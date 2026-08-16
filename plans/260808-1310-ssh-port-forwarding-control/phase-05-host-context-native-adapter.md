@@ -15,7 +15,7 @@
 - **Priority:** P1
 - **Status:** Complete (100%)
 - **Effort:** 10h
-- **Description:** Add browser-safe host/context types, a 12-command desktop Tauri adapter, Rust-issued client context, caller-monotonic decimal activation tokens, authoritative hint reconciliation, profile-deletion purge, and browser/mobile zero-call behavior.
+- **Description:** Add browser-safe host/context types, a 14-command desktop Tauri adapter, Rust-issued client context, caller-monotonic decimal activation tokens, authoritative hint reconciliation, profile-deletion purge, and browser/mobile zero-call behavior.
 
 ## Key Insights
 
@@ -86,7 +86,7 @@ Shared UI owns intent/public state. Adapter owns Tauri/context/token injection. 
 - `G:\ws\sharing\dam-hopper\packages\ui\src\hooks\use-ssh-forward.ts` - authoritative snapshot/mutation state.
 - `G:\ws\sharing\dam-hopper\packages\ui\src\hooks\use-ssh-forward.test.tsx` - conflict/refetch/no-replay tests.
 - `G:\ws\sharing\dam-hopper\apps\native\src\native-ssh-forward-host.ts` - sole SSH-forward Tauri adapter and token ordering.
-- `G:\ws\sharing\dam-hopper\apps\native\src\native-ssh-forward-host.test.ts` - 12 commands, A/B/C, reload, hint, purge, mobile tests.
+- `G:\ws\sharing\dam-hopper\apps\native\src\native-ssh-forward-host.test.ts` - 14 commands, A/B/C, reload, hint, purge, mobile tests.
 
 ### Modify
 
@@ -105,7 +105,7 @@ Shared UI owns intent/public state. Adapter owns Tauri/context/token injection. 
 
 1. Mirror exact decimal/timestamp/profile/runtime/challenge/error fixtures; reject unsafe JSON numbers for all unbounded counters.
 2. Implement nullable context and typed server-profile available/unavailable/change/delete events. Verify storage failure cannot look like authoritative empty list.
-3. Implement desktop factory and exact 12-command map. Listener installs before open-client; mobile/non-Tauri perform zero calls.
+3. Implement desktop factory and exact 14-command map. Listener installs before open-client; mobile/non-Tauri perform zero calls.
 4. Implement open-client context validation and checked caller activation token. Issue A/B/C immediately; local operation gate rejects late responses.
 5. Implement manager restart reopen/re-activate without mutation replay; same-scope reload must preserve native worker/listener.
 6. Centralize command input binding and snapshot validation. Strict error parser maps unknown objects to fixed error without logging raw payload.
@@ -116,7 +116,7 @@ Shared UI owns intent/public state. Adapter owns Tauri/context/token injection. 
 ## Todo list
 
 - [ ] Shared package has no SSH-forward Tauri import.
-- [ ] Adapter map contains exactly all 12 commands.
+- [x] Adapter map contains exactly all 14 commands.
 - [ ] All unbounded counters stay decimal strings across JSON.
 - [ ] A/B/C and reload operation gates match Rust ordering.
 - [ ] Counters compare numerically after parsing; 9/10 and 99/100 boundaries pass.
@@ -146,7 +146,7 @@ Shared UI owns intent/public state. Adapter owns Tauri/context/token injection. 
 ## Security Considerations
 
 - Components cannot forge desktop/context/scope/token fields or raw invoke payloads.
-- Host caches public endpoints/fingerprints only; no password/passphrase/key bytes/path/HTTP token.
+- Host caches public endpoints/fingerprints only; username/password/passphrase/key bytes/path never enter the durable host snapshot or HTTP transport.
 - Unknown IPC objects and raw errors are discarded, not interpolated into UI/logs.
 - Protected server port-forward, PTY, SSH API, query, and WS files remain untouched.
 

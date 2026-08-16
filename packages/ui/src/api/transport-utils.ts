@@ -9,6 +9,7 @@ import {
   initTransportListeners,
   resetTransportListeners,
 } from "@/hooks/use-sse.js";
+import { isNativeWindowsHost } from "./server-config.js";
 
 /**
  * Reinitialize the transport with a new server URL.
@@ -50,7 +51,10 @@ function resolveTransportUrl(newServerUrl?: string): string | undefined {
   if (typeof document === "undefined" || typeof window === "undefined") {
     return newServerUrl;
   }
-  if (document.documentElement.dataset.appHost !== "native") {
+  if (
+    document.documentElement.dataset.appHost !== "native" ||
+    isNativeWindowsHost()
+  ) {
     return newServerUrl;
   }
   if (!newServerUrl) return undefined;

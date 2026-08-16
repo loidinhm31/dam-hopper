@@ -129,6 +129,9 @@ impl SshTransportError {
             Self::Agent(CredentialError::KeyNotFound) => SshForwardErrorCode::KeyNotFound,
             Self::Agent(CredentialError::KeyUnsafe) => SshForwardErrorCode::KeyUnsafe,
             Self::Agent(CredentialError::KeyEncrypted) => SshForwardErrorCode::KeyEncryptedUseAgent,
+            Self::Agent(CredentialError::InvalidPassphrase) => {
+                SshForwardErrorCode::KeyPassphraseInvalid
+            }
             Self::Agent(CredentialError::InvalidInventory) => SshForwardErrorCode::KeyUnsafe,
             Self::ChannelOpen => SshForwardErrorCode::TargetConnectFailed,
             Self::ChannelOpenTimeout => SshForwardErrorCode::ChannelOpenTimeout,
@@ -177,6 +180,8 @@ impl SshSession {
         user: &str,
         auth: &SshForwardAuth,
         trust: &StoredTrust,
+        fallback_key: Option<Arc<PrivateKey>>,
+        password: Option<(&str, &str)>,
     ) -> Result<Self, SshTransportError> {
         let handler = RusshHandler {
             endpoint: endpoint.clone(),
@@ -194,64 +199,105 @@ impl SshSession {
                 handler,
             )
             .await?;
-            match auth {
-                SshForwardAuth::Agent => {
-                    let mut agent = connect_agent().await.map_err(SshTransportError::Agent)?;
-                    let identities = agent
-                        .request_identities()
-                        .await
-                        .map_err(|_| SshTransportError::Agent(CredentialError::AgentUnavailable))?;
-                    if identities.is_empty() {
-                        return Err(SshTransportError::Agent(CredentialError::AgentUnavailable));
-                    }
-                    let mut authenticated = false;
-                    for identity in identities
-                        .into_iter()
-                        .filter(|identity| {
-                            crate::ssh_forward::known_hosts::is_supported_algorithm(
-                                identity.public_key().algorithm().as_ref(),
-                            )
-                        })
-                        .take(crate::ssh_forward::credentials::max_agent_identities())
-                    {
-                        let public_key = identity.public_key().into_owned();
-                        let result = handle
-                            .authenticate_publickey_with(user, public_key, None, &mut agent)
-                            .await?;
-                        if result.success() {
-                            authenticated = true;
-                            break;
+            if let Some((password_user, password)) = password {
+                let result = handle
+                    .authenticate_password(password_user, password)
+                    .await?;
+                if !result.success() {
+                    return Err(SshTransportError::Authentication);
+                }
+            } else {
+                match auth {
+                    SshForwardAuth::Agent => {
+                        let mut authenticated = false;
+                        let mut agent_failure = None;
+                        if let Ok(mut agent) = connect_agent().await {
+                            match agent.request_identities().await {
+                                Ok(identities) => {
+                                    if identities.is_empty() {
+                                        agent_failure = Some(CredentialError::AgentUnavailable);
+                                    }
+                                    for identity in identities
+                                        .into_iter()
+                                        .filter(|identity| {
+                                            crate::ssh_forward::known_hosts::is_supported_algorithm(
+                                                identity.public_key().algorithm().as_ref(),
+                                            )
+                                        })
+                                        .take(
+                                            crate::ssh_forward::credentials::max_agent_identities(),
+                                        )
+                                    {
+                                        let public_key = identity.public_key().into_owned();
+                                        if let Ok(result) = handle
+                                            .authenticate_publickey_with(
+                                                user, public_key, None, &mut agent,
+                                            )
+                                            .await
+                                        {
+                                            if result.success() {
+                                                authenticated = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    agent_failure = Some(CredentialError::AgentUnavailable);
+                                }
+                            }
+                        } else {
+                            agent_failure = Some(CredentialError::AgentUnavailable);
+                        }
+                        if !authenticated {
+                            if let Some(key) = fallback_key {
+                                let result = handle
+                                    .authenticate_publickey(
+                                        user,
+                                        PrivateKeyWithHashAlg::new(key, None),
+                                    )
+                                    .await?;
+                                if result.success() {
+                                    authenticated = true;
+                                }
+                            } else if let Some(error) = agent_failure {
+                                return Err(SshTransportError::Agent(error));
+                            }
+                        }
+                        if !authenticated {
+                            return Err(SshTransportError::Authentication);
                         }
                     }
-                    if !authenticated {
-                        return Err(SshTransportError::Authentication);
-                    }
-                }
-                SshForwardAuth::Key { key_id } => {
-                    #[cfg(test)]
-                    let bytes = if key_id == TEST_PRIVATE_KEY_ID {
-                        test_private_key()
-                            .ok_or(SshTransportError::Agent(CredentialError::KeyNotFound))?
-                    } else {
-                        crate::ssh_forward::credentials::load_safe_key(key_id)
-                            .map_err(SshTransportError::Agent)?
-                    };
-                    #[cfg(not(test))]
-                    let bytes = crate::ssh_forward::credentials::load_safe_key(key_id)
-                        .map_err(SshTransportError::Agent)?;
-                    let key = PrivateKey::from_openssh(&bytes)
-                        .map_err(|_| SshTransportError::Agent(CredentialError::KeyUnsafe))?;
-                    if key.is_encrypted() {
-                        return Err(SshTransportError::Agent(CredentialError::KeyEncrypted));
-                    }
-                    let result = handle
-                        .authenticate_publickey(
-                            user,
-                            PrivateKeyWithHashAlg::new(Arc::new(key), None),
-                        )
-                        .await?;
-                    if !result.success() {
-                        return Err(SshTransportError::Authentication);
+                    SshForwardAuth::Key { key_id } => {
+                        let key = if let Some(key) = fallback_key {
+                            key
+                        } else {
+                            #[cfg(test)]
+                            let key = if key_id == TEST_PRIVATE_KEY_ID {
+                                let bytes = test_private_key().ok_or(SshTransportError::Agent(
+                                    CredentialError::KeyNotFound,
+                                ))?;
+                                PrivateKey::from_openssh(&bytes).map_err(|_| {
+                                    SshTransportError::Agent(CredentialError::KeyUnsafe)
+                                })?
+                            } else {
+                                crate::ssh_forward::credentials::load_safe_key(key_id, None)
+                                    .map_err(SshTransportError::Agent)?
+                            };
+                            #[cfg(not(test))]
+                            let key = crate::ssh_forward::credentials::load_safe_key(key_id, None)
+                                .map_err(SshTransportError::Agent)?;
+                            Arc::new(key)
+                        };
+                        if key.is_encrypted() {
+                            return Err(SshTransportError::Agent(CredentialError::KeyEncrypted));
+                        }
+                        let result = handle
+                            .authenticate_publickey(user, PrivateKeyWithHashAlg::new(key, None))
+                            .await?;
+                        if !result.success() {
+                            return Err(SshTransportError::Authentication);
+                        }
                     }
                 }
             }
