@@ -1918,7 +1918,7 @@ flow is:
   -> WsTransport listener dispatch keyed by terminal session id
   -> TerminalPanel attach/replay gate
   -> writeLiveData(data) and xterm write
-  -> memory-only per-session activity transition store
+  -> memory-only per-session browser-local activity snapshot store
   -> TerminalRuntimeNavigatorItem for the same session id
 ```
 
@@ -1928,9 +1928,10 @@ queued during replay count only after replay completes and each chunk flows
 through `writeLiveData`. Every mounted `TerminalPanel`, including hidden panels
 retained by `TerminalKeepAliveHost`, independently updates its session entry.
 
-The store retains only the latest observed-output timestamp, derived recent/quiet
-state, stream readiness needed for the gray state, and timer/subscription
-bookkeeping. It never stores, persists, logs, or forwards output content. The
+The store publishes only per-session activity snapshots containing derived
+recent/quiet state and stream readiness needed for the gray state; its internal
+bookkeeping also retains the latest observed-output timestamp and timer/
+subscription state. It never stores, persists, logs, or forwards output content. The
 recent-output window is fixed at 3,000 ms in v1. A first chunk transitions the
 session to recent output and schedules an expiry check. Later chunks update the
 timestamp without notifying React or recreating the timer. Each expiry callback

@@ -1,15 +1,33 @@
-import { Children, isValidElement } from "react";
-import { describe, expect, it, vi } from "vitest";
-import { TerminalRuntimeNavigatorItem } from "./TerminalRuntimeNavigatorItem.js";
-import type { RuntimeSessionItem } from "@/lib/terminal-runtime-tree.js";
+// @vitest-environment jsdom
 
-function createSession(): RuntimeSessionItem {
+import { act, Profiler, type ComponentProps, type ReactElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  markTerminalOutput,
+  setTerminalStreamReady,
+} from "@/lib/terminal-output-activity.js";
+import type {
+  RuntimeSessionItem,
+  RuntimeTreeItem,
+} from "@/lib/terminal-runtime-tree.js";
+import { TerminalRuntimeNavigatorItem } from "./TerminalRuntimeNavigatorItem.js";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+  true;
+
+type ItemProps = ComponentProps<typeof TerminalRuntimeNavigatorItem>;
+
+let container: HTMLDivElement;
+let root: Root;
+
+function createSession(sessionId = "web"): RuntimeSessionItem {
   return {
     kind: "session",
-    id: "session:web",
+    id: `session:${sessionId}`,
     groupId: "web",
-    sessionId: "web",
-    label: "web:bash",
+    sessionId,
+    label: `${sessionId}:bash`,
     project: "web",
     command: "bash",
     startedAt: 1,
@@ -17,116 +35,218 @@ function createSession(): RuntimeSessionItem {
   };
 }
 
-function findElementByTitle(node: unknown, title: string): Record<string, unknown> | null {
-  if (!isValidElement(node)) return null;
-  if (typeof node.type === "function") {
-    return findElementByTitle(node.type(node.props), title);
-  }
-  if ((node.props as { title?: string }).title === title) {
-    return node.props as Record<string, unknown>;
-  }
-  for (const child of Children.toArray((node.props as { children?: unknown }).children)) {
-    const match = findElementByTitle(child, title);
-    if (match) return match;
-  }
-  return null;
+function defaultProps(item: RuntimeTreeItem): ItemProps {
+  return {
+    activeSessionId: null,
+    dragState: null,
+    item,
+    onMoveItem: () => {},
+    onSetDragState: () => {},
+    onStartTunnel: async () => {},
+    onStopTunnel: async () => {},
+  };
 }
 
-function findElementByClassFragment(
-  node: unknown,
-  classFragment: string,
-): Record<string, unknown> | null {
-  if (!isValidElement(node)) return null;
-  if (typeof node.type === "function") {
-    return findElementByClassFragment(node.type(node.props), classFragment);
-  }
-  const className = (node.props as { className?: unknown }).className;
-  if (typeof className === "string" && className.includes(classFragment)) {
-    return node.props as Record<string, unknown>;
-  }
-  for (const child of Children.toArray(
-    (node.props as { children?: unknown }).children,
-  )) {
-    const match = findElementByClassFragment(child, classFragment);
-    if (match) return match;
-  }
-  return null;
+function renderItem(
+  item: RuntimeTreeItem,
+  overrides: Partial<ItemProps> = {},
+): void {
+  act(() =>
+    root.render(
+      <TerminalRuntimeNavigatorItem {...defaultProps(item)} {...overrides} />,
+    ),
+  );
 }
+
+function renderElement(element: ReactElement): void {
+  act(() => root.render(element));
+}
+
+function getStatus(sessionId?: string): HTMLElement {
+  const statuses = Array.from(
+    container.querySelectorAll<HTMLElement>("span[title]"),
+  );
+  if (!sessionId) {
+    expect(statuses).toHaveLength(1);
+    return statuses[0]!;
+  }
+  const sessionLabel = container.querySelector(`button[title="${sessionId}"]`);
+  expect(sessionLabel).not.toBeNull();
+  const status = sessionLabel?.querySelector<HTMLElement>("span[title]");
+  expect(status).not.toBeNull();
+  return status!;
+}
+
+function expectStatus(
+  status: HTMLElement,
+  label: string,
+  title: string,
+  classFragment: string,
+): void {
+  expect(status.getAttribute("aria-hidden")).toBe("true");
+  expect(status.getAttribute("aria-label")).toBeNull();
+  expect(status.getAttribute("title")).toBe(title);
+  expect(status.className).toContain(classFragment);
+  expect(container.textContent).toContain(label);
+}
+
+beforeEach(() => {
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
 
 describe("TerminalRuntimeNavigatorItem", () => {
+  it.each([
+    {
+      name: "stopped",
+      session: { alive: false },
+      ready: true,
+      recent: true,
+      label: "Stopped",
+      title: "Terminal stopped",
+      classFragment: "color-danger",
+    },
+    {
+      name: "stream unavailable",
+      session: {},
+      ready: false,
+      recent: false,
+      label: "Output unavailable",
+      title: "Output stream unavailable",
+      classFragment: "color-text-muted",
+    },
+    {
+      name: "recent output",
+      session: {},
+      ready: true,
+      recent: true,
+      label: "Receiving output",
+      title: "Receiving output",
+      classFragment: "color-success",
+    },
+    {
+      name: "quiet",
+      session: {},
+      ready: true,
+      recent: false,
+      label: "Quiet",
+      title: "Quiet; no recent output observed",
+      classFragment: "color-warning",
+    },
+  ])(
+    "renders the $name state",
+    ({ session, ready, recent, label, title, classFragment }) => {
+      const sessionId = `state-${label.toLowerCase().replaceAll(" ", "-")}`;
+      if (ready) setTerminalStreamReady(sessionId, true);
+      if (recent) markTerminalOutput(sessionId);
+
+      renderItem({ ...createSession(sessionId), ...session });
+
+      expectStatus(getStatus(), label, title, classFragment);
+    },
+  );
+
+  it("applies stopped before recent output", () => {
+    setTerminalStreamReady("precedence", true);
+    markTerminalOutput("precedence");
+
+    renderItem({ ...createSession("precedence"), alive: false });
+
+    expectStatus(getStatus(), "Stopped", "Terminal stopped", "color-danger");
+  });
+
+  it("updates only the leaf with the matching session ID", () => {
+    setTerminalStreamReady("first", true);
+    setTerminalStreamReady("second", true);
+    renderItem({
+      kind: "service-group",
+      id: "services:web",
+      groupId: "web",
+      label: "Running ports",
+      startedAt: 1,
+      sessions: [createSession("first"), createSession("second")],
+    });
+
+    act(() => markTerminalOutput("first"));
+
+    expect(getStatus("first").getAttribute("title")).toBe("Receiving output");
+    expect(getStatus("second").getAttribute("title")).toBe(
+      "Quiet; no recent output observed",
+    );
+  });
+
+  it("does not rerender another leaf or repeat recent transition renders", () => {
+    setTerminalStreamReady("first", true);
+    setTerminalStreamReady("second", true);
+    const renders = { first: 0, second: 0 };
+
+    renderElement(
+      <>
+        <Profiler id="first" onRender={() => renders.first++}>
+          <TerminalRuntimeNavigatorItem
+            {...defaultProps(createSession("first"))}
+          />
+        </Profiler>
+        <Profiler id="second" onRender={() => renders.second++}>
+          <TerminalRuntimeNavigatorItem
+            {...defaultProps(createSession("second"))}
+          />
+        </Profiler>
+      </>,
+    );
+    const initialRenders = { ...renders };
+
+    act(() => markTerminalOutput("first"));
+    expect(renders.first).toBe(initialRenders.first + 1);
+    expect(renders.second).toBe(initialRenders.second);
+
+    act(() => markTerminalOutput("first"));
+    expect(renders.first).toBe(initialRenders.first + 1);
+    expect(renders.second).toBe(initialRenders.second);
+  });
+
   it("routes the close button to the existing close flow", () => {
     const onCloseSession = vi.fn();
-    const tree = TerminalRuntimeNavigatorItem({
-      activeSessionId: "web",
-      dragState: null,
-      item: {
-        kind: "session",
-        id: "session:web",
-        groupId: "web",
-        sessionId: "web",
-        label: "web:bash",
-        project: "web",
-        command: "pnpm dev",
-        startedAt: 1,
-        ports: [],
-      },
-      onCloseSession,
-      onMoveItem: () => {},
-      onSetDragState: () => {},
-      onStartTunnel: async () => {},
-      onStopTunnel: async () => {},
-    });
-    const closeProps = findElementByTitle(
-      tree,
-      "Close terminal (terminates process)",
-    );
+    renderItem(createSession(), { activeSessionId: "web", onCloseSession });
 
-    expect(closeProps).not.toBeNull();
-    (closeProps?.onClick as (event: { stopPropagation: () => void }) => void)?.({
-      stopPropagation: () => {},
-    });
+    container
+      .querySelector<HTMLButtonElement>(
+        'button[title="Close terminal (terminates process)"]',
+      )
+      ?.click();
 
     expect(onCloseSession).toHaveBeenCalledWith("web");
   });
 
   it("uses a native selection button without making the leaf a nested button", () => {
     const onSelectSession = vi.fn();
-    const tree = TerminalRuntimeNavigatorItem({
+    renderItem(createSession(), {
       activeSessionId: "web",
-      dragState: null,
-      item: createSession(),
       onSelectSession,
-      onMoveItem: () => {},
-      onSetDragState: () => {},
-      onStartTunnel: async () => {},
-      onStopTunnel: async () => {},
     });
-    const selectionProps = findElementByTitle(tree, "web");
-    const leafProps = findElementByClassFragment(
-      tree,
-      "rounded-sm px-1.5 py-1 outline-none",
+    const selectionButton = container.querySelector<HTMLButtonElement>(
+      'button[title="web"]',
     );
+    const leaf = selectionButton?.parentElement?.parentElement;
 
-    expect(selectionProps).toMatchObject({
-      type: "button",
-      "aria-current": "page",
-    });
-    expect(selectionProps?.onKeyDown).toBeUndefined();
-    expect(leafProps?.role).toBeUndefined();
-    expect(leafProps?.tabIndex).toBeUndefined();
+    expect(selectionButton?.getAttribute("aria-current")).toBe("page");
+    expect(leaf?.getAttribute("role")).toBeNull();
+    expect(leaf?.getAttribute("tabindex")).toBeNull();
 
-    (selectionProps?.onClick as (event: { stopPropagation: () => void }) => void)?.({
-      stopPropagation: vi.fn(),
-    });
+    selectionButton?.click();
     expect(onSelectSession).toHaveBeenCalledWith("web");
   });
 
   it("selects the session when clicking noninteractive row content", () => {
     const onSelectSession = vi.fn();
-    const tree = TerminalRuntimeNavigatorItem({
-      activeSessionId: null,
-      dragState: null,
-      item: {
+    renderItem(
+      {
         ...createSession(),
         ports: [
           {
@@ -134,106 +254,61 @@ describe("TerminalRuntimeNavigatorItem", () => {
             project: "web",
             state: "listening",
             sessionId: "web",
+            tunnel: undefined,
+            tunnelStatus: null,
           },
         ],
       },
-      onSelectSession,
-      onMoveItem: () => {},
-      onSetDragState: () => {},
-      onStartTunnel: async () => {},
-      onStopTunnel: async () => {},
-    });
-    const leafProps = findElementByClassFragment(
-      tree,
-      "rounded-sm px-1.5 py-1 outline-none",
+      { onSelectSession },
     );
 
-    expect(leafProps?.role).toBeUndefined();
-    (leafProps?.onClick as () => void)?.();
-
+    container.querySelector<HTMLElement>(".font-mono")?.click();
     expect(onSelectSession).toHaveBeenCalledWith("web");
   });
 
   it("routes pinning and omits close for a pinned Runtime leaf", () => {
     const onToggleTabPin = vi.fn();
-    const tree = TerminalRuntimeNavigatorItem({
-      activeSessionId: "worker",
-      dragState: null,
-      item: {
+    renderItem(
+      {
         kind: "service-group",
         id: "services:web",
         groupId: "web",
         label: "Running ports",
         startedAt: 1,
-        sessions: [
-          {
-            kind: "session",
-            id: "session:worker",
-            groupId: "web",
-            sessionId: "worker",
-            label: "web:worker",
-            project: "web",
-            command: "worker",
-            startedAt: 1,
-            ports: [],
-            isPinned: true,
-          },
-        ],
+        sessions: [{ ...createSession("worker"), isPinned: true }],
       },
-      onToggleTabPin,
-      onMoveItem: () => {},
-      onSetDragState: () => {},
-      onStartTunnel: async () => {},
-      onStopTunnel: async () => {},
-    });
-    const unpinProps = findElementByTitle(
-      tree,
-      "Unpin terminal (allows closing)",
+      { activeSessionId: "worker", onToggleTabPin },
     );
 
-    expect(unpinProps).not.toBeNull();
-    expect(unpinProps?.["aria-pressed"]).toBe(true);
+    const unpinButton = container.querySelector<HTMLButtonElement>(
+      'button[title="Unpin terminal (allows closing)"]',
+    );
+    expect(unpinButton?.getAttribute("aria-pressed")).toBe("true");
     expect(
-      findElementByTitle(tree, "Close terminal (terminates process)"),
+      container.querySelector(
+        'button[title="Close terminal (terminates process)"]',
+      ),
     ).toBeNull();
-    (unpinProps?.onClick as (event: { stopPropagation: () => void }) => void)?.({
-      stopPropagation: vi.fn(),
-    });
+    unpinButton?.click();
     expect(onToggleTabPin).toHaveBeenCalledWith("worker");
   });
 
   it("routes a session title context menu to that session", () => {
     const onOpenDiagnosticsMenu = vi.fn();
-    const tree = TerminalRuntimeNavigatorItem({
-      activeSessionId: "web",
-      dragState: null,
-      item: {
-        kind: "session",
-        id: "session:web",
-        groupId: "web",
-        sessionId: "web",
-        label: "web:bash",
-        project: "web",
-        command: "bash",
-        startedAt: 1,
-        ports: [],
-      },
-      onOpenDiagnosticsMenu,
-      onMoveItem: () => {},
-      onSetDragState: () => {},
-      onStartTunnel: async () => {},
-      onStopTunnel: async () => {},
-    });
-    const labelProps = findElementByTitle(tree, "web");
-    const preventDefault = vi.fn();
-    const stopPropagation = vi.fn();
+    renderItem(createSession(), { onOpenDiagnosticsMenu });
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[title="web"]',
+    )!;
 
-    (labelProps?.onContextMenu as (event: {
-      clientX: number;
-      clientY: number;
-      preventDefault: () => void;
-      stopPropagation: () => void;
-    }) => void)?.({ clientX: 11, clientY: 22, preventDefault, stopPropagation });
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 11,
+      clientY: 22,
+    });
+    const preventDefault = vi.spyOn(event, "preventDefault");
+    const stopPropagation = vi.spyOn(event, "stopPropagation");
+    button.dispatchEvent(event);
 
     expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith("web", 11, 22);
     expect(preventDefault).toHaveBeenCalledOnce();
@@ -242,117 +317,71 @@ describe("TerminalRuntimeNavigatorItem", () => {
 
   it("routes a grouped runtime session title to its own session", () => {
     const onOpenDiagnosticsMenu = vi.fn();
-    const tree = TerminalRuntimeNavigatorItem({
-      activeSessionId: "web",
-      dragState: null,
-      item: {
+    renderItem(
+      {
         kind: "service-group",
         id: "service:web",
         groupId: "web",
         label: "web",
-        sessions: [
-          {
-            kind: "session",
-            id: "session:worker",
-            groupId: "web",
-            sessionId: "worker",
-            label: "web:worker",
-            project: "web",
-            command: "worker",
-            startedAt: 1,
-            ports: [],
-          },
-        ],
+        startedAt: 1,
+        sessions: [createSession("worker")],
       },
-      onOpenDiagnosticsMenu,
-      onMoveItem: () => {},
-      onSetDragState: () => {},
-      onStartTunnel: async () => {},
-      onStopTunnel: async () => {},
-    });
-    const labelProps = findElementByTitle(tree, "worker");
+      { onOpenDiagnosticsMenu },
+    );
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[title="worker"]',
+    )!;
 
-    (labelProps?.onContextMenu as (event: {
-      clientX: number;
-      clientY: number;
-      preventDefault: () => void;
-      stopPropagation: () => void;
-    }) => void)({
-      clientX: 33,
-      clientY: 44,
-      preventDefault: vi.fn(),
-      stopPropagation: vi.fn(),
-    });
+    button.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        clientX: 33,
+        clientY: 44,
+      }),
+    );
 
     expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith("worker", 33, 44);
   });
 
   it("routes a ready tunnel chip to the embedded browser without selecting the session", () => {
     const onOpenTunnelInBrowser = vi.fn();
-    const stopPropagation = vi.fn();
-    const tree = TerminalRuntimeNavigatorItem({
-      activeSessionId: "web",
-      dragState: null,
-      item: {
-        kind: "session",
-        id: "session:web",
-        groupId: "web",
-        sessionId: "web",
-        label: "web:bash",
-        project: "web",
-        command: "pnpm dev",
-        startedAt: 1,
+    const tunnel = {
+      id: "tunnel-1",
+      port: 3000,
+      label: "web",
+      driver: "cloudflared" as const,
+      status: "ready" as const,
+      url: "https://demo.trycloudflare.com",
+      startedAt: 1,
+    };
+    renderItem(
+      {
+        ...createSession(),
         ports: [
           {
             port: 3000,
             project: "web",
             state: "listening",
             sessionId: "web",
-            tunnel: {
-              id: "tunnel-1",
-              port: 3000,
-              label: "web",
-              driver: "cloudflared",
-              status: "ready",
-              url: "https://demo.trycloudflare.com",
-              startedAt: 1,
-            },
+            tunnel,
             tunnelStatus: "ready",
-            tunnelUrl: "https://demo.trycloudflare.com",
-            tunnelId: "tunnel-1",
+            tunnelUrl: tunnel.url,
+            tunnelId: tunnel.id,
           },
         ],
       },
-      onOpenTunnelInBrowser,
-      onMoveItem: () => {},
-      onSetDragState: () => {},
-      onStartTunnel: async () => {},
-      onStopTunnel: async () => {},
-    });
-    const openProps = findElementByTitle(
-      tree,
-      "Open https://demo.trycloudflare.com in embedded Browser",
+      { onOpenTunnelInBrowser },
     );
 
-    expect(openProps).not.toBeNull();
-    (openProps?.onClick as (event: { stopPropagation: () => void }) => void)?.({
-      stopPropagation,
-    });
+    container
+      .querySelector<HTMLButtonElement>(
+        'button[title="Open https://demo.trycloudflare.com in embedded Browser"]',
+      )
+      ?.click();
 
-    expect(stopPropagation).toHaveBeenCalledOnce();
     expect(onOpenTunnelInBrowser).toHaveBeenCalledWith(
-      "https://demo.trycloudflare.com",
-      expect.objectContaining({
-        id: "tunnel-1",
-        status: "ready",
-      }),
+      tunnel.url,
+      expect.objectContaining({ id: tunnel.id, status: "ready" }),
     );
-
-    const keydownStopPropagation = vi.fn();
-    (openProps?.onKeyDown as (event: { stopPropagation: () => void }) => void)?.({
-      stopPropagation: keydownStopPropagation,
-    });
-
-    expect(keydownStopPropagation).toHaveBeenCalledOnce();
   });
 });
