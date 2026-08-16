@@ -73,15 +73,17 @@
 6. After each effective size change, invalidate terminal-dependent suggestion
    geometry and schedule one fit. Let the existing xterm resize listener send
    the resulting rows/columns to the PTY. Do not emit a parallel resize call.
-7. While xterm is focused, an exact configured keydown consumes both browser and
-   terminal input, adjusts one step within bounds, and uses debounced persistence.
+7. A page-level exact configured keydown consumes browser input, adjusts one step
+   within bounds, and uses debounced persistence. The xterm handler also consumes
+   the same event before PTY input.
    Extra/missing modifiers, keyup, and unrelated keys remain unchanged. Repeated
    or composing matches must not leak to the PTY; composition must not change size.
 
 ### Non-functional
 
 - No xterm disposal/recreation, scrollback loss, focus steal, output mutation,
-  global document listener, new dependency, or per-terminal persisted state.
+  duplicate per-terminal global listener, new dependency, or per-terminal
+  persisted state.
 - Strict TypeScript; additive serde defaults/aliases; current camelCase API and
   snake_case TOML conventions remain intact.
 - Controls have contextual names for numeric input, increment/decrement, capture,
@@ -103,7 +105,7 @@ global config TOML
                                    -> scheduleTerminalFit
                                    -> xterm onResize -> existing PTY resize
 
-focused xterm keydown
+page or focused xterm keydown
   -> shared terminal key handler -> exact persisted shortcut match
   -> preventDefault + return false -> store size +/- 1 -> same live path
 ```
@@ -120,7 +122,7 @@ Rejected alternatives:
 | Recreate xterm on every change | Loses/replays state, risks duplicate PTY attach and focus changes. |
 | CSS transform or container zoom | Visual size diverges from xterm grid and backend PTY rows/columns. |
 | Global registry subscriber/service | Adds cross-terminal lifecycle ownership when each panel already owns its instance. |
-| Document-level keyboard listener | Violates focused-terminal scope and can steal editor/browser shortcuts. |
+| Duplicate per-terminal keyboard listeners | Can apply one page shortcut once per mounted terminal. |
 
 Architecture invariant: global UI config owns one shared terminal presentation
 preference; `TerminalPanel` remains the xterm/PTY adapter and the existing resize
@@ -180,8 +182,8 @@ mobile keyboard control, or dependency.
    `ShortcutCapture`, consistent with existing shortcut settings. Verify partial
    saves do not overwrite unrelated config and rejected saves restore the last
    confirmed size/bindings.
-6. Extend `handleSharedTerminalKeyEvent` options with increase/decrease shortcut
-   values and callbacks. Check focused font shortcuts before general workspace /
+6. Extend the shared font shortcut helper with increase/decrease shortcut values
+   and callbacks. Check page-level font shortcuts before general workspace /
    panel suppression. For a recognized keydown, call `preventDefault()` and
    return `false`; invoke the callback only for an allowed non-composing action.
    Ensure a repeated/composing recognized chord is still consumed rather than
@@ -200,7 +202,7 @@ mobile keyboard control, or dependency.
    rows with `ShortcutCapture`, reset defaults, accessible change/reset names,
    and descriptions that say the increase default represents the actual `+` key
    (`Shift+Equal`) while both bindings are user-editable.
-10. Add focused unit/component tests. Cover old-config compatibility, clamping,
+10. Add unit/component tests. Cover old-config compatibility, clamping,
     persistence/reload/rollback, `Ctrl+Alt+Shift+Equal`, `Ctrl+Alt+Minus`, wrong
     modifiers, invalid `Ctrl+Alt+`, keyup/repeat/composition, preventDefault,
     `false` return, no PTY callback, Settings capture/reset, and accessible names.
@@ -220,7 +222,8 @@ mobile keyboard control, or dependency.
 - [x] Add backward-compatible server/UI config fields and defaults.
 - [x] Persist and clamp terminal font size plus both shortcut bindings.
 - [x] Apply font size live to every mounted xterm and refit without remount.
-- [x] Consume exact focused-terminal zoom shortcuts without PTY/browser leakage.
+- [x] Consume exact page-level zoom shortcuts without PTY leakage; user-selected
+      bindings may intentionally override other page shortcuts.
 - [x] Add accessible Appearance and Keyboard Shortcut controls.
 - [x] Add server, unit, component, and Chromium regression coverage.
 - [x] Update architecture invariant and complete tester/reviewer gates.
@@ -243,8 +246,9 @@ mobile keyboard control, or dependency.
   keep-alive terminals, without losing scrollback, input, focus, or PTY identity.
 - Each effective update invalidates geometry, schedules fit, and reaches backend
   dimensions only through the existing xterm resize listener.
-- With xterm focused, exact default or edited chords change one step, prevent the
-  browser default, return `false` to xterm, and write no bytes to the PTY.
+- Exact default or edited chords change one step anywhere on the page, prevent the
+  browser default, return `false` to xterm when applicable, and write no bytes to
+  the PTY.
 - Extra/missing modifiers and unrelated keys keep existing behavior. Repeated or
   composing recognized chords do not leak terminal characters.
 - Settings clearly separate terminal/system/editor font sizes and present two
@@ -261,9 +265,9 @@ mobile keyboard control, or dependency.
   `Ctrl+Alt+Shift+Equal`, capture `event.code`, explain it in Settings, and test
   wrong-shift/Numpad cases explicitly.
 - **Browser-reserved shortcut:** some OS/browser combinations may intercept a
-  chord before page dispatch. **Mitigation:** focused xterm handler calls
-  `preventDefault`; Chromium proves supported delivery; Settings lets users
-  replace either chord and UI does not claim OS-global capture.
+  chord before page dispatch. **Mitigation:** page and focused xterm handlers
+  call `preventDefault`; Chromium proves supported delivery; Settings lets users
+  replace either chord.
 - **Grid/PTY mismatch:** changing glyph metrics without fitting corrupts visual
   wrapping and process dimensions. **Mitigation:** mutate xterm option, invalidate
   geometry, schedule existing fit, retain current `onResize` transport owner.
@@ -278,8 +282,8 @@ mobile keyboard control, or dependency.
   rollback triggers the same reactive terminal update.
 - **Shortcut collision:** user may choose a browser/app/terminal chord already in
   use. **Mitigation:** exact matching and visible editable bindings; do not invent
-  a global conflict registry in this feature. Document precedence in focused
-  terminal tests.
+  a global conflict registry in this feature. User-selected page shortcuts take
+  precedence where the browser delivers the event.
 - **Large `TerminalPanel`:** lifecycle code is already complex. **Mitigation:**
   keep mutation effect small, reuse fit/registry utilities, avoid a new service.
 
@@ -291,8 +295,8 @@ mobile keyboard control, or dependency.
   server validation rejects out-of-range terminal font sizes.
 - Shortcut strings are data, never commands or executable content. Continue the
   existing parser/capture path; do not evaluate strings or install OS hooks.
-- Keyboard handling is scoped to the active xterm custom handler. No document or
-  global capture is added, preserving editor and browser behavior outside xterm.
+- Keyboard handling uses a page-level listener plus the active xterm custom
+  handler; user-selected bindings may override editor/browser shortcuts.
 
 ## Side-Effect Review Checklist
 
@@ -300,7 +304,7 @@ mobile keyboard control, or dependency.
 - [ ] API/client compatibility: fields additive; client accepts omission; server
   serde defaults/aliases accept old TOML and camelCase JSON.
 - [ ] Database, migrations, data integrity: none; bounded global TOML values only.
-- [ ] Business logic: only terminal visual grid and focused zoom behavior.
+- [ ] Business logic: only terminal visual grid and page-level zoom behavior.
 - [ ] Security, privacy, secrets, logging: no new data collection or execution.
 - [ ] Performance, concurrency, resources: O(open terminals) option/fit work per
   user change, animation-frame coalesced; one debounced network write.
