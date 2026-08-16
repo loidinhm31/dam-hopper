@@ -9,7 +9,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Explorer Browser Video Playback and Direct Download (2026-08-10)
 
-- **Phase 01 — [COMPLETED 2026-08-10 11:51:39 +07:00]**: purpose-bound playback/download ticket issuance and lifecycle delivered: authenticated opaque capabilities, sandboxed resource/version binding, independent purpose isolation, deterministic 256-ticket capacity and 30-minute idle/8-hour absolute expiry, authenticated revoke, and workspace-change invalidation.
+- **Phase 01 — [COMPLETED 2026-08-10 11:51:39 +07:00]**: purpose-bound playback/download ticket issuance and lifecycle delivered: authenticated opaque capabilities, sandboxed resource/version binding, independent purpose isolation, initial capacity and TTL policy, authenticated revoke, and workspace-change invalidation. Later lifecycle-policy changes are tracked separately.
 - **Phase 02 — [COMPLETED 2026-08-10]**: shared bounded Range stream and inline/attachment response policy delivered with purpose-bound disposition and resource revalidation.
 - **Phase 03 — [COMPLETED 2026-08-10]**: Explorer browser playback/download UX delivered for the browser host without whole-file buffering or Blob allocation.
 - **Phase 04 — [COMPLETED 2026-08-10 15:25:44 +07:00]**: protocol, browser, and resource-safety release gates completed; browser-host scope validated. Caveats: `pnpm check` is blocked by missing `TAURI_SIGNING_PRIVATE_KEY`; final reviewer noted the stale-ticket Chromium assertion accepts any `DELETE`, approved by the user. Tauri support and performance tuning remain deferred follow-ups.
@@ -64,6 +64,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 01 — [COMPLETED 2026-08-13 10:15:26 +07:00]**: additive v1 battery DTO, bounded Linux power-supply collector, truthful direct energy/power aggregation, degradation/stale handling, and focused Rust/API validation delivered and approved.
 - **Phase 02 — [COMPLETED 2026-08-13 11:08:43 +07:00]**: diagnosis battery/status, remaining-energy (Wh), and instantaneous-power (W) rows delivered with old-server absence tolerance, invalid-value omission, and focused/browser regressions.
 - **Phase 03 — [COMPLETED 2026-08-13 11:39:20 +07:00]**: API/frontend contract documentation, Rust/UI/browser/repository release gates, compatibility review, and architecture-drift review completed. Validation caveat: the `TAURI_SIGNING_PRIVATE_KEY` native signing gate was explicitly waived; signing configuration was not changed.
+
+### Compact High-Contrast Host Resource Panel (2026-08-15)
+
+- **Phase 01 — [COMPLETED 2026-08-15 09:42:35 +07:00]**: presentation redesign and deterministic effective-status state completed per approved plan. Phase 02 responsive, accessibility, regression, and review validation remains pending. [Plan](../plans/260815-0605-ui-host-resource-panel/plan.md).
+- **Phase 02 — [COMPLETED 2026-08-15 11:15:14 +07:00]**: automated validation gates and headed-Xvfb smoke passed; regression, accessibility, responsive, and review validation closed. Actual browser-menu 200% zoom and the 100% visual state sweep remain manual/unavailable in this environment, so they remain residual follow-up risk. [Plan](../plans/260815-0605-ui-host-resource-panel/plan.md).
 
 ### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
 

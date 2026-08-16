@@ -1502,12 +1502,11 @@ The media cookie is host-only `HttpOnly; SameSite=Lax; Path=/api/fs` and
 non-`Secure` for HTTP compatibility. The auth fallback cookie is host-only
 `HttpOnly; SameSite=Strict; Path=/`, also non-`Secure`. Each successful image or
 video issuance creates or reuses that actor's media session, returns the opaque
-ticket response, and sets or refreshes the media cookie. Ticket and session idle lifetime is 30 minutes and the
-absolute lifetime is eight hours. Successful issuance and fully validated stream
-responses can refresh idle lifetime but never the absolute deadline. Shared
-limits are 256 tickets, 128 tickets per actor, 64 tickets per media session, 256
-sessions, and 8 sessions per actor. Context changes, expiry, and explicit
-revocation remove affected tickets.
+ticket response, and sets or refreshes the media cookie. Ticket idle lifetime is
+15 minutes; media-session idle lifetime is 30 minutes; both have an eight-hour
+absolute lifetime. Successful issuance and fully validated stream responses can
+refresh idle lifetime but never the absolute deadline. Context changes, expiry,
+and explicit revocation remove affected tickets.
 
 **DELETE /api/fs/media-session**
 
@@ -1529,7 +1528,8 @@ replacement, and before logout, including when an open settings dialog outlives
 a concurrently deleted profile. Remote revocation is bounded to five seconds;
 an unreachable server does
 not block local cleanup/logout, so the old cookie and tickets can remain usable
-until their 30-minute idle or eight-hour absolute expiry. Conversely, if remote
+until their 15-minute ticket or 30-minute session idle expiry, or eight-hour
+absolute expiry. Conversely, if remote
 revocation succeeds but local token persistence or removal then fails, the UI
 intentionally does **not** recreate the remote session. Any restored or retained
 local credential must issue fresh media tickets (and a new media session) before
@@ -1582,9 +1582,8 @@ identity/version, and returns a fixed-purpose capability:
 Success is `201 Created` with `Cache-Control: no-store` and a `Set-Cookie`
 header for the created or reused media session. Authentication failure is `401`;
 unsupported input is `400`; sandbox escape is `403`; missing or
-non-regular resources are `404`; and shared ticket capacity is `429` with
-`Retry-After: 1` and `code: IMAGE_TICKET_CAPACITY`. Response bodies do not
-include the project path, absolute filename, or bearer token.
+non-regular resources are `404`. Response bodies do not include the project
+path, absolute filename, or bearer token.
 
 **DELETE /api/fs/image/tickets**
 
@@ -1627,8 +1626,7 @@ response has the same `ticket`, `streamPath`, `expiresAt`, and
 `authorizationMode: "session-cookie-v1"` fields as image issuance, plus the
 selected `purpose`, and sets or refreshes the media-session cookie. The server
 accepts final, case-insensitive `mp4`, `m4v`, `webm`, `ogv`, `ogg`, and `mov`
-extensions after sandbox and regular-file validation. Capacity returns `429`
-with `Retry-After: 1` and `code: VIDEO_TICKET_CAPACITY`.
+extensions after sandbox and regular-file validation.
 
 **DELETE /api/fs/video/tickets** requires Bearer authentication and JSON
 `{ "ticket": "opaque-token" }`; include credentials so the matching

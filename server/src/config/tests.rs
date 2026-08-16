@@ -11,6 +11,7 @@ use super::{
     schema::{
         CommandKind, ExplorerLanguageFilter, GlobalConfig, KnownWorkspace, ProjectType,
         RestartPolicy, TerminalCodexNotificationSoundPattern, UiConfig,
+        MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES,
     },
 };
 
@@ -888,6 +889,7 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
         }),
         workspaces: None,
         ui: Some(UiConfig {
+            host_resource_pinned_mount: Some("/data".to_string()),
             terminal_codex_notifications_enabled: true,
             ..UiConfig::default()
         }),
@@ -903,12 +905,14 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
     let written = std::fs::read_to_string(&cfg_path).unwrap();
 
     assert!(written.contains("terminal_codex_notifications_enabled = true"));
+    assert!(written.contains("host_resource_pinned_mount = \"/data\""));
     assert!(written.contains("terminal_codex_notification_toast_enabled = true"));
     assert!(written.contains("terminal_codex_browser_notifications_enabled = true"));
     assert!(written.contains("terminal_codex_notification_sound_pattern = \"default\""));
     assert!(written.contains("session_db_path = \"/tmp/sessions.db\""));
     assert!(written.contains("session_buffer_ttl_hours = 12"));
     assert!(!written.contains("terminalAgentNotificationsEnabled"));
+    assert!(!written.contains("hostResourcePinnedMount"));
     assert!(!written.contains("terminalCodexNotificationToastEnabled"));
     assert!(!written.contains("sessionDbPath"));
 }
@@ -1261,6 +1265,7 @@ run_command = "java -jar app.jar"
 #[test]
 fn ui_config_defaults() {
     let ui = UiConfig::default();
+    assert_eq!(ui.host_resource_pinned_mount, None);
     assert_eq!(ui.system_font_size, 14);
     assert_eq!(ui.editor_font_size, 14);
     assert!(ui.editor_zoom_wheel_enabled);
@@ -1298,6 +1303,7 @@ fn ui_config_serde_roundtrip() {
         defaults: None,
         workspaces: None,
         ui: Some(UiConfig {
+            host_resource_pinned_mount: Some("/mnt/fast data".to_string()),
             system_font_size: 16,
             editor_font_size: 12,
             editor_zoom_wheel_enabled: false,
@@ -1350,6 +1356,11 @@ fn ui_config_serde_roundtrip() {
         serde_json::json!("two-tone")
     );
     assert_eq!(
+        json["hostResourcePinnedMount"],
+        serde_json::json!("/mnt/fast data")
+    );
+    assert!(json.get("host_resource_pinned_mount").is_none());
+    assert_eq!(
         json["explorerLanguageFilter"],
         serde_json::json!("javascript-typescript")
     );
@@ -1363,6 +1374,8 @@ fn ui_config_serde_roundtrip() {
     write_global_config_at(&cfg_path, &cfg).unwrap();
     let written = std::fs::read_to_string(&cfg_path).unwrap();
     assert!(written.contains("terminal_commit_status_enabled = true"));
+    assert!(written.contains("host_resource_pinned_mount = \"/mnt/fast data\""));
+    assert!(!written.contains("hostResourcePinnedMount"));
     assert!(!written.contains("terminalCommitStatusEnabled"));
     assert!(written.contains("terminal_auto_switch_project_enabled = true"));
     assert!(!written.contains("terminalAutoSwitchProjectEnabled"));
@@ -1371,6 +1384,10 @@ fn ui_config_serde_roundtrip() {
     let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.system_font_size, 16);
+    assert_eq!(
+        ui.host_resource_pinned_mount.as_deref(),
+        Some("/mnt/fast data")
+    );
     assert_eq!(ui.editor_font_size, 12);
     assert!(!ui.editor_zoom_wheel_enabled);
     assert_eq!(ui.search_text_shortcut, "Ctrl+Alt+KeyS");
@@ -1585,6 +1602,42 @@ fn ui_config_missing_terminal_auto_switch_project_defaults_true() {
 }
 
 #[test]
+fn ui_config_serde_aliases_host_resource_pinned_mount() {
+    for key in ["host_resource_pinned_mount", "hostResourcePinnedMount"] {
+        let toml = format!("[ui]\n{key} = \"/data\"\n");
+        let loaded: GlobalConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(
+            loaded.ui.unwrap().host_resource_pinned_mount.as_deref(),
+            Some("/data")
+        );
+    }
+
+    let json = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "hostResourcePinnedMount": "/data2"
+    }))
+    .unwrap();
+    assert_eq!(json.host_resource_pinned_mount.as_deref(), Some("/data2"));
+
+    let snake_json = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "host_resource_pinned_mount": "/data3"
+    }))
+    .unwrap();
+    assert_eq!(
+        snake_json.host_resource_pinned_mount.as_deref(),
+        Some("/data3")
+    );
+}
+
+#[test]
+fn ui_config_missing_host_resource_pinned_mount_defaults_to_none() {
+    let json = serde_json::from_value::<UiConfig>(serde_json::json!({})).unwrap();
+    assert_eq!(json.host_resource_pinned_mount, None);
+
+    let toml: GlobalConfig = toml::from_str("[ui]\n").unwrap();
+    assert_eq!(toml.ui.unwrap().host_resource_pinned_mount, None);
+}
+
+#[test]
 fn validate_font_size_accepts_boundary_values() {
     assert!(UiConfig::validate_font_size(10).is_ok());
     assert!(UiConfig::validate_font_size(32).is_ok());
@@ -1666,4 +1719,34 @@ fn validate_terminal_notification_sound_volume_checks_bounds() {
     assert!(invalid
         .validate_terminal_notification_sound_volume()
         .is_err());
+}
+
+#[test]
+fn validate_host_resource_pinned_mount_checks_utf8_byte_bounds() {
+    assert!(UiConfig::default()
+        .validate_host_resource_pinned_mount()
+        .is_ok());
+
+    for mount_point in [
+        "/data".to_string(),
+        "é".repeat(MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES / 2),
+    ] {
+        let valid = UiConfig {
+            host_resource_pinned_mount: Some(mount_point),
+            ..UiConfig::default()
+        };
+        assert!(valid.validate_host_resource_pinned_mount().is_ok());
+    }
+
+    let empty = UiConfig {
+        host_resource_pinned_mount: Some(String::new()),
+        ..UiConfig::default()
+    };
+    assert!(empty.validate_host_resource_pinned_mount().is_err());
+
+    let oversized = UiConfig {
+        host_resource_pinned_mount: Some("x".repeat(MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES + 1)),
+        ..UiConfig::default()
+    };
+    assert!(oversized.validate_host_resource_pinned_mount().is_err());
 }

@@ -834,12 +834,13 @@ sequenceDiagram
 a configured project, project-relative path, and closed `playback | download`
 purpose. It resolves through the existing `ProjectSandbox`, verifies a regular
 video candidate, and returns a random opaque ticket URL. `DELETE
-/api/fs/video/tickets` revokes a ticket idempotently. The in-memory ticket store is
-capped at 256 live tickets, prunes expired entries before admission, and binds each
-ticket to one canonical project resource, one immutable purpose, issuance
+/api/fs/video/tickets` revokes a ticket idempotently. The in-memory ticket store
+prunes expired entries and binds each ticket to one canonical project resource,
+one immutable purpose, issuance
 metadata, and the authenticated actor's media session. Tickets are never
-persisted into editor state, browser storage, diagnostics, or logs. Ticket and
-session idle expiry is 30 minutes and absolute expiry is eight hours. The stream
+persisted into editor state, browser storage, diagnostics, or logs. Ticket idle
+expiry is 15 minutes; media-session idle expiry is 30 minutes; both have an
+eight-hour absolute expiry. The stream
 must present the matching `damhopper-media-session` cookie (host-only, `HttpOnly`,
 `SameSite=Lax`, `Path=/api/fs`; no `Secure`); ticket-only, foreign-session,
 expired, and revoked requests return indistinguishable `404` responses. Idle TTL
@@ -954,8 +955,8 @@ The editor assigns an `image` tier before binary/large classification, including
 large or binary-hinted allowlisted images. Open, hydration, save, force-overwrite,
 reload, and Git reconciliation paths treat image tabs as preview-only and never
 materialize bytes. Diff tabs retain their dedicated viewer and video routing
-continues to take precedence. The shared store keeps the 256-ticket capacity,
-idle/absolute expiry, generation invalidation, stale-file `410`, range/HEAD,
+continues to take precedence. The shared store keeps idle/absolute expiry,
+generation invalidation, stale-file `410`, range/HEAD,
 revalidation and private no-store response invariants used by video.
 
 ### git/
@@ -1819,6 +1820,60 @@ without trusting malformed additive data. The existing `GET /api/system/metrics`
 remains a compatible basic-metrics endpoint; new resource APIs are versioned
 siblings. Phase 03 moves it to the shared monitor's cached projection without
 changing its response shape.
+
+### Host-resource glance panel (current UI)
+
+The top-nav popover keeps the same monitoring-only boundary and existing query
+ownership. It combines the cached deep snapshot with the cached compatibility
+metrics; opening the popover may poll the compatibility projection, but it must
+not start another host sampler or add a second telemetry endpoint.
+
+The visible body uses two tiers:
+
+- the glance tier appears first and keeps a stable order: memory used, CPU,
+  pinned storage, every reported temperature sensor, then battery/power;
+- percentage-capable values show a numeric value beside a bounded meter. Memory
+  uses `usedBytes / totalBytes`, not available memory. Battery adds charging
+  state and instantaneous watts when reported;
+- temperature rows keep the same compact meter-like layout but report Celsius.
+  They must not fabricate a percentage until the telemetry contract provides a
+  meaningful per-sensor range or threshold;
+- one disclosure contains memory diagnosis, pressure, cache/slab/swap, storage
+  inventory, process/cgroup scope, alert evidence, and incident history. The
+  active status remains visible outside the disclosure.
+
+Storage pinning is presentation preference only. Global UI config stores one
+optional mount point as `hostResourcePinnedMount` on the API and
+`host_resource_pinned_mount` in TOML. Non-null values are 1–4096 UTF-8 bytes;
+`null` clears the pin. The browser resolves it against the current
+`HostMetrics.disks` list and never sends it into monitoring, alert
+classification, or telemetry. A missing mount stays visibly missing until the
+user changes or clears the pin; it must not silently bind to a different
+filesystem. With no saved pin, the compatibility `HostMetrics.disk` value is
+the default. The pinned mount percentage is the primary storage value and the
+compatibility disk percentage is supporting `(overall …)` context; this label
+is not an aggregate sum across potentially overlapping mounts.
+
+The component dataflow is:
+
+```
+HostResourceMonitor cache
+  -> resource snapshot + compatibility metrics
+  -> TanStack Query cache
+  -> glance metric projection + diagnostic detail projection
+Global UiConfig
+  -> optional pinned mount
+  -> current-disk resolver
+  -> glance storage row only
+```
+
+Key invariants:
+
+- missing, unsupported, and stale values never render as zero;
+- a preference update cannot change sampling, alerts, or host state;
+- the selected mount and the compatibility/overall value remain distinct;
+- meter labels, numbers, warning text, and disclosure controls remain
+  keyboard- and screen-reader-operable; color is never the only state cue.
 
 The release image is built explicitly for `linux/amd64` and uses pinned base
 image digests. Phase 07 evidence measures clean shutdown only for a server with

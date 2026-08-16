@@ -60,7 +60,7 @@ pub struct AppState {
     /// Clone is cheap — Arc-backed.
     pub fs: FsSubsystem,
     /// Shared memory-only media capability store. Image and video adapters use
-    /// this same generation and 256-ticket capacity.
+    /// this same generation and expiry lifecycle.
     pub media_tickets: MediaTicketStore,
     /// Memory-only, purpose-bound capabilities for browser video streaming.
     pub video_stream_tickets: VideoStreamTicketStore,
