@@ -111,8 +111,11 @@ export const FIXED_SSH_FORWARD_ERRORS: Record<
     retryable: false,
   },
   KEY_ENCRYPTED_USE_AGENT: {
-    message:
-      "Load this encrypted key in the OS SSH agent, then use agent authentication.",
+    message: "Enter the passphrase for this encrypted SSH key to continue.",
+    retryable: false,
+  },
+  KEY_PASSPHRASE_INVALID: {
+    message: "The passphrase did not unlock the selected SSH key.",
     retryable: false,
   },
   AGENT_UNAVAILABLE: {

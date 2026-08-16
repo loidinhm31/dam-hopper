@@ -14,14 +14,17 @@
 - **Priority:** P1
 - **Status:** Pending
 - **Effort:** 14h
-- **Description:** Implement the pinned desktop SSH client, OS-agent/safe-key authentication, endpoint-first multi-algorithm trust, exact fingerprint approval, remote-loopback direct-TCP/IP, and one fixed redacted error table.
+- **Description:** Implement the pinned desktop SSH client, OS-agent/safe-key/password authentication, endpoint-first multi-algorithm trust, exact fingerprint approval, remote-loopback direct-TCP/IP, and one fixed redacted error table.
 
 ## Key Insights
 
 - Trust lookup starts at canonical endpoint. Looking up by offered algorithm first can misclassify an algorithm change as a new host.
 - Once any key exists for an endpoint, a new algorithm is a change, not TOFU. Multiple algorithms are accepted only when each exact algorithm/key record already exists.
 - V1 has no arbitrary remote target: every SSH channel targets remote `127.0.0.1:<targetPort>`.
-- Encrypted key files remain agent-only. Accepted v1 has no path picker, passphrase IPC, keychain, password, or subprocess `ssh` fallback.
+- Encrypted key files can be unlocked by the Windows desktop through an ephemeral passphrase IPC
+  request; the decrypted key remains in memory only. The Windows lifecycle prompt also supports
+  ephemeral username/password SSH authentication for a requested retry. There is no path picker,
+  keychain, password persistence, or subprocess `ssh` fallback.
 - Long-lived database/debug channels must not be broken by a surprising app idle timer; resource caps and SSH keepalive handle liveness.
 
 ## Requirements
@@ -54,7 +57,8 @@
 | `AUTO_START_SKIPPED_LIMIT` | Yes | Auto-start was skipped because the active-forward limit was reached. |
 | `KEY_NOT_FOUND` | No | The selected key is no longer in the safe key inventory. |
 | `KEY_UNSAFE` | No | The selected key file does not meet native safety checks. |
-| `KEY_ENCRYPTED_USE_AGENT` | No | Load this encrypted key in the OS SSH agent, then use agent authentication. |
+| `KEY_ENCRYPTED_USE_AGENT` | No | Enter the encrypted key passphrase in the Windows desktop prompt to continue. |
+| `KEY_PASSPHRASE_INVALID` | No | The passphrase did not unlock the selected SSH key. |
 | `AGENT_UNAVAILABLE` | No | Start the OS SSH agent and load an identity before retrying. |
 | `HOST_KEY_APPROVAL_REQUIRED` | No | Verify and approve the SSH host fingerprint before starting again. |
 | `HOST_KEY_CHANGED` | No | SSH host identity changed. Connection blocked; use stopped-app trust repair. |
@@ -82,9 +86,9 @@
 ### Credential providers
 
 - Agent is default. Support only Phase 01-proven protocols; try at most 64 bounded identities without exporting key material.
-- Inventory scans only the desktop SSH directory through trusted root handle: inspect <=256 entries, return <=64 safe unencrypted private keys, ignore symlink/reparse/irregular/public-only/>1MiB/unsafe candidates.
-- Inventory returns opaque stable `keyId`, bounded label, algorithm, fingerprint; no path. At use, resolve current inventory, open root-relative no-follow, verify same regular identity/size, parse from that handle's bytes.
-- Encrypted detection returns `KEY_ENCRYPTED_USE_AGENT`. No prompt/callback/keychain/password/private-key IPC or arbitrary path exists.
+- Inventory scans only the desktop SSH directory through trusted root handle: inspect <=256 entries, return <=64 safe private keys, mark encrypted candidates, and ignore symlink/reparse/irregular/public-only/>1MiB/unsafe candidates.
+- Inventory returns opaque stable `keyId`, bounded label, algorithm, fingerprint, and encrypted status; no path. At use, resolve current inventory, open root-relative no-follow, verify same regular identity/size, parse from that handle's bytes.
+- Encrypted detection returns `KEY_ENCRYPTED_USE_AGENT`; the Windows desktop can then send a bounded passphrase through Tauri IPC, decrypt only in native memory, and retain no passphrase or persisted credential.
 
 ### Endpoint-first host trust
 
@@ -121,11 +125,11 @@ canonical endpoint (host,port) -> endpoint records?
   present + exact algorithm/key -> authenticate
   present + changed key/algorithm -> hard fail -> stopped-app removal -> unknown flow
 
-agent (preferred) OR opaque safe unencrypted key -> SSH session
+agent (preferred) OR opaque local key (ephemeral unlock when encrypted) -> SSH session
 desktop 127.0.0.1 socket -> direct-tcpip remote 127.0.0.1:targetPort
 ```
 
-Traits expose only identity/signing, host-key decision, connect/auth, direct-TCP/IP channel, keepalive, close. No shell/SFTP/remote/SOCKS/password/path methods.
+Traits expose only identity/signing, host-key decision, connect/auth, direct-TCP/IP channel, keepalive, close. No shell/SFTP/remote/SOCKS/path methods; password auth is limited to the ephemeral lifecycle retry.
 
 ## Related code files
 
@@ -165,7 +169,7 @@ Traits expose only identity/signing, host-key decision, connect/auth, direct-TCP
 ## Todo list
 
 - [ ] Full error/retry/message table mirrored in Rust/TypeScript tests.
-- [ ] Agent and contained unencrypted-key flows pass supported OSes.
+- [ ] Agent and contained local-key flows pass supported OSes; encrypted local keys are unlocked only through the Windows desktop Tauri prompt.
 - [ ] Endpoint canonicalization/trailing-dot/case tests pass.
 - [ ] Multiple exact algorithms work; new algorithm/key hard-fails.
 - [ ] Approval matches exact canonical fingerprint and never auto-starts.

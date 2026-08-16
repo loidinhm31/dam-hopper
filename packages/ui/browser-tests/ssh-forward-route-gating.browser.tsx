@@ -98,6 +98,19 @@ const desktopSnapshot = {
   hostKeyChallenges: [],
 } as unknown as SshForwardSnapshot;
 const desktopHostMock = {
+  openClient: vi.fn(async () => ({
+    context: desktopSnapshot.context,
+    activationTokenFloor: "0",
+    activeScopeId: desktopSnapshot.scopeId,
+    scopeGeneration: desktopSnapshot.scopeGeneration,
+  })),
+  activateScope: vi.fn(async () => ({
+    context: desktopSnapshot.context,
+    activationToken: desktopSnapshot.activationToken,
+    scopeId: desktopSnapshot.scopeId,
+    scopeGeneration: desktopSnapshot.scopeGeneration,
+    snapshot: desktopSnapshot,
+  })),
   snapshot: vi.fn(async () => desktopSnapshot),
   subscribe: vi.fn(() => () => {}),
 };

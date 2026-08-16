@@ -72,6 +72,8 @@ function controller(
       pendingAction: null,
       refresh: vi.fn(),
       listKeys: vi.fn(),
+      loadKey: vi.fn(),
+      loadPassword: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
       restart: vi.fn(),

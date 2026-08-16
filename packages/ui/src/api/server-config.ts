@@ -85,9 +85,12 @@ export function getServerUrl(): string {
     return activeProfile.url.replace(/\/$/, "");
   }
 
-  // Packaged native browser transport intentionally stays same-origin until a
-  // native HTTP/WebSocket transport exists. Skip legacy remote URL overrides.
-  if (isNativeBrowserHost()) return `${location.protocol}//${location.host}`;
+  // Native mobile and unknown native hosts stay same-origin until a native
+  // HTTP/WebSocket transport exists. Windows desktop uses the existing
+  // browser transport with an exact backend CORS allowlist.
+  if (isNativeBrowserHost() && !isNativeWindowsHost()) {
+    return `${location.protocol}//${location.host}`;
+  }
 
   // Priority 2: Legacy localStorage (for migration period)
   try {
@@ -410,8 +413,16 @@ function isNativeBrowserHost(): boolean {
   );
 }
 
+/** Whether this is the supported Windows desktop native host. */
+export function isNativeWindowsHost(): boolean {
+  return (
+    isNativeBrowserHost() &&
+    document.documentElement.dataset.appPlatform === "windows"
+  );
+}
+
 function isSameOriginProfile(profile: ServerProfile): boolean {
-  if (!isNativeBrowserHost()) return true;
+  if (!isNativeBrowserHost() || isNativeWindowsHost()) return true;
   if (typeof window === "undefined") return true;
 
   try {

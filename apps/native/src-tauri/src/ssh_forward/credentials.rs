@@ -17,6 +17,14 @@ pub(crate) struct SafeKeyRecord {
     pub(crate) label: String,
     pub(crate) algorithm: String,
     pub(crate) fingerprint: String,
+    pub(crate) encrypted: bool,
+    pub(crate) source: KeySource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum KeySource {
+    Agent,
+    Local,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +33,7 @@ pub(crate) enum CredentialError {
     KeyNotFound,
     KeyUnsafe,
     KeyEncrypted,
+    InvalidPassphrase,
     InvalidInventory,
 }
 
@@ -35,6 +44,7 @@ impl fmt::Display for CredentialError {
             Self::KeyNotFound => "key_not_found",
             Self::KeyUnsafe => "key_unsafe",
             Self::KeyEncrypted => "key_encrypted",
+            Self::InvalidPassphrase => "invalid_passphrase",
             Self::InvalidInventory => "invalid_inventory",
         })
     }
@@ -60,8 +70,11 @@ pub(crate) fn safe_key_inventory() -> Result<Vec<SafeKeyRecord>, CredentialError
 }
 
 #[cfg(windows)]
-pub(crate) fn load_safe_key(key_id: &str) -> Result<Vec<u8>, CredentialError> {
-    windows::load_safe_key(key_id)
+pub(crate) fn load_safe_key(
+    key_id: &str,
+    passphrase: Option<&str>,
+) -> Result<russh::keys::PrivateKey, CredentialError> {
+    windows::load_safe_key(key_id, passphrase)
 }
 
 #[cfg(windows)]
@@ -77,5 +90,9 @@ mod tests {
     fn credential_limits_are_bounded_and_redacted() {
         assert_eq!(max_agent_identities(), 64);
         assert_eq!(CredentialError::KeyEncrypted.to_string(), "key_encrypted");
+        assert_eq!(
+            CredentialError::InvalidPassphrase.to_string(),
+            "invalid_passphrase"
+        );
     }
 }

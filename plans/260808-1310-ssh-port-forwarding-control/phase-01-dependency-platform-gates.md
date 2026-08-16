@@ -37,7 +37,7 @@
 
 ### Concrete Tauri ACL
 
-- Define one `SSH_FORWARD_COMMANDS` constant with exactly 12 snake_case commands: `ssh_forward_open_client`, `ssh_forward_activate_scope`, `ssh_forward_snapshot`, `ssh_forward_create_profile`, `ssh_forward_update_profile`, `ssh_forward_delete_profile`, `ssh_forward_start`, `ssh_forward_stop`, `ssh_forward_restart`, `ssh_forward_list_keys`, `ssh_forward_approve_host`, `ssh_forward_purge_scope`.
+- Define one `SSH_FORWARD_COMMANDS` constant with exactly 14 snake_case commands: `ssh_forward_open_client`, `ssh_forward_activate_scope`, `ssh_forward_snapshot`, `ssh_forward_create_profile`, `ssh_forward_update_profile`, `ssh_forward_delete_profile`, `ssh_forward_start`, `ssh_forward_stop`, `ssh_forward_restart`, `ssh_forward_list_keys`, `ssh_forward_load_key`, `ssh_forward_load_password`, `ssh_forward_approve_host`, `ssh_forward_purge_scope`.
 - `build.rs` preserves browser-debug asset work and calls `tauri_build::try_build(Attributes::new().app_manifest(AppManifest::new().commands(SSH_FORWARD_COMMANDS)))` for desktop targets. Mobile target build gets no SSH-forward command manifest.
 - Check in `permissions/ssh-forward.toml` with this exact intended application-permission shape:
 
@@ -71,7 +71,7 @@ commands.allow = [
 ### Desktop-only dependency graph
 
 - Put SSH, agent, desktop socket/storage helpers under Cargo target dependencies for `cfg(any(target_os="windows",target_os="macos",target_os="linux"))`; modules/state/handlers remain `#[cfg(desktop)]`.
-- Android and iOS dependency trees must contain no accepted SSH/agent/native-handle crates. Build script command manifest and invoke handler exclude all 12 commands on mobile.
+- Android and iOS dependency trees must contain no accepted SSH/agent/native-handle crates. Build script command manifest and invoke handler exclude all 14 commands on mobile.
 - Prove `cargo check` for Android and iOS targets in their native CI environments; TypeScript mobile factory remains host-null/zero-call.
 
 ## Architecture
@@ -80,7 +80,7 @@ commands.allow = [
 Feasibility spike
   |-- pinned SSH/crypto/agent APIs on Windows
   |-- contained key handle + atomic replace Windows proofs
-  |-- AppManifest 12-command ACL + checked-in permission/capability
+  |-- AppManifest 14-command ACL + checked-in permission/capability
   `-- Android/iOS Cargo tree and compile exclusion
        |
        `-- go -> Phase 02 contracts/storage; no-go -> revise plan before code
@@ -92,7 +92,7 @@ No server or shared transport code participates. Existing `server/src/port_forwa
 
 ### Create
 
-- `G:\ws\sharing\dam-hopper\apps\native\src-tauri\permissions\ssh-forward.toml` - exact 12-command application permission.
+- `G:\ws\sharing\dam-hopper\apps\native\src-tauri\permissions\ssh-forward.toml` - exact 14-command application permission.
 - `G:\ws\sharing\dam-hopper\apps\native\src-tauri\capabilities\ssh-forward.json` - main-window desktop capability.
 - `G:\ws\sharing\dam-hopper\plans\260808-1310-ssh-port-forwarding-control\reports\03-native-dependency-platform-gate.md` - pinned versions, licenses, API/platform evidence, go/no-go result.
 
@@ -112,7 +112,7 @@ No server or shared transport code participates. Existing `server/src/port_forwa
 1. Spike candidate SSH crate/crypto backend against strict trust, agent, verified-byte key auth, direct-TCP/IP, keepalive, cancellation, and close. Reject path-only key parsing or blind trust APIs.
 2. Review upstream activity, advisories, MSRV, features, duplicate crypto backends, and all transitive licenses; record exact evidence.
 3. Prototype contained/no-follow root/scope/file handles, feature runtime lock, atomic replace, backup/quarantine, and purge on each desktop runner with deterministic race/fault injection across all native stores and key inventory.
-4. Add the exact 12-command constant, desktop `AppManifest`, checked-in permission TOML, and capability JSON. Generate schemas; assert permission resolves only for main desktop window.
+4. Add the exact 14-command constant, desktop `AppManifest`, checked-in permission TOML, and capability JSON. Generate schemas; assert permission resolves only for main desktop window.
 5. Inspect merged capabilities: document existing `core:default`; ensure this feature adds no core/plugin capability beyond `ssh-forward`.
 6. Gate dependencies by target OS. Run desktop Cargo trees and mobile Cargo trees; assert SSH/agent/native-handle crates are absent on Android/iOS.
 7. Run desktop and mobile compile checks. Test unauthorized window, remote origin, mobile handler absence, and main event listen/unlisten availability.
@@ -124,7 +124,7 @@ No server or shared transport code participates. Existing `server/src/port_forwa
 - [x] Windows OpenSSH named-pipe agent proof recorded.
 - [x] Windows reparse-safe contained-handle, atomic-replace, locking, junction, hard-link, and name-swap proofs pass.
 - [ ] Every profile/trust/meta read/write/backup/quarantine/purge rejects link/reparse/component swaps.
-- [x] App manifest lists exactly 12 commands.
+- [x] App manifest lists exactly 14 commands, including the ephemeral password-load command.
 - [x] Permission TOML and capability schema resolve.
 - [x] Effective `core:default` merge documented; no new core permission added.
 - [x] Android/iOS Cargo trees exclude SSH dependencies and handlers.

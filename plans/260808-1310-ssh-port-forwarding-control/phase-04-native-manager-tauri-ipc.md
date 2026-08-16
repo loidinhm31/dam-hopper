@@ -15,7 +15,7 @@
 - **Priority:** P1
 - **Status:** Complete — Windows native runtime validation passed (2026-08-14)
 - **Effort:** 16h
-- **Description:** Implement Rust-authoritative activation ordering, serialized forward lifecycle, deterministic auto-start, 12-command ACL surface, scope purge, bounded events, and actual Tauri close/exit disposal coordinated with Browser Debug.
+- **Description:** Implement Rust-authoritative activation ordering, serialized forward lifecycle, deterministic auto-start, 14-command ACL surface, ephemeral password retry credentials, scope purge, bounded events, and actual Tauri close/exit disposal coordinated with Browser Debug.
 
 ## Current status
 
@@ -37,7 +37,7 @@ Windows native runtime validation now passes. The earlier `0xc0000139 STATUS_ENT
 
 ## Requirements
 
-### Exact 12-command IPC surface
+### Exact 14-command IPC surface
 
 TypeScript calls `invoke(commandName,{input})`; every nested field is camelCase and rejects unknown fields.
 
@@ -53,13 +53,15 @@ TypeScript calls `invoke(commandName,{input})`; every nested field is camelCase 
 | 8 | `ssh_forward_stop` | `{ context, activationToken, scopeId, scopeGeneration, profileId, expectedGeneration }` | `SshForwardSnapshot` |
 | 9 | `ssh_forward_restart` | `{ context, activationToken, scopeId, scopeGeneration, profileId, expectedGeneration }` | `SshForwardSnapshot` |
 | 10 | `ssh_forward_list_keys` | `{ context, activationToken, scopeId, scopeGeneration }` | `SshKeyInventory` |
-| 11 | `ssh_forward_approve_host` | `{ context, activationToken, scopeId, scopeGeneration, profileId, expectedGeneration, challengeId, algorithm, fingerprint, expectedTrustRevision }` | `SshForwardSnapshot` |
-| 12 | `ssh_forward_purge_scope` | `{ context, activationToken, scopeId, knownScopes: {status:"available",ids:string[]} }` | `{scopeId:string,purged:boolean}` |
+| 11 | `ssh_forward_load_key` | `{ context, activationToken, scopeId, scopeGeneration, profileId, keyId, passphrase }` | `SshForwardSnapshot` |
+| 12 | `ssh_forward_load_password` | `{ context, activationToken, scopeId, scopeGeneration, profileId, username, password }` | `SshForwardSnapshot` |
+| 13 | `ssh_forward_approve_host` | `{ context, activationToken, scopeId, scopeGeneration, profileId, expectedGeneration, challengeId, algorithm, fingerprint, expectedTrustRevision }` | `SshForwardSnapshot` |
+| 14 | `ssh_forward_purge_scope` | `{ context, activationToken, scopeId, knownScopes: {status:"available",ids:string[]} }` | `{scopeId:string,purged:boolean}` |
 
 - All revision/generation/epoch/token fields are canonical decimal strings on IPC only. Handlers parse them to `u64` before numeric comparison; lexicographic comparison is forbidden. All handlers require main webview label and Phase 01 `ssh-forward` permission.
 - `open_client` is the only command without prior context. It validates known scopes, allocates higher client epoch, and never changes active scope.
 - `purge_scope` requires explicit available known-scope list excluding target, target inactive/not staged, valid current client/activation owner, and safe hashed store. Idempotent missing directory returns `purged:false`.
-- App manifest, permission TOML, capability, invoke handler, adapter map, ACL tests, and command-count test all assert exactly the same 12 names.
+- App manifest, permission TOML, capability, invoke handler, adapter map, ACL tests, and command-count test all assert exactly the same 14 names. Password input is bounded, Windows-only, profile-scoped in memory, and never part of the durable profile DTO.
 
 ### Manager-authoritative activation ordering
 
@@ -132,7 +134,7 @@ Commands remain authoritative. Existing Axum server, `server/src/port_forward/**
 - `G:\ws\sharing\dam-hopper\apps\native\src-tauri\src\ssh_forward\mod.rs` - manager/commands exports.
 - `G:\ws\sharing\dam-hopper\apps\native\src-tauri\src\ssh_forward\model.rs` - 12 inputs/results/event DTOs.
 - `G:\ws\sharing\dam-hopper\apps\native\src-tauri\src\ssh_forward\error.rs` - current-value conflict fields.
-- `G:\ws\sharing\dam-hopper\apps\native\src-tauri\permissions\ssh-forward.toml` - keep exact 12-command allowlist synchronized.
+- `G:\ws\sharing\dam-hopper\apps\native\src-tauri\permissions\ssh-forward.toml` - keep exact 14-command allowlist synchronized.
 - `G:\ws\sharing\dam-hopper\apps\native\src-tauri\capabilities\ssh-forward.json` - main desktop inclusion only.
 
 ### Delete
@@ -154,7 +156,7 @@ Commands remain authoritative. Existing Axum server, `server/src/port_forward/**
 
 ## Todo list
 
-- [x] Exactly 12 commands synchronized across manifest/permission/handler/tests — native suite passes.
+- [x] Exactly 14 commands synchronized across manifest/permission/handler/tests — native suite passes.
 - [x] A/B/C activation ordering implemented and exercised by randomized native schedules.
 - [x] Same-scope reload behavior implemented and tested.
 - [x] Process restart/session reset behavior implemented and tested.
@@ -175,7 +177,7 @@ Commands remain authoritative. Existing Axum server, `server/src/port_forward/**
 - 1,000 randomized concurrent A/B/C activation schedules end with only maximum `(clientEpoch,activationToken)` scope committed; deterministic tests cover barriers after intent, before/after stop, after load, before commit, before auto-start, and before publish.
 - Deterministic `"9" -> "10"` and `"99" -> "100"` activation/revision/generation fixtures prove numeric ordering and reject lexical comparators.
 - Reload same scope produces one listener; Stop/switch/exit probes fail to reconnect after <=5 seconds.
-- Main allowed/unauthorized denied/mobile absent tests pass for all 12 commands.
+- Main allowed/unauthorized denied/mobile absent tests pass for all 14 commands.
 
 ## Risk Assessment
 

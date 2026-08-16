@@ -13,7 +13,7 @@ created: 2026-08-08
 
 ## Overview
 
-Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardHost` -> 12-command desktop IPC -> native Rust manager -> desktop `127.0.0.1` listener -> SSH `direct-tcpip` -> remote `127.0.0.1` target. Browser, native mobile, Axum, existing server forwarding/SSH/PTY, and shared WebSocket transport remain outside the feature.
+Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardHost` -> 14-command Windows desktop IPC -> native Rust manager -> desktop `127.0.0.1` listener -> SSH `direct-tcpip` -> remote `127.0.0.1` target. Browser, native mobile, Axum, existing server forwarding/SSH/PTY, and shared WebSocket transport remain outside the feature.
 
 **Accepted scope (2026-08-15): Windows desktop only.** This plan is complete for the Windows implementation, automated native/package gates, and release-evidence workflow. macOS, Linux, Android, iOS, and future signed-updater expansion are separate follow-up scope, not completion blockers for this plan.
 
@@ -25,7 +25,13 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 - All IPC revisions/generations/epochs/tokens are canonical decimal strings on the wire, parsed to `u64`/`BigInt` and compared numerically; lexical comparison is forbidden. Timestamps are RFC3339 UTC milliseconds. Overflow fails closed.
 - `app_config_dir` stores hashed per-scope profiles/trust/meta; runtime is memory-only. Observed profile deletion purges inactive scope; unobserved orphans quarantine 30 days.
 - Every native store/backup/quarantine/purge uses contained no-follow/reparse-safe handles. Changed trust uses a stopped-app locked maintenance mode and protected recovery, never IPC override.
-- OS agent preferred; optional opaque no-follow inventory for safe unencrypted keys. No path/passphrase/keychain/password/shell/general filesystem capability.
+- Windows-only native scope: OS agent preferred; when unavailable, the desktop UI can unlock an
+  opaque no-follow inventory key with an ephemeral passphrase sent only over Tauri IPC. The
+  decrypted key is profile-scoped in memory and is never persisted, logged, or sent to the server.
+  The lifecycle prompt also offers VS Code-style ephemeral SSH username/password authentication;
+  the password is zeroized in native memory, cleared after failed authentication, and never
+  persisted or sent to the HTTP server. No path picker, keychain, password persistence, shell, or
+  general filesystem capability.
 - Endpoint-first canonical host trust accepts only exact pre-recorded algorithm/key; unknown endpoint needs exact fingerprint approval; changed key/algorithm hard-fails to stopped-app remediation.
 - Commands/snapshots are authoritative; scope/generation events only hint refetch. Same-scope reload rehydrates; Stop/scope switch/actual Tauri exit close listeners within 5 seconds.
 - Any local desktop process can use the listener. Product owner must accept this limitation; SSH encryption starts after local loopback.
@@ -45,7 +51,10 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 
 ## Explicit non-goals
 
-- No remote forwarding, SOCKS, IPv6, remote non-loopback target, local-client auth claim, password, encrypted-key prompt, keychain, arbitrary SSH option/path, or browser/mobile fallback.
+- No remote forwarding, SOCKS, IPv6, remote non-loopback target, local-client auth claim, password
+  persistence, keychain, arbitrary SSH option/path, or browser/mobile fallback. The Windows desktop
+  may prompt for an encrypted local key or SSH username/password and keeps all resulting credentials
+  only in memory.
 - No server feature flag/API/manager/store/event/credential reuse and no removal/refactor of existing server forwarding/SSH/PTY behavior.
 - No runtime updater/restart/relaunch in v1; updater artifacts remain packaging metadata until coordinator-backed packaged disposal is proven.
 
@@ -83,3 +92,22 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 - Non-Windows support wording and release evidence remain deferred until a future scope expansion.
 
 **2026-08-15T22:39:00+07:00 - Windows-only re-scope accepted:** The Windows implementation and release-gate scope is complete. Validation covers temporary OpenSSH remote-loopback E2E, redacted evidence schema/validator, exact artifact/hash and commit binding, protected approval-ID/timestamp binding, native Rust/CI/release pre-bundle checks, WebView2/OpenSSH preflight, and the NSIS package profile. The unsigned profile disables updater artifact creation because signing credentials and an updater endpoint are unavailable; runtime updater/relaunch remains absent. Protected runtime evidence remains a production-release prerequisite, while non-Windows/mobile/signed-updater expansion is deferred to a separate plan. Overall plan status is **complete for the accepted Windows-only scope**.
+
+**2026-08-16 - Windows passphrase UX amendment:** When agent authentication is unavailable, the
+desktop control surface lists encrypted local key candidates, prompts for the passphrase in-app,
+decrypts through the Windows native Tauri boundary, and retries the requested lifecycle operation.
+The passphrase is never persisted, logged, or sent to the HTTP server; only the profile-scoped
+decrypted key remains in memory for the active desktop session.
+
+**2026-08-16 - Windows flow correction:** Save Forward now closes only after the authoritative
+profile mutation succeeds, so a pending request cannot be submitted repeatedly. The form resets
+from the selected native profile whenever it opens. Local-key authentication binds an opaque local
+key ID to the forward (encrypted keys are allowed and prompt at Start/Restart); OS-agent profiles
+remain agent-first and label any passphrase fallback with the forward name.
+
+**2026-08-16 - Windows password-auth UX amendment:** The lifecycle credential prompt now offers
+`Username and password` alongside `SSH key passphrase`, matching the practical VS Code Remote-SSH
+flow. The username is prefilled from the forward but editable for the current retry. Password
+credentials travel only through the Windows Tauri IPC boundary, are used for the requested
+Start/Restart attempt, and remain absent from profiles, storage, logs, the HTTP server, and the
+browser host snapshot.

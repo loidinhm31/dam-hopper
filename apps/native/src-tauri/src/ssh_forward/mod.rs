@@ -70,7 +70,7 @@ mod tests {
     }
 
     #[test]
-    fn permission_manifest_allows_exactly_the_twelve_commands() {
+    fn permission_manifest_allows_exactly_the_fourteen_commands() {
         assert_eq!(permission_commands(PERMISSION_MANIFEST), COMMANDS);
     }
 

@@ -24,6 +24,7 @@ use tokio::{
     task::{AbortHandle, JoinHandle, JoinSet},
     time::{interval, sleep, timeout},
 };
+use zeroize::Zeroizing;
 
 #[cfg(test)]
 use std::sync::atomic::AtomicU8;
@@ -40,7 +41,7 @@ use super::{
         AutoStartDisposition, OpenClientResult, PurgeScopeResult, SshForwardEventHint,
         SshForwardEventReason, SshForwardRuntime, SshForwardScopeActivation, SshForwardSnapshot,
         SshForwardState, SshForwardTrustRepairMetadata, SshKeyInventory, SshKeyInventoryItem,
-        UtcTimestamp, WireCounter,
+        SshKeyInventorySource, UtcTimestamp, WireCounter,
     },
     profile::SshForwardProfile,
     scope_retention::KnownScopesInput,
@@ -84,6 +85,32 @@ struct RuntimeEntry {
     suspended: bool,
     stop_tx: Option<oneshot::Sender<Instant>>,
     worker: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone)]
+struct LoadedPassword {
+    credential_attempt_id: String,
+    username: Zeroizing<String>,
+    password: Zeroizing<String>,
+}
+
+struct LoadedPasswordCleanup {
+    manager: Arc<SshForwardManager>,
+    scope_id: String,
+    profile_id: String,
+    credential: Option<Arc<LoadedPassword>>,
+}
+
+impl Drop for LoadedPasswordCleanup {
+    fn drop(&mut self) {
+        if let Some(credential) = self.credential.as_ref() {
+            self.manager.forget_loaded_password_if_same(
+                &self.scope_id,
+                &self.profile_id,
+                credential,
+            );
+        }
+    }
 }
 
 impl RuntimeEntry {
@@ -183,6 +210,8 @@ pub(crate) struct SshForwardManager {
     command_gate: Mutex<()>,
     active_scope: Mutex<Option<ActiveScope>>,
     runtimes: Arc<Mutex<HashMap<String, RuntimeEntry>>>,
+    loaded_keys: std::sync::Mutex<HashMap<(String, String), Arc<russh::keys::PrivateKey>>>,
+    loaded_passwords: std::sync::Mutex<HashMap<(String, String), Arc<LoadedPassword>>>,
     challenges: Mutex<HostKeyChallengeBook>,
     app: Mutex<Option<AppHandle>>,
     event_times: Mutex<HashMap<String, Instant>>,
@@ -226,6 +255,8 @@ impl SshForwardManager {
             command_gate: Mutex::new(()),
             active_scope: Mutex::new(None),
             runtimes: Arc::new(Mutex::new(HashMap::new())),
+            loaded_keys: std::sync::Mutex::new(HashMap::new()),
+            loaded_passwords: std::sync::Mutex::new(HashMap::new()),
             challenges: Mutex::new(HostKeyChallengeBook::default()),
             app: Mutex::new(None),
             event_times: Mutex::new(HashMap::new()),
@@ -644,6 +675,14 @@ impl SshForwardManager {
             committed.revision()
         };
         self.update_profile_revision(committed_revision).await;
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .remove(&(input.request.scope_id.clone(), input.profile_id.clone()));
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .remove(&(input.request.scope_id.clone(), input.profile_id.clone()));
         self.emit_hint(
             Some(input.profile_id.clone()),
             SshForwardEventReason::ProfilesChanged,
@@ -724,6 +763,14 @@ impl SshForwardManager {
             committed.revision()
         };
         self.update_profile_revision(committed_revision).await;
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .remove(&(input.request.scope_id.clone(), input.profile_id.clone()));
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .remove(&(input.request.scope_id.clone(), input.profile_id.clone()));
         self.emit_hint(
             Some(input.profile_id.clone()),
             SshForwardEventReason::ProfilesChanged,
@@ -742,13 +789,23 @@ impl SshForwardManager {
         input: &super::model::ProfileLifecycleInput,
     ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
         let _command = self.command_gate.lock().await;
-        self.start_inner(input).await
+        self.start_inner(input, true).await
     }
 
     async fn start_inner(
         self: &Arc<Self>,
         input: &super::model::ProfileLifecycleInput,
+        allow_loaded_password: bool,
     ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let loaded_password = allow_loaded_password
+            .then(|| {
+                self.take_loaded_password(
+                    &input.scope_id,
+                    &input.profile_id,
+                    input.credential_attempt_id.as_deref(),
+                )
+            })
+            .flatten();
         let store = self
             .checked_scope(
                 &input.context,
@@ -918,6 +975,12 @@ impl SshForwardManager {
         }
         self.close_workers(retired_workers).await;
         self.abort_and_remove_handle(&input.profile_id);
+        let loaded_key = self
+            .loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .get(&(input.scope_id.clone(), input.profile_id.clone()))
+            .cloned();
         let registration = {
             let _admission = self.intent_admission_gate.lock().await;
             let result = self
@@ -952,6 +1015,7 @@ impl SshForwardManager {
                     .await
                     .get(&input.profile_id)
                     .map(|runtime| Arc::clone(&runtime.active_channels));
+                let loaded_password_for_worker = loaded_password.clone();
                 let task = tokio::spawn(async move {
                     manager
                         .run_profile(
@@ -964,6 +1028,8 @@ impl SshForwardManager {
                             profile_id,
                             generation,
                             active_channels.unwrap_or_else(|| Arc::new(AtomicU16::new(0))),
+                            loaded_key,
+                            loaded_password_for_worker,
                             stop_rx,
                         )
                         .await;
@@ -1011,7 +1077,12 @@ impl SshForwardManager {
         input: &super::model::ProfileLifecycleInput,
     ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
         let _command = self.command_gate.lock().await;
-        self.stop_inner(input).await
+        self.forget_loaded_password(&input.scope_id, &input.profile_id);
+        let result = self.stop_inner(input).await;
+        if result.is_ok() {
+            self.forget_loaded_password(&input.scope_id, &input.profile_id);
+        }
+        result
     }
 
     async fn stop_inner(
@@ -1078,6 +1149,11 @@ impl SshForwardManager {
         input: &super::model::ProfileLifecycleInput,
     ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
         let _command = self.command_gate.lock().await;
+        let loaded_password = self.take_loaded_password(
+            &input.scope_id,
+            &input.profile_id,
+            input.credential_attempt_id.as_deref(),
+        );
         self.checked_scope(
             &input.context,
             input.activation_token,
@@ -1111,9 +1187,18 @@ impl SshForwardManager {
             }
         }
         self.stop_inner(input).await?;
+        if let Some(credential) = loaded_password.as_ref() {
+            self.loaded_passwords
+                .lock()
+                .expect("loaded password mutex poisoned")
+                .insert(
+                    (input.scope_id.clone(), input.profile_id.clone()),
+                    Arc::new(credential.as_ref().clone()),
+                );
+        }
         let mut next = input.clone();
         next.expected_generation = input.expected_generation;
-        self.start_inner(&next).await
+        self.start_inner(&next, true).await
     }
 
     pub(crate) async fn list_keys(
@@ -1126,9 +1211,11 @@ impl SshForwardManager {
         let _command = self.command_gate.lock().await;
         self.checked_scope(context, token, scope_id, generation)
             .await?;
-        let mut keys = credentials::agent_inventory()
-            .await
-            .map_err(map_credential_error)?;
+        let mut keys = match credentials::agent_inventory().await {
+            Ok(keys) => keys,
+            Err(CredentialError::AgentUnavailable) => Vec::new(),
+            Err(error) => return Err(map_credential_error(error)),
+        };
         keys.extend(credentials::safe_key_inventory().map_err(map_credential_error)?);
         if !credentials::is_bounded_inventory(keys.len()) {
             return Err(SshForwardErrorCode::KeyUnsafe.command_error());
@@ -1146,9 +1233,127 @@ impl SshForwardManager {
                     label: key.label,
                     algorithm: key.algorithm,
                     fingerprint: key.fingerprint,
+                    encrypted: key.encrypted,
+                    source: match key.source {
+                        credentials::KeySource::Agent => SshKeyInventorySource::Agent,
+                        credentials::KeySource::Local => SshKeyInventorySource::Local,
+                    },
                 })
                 .collect(),
         })
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn load_key(
+        &self,
+        input: &super::model::LoadKeyInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.context,
+                input.activation_token,
+                &input.scope_id,
+                input.scope_generation,
+            )
+            .await?;
+        if input.key_id.is_empty()
+            || input.key_id.len() > 128
+            || !input
+                .key_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            || input.passphrase.len() > 4096
+        {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        let profile = store
+            .load_profiles()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
+            .profiles()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
+            .into_iter()
+            .find(|profile| profile.id == input.profile_id)
+            .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
+        let key_matches_profile = match &profile.auth {
+            super::profile::SshForwardAuth::Agent => true,
+            super::profile::SshForwardAuth::Key { key_id } => key_id == &input.key_id,
+        };
+        if !key_matches_profile {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        let key = credentials::load_safe_key(&input.key_id, Some(input.passphrase.as_str()))
+            .map_err(map_credential_error)?;
+        self.ensure_context(&input.context, input.activation_token)
+            .await?;
+        let snapshot = self
+            .snapshot_inner(&input.context, input.activation_token, &input.scope_id)
+            .await?;
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .insert(
+                (input.scope_id.clone(), input.profile_id.clone()),
+                Arc::new(key),
+            );
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .remove(&(input.scope_id.clone(), input.profile_id.clone()));
+        Ok(snapshot)
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn load_password(
+        &self,
+        input: &super::model::LoadPasswordInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.context,
+                input.activation_token,
+                &input.scope_id,
+                input.scope_generation,
+            )
+            .await?;
+        if input.username.trim().is_empty()
+            || input.username.chars().count() > 64
+            || input.username.chars().any(char::is_control)
+            || input.password.is_empty()
+            || input.password.len() > 4096
+        {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        store
+            .load_profiles()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
+            .profiles()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
+            .into_iter()
+            .find(|profile| profile.id == input.profile_id)
+            .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
+        self.ensure_context(&input.context, input.activation_token)
+            .await?;
+        let snapshot = self
+            .snapshot_inner(&input.context, input.activation_token, &input.scope_id)
+            .await?;
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .insert(
+                (input.scope_id.clone(), input.profile_id.clone()),
+                Arc::new(LoadedPassword {
+                    credential_attempt_id: input.credential_attempt_id.clone(),
+                    username: Zeroizing::new(input.username.clone()),
+                    password: input.password.clone(),
+                }),
+            );
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .remove(&(input.scope_id.clone(), input.profile_id.clone()));
+        Ok(snapshot)
     }
 
     pub(crate) async fn approve_host(
@@ -1269,11 +1474,27 @@ impl SshForwardManager {
         self.stop_all_workers().await;
         *self.active_scope.lock().await = None;
         self.runtimes.lock().await.clear();
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .clear();
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .clear();
     }
 
     /// Emergency fallback after bounded graceful disposal; it only aborts tasks.
     pub(crate) fn force_close(&self) {
         self.shutting_down.store(true, Ordering::Release);
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .clear();
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .clear();
         let aborts = self
             .abort_handles
             .lock()
@@ -1301,6 +1522,49 @@ impl SshForwardManager {
         };
     }
 
+    fn forget_loaded_password(&self, scope_id: &str, profile_id: &str) {
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .remove(&(scope_id.to_owned(), profile_id.to_owned()));
+    }
+
+    fn take_loaded_password(
+        &self,
+        scope_id: &str,
+        profile_id: &str,
+        credential_attempt_id: Option<&str>,
+    ) -> Option<Arc<LoadedPassword>> {
+        let credential = self
+            .loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .remove(&(scope_id.to_owned(), profile_id.to_owned()));
+        credential.filter(|credential| {
+            credential_attempt_id
+                .is_some_and(|attempt_id| attempt_id == credential.credential_attempt_id)
+        })
+    }
+
+    fn forget_loaded_password_if_same(
+        &self,
+        scope_id: &str,
+        profile_id: &str,
+        credential: &Arc<LoadedPassword>,
+    ) {
+        let mut loaded_passwords = self
+            .loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned");
+        let key = (scope_id.to_owned(), profile_id.to_owned());
+        if loaded_passwords
+            .get(&key)
+            .is_some_and(|current| Arc::ptr_eq(current, credential))
+        {
+            loaded_passwords.remove(&key);
+        }
+    }
+
     async fn run_profile(
         self: Arc<Self>,
         profile: SshForwardProfile,
@@ -1312,8 +1576,16 @@ impl SshForwardManager {
         profile_id: String,
         generation: WireCounter,
         active_channels: Arc<AtomicU16>,
+        loaded_key: Option<Arc<russh::keys::PrivateKey>>,
+        loaded_password: Option<Arc<LoadedPassword>>,
         mut stop_rx: oneshot::Receiver<Instant>,
     ) {
+        let _loaded_password_cleanup = LoadedPasswordCleanup {
+            manager: Arc::clone(&self),
+            scope_id: scope_id.clone(),
+            profile_id: profile_id.clone(),
+            credential: loaded_password.clone(),
+        };
         let endpoint = match SshEndpoint::new(&profile.ssh_host, profile.ssh_port) {
             Ok(endpoint) => endpoint,
             Err(code) => {
@@ -1330,7 +1602,16 @@ impl SshForwardManager {
                 };
                 let result = tokio::select! {
                     _ = &mut stop_rx => return,
-                    result = SshSession::connect(&endpoint, &profile.ssh_user, &profile.auth, &trust) => result,
+                    result = SshSession::connect(
+                        &endpoint,
+                        &profile.ssh_user,
+                        &profile.auth,
+                        &trust,
+                        loaded_key.clone(),
+                        loaded_password.as_deref().map(|credential| {
+                            (credential.username.as_str(), credential.password.as_str())
+                        }),
+                    ) => result,
                 };
                 drop(permit);
                 result
@@ -1428,7 +1709,15 @@ impl SshForwardManager {
                     }
                     self.set_reconnecting(&profile_id, generation).await;
                     match self
-                        .reconnect_session(&listener, &endpoint, &profile, &trust, &mut stop_rx)
+                        .reconnect_session(
+                            &listener,
+                            &endpoint,
+                            &profile,
+                            &trust,
+                            &mut stop_rx,
+                            loaded_key.clone(),
+                            loaded_password.clone(),
+                        )
                         .await
                     {
                         ReconnectResult::Connected(next) => {
@@ -1472,6 +1761,8 @@ impl SshForwardManager {
         profile: &SshForwardProfile,
         trust: &StoredTrust,
         stop_rx: &mut oneshot::Receiver<Instant>,
+        loaded_key: Option<Arc<russh::keys::PrivateKey>>,
+        loaded_password: Option<Arc<LoadedPassword>>,
     ) -> ReconnectResult {
         if !profile.reconnect.enabled {
             return ReconnectResult::Failed(SshForwardErrorCode::SshConnectFailed);
@@ -1501,10 +1792,13 @@ impl SshForwardManager {
             let endpoint = endpoint.clone();
             let profile = profile.clone();
             let trust = trust.clone();
-            let mut connect =
-                tokio::spawn(
-                    async move { manager.connect_session(&endpoint, &profile, &trust).await },
-                );
+            let loaded_key = loaded_key.clone();
+            let loaded_password = loaded_password.clone();
+            let mut connect = tokio::spawn(async move {
+                manager
+                    .connect_session(&endpoint, &profile, &trust, loaded_key, loaded_password)
+                    .await
+            });
             loop {
                 tokio::select! {
                     stopped = &mut *stop_rx => {
@@ -1542,13 +1836,25 @@ impl SshForwardManager {
         endpoint: &SshEndpoint,
         profile: &SshForwardProfile,
         trust: &StoredTrust,
+        loaded_key: Option<Arc<russh::keys::PrivateKey>>,
+        loaded_password: Option<Arc<LoadedPassword>>,
     ) -> Result<SshSession, SshTransportError> {
         let permit = self
             .handshake_gate
             .acquire()
             .await
             .map_err(|_| SshTransportError::Connect)?;
-        let result = SshSession::connect(endpoint, &profile.ssh_user, &profile.auth, trust).await;
+        let result = SshSession::connect(
+            endpoint,
+            &profile.ssh_user,
+            &profile.auth,
+            trust,
+            loaded_key,
+            loaded_password
+                .as_deref()
+                .map(|credential| (credential.username.as_str(), credential.password.as_str())),
+        )
+        .await;
         drop(permit);
         result
     }
@@ -1627,8 +1933,9 @@ impl SshForwardManager {
                 scope_generation: active.generation,
                 profile_id: profile.id,
                 expected_generation: WireCounter::ZERO,
+                credential_attempt_id: None,
             };
-            starts.spawn(async move { manager.start_inner(&input).await });
+            starts.spawn(async move { manager.start_inner(&input, false).await });
         }
         while let Some(result) = starts.join_next().await {
             match result {
@@ -1677,14 +1984,18 @@ impl SshForwardManager {
             .collect::<Vec<_>>();
         for (profile_id, generation) in suspended {
             self.check_intent(key).await?;
-            self.start_inner(&super::model::ProfileLifecycleInput {
-                context: context.clone(),
-                activation_token: token,
-                scope_id: active.id.clone(),
-                scope_generation: active.generation,
-                profile_id,
-                expected_generation: generation,
-            })
+            self.start_inner(
+                &super::model::ProfileLifecycleInput {
+                    context: context.clone(),
+                    activation_token: token,
+                    scope_id: active.id.clone(),
+                    scope_generation: active.generation,
+                    profile_id,
+                    expected_generation: generation,
+                    credential_attempt_id: None,
+                },
+                false,
+            )
             .await?;
         }
         Ok(())
@@ -1748,6 +2059,10 @@ impl SshForwardManager {
                 runtime.changed_at = UtcTimestamp::now();
             }
         }
+        // A terminal failure is actionable UI state. Bypass the normal runtime
+        // hint throttle so a fast connect failure cannot be hidden behind the
+        // preceding start hint.
+        self.event_times.lock().await.remove(profile_id);
         self.emit_hint(
             Some(profile_id.into()),
             SshForwardEventReason::RuntimeChanged,
@@ -1968,6 +2283,15 @@ impl SshForwardManager {
         if current != (key.client_epoch, key.activation_token) {
             return Err(SshForwardErrorCode::ActivationSuperseded.command_error());
         }
+        let next_scope_id = next.as_ref().map(|scope| scope.id.as_str());
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .retain(|(scope_id, _), _| Some(scope_id.as_str()) == next_scope_id);
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .retain(|(scope_id, _), _| Some(scope_id.as_str()) == next_scope_id);
         *self.active_scope.lock().await = next;
         Ok(())
     }
@@ -2213,6 +2537,7 @@ impl SshForwardErrorCode {
             CredentialError::KeyNotFound => Self::KeyNotFound,
             CredentialError::KeyUnsafe | CredentialError::InvalidInventory => Self::KeyUnsafe,
             CredentialError::KeyEncrypted => Self::KeyEncryptedUseAgent,
+            CredentialError::InvalidPassphrase => Self::KeyPassphraseInvalid,
         }
     }
 }
@@ -2234,11 +2559,13 @@ mod tests {
         server::{Auth, Handler, Server as ServerTrait},
     };
     use tokio::net::{TcpListener, TcpStream};
+    use zeroize::Zeroizing;
 
     use super::{
         abort_channel_tasks, partition_auto_start_candidates, record_activation_intent,
-        ActivationBarrierPoint, ActivationIntent, ActivationKey, RuntimeEntry, SshForwardManager,
-        ACTIVE_FORWARD_LIMIT, HANDSHAKE_CONCURRENCY_LIMIT,
+        ActivationBarrierPoint, ActivationIntent, ActivationKey, LoadedPassword,
+        LoadedPasswordCleanup, RuntimeEntry, SshForwardManager, ACTIVE_FORWARD_LIMIT,
+        HANDSHAKE_CONCURRENCY_LIMIT,
     };
     use crate::ssh_forward::{
         error::SshForwardErrorCode,
@@ -2293,6 +2620,71 @@ mod tests {
         ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn loaded_password_cleanup_is_identity_safe() {
+        let config = temp_config_dir("loaded-password-cleanup");
+        let manager = Arc::new(SshForwardManager::new(&config).unwrap());
+        let key = (SCOPE.to_owned(), "profile".to_owned());
+        let credential = Arc::new(LoadedPassword {
+            credential_attempt_id: "attempt-1".to_owned(),
+            username: Zeroizing::new("operator".to_owned()),
+            password: Zeroizing::new("secret".to_owned()),
+        });
+        manager
+            .loaded_passwords
+            .lock()
+            .unwrap()
+            .insert(key.clone(), Arc::clone(&credential));
+
+        drop(LoadedPasswordCleanup {
+            manager: Arc::clone(&manager),
+            scope_id: SCOPE.to_owned(),
+            profile_id: "profile".to_owned(),
+            credential: Some(Arc::clone(&credential)),
+        });
+        assert!(!manager.loaded_passwords.lock().unwrap().contains_key(&key));
+
+        manager
+            .loaded_passwords
+            .lock()
+            .unwrap()
+            .insert(key.clone(), Arc::clone(&credential));
+        assert!(manager
+            .take_loaded_password(SCOPE, "profile", Some("attempt-1"))
+            .is_some());
+        assert!(manager.loaded_passwords.lock().unwrap().get(&key).is_none());
+        manager
+            .loaded_passwords
+            .lock()
+            .unwrap()
+            .insert(key.clone(), Arc::clone(&credential));
+        let replacement = Arc::new(LoadedPassword {
+            credential_attempt_id: "attempt-2".to_owned(),
+            username: Zeroizing::new("replacement".to_owned()),
+            password: Zeroizing::new("new-secret".to_owned()),
+        });
+        manager
+            .loaded_passwords
+            .lock()
+            .unwrap()
+            .insert(key.clone(), Arc::clone(&replacement));
+        drop(LoadedPasswordCleanup {
+            manager: Arc::clone(&manager),
+            scope_id: SCOPE.to_owned(),
+            profile_id: "profile".to_owned(),
+            credential: Some(credential),
+        });
+        assert!(manager
+            .loaded_passwords
+            .lock()
+            .unwrap()
+            .get(&key)
+            .is_some_and(|current| Arc::ptr_eq(current, &replacement)));
+
+        drop(manager);
+        std::fs::remove_dir_all(config).unwrap();
     }
 
     async fn wait_for_token(manager: &Arc<SshForwardManager>, token: WireCounter) {
@@ -2858,6 +3250,7 @@ mod tests {
             scope_generation: activation.scope_generation,
             profile_id: profile_id.into(),
             expected_generation: WireCounter::parse("1").unwrap(),
+            credential_attempt_id: None,
         };
         let start_snapshot = manager.start(&input).await.unwrap();
         assert_eq!(start_snapshot.host_key_challenges.len(), 1);
@@ -2976,6 +3369,7 @@ mod tests {
             scope_generation: activation.scope_generation,
             profile_id: profile_id.into(),
             expected_generation: WireCounter::ZERO,
+            credential_attempt_id: None,
         };
         manager.start(&input).await.unwrap();
         let challenge = tokio::time::timeout(Duration::from_secs(5), async {
@@ -3088,6 +3482,7 @@ mod tests {
                 scope_generation: activation.scope_generation,
                 profile_id: "probe".into(),
                 expected_generation: WireCounter::parse("1").unwrap(),
+                credential_attempt_id: None,
             })
             .await
             .unwrap();

@@ -855,6 +855,17 @@ impl ScopeStore {
         self.read_typed(META_FILE, StoredScopeMeta::validate)
     }
 
+    fn ensure_metadata_unlocked(&self) -> io::Result<()> {
+        match self.load_meta_unlocked() {
+            Ok(_) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => self.write_typed(
+                META_FILE,
+                &StoredScopeMeta::new(&self.scope_id, UtcTimestamp::now()),
+            ),
+            Err(error) => Err(error),
+        }
+    }
+
     fn validate_documents_for_purge(&self) -> io::Result<()> {
         self.load_profiles_unlocked()?;
         self.load_trust_unlocked()?;
@@ -884,6 +895,7 @@ impl ScopeStore {
             .increment()
             .map_err(|_| invalid_data("counter_exhausted"))?;
         next.validate(&self.scope_id)?;
+        self.ensure_metadata_unlocked()?;
         self.write_typed(PROFILES_FILE, &next)?;
         Ok(next)
     }
@@ -907,6 +919,7 @@ impl ScopeStore {
             .increment()
             .map_err(|_| invalid_data("counter_exhausted"))?;
         next.validate(&self.scope_id)?;
+        self.ensure_metadata_unlocked()?;
         self.write_typed(TRUST_FILE, &next)?;
         Ok(next)
     }
@@ -3477,11 +3490,26 @@ mod tests {
         let fixture = Fixture::new();
         let store = SshForwardStore::open(&fixture.root).unwrap();
         let scope = store.scope(SCOPE).unwrap();
+        fs::write(
+            fixture.scope_dir().join(PROFILES_FILE),
+            toml::to_string(&StoredProfiles::empty(SCOPE)).unwrap(),
+        )
+        .unwrap();
+        drop(scope);
+        assert!(store.enumerate_scopes().is_err());
+    }
+
+    #[test]
+    fn profile_write_materializes_scope_metadata() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
         scope
             .replace_profiles(WireCounter::ZERO, StoredProfiles::empty(SCOPE))
             .unwrap();
-        drop(scope);
-        assert!(store.enumerate_scopes().is_err());
+
+        assert!(fixture.scope_dir().join(META_FILE).exists());
+        assert_eq!(store.enumerate_scopes().unwrap().len(), 1);
     }
 
     #[test]

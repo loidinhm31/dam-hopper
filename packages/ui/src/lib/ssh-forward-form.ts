@@ -92,7 +92,7 @@ export function validateSshForwardDraft(
   if (parsePort(draft.targetPort) === null)
     errors.targetPort = portMessage("Target");
   if (draft.authMode === "key" && !isSafeKeyId(draft.keyId)) {
-    errors.keyId = "Select a safe key from the native inventory.";
+    errors.keyId = "Select a local SSH key from the native inventory.";
   }
   if (draft.reconnectEnabled) {
     const attempts = parsePort(draft.reconnectMaxAttempts);

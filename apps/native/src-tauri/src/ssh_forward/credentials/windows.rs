@@ -13,7 +13,7 @@ use russh::keys::{agent::client::AgentClient, HashAlg, PrivateKey};
 use sha2::{Digest, Sha256};
 use tokio::time::timeout;
 
-use super::{CredentialError, SafeKeyRecord};
+use super::{CredentialError, KeySource, SafeKeyRecord};
 use crate::ssh_forward::known_hosts::is_supported_algorithm;
 use crate::ssh_forward::windows_storage_probe::{
     enumerate_directory_tolerant, open_root, validate_retained_handle,
@@ -51,6 +51,8 @@ pub(crate) async fn agent_inventory() -> Result<Vec<SafeKeyRecord>, CredentialEr
             label: format!("Agent identity {}", index + 1),
             algorithm,
             fingerprint,
+            encrypted: false,
+            source: KeySource::Agent,
         })
         .collect())
 }
@@ -60,7 +62,10 @@ pub(crate) fn safe_key_inventory() -> Result<Vec<SafeKeyRecord>, CredentialError
     scan_inventory(&root)
 }
 
-pub(crate) fn load_safe_key(key_id: &str) -> Result<Vec<u8>, CredentialError> {
+pub(crate) fn load_safe_key(
+    key_id: &str,
+    passphrase: Option<&str>,
+) -> Result<PrivateKey, CredentialError> {
     let root = ssh_directory()?;
     let entries = inventory_entries(&root)?;
     for entry in entries {
@@ -84,13 +89,19 @@ pub(crate) fn load_safe_key(key_id: &str) -> Result<Vec<u8>, CredentialError> {
         if key_id_for(&key) != key_id {
             continue;
         }
-        if !is_supported_algorithm(key.algorithm().as_ref()) {
+        let algorithm = key.public_key().algorithm().to_string();
+        if !is_supported_algorithm(&algorithm) {
             continue;
         }
         if key.is_encrypted() {
-            return Err(CredentialError::KeyEncrypted);
+            let Some(passphrase) = passphrase else {
+                return Err(CredentialError::KeyEncrypted);
+            };
+            return key
+                .decrypt(passphrase.as_bytes())
+                .map_err(|_| CredentialError::InvalidPassphrase);
         }
-        return Ok(bytes);
+        return Ok(key);
     }
     Err(CredentialError::KeyNotFound)
 }
@@ -120,17 +131,22 @@ fn scan_inventory(
         let Ok(key) = PrivateKey::from_openssh(&bytes) else {
             continue;
         };
-        if key.is_encrypted() {
+        let algorithm = key.public_key().algorithm().to_string();
+        if !is_supported_algorithm(&algorithm) {
             continue;
         }
-        if !is_supported_algorithm(key.algorithm().as_ref()) {
-            continue;
-        }
+        let encrypted = key.is_encrypted();
         records.push(SafeKeyRecord {
             key_id: key_id_for(&key),
-            label: safe_label(&entry.name),
-            algorithm: key.algorithm().to_string(),
-            fingerprint: key.fingerprint(HashAlg::Sha256).to_string(),
+            label: if encrypted {
+                format!("{} (passphrase required)", safe_label(&entry.name))
+            } else {
+                safe_label(&entry.name)
+            },
+            algorithm,
+            fingerprint: key.public_key().fingerprint(HashAlg::Sha256).to_string(),
+            encrypted,
+            source: KeySource::Local,
         });
         if records.len() == super::MAX_AGENT_IDENTITIES {
             break;

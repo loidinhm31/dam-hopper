@@ -28,6 +28,7 @@ pub(crate) enum SshForwardErrorCode {
     KeyNotFound,
     KeyUnsafe,
     KeyEncryptedUseAgent,
+    KeyPassphraseInvalid,
     AgentUnavailable,
     HostKeyApprovalRequired,
     HostKeyChanged,
@@ -136,9 +137,10 @@ impl SshForwardErrorCode {
                 false,
             ),
             KeyEncryptedUseAgent => (
-                "Load this encrypted key in the OS SSH agent, then use agent authentication.",
+                "Enter the passphrase for this encrypted SSH key to continue.",
                 false,
             ),
+            KeyPassphraseInvalid => ("The passphrase did not unlock the selected SSH key.", false),
             AgentUnavailable => (
                 "Start the OS SSH agent and load an identity before retrying.",
                 false,
@@ -270,6 +272,7 @@ mod tests {
             KeyNotFound,
             KeyUnsafe,
             KeyEncryptedUseAgent,
+            KeyPassphraseInvalid,
             AgentUnavailable,
             HostKeyApprovalRequired,
             HostKeyChanged,
