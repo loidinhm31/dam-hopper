@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleSharedTerminalKeyEvent } from "./terminal-keyboard-shortcuts.js";
+import {
+  handleSharedTerminalKeyEvent,
+  handleTerminalFontSizeShortcut,
+} from "./terminal-keyboard-shortcuts.js";
 
 function key(overrides: Partial<KeyboardEvent> & { code: string }) {
   return {
@@ -17,6 +20,49 @@ function key(overrides: Partial<KeyboardEvent> & { code: string }) {
 }
 
 describe("handleSharedTerminalKeyEvent", () => {
+  it("matches native keyboard properties that are not enumerable", () => {
+    const onIncrease = vi.fn();
+    const event = Object.defineProperties(
+      {},
+      {
+        type: { value: "keydown" },
+        code: { value: "KeyZ" },
+        key: { value: "z" },
+        ctrlKey: { value: true },
+        metaKey: { value: false },
+        altKey: { value: false },
+        shiftKey: { value: false },
+        repeat: { value: false },
+        isComposing: { value: false },
+        preventDefault: { value: vi.fn() },
+      },
+    ) as KeyboardEvent;
+
+    expect(
+      handleTerminalFontSizeShortcut(event, {
+        increaseShortcut: "Ctrl+KeyZ",
+        onIncrease,
+      }),
+    ).toBe(false);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(onIncrease).toHaveBeenCalledOnce();
+  });
+
+  it("handles a configured font shortcut without terminal focus", () => {
+    const onIncrease = vi.fn();
+    const event = key({ code: "KeyZ", key: "z", ctrlKey: true });
+
+    expect(
+      handleTerminalFontSizeShortcut(event, {
+        increaseShortcut: "Ctrl+KeyZ",
+        decreaseShortcut: "Ctrl+KeyX",
+        onIncrease,
+      }),
+    ).toBe(false);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(onIncrease).toHaveBeenCalledOnce();
+  });
+
   it("copies terminal selection on Ctrl+Shift+C", () => {
     const onCopySelection = vi.fn();
 
