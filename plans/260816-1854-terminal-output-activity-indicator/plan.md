@@ -1,7 +1,7 @@
 ---
 title: "Terminal Output Activity Indicator"
 description: "Add browser-local recent-output state to every mounted Runtime terminal row without changing server transport."
-status: pending
+status: in-progress
 priority: P2
 effort: 9h
 branch: feat/terminal-output-activity-indicator
@@ -25,12 +25,12 @@ Observe non-empty live terminal chunks at the post-replay xterm write seam. Publ
 
 ## Phases
 
-Plan progress: Phase 01 complete (1/3 phases, 33%).
+Plan progress: Phases 01–02 complete (2/3 phases, 67%); Phase 03 pending.
 
 | # | Phase | Status | Progress | Effort | Link |
 |---|---|---|---:|---:|---|
 | 1 | Activity store and lifecycle publisher | DONE 2026-08-16 22:52:22 +07:00 | 100% | 4h | [phase-01](./phase-01-activity-store-and-lifecycle.md) |
-| 2 | Runtime row presentation | Pending | 0% | 2h | [phase-02](./phase-02-runtime-row-presentation.md) |
+| 2 | Runtime row presentation | DONE 2026-08-17 00:44:18 +07:00 | 100% | 2h | [phase-02](./phase-02-runtime-row-presentation.md) |
 | 3 | Regression coverage and validation | Pending | 0% | 3h | [phase-03](./phase-03-regression-coverage-and-validation.md) |
 
 ## Dependencies
