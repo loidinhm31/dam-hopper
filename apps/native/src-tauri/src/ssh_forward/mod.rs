@@ -31,6 +31,8 @@ pub(crate) mod trust_repair;
 #[cfg(windows)]
 pub(crate) mod commands;
 #[cfg(windows)]
+pub(crate) mod connection_runtime;
+#[cfg(windows)]
 pub(crate) mod manager;
 #[cfg(windows)]
 #[allow(dead_code)]

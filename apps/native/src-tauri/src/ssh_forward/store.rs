@@ -898,6 +898,10 @@ impl ScopeStore {
         self.ensure_live()?;
         let _gate = lock(&self.write_gate)?;
         let _file_lock = acquire_file_lock(&self.lock_file)?;
+        // V2 rule revisions are manager-owned while a scope is live. Until
+        // the synchronized Phase 04 writer is published, reject direct store
+        // writes rather than allowing a listener to outlive its definition.
+        let _activity = self.acquire_activity_lock_locked()?;
         let _fence = self.acquire_scope_operation_fence()?;
         self.ensure_current()?;
         let current = self.load_scope_config_unlocked()?;
@@ -2846,6 +2850,15 @@ mod tests {
         assert_eq!(on_disk.connections.len(), 1);
         assert_eq!(on_disk.rules.len(), 1);
         assert_eq!(on_disk.rules[0].connection_profile_id, first_connection.id);
+
+        let activity = scope.acquire_activity_lease().unwrap();
+        let rejected = scope.replace_rules(
+            on_disk.rules_revision,
+            StoredScopeConfigV2::from_models(SCOPE, on_disk.connections().unwrap(), vec![])
+                .unwrap(),
+        );
+        assert_eq!(rejected.unwrap_err().to_string(), "scope_active");
+        drop(activity);
     }
 
     #[test]
