@@ -1,12 +1,36 @@
+// @vitest-environment jsdom
+
+import { act, useEffect } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getTerminalOutputActivitySnapshot,
+  registerTerminalOutputActivity,
+  type TerminalOutputActivityRegistration,
+} from "@/lib/terminal-output-activity.js";
 
 const renderedPanelProps: Array<Record<string, unknown>> = [];
+const activityRegistrations = new Map<
+  string,
+  TerminalOutputActivityRegistration
+>();
 const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("@/components/organisms/TerminalPanel.js", () => ({
   TerminalPanel: (props: Record<string, unknown>) => {
     renderedPanelProps.push(props);
+    useEffect(() => {
+      const sessionId = String(props.sessionId);
+      const registration = registerTerminalOutputActivity(sessionId);
+      registration.setStreamReady(true);
+      activityRegistrations.set(sessionId, registration);
+
+      return () => {
+        registration.dispose();
+        activityRegistrations.delete(sessionId);
+      };
+    }, [props.sessionId]);
     return null;
   },
 }));
@@ -18,6 +42,18 @@ vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
 }));
 
 import { TerminalKeepAliveHost } from "./TerminalKeepAliveHost.js";
+
+let root: Root | null = null;
+
+afterEach(() => {
+  if (root) {
+    act(() => root?.unmount());
+    root = null;
+  }
+  renderedPanelProps.length = 0;
+  activityRegistrations.clear();
+  mockPolicy.enabled = false;
+});
 
 describe("TerminalKeepAliveHost", () => {
   it("overrides an explicit native-input opt-out when Android policy is active", () => {
@@ -136,5 +172,57 @@ describe("TerminalKeepAliveHost", () => {
         webglEnabled: true,
       }),
     ]);
+  });
+
+  it("keeps hidden sessions isolated and disposes removed panels", () => {
+    const host = (
+      <TerminalKeepAliveHost
+        mountedSessions={[
+          { sessionId: "hidden-a", project: "web", command: "bash" },
+          { sessionId: "hidden-b", project: "api", command: "bash" },
+        ]}
+      />
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+
+    act(() => root?.render(host));
+
+    expect(activityRegistrations).toHaveProperty("size", 2);
+    activityRegistrations.get("hidden-a")?.markOutput();
+    expect(getTerminalOutputActivitySnapshot("hidden-a")).toEqual({
+      recentOutput: true,
+      streamReady: true,
+    });
+    expect(getTerminalOutputActivitySnapshot("hidden-b")).toEqual({
+      recentOutput: false,
+      streamReady: true,
+    });
+
+    act(() =>
+      root?.render(
+        <TerminalKeepAliveHost
+          mountedSessions={[
+            { sessionId: "hidden-b", project: "api", command: "bash" },
+          ]}
+        />,
+      ),
+    );
+
+    expect(getTerminalOutputActivitySnapshot("hidden-a")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+    expect(activityRegistrations).toHaveProperty("size", 1);
+
+    act(() => root?.unmount());
+    root = null;
+    container.remove();
+
+    expect(getTerminalOutputActivitySnapshot("hidden-b")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
   });
 });

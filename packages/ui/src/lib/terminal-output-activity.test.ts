@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  TERMINAL_OUTPUT_ACTIVITY_WINDOW_MS,
   getTerminalOutputActivitySnapshot,
   registerTerminalOutputActivity,
   subscribeToTerminalOutputActivity,
@@ -129,6 +130,64 @@ describe("terminal output activity", () => {
     unsubscribe();
   });
 
+  it("notifies only for externally visible transitions", () => {
+    const activity = registerTerminalOutputActivity("activity-transitions");
+    const listener = vi.fn();
+    const unsubscribe = subscribeToTerminalOutputActivity(
+      "activity-transitions",
+      listener,
+    );
+
+    activity.markOutput();
+    expect(listener).not.toHaveBeenCalled();
+
+    activity.setStreamReady(true);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(getTerminalOutputActivitySnapshot("activity-transitions")).toEqual({
+      recentOutput: false,
+      streamReady: true,
+    });
+
+    activity.markOutput();
+    activity.markOutput();
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    activity.setStreamReady(false);
+    activity.setStreamReady(false);
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(getTerminalOutputActivitySnapshot("activity-transitions")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+
+    activity.setStreamReady(true);
+    expect(listener).toHaveBeenCalledTimes(4);
+
+    activity.dispose();
+    unsubscribe();
+  });
+
+  it("cancels the expiry timer and removes state after owner cleanup", () => {
+    const activity = registerTerminalOutputActivity("activity-cleanup");
+    activity.setStreamReady(true);
+    activity.markOutput();
+    const unsubscribe = subscribeToTerminalOutputActivity(
+      "activity-cleanup",
+      vi.fn(),
+    );
+
+    activity.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    unsubscribe();
+
+    expect(getTerminalOutputActivitySnapshot("activity-cleanup")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+    vi.advanceTimersByTime(TERMINAL_OUTPUT_ACTIVITY_WINDOW_MS);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("clears recent activity and prevents an obsolete owner from clearing a replacement", () => {
     const original = registerTerminalOutputActivity("activity-owner");
     original.setStreamReady(true);
@@ -138,6 +197,9 @@ describe("terminal output activity", () => {
       "activity-owner",
       vi.fn(),
     );
+
+    original.setStreamReady(true);
+    original.markOutput();
 
     expect(getTerminalOutputActivitySnapshot("activity-owner")).toEqual({
       recentOutput: false,
