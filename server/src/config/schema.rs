@@ -471,6 +471,18 @@ fn default_terminal_codex_notification_sound_volume() -> u8 {
     100
 }
 
+fn default_terminal_font_size() -> u16 {
+    13
+}
+
+fn default_terminal_font_size_increase_shortcut() -> String {
+    "Ctrl+Alt+Shift+Equal".to_string()
+}
+
+fn default_terminal_font_size_decrease_shortcut() -> String {
+    "Ctrl+Alt+Minus".to_string()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TerminalCodexNotificationSoundPattern {
@@ -502,6 +514,8 @@ pub struct UiConfig {
     pub system_font_size: u16,
     #[serde(default = "default_editor_font_size", alias = "editor_font_size")]
     pub editor_font_size: u16,
+    #[serde(default = "default_terminal_font_size", alias = "terminal_font_size")]
+    pub terminal_font_size: u16,
     #[serde(
         default = "default_editor_zoom_wheel_enabled",
         alias = "editor_zoom_wheel_enabled"
@@ -544,6 +558,16 @@ pub struct UiConfig {
         alias = "fleet_terminal_shortcut"
     )]
     pub fleet_terminal_shortcut: String,
+    #[serde(
+        default = "default_terminal_font_size_increase_shortcut",
+        alias = "terminal_font_size_increase_shortcut"
+    )]
+    pub terminal_font_size_increase_shortcut: String,
+    #[serde(
+        default = "default_terminal_font_size_decrease_shortcut",
+        alias = "terminal_font_size_decrease_shortcut"
+    )]
+    pub terminal_font_size_decrease_shortcut: String,
     #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
     pub terminal_suggestions_enabled: bool,
     #[serde(
@@ -668,6 +692,7 @@ impl Default for UiConfig {
             host_resource_pinned_mount: None,
             system_font_size: default_system_font_size(),
             editor_font_size: default_editor_font_size(),
+            terminal_font_size: default_terminal_font_size(),
             editor_zoom_wheel_enabled: default_editor_zoom_wheel_enabled(),
             search_text_shortcut: default_search_text_shortcut(),
             search_filename_shortcut: default_search_filename_shortcut(),
@@ -677,6 +702,8 @@ impl Default for UiConfig {
             git_panel_shortcut: default_git_panel_shortcut(),
             ports_panel_shortcut: default_ports_panel_shortcut(),
             fleet_terminal_shortcut: default_fleet_terminal_shortcut(),
+            terminal_font_size_increase_shortcut: default_terminal_font_size_increase_shortcut(),
+            terminal_font_size_decrease_shortcut: default_terminal_font_size_decrease_shortcut(),
             terminal_suggestions_enabled: true,
             terminal_auto_switch_project_enabled: true,
             terminal_codex_notifications_enabled: false,
@@ -720,10 +747,11 @@ impl UiConfig {
         }
     }
 
-    /// Validates that both font sizes are in the allowed range [10, 32].
+    /// Validates that all desktop font sizes are in the allowed range [10, 32].
     pub fn validate_font_sizes(&self) -> Result<(), String> {
         Self::validate_font_size(self.system_font_size)?;
-        Self::validate_font_size(self.editor_font_size)
+        Self::validate_font_size(self.editor_font_size)?;
+        Self::validate_font_size(self.terminal_font_size)
     }
 
     pub fn validate_mobile_keyboard_sizes(&self) -> Result<(), String> {
