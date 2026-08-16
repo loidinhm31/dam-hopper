@@ -1,6 +1,14 @@
 //! Narrow `russh` adapter: agent auth, strict host-key callback, and direct TCP.
 
-use std::{fmt, future::Future, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    future::Future,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc, Mutex as StdMutex,
+    },
+    time::Duration,
+};
 
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
@@ -18,6 +26,7 @@ use russh::{
 use tokio::{
     io::{copy_bidirectional, AsyncRead, AsyncWrite},
     net::TcpStream,
+    sync::Mutex as TokioMutex,
     time::timeout,
 };
 
@@ -36,6 +45,9 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 // russh 0.62 closes when `alive_timeouts > keepalive_max`, so 2 yields
 // closure on the third unanswered probe required by the Phase 03 contract.
 const KEEPALIVE_MAX: usize = 2;
+const SESSION_OPEN: u8 = 0;
+const SESSION_CLOSING: u8 = 1;
+const SESSION_CLOSED: u8 = 2;
 
 #[cfg(test)]
 pub(crate) const TEST_PRIVATE_KEY_ID: &str = "phase04-test-key";
@@ -77,6 +89,7 @@ pub(crate) enum SshTransportError {
     ChannelOpen,
     ChannelOpenTimeout,
     TargetNotAllowed,
+    SessionClosed,
     ShutdownTimeout,
     Russh(russh::Error),
 }
@@ -95,6 +108,7 @@ impl fmt::Display for SshTransportError {
             Self::ChannelOpen => "channel_open_failed",
             Self::ChannelOpenTimeout => "channel_open_timeout",
             Self::TargetNotAllowed => "target_not_allowed",
+            Self::SessionClosed => "session_closed",
             Self::ShutdownTimeout => "shutdown_timeout",
             Self::Russh(_) => "russh_error",
         })
@@ -136,6 +150,7 @@ impl SshTransportError {
             Self::ChannelOpen => SshForwardErrorCode::TargetConnectFailed,
             Self::ChannelOpenTimeout => SshForwardErrorCode::ChannelOpenTimeout,
             Self::TargetNotAllowed => SshForwardErrorCode::TargetNotAllowed,
+            Self::SessionClosed => SshForwardErrorCode::ConnectionNotEstablished,
             Self::ShutdownTimeout => SshForwardErrorCode::ShutdownTimeout,
         }
     }
@@ -145,6 +160,7 @@ impl SshTransportError {
 struct RusshHandler {
     endpoint: SshEndpoint,
     trust: StoredTrust,
+    accepted_host_key: Arc<StdMutex<Option<OfferedHostKey>>>,
 }
 
 impl Handler for RusshHandler {
@@ -157,7 +173,13 @@ impl Handler for RusshHandler {
         let offered = OfferedHostKey::from_russh(server_public_key)
             .map_err(|_| SshTransportError::Connect)?;
         match inspect_trust(&self.trust, &self.endpoint, &offered) {
-            TrustDecision::Trusted => Ok(true),
+            TrustDecision::Trusted => {
+                *self
+                    .accepted_host_key
+                    .lock()
+                    .map_err(|_| SshTransportError::Connect)? = Some(offered);
+                Ok(true)
+            }
             TrustDecision::Unknown => Err(SshTransportError::HostKeyRejected(offered)),
             TrustDecision::ChangedKey => Err(SshTransportError::HostKeyChanged(offered)),
             TrustDecision::ChangedAlgorithm => {
@@ -172,6 +194,9 @@ impl Handler for RusshHandler {
 
 pub(crate) struct SshSession {
     handle: Handle<RusshHandler>,
+    accepted_host_key: Arc<StdMutex<Option<OfferedHostKey>>>,
+    state: AtomicU8,
+    close_gate: TokioMutex<()>,
 }
 
 impl SshSession {
@@ -183,9 +208,11 @@ impl SshSession {
         fallback_key: Option<Arc<PrivateKey>>,
         password: Option<(&str, &str)>,
     ) -> Result<Self, SshTransportError> {
+        let accepted_host_key = Arc::new(StdMutex::new(None));
         let handler = RusshHandler {
             endpoint: endpoint.clone(),
             trust: trust.clone(),
+            accepted_host_key: Arc::clone(&accepted_host_key),
         };
         let config = client::Config {
             keepalive_interval: Some(KEEPALIVE_INTERVAL),
@@ -301,7 +328,12 @@ impl SshSession {
                     }
                 }
             }
-            Ok::<Self, SshTransportError>(Self { handle })
+            Ok::<Self, SshTransportError>(Self {
+                handle,
+                accepted_host_key,
+                state: AtomicU8::new(SESSION_OPEN),
+                close_gate: TokioMutex::new(()),
+            })
         })
         .await?;
         Ok(session)
@@ -313,6 +345,9 @@ impl SshSession {
         target_port: u16,
         local_port: u16,
     ) -> Result<Channel<client::Msg>, SshTransportError> {
+        if self.state.load(Ordering::Acquire) != SESSION_OPEN {
+            return Err(SshTransportError::SessionClosed);
+        }
         if target_host != "127.0.0.1" || target_port == 0 || local_port == 0 {
             return Err(SshTransportError::TargetNotAllowed);
         }
@@ -331,18 +366,45 @@ impl SshSession {
     }
 
     pub(crate) async fn send_keepalive(&self) -> Result<(), SshTransportError> {
+        if self.state.load(Ordering::Acquire) != SESSION_OPEN {
+            return Err(SshTransportError::SessionClosed);
+        }
         self.handle.send_keepalive(true).await.map_err(Into::into)
     }
 
-    pub(crate) async fn close(self) -> Result<(), SshTransportError> {
-        timeout(
+    /// Close through a shared reference so children can hold `Arc<SshSession>`.
+    /// The async gate makes parent shutdown idempotent while allowing a later
+    /// caller to retry if russh reports a failed disconnect.
+    pub(crate) async fn close(&self) -> Result<(), SshTransportError> {
+        let _close_gate = self.close_gate.lock().await;
+        if self.state.load(Ordering::Acquire) == SESSION_CLOSED {
+            return Ok(());
+        }
+        self.state.store(SESSION_CLOSING, Ordering::Release);
+        let result = timeout(
             SHUTDOWN_TIMEOUT,
             self.handle
                 .disconnect(russh::Disconnect::ByApplication, "closing", ""),
         )
         .await
         .map_err(|_| SshTransportError::ShutdownTimeout)?
-        .map_err(Into::into)
+        .map_err(Into::into);
+        self.state.store(
+            if result.is_ok() {
+                SESSION_CLOSED
+            } else {
+                SESSION_OPEN
+            },
+            Ordering::Release,
+        );
+        result
+    }
+
+    pub(crate) fn verified_host_key(&self) -> Option<OfferedHostKey> {
+        self.accepted_host_key
+            .lock()
+            .ok()
+            .and_then(|key| key.clone())
     }
 }
 
