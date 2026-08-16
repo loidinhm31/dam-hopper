@@ -45,6 +45,16 @@ const mocks = vi.hoisted(() => {
         }) => void)
       | null,
     onData: null as ((data: string) => void) | null,
+    onExit: null as ((exitCode: number | null) => void) | null,
+    onExitEnhanced: null as
+      | ((exit: {
+          exitCode: number | null;
+          willRestart: boolean;
+          restartIn?: number;
+          restartCount?: number;
+        }) => void)
+      | null,
+    onStatus: null as ((status: string) => void) | null,
     setReplayActive: vi.fn(),
     onOutput: vi.fn(),
     handleOutput: vi.fn(),
@@ -71,13 +81,36 @@ const mocks = vi.hoisted(() => {
         mocks.onData = callback;
         return () => {};
       }),
-      onTerminalExit: vi.fn(() => () => {}),
+      onTerminalExit: vi.fn(
+        (_id: string, callback: (exitCode: number | null) => void) => {
+          mocks.onExit = callback;
+          return () => {};
+        },
+      ),
+      onTerminalExitEnhanced: vi.fn(
+        (
+          _id: string,
+          callback: (exit: {
+            exitCode: number | null;
+            willRestart: boolean;
+            restartIn?: number;
+            restartCount?: number;
+          }) => void,
+        ) => {
+          mocks.onExitEnhanced = callback;
+          return () => {};
+        },
+      ),
       onTerminalBuffer: vi.fn(
         (_id: string, callback: typeof mocks.onBuffer) => {
           mocks.onBuffer = callback;
           return () => {};
         },
       ),
+      onStatusChange: vi.fn((callback: (status: string) => void) => {
+        mocks.onStatus = callback;
+        return () => {};
+      }),
     },
   };
 });
@@ -217,6 +250,7 @@ vi.mock("@/lib/utils.js", () => ({
 }));
 
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
+import { getTerminalOutputActivitySnapshot } from "@/lib/terminal-output-activity.js";
 
 describe("TerminalPanel replay lifecycle in Chromium", () => {
   let container: HTMLDivElement;
@@ -228,6 +262,9 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     mocks.terminal = null;
     mocks.onBuffer = null;
     mocks.onData = null;
+    mocks.onExit = null;
+    mocks.onExitEnhanced = null;
+    mocks.onStatus = null;
     mocks.settings.terminalFontSize = 13;
     container = document.createElement("div");
     document.body.append(container);
@@ -254,6 +291,10 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
         reset: true,
         truncated: false,
       });
+      expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+        recentOutput: false,
+        streamReady: false,
+      });
       mocks.onData?.("live-first");
       mocks.onData?.("live-second");
     });
@@ -274,6 +315,99 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     ]);
     expect(mocks.handleOutput).toHaveBeenCalledTimes(2);
     expect(mocks.onOutput).toHaveBeenCalledTimes(2);
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: true,
+      streamReady: true,
+    });
+  });
+
+  it("ignores empty and synthetic output and clears activity at lifecycle boundaries", async () => {
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+    await vi.waitFor(() => expect(mocks.onBuffer).toBeTypeOf("function"));
+
+    await act(async () => {
+      mocks.onBuffer?.({
+        data: "retained",
+        offset: 8,
+        reset: true,
+        truncated: false,
+      });
+      mocks.terminal?.writes[0]?.callback?.();
+    });
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: true,
+    });
+
+    await act(async () => mocks.onData?.(""));
+    expect(getTerminalOutputActivitySnapshot("term-1").recentOutput).toBe(
+      false,
+    );
+
+    await act(async () => mocks.onData?.("live"));
+    expect(getTerminalOutputActivitySnapshot("term-1").recentOutput).toBe(true);
+    await act(async () => mocks.onExit?.(0));
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+    await act(async () => mocks.onData?.("late-after-exit"));
+    expect(getTerminalOutputActivitySnapshot("term-1").recentOutput).toBe(
+      false,
+    );
+
+    await act(async () =>
+      mocks.onBuffer?.({
+        data: "retained-after-exit",
+        offset: 16,
+        reset: false,
+        truncated: false,
+      }),
+    );
+    const exitReplayWrite = mocks.terminal?.writes.at(-1);
+    await act(async () => exitReplayWrite?.callback?.());
+    await act(async () => mocks.onData?.("live-after-exit"));
+    expect(getTerminalOutputActivitySnapshot("term-1").recentOutput).toBe(true);
+    await act(async () => mocks.onStatus?.("disconnected"));
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+    await act(async () => mocks.onData?.("late-after-disconnect"));
+    expect(getTerminalOutputActivitySnapshot("term-1").recentOutput).toBe(
+      false,
+    );
+
+    await act(async () =>
+      mocks.onBuffer?.({
+        data: "retained-again",
+        offset: 16,
+        reset: false,
+        truncated: false,
+      }),
+    );
+    const replayWrite = mocks.terminal?.writes.at(-1);
+    await act(async () => replayWrite?.callback?.());
+    await act(async () => mocks.onData?.("live-again"));
+    expect(getTerminalOutputActivitySnapshot("term-1").recentOutput).toBe(true);
+
+    await act(async () =>
+      mocks.onExitEnhanced?.({ exitCode: 0, willRestart: false }),
+    );
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+    expect(mocks.terminal?.writes.at(-1)?.data).toContain("Process exited");
+    await act(async () => mocks.onData?.(""));
+    await act(async () => mocks.onData?.("late-after-enhanced-exit"));
+    expect(getTerminalOutputActivitySnapshot("term-1").recentOutput).toBe(
+      false,
+    );
   });
 
   it("sends the immutable worktree target when recovery creates a session", async () => {
