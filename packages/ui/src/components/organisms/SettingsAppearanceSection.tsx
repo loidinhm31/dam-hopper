@@ -18,6 +18,7 @@ export function SettingsAppearanceSection() {
   const {
     systemFontSize,
     editorFontSize,
+    terminalFontSize,
     editorZoomWheelEnabled,
     terminalSuggestionsEnabled,
     terminalCodexNotificationsEnabled,
@@ -57,6 +58,19 @@ export function SettingsAppearanceSection() {
         <NumberStepper
           value={editorFontSize}
           onChange={(v) => saveDebounced({ editorFontSize: v })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Terminal font size"
+        description="Range: 10–32 px; applies to terminal text"
+      >
+        <NumberStepper
+          value={terminalFontSize}
+          label="terminal font size"
+          onChange={(value) => saveDebounced({ terminalFontSize: value })}
         />
       </SettingRow>
 

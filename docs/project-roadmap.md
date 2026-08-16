@@ -22,6 +22,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
+### Terminal Font Size and Shortcuts (2026-08-16)
+
+- **Phase 01 — [COMPLETED 2026-08-16]**: persisted terminal font size and editable increase/decrease shortcuts, live xterm refit/PTY geometry updates, accessible Settings controls, and regression coverage delivered. Validation: 1,079 UI tests, 124 Chromium tests, UI build/lint, and 74 Rust config tests passed. [Plan](../plans/260816-1356-terminal-font-size-shortcuts/plan.md).
+
 - **Current Phase:** Session Model Delegation Audit complete (Phase 07 released 2026-08-01)
 - **Last Milestone:** Release gates, tests, and documentation completed (review approved 9.3/10)
 - **Total Phases Completed:** 36 phases (prior roadmap phases plus Terminal Usage Analytics 03–07 and completed Session Model Delegation Audit 01, 02, 04–07)

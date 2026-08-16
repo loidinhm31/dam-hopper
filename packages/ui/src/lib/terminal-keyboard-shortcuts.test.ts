@@ -135,22 +135,25 @@ describe("handleSharedTerminalKeyEvent", () => {
   it.each([
     { code: "KeyF", key: "f", ctrlKey: true, repeat: true },
     { code: "KeyF", key: "f", metaKey: true, isComposing: true },
-  ])("suppresses repeat/composition F events without reopening search", (shortcut) => {
-    const onFind = vi.fn();
-    const event = key(shortcut);
+  ])(
+    "suppresses repeat/composition F events without reopening search",
+    (shortcut) => {
+      const onFind = vi.fn();
+      const event = key(shortcut);
 
-    expect(
-      handleSharedTerminalKeyEvent(event, {
-        workspaceShortcut: "Mod+Shift+Backquote",
-        revealActiveFileShortcut: "Alt+F1",
-        onCopySelection: vi.fn(),
-        onFind,
-      }),
-    ).toBe(false);
+      expect(
+        handleSharedTerminalKeyEvent(event, {
+          workspaceShortcut: "Mod+Shift+Backquote",
+          revealActiveFileShortcut: "Alt+F1",
+          onCopySelection: vi.fn(),
+          onFind,
+        }),
+      ).toBe(false);
 
-    expect(onFind).not.toHaveBeenCalled();
-    expect(event.preventDefault).toHaveBeenCalledOnce();
-  });
+      expect(onFind).not.toHaveBeenCalled();
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps the file-search shortcut available", () => {
     const onFind = vi.fn();
@@ -200,5 +203,142 @@ describe("handleSharedTerminalKeyEvent", () => {
     if (handled) onData();
 
     expect(onData).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      shortcut: "Ctrl+Alt+Shift+Equal",
+      event: {
+        code: "Equal",
+        key: "+",
+        ctrlKey: true,
+        altKey: true,
+        shiftKey: true,
+      },
+      callback: "increase",
+    },
+    {
+      shortcut: "Ctrl+Alt+Minus",
+      event: { code: "Minus", key: "-", ctrlKey: true, altKey: true },
+      callback: "decrease",
+    },
+  ])(
+    "consumes the $shortcut terminal font shortcut",
+    ({ shortcut, event, callback }) => {
+      const onIncreaseTerminalFontSize = vi.fn();
+      const onDecreaseTerminalFontSize = vi.fn();
+      const keyEvent = key(event);
+
+      expect(
+        handleSharedTerminalKeyEvent(keyEvent, {
+          workspaceShortcut: "Mod+Shift+Backquote",
+          revealActiveFileShortcut: "Alt+F1",
+          terminalFontSizeIncreaseShortcut:
+            callback === "increase" ? shortcut : "Ctrl+Alt+Shift+Equal",
+          terminalFontSizeDecreaseShortcut:
+            callback === "decrease" ? shortcut : "Ctrl+Alt+Minus",
+          onCopySelection: vi.fn(),
+          onIncreaseTerminalFontSize,
+          onDecreaseTerminalFontSize,
+        }),
+      ).toBe(false);
+
+      expect(keyEvent.preventDefault).toHaveBeenCalledOnce();
+      expect(onIncreaseTerminalFontSize).toHaveBeenCalledTimes(
+        callback === "increase" ? 1 : 0,
+      );
+      expect(onDecreaseTerminalFontSize).toHaveBeenCalledTimes(
+        callback === "decrease" ? 1 : 0,
+      );
+    },
+  );
+
+  it("consumes repeated and composing font shortcuts without changing the size", () => {
+    for (const event of [
+      key({
+        code: "Equal",
+        key: "+",
+        ctrlKey: true,
+        altKey: true,
+        shiftKey: true,
+        repeat: true,
+      }),
+      key({
+        code: "Minus",
+        key: "-",
+        ctrlKey: true,
+        altKey: true,
+        isComposing: true,
+      }),
+      key({
+        code: "Equal",
+        key: "+",
+        ctrlKey: true,
+        altKey: true,
+        shiftKey: true,
+        keyCode: 229,
+      }),
+    ]) {
+      const onIncreaseTerminalFontSize = vi.fn();
+      const onDecreaseTerminalFontSize = vi.fn();
+      expect(
+        handleSharedTerminalKeyEvent(event, {
+          workspaceShortcut: "Mod+Shift+Backquote",
+          revealActiveFileShortcut: "Alt+F1",
+          terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
+          terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Minus",
+          onCopySelection: vi.fn(),
+          onIncreaseTerminalFontSize,
+          onDecreaseTerminalFontSize,
+        }),
+      ).toBe(false);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+      expect(onIncreaseTerminalFontSize).not.toHaveBeenCalled();
+      expect(onDecreaseTerminalFontSize).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not match a terminal font shortcut with missing modifiers", () => {
+    const event = key({ code: "Equal", key: "+", ctrlKey: true, altKey: true });
+    const onIncreaseTerminalFontSize = vi.fn();
+
+    expect(
+      handleSharedTerminalKeyEvent(event, {
+        workspaceShortcut: "Mod+Shift+Backquote",
+        revealActiveFileShortcut: "Alt+F1",
+        terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
+        onCopySelection: vi.fn(),
+        onIncreaseTerminalFontSize,
+      }),
+    ).toBe(true);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(onIncreaseTerminalFontSize).not.toHaveBeenCalled();
+  });
+
+  it("consumes duplicate font bindings without choosing a direction", () => {
+    const event = key({
+      code: "Equal",
+      key: "+",
+      ctrlKey: true,
+      altKey: true,
+      shiftKey: true,
+    });
+    const onIncreaseTerminalFontSize = vi.fn();
+    const onDecreaseTerminalFontSize = vi.fn();
+
+    expect(
+      handleSharedTerminalKeyEvent(event, {
+        workspaceShortcut: "Mod+Shift+Backquote",
+        revealActiveFileShortcut: "Alt+F1",
+        terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
+        terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Shift+Equal",
+        onCopySelection: vi.fn(),
+        onIncreaseTerminalFontSize,
+        onDecreaseTerminalFontSize,
+      }),
+    ).toBe(false);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(onIncreaseTerminalFontSize).not.toHaveBeenCalled();
+    expect(onDecreaseTerminalFontSize).not.toHaveBeenCalled();
   });
 });

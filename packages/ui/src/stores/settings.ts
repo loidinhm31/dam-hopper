@@ -21,6 +21,8 @@ import {
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
+  DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
+  DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
 } from "@/lib/shortcuts.js";
 
@@ -70,6 +72,7 @@ export function clampTerminalNotificationSoundVolume(volume: number): number {
 interface PersistedSettingsState {
   systemFontSize: number;
   editorFontSize: number;
+  terminalFontSize: number;
   editorZoomWheelEnabled: boolean;
   searchTextShortcut: string;
   searchFilenameShortcut: string;
@@ -79,6 +82,8 @@ interface PersistedSettingsState {
   gitPanelShortcut: string;
   portsPanelShortcut: string;
   fleetTerminalShortcut: string;
+  terminalFontSizeIncreaseShortcut: string;
+  terminalFontSizeDecreaseShortcut: string;
   terminalSuggestionsEnabled: boolean;
   terminalAutoSwitchProjectEnabled: boolean;
   terminalCodexNotificationsEnabled: boolean;
@@ -118,6 +123,7 @@ function pickPersistedSettings(
   return {
     systemFontSize: state.systemFontSize,
     editorFontSize: state.editorFontSize,
+    terminalFontSize: state.terminalFontSize,
     editorZoomWheelEnabled: state.editorZoomWheelEnabled,
     searchTextShortcut: state.searchTextShortcut,
     searchFilenameShortcut: state.searchFilenameShortcut,
@@ -127,6 +133,8 @@ function pickPersistedSettings(
     gitPanelShortcut: state.gitPanelShortcut,
     portsPanelShortcut: state.portsPanelShortcut,
     fleetTerminalShortcut: state.fleetTerminalShortcut,
+    terminalFontSizeIncreaseShortcut: state.terminalFontSizeIncreaseShortcut,
+    terminalFontSizeDecreaseShortcut: state.terminalFontSizeDecreaseShortcut,
     terminalSuggestionsEnabled: state.terminalSuggestionsEnabled,
     terminalAutoSwitchProjectEnabled: state.terminalAutoSwitchProjectEnabled,
     terminalCodexNotificationsEnabled: state.terminalCodexNotificationsEnabled,
@@ -170,6 +178,7 @@ function pickPersistedSettingsPatch(
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   systemFontSize: 14,
   editorFontSize: 14,
+  terminalFontSize: 13,
   editorZoomWheelEnabled: true,
   searchTextShortcut: DEFAULT_SEARCH_TEXT_SHORTCUT,
   searchFilenameShortcut: DEFAULT_SEARCH_FILENAME_SHORTCUT,
@@ -179,6 +188,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   gitPanelShortcut: DEFAULT_GIT_PANEL_SHORTCUT,
   portsPanelShortcut: DEFAULT_PORTS_PANEL_SHORTCUT,
   fleetTerminalShortcut: DEFAULT_FLEET_TERMINAL_SHORTCUT,
+  terminalFontSizeIncreaseShortcut:
+    DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
+  terminalFontSizeDecreaseShortcut:
+    DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   terminalSuggestionsEnabled: true,
   terminalAutoSwitchProjectEnabled: true,
   terminalCodexNotificationsEnabled: false,
@@ -205,6 +218,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       set({
         systemFontSize: ui.systemFontSize,
         editorFontSize: ui.editorFontSize,
+        terminalFontSize: clampFont(ui.terminalFontSize ?? 13),
         editorZoomWheelEnabled: ui.editorZoomWheelEnabled,
         searchTextShortcut: ui.searchTextShortcut,
         searchFilenameShortcut: ui.searchFilenameShortcut,
@@ -214,6 +228,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         gitPanelShortcut: ui.gitPanelShortcut,
         portsPanelShortcut: ui.portsPanelShortcut,
         fleetTerminalShortcut: ui.fleetTerminalShortcut,
+        terminalFontSizeIncreaseShortcut:
+          ui.terminalFontSizeIncreaseShortcut ??
+          DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
+        terminalFontSizeDecreaseShortcut:
+          ui.terminalFontSizeDecreaseShortcut ??
+          DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
         terminalAutoSwitchProjectEnabled:
           ui.terminalAutoSwitchProjectEnabled ?? true,
@@ -259,6 +279,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.systemFontSize = clampFont(partial.systemFontSize);
     if (partial.editorFontSize !== undefined)
       clamped.editorFontSize = clampFont(partial.editorFontSize);
+    if (partial.terminalFontSize !== undefined)
+      clamped.terminalFontSize = clampFont(partial.terminalFontSize);
     if (partial.editorZoomWheelEnabled !== undefined)
       clamped.editorZoomWheelEnabled = partial.editorZoomWheelEnabled;
     if (partial.searchTextShortcut !== undefined)
@@ -277,6 +299,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.portsPanelShortcut = partial.portsPanelShortcut;
     if (partial.fleetTerminalShortcut !== undefined)
       clamped.fleetTerminalShortcut = partial.fleetTerminalShortcut;
+    if (partial.terminalFontSizeIncreaseShortcut !== undefined)
+      clamped.terminalFontSizeIncreaseShortcut =
+        partial.terminalFontSizeIncreaseShortcut;
+    if (partial.terminalFontSizeDecreaseShortcut !== undefined)
+      clamped.terminalFontSizeDecreaseShortcut =
+        partial.terminalFontSizeDecreaseShortcut;
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
     if (partial.terminalAutoSwitchProjectEnabled !== undefined)

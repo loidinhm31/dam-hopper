@@ -7,6 +7,9 @@ export const DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT = "Alt+F1";
 export const DEFAULT_GIT_PANEL_SHORTCUT = "Mod+Shift+KeyG";
 export const DEFAULT_PORTS_PANEL_SHORTCUT = "Mod+Shift+KeyP";
 export const DEFAULT_FLEET_TERMINAL_SHORTCUT = "Mod+Shift+KeyM";
+export const DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT =
+  "Ctrl+Alt+Shift+Equal";
+export const DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT = "Ctrl+Alt+Minus";
 export const EDITOR_ZOOM_WHEEL_SHORTCUT = "Mod+Wheel";
 
 const DOUBLE_SHIFT_MS = 450;
@@ -37,6 +40,7 @@ export interface ShortcutKeyEvent {
   preventDefault?: () => void;
   repeat?: boolean;
   isComposing?: boolean;
+  keyCode?: number;
 }
 
 export interface ShortcutWheelEvent {
@@ -225,6 +229,8 @@ function normalizeCode(code: string): string {
   if (/^[0-9]$/.test(code)) return `Digit${code}`;
   if (/^f\d{1,2}$/i.test(code)) return code.toUpperCase();
   if (code.toLowerCase() === "backquote") return "Backquote";
+  if (code.toLowerCase() === "equal") return "Equal";
+  if (code.toLowerCase() === "minus") return "Minus";
   return code;
 }
 

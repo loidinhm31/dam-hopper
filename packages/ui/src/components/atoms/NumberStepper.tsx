@@ -3,20 +3,27 @@ interface NumberStepperProps {
   onChange: (value: number) => void;
   min?: number;
   max?: number;
+  label?: string;
 }
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
-export function NumberStepper({ value, onChange, min = 10, max = 32 }: NumberStepperProps) {
+export function NumberStepper({
+  value,
+  onChange,
+  min = 10,
+  max = 32,
+  label,
+}: NumberStepperProps) {
   return (
     <div className="flex items-center gap-2">
       <button
         className="w-7 h-7 flex items-center justify-center rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-primary)] transition-colors text-base leading-none"
         onClick={() => onChange(value - 1)}
         disabled={value <= min}
-        aria-label="Decrease"
+        aria-label={label ? `Decrease ${label}` : "Decrease"}
       >
         −
       </button>
@@ -24,6 +31,7 @@ export function NumberStepper({ value, onChange, min = 10, max = 32 }: NumberSte
         type="number"
         min={min}
         max={max}
+        aria-label={label ? `${label} in pixels` : undefined}
         value={value}
         onChange={(e) => {
           const n = parseInt(e.target.value, 10);
@@ -39,7 +47,7 @@ export function NumberStepper({ value, onChange, min = 10, max = 32 }: NumberSte
         className="w-7 h-7 flex items-center justify-center rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-primary)] transition-colors text-base leading-none"
         onClick={() => onChange(value + 1)}
         disabled={value >= max}
-        aria-label="Increase"
+        aria-label={label ? `Increase ${label}` : "Increase"}
       >
         +
       </button>

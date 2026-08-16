@@ -800,6 +800,7 @@ export interface UiConfig {
   hostResourcePinnedMount?: string | null;
   systemFontSize: number;
   editorFontSize: number;
+  terminalFontSize?: number;
   editorZoomWheelEnabled: boolean;
   searchTextShortcut: string;
   searchFilenameShortcut: string;
@@ -809,6 +810,8 @@ export interface UiConfig {
   gitPanelShortcut: string;
   portsPanelShortcut: string;
   fleetTerminalShortcut: string;
+  terminalFontSizeIncreaseShortcut?: string;
+  terminalFontSizeDecreaseShortcut?: string;
   terminalSuggestionsEnabled?: boolean;
   terminalAutoSwitchProjectEnabled?: boolean;
   terminalCodexNotificationsEnabled?: boolean;

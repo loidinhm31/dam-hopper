@@ -12,6 +12,7 @@ export interface TerminalSuggestionGhostProps {
   /** Candidate text after the verified, already-typed prefix. */
   suffix: string;
   position: TerminalSuggestionGhostPosition;
+  fontSize: number;
   className?: string;
 }
 
@@ -22,6 +23,7 @@ export interface TerminalSuggestionGhostProps {
 export function TerminalSuggestionGhost({
   suffix,
   position,
+  fontSize,
   className,
 }: TerminalSuggestionGhostProps) {
   if (!suffix) return null;
@@ -29,7 +31,7 @@ export function TerminalSuggestionGhost({
   const style: CSSProperties = {
     left: position.x,
     top: position.y,
-    fontSize: 13,
+    fontSize,
     lineHeight: `${position.lineHeight}px`,
   };
 
