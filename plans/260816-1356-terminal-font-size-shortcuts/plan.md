@@ -23,16 +23,16 @@ xterm and PTY resize without recreating sessions.
 - **Acceptance:** default 13 px; 10–32 px bounds; old configs hydrate safely;
   save/reload persists; every mounted terminal updates, refits, and sends its
   existing resize path; defaults are actual `Ctrl+Alt+Shift+Equal` (+) and
-  `Ctrl+Alt+Minus`; exact focused matches never reach browser/PTY; controls are
+  `Ctrl+Alt+Minus`; exact page matches are consumed before browser/PTY input; controls are
   accessible and editable.
 - **In scope:** server/UI config compatibility, Zustand persistence, xterm
   lifecycle, shared terminal key handler, Appearance and Keyboard Shortcuts,
-  unit/component/Chromium proof, manual focused-terminal check.
-- **Out of scope:** system/editor fonts, document-global capture, per-session or
+  unit/component/Chromium proof, manual page-level shortcut check.
+- **Out of scope:** system/editor fonts, OS-global capture, per-session or
   terminal-content settings, mobile custom-key keyboard, server API redesign.
 - **Risk/public contracts:** additive global UI config fields, plus-key physical
   semantics, browser-reserved chords, exact modifiers, xterm fit/PTY geometry,
-  focused capture and shortcut conflicts.
+  page capture and user-selected shortcut conflicts.
 - **Affected systems:** server config, UI API/config/store, terminal, Settings, tests.
 - **Testing:** Rust/UI tests and build; Chromium; reload/focus/split manual checks.
 - **Open questions:** none.
@@ -45,7 +45,8 @@ shared size reactively to its own xterm instance, then reuse the fit scheduler;
 the existing `onResize` bridge remains the only PTY resize owner. Extend the
 shared terminal key handler so matching zoom chords call `preventDefault`, return
 `false`, and update the same store. This is smaller and safer than recreating
-xterm instances, using CSS transforms, or installing global key listeners.
+xterm instances, using CSS transforms, or installing duplicate per-terminal
+global listeners.
 
 ## Phases
 
@@ -58,7 +59,7 @@ xterm instances, using CSS transforms, or installing global key listeners.
 - [ ] Auth, sessions, permissions, roles: no effect.
 - [ ] API/client compatibility: additive optional client fields + server defaults.
 - [ ] Database/migrations/data integrity: none; global TOML only.
-- [ ] Business logic: terminal presentation and focused keyboard behavior only.
+- [ ] Business logic: terminal presentation and page-level keyboard behavior only.
 - [ ] Security/privacy/secrets/logging: no new sensitive data or telemetry.
 - [ ] Performance/concurrency/resources: one option mutation and scheduled fit per
   mounted terminal per change; debounced persistence; no remount.

@@ -36,6 +36,8 @@ import { useBrowserShortcutGuard } from "@/hooks/use-browser-shortcut-guard.js";
 import { useBrowserContextMenuSuppression } from "@/hooks/use-browser-context-menu-suppression.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { matchesNewTerminalShortcut } from "@/lib/shortcuts.js";
+import { handleTerminalFontSizeShortcut } from "@/lib/terminal-keyboard-shortcuts.js";
+import { isTerminalSurfaceTarget } from "@/lib/browser-shortcut-guard.js";
 import { normalizeRouterBasename } from "@/lib/router-basename.js";
 import { recordClientRoute } from "@/lib/diagnostics-client.js";
 export {
@@ -107,6 +109,45 @@ function GlobalShortcuts() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeProject, navigate]);
+
+  return null;
+}
+
+/** Applies terminal font-size shortcuts anywhere in the current page. */
+function GlobalTerminalFontSizeShortcuts() {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      // The xterm handler already applied the shortcut and prevented the
+      // browser default; page-level handling must not apply it a second time.
+      if (event.defaultPrevented && isTerminalSurfaceTarget(event.target)) {
+        return;
+      }
+      const settings = useSettingsStore.getState();
+      handleTerminalFontSizeShortcut(event, {
+        increaseShortcut: settings.terminalFontSizeIncreaseShortcut,
+        decreaseShortcut: settings.terminalFontSizeDecreaseShortcut,
+        onIncrease: () => {
+          const current = useSettingsStore.getState();
+          if (current.terminalFontSize < 32) {
+            current.saveDebounced({
+              terminalFontSize: current.terminalFontSize + 1,
+            });
+          }
+        },
+        onDecrease: () => {
+          const current = useSettingsStore.getState();
+          if (current.terminalFontSize > 10) {
+            current.saveDebounced({
+              terminalFontSize: current.terminalFontSize - 1,
+            });
+          }
+        },
+      });
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   return null;
 }
@@ -361,6 +402,7 @@ export function DamHopperApp() {
         <BrowserRouter basename={routerBasename}>
           <AndroidChromeKeyboardNotice />
           <GlobalShortcuts />
+          <GlobalTerminalFontSizeShortcuts />
           <TerminalNotificationToastViewport />
           <RouteDiagnostics />
           <PassphrasePrompt />
