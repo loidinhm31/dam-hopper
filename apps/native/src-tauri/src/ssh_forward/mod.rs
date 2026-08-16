@@ -38,6 +38,10 @@ pub(crate) mod store;
 
 #[cfg(windows)]
 #[allow(dead_code)]
+mod store_schema;
+
+#[cfg(windows)]
+#[allow(dead_code)]
 mod windows_storage_probe;
 
 #[cfg(test)]
