@@ -23,12 +23,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use super::store_schema::{
+    migrate_v1, rollback_metadata, schema_version, sha256, StoredScopeConfigV2, V1RollbackMetadata,
+    V1_SCHEMA_VERSION, V2_SCHEMA_VERSION,
+};
 use super::{
     model::{UtcTimestamp, WireCounter},
-    profile::{
-        validate_canonical_ssh_host, validate_uuid_v4, LoopbackHost, ReconnectPolicy,
-        SshForwardAuth, SshForwardProfile,
-    },
+    profile::{validate_canonical_ssh_host, validate_uuid_v4},
     scope_retention::{
         is_purge_eligible, reconcile, validate_known_scopes, KnownScopesInput, Reconciliation,
         ScopeMeta,
@@ -45,6 +46,8 @@ use super::{
     },
 };
 
+pub(crate) use super::store_schema::StoredProfilesV1 as StoredProfiles;
+
 const STORE_ROOT: &str = "ssh-forward";
 const SCOPES_DIRECTORY: &str = "scopes";
 const IDENTITY_FILE: &str = "desktop-instance.toml";
@@ -57,8 +60,11 @@ const LOCK_FILE: &str = "ssh-forward.lock";
 const RUNTIME_LOCK_FILE: &str = "ssh-forward-runtime.lock";
 const TRUST_BACKUPS_DIRECTORY: &str = "trust-backups";
 const TRUST_QUARANTINE_DIRECTORY: &str = "trust-quarantine";
-const SCHEMA_VERSION: u8 = 1;
-const MAX_PROFILES: usize = 64;
+const TRUST_SCHEMA_VERSION: u8 = V1_SCHEMA_VERSION;
+const META_SCHEMA_VERSION: u8 = V1_SCHEMA_VERSION;
+const IDENTITY_SCHEMA_VERSION: u8 = V1_SCHEMA_VERSION;
+const V1_ROLLBACK_FILE: &str = "profiles.v1.rollback.toml";
+const V1_ROLLBACK_METADATA_FILE: &str = "profiles.v1.rollback.meta";
 const MAX_TRUSTED_ALGORITHMS_PER_ENDPOINT: usize = 8;
 const SHA256_FINGERPRINT_LENGTH: usize = "SHA256:".len() + 43;
 
@@ -131,15 +137,6 @@ impl Drop for ScopeOperationFence {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) struct StoredProfiles {
-    schema_version: u8,
-    scope_id: String,
-    profiles_revision: WireCounter,
-    profiles: Vec<StoredProfile>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct StoredTrust {
     pub(crate) schema_version: u8,
     pub(crate) scope_id: String,
@@ -167,32 +164,6 @@ pub(crate) struct TrustedHost {
     /// phase-02 documents readable; new approvals always persist it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) public_key: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-struct StoredProfile {
-    id: String,
-    scope_id: String,
-    name: String,
-    ssh_host: String,
-    ssh_port: u16,
-    ssh_user: String,
-    auth: StoredAuth,
-    local_port: u16,
-    target_host: LoopbackHost,
-    target_port: u16,
-    auto_start: bool,
-    reconnect: ReconnectPolicy,
-    created_at: UtcTimestamp,
-    updated_at: UtcTimestamp,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-enum StoredAuth {
-    Agent,
-    Key { key_id: String },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -507,64 +478,10 @@ impl SshForwardStore {
     }
 }
 
-impl StoredProfiles {
-    pub(crate) fn empty(scope_id: &str) -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            scope_id: scope_id.into(),
-            profiles_revision: WireCounter::ZERO,
-            profiles: vec![],
-        }
-    }
-    fn validate(&self, scope_id: &str) -> io::Result<()> {
-        validate_document_header(self.schema_version, &self.scope_id, scope_id)?;
-        if self.profiles.len() > MAX_PROFILES {
-            return Err(invalid_data("profile_limit"));
-        }
-        let mut ids = HashSet::new();
-        self.profiles.iter().try_for_each(|profile| {
-            profile.validate(scope_id)?;
-            if ids.insert(profile.id.as_str()) {
-                Ok(())
-            } else {
-                Err(invalid_data("duplicate_profile_id"))
-            }
-        })
-    }
-
-    pub(crate) fn revision(&self) -> WireCounter {
-        self.profiles_revision
-    }
-
-    pub(crate) fn profiles(&self) -> io::Result<Vec<SshForwardProfile>> {
-        self.profiles
-            .iter()
-            .map(StoredProfile::to_profile)
-            .collect()
-    }
-
-    pub(crate) fn from_profiles(
-        scope_id: &str,
-        profiles: Vec<SshForwardProfile>,
-    ) -> io::Result<Self> {
-        let stored = Self {
-            schema_version: SCHEMA_VERSION,
-            scope_id: scope_id.into(),
-            profiles_revision: WireCounter::ZERO,
-            profiles: profiles
-                .into_iter()
-                .map(StoredProfile::from_profile)
-                .collect(),
-        };
-        stored.validate(scope_id)?;
-        Ok(stored)
-    }
-}
-
 impl StoredTrust {
     pub(crate) fn empty(scope_id: &str) -> Self {
         Self {
-            schema_version: SCHEMA_VERSION,
+            schema_version: TRUST_SCHEMA_VERSION,
             scope_id: scope_id.into(),
             trust_revision: WireCounter::ZERO,
             entries: vec![],
@@ -582,7 +499,12 @@ impl StoredTrust {
         self.trust_revision
     }
     fn validate(&self, scope_id: &str) -> io::Result<()> {
-        validate_document_header(self.schema_version, &self.scope_id, scope_id)?;
+        validate_document_header(
+            self.schema_version,
+            TRUST_SCHEMA_VERSION,
+            &self.scope_id,
+            scope_id,
+        )?;
         let mut algorithms = HashSet::new();
         let mut endpoint_counts = HashMap::new();
         self.entries.iter().try_for_each(|entry| {
@@ -609,20 +531,24 @@ impl StoredTrust {
 impl StoredScopeMeta {
     pub(crate) fn new(scope_id: &str, now: UtcTimestamp) -> Self {
         Self {
-            schema_version: SCHEMA_VERSION,
+            schema_version: META_SCHEMA_VERSION,
             scope_id: scope_id.into(),
             last_seen_at: now,
             orphaned_at: None,
         }
     }
     fn validate(&self, scope_id: &str) -> io::Result<()> {
-        validate_document_header(self.schema_version, &self.scope_id, scope_id).and_then(|()| {
-            match self.orphaned_at {
-                Some(orphaned_at) if orphaned_at < self.last_seen_at => {
-                    Err(invalid_data("invalid_scope_retention_order"))
-                }
-                _ => Ok(()),
+        validate_document_header(
+            self.schema_version,
+            META_SCHEMA_VERSION,
+            &self.scope_id,
+            scope_id,
+        )
+        .and_then(|()| match self.orphaned_at {
+            Some(orphaned_at) if orphaned_at < self.last_seen_at => {
+                Err(invalid_data("invalid_scope_retention_order"))
             }
+            _ => Ok(()),
         })
     }
     fn retention(&self) -> ScopeMeta {
@@ -737,71 +663,6 @@ fn is_canonical_sha256_fingerprint(fingerprint: &str) -> bool {
     decoded.len() == 32 && STANDARD_NO_PAD.encode(decoded) == encoded
 }
 
-impl StoredProfile {
-    fn from_profile(profile: SshForwardProfile) -> Self {
-        let auth = match profile.auth {
-            SshForwardAuth::Agent => StoredAuth::Agent,
-            SshForwardAuth::Key { key_id } => StoredAuth::Key { key_id },
-        };
-        Self {
-            id: profile.id,
-            scope_id: profile.scope_id,
-            name: profile.name,
-            ssh_host: profile.ssh_host,
-            ssh_port: profile.ssh_port,
-            ssh_user: profile.ssh_user,
-            auth,
-            local_port: profile.local_port,
-            target_host: profile.target_host,
-            target_port: profile.target_port,
-            auto_start: profile.auto_start,
-            reconnect: profile.reconnect,
-            created_at: profile.created_at,
-            updated_at: profile.updated_at,
-        }
-    }
-
-    fn validate(&self, scope_id: &str) -> io::Result<()> {
-        self.to_profile()?
-            .validate()
-            .map_err(|_| invalid_data("invalid_profile"))?;
-        if self.scope_id == scope_id {
-            Ok(())
-        } else {
-            Err(invalid_data("embedded_scope_mismatch"))
-        }
-    }
-    fn to_profile(&self) -> io::Result<SshForwardProfile> {
-        Ok(SshForwardProfile {
-            id: self.id.clone(),
-            scope_id: self.scope_id.clone(),
-            name: self.name.clone(),
-            ssh_host: self.ssh_host.clone(),
-            ssh_port: self.ssh_port,
-            ssh_user: self.ssh_user.clone(),
-            auth: self.auth.to_auth(),
-            local_port: self.local_port,
-            target_host: self.target_host,
-            target_port: self.target_port,
-            auto_start: self.auto_start,
-            reconnect: self.reconnect,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
-
-impl StoredAuth {
-    fn to_auth(&self) -> SshForwardAuth {
-        match self {
-            Self::Agent => SshForwardAuth::Agent,
-            Self::Key { key_id } => SshForwardAuth::Key {
-                key_id: key_id.clone(),
-            },
-        }
-    }
-}
-
 impl ScopeStore {
     /// Acquires a cross-process runtime lease. The manager should hold this
     /// lease for every active or staged scope; purge takes the same lock.
@@ -817,20 +678,146 @@ impl ScopeStore {
         acquire_scope_activity_lock(&self.root, &self.storage_key)
     }
 
-    pub(crate) fn load_profiles(&self) -> io::Result<StoredProfiles> {
+    pub(crate) fn load_scope_config(&self) -> io::Result<StoredScopeConfigV2> {
         self.ensure_live()?;
         let _gate = lock(&self.write_gate)?;
         let _file_lock = acquire_file_lock(&self.lock_file)?;
         let _fence = self.acquire_scope_operation_fence()?;
         self.ensure_current()?;
-        self.load_profiles_unlocked()
+        self.load_scope_config_unlocked()
     }
+
+    pub(crate) fn load_profiles(&self) -> io::Result<StoredProfiles> {
+        self.load_scope_config()
+            .and_then(|config| config.to_legacy_profiles())
+    }
+
+    fn load_scope_config_unlocked(&self) -> io::Result<StoredScopeConfigV2> {
+        let bytes = match self.with_directory(|directory| read_file(directory, PROFILES_FILE)) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(StoredScopeConfigV2::empty(&self.scope_id));
+            }
+            Err(error) => return Err(error),
+        };
+        match schema_version(&bytes)? {
+            V2_SCHEMA_VERSION => {
+                let text = String::from_utf8(bytes).map_err(|_| invalid_data("store_not_utf8"))?;
+                let value = toml::from_str::<StoredScopeConfigV2>(&text)
+                    .map_err(|_| invalid_data("invalid_store_toml"))?;
+                value.validate(&self.scope_id)?;
+                Ok(value)
+            }
+            V1_SCHEMA_VERSION => {
+                let text =
+                    String::from_utf8(bytes.clone()).map_err(|_| invalid_data("store_not_utf8"))?;
+                let source = toml::from_str::<StoredProfiles>(&text)
+                    .map_err(|_| invalid_data("invalid_store_toml"))?;
+                let migrated = migrate_v1(source)?;
+                self.persist_v1_rollback_unlocked(&bytes)?;
+                self.write_scope_config_unlocked(&migrated)?;
+                match self.read_scope_config_v2_unlocked() {
+                    Ok(value) if value == migrated => Ok(value),
+                    Ok(_) => self.restore_v1_after_migration_failure(&bytes),
+                    Err(error) => {
+                        let restore = self.restore_v1_after_migration_failure(&bytes);
+                        Err(match restore {
+                            Ok(_) => error,
+                            Err(restore_error) => io::Error::other(format!(
+                                "{error};migration_restore_failed:{restore_error}"
+                            )),
+                        })
+                    }
+                }
+            }
+            _ => Err(invalid_data("unsupported_store_schema")),
+        }
+    }
+
+    fn read_scope_config_v2_unlocked(&self) -> io::Result<StoredScopeConfigV2> {
+        let bytes = self.with_directory(|directory| read_file(directory, PROFILES_FILE))?;
+        let text = String::from_utf8(bytes).map_err(|_| invalid_data("store_not_utf8"))?;
+        let value = toml::from_str::<StoredScopeConfigV2>(&text)
+            .map_err(|_| invalid_data("invalid_store_toml"))?;
+        value.validate(&self.scope_id)?;
+        Ok(value)
+    }
+
+    fn write_scope_config_unlocked(&self, value: &StoredScopeConfigV2) -> io::Result<()> {
+        value.validate(&self.scope_id)?;
+        self.write_typed(PROFILES_FILE, value)
+    }
+
+    fn restore_v1_after_migration_failure(&self, bytes: &[u8]) -> io::Result<StoredScopeConfigV2> {
+        let text = std::str::from_utf8(bytes).map_err(|_| invalid_data("store_not_utf8"))?;
+        self.with_directory(|directory| write_file(directory, PROFILES_FILE, text))?;
+        Err(invalid_data("migration_readback_failed"))
+    }
+
+    fn persist_v1_rollback_unlocked(&self, bytes: &[u8]) -> io::Result<()> {
+        let expected_metadata = rollback_metadata(&self.scope_id, bytes)?;
+        let existing = self.with_directory(|directory| {
+            Ok((
+                read_file(directory, V1_ROLLBACK_FILE),
+                read_file(directory, V1_ROLLBACK_METADATA_FILE),
+            ))
+        })?;
+        match (existing.0, existing.1) {
+            (Ok(existing_bytes), Ok(metadata_bytes)) => {
+                if existing_bytes != bytes {
+                    return Err(invalid_data("rollback_artifact_conflict"));
+                }
+                let text = String::from_utf8(metadata_bytes)
+                    .map_err(|_| invalid_data("invalid_rollback_metadata"))?;
+                let metadata = toml::from_str::<V1RollbackMetadata>(&text)
+                    .map_err(|_| invalid_data("invalid_rollback_metadata"))?;
+                metadata.validate(&self.scope_id)?;
+                if metadata != expected_metadata {
+                    return Err(invalid_data("rollback_checksum_mismatch"));
+                }
+                return Ok(());
+            }
+            (Err(error), Err(other))
+                if error.kind() == io::ErrorKind::NotFound
+                    && other.kind() == io::ErrorKind::NotFound => {}
+            _ => return Err(invalid_data("incomplete_rollback_artifact")),
+        }
+
+        let text = std::str::from_utf8(bytes).map_err(|_| invalid_data("store_not_utf8"))?;
+        self.with_directory(|directory| write_file(directory, V1_ROLLBACK_FILE, text))?;
+        let readback = self.with_directory(|directory| read_file(directory, V1_ROLLBACK_FILE))?;
+        if readback != bytes {
+            return Err(invalid_data("rollback_readback_mismatch"));
+        }
+        let metadata_text =
+            toml::to_string(&expected_metadata).map_err(|_| invalid_data("store_serialize"))?;
+        self.with_directory(|directory| {
+            write_file(directory, V1_ROLLBACK_METADATA_FILE, &metadata_text)
+        })?;
+        self.verify_v1_rollback_unlocked()
+    }
+
+    fn verify_v1_rollback_unlocked(&self) -> io::Result<()> {
+        let bytes = self.with_directory(|directory| read_file(directory, V1_ROLLBACK_FILE))?;
+        let metadata_bytes =
+            self.with_directory(|directory| read_file(directory, V1_ROLLBACK_METADATA_FILE))?;
+        let text = String::from_utf8(metadata_bytes)
+            .map_err(|_| invalid_data("invalid_rollback_metadata"))?;
+        let metadata = toml::from_str::<V1RollbackMetadata>(&text)
+            .map_err(|_| invalid_data("invalid_rollback_metadata"))?;
+        metadata.validate(&self.scope_id)?;
+        if metadata.byte_length != bytes.len() as u64 || metadata.sha256 != sha256(&bytes) {
+            return Err(invalid_data("rollback_checksum_mismatch"));
+        }
+        let text = String::from_utf8(bytes).map_err(|_| invalid_data("store_not_utf8"))?;
+        let source = toml::from_str::<StoredProfiles>(&text)
+            .map_err(|_| invalid_data("invalid_rollback_document"))?;
+        source.validate(&self.scope_id)
+    }
+
     fn load_profiles_unlocked(&self) -> io::Result<StoredProfiles> {
-        self.read_or_empty(
-            PROFILES_FILE,
-            StoredProfiles::empty,
-            StoredProfiles::validate,
-        )
+        self.load_scope_config_unlocked()
+            .and_then(|config| config.to_legacy_profiles())
     }
     pub(crate) fn load_trust(&self) -> io::Result<StoredTrust> {
         self.ensure_live()?;
@@ -876,28 +863,93 @@ impl ScopeStore {
         }
     }
 
+    pub(crate) fn replace_connections(
+        &self,
+        expected: WireCounter,
+        mut next: StoredScopeConfigV2,
+    ) -> io::Result<StoredScopeConfigV2> {
+        self.ensure_live()?;
+        let _gate = lock(&self.write_gate)?;
+        let _file_lock = acquire_file_lock(&self.lock_file)?;
+        let _fence = self.acquire_scope_operation_fence()?;
+        self.ensure_current()?;
+        let current = self.load_scope_config_unlocked()?;
+        if current.connections_revision != expected {
+            return Err(invalid_data("connections_revision_conflict"));
+        }
+        next.scope_id = self.scope_id.clone();
+        next.connections_revision = current
+            .connections_revision
+            .increment()
+            .map_err(|_| invalid_data("counter_exhausted"))?;
+        next.rules = current.rules;
+        next.rules_revision = current.rules_revision;
+        next.validate(&self.scope_id)?;
+        self.ensure_metadata_unlocked()?;
+        self.write_scope_config_unlocked(&next)?;
+        Ok(next)
+    }
+
+    pub(crate) fn replace_rules(
+        &self,
+        expected: WireCounter,
+        mut next: StoredScopeConfigV2,
+    ) -> io::Result<StoredScopeConfigV2> {
+        self.ensure_live()?;
+        let _gate = lock(&self.write_gate)?;
+        let _file_lock = acquire_file_lock(&self.lock_file)?;
+        let _fence = self.acquire_scope_operation_fence()?;
+        self.ensure_current()?;
+        let current = self.load_scope_config_unlocked()?;
+        if current.rules_revision != expected {
+            return Err(invalid_data("rules_revision_conflict"));
+        }
+        next.scope_id = self.scope_id.clone();
+        next.connections = current.connections;
+        next.connections_revision = current.connections_revision;
+        next.rules_revision = current
+            .rules_revision
+            .increment()
+            .map_err(|_| invalid_data("counter_exhausted"))?;
+        next.validate(&self.scope_id)?;
+        self.ensure_metadata_unlocked()?;
+        self.write_scope_config_unlocked(&next)?;
+        Ok(next)
+    }
+
     pub(crate) fn replace_profiles(
         &self,
         expected: WireCounter,
-        mut next: StoredProfiles,
+        next: StoredProfiles,
     ) -> io::Result<StoredProfiles> {
         self.ensure_live()?;
         let _gate = lock(&self.write_gate)?;
         let _file_lock = acquire_file_lock(&self.lock_file)?;
         let _fence = self.acquire_scope_operation_fence()?;
         self.ensure_current()?;
-        let current = self.load_profiles_unlocked()?;
-        if current.profiles_revision != expected {
+        let current = self.load_scope_config_unlocked()?;
+        if current.rules_revision != expected {
             return Err(invalid_data("profiles_revision_conflict"));
         }
-        next.profiles_revision = current
-            .profiles_revision
+        let legacy = migrate_v1(next)?;
+        let mut replacement = legacy;
+        let connections_changed = replacement.rebase_legacy_write(&current)?;
+        replacement.connections_revision = if connections_changed {
+            current
+                .connections_revision
+                .increment()
+                .map_err(|_| invalid_data("counter_exhausted"))?
+        } else {
+            current.connections_revision
+        };
+        replacement.rules_revision = current
+            .rules_revision
             .increment()
             .map_err(|_| invalid_data("counter_exhausted"))?;
-        next.validate(&self.scope_id)?;
+        replacement.validate(&self.scope_id)?;
         self.ensure_metadata_unlocked()?;
-        self.write_typed(PROFILES_FILE, &next)?;
-        Ok(next)
+        self.write_scope_config_unlocked(&replacement)?;
+        replacement.to_legacy_profiles()
     }
 
     pub(crate) fn replace_trust(
@@ -1429,8 +1481,13 @@ fn verify_backup_checksum(backup_id: &str, contents: &[u8]) -> io::Result<()> {
     }
 }
 
-fn validate_document_header(version: u8, embedded: &str, expected: &str) -> io::Result<()> {
-    if version == SCHEMA_VERSION && embedded == expected {
+fn validate_document_header(
+    version: u8,
+    expected_version: u8,
+    embedded: &str,
+    expected: &str,
+) -> io::Result<()> {
+    if version == expected_version && embedded == expected {
         validate_uuid_v4(embedded).map_err(invalid_scope)
     } else {
         Err(invalid_data("invalid_store_header"))
@@ -1935,20 +1992,138 @@ fn recover_tombstone(
     flush_handle(scopes)
 }
 
+fn validate_v1_rollback_payload(scope: &OwnedHandle, storage_key: &str) -> io::Result<()> {
+    let bytes = open_relative(scope, V1_ROLLBACK_FILE, false);
+    let metadata = open_relative(scope, V1_ROLLBACK_METADATA_FILE, false);
+    match (bytes, metadata) {
+        (Err(bytes), Err(metadata))
+            if bytes.kind() == io::ErrorKind::NotFound
+                && metadata.kind() == io::ErrorKind::NotFound =>
+        {
+            Ok(())
+        }
+        (Ok(bytes), Ok(metadata)) => {
+            let bytes = read_handle(&bytes)?;
+            let metadata_text = String::from_utf8(read_handle(&metadata)?)
+                .map_err(|_| invalid_data("invalid_rollback_metadata"))?;
+            let metadata = toml::from_str::<V1RollbackMetadata>(&metadata_text)
+                .map_err(|_| invalid_data("invalid_rollback_metadata"))?;
+            let scope_id = metadata.scope_id.clone();
+            metadata.validate(&scope_id)?;
+            if metadata.byte_length != bytes.len() as u64 || metadata.sha256 != sha256(&bytes) {
+                return Err(invalid_data("rollback_checksum_mismatch"));
+            }
+            let source_text =
+                String::from_utf8(bytes).map_err(|_| invalid_data("store_not_utf8"))?;
+            let source = toml::from_str::<StoredProfiles>(&source_text)
+                .map_err(|_| invalid_data("invalid_rollback_document"))?;
+            source.validate(&scope_id)?;
+            if scope_storage_key(&scope_id)? != storage_key {
+                return Err(invalid_data("rollback_scope_mismatch"));
+            }
+            Ok(())
+        }
+        incomplete => {
+            drop(incomplete.0);
+            drop(incomplete.1);
+            if live_profiles_are_valid_v1(scope, storage_key)? {
+                discard_incomplete_v1_rollback_artifacts(scope)
+            } else {
+                Err(invalid_data("incomplete_rollback_artifact"))
+            }
+        }
+    }
+}
+
+fn live_profiles_are_valid_v1(scope: &OwnedHandle, storage_key: &str) -> io::Result<bool> {
+    let profiles = match open_relative(scope, PROFILES_FILE, false) {
+        Ok(profiles) => profiles,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let bytes = read_handle(&profiles)?;
+    if schema_version(&bytes)? != V1_SCHEMA_VERSION {
+        return Ok(false);
+    }
+    let text = String::from_utf8(bytes).map_err(|_| invalid_data("store_not_utf8"))?;
+    let source =
+        toml::from_str::<StoredProfiles>(&text).map_err(|_| invalid_data("invalid_store_toml"))?;
+    source.validate(&source.scope_id)?;
+    if scope_storage_key(&source.scope_id)? != storage_key {
+        return Err(invalid_data("scope_storage_mismatch"));
+    }
+    Ok(true)
+}
+
+fn discard_incomplete_v1_rollback_artifacts(scope: &OwnedHandle) -> io::Result<()> {
+    let entries = enumerate_directory(scope)?;
+    let mut changed = false;
+    for entry in entries {
+        let is_rollback_artifact =
+            [V1_ROLLBACK_FILE, V1_ROLLBACK_METADATA_FILE]
+                .iter()
+                .any(|base| {
+                    entry.name == *base
+                        || [
+                            ArtifactKind::Temp,
+                            ArtifactKind::Backup,
+                            ArtifactKind::Commit,
+                        ]
+                        .iter()
+                        .any(|kind| artifact_name_is_valid_for(&entry.name, base, *kind))
+                });
+        if !is_rollback_artifact {
+            continue;
+        }
+        if entry.is_directory {
+            return Err(invalid_data("rollback_artifact_is_directory"));
+        }
+        delete_handle(&entry.handle)?;
+        changed = true;
+    }
+    if changed {
+        flush_handle(scope)?;
+    }
+    Ok(())
+}
+
 fn validate_scope_payload(storage_key: &str, entry: &DirectoryEntry) -> io::Result<()> {
-    let document_base = [PROFILES_FILE, TRUST_FILE, META_FILE]
-        .into_iter()
-        .find(|base| {
-            entry.name == *base
-                || [ArtifactKind::Temp, ArtifactKind::Backup]
-                    .iter()
-                    .any(|kind| artifact_name_is_valid_for(&entry.name, base, *kind))
-        });
+    let document_base = [
+        PROFILES_FILE,
+        TRUST_FILE,
+        META_FILE,
+        V1_ROLLBACK_FILE,
+        V1_ROLLBACK_METADATA_FILE,
+    ]
+    .into_iter()
+    .find(|base| {
+        entry.name == *base
+            || [ArtifactKind::Temp, ArtifactKind::Backup]
+                .iter()
+                .any(|kind| artifact_name_is_valid_for(&entry.name, base, *kind))
+    });
     let embedded_scope_id = match document_base {
         Some(PROFILES_FILE) => {
-            let value = read_typed_handle::<StoredProfiles>(&entry.handle)?;
-            value.validate(&value.scope_id)?;
-            Some(value.scope_id)
+            let bytes = read_handle(&entry.handle)?;
+            match schema_version(&bytes)? {
+                V1_SCHEMA_VERSION => {
+                    let text =
+                        String::from_utf8(bytes).map_err(|_| invalid_data("store_not_utf8"))?;
+                    let value = toml::from_str::<StoredProfiles>(&text)
+                        .map_err(|_| invalid_data("invalid_store_toml"))?;
+                    value.validate(&value.scope_id)?;
+                    Some(value.scope_id)
+                }
+                V2_SCHEMA_VERSION => {
+                    let text =
+                        String::from_utf8(bytes).map_err(|_| invalid_data("store_not_utf8"))?;
+                    let value = toml::from_str::<StoredScopeConfigV2>(&text)
+                        .map_err(|_| invalid_data("invalid_store_toml"))?;
+                    value.validate(&value.scope_id)?;
+                    Some(value.scope_id)
+                }
+                _ => return Err(invalid_data("unsupported_store_schema")),
+            }
         }
         Some(TRUST_FILE) => {
             let value = read_typed_handle::<StoredTrust>(&entry.handle)?;
@@ -1960,11 +2135,27 @@ fn validate_scope_payload(storage_key: &str, entry: &DirectoryEntry) -> io::Resu
             value.validate(&value.scope_id)?;
             Some(value.scope_id)
         }
+        Some(V1_ROLLBACK_FILE) => {
+            let value = read_typed_handle::<StoredProfiles>(&entry.handle)?;
+            value.validate(&value.scope_id)?;
+            Some(value.scope_id)
+        }
+        Some(V1_ROLLBACK_METADATA_FILE) => {
+            let value = read_typed_handle::<V1RollbackMetadata>(&entry.handle)?;
+            value.validate(&value.scope_id)?;
+            Some(value.scope_id)
+        }
         Some(_) => unreachable!("unknown tombstone document base"),
         None => {
-            if [PROFILES_FILE, TRUST_FILE, META_FILE]
-                .iter()
-                .any(|base| artifact_name_is_valid_for(&entry.name, base, ArtifactKind::Commit))
+            if [
+                PROFILES_FILE,
+                TRUST_FILE,
+                META_FILE,
+                V1_ROLLBACK_FILE,
+                V1_ROLLBACK_METADATA_FILE,
+            ]
+            .iter()
+            .any(|base| artifact_name_is_valid_for(&entry.name, base, ArtifactKind::Commit))
             {
                 ReplacementMarker::parse(&read_handle(&entry.handle)?)?;
             }
@@ -1994,12 +2185,20 @@ fn recover_scope_artifacts(scope: &OwnedHandle, storage_key: &str) -> io::Result
             changed = true;
         }
     }
-    for base in [PROFILES_FILE, TRUST_FILE, META_FILE] {
+    for base in [
+        PROFILES_FILE,
+        TRUST_FILE,
+        META_FILE,
+        V1_ROLLBACK_FILE,
+        V1_ROLLBACK_METADATA_FILE,
+    ] {
         changed |= recover_document_artifacts(scope, &entries, base, Some(storage_key), false)?;
     }
+    drop(entries);
     if changed {
         flush_handle(scope)?;
     }
+    validate_v1_rollback_payload(scope, storage_key)?;
     Ok(())
 }
 
@@ -2188,7 +2387,15 @@ fn artifact_suffix<'a>(name: &'a str, base: &str, kind: ArtifactKind) -> Option<
 }
 
 fn is_managed_scope_entry(name: &str) -> bool {
-    [PROFILES_FILE, TRUST_FILE, META_FILE, SCOPE_FENCE_FILE].contains(&name)
+    [
+        PROFILES_FILE,
+        TRUST_FILE,
+        META_FILE,
+        V1_ROLLBACK_FILE,
+        V1_ROLLBACK_METADATA_FILE,
+        SCOPE_FENCE_FILE,
+    ]
+    .contains(&name)
         || [
             ArtifactKind::Temp,
             ArtifactKind::Backup,
@@ -2223,9 +2430,15 @@ fn activity_lock_offset(storage_key: &str) -> i64 {
 }
 
 fn artifact_name_is_valid(name: &str, kind: ArtifactKind) -> bool {
-    [PROFILES_FILE, TRUST_FILE, META_FILE]
-        .iter()
-        .any(|base| artifact_name_is_valid_for(name, base, kind))
+    [
+        PROFILES_FILE,
+        TRUST_FILE,
+        META_FILE,
+        V1_ROLLBACK_FILE,
+        V1_ROLLBACK_METADATA_FILE,
+    ]
+    .iter()
+    .any(|base| artifact_name_is_valid_for(name, base, kind))
 }
 
 fn artifact_name_is_valid_for(name: &str, base: &str, kind: ArtifactKind) -> bool {
@@ -2286,7 +2499,7 @@ fn parse_identity(contents: &[u8]) -> io::Result<String> {
     }
     let text = std::str::from_utf8(contents).map_err(|_| invalid_data("identity_not_utf8"))?;
     let value: Identity = toml::from_str(text).map_err(|_| invalid_data("identity_corrupt"))?;
-    if value.schema_version == SCHEMA_VERSION {
+    if value.schema_version == IDENTITY_SCHEMA_VERSION {
         validate_uuid_v4(&value.desktop_instance_id)
             .map_err(|_| invalid_data("identity_corrupt"))?;
         Ok(value.desktop_instance_id)
@@ -2357,19 +2570,24 @@ mod tests {
     };
     use uuid::Uuid;
 
+    use super::super::store_schema::{StoredAuth, StoredProfileV1 as StoredProfile};
     use super::{
         acquire_file_lock, backup_id, create_new_relative_file, delete_handle, endpoint_hash,
         file_identity, flush_handle, identity_toml, open_or_create_relative_directory_no_delete,
         open_relative_for_mutation, open_scope_operation_file, read_handle, rename_to,
         repair_timestamp, restore_destination, scope_storage_key, write_file_with_fault,
-        PurgeFault, ReplacementFault, ReplacementMarker, SshForwardStore, StoredAuth,
-        StoredProfile, StoredProfiles, StoredTrust, TrustedHost, IDENTITY_FILE,
+        PurgeFault, ReplacementFault, ReplacementMarker, SshForwardStore, StoredProfiles,
+        StoredScopeConfigV2, StoredTrust, TrustedHost, IDENTITY_FILE,
         MAX_TRUSTED_ALGORITHMS_PER_ENDPOINT, META_FILE, PROFILES_FILE, SCOPE_FENCE_FILE,
-        TRUST_BACKUPS_DIRECTORY, TRUST_FILE, TRUST_QUARANTINE_DIRECTORY,
+        TRUST_BACKUPS_DIRECTORY, TRUST_FILE, TRUST_QUARANTINE_DIRECTORY, V1_ROLLBACK_FILE,
+        V1_ROLLBACK_METADATA_FILE,
     };
     use crate::ssh_forward::{
         model::{UtcTimestamp, WireCounter},
-        profile::{LoopbackHost, ReconnectPolicy},
+        profile::{
+            LoopbackHost, ReconnectPolicy, SshConnectionProfile, SshForwardAuth, SshForwardProfile,
+            SshForwardRule,
+        },
         scope_retention::{KnownScopesInput, Reconciliation},
     };
 
@@ -2399,6 +2617,68 @@ mod tests {
     }
     fn timestamp(value: &str) -> UtcTimestamp {
         UtcTimestamp::parse(value).unwrap()
+    }
+
+    fn legacy_profile(
+        id: &str,
+        name: &str,
+        local_port: u16,
+        ssh_port: u16,
+        ssh_user: &str,
+        auth: SshForwardAuth,
+    ) -> SshForwardProfile {
+        SshForwardProfile {
+            id: id.into(),
+            scope_id: SCOPE.into(),
+            name: name.into(),
+            ssh_host: "bastion.example".into(),
+            ssh_port,
+            ssh_user: ssh_user.into(),
+            auth,
+            local_port,
+            target_host: LoopbackHost,
+            target_port: 5432,
+            auto_start: true,
+            reconnect: ReconnectPolicy {
+                enabled: true,
+                max_attempts: 5,
+            },
+            created_at: timestamp("2026-08-10T12:34:56.789Z"),
+            updated_at: timestamp("2026-08-10T12:34:56.789Z"),
+        }
+    }
+
+    fn connection(id: &str) -> SshConnectionProfile {
+        SshConnectionProfile {
+            id: id.into(),
+            scope_id: SCOPE.into(),
+            name: "metrics".into(),
+            ssh_host: "bastion.example".into(),
+            ssh_port: 22,
+            ssh_user: "operator".into(),
+            auth: SshForwardAuth::Agent,
+            created_at: timestamp("2026-08-10T12:34:56.789Z"),
+            updated_at: timestamp("2026-08-10T12:34:56.789Z"),
+        }
+    }
+
+    fn rule(id: &str, connection_profile_id: &str, local_port: u16) -> SshForwardRule {
+        SshForwardRule {
+            id: id.into(),
+            scope_id: SCOPE.into(),
+            connection_profile_id: connection_profile_id.into(),
+            name: "metrics".into(),
+            local_port,
+            target_host: LoopbackHost,
+            target_port: 5432,
+            desired_enabled: true,
+            reconnect: ReconnectPolicy {
+                enabled: true,
+                max_attempts: 5,
+            },
+            created_at: timestamp("2026-08-10T12:34:56.789Z"),
+            updated_at: timestamp("2026-08-10T12:34:56.789Z"),
+        }
     }
     fn available_absent() -> KnownScopesInput {
         KnownScopesInput::Available { ids: vec![] }
@@ -2479,6 +2759,261 @@ mod tests {
                 StoredProfiles::empty(SCOPE)
             )
             .is_err());
+    }
+
+    #[test]
+    fn first_v1_load_migrates_atomically_and_retains_byte_exact_rollback() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        let source = StoredProfiles::from_profiles(
+            SCOPE,
+            vec![
+                legacy_profile(
+                    "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+                    "metrics",
+                    15432,
+                    22,
+                    "operator",
+                    SshForwardAuth::Agent,
+                ),
+                legacy_profile(
+                    "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0",
+                    "metrics-readonly",
+                    15433,
+                    22,
+                    "operator",
+                    SshForwardAuth::Agent,
+                ),
+            ],
+        )
+        .unwrap();
+        let source_bytes = toml::to_string(&source).unwrap().into_bytes();
+        fs::write(fixture.scope_dir().join(PROFILES_FILE), &source_bytes).unwrap();
+
+        let migrated = scope.load_scope_config().unwrap();
+        assert_eq!(migrated.connections.len(), 1);
+        assert_eq!(migrated.rules.len(), 2);
+        assert_eq!(migrated.connections_revision, WireCounter::ZERO);
+        assert_eq!(migrated.rules_revision, WireCounter::ZERO);
+        assert_eq!(
+            fs::read(fixture.scope_dir().join(V1_ROLLBACK_FILE)).unwrap(),
+            source_bytes
+        );
+        assert!(fixture
+            .scope_dir()
+            .join(V1_ROLLBACK_METADATA_FILE)
+            .is_file());
+        let stored_text = fs::read_to_string(fixture.scope_dir().join(PROFILES_FILE)).unwrap();
+        assert!(stored_text.contains("schema_version = 2"));
+        assert!(stored_text.contains("connections_revision = \"0\""));
+        assert!(stored_text.contains("rules_revision = \"0\""));
+    }
+
+    #[test]
+    fn v2_collection_replacements_share_one_atomic_document_and_revisions() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        let first_connection = connection("e1634e77-b0b5-4b21-bd2f-462c9e3b7a96");
+        let next_connections =
+            StoredScopeConfigV2::from_models(SCOPE, vec![first_connection.clone()], vec![])
+                .unwrap();
+        let committed = scope
+            .replace_connections(WireCounter::ZERO, next_connections)
+            .unwrap();
+        assert_eq!(committed.connections_revision.value(), 1);
+        assert_eq!(committed.rules_revision, WireCounter::ZERO);
+
+        let next_rules = StoredScopeConfigV2::from_models(
+            SCOPE,
+            committed.connections().unwrap(),
+            vec![rule(
+                "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0",
+                &first_connection.id,
+                15432,
+            )],
+        )
+        .unwrap();
+        let committed = scope.replace_rules(WireCounter::ZERO, next_rules).unwrap();
+        assert_eq!(committed.connections_revision.value(), 1);
+        assert_eq!(committed.rules_revision.value(), 1);
+        assert!(scope
+            .replace_connections(WireCounter::ZERO, StoredScopeConfigV2::empty(SCOPE))
+            .is_err());
+
+        let on_disk = scope.load_scope_config().unwrap();
+        assert_eq!(on_disk.connections.len(), 1);
+        assert_eq!(on_disk.rules.len(), 1);
+        assert_eq!(on_disk.rules[0].connection_profile_id, first_connection.id);
+    }
+
+    #[test]
+    fn migration_rejects_secret_bearing_v1_without_publishing_v2() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        let path = fixture.scope_dir().join(PROFILES_FILE);
+        fs::write(
+            &path,
+            format!(
+                "schema_version = 1\nscope_id = \"{SCOPE}\"\nprofiles_revision = \"0\"\npassword = \"never\"\nprofiles = []\n"
+            ),
+        )
+        .unwrap();
+        assert!(scope.load_scope_config().is_err());
+        assert!(fs::read_to_string(path)
+            .unwrap()
+            .contains("schema_version = 1"));
+        assert!(!fixture.scope_dir().join(V1_ROLLBACK_FILE).exists());
+    }
+
+    #[test]
+    fn restart_rejects_tampered_v1_rollback_artifact() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        let source = StoredProfiles::from_profiles(
+            SCOPE,
+            vec![legacy_profile(
+                "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+                "metrics",
+                15432,
+                22,
+                "operator",
+                SshForwardAuth::Agent,
+            )],
+        )
+        .unwrap();
+        fs::write(
+            fixture.scope_dir().join(PROFILES_FILE),
+            toml::to_string(&source).unwrap(),
+        )
+        .unwrap();
+        scope.load_scope_config().unwrap();
+        drop(scope);
+        drop(store);
+        fs::write(fixture.scope_dir().join(V1_ROLLBACK_FILE), b"tampered").unwrap();
+        assert!(SshForwardStore::open(&fixture.root).is_err());
+    }
+
+    #[test]
+    fn restart_discards_incomplete_v1_rollback_when_live_v1_is_valid() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        let source = StoredProfiles::from_profiles(
+            SCOPE,
+            vec![legacy_profile(
+                "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+                "metrics",
+                15432,
+                22,
+                "operator",
+                SshForwardAuth::Agent,
+            )],
+        )
+        .unwrap();
+        let source_bytes = toml::to_string(&source).unwrap().into_bytes();
+        fs::write(fixture.scope_dir().join(PROFILES_FILE), &source_bytes).unwrap();
+        fs::write(fixture.scope_dir().join(V1_ROLLBACK_FILE), &source_bytes).unwrap();
+        drop(scope);
+        drop(store);
+
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        assert!(!fixture.scope_dir().join(V1_ROLLBACK_FILE).exists());
+        assert!(!fixture.scope_dir().join(V1_ROLLBACK_METADATA_FILE).exists());
+        let migrated = store.scope(SCOPE).unwrap().load_scope_config().unwrap();
+        assert_eq!(migrated.connections.len(), 1);
+        assert!(fixture
+            .scope_dir()
+            .join(V1_ROLLBACK_METADATA_FILE)
+            .is_file());
+    }
+
+    #[test]
+    fn legacy_compatibility_round_trip_preserves_v2_desired_enabled() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        let source = StoredProfiles::from_profiles(
+            SCOPE,
+            vec![legacy_profile(
+                "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+                "metrics",
+                15432,
+                22,
+                "operator",
+                SshForwardAuth::Agent,
+            )],
+        )
+        .unwrap();
+        fs::write(
+            fixture.scope_dir().join(PROFILES_FILE),
+            toml::to_string(&source).unwrap(),
+        )
+        .unwrap();
+
+        let migrated = scope.load_scope_config().unwrap();
+        assert!(migrated.rules[0].desired_enabled);
+        let mut legacy = scope.load_profiles().unwrap();
+        assert!(!legacy.profiles[0].auto_start);
+        legacy.profiles[0].name = "renamed".into();
+
+        scope.replace_profiles(legacy.revision(), legacy).unwrap();
+        let reloaded = scope.load_scope_config().unwrap();
+        assert!(reloaded.rules[0].desired_enabled);
+        assert_eq!(reloaded.rules[0].name, "renamed");
+    }
+
+    #[test]
+    fn legacy_compatibility_write_rebases_stale_connection_view() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        let source = StoredProfiles::from_profiles(
+            SCOPE,
+            vec![legacy_profile(
+                "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+                "metrics",
+                15432,
+                22,
+                "operator",
+                SshForwardAuth::Agent,
+            )],
+        )
+        .unwrap();
+        fs::write(
+            fixture.scope_dir().join(PROFILES_FILE),
+            toml::to_string(&source).unwrap(),
+        )
+        .unwrap();
+
+        scope.load_scope_config().unwrap();
+        let mut legacy = scope.load_profiles().unwrap();
+        let current = scope.load_scope_config().unwrap();
+        let original_connection_id = current.connections[0].id.clone();
+        let mut connections = current.connections().unwrap();
+        connections[0].ssh_host = "updated.example".into();
+        let changed_connections =
+            StoredScopeConfigV2::from_models(SCOPE, connections, current.rules().unwrap()).unwrap();
+        scope
+            .replace_connections(current.connections_revision, changed_connections)
+            .unwrap();
+
+        legacy.profiles[0].name = "renamed".into();
+        scope.replace_profiles(legacy.revision(), legacy).unwrap();
+
+        let reloaded = scope.load_scope_config().unwrap();
+        assert_eq!(reloaded.connections.len(), 1);
+        assert_eq!(reloaded.connections[0].id, original_connection_id);
+        assert_eq!(reloaded.connections[0].ssh_host, "updated.example");
+        assert_eq!(
+            reloaded.rules[0].connection_profile_id,
+            original_connection_id
+        );
+        assert_eq!(reloaded.rules[0].name, "renamed");
+        assert_eq!(reloaded.connections_revision.value(), 1);
     }
 
     #[test]
