@@ -8,9 +8,10 @@ use uuid::Uuid;
 use super::model::UtcTimestamp;
 
 const LOOPBACK_HOST: &str = "127.0.0.1";
-const MAX_PROFILE_SCALARS: usize = 64;
+pub(crate) const MAX_PROFILE_SCALARS: usize = 64;
 const MAX_SSH_HOST: usize = 253;
-const MAX_KEY_ID: usize = 128;
+pub(crate) const MAX_KEY_ID: usize = 128;
+pub(crate) const MAX_RECONNECT_ATTEMPTS: u8 = 5;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct LoopbackHost;
@@ -55,6 +56,167 @@ pub(crate) struct SshForwardProfile {
     pub(crate) reconnect: ReconnectPolicy,
     pub(crate) created_at: UtcTimestamp,
     pub(crate) updated_at: UtcTimestamp,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SshConnectionProfile {
+    pub(crate) id: String,
+    pub(crate) scope_id: String,
+    pub(crate) name: String,
+    pub(crate) ssh_host: String,
+    pub(crate) ssh_port: u16,
+    pub(crate) ssh_user: String,
+    pub(crate) auth: SshForwardAuth,
+    pub(crate) created_at: UtcTimestamp,
+    pub(crate) updated_at: UtcTimestamp,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SshConnectionProfileWire {
+    id: String,
+    scope_id: String,
+    name: String,
+    ssh_host: String,
+    ssh_port: u16,
+    ssh_user: String,
+    auth: SshForwardAuth,
+    created_at: UtcTimestamp,
+    updated_at: UtcTimestamp,
+}
+
+impl<'de> Deserialize<'de> for SshConnectionProfile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = SshConnectionProfileWire::deserialize(deserializer)?;
+        let profile = Self {
+            id: wire.id,
+            scope_id: wire.scope_id,
+            name: wire.name,
+            ssh_host: wire.ssh_host,
+            ssh_port: wire.ssh_port,
+            ssh_user: wire.ssh_user,
+            auth: wire.auth,
+            created_at: wire.created_at,
+            updated_at: wire.updated_at,
+        };
+        profile.validate().map_err(de::Error::custom)?;
+        Ok(profile)
+    }
+}
+
+impl SshConnectionProfile {
+    pub(crate) fn validate(&self) -> Result<(), ProfileValidationError> {
+        validate_uuid_v4(&self.id)?;
+        validate_uuid_v4(&self.scope_id)?;
+        validate_scalar(&self.name, MAX_PROFILE_SCALARS)?;
+        validate_canonical_ssh_host(&self.ssh_host)?;
+        validate_scalar(&self.ssh_user, MAX_PROFILE_SCALARS)?;
+        validate_port(self.ssh_port)?;
+        self.auth.validate()
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum SshAuthIdentity {
+    Agent,
+    Key(String),
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct SshConnectionIdentity {
+    pub(crate) scope_id: String,
+    pub(crate) ssh_host: String,
+    pub(crate) ssh_port: u16,
+    pub(crate) ssh_user: String,
+    pub(crate) auth: SshAuthIdentity,
+}
+
+pub(crate) fn canonical_connection_identity(
+    profile: &SshConnectionProfile,
+) -> Result<SshConnectionIdentity, ProfileValidationError> {
+    profile.validate()?;
+    Ok(SshConnectionIdentity {
+        scope_id: profile.scope_id.clone(),
+        ssh_host: profile.ssh_host.clone(),
+        ssh_port: profile.ssh_port,
+        ssh_user: profile.ssh_user.clone(),
+        auth: match &profile.auth {
+            SshForwardAuth::Agent => SshAuthIdentity::Agent,
+            SshForwardAuth::Key { key_id } => SshAuthIdentity::Key(key_id.clone()),
+        },
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SshForwardRule {
+    pub(crate) id: String,
+    pub(crate) scope_id: String,
+    pub(crate) connection_profile_id: String,
+    pub(crate) name: String,
+    pub(crate) local_port: u16,
+    pub(crate) target_host: LoopbackHost,
+    pub(crate) target_port: u16,
+    pub(crate) desired_enabled: bool,
+    pub(crate) reconnect: ReconnectPolicy,
+    pub(crate) created_at: UtcTimestamp,
+    pub(crate) updated_at: UtcTimestamp,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SshForwardRuleWire {
+    id: String,
+    scope_id: String,
+    connection_profile_id: String,
+    name: String,
+    local_port: u16,
+    target_host: LoopbackHost,
+    target_port: u16,
+    desired_enabled: bool,
+    reconnect: ReconnectPolicy,
+    created_at: UtcTimestamp,
+    updated_at: UtcTimestamp,
+}
+
+impl<'de> Deserialize<'de> for SshForwardRule {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = SshForwardRuleWire::deserialize(deserializer)?;
+        let rule = Self {
+            id: wire.id,
+            scope_id: wire.scope_id,
+            connection_profile_id: wire.connection_profile_id,
+            name: wire.name,
+            local_port: wire.local_port,
+            target_host: wire.target_host,
+            target_port: wire.target_port,
+            desired_enabled: wire.desired_enabled,
+            reconnect: wire.reconnect,
+            created_at: wire.created_at,
+            updated_at: wire.updated_at,
+        };
+        rule.validate().map_err(de::Error::custom)?;
+        Ok(rule)
+    }
+}
+
+impl SshForwardRule {
+    pub(crate) fn validate(&self) -> Result<(), ProfileValidationError> {
+        validate_uuid_v4(&self.id)?;
+        validate_uuid_v4(&self.scope_id)?;
+        validate_uuid_v4(&self.connection_profile_id)?;
+        validate_scalar(&self.name, MAX_PROFILE_SCALARS)?;
+        validate_port(self.local_port)?;
+        validate_port(self.target_port)?;
+        self.reconnect.validate()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,7 +291,7 @@ pub(crate) enum SshForwardAuth {
 }
 
 impl SshForwardAuth {
-    fn validate(&self) -> Result<(), ProfileValidationError> {
+    pub(crate) fn validate(&self) -> Result<(), ProfileValidationError> {
         if let Self::Key { key_id } = self {
             validate_safe_ascii(key_id, MAX_KEY_ID)?;
         }
@@ -145,8 +307,8 @@ pub(crate) struct ReconnectPolicy {
 }
 
 impl ReconnectPolicy {
-    fn validate(&self) -> Result<(), ProfileValidationError> {
-        if self.max_attempts <= 5 {
+    pub(crate) fn validate(&self) -> Result<(), ProfileValidationError> {
+        if self.max_attempts <= MAX_RECONNECT_ATTEMPTS {
             Ok(())
         } else {
             Err(ProfileValidationError::InvalidReconnectPolicy)
@@ -188,7 +350,7 @@ pub(crate) fn validate_uuid_v4(value: &str) -> Result<(), ProfileValidationError
     }
 }
 
-fn validate_scalar(value: &str, limit: usize) -> Result<(), ProfileValidationError> {
+pub(crate) fn validate_scalar(value: &str, limit: usize) -> Result<(), ProfileValidationError> {
     if value.is_empty() || value.chars().count() > limit || value.chars().any(char::is_control) {
         Err(ProfileValidationError::InvalidScalar)
     } else {
@@ -196,7 +358,7 @@ fn validate_scalar(value: &str, limit: usize) -> Result<(), ProfileValidationErr
     }
 }
 
-fn validate_safe_ascii(value: &str, limit: usize) -> Result<(), ProfileValidationError> {
+pub(crate) fn validate_safe_ascii(value: &str, limit: usize) -> Result<(), ProfileValidationError> {
     if value.is_empty()
         || value.len() > limit
         || !value
@@ -270,7 +432,7 @@ pub(crate) fn canonicalize_ssh_host(value: &str) -> Result<String, ProfileValida
     Ok(canonical)
 }
 
-fn validate_port(port: u16) -> Result<(), ProfileValidationError> {
+pub(crate) fn validate_port(port: u16) -> Result<(), ProfileValidationError> {
     if port == 0 {
         Err(ProfileValidationError::InvalidPort)
     } else {
@@ -281,7 +443,8 @@ fn validate_port(port: u16) -> Result<(), ProfileValidationError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonicalize_ssh_host, LoopbackHost, ReconnectPolicy, SshForwardAuth, SshForwardProfile,
+        canonicalize_ssh_host, LoopbackHost, ReconnectPolicy, SshConnectionProfile, SshForwardAuth,
+        SshForwardProfile, SshForwardRule,
     };
     use crate::ssh_forward::model::UtcTimestamp;
 
@@ -375,6 +538,55 @@ mod tests {
             "mode": "key",
             "key_id": "workstation"
         }))
+        .is_err());
+    }
+
+    #[test]
+    fn v2_connection_and_rule_wire_shapes_are_camel_case_and_secret_free() {
+        let connection = SshConnectionProfile {
+            id: "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96".into(),
+            scope_id: "c1f5890a-55d7-46ca-949b-0d63972f0a68".into(),
+            name: "metrics".into(),
+            ssh_host: "bastion.example".into(),
+            ssh_port: 22,
+            ssh_user: "operator".into(),
+            auth: SshForwardAuth::Key {
+                key_id: "workstation".into(),
+            },
+            created_at: UtcTimestamp::parse("2026-08-10T12:34:56.789Z").unwrap(),
+            updated_at: UtcTimestamp::parse("2026-08-10T12:34:56.789Z").unwrap(),
+        };
+        let rule = SshForwardRule {
+            id: "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0".into(),
+            scope_id: connection.scope_id.clone(),
+            connection_profile_id: connection.id.clone(),
+            name: "metrics".into(),
+            local_port: 15432,
+            target_host: LoopbackHost,
+            target_port: 5432,
+            desired_enabled: true,
+            reconnect: ReconnectPolicy {
+                enabled: true,
+                max_attempts: 5,
+            },
+            created_at: connection.created_at,
+            updated_at: connection.updated_at,
+        };
+        let connection_id = connection.id.clone();
+        let encoded = serde_json::json!({
+            "connection": connection,
+            "rule": rule,
+        });
+        assert_eq!(encoded["connection"]["sshPort"], 22);
+        assert_eq!(encoded["connection"]["auth"]["keyId"], "workstation");
+        assert_eq!(encoded["rule"]["connectionProfileId"], connection_id);
+        assert_eq!(encoded["rule"]["desiredEnabled"], true);
+        assert!(!encoded.to_string().contains("password"));
+        assert!(serde_json::from_value::<SshConnectionProfile>({
+            let mut value = encoded["connection"].clone();
+            value["password"] = serde_json::json!("never");
+            value
+        })
         .is_err());
     }
 }
