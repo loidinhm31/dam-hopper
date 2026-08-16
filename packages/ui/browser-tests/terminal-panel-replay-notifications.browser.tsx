@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => {
     element: HTMLElement | undefined;
     readonly writes: Array<{ data: string; callback?: () => void }> = [];
 
-    options = { disableStdin: false };
+    options = { disableStdin: false, fontSize: 13 };
+    constructor(options?: { fontSize?: number }) {
+      this.options.fontSize = options?.fontSize ?? 13;
+    }
     loadAddon = vi.fn();
     open = vi.fn((host: HTMLElement) => {
       this.element = host;
@@ -46,13 +49,43 @@ const mocks = vi.hoisted(() => {
     onOutput: vi.fn(),
     handleOutput: vi.fn(),
     handleReplay: vi.fn(),
+    scheduleTerminalFit: vi.fn(),
+    invalidateSuggestionGeometry: vi.fn(),
+    settings: {
+      terminalFontSize: 13,
+      terminalWorkspaceShortcut: "Mod+Shift+Backquote",
+      revealActiveFileShortcut: "Alt+F1",
+      gitPanelShortcut: "Mod+Shift+KeyG",
+      portsPanelShortcut: "Mod+Shift+KeyP",
+      fleetTerminalShortcut: "Mod+Shift+KeyM",
+      terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
+      terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Minus",
+      saveDebounced: vi.fn(),
+    },
+    transport: {
+      invoke: vi.fn().mockResolvedValue([{ id: "term-1", alive: true }]),
+      terminalAttach: vi.fn(() => true),
+      terminalWrite: vi.fn(),
+      terminalResize: vi.fn(),
+      onTerminalData: vi.fn((_id: string, callback: (data: string) => void) => {
+        mocks.onData = callback;
+        return () => {};
+      }),
+      onTerminalExit: vi.fn(() => () => {}),
+      onTerminalBuffer: vi.fn(
+        (_id: string, callback: typeof mocks.onBuffer) => {
+          mocks.onBuffer = callback;
+          return () => {};
+        },
+      ),
+    },
   };
 });
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class extends mocks.FakeTerminal {
-    constructor() {
-      super();
+    constructor(options?: { fontSize?: number }) {
+      super(options);
       mocks.terminal = this;
     }
   },
@@ -69,27 +102,30 @@ vi.mock("@/api/client.js", () => ({
 vi.mock("@/api/transport.js", () => ({
   getTransportGeneration: () => 0,
   subscribeTransportChanges: () => () => {},
-  getTransport: () => ({
-    invoke: vi.fn().mockResolvedValue([{ id: "term-1", alive: true }]),
-    terminalAttach: vi.fn(() => true),
-    terminalWrite: vi.fn(),
-    terminalResize: vi.fn(),
-    onTerminalData: vi.fn((_id: string, callback: (data: string) => void) => {
-      mocks.onData = callback;
-      return () => {};
-    }),
-    onTerminalExit: vi.fn(() => () => {}),
-    onTerminalBuffer: vi.fn((_id: string, callback: typeof mocks.onBuffer) => {
-      mocks.onBuffer = callback;
-      return () => {};
-    }),
-  }),
+  getTransport: () => mocks.transport,
 }));
-vi.mock("@/lib/terminal-registry.js", () => ({
-  registerTerminal: () => ({}),
-  removeTerminal: vi.fn(),
-  terminalRegistry: new Map(),
-}));
+vi.mock("@/lib/terminal-registry.js", () => {
+  const terminalRegistry = new Map();
+  return {
+    registerTerminal: (
+      id: string,
+      terminal: unknown,
+      fitAddon: unknown,
+      findController: unknown,
+    ) => {
+      const entry = {
+        terminal,
+        fitAddon,
+        findController,
+        invalidateSuggestionGeometry: mocks.invalidateSuggestionGeometry,
+      };
+      terminalRegistry.set(id, entry);
+      return entry;
+    },
+    removeTerminal: vi.fn(),
+    terminalRegistry,
+  };
+});
 vi.mock("@/lib/terminal-find-controller.js", () => ({
   TerminalFindController: class {
     getSnapshot = () => ({
@@ -105,7 +141,7 @@ vi.mock("@/lib/terminal-find-controller.js", () => ({
 }));
 vi.mock("@/lib/terminal-fit-scheduler.js", () => ({
   cancelScheduledTerminalFit: vi.fn(),
-  scheduleTerminalFit: vi.fn(),
+  scheduleTerminalFit: mocks.scheduleTerminalFit,
 }));
 vi.mock("@/lib/terminal-renderer.js", () => ({
   activateTerminalWebglRenderer: () => ({ renderer: "dom", dispose: vi.fn() }),
@@ -134,9 +170,6 @@ vi.mock("@/lib/terminal-agent-notification-integration.js", () => ({
 vi.mock("@/lib/diagnostics-client.js", () => ({
   recordClientDiagnostic: vi.fn(),
 }));
-vi.mock("@/lib/terminal-keyboard-shortcuts.js", () => ({
-  handleSharedTerminalKeyEvent: () => true,
-}));
 vi.mock("@/lib/terminal-suggestion-key-handler.js", () => ({
   handleTerminalSuggestionKeyEvent: () => true,
 }));
@@ -160,7 +193,11 @@ vi.mock("@/hooks/use-terminal-suggestions.js", () => ({
   }),
 }));
 vi.mock("@/stores/settings.js", () => ({
-  useSettingsStore: Object.assign(() => ({}), { getState: () => ({}) }),
+  useSettingsStore: Object.assign(
+    (selector?: (state: typeof mocks.settings) => unknown) =>
+      selector ? selector(mocks.settings) : mocks.settings,
+    { getState: () => mocks.settings },
+  ),
 }));
 vi.mock("@/components/atoms/TerminalFindBar.js", () => ({
   TerminalFindBar: () => null,
@@ -191,6 +228,7 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     mocks.terminal = null;
     mocks.onBuffer = null;
     mocks.onData = null;
+    mocks.settings.terminalFontSize = 13;
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -236,5 +274,57 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     ]);
     expect(mocks.handleOutput).toHaveBeenCalledTimes(2);
     expect(mocks.onOutput).toHaveBeenCalledTimes(2);
+  });
+
+  it("updates live xterm font size and schedules the existing fit path", async () => {
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+
+    expect(mocks.terminal?.options.fontSize).toBe(13);
+    mocks.settings.terminalFontSize = 16;
+
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+
+    expect(mocks.terminal?.options.fontSize).toBe(16);
+    expect(mocks.scheduleTerminalFit).toHaveBeenCalledWith(expect.any(Object), {
+      focus: false,
+    });
+  });
+
+  it("uses xterm's installed key handler without forwarding font shortcuts", async () => {
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+
+    const handler =
+      mocks.terminal?.attachCustomKeyEventHandler.mock.calls[0]?.[0];
+    const event = {
+      type: "keydown",
+      key: "+",
+      code: "Equal",
+      ctrlKey: true,
+      altKey: true,
+      shiftKey: true,
+      metaKey: false,
+      repeat: false,
+      isComposing: false,
+      preventDefault: vi.fn(),
+    };
+
+    expect(handler?.(event)).toBe(false);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(mocks.settings.saveDebounced).toHaveBeenCalledWith({
+      terminalFontSize: 14,
+    });
+    expect(mocks.transport.terminalWrite).not.toHaveBeenCalled();
   });
 });

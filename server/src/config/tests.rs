@@ -1268,6 +1268,7 @@ fn ui_config_defaults() {
     assert_eq!(ui.host_resource_pinned_mount, None);
     assert_eq!(ui.system_font_size, 14);
     assert_eq!(ui.editor_font_size, 14);
+    assert_eq!(ui.terminal_font_size, 13);
     assert!(ui.editor_zoom_wheel_enabled);
     assert_eq!(ui.search_text_shortcut, "Mod+Shift+KeyF");
     assert_eq!(ui.search_filename_shortcut, "DoubleShift");
@@ -1277,6 +1278,11 @@ fn ui_config_defaults() {
     assert_eq!(ui.git_panel_shortcut, "Mod+Shift+KeyG");
     assert_eq!(ui.ports_panel_shortcut, "Mod+Shift+KeyP");
     assert_eq!(ui.fleet_terminal_shortcut, "Mod+Shift+KeyM");
+    assert_eq!(
+        ui.terminal_font_size_increase_shortcut,
+        "Ctrl+Alt+Shift+Equal"
+    );
+    assert_eq!(ui.terminal_font_size_decrease_shortcut, "Ctrl+Alt+Minus");
     assert!(ui.terminal_auto_switch_project_enabled);
     assert!(!ui.terminal_codex_notifications_enabled);
     assert!(ui.terminal_codex_notification_toast_enabled);
@@ -1306,6 +1312,7 @@ fn ui_config_serde_roundtrip() {
             host_resource_pinned_mount: Some("/mnt/fast data".to_string()),
             system_font_size: 16,
             editor_font_size: 12,
+            terminal_font_size: 15,
             editor_zoom_wheel_enabled: false,
             search_text_shortcut: "Ctrl+Alt+KeyS".to_string(),
             search_filename_shortcut: "Ctrl+KeyP".to_string(),
@@ -1315,6 +1322,8 @@ fn ui_config_serde_roundtrip() {
             git_panel_shortcut: "Ctrl+Shift+KeyG".to_string(),
             ports_panel_shortcut: "Ctrl+Shift+KeyP".to_string(),
             fleet_terminal_shortcut: "Ctrl+Shift+KeyM".to_string(),
+            terminal_font_size_increase_shortcut: "Ctrl+Alt+Shift+Equal".to_string(),
+            terminal_font_size_decrease_shortcut: "Ctrl+Alt+Minus".to_string(),
             terminal_suggestions_enabled: true,
             terminal_auto_switch_project_enabled: true,
             terminal_codex_notifications_enabled: true,
@@ -1359,6 +1368,11 @@ fn ui_config_serde_roundtrip() {
         json["hostResourcePinnedMount"],
         serde_json::json!("/mnt/fast data")
     );
+    assert_eq!(json["terminalFontSize"], 15);
+    assert_eq!(
+        json["terminalFontSizeIncreaseShortcut"],
+        serde_json::json!("Ctrl+Alt+Shift+Equal")
+    );
     assert!(json.get("host_resource_pinned_mount").is_none());
     assert_eq!(
         json["explorerLanguageFilter"],
@@ -1374,6 +1388,8 @@ fn ui_config_serde_roundtrip() {
     write_global_config_at(&cfg_path, &cfg).unwrap();
     let written = std::fs::read_to_string(&cfg_path).unwrap();
     assert!(written.contains("terminal_commit_status_enabled = true"));
+    assert!(written.contains("terminal_font_size = 15"));
+    assert!(written.contains("terminal_font_size_increase_shortcut = \"Ctrl+Alt+Shift+Equal\""));
     assert!(written.contains("host_resource_pinned_mount = \"/mnt/fast data\""));
     assert!(!written.contains("hostResourcePinnedMount"));
     assert!(!written.contains("terminalCommitStatusEnabled"));
@@ -1389,6 +1405,12 @@ fn ui_config_serde_roundtrip() {
         Some("/mnt/fast data")
     );
     assert_eq!(ui.editor_font_size, 12);
+    assert_eq!(ui.terminal_font_size, 15);
+    assert_eq!(
+        ui.terminal_font_size_increase_shortcut,
+        "Ctrl+Alt+Shift+Equal"
+    );
+    assert_eq!(ui.terminal_font_size_decrease_shortcut, "Ctrl+Alt+Minus");
     assert!(!ui.editor_zoom_wheel_enabled);
     assert_eq!(ui.search_text_shortcut, "Ctrl+Alt+KeyS");
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
@@ -1652,6 +1674,7 @@ fn ui_config_validate_font_sizes_checks_both_fields() {
     let valid = UiConfig {
         system_font_size: 14,
         editor_font_size: 16,
+        terminal_font_size: 13,
         ..UiConfig::default()
     };
     assert!(valid.validate_font_sizes().is_ok());
@@ -1669,6 +1692,12 @@ fn ui_config_validate_font_sizes_checks_both_fields() {
         ..UiConfig::default()
     };
     assert!(bad_editor.validate_font_sizes().is_err());
+
+    let bad_terminal = UiConfig {
+        terminal_font_size: 33,
+        ..UiConfig::default()
+    };
+    assert!(bad_terminal.validate_font_sizes().is_err());
 }
 
 #[test]
