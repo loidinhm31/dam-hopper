@@ -9,9 +9,25 @@ interface SharedTerminalKeyOptions {
   workspaceShortcut: string;
   revealActiveFileShortcut: string;
   panelShortcuts?: string[];
+  terminalFontSizeIncreaseShortcut?: string;
+  terminalFontSizeDecreaseShortcut?: string;
   onCopySelection: () => void;
   onFind?: () => void;
   onNewTerminal?: () => void;
+  onIncreaseTerminalFontSize?: () => void;
+  onDecreaseTerminalFontSize?: () => void;
+}
+
+function matchesTerminalFontShortcut(
+  shortcut: string | undefined,
+  event: ShortcutKeyEvent,
+): boolean {
+  if (!shortcut || event.type !== "keydown") return false;
+  return matchesKeyboardShortcut(shortcut, {
+    ...event,
+    repeat: false,
+    isComposing: false,
+  });
 }
 
 function matchesTerminalFindShortcut(event: ShortcutKeyEvent): boolean {
@@ -34,11 +50,38 @@ export function handleSharedTerminalKeyEvent(
     workspaceShortcut,
     revealActiveFileShortcut,
     panelShortcuts = [],
+    terminalFontSizeIncreaseShortcut,
+    terminalFontSizeDecreaseShortcut,
     onCopySelection,
     onFind,
     onNewTerminal,
+    onIncreaseTerminalFontSize,
+    onDecreaseTerminalFontSize,
   }: SharedTerminalKeyOptions,
 ) {
+  const shouldIncreaseTerminalFontSize = matchesTerminalFontShortcut(
+    terminalFontSizeIncreaseShortcut,
+    event,
+  );
+  const shouldDecreaseTerminalFontSize = matchesTerminalFontShortcut(
+    terminalFontSizeDecreaseShortcut,
+    event,
+  );
+  if (shouldIncreaseTerminalFontSize || shouldDecreaseTerminalFontSize) {
+    event.preventDefault?.();
+    if (!event.repeat && !event.isComposing && event.keyCode !== 229) {
+      if (shouldIncreaseTerminalFontSize && !shouldDecreaseTerminalFontSize) {
+        onIncreaseTerminalFontSize?.();
+      } else if (
+        shouldDecreaseTerminalFontSize &&
+        !shouldIncreaseTerminalFontSize
+      ) {
+        onDecreaseTerminalFontSize?.();
+      }
+    }
+    return false;
+  }
+
   if (matchesTerminalFindShortcut(event)) {
     event.preventDefault?.();
     if (!event.repeat && !event.isComposing) onFind?.();

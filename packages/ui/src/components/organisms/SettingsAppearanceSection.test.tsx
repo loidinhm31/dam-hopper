@@ -23,6 +23,7 @@ vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
 const settingsStore = {
   systemFontSize: 14,
   editorFontSize: 14,
+  terminalFontSize: 13,
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
   terminalAutoSwitchProjectEnabled: true,
@@ -63,6 +64,11 @@ describe("SettingsAppearanceSection", () => {
     const markup = renderToStaticMarkup(<SettingsAppearanceSection />);
 
     expect(markup).toContain("Codex terminal notifications");
+    expect(markup).toContain("Terminal font size");
+    expect(markup).toContain("Range: 10–32 px; applies to terminal text");
+    expect(markup).toContain('aria-label="terminal font size in pixels"');
+    expect(markup).toContain('aria-label="Decrease terminal font size"');
+    expect(markup).toContain('aria-label="Increase terminal font size"');
     expect(markup).toContain("Local command history");
     expect(markup).toContain("Clear local command history");
     expect(markup).toContain("Stored only in this browser");

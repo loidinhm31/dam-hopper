@@ -8,6 +8,8 @@ import {
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
+  DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
+  DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   formatShortcut,
 } from "@/lib/shortcuts.js";
@@ -16,6 +18,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   hostResourcePinnedMount: null,
   systemFontSize: 14,
   editorFontSize: 14,
+  terminalFontSize: 13,
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
   terminalAutoSwitchProjectEnabled: true,
@@ -47,6 +50,10 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   gitPanelShortcut: DEFAULT_GIT_PANEL_SHORTCUT,
   portsPanelShortcut: DEFAULT_PORTS_PANEL_SHORTCUT,
   fleetTerminalShortcut: DEFAULT_FLEET_TERMINAL_SHORTCUT,
+  terminalFontSizeIncreaseShortcut:
+    DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
+  terminalFontSizeDecreaseShortcut:
+    DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
 };
 
 export function isExplorerLanguageFilter(
@@ -123,6 +130,8 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     terminalCodexNotificationSoundPattern:
       ui?.terminalCodexNotificationSoundPattern ??
       DEFAULT_UI_CONFIG.terminalCodexNotificationSoundPattern,
+    terminalFontSize:
+      ui?.terminalFontSize ?? DEFAULT_UI_CONFIG.terminalFontSize,
     searchTextShortcut: formatShortcut(
       ui?.searchTextShortcut ?? DEFAULT_UI_CONFIG.searchTextShortcut,
     ),
@@ -149,6 +158,14 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     ),
     fleetTerminalShortcut: formatShortcut(
       ui?.fleetTerminalShortcut ?? DEFAULT_UI_CONFIG.fleetTerminalShortcut,
+    ),
+    terminalFontSizeIncreaseShortcut: formatShortcut(
+      ui?.terminalFontSizeIncreaseShortcut ??
+        DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
+    ),
+    terminalFontSizeDecreaseShortcut: formatShortcut(
+      ui?.terminalFontSizeDecreaseShortcut ??
+        DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
     ),
   };
 }

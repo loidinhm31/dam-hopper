@@ -12,6 +12,9 @@ describe("withUiConfigDefaults", () => {
     expect(ui.gitPanelShortcut).toBe("Mod+Shift+KeyG");
     expect(ui.portsPanelShortcut).toBe("Mod+Shift+KeyP");
     expect(ui.fleetTerminalShortcut).toBe("Mod+Shift+KeyM");
+    expect(ui.terminalFontSize).toBe(13);
+    expect(ui.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
+    expect(ui.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
     expect(ui.terminalCodexNotificationsEnabled).toBe(false);
     expect(ui.terminalAutoSwitchProjectEnabled).toBe(true);
     expect(ui.terminalCodexNotificationToastEnabled).toBe(true);
@@ -34,6 +37,7 @@ describe("withUiConfigDefaults", () => {
   it("preserves existing fields while normalizing provided shortcuts", () => {
     const ui = withUiConfigDefaults({
       editorFontSize: 18,
+      terminalFontSize: 17,
       terminalOrder: ["one"],
       runtimeGroupOrder: ["web", "__free__"],
       runtimeItemOrder: { web: ["session:one"] },
@@ -45,6 +49,8 @@ describe("withUiConfigDefaults", () => {
       gitPanelShortcut: "ctrl+shift+g",
       portsPanelShortcut: "ctrl+shift+p",
       fleetTerminalShortcut: "ctrl+shift+m",
+      terminalFontSizeIncreaseShortcut: "ctrl+alt+shift+equal",
+      terminalFontSizeDecreaseShortcut: "ctrl+alt+minus",
       terminalCodexNotificationsEnabled: true,
       terminalCodexNotificationToastEnabled: false,
       terminalCodexBrowserNotificationsEnabled: false,
@@ -60,6 +66,7 @@ describe("withUiConfigDefaults", () => {
     });
 
     expect(ui.editorFontSize).toBe(18);
+    expect(ui.terminalFontSize).toBe(17);
     expect(ui.terminalOrder).toEqual(["one"]);
     expect(ui.runtimeGroupOrder).toEqual(["web", "__free__"]);
     expect(ui.runtimeItemOrder).toEqual({ web: ["session:one"] });
@@ -71,6 +78,8 @@ describe("withUiConfigDefaults", () => {
     expect(ui.gitPanelShortcut).toBe("Ctrl+Shift+KeyG");
     expect(ui.portsPanelShortcut).toBe("Ctrl+Shift+KeyP");
     expect(ui.fleetTerminalShortcut).toBe("Ctrl+Shift+KeyM");
+    expect(ui.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
+    expect(ui.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
     expect(ui.terminalCodexNotificationsEnabled).toBe(true);
     expect(ui.terminalCodexNotificationToastEnabled).toBe(false);
     expect(ui.terminalCodexBrowserNotificationsEnabled).toBe(false);

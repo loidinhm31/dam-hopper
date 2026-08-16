@@ -9,6 +9,7 @@ describe("TerminalSuggestionGhost", () => {
         <TerminalSuggestionGhost
           suffix=""
           position={{ x: 12, y: 18, lineHeight: 18 }}
+          fontSize={13}
         />,
       ),
     ).toBe("");
@@ -19,6 +20,7 @@ describe("TerminalSuggestionGhost", () => {
       <TerminalSuggestionGhost
         suffix=" --help"
         position={{ x: 12, y: 18, lineHeight: 18 }}
+        fontSize={16}
       />,
     );
 
@@ -27,5 +29,6 @@ describe("TerminalSuggestionGhost", () => {
     expect(markup).toContain("pointer-events-none");
     expect(markup).toContain("whitespace-nowrap");
     expect(markup).toContain("--help");
+    expect(markup).toContain("font-size:16px");
   });
 });

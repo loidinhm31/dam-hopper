@@ -13,6 +13,8 @@ const settingsStore = {
   searchTextShortcut: "mod+shift+f",
   searchFilenameShortcut: "mod+p",
   terminalWorkspaceShortcut: "mod+`",
+  terminalFontSizeIncreaseShortcut: "ctrl+alt+shift+equal",
+  terminalFontSizeDecreaseShortcut: "ctrl+alt+minus",
   terminalFilePanelShortcut: "mod+shift+e",
   revealActiveFileShortcut: "alt+f1",
   gitPanelShortcut: "ctrl+shift+g",
@@ -32,5 +34,14 @@ describe("SettingsKeyboardShortcutsSection", () => {
     expect(markup).toContain("Git panel");
     expect(markup).toContain("Ports panel");
     expect(markup).toContain("Fleet Terminal");
+    expect(markup).toContain("Increase terminal font size");
+    expect(markup).toContain("Decrease terminal font size");
+    expect(markup).toContain("the + key");
+    expect(markup).toContain(
+      'aria-label="Set shortcut for Increase terminal font size"',
+    );
+    expect(markup).toContain(
+      'aria-label="Reset Decrease terminal font size shortcut to default"',
+    );
   });
 });
