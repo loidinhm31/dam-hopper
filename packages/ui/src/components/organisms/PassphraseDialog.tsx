@@ -15,6 +15,16 @@ interface Props {
   loading?: boolean;
   error?: string;
   availableKeys?: string[];
+  keyOptions?: Array<{ value: string; label: string }>;
+  title?: string;
+  description?: string;
+  submitLabel?: string;
+  allowSaveForLater?: boolean;
+  requireKeySelection?: boolean;
+  passwordAuth?: {
+    username: string;
+    onSubmit: (username: string, password: string) => void;
+  };
 }
 
 export interface PassphraseDialogSubmission {
@@ -42,10 +52,19 @@ export function PassphraseDialog({
   loading = false,
   error,
   availableKeys = [],
+  keyOptions,
+  title = "SSH Key Passphrase",
+  description = "Git could not authenticate with SSH. Enter the passphrase for the selected private key and retry. Leave blank if the key has no passphrase.",
+  submitLabel = "Load Key & Retry",
+  allowSaveForLater = true,
+  requireKeySelection = false,
+  passwordAuth,
 }: Props) {
   const [passphrase, setPassphrase] = useState("");
   const [selectedKey, setSelectedKey] = useState("");
   const [saveForLater, setSaveForLater] = useState(false);
+  const [authMethod, setAuthMethod] = useState<"key" | "password">("key");
+  const [username, setUsername] = useState(passwordAuth?.username ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
@@ -72,26 +91,41 @@ export function PassphraseDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (loading || isAndroidChromeNativeInputSuppressed) return;
-    const submission = buildPassphraseDialogSubmission(
-      passphrase,
-      selectedKey,
-      saveForLater,
-    );
-    onSubmit(
-      submission.passphrase,
-      submission.keyPath,
-      submission.saveForLater,
-    );
+    if (
+      loading ||
+      isAndroidChromeNativeInputSuppressed ||
+      (authMethod === "key" && requireKeySelection && !selectedKey) ||
+      (authMethod === "password" &&
+        (!passwordAuth || !username.trim() || !passphrase))
+    )
+      return;
+    if (authMethod === "password") {
+      passwordAuth!.onSubmit(username.trim(), passphrase);
+    } else {
+      const submission = buildPassphraseDialogSubmission(
+        passphrase,
+        selectedKey,
+        saveForLater,
+      );
+      onSubmit(
+        submission.passphrase,
+        submission.keyPath,
+        submission.saveForLater,
+      );
+    }
     setPassphrase("");
     setSelectedKey("");
     setSaveForLater(false);
+    setAuthMethod("key");
+    setUsername(passwordAuth?.username ?? "");
   }
 
   function handleCancel() {
     setPassphrase("");
     setSelectedKey("");
     setSaveForLater(false);
+    setAuthMethod("key");
+    setUsername(passwordAuth?.username ?? "");
     onCancel();
   }
 
@@ -114,7 +148,7 @@ export function PassphraseDialog({
             id="passphrase-dialog-title"
             className="text-sm font-semibold text-[var(--color-text)] flex-1"
           >
-            SSH Key Passphrase
+            {title}
           </h2>
           <button
             type="button"
@@ -126,9 +160,7 @@ export function PassphraseDialog({
         </div>
 
         <p className="text-xs text-[var(--color-text-muted)] mb-4">
-          Git could not authenticate with SSH. Enter the passphrase for the
-          selected private key and retry. Leave blank if the key has no
-          passphrase.
+          {description}
         </p>
 
         {isAndroidChromeNativeInputSuppressed && (
@@ -143,43 +175,92 @@ export function PassphraseDialog({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-3">
-          {/* SSH key selector */}
-          {availableKeys.length > 0 && (
+          {passwordAuth ? (
             <div className="space-y-1">
               <label className="text-xs font-medium text-[var(--color-text-muted)]">
-                SSH Key
+                Authentication method
               </label>
               <select
-                value={selectedKey}
-                onChange={(e) => setSelectedKey(e.target.value)}
+                value={authMethod}
+                onChange={(event) =>
+                  setAuthMethod(event.target.value as "key" | "password")
+                }
                 disabled={loading}
                 className={cn(inputClass, "pr-8")}
               >
-                <option value="">
-                  Default key
-                  {availableKeys[0]
-                    ? ` (server auto-selects; first available: ~/.ssh/${availableKeys[0]})`
-                    : " (server auto-selects)"}
-                </option>
-                {availableKeys.map((k) => (
-                  <option key={k} value={k}>
-                    ~/.ssh/{k}
-                  </option>
-                ))}
+                <option value="key">SSH key passphrase</option>
+                <option value="password">Username and password</option>
               </select>
             </div>
-          )}
+          ) : null}
 
-          {/* Passphrase input */}
+          {/* SSH key selector */}
+          {authMethod === "key" &&
+            (keyOptions !== undefined || availableKeys.length > 0) && (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-[var(--color-text-muted)]">
+                  SSH Key
+                </label>
+                <select
+                  value={selectedKey}
+                  onChange={(e) => setSelectedKey(e.target.value)}
+                  disabled={loading}
+                  className={cn(inputClass, "pr-8")}
+                >
+                  <option value="">
+                    {keyOptions !== undefined
+                      ? keyOptions.length > 0
+                        ? "Select a key"
+                        : "No local encrypted keys found"
+                      : `Default key${availableKeys[0] ? ` (first available: ~/.ssh/${availableKeys[0]})` : " (server auto-selects)"}`}
+                  </option>
+                  {keyOptions !== undefined
+                    ? keyOptions.map((key) => (
+                        <option key={key.value} value={key.value}>
+                          {key.label}
+                        </option>
+                      ))
+                    : availableKeys.map((key) => (
+                        <option key={key} value={key}>
+                          ~/.ssh/{key}
+                        </option>
+                      ))}
+                </select>
+              </div>
+            )}
+
+          {authMethod === "password" ? (
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-[var(--color-text-muted)]">
+                Username
+              </label>
+              <input
+                type="text"
+                autoComplete="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                disabled={loading || isAndroidChromeNativeInputSuppressed}
+                className={inputClass}
+              />
+            </div>
+          ) : null}
+
+          {/* Passphrase or password input */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-[var(--color-text-muted)]">
-              Passphrase
+              {authMethod === "password" ? "Password" : "Passphrase"}
             </label>
             <input
               ref={inputRef}
               type="password"
-              autoComplete="off"
-              placeholder="Enter passphrase..."
+              autoComplete={
+                authMethod === "password" ? "current-password" : "off"
+              }
+              placeholder={
+                authMethod === "password"
+                  ? "Enter password..."
+                  : "Enter passphrase..."
+              }
               value={passphrase}
               onChange={(e) => setPassphrase(e.target.value)}
               disabled={loading || isAndroidChromeNativeInputSuppressed}
@@ -192,21 +273,23 @@ export function PassphraseDialog({
             />
           </div>
 
-          <label className="flex items-start gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/40 px-3 py-2 text-xs text-[var(--color-text-muted)]">
-            <input
-              type="checkbox"
-              checked={saveForLater}
-              onChange={(e) => setSaveForLater(e.target.checked)}
-              disabled={loading}
-              className="mt-0.5"
-            />
-            <span>
-              Save for later when device credential storage is available.
-              <span className="block text-[11px] opacity-80">
-                Otherwise the key stays loaded for this server session only.
+          {authMethod === "key" && allowSaveForLater ? (
+            <label className="flex items-start gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/40 px-3 py-2 text-xs text-[var(--color-text-muted)]">
+              <input
+                type="checkbox"
+                checked={saveForLater}
+                onChange={(e) => setSaveForLater(e.target.checked)}
+                disabled={loading}
+                className="mt-0.5"
+              />
+              <span>
+                Save for later when device credential storage is available.
+                <span className="block text-[11px] opacity-80">
+                  Otherwise the key stays loaded for this server session only.
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+          ) : null}
 
           {/* Error */}
           {error && (
@@ -221,7 +304,7 @@ export function PassphraseDialog({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={onCancel}
+              onClick={handleCancel}
               disabled={loading}
             >
               Cancel
@@ -231,14 +314,21 @@ export function PassphraseDialog({
               variant="primary"
               size="sm"
               loading={loading}
-              disabled={isAndroidChromeNativeInputSuppressed}
+              disabled={
+                isAndroidChromeNativeInputSuppressed ||
+                (authMethod === "key" &&
+                  requireKeySelection &&
+                  (!selectedKey || keyOptions?.length === 0)) ||
+                (authMethod === "password" &&
+                  (!passwordAuth || !username.trim() || !passphrase))
+              }
               title={
                 isAndroidChromeNativeInputSuppressed
                   ? "Unavailable on Android Chrome"
                   : undefined
               }
             >
-              Load Key & Retry
+              {submitLabel}
             </Button>
           </div>
         </form>

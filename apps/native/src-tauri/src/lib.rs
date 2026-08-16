@@ -101,6 +101,8 @@ pub fn run() {
         ssh_forward::commands::ssh_forward_stop,
         ssh_forward::commands::ssh_forward_restart,
         ssh_forward::commands::ssh_forward_list_keys,
+        ssh_forward::commands::ssh_forward_load_key,
+        ssh_forward::commands::ssh_forward_load_password,
         ssh_forward::commands::ssh_forward_approve_host,
         ssh_forward::commands::ssh_forward_purge_scope,
     ]);

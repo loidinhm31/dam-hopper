@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
 import { SshForwardProfileCard } from "@/components/molecules/SshForwardProfileCard.js";
 import { SshForwardProfileDialog } from "@/components/organisms/SshForwardProfileDialog.js";
+import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import { SshHostKeyApprovalDialog } from "@/components/organisms/SshHostKeyApprovalDialog.js";
 import { useSshForwardPageController } from "@/hooks/use-ssh-forward-page-controller.js";
 import { getSshForwardErrorPresentation } from "@/lib/ssh-forward-error-copy.js";
@@ -95,7 +96,7 @@ export function SshForwardingPage() {
                 challenge={challenge}
                 pending={forwarding.pending}
                 onStart={() =>
-                  void controller.lifecycle(profile, () =>
+                  void controller.lifecycle(profile, "start", () =>
                     forwarding.start(
                       profile.id,
                       controller.profileGeneration(profile.id),
@@ -111,7 +112,7 @@ export function SshForwardingPage() {
                   )
                 }
                 onRestart={() =>
-                  void controller.lifecycle(profile, () =>
+                  void controller.lifecycle(profile, "restart", () =>
                     forwarding.restart(
                       profile.id,
                       controller.profileGeneration(profile.id),
@@ -157,6 +158,31 @@ export function SshForwardingPage() {
           approved={controller.trustApproved}
           onApprove={controller.approveHost}
           onClose={() => controller.setTrustTarget(null)}
+        />
+      ) : null}
+      {controller.passphraseTarget ? (
+        <PassphraseDialog
+          open
+          title={`Unlock SSH key for ${controller.passphraseTarget.profile.name}`}
+          description={`SSH could not authenticate ${controller.passphraseTarget.profile.sshUser}@${controller.passphraseTarget.profile.sshHost}. Use the configured key or choose username and password, like VS Code. Credentials are used only in memory.`}
+          submitLabel="Unlock and retry"
+          allowSaveForLater={false}
+          requireKeySelection
+          keyOptions={controller.passphraseTarget.keys.map((key) => ({
+            value: key.keyId,
+            label: `${key.label} · ${key.algorithm}`,
+          }))}
+          loading={controller.passphraseLoading}
+          error={controller.passphraseError ?? undefined}
+          onSubmit={(passphrase, keyId) =>
+            void controller.submitPassphrase(passphrase, keyId)
+          }
+          passwordAuth={{
+            username: controller.passphraseTarget.profile.sshUser,
+            onSubmit: (username, password) =>
+              void controller.submitPassword(username, password),
+          }}
+          onCancel={controller.cancelPassphrase}
         />
       ) : null}
     </AppLayout>

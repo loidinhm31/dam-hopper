@@ -31,7 +31,7 @@ This phase is complete for Windows desktop only. The accepted scope includes Win
 
 ## Final Windows-only execution status (2026-08-15T22:39:00+07:00)
 
-- Added a real temporary OpenSSH/remote-loopback forwarding gate, deterministic smoke/evidence validation, the strict twelve-command ACL boundary checks, and a Windows-only native package profile.
+- Added a real temporary OpenSSH/remote-loopback forwarding gate, deterministic smoke/evidence validation, the strict fourteen-command ACL boundary checks, and a Windows-only native package profile.
 - Windows CI now runs Rust formatting, lint, unit tests, the ignored real-OpenSSH gate, no-bundle Tauri compilation, and NSIS packaging independently of the unrelated server test job. Release pre-bundle checks run the same E2E before the desktop matrix, and Windows packaging uses the same explicit profile.
 - The base Tauri configuration keeps the updater/relaunch boundary assertion, but the unsigned Windows package profile disables updater artifact creation. This avoids inventing a signing key or endpoint; no updater plugin, capability, restart, or relaunch behavior is enabled.
 - WebView2/OpenSSH preflight is automated. Evidence validation enforces the schema shape, exact artifact filename/hash, checked-out and package-run commit, redaction, and approval IDs supplied by the protected environment. Packaged runtime behavior remains `manual-pending` until protected evidence carries release-engineer, security-reviewer, and product-owner approvals.
@@ -85,7 +85,7 @@ The following original requirements remain intentionally deferred and are not pa
 ### Packaged evidence ownership and states
 
 - Add `smoke:ssh-forward` modes `--build-only`, `--runtime`, `--validate-evidence`. Build-only can mark automated package `pass`; it cannot mark runtime `pass`.
-- Per-OS runtime checks: exact 12-command main ACL/unauthorized denial; numeric 9/10 and 99/100 ordering; wrong-client-epoch hint causes no refetch; reviewed endpoint/fixed remote loopback; unknown exact approval/explicit Start; bytes/long-idle; second local process; key/algorithm hard fail; Tauri-resolved trust path, stopped-app repair refusal while running, contained backup/quarantine/recovery, then unknown approval; same-scope reload one listener; Stop, scope switch, and app exit each make old listener unreachable within 5 seconds; no leaked detail.
+- Windows runtime checks: exact 14-command main ACL/unauthorized denial; numeric 9/10 and 99/100 ordering; wrong-client-epoch hint causes no refetch; reviewed endpoint/fixed remote loopback; unknown exact approval/explicit Start; bytes/long-idle; second local process; key/algorithm hard fail; Tauri-resolved trust path, stopped-app repair refusal while running, contained backup/quarantine/recovery, then unknown approval; same-scope reload one listener; Stop, scope switch, and app exit each make old listener unreachable within 5 seconds; no leaked detail.
 - CI owns automated test/build artifacts. Named release engineer runs packaged artifact and uploads `artifacts/native-ssh-forward/<commit>/<os>/evidence.json`. Security reviewer accepts ACL/trust/fixed-target/remediation evidence. Product owner accepts other-local-process exposure and copy.
 - Protected `native-ssh-forward-runtime` environment/check remains `manual-pending` until role approvals and `--validate-evidence` bind evidence to exact commit and artifact SHA-256. Missing/build-only/self-attested/wrong-hash evidence is not pass. Release job requires the validated check.
 - Evidence may include OS, WebView/runtime version, SSH crate/version, agent backend, commit, artifact hash, boolean checks, reviewer IDs/timestamps. It excludes key IDs/fingerprints/endpoints/paths/usernames/payloads/secrets.
@@ -128,7 +128,7 @@ Linux:   pnpm --filter @dam-hopper/native exec tauri build --bundles deb,rpm
 ## Architecture
 
 ```text
-contract/A-B-C tests -> real sshd remote-loopback E2E -> 12-command ACL/mobile tests
+contract/A-B-C tests -> real sshd remote-loopback E2E -> 14-command ACL/mobile tests
   -> UI zero-call tests -> native package build PASS
   -> release engineer runtime evidence MANUAL-PENDING
   -> security + product approvals + validator PASS
@@ -177,7 +177,7 @@ No build-only or skipped check can be promoted to runtime-supported.
 - [ ] Rust fmt/clippy/unit/real-SSH/A-B-C tests pass.
 - [ ] Numeric counter boundaries and exact event-hint context tests pass.
 - [ ] Every native store and trust-repair path passes link/reparse/component-swap tests.
-- [ ] Exact 12-command ACL equality and unauthorized denial pass.
+- [ ] Exact 14-command ACL equality and unauthorized denial pass.
 - [ ] Android/iOS trees/checks exclude forwarding dependencies/handlers.
 - [ ] Native adapter/UI/Chromium zero-call suites pass.
 - [ ] Tauri no-bundle and all OS bundles pass.
@@ -225,7 +225,7 @@ No build-only or skipped check can be promoted to runtime-supported.
 
 - This Windows-only plan is complete. Produce protected runtime evidence and configure the three approval roles before a production tag release.
 - Create a separate plan before adding macOS, Linux, Android, iOS, signed updater artifacts, or new local-client authentication claims.
-- Any IPv6/non-loopback target, remote/SOCKS, password/keychain, or local-client auth work needs a new threat-model plan.
+- Any IPv6/non-loopback target, remote/SOCKS, password persistence/keychain, or local-client auth work needs a new threat-model plan. Ephemeral Windows SSH username/password retry is now explicitly included in the accepted scope.
 
 ### Deferred operational questions
 
