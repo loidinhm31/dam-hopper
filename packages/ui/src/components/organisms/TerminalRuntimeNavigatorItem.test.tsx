@@ -13,8 +13,9 @@ import type {
 } from "@/lib/terminal-runtime-tree.js";
 import { TerminalRuntimeNavigatorItem } from "./TerminalRuntimeNavigatorItem.js";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
-  true;
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 type ItemProps = ComponentProps<typeof TerminalRuntimeNavigatorItem>;
 
@@ -83,10 +84,13 @@ function expectStatus(
   title: string,
   classFragment: string,
 ): void {
+  const selectionButton = status.closest("button");
   expect(status.getAttribute("aria-hidden")).toBe("true");
   expect(status.getAttribute("aria-label")).toBeNull();
   expect(status.getAttribute("title")).toBe(title);
   expect(status.className).toContain(classFragment);
+  expect(selectionButton?.querySelector(".sr-only")?.textContent).toBe(label);
+  expect(selectionButton?.textContent).toContain(label);
   expect(container.textContent).toContain(label);
 }
 
@@ -159,6 +163,29 @@ describe("TerminalRuntimeNavigatorItem", () => {
     renderItem({ ...createSession("precedence"), alive: false });
 
     expectStatus(getStatus(), "Stopped", "Terminal stopped", "color-danger");
+  });
+
+  it("moves a recent row back to unavailable when its stream disconnects", () => {
+    const sessionId = "stream-reset";
+    setTerminalStreamReady(sessionId, true);
+    markTerminalOutput(sessionId);
+
+    renderItem(createSession(sessionId));
+    expectStatus(
+      getStatus(),
+      "Receiving output",
+      "Receiving output",
+      "color-success",
+    );
+
+    act(() => setTerminalStreamReady(sessionId, false));
+
+    expectStatus(
+      getStatus(),
+      "Output unavailable",
+      "Output stream unavailable",
+      "color-text-muted",
+    );
   });
 
   it("updates only the leaf with the matching session ID", () => {

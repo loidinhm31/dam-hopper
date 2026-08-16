@@ -1,7 +1,7 @@
 ---
 title: "Terminal Output Activity Indicator"
 description: "Add browser-local recent-output state to every mounted Runtime terminal row without changing server transport."
-status: in-progress
+status: completed
 priority: P2
 effort: 9h
 branch: feat/terminal-output-activity-indicator
@@ -25,13 +25,13 @@ Observe non-empty live terminal chunks at the post-replay xterm write seam. Publ
 
 ## Phases
 
-Plan progress: Phases 01–02 complete (2/3 phases, 67%); Phase 03 pending.
+Plan progress: Phases 01–03 complete (3/3 phases, 100%); plan DONE 2026-08-17 01:20:11 +07:00.
 
 | # | Phase | Status | Progress | Effort | Link |
 |---|---|---|---:|---:|---|
 | 1 | Activity store and lifecycle publisher | DONE 2026-08-16 22:52:22 +07:00 | 100% | 4h | [phase-01](./phase-01-activity-store-and-lifecycle.md) |
 | 2 | Runtime row presentation | DONE 2026-08-17 00:44:18 +07:00 | 100% | 2h | [phase-02](./phase-02-runtime-row-presentation.md) |
-| 3 | Regression coverage and validation | Pending | 0% | 3h | [phase-03](./phase-03-regression-coverage-and-validation.md) |
+| 3 | Regression coverage and validation | DONE 2026-08-17 01:20:11 +07:00 | 100% | 3h | [phase-03](./phase-03-regression-coverage-and-validation.md) |
 
 ## Dependencies
 
@@ -53,6 +53,15 @@ Plan progress: Phases 01–02 complete (2/3 phases, 67%); Phase 03 pending.
 
 Focused unit/browser tests, type-check, UI test suite, build, docs validation, and architecture-vs-implementation review pass with no per-chunk subscriber notifications or output-content retention.
 
+## Validation evidence
+
+- Full UI: 1,096/1,096.
+- Full browser: 127/127.
+- Focused UI: 26/26; focused browser: 6/6.
+- UI/root build, lint, diff-check passed.
+- Docs validation warn-only; no blocking documentation issue.
+- Final scope review confirms no backend, transport/SSE, persistence, output-content retention, or dependency changes.
+
 ## Unresolved questions
 
-- Exact accessible wording/tooltips and stopped color token; implementation may choose one consistent set matching the accepted four-state semantics.
+- None. Phase 02 resolved the accessible labels/tooltips and uses the danger token for stopped, muted text for unavailable, success for receiving, and warning for quiet.
