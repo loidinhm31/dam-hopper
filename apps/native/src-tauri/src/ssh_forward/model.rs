@@ -11,7 +11,7 @@ use zeroize::Zeroizing;
 use super::{
     error::SshForwardErrorCode,
     instance::DesktopClientContext,
-    profile::{LoopbackHost, SshForwardProfile},
+    profile::{LoopbackHost, SshConnectionProfile, SshForwardProfile, SshForwardRule},
     scope_retention::KnownScopesInput,
 };
 
@@ -427,6 +427,62 @@ pub(crate) enum AutoStartDisposition {
     SkippedActiveLimit,
 }
 
+/// Memory-only lifecycle state for an authenticated connection. It is kept
+/// separate from the legacy per-rule state until the v2 command surface is
+/// published in the next phase.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum SshConnectionState {
+    Disconnected,
+    Authenticating,
+    Established,
+    Reconnecting,
+    Disconnecting,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum SshForwardRuleState {
+    Off,
+    Opening,
+    On,
+    Closing,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SshConnectionRuntime {
+    pub(crate) connection_profile_id: String,
+    pub(crate) generation: WireCounter,
+    pub(crate) state: SshConnectionState,
+    pub(crate) retry_attempt: u8,
+    pub(crate) active_channels: u16,
+    pub(crate) state_changed_at: UtcTimestamp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) started_at: Option<UtcTimestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error_code: Option<SshForwardErrorCode>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SshForwardRuleRuntime {
+    pub(crate) rule_id: String,
+    pub(crate) connection_profile_id: String,
+    pub(crate) connection_generation: WireCounter,
+    pub(crate) generation: WireCounter,
+    pub(crate) state: SshForwardRuleState,
+    pub(crate) bind_host: LoopbackHost,
+    pub(crate) local_port: u16,
+    pub(crate) active_channels: u16,
+    pub(crate) state_changed_at: UtcTimestamp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) started_at: Option<UtcTimestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error_code: Option<SshForwardErrorCode>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SshForwardRuntime {
@@ -480,6 +536,16 @@ pub(crate) struct SshForwardSnapshot {
     pub(crate) host_key_challenges: Vec<HostKeyChallenge>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) trust_repair: Option<SshForwardTrustRepairMetadata>,
+    /// Optional v2 projections. They are omitted by the legacy command
+    /// facade and become authoritative when Phase 04 publishes v2 commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) connections: Option<Vec<SshConnectionProfile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rules: Option<Vec<SshForwardRule>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) connection_runtimes: Option<Vec<SshConnectionRuntime>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rule_runtimes: Option<Vec<SshForwardRuleRuntime>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -543,6 +609,14 @@ pub(crate) struct SshForwardEventHint {
     pub(crate) profile_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) generation: Option<WireCounter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) connection_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rule_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) connection_generation: Option<WireCounter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rule_generation: Option<WireCounter>,
     pub(crate) reason: SshForwardEventReason,
 }
 
