@@ -25,7 +25,12 @@ const KNOWN_TEST_TICKETS = new Set([
 ]);
 const imageIssueCounts = new Map<string, number>();
 const activeImageTickets = new Set<string>();
-const activeMediaTickets = new Set(KNOWN_TEST_TICKETS);
+// Fixture tickets are intentionally named and reused across browser tests.
+// Reference-count them so asynchronous cleanup from an older test cannot
+// revoke a newer lease with the same fixture ID.
+const activeMediaTickets = new Map(
+  [...KNOWN_TEST_TICKETS].map((ticket) => [ticket, 1] as const),
+);
 
 function hasMediaCookie(cookieHeader: string | undefined): boolean {
   return (
@@ -154,7 +159,10 @@ const mediaFixturePlugin = {
                   : body.path === "clips/stale.webm"
                     ? "stale_ticket"
                     : "playback_ticket";
-          activeMediaTickets.add(ticket);
+          activeMediaTickets.set(
+            ticket,
+            (activeMediaTickets.get(ticket) ?? 0) + 1,
+          );
           response.statusCode = 201;
           response.setHeader("Cache-Control", "no-store");
           setMediaCookie(response);
@@ -173,8 +181,11 @@ const mediaFixturePlugin = {
       }
       if (request.method === "DELETE") {
         readJsonBody(request, (body) => {
-          if (typeof body.ticket === "string")
-            activeMediaTickets.delete(body.ticket);
+          if (typeof body.ticket === "string") {
+            const references = activeMediaTickets.get(body.ticket) ?? 0;
+            if (references <= 1) activeMediaTickets.delete(body.ticket);
+            else activeMediaTickets.set(body.ticket, references - 1);
+          }
           response.statusCode = 204;
           response.end();
         });
@@ -206,7 +217,7 @@ const mediaFixturePlugin = {
       if (
         !hasMediaCookie(request.headers?.cookie) ||
         ticket === "unsupported_ticket" ||
-        !activeMediaTickets.has(ticket ?? "")
+        (activeMediaTickets.get(ticket ?? "") ?? 0) === 0
       ) {
         response.statusCode = 404;
         response.end();
