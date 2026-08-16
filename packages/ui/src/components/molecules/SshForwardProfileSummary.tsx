@@ -22,7 +22,7 @@ export function SshForwardProfileSummary({
           value={
             profile.auth.mode === "agent"
               ? "OS agent"
-              : `Safe key · ${profile.auth.keyId}`
+              : `Local key · ${profile.auth.keyId}`
           }
         />
         <Info label="Generation" value={generation} />

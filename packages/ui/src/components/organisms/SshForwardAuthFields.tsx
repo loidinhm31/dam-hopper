@@ -27,6 +27,7 @@ export function SshForwardAuthFields({
   keyError,
   onUpdate,
 }: Props) {
+  const localKeys = keys?.filter((key) => key.source === "local");
   const input =
     (field: keyof SshForwardProfileDraft) =>
     (event: ChangeEvent<HTMLInputElement>) =>
@@ -48,11 +49,11 @@ export function SshForwardAuthFields({
           }
         >
           <option value="agent">OS SSH agent (recommended)</option>
-          <option value="key">Safe unencrypted key</option>
+          <option value="key">Local SSH key (passphrase if needed)</option>
         </select>
       </SshForwardProfileField>
       {draft.authMode === "key" ? (
-        <SshForwardProfileField label="Safe key" error={errors.keyId}>
+          <SshForwardProfileField label="Local SSH key" error={errors.keyId}>
           <select
             className={inputClass}
             value={draft.keyId}
@@ -60,9 +61,9 @@ export function SshForwardAuthFields({
             disabled={!keys && !keyError}
           >
             <option value="">
-              {!keys && !keyError ? "Loading safe keys…" : "Select a key"}
+              {!keys && !keyError ? "Loading local keys…" : "Select a key"}
             </option>
-            {keys?.map((key) => (
+            {localKeys?.map((key) => (
               <option key={key.keyId} value={key.keyId}>
                 {key.label} · {key.algorithm}
               </option>
@@ -73,10 +74,10 @@ export function SshForwardAuthFields({
               {keyError.message}
             </p>
           ) : null}
-          {keys && keys.length === 0 ? (
+          {localKeys && localKeys.length === 0 ? (
             <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">
-              No safe keys found. Load an encrypted key in the OS agent and use
-              agent authentication.
+              No local keys found. Keep OS agent authentication or add a key
+              under your user .ssh directory.
             </p>
           ) : null}
         </SshForwardProfileField>

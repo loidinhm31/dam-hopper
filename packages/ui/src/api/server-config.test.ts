@@ -74,7 +74,7 @@ describe("server profile migration", () => {
     expect(getActiveProfile()?.id).toBe("profile-id");
   });
 
-  it("hides separate-origin active profiles from native browser transport", () => {
+  it("hides separate-origin active profiles from unsupported native hosts", () => {
     saveProfiles([
       {
         id: "remote",
@@ -86,9 +86,28 @@ describe("server profile migration", () => {
     ]);
     setActiveProfile("remote");
     document.documentElement.dataset.appHost = "native";
+    document.documentElement.dataset.appPlatform = "android";
 
     expect(getActiveProfile()).toBeNull();
     expect(getServerUrl()).toBe("http://127.0.0.1:4800");
+  });
+
+  it("allows separate-origin profiles on Windows native desktop", () => {
+    saveProfiles([
+      {
+        id: "remote",
+        name: "Remote",
+        url: "http://remote.example:4800",
+        authType: "none",
+        createdAt: 1,
+      },
+    ]);
+    setActiveProfile("remote");
+    document.documentElement.dataset.appHost = "native";
+    document.documentElement.dataset.appPlatform = "windows";
+
+    expect(getActiveProfile()?.id).toBe("remote");
+    expect(getServerUrl()).toBe("http://remote.example:4800");
   });
 
   it("normalizes equivalent URLs without treating trailing slashes as changes", () => {

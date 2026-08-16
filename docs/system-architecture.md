@@ -624,7 +624,7 @@ permissions to `core:default`.
 
 - `apps/native/src-tauri` contains the default Tauri builder, the main window config, and the checked-in Android Studio project under `src-tauri/gen/android`.
 - No filesystem, shell, opener, HTTP, or sidecar plugin permissions are granted in Phase 03. The native CSP allows local/profile HTTP and WebSocket connections but keeps default script execution to self.
-- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. Packaged native browser transport ignores separate-origin profiles by policy; a native HTTP/WebSocket transport is deferred. Separate web frontends require an exact backend `DAM_HOPPER_CORS_ORIGINS` entry.
+- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. Windows native desktop may use separate-origin profiles through the existing browser transport when the backend has an exact `DAM_HOPPER_CORS_ORIGINS` entry; Android, iOS, and unsupported native hosts remain same-origin by policy. Separate web frontends also require an exact backend `DAM_HOPPER_CORS_ORIGINS` entry.
 
 **Native browser-debug controller (Phase 03):**
 
@@ -1189,7 +1189,7 @@ The SSH endpoint defaults from the active DamHopper server profile hostname with
 but the user must review and save it. The persisted SSH endpoint is explicit and editable; later
 HTTP profile URL changes never silently rewrite it. Both bind and remote target hosts are fixed
 IPv4 `127.0.0.1`; only their integer ports are configurable in `1..=65535`. Remote forwarding,
-SOCKS, non-loopback targets, wildcard/IPv6, port `0`, password authentication, desktop keychain,
+SOCKS, non-loopback targets, wildcard/IPv6, port `0`, password persistence, desktop keychain,
 arbitrary paths/options, and browser/mobile support are out of v1 scope.
 
 ```mermaid
@@ -1257,8 +1257,13 @@ counters are memory-only as described above.
 
 V1 prefers the OS SSH agent. An optional key mode selects only an inventory entry beneath the
 desktop user's SSH directory and loads it through a platform no-follow/contained-handle operation.
-Encrypted key files must already be unlocked in the SSH agent; passphrases never cross IPC and are
-not stored by DamHopper. There is no path picker, keychain, password, or subprocess fallback.
+When the Windows agent is unavailable, the desktop UI may ask for the selected encrypted key's
+passphrase through the Tauri IPC boundary. Rust decrypts the key in memory, keeps only the
+profile-scoped decrypted key for the active desktop session, and never persists, logs, or sends the
+passphrase to the HTTP server. The Start/Restart credential prompt also offers an editable username
+and ephemeral SSH password method, like VS Code Remote-SSH; native Rust zeroizes and clears that
+credential after a failed authentication, and it never enters the profile, browser snapshot, logs,
+or HTTP server. There is no path picker, keychain, or subprocess fallback.
 
 Host trust lookup is endpoint-first. SSH host is canonical safe ASCII DNS (lowercase, trailing dots
 removed) or canonical IPv4 plus port; validation is applied before lookup and mutation. An endpoint
@@ -1323,10 +1328,10 @@ generation/challenge. Approval consumes it but never auto-starts. Reconnect keep
 and generation, rejects new local clients until SSH returns, re-verifies trust, and closes channels
 from the lost transport.
 
-Tauri registers exactly 12 desktop commands: open client, activate scope, snapshot, profile CRUD,
-start, stop, restart, key inventory, exact host-key approval, and inactive scope purge. `build.rs`
+Tauri registers exactly 13 Windows desktop commands: open client, activate scope, snapshot, profile CRUD,
+start, stop, restart, key inventory, ephemeral key unlock, exact host-key approval, and inactive scope purge. `build.rs`
 uses `AppManifest::commands`; checked-in `permissions/ssh-forward.toml` allows exactly those names;
-`ssh-forward-main` grants that app permission only to `main` on Linux/macOS/Windows. The existing
+`ssh-forward-main` grants that app permission only to `main` on Windows. The existing
 main `default` capability still grants `core:default` (including event listen/unlisten/emit), and
 capabilities merge; this feature adds no core permission and makes no false minimal-core claim. No
 shell/general filesystem/HTTP/opener capability is granted. Every
@@ -1339,7 +1344,7 @@ requires exact current desktop/manager/client-epoch/activation/scope identity be
 freshness check may schedule refetch. Mismatched hints do nothing; events never become authority.
 
 SSH/agent/native-handle Cargo dependencies use desktop target-OS dependency sections and modules/
-handlers use `cfg(desktop)`. Android/iOS Cargo trees and generated handlers contain none of the 12
+handlers use `cfg(desktop)`. Android/iOS Cargo trees and generated handlers contain none of the 13
 commands or accepted SSH dependencies; native mobile frontend creates no host/call.
 
 Profiles are capped at 64 per scope, active forwards at 16, and channels at 64 per forward. Connect

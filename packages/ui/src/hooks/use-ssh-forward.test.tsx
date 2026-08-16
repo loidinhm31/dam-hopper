@@ -161,4 +161,37 @@ describe("useSshForward", () => {
     );
     expect(snapshotCall).toHaveBeenCalledOnce();
   });
+
+  it("defers hint refreshes until a lifecycle mutation settles", async () => {
+    const refreshed = { ...snapshot, profilesRevision: counter("2") };
+    let resolveStart!: (value: SshForwardSnapshot) => void;
+    const snapshotCall = vi
+      .fn<() => Promise<SshForwardSnapshot>>()
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce(refreshed);
+    const subscribe = vi.fn(() => () => {});
+    const start = vi.fn(
+      () =>
+        new Promise<SshForwardSnapshot>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const host = {
+      snapshot: snapshotCall,
+      subscribe,
+      start,
+    } as unknown as SshForwardHost;
+    await renderHarness(host);
+    await act(async () => {});
+    snapshotCall.mockClear();
+
+    const lifecycle = latest!.start("profile", counter("0"));
+    await act(async () => latest!.refresh());
+    expect(snapshotCall).not.toHaveBeenCalled();
+
+    resolveStart(refreshed);
+    await act(async () => lifecycle);
+    await act(async () => {});
+    expect(snapshotCall).toHaveBeenCalledOnce();
+  });
 });
