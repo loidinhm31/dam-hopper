@@ -58,14 +58,37 @@ describe("reinitializeTransport", () => {
     );
   });
 
-  it("keeps native separate-origin profiles idle", () => {
+  it("keeps unsupported native separate-origin profiles idle", () => {
     document.documentElement.dataset.appHost = "native";
+    document.documentElement.dataset.appPlatform = "android";
     getTransport.mockReturnValue({ destroy: vi.fn() });
 
     reinitializeTransport("http://remote.example", "profile-a");
 
     expect(WsTransport).not.toHaveBeenCalled();
     expect(reconfigureTransport).toHaveBeenCalledOnce();
+  });
+
+  it("connects Windows native desktop profiles through the browser transport", () => {
+    document.documentElement.dataset.appHost = "native";
+    document.documentElement.dataset.appPlatform = "windows";
+    const nextTransport = { onEvent: vi.fn() };
+    getTransport.mockReturnValue({ destroy: vi.fn() });
+    WsTransport.mockImplementation(
+      class {
+        constructor() {
+          return nextTransport;
+        }
+      },
+    );
+
+    reinitializeTransport("http://remote.example", "profile-a");
+
+    expect(WsTransport).toHaveBeenCalledWith(
+      "http://remote.example",
+      "profile-a",
+    );
+    expect(reconfigureTransport).toHaveBeenCalledWith(nextTransport);
   });
 
   it("forwards the active profile ID to the replacement transport", () => {

@@ -14,10 +14,10 @@ use super::{
     error::SshForwardCommandError,
     manager::SshForwardManager,
     model::{
-        ActivateScopeInput, ApproveHostInput, CreateProfileInput, DeleteProfileInput,
-        OpenClientInput, OpenClientResult, ProfileLifecycleInput, PurgeScopeInput,
-        PurgeScopeResult, ScopeContextInput, SshForwardScopeActivation, SshForwardSnapshot,
-        SshKeyInventory, UpdateProfileInput,
+        ActivateScopeInput, ApproveHostInput, CreateProfileInput, DeleteProfileInput, LoadKeyInput,
+        LoadPasswordInput, OpenClientInput, OpenClientResult, ProfileLifecycleInput,
+        PurgeScopeInput, PurgeScopeResult, ScopeContextInput, SshForwardScopeActivation,
+        SshForwardSnapshot, SshKeyInventory, UpdateProfileInput,
     },
 };
 
@@ -136,6 +136,26 @@ pub(crate) async fn ssh_forward_list_keys(
 }
 
 #[command]
+pub(crate) async fn ssh_forward_load_key(
+    webview: Webview,
+    state: State<'_, Arc<SshForwardManager>>,
+    input: LoadKeyInput,
+) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+    ensure_desktop_main(&webview)?;
+    state.load_key(&input).await
+}
+
+#[command]
+pub(crate) async fn ssh_forward_load_password(
+    webview: Webview,
+    state: State<'_, Arc<SshForwardManager>>,
+    input: LoadPasswordInput,
+) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+    ensure_desktop_main(&webview)?;
+    state.load_password(&input).await
+}
+
+#[command]
 pub(crate) async fn ssh_forward_approve_host(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
@@ -170,6 +190,8 @@ mod tests {
         "ssh_forward_stop",
         "ssh_forward_restart",
         "ssh_forward_list_keys",
+        "ssh_forward_load_key",
+        "ssh_forward_load_password",
         "ssh_forward_approve_host",
         "ssh_forward_purge_scope",
     ];

@@ -19,7 +19,8 @@ const REFRESHABLE_CONFLICT_CODES = new Set<SshForwardError["code"]>([
 ]);
 
 export function useSshForward() {
-  const { host } = useSshForwardHost();
+  const { host, readiness, readinessError, retryInitialization } =
+    useSshForwardHost();
   const [snapshot, setSnapshot] = useState<SshForwardSnapshot | null>(null);
   const [error, setError] = useState<SshForwardError | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -32,6 +33,23 @@ export function useSshForward() {
     if (!host || refreshing.current) {
       if (host) trailing.current = true;
       return null;
+    }
+    if (pendingActionRef.current !== null) {
+      trailing.current = true;
+      return null;
+    }
+    if (readiness === "initializing") {
+      setError(toSshForwardError(null));
+      return null;
+    }
+    if (readiness === "failed") {
+      try {
+        await retryInitialization();
+      } catch (nextError) {
+        const parsed = toSshForwardError(nextError);
+        setError(parsed);
+        return null;
+      }
     }
     refreshing.current = true;
     const ownsPendingState = pendingActionRef.current === null;
@@ -59,7 +77,7 @@ export function useSshForward() {
         void refresh();
       }
     }
-  }, [host]);
+  }, [host, readiness, retryInitialization]);
 
   const runMutation = useCallback(
     async <T>(
@@ -68,6 +86,11 @@ export function useSshForward() {
       acceptSnapshot: (value: T) => SshForwardSnapshot | null,
     ): Promise<T> => {
       if (!host) throw toSshForwardError(null);
+      if (readiness !== "unmanaged" && readiness !== "ready") {
+        const parsed = toSshForwardError(readinessError);
+        setError(parsed);
+        throw parsed;
+      }
       pendingActionRef.current = action;
       setPendingAction(action);
       setError(null);
@@ -85,10 +108,14 @@ export function useSshForward() {
         if (pendingActionRef.current === action) {
           pendingActionRef.current = null;
           setPendingAction(null);
+          if (trailing.current) {
+            trailing.current = false;
+            void refresh();
+          }
         }
       }
     },
-    [host, refresh],
+    [host, readiness, readinessError, refresh],
   );
 
   const snapshotResult = (value: SshForwardSnapshot) => value;
@@ -120,10 +147,14 @@ export function useSshForward() {
     [host, runMutation],
   );
   const start = useCallback(
-    (profileId: string, expectedGeneration: WireCounter) =>
+    (
+      profileId: string,
+      expectedGeneration: WireCounter,
+      credentialAttemptId?: string,
+    ) =>
       runMutation(
         "start",
-        () => host!.start(profileId, expectedGeneration),
+        () => host!.start(profileId, expectedGeneration, credentialAttemptId),
         snapshotResult,
       ),
     [host, runMutation],
@@ -138,10 +169,14 @@ export function useSshForward() {
     [host, runMutation],
   );
   const restart = useCallback(
-    (profileId: string, expectedGeneration: WireCounter) =>
+    (
+      profileId: string,
+      expectedGeneration: WireCounter,
+      credentialAttemptId?: string,
+    ) =>
       runMutation(
         "restart",
-        () => host!.restart(profileId, expectedGeneration),
+        () => host!.restart(profileId, expectedGeneration, credentialAttemptId),
         snapshotResult,
       ),
     [host, runMutation],
@@ -177,10 +212,55 @@ export function useSshForward() {
       ),
     [host, runMutation],
   );
+  const loadKey = useCallback(
+    (profileId: string, keyId: string, passphrase: string) =>
+      runMutation(
+        "loadKey",
+        () => host!.loadKey(profileId, keyId, passphrase),
+        snapshotResult,
+      ),
+    [host, runMutation],
+  );
+  const loadPassword = useCallback(
+    (
+      profileId: string,
+      username: string,
+      password: string,
+      credentialAttemptId: string,
+    ) =>
+      runMutation(
+        "loadPassword",
+        () =>
+          host!.loadPassword(
+            profileId,
+            username,
+            password,
+            credentialAttemptId,
+          ),
+        snapshotResult,
+      ),
+    [host, runMutation],
+  );
 
   useEffect(() => {
     snapshotRef.current = snapshot;
   }, [snapshot]);
+
+  useEffect(() => {
+    if (!host || readiness === "unmanaged") return;
+    if (readiness === "failed") {
+      setError(toSshForwardError(readinessError));
+      return;
+    }
+    if (readiness !== "ready") return;
+    void refresh();
+  }, [host, readiness, readinessError, refresh]);
+
+  useEffect(() => {
+    if (readiness !== "initializing" && readiness !== "failed") return;
+    snapshotRef.current = null;
+    setSnapshot(null);
+  }, [readiness]);
 
   useEffect(() => {
     if (!host) {
@@ -191,6 +271,7 @@ export function useSshForward() {
     }
     const unsubscribe = host.subscribe((event) => {
       const current = snapshotRef.current;
+      if (readiness === "initializing" || readiness === "failed") return;
       const hint = event.hint;
       if (
         !current ||
@@ -234,7 +315,7 @@ export function useSshForward() {
       void refresh();
     });
     return unsubscribe;
-  }, [host, refresh]);
+  }, [host, readiness, refresh]);
 
   return {
     snapshot,
@@ -249,6 +330,8 @@ export function useSshForward() {
     stop,
     restart,
     listKeys,
+    loadKey,
+    loadPassword,
     approveHost,
   };
 }

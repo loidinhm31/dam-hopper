@@ -646,9 +646,9 @@ the setting.
 Each allowlisted origin may call authenticated APIs with credentials. CORS does
 not make media public: media ticket issuance still requires the authenticated
 actor, and each stream URL is a short-lived actor/session-bound capability with
-expiry, logout/session revocation, and file revalidation. Packaged native browser
-transport intentionally ignores separate-origin profiles until a native
-HTTP/WebSocket transport exists.
+expiry, logout/session revocation, and file revalidation. Windows native desktop
+uses this same browser transport for separate-origin profiles; Android, iOS, and
+unsupported native hosts continue to require same-origin profiles.
 
 Authenticated HTTP binds, including the default `0.0.0.0`, are supported. HTTP
 media and bearer credentials remain exposed to interception, replay, and modification;

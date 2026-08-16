@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.damhopper",
   "build": {
-    "beforeDevCommand": "pnpm build",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' asset: https://asset.localhost; img-src 'self' asset: data: blob: https:; media-src https:; connect-src http://localhost:* http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:* ws://[::1]:* https: wss: tauri:; worker-src 'self' blob:"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' asset: https://asset.localhost; img-src 'self' asset: data: blob: https:; media-src https:; connect-src http://localhost:* http://127.0.0.1:* http://[::1]:* http: ws://localhost:* ws://127.0.0.1:* ws://[::1]:* ws: https: wss: tauri:; worker-src 'self' blob:"
     }
   },
   "bundle": {

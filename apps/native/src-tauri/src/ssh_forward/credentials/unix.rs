@@ -5,7 +5,7 @@ use std::time::Duration;
 use russh::keys::{agent::client::AgentClient, HashAlg};
 use tokio::time::timeout;
 
-use super::{CredentialError, SafeKeyRecord};
+use super::{CredentialError, KeySource, SafeKeyRecord};
 
 pub(crate) async fn agent_inventory() -> Result<Vec<SafeKeyRecord>, CredentialError> {
     let mut agent = timeout(Duration::from_secs(5), AgentClient::connect_env())
@@ -27,6 +27,8 @@ pub(crate) async fn agent_inventory() -> Result<Vec<SafeKeyRecord>, CredentialEr
                 label: format!("Agent identity {}", index + 1),
                 algorithm: public_key.algorithm().to_string(),
                 fingerprint: public_key.fingerprint(HashAlg::Sha256).to_string(),
+                encrypted: false,
+                source: KeySource::Agent,
             }
         })
         .collect())

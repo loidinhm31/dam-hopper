@@ -162,7 +162,9 @@
           "keyId": "workstation",
           "label": "Workstation",
           "algorithm": "ssh-ed25519",
-          "fingerprint": "SHA256:fixture"
+          "fingerprint": "SHA256:fixture",
+          "encrypted": false,
+          "source": "local"
         }
       ]
     },

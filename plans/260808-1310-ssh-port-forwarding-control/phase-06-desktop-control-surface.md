@@ -37,7 +37,7 @@
 - Page shows current scope only: profile name, `127.0.0.1:localPort`, explicit `sshUser@sshHost:sshPort`, fixed remote `127.0.0.1:targetPort`, auth mode, runtime decimal generation, retry attempt, auto-start disposition, and exact Phase 03 error copy.
 - Actions use snapshot generation: Start, Stop, Restart. Disable incompatible operations while a mutation is pending. Idempotency remains native-authoritative.
 - Edit/Delete on active state first explains `Stop before editing/deleting`; user performs Stop as a separate action. No combined hidden stop/update.
-- Auto-start and bounded reconnect toggle/max attempts are explicit. `skippedActiveLimit` is visibly stopped with the fixed code and an explicit later Start path. No arbitrary target host, remote/SOCKS/wildcard/IPv6/password/arbitrary-option controls.
+- Auto-start and bounded reconnect toggle/max attempts are explicit. `skippedActiveLimit` is visibly stopped with the fixed code and an explicit later Start path. No arbitrary target host, remote/SOCKS/wildcard/IPv6/password persistence/arbitrary-option controls.
 - Surface active limit, port-in-use, agent unavailable, encrypted-key-agent instruction, remote refusal, and timeout codes with actionable fixed copy. Never render raw source error.
 
 ### Create/edit form
@@ -46,8 +46,12 @@
 - Display “Defaulted from <profile name>; review before saving.” Require an unchecked `I reviewed the SSH endpoint` confirmation. Editing host/port does not remove the requirement.
 - Save sends explicit values only after validation. Saved profile never keeps a `defaultSource`, HTTP URL, or live link. Reopening Edit reads native snapshot only; later HTTP URL/hostname changes cannot rewrite it.
 - Edit endpoint changes require review again. Name/user <=64; SSH host <=253 safe ASCII; every port integer `1..65535`; local bind and remote target hosts display immutable `127.0.0.1` and are absent from editable request fields.
-- Auth defaults agent. Optional key mode calls inventory on demand and stores only selected opaque `keyId`; no path input/drop zone/file picker/passphrase/password field.
-- If no safe unencrypted keys exist, instruct user to load an encrypted key in the OS agent. Do not offer keychain or passphrase prompt.
+- Auth defaults agent. Optional local-key mode calls inventory on demand and stores only the
+  selected opaque local `keyId`; encrypted local candidates are allowed and prompt at Start/Restart.
+  No path input/drop zone/file picker/passphrase/password field is present in the profile form.
+  The lifecycle prompt separately offers an ephemeral username/password method for Start/Restart,
+  with the username prefilled from the profile and the password never persisted.
+  Never offer keychain persistence or send the passphrase to the HTTP server.
 
 ### Trust and local security copy
 
@@ -102,7 +106,9 @@ React local state holds only current form/public challenge/status data. Authorit
 3. [x] Implement the complete fixed Phase 03 error/retry/message presentation and state-aware buttons. Keep decimal revision/generation strings opaque; surface conflict-refetched state with explicit retry.
 4. [x] Build new form defaults from active server profile only at dialog-open initialization. Track endpoint review locally; validate integers/ASCII/bounds before host call.
 5. [x] Build edit form from saved native profile only. Add regression: change `ServerProfile.url` after snapshot, rerender/reopen, and assert saved host/port and outgoing update remain unchanged unless user edits them.
-6. [x] Load safe key inventory only after key mode selection. Render opaque selection labels; omit path/file/password/passphrase/keychain UI and redact error handling.
+6. [x] Load local key inventory only after local-key mode selection. Render opaque selection labels;
+   defer encrypted-key passphrase entry and optional username/password retry to the lifecycle prompt;
+   omit path/file/keychain UI from the profile form.
 7. [x] Implement host-key modal. Unknown approval echoes exact algorithm/fingerprint and current decimal generation; after approval close with explicit Start prompt. Changed-key view has no approval callback/button and shows exact resolved path/command, protected backup/quarantine/recovery, and offline removal/reapproval procedure.
 8. [x] Add permanent local-process/loopback limitation copy and targeted accessibility labels, focus restoration, keyboard navigation, and pending/error announcements.
 9. [x] Add JSDOM and Chromium coverage for route/nav gating, form validation, host trust, lifecycle, compact navigation, and zero calls without host.
@@ -113,7 +119,7 @@ React local state holds only current form/public challenge/status data. Authorit
 - [x] New form defaults host once, port 22, immutable target `127.0.0.1`, and requires review.
 - [x] Port 0, IPv6, wildcard, invalid/decimal/out-of-range ports rejected.
 - [x] Saved endpoint never follows HTTP profile URL edits.
-- [x] Agent preferred; key mode exposes opaque safe inventory only.
+- [x] Agent preferred; local-key mode exposes opaque local inventory, including encrypted candidates; lifecycle prompt also supports ephemeral username/password retry.
 - [x] Unknown approval echoes exact fingerprint and does not auto-start; changed key/algorithm has no override.
 - [x] Windows changed-key copy/path/command matches the stopped-app maintenance contract; other OS variants remain Phase 07 scope.
 - [x] No updater/restart/relaunch UI is exposed.
@@ -129,7 +135,7 @@ React local state holds only current form/public challenge/status data. Authorit
 - `pnpm --filter @dam-hopper/ui build`
 - Browser/mobile render contains neither `SSH FORWARDS` nor matching route; host/Tauri/network spies remain zero.
 - Desktop create -> approve unknown host -> explicit Start -> Running -> Stop journey works from authoritative snapshots.
-- UI source and rendered form contain no password/passphrase/key path/keychain/general SSH option input.
+- The durable profile form contains no password/passphrase/key path/keychain/general SSH option input; the separate lifecycle prompt may collect an ephemeral password retry.
 - Changed-key UI snapshot contains the exact blocking copy, Tauri-resolved path/maintenance command, backup recovery, and no approval callback.
 
 ## Risk Assessment
