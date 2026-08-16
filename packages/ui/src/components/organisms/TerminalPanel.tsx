@@ -139,6 +139,7 @@ export function TerminalPanel({
     isAndroidChromeNativeInputSuppressed || suppressNativeKeyboard;
   const shouldSuppressTerminalFocus =
     shouldSuppressNativeKeyboard || suppressAutoFocus;
+  const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
   const containerRef = useRef<HTMLDivElement>(null);
   // Sanitize session ID: server only allows [a-zA-Z0-9:._-]
   const safeSessionId = sessionId.replace(/[^a-zA-Z0-9:._-]/g, "-");
@@ -214,7 +215,7 @@ export function TerminalPanel({
     const term = new Terminal({
       theme: DARK_THEME,
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-      fontSize: 13,
+      fontSize: terminalFontSize,
       lineHeight: 1.4,
       scrollback: 5000,
       convertEol: true,
@@ -463,22 +464,39 @@ export function TerminalPanel({
       ) {
         return false;
       }
+      const settings = useSettingsStore.getState();
       return handleSharedTerminalKeyEvent(e, {
-        workspaceShortcut:
-          useSettingsStore.getState().terminalWorkspaceShortcut,
-        revealActiveFileShortcut:
-          useSettingsStore.getState().revealActiveFileShortcut,
+        workspaceShortcut: settings.terminalWorkspaceShortcut,
+        revealActiveFileShortcut: settings.revealActiveFileShortcut,
         panelShortcuts: [
-          useSettingsStore.getState().gitPanelShortcut,
-          useSettingsStore.getState().portsPanelShortcut,
-          useSettingsStore.getState().fleetTerminalShortcut,
+          settings.gitPanelShortcut,
+          settings.portsPanelShortcut,
+          settings.fleetTerminalShortcut,
         ],
+        terminalFontSizeIncreaseShortcut:
+          settings.terminalFontSizeIncreaseShortcut,
+        terminalFontSizeDecreaseShortcut:
+          settings.terminalFontSizeDecreaseShortcut,
         onCopySelection: () => {
           const selection = term.getSelection();
           if (selection) void navigator.clipboard.writeText(selection);
         },
         onFind: () => findController.open(),
         onNewTerminal,
+        onIncreaseTerminalFontSize: () => {
+          if (settings.terminalFontSize < 32) {
+            settings.saveDebounced({
+              terminalFontSize: settings.terminalFontSize + 1,
+            });
+          }
+        },
+        onDecreaseTerminalFontSize: () => {
+          if (settings.terminalFontSize > 10) {
+            settings.saveDebounced({
+              terminalFontSize: settings.terminalFontSize - 1,
+            });
+          }
+        },
       });
     };
     terminalEntry.baseKeyEventHandler = baseKeyEventHandler;
@@ -665,6 +683,16 @@ export function TerminalPanel({
 
   useEffect(() => {
     const term = termRef.current;
+    const entry = terminalRegistry.get(safeSessionId);
+    if (!term || !entry || term.options.fontSize === terminalFontSize) return;
+
+    term.options.fontSize = terminalFontSize;
+    entry.invalidateSuggestionGeometry?.();
+    scheduleTerminalFit(entry, { focus: false });
+  }, [safeSessionId, termElement, terminalFontSize]);
+
+  useEffect(() => {
+    const term = termRef.current;
     if (!term || !webglEnabled) {
       rendererRef.current?.dispose();
       rendererRef.current = null;
@@ -793,6 +821,7 @@ export function TerminalPanel({
           <TerminalSuggestionGhost
             suffix={ghostSuffix}
             position={cursorGeometry}
+            fontSize={terminalFontSize}
           />,
           termElement,
         )}

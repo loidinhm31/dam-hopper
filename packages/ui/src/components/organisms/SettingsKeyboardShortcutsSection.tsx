@@ -10,6 +10,8 @@ import {
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
+  DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
+  DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   DoubleShiftDetector,
   displayShortcut,
@@ -22,12 +24,14 @@ import { cn } from "@/lib/utils.js";
 interface ShortcutCaptureProps {
   value: string;
   defaultValue: string;
+  label?: string;
   onChange: (value: string) => void;
 }
 
 function ShortcutCapture({
   value,
   defaultValue,
+  label,
   onChange,
 }: ShortcutCaptureProps) {
   const [capturing, setCapturing] = useState(false);
@@ -75,6 +79,10 @@ function ShortcutCapture({
             detectorRef.current.reset();
           }}
           onKeyDown={handleKeyDown}
+          aria-label={
+            label ? `Set shortcut for ${label}` : "Set keyboard shortcut"
+          }
+          aria-pressed={capturing}
           className={cn(
             "min-w-36 rounded border px-3 py-1.5 text-xs font-mono transition-colors",
             capturing
@@ -87,6 +95,11 @@ function ShortcutCapture({
         <button
           type="button"
           title="Reset shortcut"
+          aria-label={
+            label
+              ? `Reset ${label} shortcut to default`
+              : "Reset shortcut to default"
+          }
           onClick={() => commit(defaultValue)}
           className="p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
         >
@@ -94,7 +107,9 @@ function ShortcutCapture({
         </button>
       </div>
       {error && (
-        <span className="text-[10px] text-[var(--color-danger)]">{error}</span>
+        <span role="alert" className="text-[10px] text-[var(--color-danger)]">
+          {error}
+        </span>
       )}
     </div>
   );
@@ -105,6 +120,8 @@ export function SettingsKeyboardShortcutsSection() {
     searchTextShortcut,
     searchFilenameShortcut,
     terminalWorkspaceShortcut,
+    terminalFontSizeIncreaseShortcut,
+    terminalFontSizeDecreaseShortcut,
     terminalFilePanelShortcut,
     revealActiveFileShortcut,
     gitPanelShortcut,
@@ -150,8 +167,41 @@ export function SettingsKeyboardShortcutsSection() {
         <ShortcutCapture
           value={terminalWorkspaceShortcut}
           defaultValue={DEFAULT_TERMINAL_WORKSPACE_SHORTCUT}
+          label="Terminal workspace"
           onChange={(shortcut) =>
             saveDebounced({ terminalWorkspaceShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Increase terminal font size"
+        description="Increase terminal text by 1 px. Default: Ctrl+Alt+Shift+Equal (the + key)."
+      >
+        <ShortcutCapture
+          value={terminalFontSizeIncreaseShortcut}
+          defaultValue={DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT}
+          label="Increase terminal font size"
+          onChange={(shortcut) =>
+            saveDebounced({ terminalFontSizeIncreaseShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Decrease terminal font size"
+        description="Decrease terminal text by 1 px. Default: Ctrl+Alt+Minus."
+      >
+        <ShortcutCapture
+          value={terminalFontSizeDecreaseShortcut}
+          defaultValue={DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT}
+          label="Decrease terminal font size"
+          onChange={(shortcut) =>
+            saveDebounced({ terminalFontSizeDecreaseShortcut: shortcut })
           }
         />
       </SettingRow>
