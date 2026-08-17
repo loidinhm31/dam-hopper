@@ -68,6 +68,14 @@ export const FIXED_SSH_FORWARD_ERRORS: Record<
     message: "Forward profiles changed; review the latest version and retry.",
     retryable: true,
   },
+  CONNECTIONS_REVISION_CONFLICT: {
+    message: "SSH connections changed; review the latest version and retry.",
+    retryable: true,
+  },
+  RULES_REVISION_CONFLICT: {
+    message: "Forwarding rules changed; review the latest version and retry.",
+    retryable: true,
+  },
   TRUST_REVISION_CONFLICT: {
     message: "Trusted host records changed; review and retry.",
     retryable: true,
@@ -100,6 +108,38 @@ export const FIXED_SSH_FORWARD_ERRORS: Record<
   AUTO_START_SKIPPED_LIMIT: {
     message:
       "Auto-start was skipped because the active-forward limit was reached.",
+    retryable: true,
+  },
+  CONNECTION_REQUIRED: {
+    message: "Establish the SSH connection before enabling a forward.",
+    retryable: false,
+  },
+  CONNECTION_LIMIT: {
+    message: "The active connection limit has been reached.",
+    retryable: true,
+  },
+  CONNECTION_NOT_ESTABLISHED: {
+    message: "The SSH connection is not established.",
+    retryable: true,
+  },
+  STALE_CONNECTION_GENERATION: {
+    message: "The SSH connection changed; reload its latest state.",
+    retryable: true,
+  },
+  RULE_LIMIT: {
+    message: "The active forwarding-rule limit has been reached.",
+    retryable: true,
+  },
+  STALE_RULE_GENERATION: {
+    message: "The forwarding rule changed; reload its latest state.",
+    retryable: true,
+  },
+  PORT_CONFLICT: {
+    message: "The desktop loopback port is already reserved.",
+    retryable: true,
+  },
+  CHANNEL_LIMIT: {
+    message: "The connection channel limit has been reached.",
     retryable: true,
   },
   KEY_NOT_FOUND: {
@@ -161,6 +201,43 @@ export const FIXED_SSH_FORWARD_ERRORS: Record<
   AUTH_FAILED: {
     message: "SSH authentication failed for the selected method.",
     retryable: false,
+  },
+  AUTH_REQUIRED: {
+    message: "Enter SSH credentials before connecting.",
+    retryable: false,
+  },
+  CREDENTIAL_VAULT_UNAVAILABLE: {
+    message:
+      "Saved SSH credentials are temporarily unavailable; enter them again.",
+    retryable: true,
+  },
+  CREDENTIAL_VAULT_CORRUPT: {
+    message: "Saved SSH credentials are invalid; enter them again.",
+    retryable: false,
+  },
+  CREDENTIAL_EXPIRED: {
+    message: "Saved SSH credentials expired; enter them again.",
+    retryable: false,
+  },
+  CREDENTIAL_REJECTED: {
+    message:
+      "Saved SSH credentials were rejected; replace them before retrying.",
+    retryable: false,
+  },
+  CREDENTIAL_DELETE_FAILED: {
+    message:
+      "Saved SSH credentials could not be removed; retry the Forget action.",
+    retryable: true,
+  },
+  CREDENTIAL_CLEANUP_PENDING: {
+    message:
+      "Saved SSH credential cleanup is incomplete; retry the profile operation.",
+    retryable: true,
+  },
+  CREDENTIAL_NOT_SAVED: {
+    message:
+      "The SSH connection is established, but the credential was not saved.",
+    retryable: true,
   },
   LOCAL_PORT_IN_USE: {
     message: "The desktop loopback port is already in use.",

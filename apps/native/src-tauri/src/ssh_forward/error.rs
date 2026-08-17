@@ -17,6 +17,8 @@ pub(crate) enum SshForwardErrorCode {
     ScopeActive,
     ScopePurgeFailed,
     ProfilesRevisionConflict,
+    ConnectionsRevisionConflict,
+    RulesRevisionConflict,
     TrustRevisionConflict,
     GenerationConflict,
     CounterExhausted,
@@ -87,7 +89,15 @@ pub(crate) struct SshForwardCommandError {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) profile_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) connection_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rule_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) current_profiles_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) current_connections_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) current_rules_revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) current_trust_revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -125,6 +135,14 @@ impl SshForwardErrorCode {
             ScopePurgeFailed => ("The inactive forwarding scope could not be removed.", true),
             ProfilesRevisionConflict => (
                 "Forward profiles changed; review the latest version and retry.",
+                true,
+            ),
+            ConnectionsRevisionConflict => (
+                "SSH connections changed; review the latest version and retry.",
+                true,
+            ),
+            RulesRevisionConflict => (
+                "Forwarding rules changed; review the latest version and retry.",
                 true,
             ),
             TrustRevisionConflict => ("Trusted host records changed; review and retry.", true),
@@ -262,7 +280,11 @@ impl SshForwardErrorCode {
             retryable,
             scope_id: None,
             profile_id: None,
+            connection_profile_id: None,
+            rule_id: None,
             current_profiles_revision: None,
+            current_connections_revision: None,
+            current_rules_revision: None,
             current_trust_revision: None,
             current_scope_generation: None,
             current_generation: None,
@@ -319,6 +341,8 @@ mod tests {
             ScopeActive,
             ScopePurgeFailed,
             ProfilesRevisionConflict,
+            ConnectionsRevisionConflict,
+            RulesRevisionConflict,
             TrustRevisionConflict,
             GenerationConflict,
             CounterExhausted,

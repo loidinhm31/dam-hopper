@@ -14,10 +14,12 @@ use super::{
     error::SshForwardCommandError,
     manager::SshForwardManager,
     model::{
-        ActivateScopeInput, ApproveHostInput, CreateProfileInput, DeleteProfileInput, LoadKeyInput,
-        LoadPasswordInput, OpenClientInput, OpenClientResult, ProfileLifecycleInput,
-        PurgeScopeInput, PurgeScopeResult, ScopeContextInput, SshForwardScopeActivation,
-        SshForwardSnapshot, SshKeyInventory, UpdateProfileInput,
+        ActivateScopeInput, ApproveConnectionHostInput, ConnectionLifecycleInput,
+        CreateConnectionInput, CreateRuleInput, DeleteConnectionInput, DeleteRuleInput,
+        ForgetCredentialInput, LoadConnectionKeyInput, LoadConnectionPasswordInput,
+        OpenClientInput, OpenClientResult, PurgeScopeInput, PurgeScopeResult, ScopeContextInput,
+        SetRuleEnabledInput, SshForwardScopeActivation, SshForwardSnapshot, SshKeyInventory,
+        UpdateConnectionInput, UpdateRuleInput,
     },
 };
 
@@ -59,63 +61,93 @@ pub(crate) async fn ssh_forward_snapshot(
 }
 
 #[command]
-pub(crate) async fn ssh_forward_create_profile(
+pub(crate) async fn ssh_forward_create_connection(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
-    input: CreateProfileInput,
+    input: CreateConnectionInput,
 ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
     ensure_desktop_main(&webview)?;
-    state.create_profile(&input).await
+    state.create_connection(&input).await
 }
 
 #[command]
-pub(crate) async fn ssh_forward_update_profile(
+pub(crate) async fn ssh_forward_update_connection(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
-    input: UpdateProfileInput,
+    input: UpdateConnectionInput,
 ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
     ensure_desktop_main(&webview)?;
-    state.update_profile(&input).await
+    state.update_connection(&input).await
 }
 
 #[command]
-pub(crate) async fn ssh_forward_delete_profile(
+pub(crate) async fn ssh_forward_delete_connection(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
-    input: DeleteProfileInput,
+    input: DeleteConnectionInput,
 ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
     ensure_desktop_main(&webview)?;
-    state.delete_profile(&input).await
+    state.delete_connection(&input).await
 }
 
 #[command]
-pub(crate) async fn ssh_forward_start(
+pub(crate) async fn ssh_forward_create_rule(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
-    input: ProfileLifecycleInput,
+    input: CreateRuleInput,
 ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
     ensure_desktop_main(&webview)?;
-    state.start(&input).await
+    state.create_rule(&input).await
 }
 
 #[command]
-pub(crate) async fn ssh_forward_stop(
+pub(crate) async fn ssh_forward_update_rule(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
-    input: ProfileLifecycleInput,
+    input: UpdateRuleInput,
 ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
     ensure_desktop_main(&webview)?;
-    state.stop(&input).await
+    state.update_rule(&input).await
 }
 
 #[command]
-pub(crate) async fn ssh_forward_restart(
+pub(crate) async fn ssh_forward_delete_rule(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
-    input: ProfileLifecycleInput,
+    input: DeleteRuleInput,
 ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
     ensure_desktop_main(&webview)?;
-    state.restart(&input).await
+    state.delete_rule(&input).await
+}
+
+#[command]
+pub(crate) async fn ssh_forward_connect(
+    webview: Webview,
+    state: State<'_, Arc<SshForwardManager>>,
+    input: ConnectionLifecycleInput,
+) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+    ensure_desktop_main(&webview)?;
+    state.connect(&input).await
+}
+
+#[command]
+pub(crate) async fn ssh_forward_disconnect(
+    webview: Webview,
+    state: State<'_, Arc<SshForwardManager>>,
+    input: ConnectionLifecycleInput,
+) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+    ensure_desktop_main(&webview)?;
+    state.disconnect(&input).await
+}
+
+#[command]
+pub(crate) async fn ssh_forward_set_rule_enabled(
+    webview: Webview,
+    state: State<'_, Arc<SshForwardManager>>,
+    input: SetRuleEnabledInput,
+) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+    ensure_desktop_main(&webview)?;
+    state.set_rule_enabled_v2(&input).await
 }
 
 #[command]
@@ -139,30 +171,40 @@ pub(crate) async fn ssh_forward_list_keys(
 pub(crate) async fn ssh_forward_load_key(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
-    input: LoadKeyInput,
+    input: LoadConnectionKeyInput,
 ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
     ensure_desktop_main(&webview)?;
-    state.load_key(&input).await
+    state.load_connection_key(&input).await
 }
 
 #[command]
 pub(crate) async fn ssh_forward_load_password(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
-    input: LoadPasswordInput,
+    input: LoadConnectionPasswordInput,
 ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
     ensure_desktop_main(&webview)?;
-    state.load_password(&input).await
+    state.load_connection_password(&input).await
+}
+
+#[command]
+pub(crate) async fn ssh_forward_forget_credential(
+    webview: Webview,
+    state: State<'_, Arc<SshForwardManager>>,
+    input: ForgetCredentialInput,
+) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+    ensure_desktop_main(&webview)?;
+    state.forget_credential(&input).await
 }
 
 #[command]
 pub(crate) async fn ssh_forward_approve_host(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
-    input: ApproveHostInput,
+    input: ApproveConnectionHostInput,
 ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
     ensure_desktop_main(&webview)?;
-    state.approve_host(&input).await
+    state.approve_connection_host(&input).await
 }
 
 #[command]
@@ -183,15 +225,19 @@ mod tests {
         "ssh_forward_open_client",
         "ssh_forward_activate_scope",
         "ssh_forward_snapshot",
-        "ssh_forward_create_profile",
-        "ssh_forward_update_profile",
-        "ssh_forward_delete_profile",
-        "ssh_forward_start",
-        "ssh_forward_stop",
-        "ssh_forward_restart",
+        "ssh_forward_create_connection",
+        "ssh_forward_update_connection",
+        "ssh_forward_delete_connection",
+        "ssh_forward_create_rule",
+        "ssh_forward_update_rule",
+        "ssh_forward_delete_rule",
+        "ssh_forward_connect",
+        "ssh_forward_disconnect",
+        "ssh_forward_set_rule_enabled",
         "ssh_forward_list_keys",
         "ssh_forward_load_key",
         "ssh_forward_load_password",
+        "ssh_forward_forget_credential",
         "ssh_forward_approve_host",
         "ssh_forward_purge_scope",
     ];

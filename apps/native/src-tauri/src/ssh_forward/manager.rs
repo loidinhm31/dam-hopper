@@ -48,16 +48,23 @@ use super::{
     instance::{ClientEpochIssuer, DesktopClientContext},
     known_hosts::{ChallengeContext, HostKeyApproval, HostKeyChallengeBook, SshEndpoint},
     model::{
-        AutoStartDisposition, OpenClientResult, PurgeScopeResult, SshForwardEventHint,
-        SshForwardEventReason, SshForwardRuntime, SshForwardScopeActivation, SshForwardSnapshot,
-        SshForwardState, SshForwardTrustRepairMetadata, SshKeyInventory, SshKeyInventoryItem,
-        SshKeyInventorySource, UtcTimestamp, WireCounter,
+        AutoStartDisposition, OpenClientResult, PurgeScopeResult, SshConnectionState,
+        SshForwardCredentialState, SshForwardCredentialStatus, SshForwardEventHint,
+        SshForwardEventReason, SshForwardRuleState, SshForwardRuntime, SshForwardScopeActivation,
+        SshForwardSnapshot, SshForwardState, SshForwardTrustRepairMetadata, SshKeyInventory,
+        SshKeyInventoryItem, SshKeyInventorySource, UtcTimestamp, WireCounter,
     },
-    profile::{SshForwardAuth, SshForwardProfile, SshForwardRule},
+    profile::{
+        canonical_connection_identity, SshConnectionProfile, SshForwardAuth, SshForwardProfile,
+        SshForwardRule,
+    },
     scope_retention::KnownScopesInput,
     ssh_client::{forward_socket, ChannelLimiter, SshSession, SshTransport, SshTransportError},
     store::{FeatureRuntimeLease, ScopeActivityLease, ScopeStore, SshForwardStore, StoredTrust},
 };
+
+#[cfg(windows)]
+use super::store_schema::{StoredScopeConfigV2, MAX_SAVED_CONNECTIONS};
 
 #[cfg(not(test))]
 use super::credential_vault::WindowsCredentialVault;
@@ -112,6 +119,8 @@ struct ActiveScope {
     generation: WireCounter,
     store: Arc<ScopeStore>,
     profiles_revision: WireCounter,
+    connections_revision: WireCounter,
+    rules_revision: WireCounter,
     trust_revision: WireCounter,
     _activity_lease: Arc<ScopeActivityLease>,
 }
@@ -951,6 +960,9 @@ impl SshForwardManager {
                 let profiles = store
                     .load_profiles()
                     .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+                let config = store
+                    .load_scope_config()
+                    .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
                 let trust = store
                     .load_trust()
                     .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
@@ -961,6 +973,8 @@ impl SshForwardManager {
                     generation,
                     store,
                     profiles_revision: profiles.revision(),
+                    connections_revision: config.connections_revision,
+                    rules_revision: config.rules_revision,
                     trust_revision: trust.revision(),
                     _activity_lease: activity_lease,
                 })
@@ -1115,7 +1129,14 @@ impl SshForwardManager {
                 registry.rule_snapshots_for_scope(scope_id),
             )
         };
-        let expose_v2_projection = !connection_runtimes.is_empty() || !rule_runtimes.is_empty();
+        let credential_states = connections
+            .iter()
+            .map(|connection| self.credential_state(scope_id, connection))
+            .collect::<Vec<_>>();
+        let trust = active
+            .store
+            .load_trust()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
         let runtimes = self.runtimes.lock().await;
         let mut runtime_values = runtimes
             .iter()
@@ -1130,21 +1151,20 @@ impl SshForwardManager {
             activation_token: token,
             scope_generation: active.generation,
             profiles_revision: profiles.revision(),
-            trust_revision: active
-                .store
-                .load_trust()
-                .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
-                .revision(),
+            connections_revision: v2.connections_revision,
+            rules_revision: v2.rules_revision,
+            trust_revision: trust.revision(),
+            connections,
+            rules,
+            connection_runtimes,
+            rule_runtimes,
+            credential_states,
             profiles: profiles
                 .profiles()
                 .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?,
             runtimes: runtime_values,
             host_key_challenges: challenges.snapshot(UtcTimestamp::now(), scope_id),
             trust_repair: Some(self.trust_repair_metadata(scope_id)?),
-            connections: expose_v2_projection.then_some(connections),
-            rules: expose_v2_projection.then_some(rules),
-            connection_runtimes: expose_v2_projection.then_some(connection_runtimes),
-            rule_runtimes: expose_v2_projection.then_some(rule_runtimes),
         };
         drop(challenges);
         snapshot
@@ -1152,6 +1172,42 @@ impl SshForwardManager {
             .sort_by(|left, right| left.id.cmp(&right.id));
         self.ensure_context(context, token).await?;
         Ok(snapshot)
+    }
+
+    fn credential_state(
+        &self,
+        scope_id: &str,
+        connection: &SshConnectionProfile,
+    ) -> SshForwardCredentialState {
+        let identity = CredentialIdentity {
+            scope_id: scope_id.to_owned(),
+            profile_id: connection.id.clone(),
+            endpoint_host: connection.ssh_host.clone(),
+            endpoint_port: connection.ssh_port,
+            ssh_user: connection.ssh_user.clone(),
+            auth: match &connection.auth {
+                SshForwardAuth::Agent => VaultAuthIdentity::Password,
+                SshForwardAuth::Key { key_id } => VaultAuthIdentity::KeyPassphrase(key_id.clone()),
+            },
+        };
+        let (credential_status, expires_at) = match target_for(&identity) {
+            Ok(target) => match self.credential_vault.load(&target, self.clock.now()) {
+                Ok(read) => (read.status, read.expires_at),
+                Err(_) => (CredentialStatus::Unavailable, None),
+            },
+            Err(_) => (CredentialStatus::Unavailable, None),
+        };
+        SshForwardCredentialState {
+            connection_profile_id: connection.id.clone(),
+            status: match credential_status {
+                CredentialStatus::None => SshForwardCredentialStatus::None,
+                CredentialStatus::Saved => SshForwardCredentialStatus::Saved,
+                CredentialStatus::Rejected => SshForwardCredentialStatus::Rejected,
+                CredentialStatus::Expired => SshForwardCredentialStatus::Expired,
+                CredentialStatus::Unavailable => SshForwardCredentialStatus::Unavailable,
+            },
+            expires_at,
+        }
     }
 
     fn trust_repair_metadata(
@@ -1164,6 +1220,471 @@ impl SshForwardManager {
             trust_path: trust_path.to_string_lossy().into_owned(),
             executable_path: self.executable_path.clone(),
         })
+    }
+
+    pub(crate) async fn create_connection(
+        &self,
+        input: &super::model::CreateConnectionInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.request.context,
+                input.request.activation_token,
+                &input.request.scope_id,
+                input.request.scope_generation,
+            )
+            .await?;
+        let current = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+        self.check_connections_revision(
+            current.connections_revision,
+            input.request.expected_connections_revision,
+        )?;
+        if input.connection.scope_id != input.request.scope_id
+            || input.connection.validate().is_err()
+        {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        let mut connections = current
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        if connections.len() >= MAX_SAVED_CONNECTIONS {
+            return Err(SshForwardErrorCode::ProfileLimit.command_error());
+        }
+        let identity = canonical_connection_identity(&input.connection)
+            .map_err(|_| SshForwardErrorCode::InvalidArgument.command_error())?;
+        if connections.iter().any(|connection| {
+            connection.id == input.connection.id
+                || canonical_connection_identity(connection)
+                    .is_ok_and(|candidate| candidate == identity)
+        }) {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        connections.push(input.connection.clone());
+        let rules = current
+            .rules()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        let next = StoredScopeConfigV2::from_models(&input.request.scope_id, connections, rules)
+            .map_err(|_| SshForwardErrorCode::InvalidArgument.command_error())?;
+        let committed = store
+            .replace_connections(input.request.expected_connections_revision, next)
+            .map_err(|_| SshForwardErrorCode::ConnectionsRevisionConflict.command_error())?;
+        self.update_connections_revision(committed.connections_revision)
+            .await;
+        self.emit_collection_hint_checked(
+            &input.request.scope_id,
+            input.request.scope_generation,
+            input.request.activation_token,
+            SshForwardEventReason::ConnectionsChanged,
+        )
+        .await;
+        self.snapshot_inner(
+            &input.request.context,
+            input.request.activation_token,
+            &input.request.scope_id,
+        )
+        .await
+    }
+
+    pub(crate) async fn update_connection(
+        &self,
+        input: &super::model::UpdateConnectionInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.request.context,
+                input.request.activation_token,
+                &input.request.scope_id,
+                input.request.scope_generation,
+            )
+            .await?;
+        let current = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+        self.check_connections_revision(
+            current.connections_revision,
+            input.request.expected_connections_revision,
+        )?;
+        self.check_connection_generation(
+            &input.request.scope_id,
+            &input.connection_profile_id,
+            input.expected_generation,
+        )
+        .await?;
+        if self
+            .connection_is_active(&input.request.scope_id, &input.connection_profile_id)
+            .await
+            || input.connection.id != input.connection_profile_id
+            || input.connection.scope_id != input.request.scope_id
+            || input.connection.validate().is_err()
+        {
+            return Err(
+                if self
+                    .connection_is_active(&input.request.scope_id, &input.connection_profile_id)
+                    .await
+                {
+                    SshForwardErrorCode::ProfileActive.command_error()
+                } else {
+                    SshForwardErrorCode::InvalidArgument.command_error()
+                },
+            );
+        }
+        let mut connections = current
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        let position = connections
+            .iter()
+            .position(|connection| connection.id == input.connection_profile_id)
+            .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
+        let identity = canonical_connection_identity(&input.connection)
+            .map_err(|_| SshForwardErrorCode::InvalidArgument.command_error())?;
+        if connections.iter().enumerate().any(|(index, connection)| {
+            index != position
+                && canonical_connection_identity(connection)
+                    .is_ok_and(|candidate| candidate == identity)
+        }) {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        connections[position] = input.connection.clone();
+        let rules = current
+            .rules()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        let next = StoredScopeConfigV2::from_models(&input.request.scope_id, connections, rules)
+            .map_err(|_| SshForwardErrorCode::InvalidArgument.command_error())?;
+        let committed = store
+            .replace_connections(input.request.expected_connections_revision, next)
+            .map_err(|_| SshForwardErrorCode::ConnectionsRevisionConflict.command_error())?;
+        self.update_connections_revision(committed.connections_revision)
+            .await;
+        self.emit_collection_hint_checked(
+            &input.request.scope_id,
+            input.request.scope_generation,
+            input.request.activation_token,
+            SshForwardEventReason::ConnectionsChanged,
+        )
+        .await;
+        self.snapshot_inner(
+            &input.request.context,
+            input.request.activation_token,
+            &input.request.scope_id,
+        )
+        .await
+    }
+
+    pub(crate) async fn delete_connection(
+        &self,
+        input: &super::model::DeleteConnectionInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.request.context,
+                input.request.activation_token,
+                &input.request.scope_id,
+                input.request.scope_generation,
+            )
+            .await?;
+        let current = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+        self.check_connections_revision(
+            current.connections_revision,
+            input.request.expected_connections_revision,
+        )?;
+        self.check_connection_generation(
+            &input.request.scope_id,
+            &input.connection_profile_id,
+            input.expected_generation,
+        )
+        .await?;
+        if self
+            .connection_is_active(&input.request.scope_id, &input.connection_profile_id)
+            .await
+        {
+            return Err(SshForwardErrorCode::ProfileActive.command_error());
+        }
+        let mut connections = current
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        if !connections
+            .iter()
+            .any(|connection| connection.id == input.connection_profile_id)
+        {
+            return Err(SshForwardErrorCode::ProfileNotFound.command_error());
+        }
+        let rules = current
+            .rules()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        if rules
+            .iter()
+            .any(|rule| rule.connection_profile_id == input.connection_profile_id)
+        {
+            return Err(SshForwardErrorCode::ProfileActive.command_error());
+        }
+        connections.retain(|connection| connection.id != input.connection_profile_id);
+        let next = StoredScopeConfigV2::from_models(&input.request.scope_id, connections, rules)
+            .map_err(|_| SshForwardErrorCode::InvalidArgument.command_error())?;
+        let committed = store
+            .replace_connections(input.request.expected_connections_revision, next)
+            .map_err(|_| SshForwardErrorCode::ConnectionsRevisionConflict.command_error())?;
+        self.update_connections_revision(committed.connections_revision)
+            .await;
+        self.emit_collection_hint_checked(
+            &input.request.scope_id,
+            input.request.scope_generation,
+            input.request.activation_token,
+            SshForwardEventReason::ConnectionsChanged,
+        )
+        .await;
+        self.snapshot_inner(
+            &input.request.context,
+            input.request.activation_token,
+            &input.request.scope_id,
+        )
+        .await
+    }
+
+    pub(crate) async fn create_rule(
+        &self,
+        input: &super::model::CreateRuleInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _rule_reconciliation = self.rule_reconciliation_gate.lock().await;
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.request.context,
+                input.request.activation_token,
+                &input.request.scope_id,
+                input.request.scope_generation,
+            )
+            .await?;
+        let current = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+        self.check_rules_revision(
+            current.rules_revision,
+            input.request.expected_rules_revision,
+        )?;
+        self.check_connection_generation(
+            &input.request.scope_id,
+            &input.request.connection_profile_id,
+            input.request.expected_connection_generation,
+        )
+        .await?;
+        if input.rule.scope_id != input.request.scope_id
+            || input.rule.connection_profile_id != input.request.connection_profile_id
+            || input.rule.validate().is_err()
+        {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        let connections = current
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        if !connections
+            .iter()
+            .any(|connection| connection.id == input.request.connection_profile_id)
+        {
+            return Err(SshForwardErrorCode::ProfileNotFound.command_error());
+        }
+        let mut rules = current
+            .rules()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        if rules.len() >= 64 || rules.iter().any(|rule| rule.id == input.rule.id) {
+            return Err(if rules.len() >= 64 {
+                SshForwardErrorCode::RuleLimit.command_error()
+            } else {
+                SshForwardErrorCode::InvalidArgument.command_error()
+            });
+        }
+        rules.push(input.rule.clone());
+        let next = StoredScopeConfigV2::from_models(&input.request.scope_id, connections, rules)
+            .map_err(|_| SshForwardErrorCode::InvalidArgument.command_error())?;
+        let committed = store
+            .replace_rules(input.request.expected_rules_revision, next)
+            .map_err(|_| SshForwardErrorCode::RulesRevisionConflict.command_error())?;
+        self.update_rules_revision_for_scope(
+            &input.request.scope_id,
+            input.request.scope_generation,
+            committed.rules_revision,
+        )
+        .await;
+        self.emit_collection_hint_checked(
+            &input.request.scope_id,
+            input.request.scope_generation,
+            input.request.activation_token,
+            SshForwardEventReason::RulesChanged,
+        )
+        .await;
+        self.snapshot_inner(
+            &input.request.context,
+            input.request.activation_token,
+            &input.request.scope_id,
+        )
+        .await
+    }
+
+    pub(crate) async fn update_rule(
+        &self,
+        input: &super::model::UpdateRuleInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _rule_reconciliation = self.rule_reconciliation_gate.lock().await;
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.request.context,
+                input.request.activation_token,
+                &input.request.scope_id,
+                input.request.scope_generation,
+            )
+            .await?;
+        let current = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+        self.check_rules_revision(
+            current.rules_revision,
+            input.request.expected_rules_revision,
+        )?;
+        self.check_connection_generation(
+            &input.request.scope_id,
+            &input.request.connection_profile_id,
+            input.request.expected_connection_generation,
+        )
+        .await?;
+        self.check_rule_generation(
+            &input.request.scope_id,
+            &input.rule_id,
+            input.expected_rule_generation,
+        )
+        .await?;
+        if self
+            .rule_is_active(&input.request.scope_id, &input.rule_id)
+            .await
+        {
+            return Err(SshForwardErrorCode::ProfileActive.command_error());
+        }
+        if input.rule.id != input.rule_id
+            || input.rule.scope_id != input.request.scope_id
+            || input.rule.connection_profile_id != input.request.connection_profile_id
+            || input.rule.validate().is_err()
+        {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        let connections = current
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        if !connections
+            .iter()
+            .any(|connection| connection.id == input.request.connection_profile_id)
+        {
+            return Err(SshForwardErrorCode::ProfileNotFound.command_error());
+        }
+        let mut rules = current
+            .rules()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        let position = rules
+            .iter()
+            .position(|rule| rule.id == input.rule_id)
+            .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
+        if rules[position].connection_profile_id != input.request.connection_profile_id {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        rules[position] = input.rule.clone();
+        let next = StoredScopeConfigV2::from_models(&input.request.scope_id, connections, rules)
+            .map_err(|_| SshForwardErrorCode::InvalidArgument.command_error())?;
+        let committed = store
+            .replace_rules(input.request.expected_rules_revision, next)
+            .map_err(|_| SshForwardErrorCode::RulesRevisionConflict.command_error())?;
+        self.update_rules_revision(committed.rules_revision).await;
+        self.emit_collection_hint_checked(
+            &input.request.scope_id,
+            input.request.scope_generation,
+            input.request.activation_token,
+            SshForwardEventReason::RulesChanged,
+        )
+        .await;
+        self.snapshot_inner(
+            &input.request.context,
+            input.request.activation_token,
+            &input.request.scope_id,
+        )
+        .await
+    }
+
+    pub(crate) async fn delete_rule(
+        &self,
+        input: &super::model::DeleteRuleInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _rule_reconciliation = self.rule_reconciliation_gate.lock().await;
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.request.context,
+                input.request.activation_token,
+                &input.request.scope_id,
+                input.request.scope_generation,
+            )
+            .await?;
+        let current = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+        self.check_rules_revision(
+            current.rules_revision,
+            input.request.expected_rules_revision,
+        )?;
+        self.check_connection_generation(
+            &input.request.scope_id,
+            &input.request.connection_profile_id,
+            input.request.expected_connection_generation,
+        )
+        .await?;
+        self.check_rule_generation(
+            &input.request.scope_id,
+            &input.rule_id,
+            input.expected_rule_generation,
+        )
+        .await?;
+        if self
+            .rule_is_active(&input.request.scope_id, &input.rule_id)
+            .await
+        {
+            return Err(SshForwardErrorCode::ProfileActive.command_error());
+        }
+        let connections = current
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        let mut rules = current
+            .rules()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        let position = rules
+            .iter()
+            .position(|rule| {
+                rule.id == input.rule_id
+                    && rule.connection_profile_id == input.request.connection_profile_id
+            })
+            .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
+        rules.remove(position);
+        let next = StoredScopeConfigV2::from_models(&input.request.scope_id, connections, rules)
+            .map_err(|_| SshForwardErrorCode::InvalidArgument.command_error())?;
+        let committed = store
+            .replace_rules(input.request.expected_rules_revision, next)
+            .map_err(|_| SshForwardErrorCode::RulesRevisionConflict.command_error())?;
+        self.update_rules_revision(committed.rules_revision).await;
+        self.emit_collection_hint_checked(
+            &input.request.scope_id,
+            input.request.scope_generation,
+            input.request.activation_token,
+            SshForwardEventReason::RulesChanged,
+        )
+        .await;
+        self.snapshot_inner(
+            &input.request.context,
+            input.request.activation_token,
+            &input.request.scope_id,
+        )
+        .await
     }
 
     pub(crate) async fn create_profile(
@@ -2360,7 +2881,6 @@ impl SshForwardManager {
         self.snapshot_inner(context, token, scope_id).await
     }
 
-    #[allow(dead_code)]
     async fn set_rule_enabled(
         self: &Arc<Self>,
         context: &DesktopClientContext,
@@ -2374,28 +2894,53 @@ impl SshForwardManager {
         enabled: bool,
     ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
         let _rule_reconciliation = self.rule_reconciliation_gate.lock().await;
-        if enabled {
-            let store = self
-                .checked_scope(context, token, scope_id, scope_generation)
-                .await?;
-            let rule = store
-                .load_scope_config()
-                .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
-                .rules()
-                .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?
-                .into_iter()
-                .find(|rule| rule.id == rule_id && rule.connection_profile_id == connection_id)
-                .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
-            self.enable_rule(
-                context,
-                token,
-                scope_id,
-                scope_generation,
-                rule,
-                connection_generation,
-                expected_rule_generation,
-            )
+        let store = self
+            .checked_scope(context, token, scope_id, scope_generation)
             .await?;
+        let current = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+        let connections = current
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        let mut rules = current
+            .rules()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
+        let rule = rules
+            .iter_mut()
+            .find(|rule| rule.id == rule_id && rule.connection_profile_id == connection_id)
+            .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
+        rule.desired_enabled = enabled;
+        let next = StoredScopeConfigV2::from_models(scope_id, connections, rules)
+            .map_err(|_| SshForwardErrorCode::InvalidArgument.command_error())?;
+        let committed = store
+            .replace_rules(current.rules_revision, next)
+            .map_err(|_| SshForwardErrorCode::RulesRevisionConflict.command_error())?;
+        self.update_rules_revision_for_scope(scope_id, scope_generation, committed.rules_revision)
+            .await;
+
+        let runtime_result = if enabled {
+            match committed.rules() {
+                Ok(rules) => match rules
+                    .into_iter()
+                    .find(|rule| rule.id == rule_id && rule.connection_profile_id == connection_id)
+                {
+                    Some(rule) => {
+                        self.enable_rule(
+                            context,
+                            token,
+                            scope_id,
+                            scope_generation,
+                            rule,
+                            connection_generation,
+                            expected_rule_generation,
+                        )
+                        .await
+                    }
+                    None => Err(SshForwardErrorCode::ProfileNotFound.command_error()),
+                },
+                Err(_) => Err(SshForwardErrorCode::StoreCorrupt.command_error()),
+            }
         } else {
             self.disable_rule(
                 context,
@@ -2407,7 +2952,49 @@ impl SshForwardManager {
                 rule_id,
                 expected_rule_generation,
             )
-            .await?;
+            .await
+        };
+        if let Err(error) = runtime_result {
+            let rollback = store
+                .replace_rules(committed.rules_revision, current)
+                .map_err(|_| SshForwardErrorCode::StoreIo.command_error());
+            let rolled_back = match rollback {
+                Ok(config) => config,
+                Err(error) => {
+                    // Durable-first quarantine: the committed desired intent
+                    // remains authoritative when compensation is unavailable.
+                    // The failed runtime state is already recorded and the
+                    // next connection reconciliation will retry that intent.
+                    self.update_rules_revision_for_scope(
+                        scope_id,
+                        scope_generation,
+                        committed.rules_revision,
+                    )
+                    .await;
+                    self.emit_collection_hint_checked(
+                        scope_id,
+                        scope_generation,
+                        token,
+                        SshForwardEventReason::RulesChanged,
+                    )
+                    .await;
+                    return Err(error);
+                }
+            };
+            self.update_rules_revision_for_scope(
+                scope_id,
+                scope_generation,
+                rolled_back.rules_revision,
+            )
+            .await;
+            self.emit_collection_hint_checked(
+                scope_id,
+                scope_generation,
+                token,
+                SshForwardEventReason::RulesChanged,
+            )
+            .await;
+            return Err(error);
         }
         let rule_generation = self
             .connection_registry
@@ -2431,7 +3018,79 @@ impl SshForwardManager {
             false,
         )
         .await;
+        self.emit_collection_hint_checked(
+            scope_id,
+            scope_generation,
+            token,
+            SshForwardEventReason::RulesChanged,
+        )
+        .await;
         self.snapshot_inner(context, token, scope_id).await
+    }
+
+    pub(crate) async fn connect(
+        self: &Arc<Self>,
+        input: &super::model::ConnectionLifecycleInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        if let Some(expected_attempt) = input.credential_attempt_id.as_deref() {
+            let key_matches = self
+                .loaded_keys
+                .lock()
+                .expect("loaded key mutex poisoned")
+                .get(&(input.scope_id.clone(), input.connection_profile_id.clone()))
+                .is_some_and(|loaded| loaded.credential_attempt_id == expected_attempt);
+            let password_matches = self
+                .loaded_passwords
+                .lock()
+                .expect("loaded password mutex poisoned")
+                .get(&(input.scope_id.clone(), input.connection_profile_id.clone()))
+                .is_some_and(|loaded| loaded.credential_attempt_id == expected_attempt);
+            if !key_matches && !password_matches {
+                return Err(SshForwardErrorCode::InvalidArgument.command_error());
+            }
+        }
+        self.connect_connection(
+            &input.context,
+            input.activation_token,
+            &input.scope_id,
+            input.scope_generation,
+            &input.connection_profile_id,
+            input.expected_generation,
+        )
+        .await
+    }
+
+    pub(crate) async fn disconnect(
+        &self,
+        input: &super::model::ConnectionLifecycleInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        self.disconnect_connection(
+            &input.context,
+            input.activation_token,
+            &input.scope_id,
+            input.scope_generation,
+            &input.connection_profile_id,
+            input.expected_generation,
+        )
+        .await
+    }
+
+    pub(crate) async fn set_rule_enabled_v2(
+        self: &Arc<Self>,
+        input: &super::model::SetRuleEnabledInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        self.set_rule_enabled(
+            &input.context,
+            input.activation_token,
+            &input.scope_id,
+            input.scope_generation,
+            &input.connection_profile_id,
+            input.expected_connection_generation,
+            &input.rule_id,
+            input.expected_rule_generation,
+            input.enabled,
+        )
+        .await
     }
 
     async fn enable_rule(
@@ -2893,6 +3552,216 @@ impl SshForwardManager {
     }
 
     #[cfg(windows)]
+    pub(crate) async fn load_connection_key(
+        &self,
+        input: &super::model::LoadConnectionKeyInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.context,
+                input.activation_token,
+                &input.scope_id,
+                input.scope_generation,
+            )
+            .await?;
+        self.check_connection_generation(
+            &input.scope_id,
+            &input.connection_profile_id,
+            input.expected_generation,
+        )
+        .await?;
+        if input.key_id.is_empty()
+            || input.key_id.len() > 128
+            || !input
+                .key_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            || input.passphrase.len() > 4096
+        {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        let connection = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?
+            .into_iter()
+            .find(|connection| connection.id == input.connection_profile_id)
+            .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
+        if !matches!(connection.auth, SshForwardAuth::Agent)
+            && !matches!(&connection.auth, SshForwardAuth::Key { key_id } if key_id == &input.key_id)
+        {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        let endpoint = SshEndpoint::new(&connection.ssh_host, connection.ssh_port)
+            .map_err(|code| code.command_error())?;
+        let loaded = credentials::load_safe_key(&input.key_id, Some(input.passphrase.as_str()))
+            .map_err(map_credential_error)?;
+        let identity = CredentialIdentity {
+            scope_id: input.scope_id.clone(),
+            profile_id: input.connection_profile_id.clone(),
+            endpoint_host: endpoint.host,
+            endpoint_port: endpoint.port,
+            ssh_user: connection.ssh_user.clone(),
+            auth: VaultAuthIdentity::KeyPassphrase(input.key_id.clone()),
+        };
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .insert(
+                (input.scope_id.clone(), input.connection_profile_id.clone()),
+                Arc::new(LoadedKeyAttempt {
+                    key: Arc::new(loaded.key),
+                    encrypted: loaded.encrypted,
+                    credential_attempt_id: input
+                        .credential_attempt_id
+                        .clone()
+                        .unwrap_or_else(|| "v2".into()),
+                    passphrase: input.passphrase.clone(),
+                    identity,
+                    remember_for_days: input.remember_for_days,
+                }),
+            );
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .remove(&(input.scope_id.clone(), input.connection_profile_id.clone()));
+        self.snapshot_inner(&input.context, input.activation_token, &input.scope_id)
+            .await
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn load_connection_password(
+        &self,
+        input: &super::model::LoadConnectionPasswordInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.context,
+                input.activation_token,
+                &input.scope_id,
+                input.scope_generation,
+            )
+            .await?;
+        self.check_connection_generation(
+            &input.scope_id,
+            &input.connection_profile_id,
+            input.expected_generation,
+        )
+        .await?;
+        if input.username.trim().is_empty()
+            || input.username.chars().count() > 64
+            || input.username.chars().any(char::is_control)
+            || input.password.is_empty()
+            || input.password.len() > 4096
+        {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        let connection = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?
+            .into_iter()
+            .find(|connection| connection.id == input.connection_profile_id)
+            .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
+        if !matches!(connection.auth, SshForwardAuth::Agent)
+            || input.username != connection.ssh_user
+        {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        let endpoint = SshEndpoint::new(&connection.ssh_host, connection.ssh_port)
+            .map_err(|code| code.command_error())?;
+        let identity = CredentialIdentity {
+            scope_id: input.scope_id.clone(),
+            profile_id: input.connection_profile_id.clone(),
+            endpoint_host: endpoint.host,
+            endpoint_port: endpoint.port,
+            ssh_user: input.username.clone(),
+            auth: VaultAuthIdentity::Password,
+        };
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .insert(
+                (input.scope_id.clone(), input.connection_profile_id.clone()),
+                Arc::new(LoadedPassword {
+                    credential_attempt_id: input.credential_attempt_id.clone(),
+                    username: Zeroizing::new(input.username.clone()),
+                    password: input.password.clone(),
+                    identity,
+                    remember_for_days: input.remember_for_days,
+                }),
+            );
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .remove(&(input.scope_id.clone(), input.connection_profile_id.clone()));
+        self.snapshot_inner(&input.context, input.activation_token, &input.scope_id)
+            .await
+    }
+
+    pub(crate) async fn forget_credential(
+        &self,
+        input: &super::model::ForgetCredentialInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.context,
+                input.activation_token,
+                &input.scope_id,
+                input.scope_generation,
+            )
+            .await?;
+        self.check_connection_generation(
+            &input.scope_id,
+            &input.connection_profile_id,
+            input.expected_generation,
+        )
+        .await?;
+        let connection = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?
+            .into_iter()
+            .find(|connection| connection.id == input.connection_profile_id)
+            .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
+        let identity = CredentialIdentity {
+            scope_id: input.scope_id.clone(),
+            profile_id: connection.id.clone(),
+            endpoint_host: connection.ssh_host.clone(),
+            endpoint_port: connection.ssh_port,
+            ssh_user: connection.ssh_user.clone(),
+            auth: match &connection.auth {
+                SshForwardAuth::Agent => VaultAuthIdentity::Password,
+                SshForwardAuth::Key { key_id } => VaultAuthIdentity::KeyPassphrase(key_id.clone()),
+            },
+        };
+        let target = target_for(&identity)
+            .map_err(vault_error_code)
+            .map_err(SshForwardErrorCode::command_error)?;
+        self.credential_vault
+            .forget(&target)
+            .map_err(vault_error_code)
+            .map_err(SshForwardErrorCode::command_error)?;
+        self.forget_loaded_password(&input.scope_id, &input.connection_profile_id);
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .remove(&(input.scope_id.clone(), input.connection_profile_id.clone()));
+        self.rejected_credentials
+            .lock()
+            .expect("rejected credential mutex poisoned")
+            .remove(target.identity_digest());
+        self.snapshot_inner(&input.context, input.activation_token, &input.scope_id)
+            .await
+    }
+
+    #[cfg(windows)]
     pub(crate) async fn load_key(
         &self,
         input: &super::model::LoadKeyInput,
@@ -3116,6 +3985,116 @@ impl SshForwardManager {
         self.emit_hint(
             Some(input.profile_id.clone()),
             SshForwardEventReason::TrustChanged,
+        )
+        .await;
+        self.snapshot_inner(&input.context, input.activation_token, &input.scope_id)
+            .await
+    }
+
+    pub(crate) async fn approve_connection_host(
+        &self,
+        input: &super::model::ApproveConnectionHostInput,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let _command = self.command_gate.lock().await;
+        let store = self
+            .checked_scope(
+                &input.context,
+                input.activation_token,
+                &input.scope_id,
+                input.scope_generation,
+            )
+            .await?;
+        self.check_connection_generation(
+            &input.scope_id,
+            &input.connection_profile_id,
+            input.expected_generation,
+        )
+        .await?;
+        let connection_exists = store
+            .load_scope_config()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
+            .connections()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?
+            .into_iter()
+            .any(|connection| connection.id == input.connection_profile_id);
+        if !connection_exists {
+            return Err(SshForwardErrorCode::ProfileNotFound.command_error());
+        }
+        let trust = store
+            .load_trust()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+        self.check_revision(
+            trust.revision(),
+            input.expected_trust_revision,
+            SshForwardErrorCode::TrustRevisionConflict,
+        )?;
+        let approval = HostKeyApproval {
+            challenge_id: input.challenge_id.clone(),
+            algorithm: input.algorithm.clone(),
+            fingerprint: input.fingerprint.clone(),
+            expected_generation: input.expected_generation,
+            expected_trust_revision: input.expected_trust_revision,
+        };
+        let committed_revision = {
+            let _admission = self.intent_admission_gate.lock().await;
+            let store = self
+                .checked_scope(
+                    &input.context,
+                    input.activation_token,
+                    &input.scope_id,
+                    input.scope_generation,
+                )
+                .await?;
+            self.check_connection_generation(
+                &input.scope_id,
+                &input.connection_profile_id,
+                input.expected_generation,
+            )
+            .await?;
+            let approved = self
+                .challenges
+                .lock()
+                .await
+                .approve(
+                    UtcTimestamp::now(),
+                    &approval,
+                    ChallengeContext {
+                        client_epoch: input.context.client_epoch,
+                        activation_token: input.activation_token,
+                        scope_generation: input.scope_generation,
+                        generation: input.expected_generation,
+                    },
+                    &input.scope_id,
+                    &input.context.desktop_instance_id,
+                    &input.context.manager_session_id,
+                    &input.connection_profile_id,
+                )
+                .map_err(|code| code.command_error())?;
+            let committed = store
+                .replace_trust(input.expected_trust_revision, {
+                    let mut next = trust.clone();
+                    next.entries.push(approved.record);
+                    next
+                })
+                .map_err(|_| SshForwardErrorCode::TrustRevisionConflict.command_error())?;
+            committed.revision()
+        };
+        self.update_trust_revision(committed_revision).await;
+        self.clear_live_secrets_for_profile(&input.scope_id, &input.connection_profile_id);
+        self.emit_runtime_hint(
+            None,
+            None,
+            Some(input.connection_profile_id.clone()),
+            None,
+            Some(input.expected_generation),
+            None,
+            Some((
+                input.scope_id.clone(),
+                input.scope_generation,
+                input.activation_token,
+            )),
+            SshForwardEventReason::TrustChanged,
+            true,
         )
         .await;
         self.snapshot_inner(&input.context, input.activation_token, &input.scope_id)
@@ -4103,6 +5082,79 @@ impl SshForwardManager {
         Ok(())
     }
 
+    async fn check_connection_generation(
+        &self,
+        scope_id: &str,
+        connection_profile_id: &str,
+        expected: WireCounter,
+    ) -> Result<(), SshForwardCommandError> {
+        let current = self
+            .connection_registry
+            .lock()
+            .await
+            .connection_snapshots_for_scope(scope_id)
+            .into_iter()
+            .find(|runtime| runtime.connection_profile_id == connection_profile_id)
+            .map(|runtime| runtime.generation)
+            .unwrap_or(WireCounter::ZERO);
+        if current != expected {
+            let mut error = SshForwardErrorCode::StaleConnectionGeneration.command_error();
+            error.connection_profile_id = Some(connection_profile_id.to_owned());
+            error.current_generation = Some(current.to_string());
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn check_rule_generation(
+        &self,
+        scope_id: &str,
+        rule_id: &str,
+        expected: WireCounter,
+    ) -> Result<(), SshForwardCommandError> {
+        let current = self
+            .connection_registry
+            .lock()
+            .await
+            .rule_snapshots_for_scope(scope_id)
+            .into_iter()
+            .find(|runtime| runtime.rule_id == rule_id)
+            .map(|runtime| runtime.generation)
+            .unwrap_or(WireCounter::ZERO);
+        if current != expected {
+            let mut error = SshForwardErrorCode::StaleRuleGeneration.command_error();
+            error.rule_id = Some(rule_id.to_owned());
+            error.current_generation = Some(current.to_string());
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn connection_is_active(&self, scope_id: &str, connection_profile_id: &str) -> bool {
+        self.connection_registry
+            .lock()
+            .await
+            .connection_snapshots_for_scope(scope_id)
+            .into_iter()
+            .find(|runtime| runtime.connection_profile_id == connection_profile_id)
+            .is_some_and(|runtime| runtime.state != SshConnectionState::Disconnected)
+    }
+
+    async fn rule_is_active(&self, scope_id: &str, rule_id: &str) -> bool {
+        self.connection_registry
+            .lock()
+            .await
+            .rule_snapshots_for_scope(scope_id)
+            .into_iter()
+            .find(|runtime| runtime.rule_id == rule_id)
+            .is_some_and(|runtime| {
+                !matches!(
+                    runtime.state,
+                    SshForwardRuleState::Off | SshForwardRuleState::Failed
+                )
+            })
+    }
+
     async fn profile_is_active(&self, scope_id: &str, profile_id: &str) -> bool {
         let legacy_active = self
             .runtimes
@@ -4129,6 +5181,31 @@ impl SshForwardManager {
         }
     }
 
+    async fn update_connections_revision(&self, revision: WireCounter) {
+        if let Some(active) = self.active_scope.lock().await.as_mut() {
+            active.connections_revision = revision;
+        }
+    }
+
+    async fn update_rules_revision(&self, revision: WireCounter) {
+        if let Some(active) = self.active_scope.lock().await.as_mut() {
+            active.rules_revision = revision;
+        }
+    }
+
+    async fn update_rules_revision_for_scope(
+        &self,
+        scope_id: &str,
+        scope_generation: WireCounter,
+        revision: WireCounter,
+    ) {
+        if let Some(active) = self.active_scope.lock().await.as_mut() {
+            if active.id == scope_id && active.generation == scope_generation {
+                active.rules_revision = revision;
+            }
+        }
+    }
+
     async fn update_trust_revision(&self, revision: WireCounter) {
         if let Some(active) = self.active_scope.lock().await.as_mut() {
             active.trust_revision = revision;
@@ -4150,6 +5227,34 @@ impl SshForwardManager {
             } else {
                 error.current_profiles_revision = Some(current.to_string());
             }
+            Err(error)
+        }
+    }
+
+    fn check_connections_revision(
+        &self,
+        current: WireCounter,
+        expected: WireCounter,
+    ) -> Result<(), SshForwardCommandError> {
+        if current == expected {
+            Ok(())
+        } else {
+            let mut error = SshForwardErrorCode::ConnectionsRevisionConflict.command_error();
+            error.current_connections_revision = Some(current.to_string());
+            Err(error)
+        }
+    }
+
+    fn check_rules_revision(
+        &self,
+        current: WireCounter,
+        expected: WireCounter,
+    ) -> Result<(), SshForwardCommandError> {
+        if current == expected {
+            Ok(())
+        } else {
+            let mut error = SshForwardErrorCode::RulesRevisionConflict.command_error();
+            error.current_rules_revision = Some(current.to_string());
             Err(error)
         }
     }
@@ -4200,6 +5305,27 @@ impl SshForwardManager {
             Some((scope_id.to_owned(), scope_generation, token)),
             reason,
             false,
+        )
+        .await;
+    }
+
+    async fn emit_collection_hint_checked(
+        &self,
+        scope_id: &str,
+        scope_generation: WireCounter,
+        token: WireCounter,
+        reason: SshForwardEventReason,
+    ) {
+        self.emit_runtime_hint(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some((scope_id.to_owned(), scope_generation, token)),
+            reason,
+            true,
         )
         .await;
     }
@@ -4308,6 +5434,8 @@ impl SshForwardManager {
                 activation_token: intent.latest_activation_token,
                 scope_id: active.id,
                 scope_generation: active.generation,
+                connections_revision: active.connections_revision,
+                rules_revision: active.rules_revision,
                 profiles_revision: active.profiles_revision,
                 trust_revision: active.trust_revision,
                 profile_id,

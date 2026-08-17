@@ -11,7 +11,9 @@ use zeroize::Zeroizing;
 use super::{
     error::SshForwardErrorCode,
     instance::DesktopClientContext,
-    profile::{LoopbackHost, SshConnectionProfile, SshForwardProfile, SshForwardRule},
+    profile::{
+        validate_uuid_v4, LoopbackHost, SshConnectionProfile, SshForwardProfile, SshForwardRule,
+    },
     scope_retention::KnownScopesInput,
 };
 
@@ -50,6 +52,29 @@ fn valid_credential_attempt_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn deserialize_uuid_v4<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    validate_uuid_v4(&value).map_err(|_| de::Error::custom("uuid_invalid"))?;
+    Ok(value)
+}
+
+fn deserialize_optional_uuid_v4<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    if value
+        .as_deref()
+        .is_some_and(|value| validate_uuid_v4(value).is_err())
+    {
+        return Err(de::Error::custom("uuid_invalid"));
+    }
+    Ok(value)
 }
 
 fn deserialize_credential_attempt_id<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -298,8 +323,210 @@ pub(crate) struct OpenClientInput {
 pub(crate) struct ScopeContextInput {
     pub(crate) context: DesktopClientContext,
     pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
     pub(crate) scope_id: String,
     pub(crate) scope_generation: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ConnectionMutationInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    pub(crate) expected_connections_revision: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CreateConnectionInput {
+    #[serde(flatten)]
+    pub(crate) request: ConnectionMutationInput,
+    pub(crate) connection: SshConnectionProfile,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct UpdateConnectionInput {
+    #[serde(flatten)]
+    pub(crate) request: ConnectionMutationInput,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) connection_profile_id: String,
+    pub(crate) expected_generation: WireCounter,
+    pub(crate) connection: SshConnectionProfile,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DeleteConnectionInput {
+    #[serde(flatten)]
+    pub(crate) request: ConnectionMutationInput,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) connection_profile_id: String,
+    pub(crate) expected_generation: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RuleMutationInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    pub(crate) expected_rules_revision: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) connection_profile_id: String,
+    pub(crate) expected_connection_generation: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CreateRuleInput {
+    #[serde(flatten)]
+    pub(crate) request: RuleMutationInput,
+    pub(crate) rule: SshForwardRule,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct UpdateRuleInput {
+    #[serde(flatten)]
+    pub(crate) request: RuleMutationInput,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) rule_id: String,
+    pub(crate) expected_rule_generation: WireCounter,
+    pub(crate) rule: SshForwardRule,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DeleteRuleInput {
+    #[serde(flatten)]
+    pub(crate) request: RuleMutationInput,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) rule_id: String,
+    pub(crate) expected_rule_generation: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ConnectionLifecycleInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) connection_profile_id: String,
+    pub(crate) expected_generation: WireCounter,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_credential_attempt_id"
+    )]
+    pub(crate) credential_attempt_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SetRuleEnabledInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) connection_profile_id: String,
+    pub(crate) expected_connection_generation: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) rule_id: String,
+    pub(crate) expected_rule_generation: WireCounter,
+    pub(crate) enabled: bool,
+}
+
+#[cfg(windows)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LoadConnectionKeyInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) connection_profile_id: String,
+    pub(crate) expected_generation: WireCounter,
+    pub(crate) key_id: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_credential_attempt_id"
+    )]
+    pub(crate) credential_attempt_id: Option<String>,
+    #[serde(
+        default = "default_remember_for_days",
+        deserialize_with = "deserialize_remember_for_days"
+    )]
+    pub(crate) remember_for_days: u16,
+    #[serde(deserialize_with = "deserialize_bounded_passphrase")]
+    pub(crate) passphrase: Zeroizing<String>,
+}
+
+#[cfg(windows)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LoadConnectionPasswordInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) connection_profile_id: String,
+    pub(crate) expected_generation: WireCounter,
+    #[serde(deserialize_with = "deserialize_credential_attempt_id")]
+    pub(crate) credential_attempt_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_username")]
+    pub(crate) username: String,
+    #[serde(deserialize_with = "deserialize_bounded_password")]
+    pub(crate) password: Zeroizing<String>,
+    #[serde(
+        default = "default_remember_for_days",
+        deserialize_with = "deserialize_remember_for_days"
+    )]
+    pub(crate) remember_for_days: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ApproveConnectionHostInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) connection_profile_id: String,
+    pub(crate) expected_generation: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) challenge_id: String,
+    pub(crate) algorithm: String,
+    pub(crate) fingerprint: String,
+    pub(crate) expected_trust_revision: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ForgetCredentialInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) connection_profile_id: String,
+    pub(crate) expected_generation: WireCounter,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -307,6 +534,7 @@ pub(crate) struct ScopeContextInput {
 pub(crate) struct ActivateScopeInput {
     pub(crate) context: DesktopClientContext,
     pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_optional_uuid_v4")]
     pub(crate) scope_id: Option<String>,
 }
 
@@ -429,6 +657,7 @@ pub(crate) struct ApproveHostInput {
 pub(crate) struct PurgeScopeInput {
     pub(crate) context: DesktopClientContext,
     pub(crate) activation_token: WireCounter,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
     pub(crate) scope_id: String,
     pub(crate) known_scopes: KnownScopesInput,
 }
@@ -481,6 +710,25 @@ pub(crate) enum SshForwardRuleState {
     On,
     Closing,
     Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum SshForwardCredentialStatus {
+    None,
+    Saved,
+    Rejected,
+    Expired,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SshForwardCredentialState {
+    pub(crate) connection_profile_id: String,
+    pub(crate) status: SshForwardCredentialStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) expires_at: Option<UtcTimestamp>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -538,7 +786,7 @@ pub(crate) struct SshForwardRuntime {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct HostKeyChallenge {
     pub(crate) challenge_id: String,
-    pub(crate) profile_id: String,
+    pub(crate) connection_profile_id: String,
     pub(crate) scope_id: String,
     pub(crate) generation: WireCounter,
     pub(crate) ssh_host: String,
@@ -562,23 +810,20 @@ pub(crate) struct SshForwardSnapshot {
     pub(crate) scope_id: String,
     pub(crate) activation_token: WireCounter,
     pub(crate) scope_generation: WireCounter,
+    pub(crate) connections_revision: WireCounter,
+    pub(crate) rules_revision: WireCounter,
     pub(crate) profiles_revision: WireCounter,
     pub(crate) trust_revision: WireCounter,
+    pub(crate) connections: Vec<SshConnectionProfile>,
+    pub(crate) rules: Vec<SshForwardRule>,
+    pub(crate) connection_runtimes: Vec<SshConnectionRuntime>,
+    pub(crate) rule_runtimes: Vec<SshForwardRuleRuntime>,
+    pub(crate) credential_states: Vec<SshForwardCredentialState>,
     pub(crate) profiles: Vec<SshForwardProfile>,
     pub(crate) runtimes: Vec<SshForwardRuntime>,
     pub(crate) host_key_challenges: Vec<HostKeyChallenge>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) trust_repair: Option<SshForwardTrustRepairMetadata>,
-    /// Optional v2 projections. They are omitted by the legacy command
-    /// facade and become authoritative when Phase 04 publishes v2 commands.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) connections: Option<Vec<SshConnectionProfile>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) rules: Option<Vec<SshForwardRule>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) connection_runtimes: Option<Vec<SshConnectionRuntime>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) rule_runtimes: Option<Vec<SshForwardRuleRuntime>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -623,6 +868,8 @@ pub(crate) struct SshKeyInventory {
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum SshForwardEventReason {
     ProfilesChanged,
+    ConnectionsChanged,
+    RulesChanged,
     RuntimeChanged,
     TrustChanged,
 }
@@ -636,6 +883,8 @@ pub(crate) struct SshForwardEventHint {
     pub(crate) activation_token: WireCounter,
     pub(crate) scope_id: String,
     pub(crate) scope_generation: WireCounter,
+    pub(crate) connections_revision: WireCounter,
+    pub(crate) rules_revision: WireCounter,
     pub(crate) profiles_revision: WireCounter,
     pub(crate) trust_revision: WireCounter,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -658,9 +907,9 @@ mod tests {
     use serde::{de::DeserializeOwned, Serialize};
 
     use super::{
-        HostKeyChallenge, OpenClientResult, SshForwardEventHint, SshForwardRuntime,
-        SshForwardScopeActivation, SshForwardSnapshot, SshKeyInventory, UtcTimestamp, WireCounter,
-        WireScalarError,
+        HostKeyChallenge, OpenClientResult, SshConnectionRuntime, SshForwardCredentialState,
+        SshForwardEventHint, SshForwardRuleRuntime, SshForwardRuntime, SshForwardScopeActivation,
+        SshForwardSnapshot, SshKeyInventory, UtcTimestamp, WireCounter, WireScalarError,
     };
     use crate::ssh_forward::{
         instance::DesktopClientContext,
@@ -789,6 +1038,11 @@ mod tests {
         assert_fixture_roundtrip::<OpenClientResult>(samples, "openClientResult");
         assert_fixture_roundtrip::<SshForwardProfile>(samples, "sshForwardProfile");
         assert_fixture_roundtrip::<SshForwardAuth>(samples, "sshForwardKeyAuth");
+        assert_fixture_roundtrip::<super::SshConnectionProfile>(samples, "sshConnectionProfile");
+        assert_fixture_roundtrip::<super::SshForwardRule>(samples, "sshForwardRule");
+        assert_fixture_roundtrip::<SshConnectionRuntime>(samples, "connectionRuntime");
+        assert_fixture_roundtrip::<SshForwardRuleRuntime>(samples, "ruleRuntime");
+        assert_fixture_roundtrip::<SshForwardCredentialState>(samples, "credentialState");
         assert_fixture_roundtrip::<SshForwardRuntime>(samples, "runtimeWithOptionals");
         assert_fixture_roundtrip::<HostKeyChallenge>(samples, "hostKeyChallenge");
         assert_fixture_roundtrip::<SshForwardSnapshot>(samples, "sshForwardSnapshot");
