@@ -1,11 +1,25 @@
 import type { SearchMatch } from "@/api/fs-types.js";
-import type {
-  FsReadResponse,
-  FsWriteResponse,
-} from "@/api/ws-transport.js";
+import type { FsReadResponse, FsWriteResponse } from "@/api/ws-transport.js";
+import {
+  normalizeProjectTarget,
+  type ProjectTargetInput,
+} from "@/api/client.js";
+import type { SearchScope } from "@/stores/search-ui.js";
 import { findNextContentSearchMatch } from "@/lib/search-matches.js";
 
 const encoder = new TextEncoder();
+
+/** Workspace search results point at configured project roots, never at the selected worktree. */
+export function resolveSearchMatchTarget(
+  currentTarget: ProjectTargetInput,
+  matchProject: string,
+  scope: SearchScope,
+): ProjectTargetInput {
+  if (scope === "workspace") return matchProject;
+
+  const normalized = normalizeProjectTarget(currentTarget);
+  return normalized.project === matchProject ? normalized : matchProject;
+}
 
 export interface ReplaceNextOptions {
   currentProject: string;
@@ -45,7 +59,9 @@ export function replaceContentSearchMatch(
 
   const lineEnd = content.indexOf("\n", lineStart);
   const lineText =
-    lineEnd === -1 ? content.slice(lineStart) : content.slice(lineStart, lineEnd);
+    lineEnd === -1
+      ? content.slice(lineStart)
+      : content.slice(lineStart, lineEnd);
   const lineColumn = utf8ByteOffsetToCodeUnitIndex(lineText, match.col - 1);
   if (lineColumn === null) return { ok: false };
 
@@ -147,7 +163,8 @@ export async function runReplaceNext(
       return {
         kind: "stale",
         nextMatch: findNextContentSearchMatch(refreshedMatches, target),
-        message: "The file changed before the replace completed. Results refreshed.",
+        message:
+          "The file changed before the replace completed. Results refreshed.",
       };
     }
 
@@ -175,7 +192,10 @@ function decodeBase64Utf8(content: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-function findLineStartOffset(content: string, lineNumber: number): number | null {
+function findLineStartOffset(
+  content: string,
+  lineNumber: number,
+): number | null {
   if (lineNumber < 1) return null;
 
   let currentLine = 1;

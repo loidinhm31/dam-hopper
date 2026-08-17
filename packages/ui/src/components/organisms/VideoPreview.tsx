@@ -10,7 +10,10 @@ import { AlertTriangle, Download, Film, Loader2, RotateCw } from "lucide-react";
 import { Button } from "@/components/atoms/Button.js";
 import { issueVideoTicket } from "@/api/video-tickets.js";
 import { startVideoDownload } from "@/lib/start-video-download.js";
-import type { ProjectTargetRef } from "@/api/client.js";
+import {
+  isProjectTargetError,
+  type ProjectTargetRef,
+} from "@/api/client.js";
 import {
   getProfileChangeVersion,
   subscribeToProfileChanges,
@@ -25,6 +28,7 @@ interface VideoPreviewProps {
   path: string;
   fileName: string;
   mime?: string;
+  onTargetUnavailable?: () => void;
 }
 
 interface VideoPlaybackHandle {
@@ -91,6 +95,7 @@ export function VideoPreview({
   path,
   fileName,
   mime,
+  onTargetUnavailable,
 }: VideoPreviewProps) {
   const worktreePath = target?.worktreePath;
   const targetProject = target?.project ?? project;
@@ -118,6 +123,11 @@ export function VideoPreview({
   const [downloadPending, setDownloadPending] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const downloadPendingRef = useRef(false);
+  const onTargetUnavailableRef = useRef(onTargetUnavailable);
+
+  useEffect(() => {
+    onTargetUnavailableRef.current = onTargetUnavailable;
+  }, [onTargetUnavailable]);
 
   const teardownPlayback = useCallback(
     (videoOverride: HTMLVideoElement | null = videoRef.current) => {
@@ -195,15 +205,22 @@ export function VideoPreview({
         ) {
           return;
         }
+        const code =
+          error && typeof error === "object" && "code" in error
+            ? String((error as { code?: unknown }).code ?? "")
+            : undefined;
+        if (isProjectTargetError(code, error instanceof Error ? error.message : undefined)) {
+          onTargetUnavailableRef.current?.();
+        }
         setMediaState("error");
-        const code = mediaTicketErrorCode(error);
-        setTicketErrorCode(code);
-        setTicketErrorAction(code ? "playback" : null);
+        const mediaCode = mediaTicketErrorCode(error);
+        setTicketErrorCode(mediaCode);
+        setTicketErrorAction(mediaCode ? "playback" : null);
         // Never expose response text, ticket values, paths, or authorization
         // details. Typed compatibility errors receive safe remediation copy.
         setErrorMessage(
-          code
-            ? mediaTicketErrorCopy[code].title
+          mediaCode
+            ? mediaTicketErrorCopy[mediaCode].title
             : "A playback ticket could not be issued. Retry or download it directly.",
         );
       });
@@ -256,6 +273,13 @@ export function VideoPreview({
       // or await the playback handle/source currently used by the player.
       await startVideoDownload(requestTarget, path);
     } catch (error: unknown) {
+      const targetCode =
+        error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code ?? "")
+          : undefined;
+      if (isProjectTargetError(targetCode)) {
+        onTargetUnavailableRef.current?.();
+      }
       const code = mediaTicketErrorCode(error);
       setTicketErrorCode(code);
       setTicketErrorAction(code ? "download" : null);

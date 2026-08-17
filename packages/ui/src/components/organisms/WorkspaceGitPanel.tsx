@@ -345,7 +345,7 @@ export function WorkspaceGitPanel({ project, target }: WorkspaceGitPanelProps) {
   const handleGitFileDoubleClick = (file: DiffFileEntry) => {
     if (selectedCommit) {
       openDiff(
-        project,
+        targetRef,
         projectRelativePathForRoot(selectedRootId, file.path),
         file.status,
         file.additions,

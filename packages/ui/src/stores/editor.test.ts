@@ -7,12 +7,22 @@ vi.mock("@/api/transport.js", () => ({
   getTransport: () => ({ fsRead, fsWriteFile }),
 }));
 
-import { useEditorStore, type Tab } from "./editor.js";
+import {
+  editorFileTabKey,
+  editorTargetScopeKey,
+  migrateEditorState,
+  useEditorStore,
+  type Tab,
+} from "./editor.js";
 
 function makeTab(project: string, path: string): Tab {
+  const target = { project } as const;
   return {
-    key: `${project}::${path}`,
+    key: editorFileTabKey(target, path),
     project,
+    target,
+    targetKey: "root",
+    targetAvailable: true,
     path,
     name: path.split("/").pop() ?? path,
     mtime: 1,
@@ -27,8 +37,29 @@ function makeTab(project: string, path: string): Tab {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+type SuccessfulRead = {
+  ok: true;
+  binary: false;
+  content: string;
+  mime: string;
+  mtime: number;
+  size: number;
+};
+
 function resetEditorStore() {
-  useEditorStore.setState({ tabs: [], activeKeys: {} });
+  useEditorStore.setState({
+    tabs: [],
+    activeKeys: {},
+    requestGenerations: {},
+  });
 }
 
 describe("editor store bulk closing", () => {
@@ -43,8 +74,8 @@ describe("editor store bulk closing", () => {
     useEditorStore.setState({
       tabs: [alphaOne, alphaTwo, betaOne],
       activeKeys: {
-        alpha: alphaOne.key,
-        beta: betaOne.key,
+        [editorTargetScopeKey({ project: "alpha" })]: alphaOne.key,
+        [editorTargetScopeKey({ project: "beta" })]: betaOne.key,
       },
     });
 
@@ -56,8 +87,8 @@ describe("editor store bulk closing", () => {
       betaOne.key,
     ]);
     expect(state.activeKeys).toEqual({
-      alpha: alphaTwo.key,
-      beta: betaOne.key,
+      [editorTargetScopeKey({ project: "alpha" })]: alphaTwo.key,
+      [editorTargetScopeKey({ project: "beta" })]: betaOne.key,
     });
   });
 
@@ -69,8 +100,8 @@ describe("editor store bulk closing", () => {
     useEditorStore.setState({
       tabs: [alphaOne, alphaTwo, betaOne],
       activeKeys: {
-        alpha: alphaTwo.key,
-        beta: betaOne.key,
+        [editorTargetScopeKey({ project: "alpha" })]: alphaTwo.key,
+        [editorTargetScopeKey({ project: "beta" })]: betaOne.key,
       },
     });
 
@@ -79,8 +110,7 @@ describe("editor store bulk closing", () => {
     const state = useEditorStore.getState();
     expect(state.tabs.map((tab) => tab.key)).toEqual([betaOne.key]);
     expect(state.activeKeys).toEqual({
-      alpha: null,
-      beta: betaOne.key,
+      [editorTargetScopeKey({ project: "beta" })]: betaOne.key,
     });
   });
 });
@@ -95,7 +125,10 @@ describe("editor store Git mutation reconciliation", () => {
 
   it("silently reloads clean tabs affected by a Git mutation", async () => {
     const tab = makeTab("alpha", "src/one.ts");
-    useEditorStore.setState({ tabs: [tab], activeKeys: { alpha: tab.key } });
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
     fsRead.mockResolvedValue({
       ok: true,
       binary: false,
@@ -124,7 +157,10 @@ describe("editor store Git mutation reconciliation", () => {
       savedContent: "base",
       dirty: true,
     };
-    useEditorStore.setState({ tabs: [tab], activeKeys: { alpha: tab.key } });
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
 
     await useEditorStore
       .getState()
@@ -148,7 +184,10 @@ describe("editor store Git mutation reconciliation", () => {
     const otherProjectTab = makeTab("beta", "src/other.ts");
     useEditorStore.setState({
       tabs: [cleanTab, dirtyTab, otherProjectTab],
-      activeKeys: { alpha: cleanTab.key, beta: otherProjectTab.key },
+      activeKeys: {
+        [editorTargetScopeKey({ project: "alpha" })]: cleanTab.key,
+        [editorTargetScopeKey({ project: "beta" })]: otherProjectTab.key,
+      },
     });
     fsRead.mockResolvedValue({
       ok: true,
@@ -172,6 +211,238 @@ describe("editor store Git mutation reconciliation", () => {
     expect(tabs.find((tab) => tab.key === otherProjectTab.key)?.content).toBe(
       "",
     );
+  });
+});
+
+describe("editor store project target isolation", () => {
+  beforeEach(() => {
+    resetEditorStore();
+    fsRead.mockReset();
+    fsWriteFile.mockReset();
+  });
+  afterEach(resetEditorStore);
+
+  it("keeps same-path root and worktree tabs independent", async () => {
+    fsRead.mockResolvedValue({
+      ok: true,
+      binary: false,
+      content: btoa("target content"),
+      mime: "text/plain",
+      mtime: 2,
+      size: 14,
+    });
+    const node = {
+      id: "src/one.ts",
+      name: "one.ts",
+      kind: "file" as const,
+      size: 1,
+      mtime: 1,
+      isSymlink: false,
+      children: null,
+    };
+
+    await useEditorStore.getState().open({ project: "alpha" }, node);
+    await useEditorStore
+      .getState()
+      .open({ project: "alpha", worktreePath: "/tmp/alpha-wt" }, node);
+
+    const tabs = useEditorStore.getState().tabs;
+    expect(tabs).toHaveLength(2);
+    expect(new Set(tabs.map((tab) => tab.key)).size).toBe(2);
+    expect(tabs.map((tab) => tab.target.worktreePath)).toEqual([
+      undefined,
+      "/tmp/alpha-wt",
+    ]);
+    expect(
+      useEditorStore.getState().activeKeys[
+        editorTargetScopeKey({ project: "alpha" })
+      ],
+    ).toBe(tabs[0]?.key);
+    expect(
+      useEditorStore.getState().activeKeys[
+        editorTargetScopeKey({
+          project: "alpha",
+          worktreePath: "/tmp/alpha-wt",
+        })
+      ],
+    ).toBe(tabs[1]?.key);
+    expect(fsRead).toHaveBeenNthCalledWith(
+      1,
+      { project: "alpha" },
+      "src/one.ts",
+    );
+    expect(fsRead).toHaveBeenNthCalledWith(
+      2,
+      { project: "alpha", worktreePath: "/tmp/alpha-wt" },
+      "src/one.ts",
+    );
+  });
+
+  it("migrates legacy root-only persisted tabs to target-scoped keys", () => {
+    const legacyKey = "alpha::src/one.ts";
+    const migrated = migrateEditorState({
+      tabs: [
+        {
+          key: legacyKey,
+          project: "alpha",
+          path: "src/one.ts",
+          name: "one.ts",
+          mtime: 1,
+          size: 1,
+          tier: "normal",
+        },
+      ],
+      activeKeys: { alpha: legacyKey },
+    });
+
+    expect(migrated.tabs[0]?.target).toEqual({ project: "alpha" });
+    expect(migrated.tabs[0]?.key).not.toBe(legacyKey);
+    expect(
+      migrated.activeKeys[editorTargetScopeKey({ project: "alpha" })],
+    ).toBe(migrated.tabs[0]?.key);
+  });
+
+  it("preserves dirty edits while a worktree is unavailable and blocks writes", async () => {
+    const target = { project: "alpha", worktreePath: "/tmp/alpha-wt" } as const;
+    const tab = {
+      ...makeTab("alpha", "src/one.ts"),
+      key: editorFileTabKey(target, "src/one.ts"),
+      target,
+      targetKey: "worktree:/tmp/alpha-wt",
+      content: "local edit",
+      savedContent: "base",
+      dirty: true,
+    };
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey(target)]: tab.key },
+    });
+
+    useEditorStore.getState().markTargetUnavailable("alpha", "/tmp/alpha-wt");
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({
+      dirty: true,
+      content: "local edit",
+      targetAvailable: false,
+    });
+    expect(await useEditorStore.getState().save(tab.key)).toBe(false);
+    expect(fsWriteFile).not.toHaveBeenCalled();
+
+    useEditorStore.getState().markTargetAvailable("alpha", "/tmp/alpha-wt");
+    fsWriteFile.mockResolvedValue({ ok: true, newMtime: 3 });
+    expect(await useEditorStore.getState().save(tab.key)).toBe(true);
+    expect(fsWriteFile).toHaveBeenCalledWith(
+      target,
+      "src/one.ts",
+      "local edit",
+      1,
+    );
+  });
+
+  it("reconciles only the target scope affected by a Git mutation", async () => {
+    const rootTab = makeTab("alpha", "src/one.ts");
+    const target = { project: "alpha", worktreePath: "/tmp/alpha-wt" } as const;
+    const worktreeTab = {
+      ...makeTab("alpha", "src/one.ts"),
+      key: editorFileTabKey(target, "src/one.ts"),
+      target,
+      targetKey: "worktree:/tmp/alpha-wt",
+    };
+    useEditorStore.setState({ tabs: [rootTab, worktreeTab], activeKeys: {} });
+    fsRead.mockResolvedValue({
+      ok: true,
+      binary: false,
+      content: btoa("worktree"),
+      mime: "text/plain",
+      mtime: 4,
+      size: 8,
+    });
+
+    await useEditorStore
+      .getState()
+      .reconcileGitMutationFiles(target, ["src/one.ts"]);
+
+    expect(useEditorStore.getState().tabs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: rootTab.key, content: "" }),
+        expect.objectContaining({ key: worktreeTab.key, content: "worktree" }),
+      ]),
+    );
+    expect(fsRead).toHaveBeenCalledWith(target, "src/one.ts");
+  });
+
+  it("ignores a late response after a same-key tab is closed and reopened", async () => {
+    const oldResponse = deferred<SuccessfulRead>();
+    const newResponse = deferred<SuccessfulRead>();
+    fsRead
+      .mockImplementationOnce(() => oldResponse.promise)
+      .mockImplementationOnce(() => newResponse.promise);
+    const node = {
+      id: "src/one.ts",
+      name: "one.ts",
+      kind: "file" as const,
+      size: 1,
+      mtime: 1,
+      isSymlink: false,
+      children: null,
+    };
+    const oldTab = {
+      ...makeTab("alpha", node.id),
+      content: "before reload",
+      savedContent: "before reload",
+      hydrated: false,
+    };
+    useEditorStore.setState({
+      tabs: [oldTab],
+      activeKeys: { [editorTargetScopeKey("alpha")]: oldTab.key },
+    });
+
+    const oldReload = useEditorStore.getState().reloadTab(oldTab.key);
+    await Promise.resolve();
+    useEditorStore.getState().close(oldTab.key);
+    const newOpen = useEditorStore.getState().open("alpha", node);
+    await Promise.resolve();
+
+    oldResponse.resolve({
+      ok: true,
+      binary: false,
+      content: btoa("stale response"),
+      mime: "text/plain",
+      mtime: 2,
+      size: 14,
+    });
+    newResponse.resolve({
+      ok: true,
+      binary: false,
+      content: btoa("new tab content"),
+      mime: "text/plain",
+      mtime: 3,
+      size: 15,
+    });
+    await Promise.all([oldReload, newOpen]);
+
+    expect(useEditorStore.getState().tabs).toEqual([
+      expect.objectContaining({
+        key: oldTab.key,
+        content: "new tab content",
+        savedContent: "new tab content",
+      }),
+    ]);
+  });
+
+  it("invalidates external async work when a same-key tab is closed", () => {
+    const tab = makeTab("alpha", "src/one.ts");
+    useEditorStore.setState({ tabs: [tab] });
+
+    const generation = useEditorStore.getState().beginAsyncRequest(tab.key);
+    expect(
+      useEditorStore.getState().isCurrentAsyncRequest(tab.key, generation),
+    ).toBe(true);
+
+    useEditorStore.getState().close(tab.key);
+
+    expect(
+      useEditorStore.getState().isCurrentAsyncRequest(tab.key, generation),
+    ).toBe(false);
   });
 });
 
@@ -209,7 +480,10 @@ describe("editor store video guards", () => {
       hydrated: true,
       dirty: true,
     };
-    useEditorStore.setState({ tabs: [tab], activeKeys: { alpha: tab.key } });
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
 
     await useEditorStore.getState().loadContent(tab.key);
     await useEditorStore.getState().save(tab.key);
@@ -251,7 +525,10 @@ describe("editor store video guards", () => {
       hydrated: true,
       dirty: true,
     };
-    useEditorStore.setState({ tabs: [tab], activeKeys: { alpha: tab.key } });
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
 
     await useEditorStore.getState().loadContent(tab.key);
     await useEditorStore.getState().save(tab.key);
@@ -282,7 +559,10 @@ describe("editor store video guards", () => {
       conflicted: true,
       stale: true,
     };
-    useEditorStore.setState({ tabs: [tab], activeKeys: { alpha: tab.key } });
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
 
     await useEditorStore
       .getState()
