@@ -85,4 +85,30 @@ impl UploadState {
 
         Ok(mtime)
     }
+
+    /// Finalize through a target-relative directory handle. This keeps the
+    /// delayed upload bound to the directory identity validated at begin time.
+    pub(crate) fn commit_at_target(
+        self,
+        target_root: &std::path::Path,
+        relative_path: &std::path::Path,
+        expected_mtime: Option<i64>,
+        expected_root: Option<crate::fs::secure_path::DirectoryIdentity>,
+        fsync: bool,
+    ) -> Result<i64, FsError> {
+        if self.bytes_written != self.expected_len {
+            return Err(FsError::MutationRefused(format!(
+                "upload commit: bytes_written {} ≠ expected_len {}",
+                self.bytes_written, self.expected_len,
+            )));
+        }
+        crate::fs::secure_path::persist_temp_sync(
+            target_root,
+            relative_path,
+            self.temp,
+            expected_mtime,
+            expected_root,
+            fsync,
+        )
+    }
 }

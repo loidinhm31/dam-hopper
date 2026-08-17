@@ -164,12 +164,14 @@ describe("WsTransport usage setup endpoints", () => {
 describe("WsTransport explorer language scan endpoint", () => {
   it("maps a project name to the protected language-files route", async () => {
     installMockWebSocket();
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ files: [], truncated: false, limit: 20_000 }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ files: [], truncated: false, limit: 20_000 }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
     const transport = new WsTransport("http://localhost:4800");
 
@@ -179,6 +181,73 @@ describe("WsTransport explorer language scan endpoint", () => {
       "http://localhost:4800/api/fs/language-files?project=demo+project",
     );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET" });
+    transport.destroy();
+  });
+
+  it("adds the selected worktree to filesystem REST queries", async () => {
+    installMockWebSocket();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ files: [], truncated: false, limit: 20_000 }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("fs:languageFiles", {
+      project: "demo",
+      worktreePath: "/tmp/demo-worktree",
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/fs/language-files?project=demo&worktreePath=%2Ftmp%2Fdemo-worktree",
+    );
+    transport.destroy();
+  });
+});
+
+describe("WsTransport filesystem targets", () => {
+  it("serializes a worktree target and keeps root-only payloads compatible", async () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+
+    const targeted = transport.fsSubscribeTree(
+      { project: "demo", worktreePath: "/tmp/demo-worktree" },
+      "src",
+    );
+    const targetedMessage = JSON.parse(socket.sent[0]);
+    expect(targetedMessage).toMatchObject({
+      kind: "fs:subscribe_tree",
+      project: "demo",
+      worktree_path: "/tmp/demo-worktree",
+      path: "src",
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "fs:tree_snapshot",
+        req_id: targetedMessage.req_id,
+        sub_id: 41,
+        nodes: [],
+      }),
+    });
+    await expect(targeted).resolves.toEqual({ sub_id: 41, nodes: [] });
+
+    const root = transport.fsSubscribeTree("demo", "");
+    const rootMessage = JSON.parse(socket.sent[1]);
+    expect(rootMessage).not.toHaveProperty("worktree_path");
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "fs:tree_snapshot",
+        req_id: rootMessage.req_id,
+        sub_id: 42,
+        nodes: [],
+      }),
+    });
+    await expect(root).resolves.toEqual({ sub_id: 42, nodes: [] });
     transport.destroy();
   });
 });
@@ -291,7 +360,9 @@ describe("WsTransport typed API errors", () => {
         enabled: true,
         terminalCorrelationEnabled: true,
       }),
-    ).rejects.toThrow("Unsupported usage setup field: terminalCorrelationEnabled");
+    ).rejects.toThrow(
+      "Unsupported usage setup field: terminalCorrelationEnabled",
+    );
     expect(fetchMock).not.toHaveBeenCalled();
     transport.destroy();
   });

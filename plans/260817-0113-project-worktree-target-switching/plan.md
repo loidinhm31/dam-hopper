@@ -1,7 +1,7 @@
 ---
 title: Project worktree target switching
 description: Add a session-scoped worktree target per project so all workspace panels can operate on a registered Git worktree without changing project identity.
-status: pending
+status: in-progress
 priority: P2
 effort: 44h
 branch: feat/project-worktree-switching
@@ -25,7 +25,7 @@ Each configured project discovers its registered Git worktrees and exposes a sel
 ## Phases
 
 1. [Target contract and secure resolution](./phase-01-target-contract-and-resolution.md) — 6h — completed
-2. [Target-aware filesystem, WebSocket, and media](./phase-02-target-aware-fs-ws-media.md) — 8h
+2. [Target-aware filesystem, WebSocket, and media](./phase-02-target-aware-fs-ws-media.md) — 8h — completed
 3. [Session selection and live discovery](./phase-03-session-selection-and-discovery.md) — 6h
 4. [Git routing and cache isolation](./phase-04-git-routing-and-cache-isolation.md) — 5h
 5. [Editor and diff isolation](./phase-05-editor-and-diff-isolation.md) — 6h
