@@ -21,6 +21,11 @@ pub(crate) struct SafeKeyRecord {
     pub(crate) source: KeySource,
 }
 
+pub(crate) struct LoadedSafeKey {
+    pub(crate) key: russh::keys::PrivateKey,
+    pub(crate) encrypted: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum KeySource {
     Agent,
@@ -73,7 +78,7 @@ pub(crate) fn safe_key_inventory() -> Result<Vec<SafeKeyRecord>, CredentialError
 pub(crate) fn load_safe_key(
     key_id: &str,
     passphrase: Option<&str>,
-) -> Result<russh::keys::PrivateKey, CredentialError> {
+) -> Result<LoadedSafeKey, CredentialError> {
     windows::load_safe_key(key_id, passphrase)
 }
 

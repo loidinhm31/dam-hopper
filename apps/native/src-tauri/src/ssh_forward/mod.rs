@@ -7,6 +7,12 @@
 
 #[cfg(windows)]
 #[allow(dead_code)]
+mod credential_lease;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod credential_vault;
+#[cfg(windows)]
+#[allow(dead_code)]
 pub(crate) mod credentials;
 #[allow(dead_code)]
 pub(crate) mod error;

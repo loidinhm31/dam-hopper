@@ -14,6 +14,7 @@ use tokio::{
 };
 
 use super::{
+    credential_lease::CredentialLease,
     error::SshForwardErrorCode,
     known_hosts::OfferedHostKey,
     model::{
@@ -168,6 +169,7 @@ pub(crate) struct ConnectionEntry {
     pub(crate) started_at: Option<UtcTimestamp>,
     pub(crate) error_code: Option<SshForwardErrorCode>,
     pub(crate) session: Option<Arc<SshSession>>,
+    pub(crate) credential_lease: Option<Arc<CredentialLease>>,
     pub(crate) accepted_host_key: Option<OfferedHostKey>,
     pub(crate) channel_limiter: ChannelLimiter,
     pub(crate) children: HashMap<String, ForwardChild>,
@@ -186,6 +188,7 @@ impl ConnectionEntry {
             started_at: None,
             error_code: None,
             session: None,
+            credential_lease: None,
             accepted_host_key: None,
             channel_limiter: ChannelLimiter::default(),
             children: HashMap::new(),
@@ -322,6 +325,7 @@ impl ConnectionRegistry {
         connection_id: &str,
         generation: WireCounter,
         session: Arc<SshSession>,
+        credential_lease: Option<Arc<CredentialLease>>,
     ) -> Result<(), RuntimeError> {
         let entry = self
             .entries
@@ -340,6 +344,7 @@ impl ConnectionRegistry {
             .verified_host_key()
             .ok_or(RuntimeError::HostKeyIdentityMissing)?;
         entry.session = Some(session);
+        entry.credential_lease = credential_lease;
         entry.accepted_host_key = Some(accepted_host_key);
         entry.state = SshConnectionState::Established;
         entry.started_at = Some(UtcTimestamp::now());
@@ -363,6 +368,7 @@ impl ConnectionRegistry {
         }
         entry.cancellation.cancel();
         entry.session = None;
+        entry.credential_lease = None;
         entry.accepted_host_key = None;
         entry.state = SshConnectionState::Disconnected;
         entry.error_code = Some(error_code);
@@ -432,6 +438,7 @@ impl ConnectionRegistry {
         }
         entry.state = SshConnectionState::Disconnecting;
         entry.generation = generation;
+        entry.credential_lease.take();
         entry.state_changed_at = UtcTimestamp::now();
         Ok(Some(DisconnectPlan {
             generation,
@@ -460,6 +467,7 @@ impl ConnectionRegistry {
         }
         entry.state = SshConnectionState::Disconnected;
         entry.session = None;
+        entry.credential_lease = None;
         entry.accepted_host_key = None;
         entry.error_code = None;
         entry.state_changed_at = UtcTimestamp::now();
@@ -988,6 +996,7 @@ impl ConnectionRegistry {
             }
             entry.cancellation.cancel();
             entry.session.take();
+            entry.credential_lease.take();
         }
         self.entries.clear();
     }
@@ -1105,6 +1114,7 @@ fn _legacy_state_types(_: SshForwardRuntime, _: SshForwardState) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ssh_forward::credential_vault::{CredentialIdentity, VaultAuthIdentity};
     use crate::ssh_forward::profile::{ReconnectPolicy, SshForwardAuth};
 
     const SCOPE: &str = "c1f5890a-55d7-46ca-949b-0d63972f0a68";
@@ -1183,6 +1193,36 @@ mod tests {
             registry.reserve_connection(connection(id), reservation.generation),
             Err(RuntimeError::ConnectionNotEstablished)
         ));
+    }
+
+    #[test]
+    fn disconnect_clears_the_live_credential_lease_before_teardown() {
+        let mut registry = ConnectionRegistry::new();
+        let id = "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96";
+        let ConnectionAdmission::Reserved(reservation) = registry
+            .reserve_connection(connection(id), WireCounter::ZERO)
+            .unwrap()
+        else {
+            panic!("first connect must reserve");
+        };
+        let identity = CredentialIdentity {
+            scope_id: SCOPE.into(),
+            profile_id: id.into(),
+            endpoint_host: "bastion.example".into(),
+            endpoint_port: 22,
+            ssh_user: "operator".into(),
+            auth: VaultAuthIdentity::Password,
+        };
+        registry.entries.get_mut(id).unwrap().credential_lease = Some(Arc::new(
+            CredentialLease::new_password(identity, "attempt", "operator", "secret"),
+        ));
+        assert!(registry.entries.get(id).unwrap().credential_lease.is_some());
+        let plan = registry
+            .begin_disconnect(id, reservation.generation)
+            .unwrap()
+            .unwrap();
+        assert!(registry.entries.get(id).unwrap().credential_lease.is_none());
+        assert!(plan.session.is_none());
     }
 
     #[test]
