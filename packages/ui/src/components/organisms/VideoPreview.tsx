@@ -5,7 +5,7 @@
  * is exchanged for a capability URL and attached directly to one native video
  * element. Downloads deliberately use a separate ticket and lifecycle.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Download, Film, Loader2, RotateCw } from "lucide-react";
 import { Button } from "@/components/atoms/Button.js";
 import { issueVideoTicket } from "@/api/video-tickets.js";
@@ -94,10 +94,13 @@ export function VideoPreview({
 }: VideoPreviewProps) {
   const worktreePath = target?.worktreePath;
   const targetProject = target?.project ?? project;
-  const requestTarget =
-    worktreePath == null
-      ? targetProject
-      : { project: targetProject, worktreePath };
+  const requestTarget = useMemo(
+    () =>
+      worktreePath == null
+        ? targetProject
+        : { project: targetProject, worktreePath },
+    [targetProject, worktreePath],
+  );
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const issueControllerRef = useRef<AbortController | null>(null);
   const playbackRef = useRef<VideoPlaybackHandle | null>(null);
@@ -209,7 +212,7 @@ export function VideoPreview({
       if (generationRef.current === generation) generationRef.current += 1;
       teardownPlayback(cleanupVideo);
     };
-  }, [path, retryToken, targetProject, teardownPlayback, worktreePath]);
+  }, [path, requestTarget, retryToken, teardownPlayback]);
 
   useEffect(
     () =>
@@ -263,7 +266,7 @@ export function VideoPreview({
       downloadPendingRef.current = false;
       setDownloadPending(false);
     }
-  }, [path, targetProject, worktreePath]);
+  }, [path, requestTarget]);
 
   return (
     <section

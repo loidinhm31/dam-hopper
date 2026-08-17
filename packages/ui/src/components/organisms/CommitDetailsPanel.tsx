@@ -1,6 +1,11 @@
 import { useState } from "react";
 import type { MouseEvent } from "react";
-import type { GitLogEntry, DiffFileEntry } from "@/api/client.js";
+import type {
+  GitLogEntry,
+  DiffFileEntry,
+  ProjectTargetRef,
+} from "@/api/client.js";
+import { normalizeProjectTarget } from "@/api/client.js";
 import { useGitCommitFiles } from "@/api/queries.js";
 import { Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils.js";
@@ -8,6 +13,7 @@ import { ContextMenu } from "@/components/ui/ContextMenu.js";
 
 interface CommitDetailsPanelProps {
   project: string;
+  target?: ProjectTargetRef;
   root?: string;
   commit: GitLogEntry;
   onClose: () => void;
@@ -31,6 +37,7 @@ interface FileSelectionState {
 
 export function CommitDetailsPanel({
   project,
+  target,
   root,
   commit,
   onClose,
@@ -39,8 +46,9 @@ export function CommitDetailsPanel({
   onRevertSelectedChanges,
   onDropSelectedChanges,
 }: CommitDetailsPanelProps) {
+  const targetRef = normalizeProjectTarget(target ?? project);
   const { data: files, isLoading } = useGitCommitFiles(
-    project,
+    targetRef,
     commit.hash,
     root,
   );

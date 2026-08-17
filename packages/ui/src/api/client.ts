@@ -1110,20 +1110,30 @@ export const api = {
     list: () => getTransport().invoke<ProjectWithStatus[]>("projects:list"),
     get: (name: string) =>
       getTransport().invoke<ProjectWithStatus>("projects:get", name),
-    status: (name: string) =>
-      getTransport().invoke<GitStatus | null>("projects:status", name),
+    status: (target: ProjectTargetInput) =>
+      getTransport().invoke<GitStatus | null>(
+        "projects:status",
+        normalizeProjectTarget(target),
+      ),
   },
   git: {
-    fetch: (projects?: string[]) =>
-      getTransport().invoke<GitOpResult[]>("git:fetch", projects),
-    pull: (projects?: string[]) =>
-      getTransport().invoke<GitOpResult[]>("git:pull", projects),
-    push: (project: string, root?: string, force?: boolean) =>
-      getTransport().invoke<GitOpResult>("git:push", { project, root, force }),
+    fetch: (targets?: ProjectTargetInput[]) =>
+      getTransport().invoke<GitOpResult[]>("git:fetch", targets),
+    pull: (targets?: ProjectTargetInput[]) =>
+      getTransport().invoke<GitOpResult[]>("git:pull", targets),
+    push: (target: ProjectTargetInput, root?: string, force?: boolean) =>
+      getTransport().invoke<GitOpResult>("git:push", {
+        ...normalizeProjectTarget(target),
+        root,
+        force,
+      }),
     worktrees: (project: string) =>
       getTransport().invoke<Worktree[]>("git:worktrees", project),
-    roots: (project: string) =>
-      getTransport().invoke<VcsRoot[]>("git:roots", project),
+    roots: (target: ProjectTargetInput) =>
+      getTransport().invoke<VcsRoot[]>(
+        "git:roots",
+        normalizeProjectTarget(target),
+      ),
     addWorktree: (
       project: string,
       options: { path: string; branch: string; createBranch?: boolean },
@@ -1131,10 +1141,13 @@ export const api = {
       getTransport().invoke<Worktree>("git:addWorktree", { project, options }),
     removeWorktree: (project: string, path: string) =>
       getTransport().invoke<void>("git:removeWorktree", { project, path }),
-    branches: (project: string, root?: string) =>
-      getTransport().invoke<Branch[]>("git:branches", { project, root }),
+    branches: (target: ProjectTargetInput, root?: string) =>
+      getTransport().invoke<Branch[]>("git:branches", {
+        ...normalizeProjectTarget(target),
+        root,
+      }),
     createBranch: (
-      project: string,
+      target: ProjectTargetInput,
       options: {
         name: string;
         startPoint?: string;
@@ -1143,11 +1156,11 @@ export const api = {
       },
     ) =>
       getTransport().invoke<GitActionResult>("git:createBranch", {
-        project,
+        ...normalizeProjectTarget(target),
         options,
       }),
     checkoutBranch: (
-      project: string,
+      target: ProjectTargetInput,
       options: {
         branch: string;
         startPoint?: string;
@@ -1157,209 +1170,229 @@ export const api = {
       },
     ) =>
       getTransport().invoke<GitActionResult>("git:checkoutBranch", {
-        project,
+        ...normalizeProjectTarget(target),
         options,
       }),
     deleteBranch: (
-      project: string,
+      target: ProjectTargetInput,
       options: {
         name: string;
         root?: string;
       },
     ) =>
       getTransport().invoke<GitActionResult>("git:deleteBranch", {
-        project,
+        ...normalizeProjectTarget(target),
         options,
       }),
-    updateBranch: (project: string, branch?: string, root?: string) =>
+    updateBranch: (
+      target: ProjectTargetInput,
+      branch?: string,
+      root?: string,
+    ) =>
       getTransport().invoke<BranchUpdateResult>("git:updateBranch", {
-        project,
+        ...normalizeProjectTarget(target),
         branch,
         root,
       }),
     log: (
-      project: string,
+      target: ProjectTargetInput,
       limit?: number,
       offset?: number,
       ref?: string,
       root?: string,
     ) =>
       getTransport().invoke<GitLogEntry[]>("git:log", {
-        project,
+        ...normalizeProjectTarget(target),
         limit,
         offset,
         ref,
         root,
       }),
-    diff: (project: string, root?: string) =>
-      getTransport().invoke<DiffResponse>("git:diff", { project, root }),
+    diff: (target: ProjectTargetInput, root?: string) =>
+      getTransport().invoke<DiffResponse>("git:diff", {
+        ...normalizeProjectTarget(target),
+        root,
+      }),
     untrackedFiles: (
-      project: string,
+      target: ProjectTargetInput,
       offset: number,
       limit: number,
       root?: string,
     ) =>
       getTransport().invoke<DiffFileEntry[]>("git:untrackedFiles", {
-        project,
+        ...normalizeProjectTarget(target),
         offset,
         limit,
         root,
       }),
-    fileDiff: (project: string, path: string, root?: string) =>
+    fileDiff: (target: ProjectTargetInput, path: string, root?: string) =>
       getTransport().invoke<FileDiffContent>("git:fileDiff", {
-        project,
+        ...normalizeProjectTarget(target),
         path,
         root,
       }),
-    stage: (project: string, paths: string[], root?: string) =>
+    stage: (target: ProjectTargetInput, paths: string[], root?: string) =>
       getTransport().invoke<{ ok: boolean }>("git:stage", {
-        project,
+        ...normalizeProjectTarget(target),
         paths,
         root,
       }),
-    unstage: (project: string, paths: string[], root?: string) =>
+    unstage: (target: ProjectTargetInput, paths: string[], root?: string) =>
       getTransport().invoke<{ ok: boolean }>("git:unstage", {
-        project,
+        ...normalizeProjectTarget(target),
         paths,
         root,
       }),
-    discard: (project: string, path: string, root?: string) =>
+    discard: (target: ProjectTargetInput, path: string, root?: string) =>
       getTransport().invoke<{ ok: boolean }>("git:discard", {
-        project,
+        ...normalizeProjectTarget(target),
         path,
         root,
       }),
     discardHunk: (
-      project: string,
+      target: ProjectTargetInput,
       path: string,
       hunkIndex: number,
       root?: string,
     ) =>
       getTransport().invoke<{ ok: boolean }>("git:discardHunk", {
-        project,
+        ...normalizeProjectTarget(target),
         path,
         hunkIndex,
         root,
       }),
-    conflicts: (project: string, root?: string) =>
-      getTransport().invoke<ConflictFile[]>("git:conflicts", { project, root }),
-    resolve: (project: string, path: string, content: string, root?: string) =>
+    conflicts: (target: ProjectTargetInput, root?: string) =>
+      getTransport().invoke<ConflictFile[]>("git:conflicts", {
+        ...normalizeProjectTarget(target),
+        root,
+      }),
+    resolve: (
+      target: ProjectTargetInput,
+      path: string,
+      content: string,
+      root?: string,
+    ) =>
       getTransport().invoke<{ ok: boolean }>("git:resolve", {
-        project,
+        ...normalizeProjectTarget(target),
         path,
         content,
         root,
       }),
     commit: (
-      project: string,
+      target: ProjectTargetInput,
       message: string,
       amend?: boolean,
       root?: string,
     ) =>
       getTransport().invoke<{ ok: boolean; hash: string }>("git:commit", {
-        project,
+        ...normalizeProjectTarget(target),
         message,
         amend,
         root,
       }),
-    cherryPick: (project: string, hash: string, root?: string) =>
+    cherryPick: (target: ProjectTargetInput, hash: string, root?: string) =>
       getTransport().invoke<GitActionResult>("git:cherryPick", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         root,
       }),
-    reset: (project: string, hash: string, mode: ResetMode, root?: string) =>
+    reset: (
+      target: ProjectTargetInput,
+      hash: string,
+      mode: ResetMode,
+      root?: string,
+    ) =>
       getTransport().invoke<GitActionResult>("git:reset", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         mode,
         root,
       }),
-    undoLastCommit: (project: string, root?: string) =>
+    undoLastCommit: (target: ProjectTargetInput, root?: string) =>
       getTransport().invoke<GitActionResult>("git:undoLastCommit", {
-        project,
+        ...normalizeProjectTarget(target),
         root,
       }),
-    commitFiles: (project: string, hash: string, root?: string) =>
+    commitFiles: (target: ProjectTargetInput, hash: string, root?: string) =>
       getTransport().invoke<DiffFileEntry[]>("git:commitFiles", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         root,
       }),
-    commitMessage: (project: string, hash: string, root?: string) =>
+    commitMessage: (target: ProjectTargetInput, hash: string, root?: string) =>
       getTransport().invoke<CommitMessageResponse>("git:commitMessage", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         root,
       }),
     editCommitMessage: (
-      project: string,
+      target: ProjectTargetInput,
       hash: string,
       message: string,
       root?: string,
     ) =>
       getTransport().invoke<GitActionResult>("git:editCommitMessage", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         message,
         root,
       }),
     commitFileDiff: (
-      project: string,
+      target: ProjectTargetInput,
       hash: string,
       path: string,
       root?: string,
     ) =>
       getTransport().invoke<FileDiffContent>("git:commitFileDiff", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         path,
         root,
       }),
     cherryPickCommitFiles: (
-      project: string,
+      target: ProjectTargetInput,
       hash: string,
       paths: string[],
       root?: string,
     ) =>
       getTransport().invoke<GitActionResult>("git:cherryPickCommitFiles", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         paths,
         root,
       }),
     dropCommitFiles: (
-      project: string,
+      target: ProjectTargetInput,
       hash: string,
       paths: string[],
       root?: string,
     ) =>
       getTransport().invoke<GitActionResult>("git:dropCommitFiles", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         paths,
         root,
       }),
-    dropCommit: (project: string, hash: string, root?: string) =>
+    dropCommit: (target: ProjectTargetInput, hash: string, root?: string) =>
       getTransport().invoke<GitActionResult>("git:dropCommit", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         root,
       }),
-    revertCommit: (project: string, hash: string, root?: string) =>
+    revertCommit: (target: ProjectTargetInput, hash: string, root?: string) =>
       getTransport().invoke<GitActionResult>("git:revertCommit", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         root,
       }),
     revertCommitFiles: (
-      project: string,
+      target: ProjectTargetInput,
       hash: string,
       paths: string[],
       root?: string,
     ) =>
       getTransport().invoke<GitActionResult>("git:revertCommitFiles", {
-        project,
+        ...normalizeProjectTarget(target),
         hash,
         paths,
         root,

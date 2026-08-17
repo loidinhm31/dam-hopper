@@ -19,6 +19,7 @@ import {
 import type { GitOpResult, GitLogEntry, DiffFileEntry } from "@/api/client.js";
 import { Badge } from "@/components/atoms/Badge.js";
 import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
+import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
 import {
@@ -110,10 +111,12 @@ function BulkGitOperations({
   setPullResults: (results: GitOpResult[] | null) => void;
   setPushResults: (results: GitOpResult[] | null) => void;
 }) {
+  const selectedTarget = useProjectTarget(selectedProjectName);
+  const targetRef = selectedTarget?.target ?? selectedProjectName ?? "";
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const gitPush = useGitPush();
-  const { data: roots = [] } = useGitRoots(selectedProjectName ?? "");
+  const { data: roots = [] } = useGitRoots(targetRef);
   const rootOptions = projectInfoRootOptions(roots);
   const [selectedRootId, setSelectedRootId] = useState(".");
   const [forcePushOpen, setForcePushOpen] = useState(false);
@@ -123,12 +126,16 @@ function BulkGitOperations({
     ? selectedRootId
     : (rootOptions[0]?.rootId ?? ".");
   const selectedRoot =
-    rootOptions.find((root) => root.rootId === resolvedRootId) ?? rootOptions[0];
+    rootOptions.find((root) => root.rootId === resolvedRootId) ??
+    rootOptions[0];
   const selectedRootLabel = selectedRoot
     ? formatProjectInfoRootLabel(selectedRoot)
     : "Project root";
   const { passphraseDialogProps, statusMessage, executeWithRetry } =
     useGitWithSshRetry();
+  const operationTargets = (selectedList ?? projectNames).map((projectName) =>
+    projectName === selectedProjectName ? targetRef : projectName,
+  );
   const pushDisabledReason = selectedProjectName
     ? null
     : "Select exactly one project to push. Bulk push is deferred in this phase.";
@@ -146,16 +153,15 @@ function BulkGitOperations({
           if (!selectedProjectName) return;
           setForcePushOpen(false);
           setPushResults(null);
-          void executeWithRetry(
-            { operation: "push" },
-            () =>
-              gitPush.mutateAsync(
-                buildProjectInfoPushTargetWithMode(
-                  selectedProjectName,
-                  resolvedRootId,
-                  true,
-                ),
+          void executeWithRetry({ operation: "push" }, () =>
+            gitPush.mutateAsync(
+              buildProjectInfoPushTargetWithMode(
+                selectedProjectName,
+                resolvedRootId,
+                true,
+                selectedTarget?.target,
               ),
+            ),
           )
             .then((result) => setPushResults(result))
             .catch(() => {});
@@ -173,9 +179,8 @@ function BulkGitOperations({
               loading={gitFetch.isPending}
               onClick={() => {
                 setFetchResults(null);
-                void executeWithRetry(
-                  { operation: "fetch" },
-                  () => gitFetch.mutateAsync(selectedList),
+                void executeWithRetry({ operation: "fetch" }, () =>
+                  gitFetch.mutateAsync(operationTargets),
                 )
                   .then((r) => setFetchResults(r))
                   .catch(() => {});
@@ -202,9 +207,8 @@ function BulkGitOperations({
               loading={gitPull.isPending}
               onClick={() => {
                 setPullResults(null);
-                void executeWithRetry(
-                  { operation: "pull" },
-                  () => gitPull.mutateAsync(selectedList),
+                void executeWithRetry({ operation: "pull" }, () =>
+                  gitPull.mutateAsync(operationTargets),
                 )
                   .then((r) => setPullResults(r))
                   .catch(() => {});
@@ -239,13 +243,12 @@ function BulkGitOperations({
               onClick={() => {
                 if (!selectedProjectName) return;
                 setPushResults(null);
-                void executeWithRetry(
-                  { operation: "push" },
-                  () =>
+                void executeWithRetry({ operation: "push" }, () =>
                   gitPush.mutateAsync(
                     buildProjectInfoPushTarget(
                       selectedProjectName,
                       resolvedRootId,
+                      selectedTarget?.target,
                     ),
                   ),
                 )
@@ -300,8 +303,9 @@ function BulkGitOperations({
                 Target root:{" "}
                 <span className="font-mono text-[var(--color-text)]">
                   {formatProjectInfoRootLabel(
-                    rootOptions.find((root) => root.rootId === resolvedRootId) ??
-                      rootOptions[0],
+                    rootOptions.find(
+                      (root) => root.rootId === resolvedRootId,
+                    ) ?? rootOptions[0],
                   )}
                 </span>
               </div>
@@ -330,15 +334,17 @@ export function GitPage() {
   const selectedList = allSelected ? undefined : [...selected];
   const projectNames = projects.map((p) => p.name);
   const selectedProjectName = selected.size === 1 ? [...selected][0] : null;
+  const selectedTarget = useProjectTarget(selectedProjectName);
+  const targetRef = selectedTarget?.target ?? selectedProjectName ?? "";
 
   const { data: logs = [], isLoading: isGitLogLoading } = useGitLog(
-    selectedProjectName ?? "",
+    targetRef,
     200,
     0,
   );
   const openDiff = useEditorStore((s) => s.openDiff);
-  const historyActions = useGitHistoryActions(selectedProjectName ?? "");
-  const { data: projectStatus } = useProjectStatus(selectedProjectName ?? "");
+  const historyActions = useGitHistoryActions(targetRef);
+  const { data: projectStatus } = useProjectStatus(targetRef);
 
   function resetHistoryView() {
     setSelectedCommit(null);
@@ -485,7 +491,10 @@ export function GitPage() {
                 Local Changes
               </div>
               <Suspense fallback={GIT_PANEL_FALLBACK}>
-                <GitLocalChanges project={selectedProjectName} />
+                <GitLocalChanges
+                  project={selectedProjectName}
+                  target={selectedTarget?.target}
+                />
               </Suspense>
             </div>
 
@@ -526,6 +535,7 @@ export function GitPage() {
                   <Suspense fallback={GIT_PANEL_FALLBACK}>
                     <CommitDetailsPanel
                       project={selectedProjectName}
+                      target={selectedTarget?.target}
                       commit={selectedCommit}
                       onClose={() => setSelectedCommit(null)}
                       onFileDoubleClick={handleFileDoubleClick}
