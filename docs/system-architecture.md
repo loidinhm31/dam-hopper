@@ -1907,6 +1907,65 @@ Frontend now uses a split host/package layout: `apps/web` is the thin Vite brows
   - Reconnect: Dim `[Reconnecting…]` / `[Reconnected]`
 - Reconnects through one in-flight `terminal:attach`; a timeout verifies session liveness, then retries with capped exponential backoff or creates one confirmed-dead replacement
 
+### Browser-local terminal output activity
+
+Runtime terminal rows derive recent-output activity from the existing terminal
+rendering path; there is no server, SSE, or WebSocket protocol change. The data
+flow is:
+
+```
+/ws terminal:output { kind, id, data }
+  -> WsTransport listener dispatch keyed by terminal session id
+  -> TerminalPanel attach/replay gate
+  -> writeLiveData(data) and xterm write
+  -> memory-only per-session browser-local activity snapshot store
+  -> TerminalRuntimeNavigatorItem for the same session id
+```
+
+`writeLiveData` marks a non-empty chunk only when it passes the replay gate for
+xterm writing. Historical `terminal:buffer` replay does not count. Live chunks
+queued during replay count only after replay completes and each chunk flows
+through `writeLiveData`. Every mounted `TerminalPanel`, including hidden panels
+retained by `TerminalKeepAliveHost`, independently updates its session entry.
+
+The store publishes only per-session activity snapshots containing derived
+recent/quiet state and stream readiness needed for the gray state; its internal
+bookkeeping also retains the latest observed-output timestamp and timer/
+subscription state. It never stores, persists, logs, or forwards output content. The
+recent-output window is fixed at 3,000 ms in v1. A first chunk transitions the
+session to recent output and schedules an expiry check. Later chunks update the
+timestamp without notifying React or recreating the timer. Each expiry callback
+compares the current time with the latest timestamp and either schedules the
+remaining duration or publishes one quiet transition. This timestamp check is
+required because background-tab timers may run late.
+
+Runtime row state precedence is fixed:
+
+1. `alive === false`: stopped (red or muted stopped treatment).
+2. Transport disconnected, attaching, or replaying: stream unavailable (gray).
+3. Live output observed within 3,000 ms: receiving output (green).
+4. Otherwise: quiet/no recent output observed (yellow).
+
+Attach/replay start, transport disconnect or replacement, terminal exit, and
+panel cleanup clear recent activity and reset stream readiness so stale green
+cannot survive a lifecycle boundary. Each mounted panel owns its registration;
+owner-checked callbacks make late output or readiness updates from a prior
+disconnect, exit, attach reset, replacement, or disposed panel no-ops. Fresh
+post-replay output may activate the row again. Store subscribers are notified
+only when the externally visible activity/stream state changes, not for every
+PTY chunk. Labels and tooltips distinguish receiving, quiet,
+connecting/disconnected/replaying, and stopped; color is never the only cue.
+
+Key invariants:
+
+- Session ID is the isolation key; output from terminal A cannot affect terminal B.
+- Activity means browser-observed live output accepted by xterm, not process work,
+  command execution, health, server-authoritative idleness, or delivery proof.
+- Replay and synthetic lifecycle banners never create recent-output activity.
+- Hidden kept-alive mounted terminals participate; unmounted/disposed panels do not.
+- Activity state is memory-only, bounded by mounted session lifecycle, and content-free.
+- The feature adds no SSE endpoint, server timer, persistence, or protocol field.
+
 **TerminalTreeView** (`packages/ui/src/components/organisms/TerminalTreeView.tsx`)
 
 - Sidebar tree displaying projects + commands + sessions
