@@ -26,7 +26,17 @@ import {
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils.js";
-import { useGitFileDiff, useGitCommitFileDiff } from "@/api/queries.js";
+import {
+  invalidateGitFileOperation,
+  useGitFileDiff,
+  useGitCommitFileDiff,
+} from "@/api/queries.js";
+import {
+  isProjectTargetError,
+  normalizeProjectTarget,
+  projectTargetCacheKey,
+  type ProjectTargetInput,
+} from "@/api/client.js";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
@@ -37,6 +47,7 @@ function transport(): WsTransport {
 
 interface DiffViewerProps {
   project: string;
+  target?: ProjectTargetInput;
   filePath: string;
   fileStatus: string;
   additions: number;
@@ -44,6 +55,8 @@ interface DiffViewerProps {
   commitHash?: string;
   gitRootId?: string;
   diffPath?: string;
+  targetAvailable?: boolean;
+  onTargetUnavailable?: () => void;
   onClose: () => void;
 }
 
@@ -90,7 +103,8 @@ function statusColor(status: string): string {
 }
 
 export function DiffViewer({
-  project,
+  project: projectName,
+  target,
   filePath,
   fileStatus,
   additions,
@@ -98,24 +112,30 @@ export function DiffViewer({
   commitHash,
   gitRootId,
   diffPath,
+  targetAvailable = true,
+  onTargetUnavailable,
   onClose,
 }: DiffViewerProps) {
+  const targetRef = normalizeProjectTarget(target ?? projectName);
+  const targetKey = projectTargetCacheKey(targetRef);
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
   const root = gitRootId && gitRootId !== "." ? gitRootId : undefined;
   const localDiff = useGitFileDiff(
-    project,
+    targetRef,
     commitHash ? "" : (diffPath ?? filePath),
     root,
   );
   const commitDiff = useGitCommitFileDiff(
-    project,
+    targetRef,
     commitHash ?? "",
     commitHash ? (diffPath ?? filePath) : "",
     root,
   );
 
-  const { data, isLoading, isError } = commitHash ? commitDiff : localDiff;
+  const { data, isLoading, isError, error } = commitHash
+    ? commitDiff
+    : localDiff;
   const [sideBySide, setSideBySide] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -138,16 +158,39 @@ export function DiffViewer({
   const isAdded = fileStatus === "added";
   const modifiedEditorReadOnly =
     isAndroidChromeNativeInputSuppressed ||
+    !targetAvailable ||
     isDeleted ||
     isAdded ||
     !!commitHash;
+
+  const diffIdentityKey = JSON.stringify([
+    targetRef.project,
+    targetKey,
+    filePath,
+    commitHash ?? null,
+    gitRootId ?? ".",
+    diffPath ?? filePath,
+  ]);
+
+  useEffect(() => {
+    if (
+      isProjectTargetError(
+        error instanceof Error ? error.message : undefined,
+        error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code ?? "")
+          : undefined,
+      )
+    ) {
+      onTargetUnavailable?.();
+    }
+  }, [error, onTargetUnavailable]);
 
   // Reset state when file selection changes
   useEffect(() => {
     setIsDirty(false);
     setSaveState("idle");
     setSaveError(null);
-  }, [filePath]);
+  }, [diffIdentityKey]);
 
   // Auto-dismiss save error after 5 s
   useEffect(() => {
@@ -279,6 +322,7 @@ export function DiffViewer({
     const editor = diffEditorRef.current;
     if (
       isAndroidChromeNativeInputSuppressed ||
+      !targetAvailable ||
       !editor ||
       !isDirty ||
       saveState === "saving"
@@ -289,18 +333,23 @@ export function DiffViewer({
     setSaveError(null);
     try {
       // Stat the file to get current mtime — server rejects stale writes
-      const readResult = await transport().fsRead(project, filePath, {
+      const readResult = await transport().fsRead(targetRef, filePath, {
         offset: 0,
         len: 0,
       });
       if (!readResult.ok && readResult.code !== "TOO_LARGE") {
+        const readMessage =
+          (readResult as { message?: string }).message ?? "Failed to read file";
+        if (isProjectTargetError(readResult.code, readMessage)) {
+          onTargetUnavailable?.();
+        }
         throw new Error(
-          (readResult as { message?: string }).message ?? "Failed to read file",
+          readMessage,
         );
       }
       const mtime = (readResult as { mtime: number }).mtime;
       const writeResult = await transport().fsWriteFile(
-        project,
+        targetRef,
         filePath,
         content,
         mtime,
@@ -309,29 +358,40 @@ export function DiffViewer({
         if ("conflict" in writeResult && writeResult.conflict) {
           throw new Error("File modified externally — reload the diff");
         }
-        throw new Error(
+        const writeMessage =
           ("error" in writeResult ? writeResult.error : undefined) ??
-            "Write failed",
-        );
+          "Write failed";
+        if (isProjectTargetError(writeMessage)) {
+          onTargetUnavailable?.();
+        }
+        throw new Error(writeMessage);
       }
       // Update snapshot so dirty state resets correctly
       savedContentRef.current = content;
       setSaveState("idle");
       setIsDirty(false);
-      void qc.invalidateQueries({ queryKey: ["git-diff", project] });
-      void qc.invalidateQueries({ queryKey: ["git-file-diff", project] });
-      void qc.invalidateQueries({ queryKey: ["project-status", project] });
+      await invalidateGitFileOperation(qc, targetRef, filePath);
     } catch (e) {
+      const code =
+        e && typeof e === "object" && "code" in e
+          ? String((e as { code?: unknown }).code ?? "")
+          : undefined;
+      const message = e instanceof Error ? e.message : String(e);
+      if (isProjectTargetError(code, message)) {
+        onTargetUnavailable?.();
+      }
       setSaveState("error");
-      setSaveError(e instanceof Error ? e.message : String(e));
+      setSaveError(message);
     }
   }, [
     filePath,
     isAndroidChromeNativeInputSuppressed,
     isDirty,
-    project,
+    onTargetUnavailable,
     qc,
     saveState,
+    targetAvailable,
+    targetRef,
   ]);
 
   // Keyboard shortcuts: Alt+↑/↓ for hunk nav, Ctrl+S for save.
@@ -428,6 +488,7 @@ export function DiffViewer({
           {/* Hunk navigation */}
           <button
             onClick={() => navigateHunk("prev")}
+            aria-label="Previous hunk"
             title="Previous hunk (Alt+↑)"
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors"
           >
@@ -435,6 +496,7 @@ export function DiffViewer({
           </button>
           <button
             onClick={() => navigateHunk("next")}
+            aria-label="Next hunk"
             title="Next hunk (Alt+↓)"
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors"
           >
@@ -444,6 +506,9 @@ export function DiffViewer({
           {/* View toggle */}
           <button
             onClick={() => setSideBySide((v) => !v)}
+            aria-label={
+              sideBySide ? "Switch to inline view" : "Switch to side-by-side"
+            }
             title={
               sideBySide ? "Switch to inline view" : "Switch to side-by-side"
             }
@@ -465,15 +530,19 @@ export function DiffViewer({
           {!isDeleted && !commitHash && (
             <button
               onClick={() => void handleSave()}
+              aria-label="Save diff changes"
               disabled={
                 isAndroidChromeNativeInputSuppressed ||
+                !targetAvailable ||
                 !isDirty ||
                 saveState === "saving"
               }
               title={
                 isAndroidChromeNativeInputSuppressed
                   ? "Unavailable on Android Chrome: editor is read-only"
-                  : "Save to disk (Ctrl+S)"
+                  : !targetAvailable
+                    ? "Target unavailable: edits cannot be saved until it returns"
+                    : "Save to disk (Ctrl+S)"
               }
               className={cn(
                 "p-1 rounded transition-colors",
@@ -493,6 +562,7 @@ export function DiffViewer({
           {/* Close */}
           <button
             onClick={onClose}
+            aria-label="Close diff viewer"
             title="Close diff viewer"
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors"
           >
@@ -512,6 +582,16 @@ export function DiffViewer({
         </p>
       )}
 
+      {!targetAvailable && (
+        <p
+          role="alert"
+          className="shrink-0 border-b border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-300"
+        >
+          This worktree is unavailable. The diff is read-only until the target
+          returns; no changes will be written to another target.
+        </p>
+      )}
+
       {/* Save error banner — auto-dismisses after 5 s */}
       {saveState === "error" && saveError && (
         <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-1.5 bg-[var(--color-danger)]/10 border-b border-[var(--color-danger)]/20 text-[var(--color-danger)] text-[11px]">
@@ -521,6 +601,7 @@ export function DiffViewer({
               setSaveState("idle");
               setSaveError(null);
             }}
+            aria-label="Dismiss save error"
             className="opacity-60 hover:opacity-100"
           >
             <X className="h-3 w-3" />

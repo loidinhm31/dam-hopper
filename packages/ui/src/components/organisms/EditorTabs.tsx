@@ -9,9 +9,14 @@
  */
 import { lazy, Suspense, useState, useEffect, useCallback } from "react";
 import type * as monacoNs from "monaco-editor";
-import { FileCode, Loader2 } from "lucide-react";
+import { AlertTriangle, FileCode, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEditorStore } from "@/stores/editor.js";
+import {
+  editorActiveKeyForTarget,
+  editorTargetScopeKey,
+  useEditorStore,
+  type Tab,
+} from "@/stores/editor.js";
 import { EditorTab } from "@/components/molecules/EditorTab.js";
 import { LargeFileViewer } from "@/components/organisms/LargeFileViewer.js";
 import { BinaryPreview } from "@/components/organisms/BinaryPreview.js";
@@ -35,6 +40,11 @@ import {
 } from "@/api/queries.js";
 import { buildGitFileStateIndex } from "@/lib/git-file-state.js";
 import {
+  normalizeProjectTarget,
+  type ProjectTargetInput,
+} from "@/api/client.js";
+import { markProjectTargetUnavailable } from "@/stores/project-target.js";
+import {
   EditorTabContextMenu,
   getEditorTabContextMenuItems,
 } from "@/components/organisms/EditorTabContextMenu.js";
@@ -51,7 +61,17 @@ const MarkdownHost = lazy(() =>
   })),
 );
 
-export function EditorTabs({ project }: { project: string | null }) {
+export function EditorTabs({
+  project,
+  target,
+}: {
+  project: string | null;
+  target?: ProjectTargetInput;
+}) {
+  const targetRef = normalizeProjectTarget(
+    target ?? project ?? { project: "" },
+  );
+  const targetScopeKey = editorTargetScopeKey(targetRef);
   const queryClient = useQueryClient();
   const {
     tabs,
@@ -70,6 +90,9 @@ export function EditorTabs({ project }: { project: string | null }) {
     clearStale,
     markSaved,
     loadContent,
+    markTargetUnavailable,
+    beginAsyncRequest,
+    isCurrentAsyncRequest,
   } = useEditorStore();
 
   const {
@@ -83,7 +106,7 @@ export function EditorTabs({ project }: { project: string | null }) {
 
   const [activeEditor, setActiveEditor] =
     useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
-  const { data: gitDiff } = useGitDiff(project ?? "", "*");
+  const { data: gitDiff } = useGitDiff(targetRef, "*");
 
   const handleSave = useCallback(
     async (key: string) => {
@@ -91,13 +114,16 @@ export function EditorTabs({ project }: { project: string | null }) {
       if (!project || !isEncryptEnabled(project)) {
         const saved = await save(key);
         if (saved && tab?.path) {
-          await invalidateGitFileOperation(queryClient, tab.project, tab.path);
+          await invalidateGitFileOperation(queryClient, tab.target, tab.path);
         }
         return;
       }
       if (!tab) return;
+      if (!tab.targetAvailable) return;
       if (isPreviewOnlyFile(tab.tier, tab.name)) return;
       if (!tab.path) return save(key);
+
+      const requestGeneration = beginAsyncRequest(key);
 
       // If a session is already cached the AES key is live — no passphrase needed
       const sessionActive = !!getSession(project);
@@ -112,16 +138,18 @@ export function EditorTabs({ project }: { project: string | null }) {
       }
       const resolvedPassphrase = sessionActive ? "" : passphrase;
       if (resolvedPassphrase === null) return;
+      if (!isCurrentAsyncRequest(key, requestGeneration)) return;
 
       const result = await encryptedWrite.saveText(
-        project,
+        tab.target,
         tab.path,
         tab.content,
         resolvedPassphrase,
       );
+      if (!isCurrentAsyncRequest(key, requestGeneration)) return;
       if (result.ok) {
         markSaved(key, result.newMtime ?? tab.mtime);
-        await invalidateGitFileOperation(queryClient, project, tab.path);
+        await invalidateGitFileOperation(queryClient, tab.target, tab.path);
       }
     },
     [
@@ -136,12 +164,34 @@ export function EditorTabs({ project }: { project: string | null }) {
       save,
       tabs,
       markSaved,
+      beginAsyncRequest,
+      isCurrentAsyncRequest,
     ],
   );
 
-  const projectTabs = project ? tabs.filter((t) => t.project === project) : [];
-  const activeKey = project ? activeKeys[project] : null;
+  const projectTabs = project
+    ? tabs.filter(
+        (tab) =>
+          tab.project === project &&
+          editorTargetScopeKey(tab.target) === targetScopeKey,
+      )
+    : [];
+  const activeKey = project
+    ? editorActiveKeyForTarget(activeKeys, targetRef)
+    : null;
   const activeTab = projectTabs.find((t) => t.key === activeKey) ?? null;
+  const activeTargetProject = activeTab?.target.project;
+  const activeTargetWorktreePath = activeTab?.target.worktreePath;
+  const handleActiveTargetUnavailable = () => {
+    if (activeTargetProject) {
+      const unavailableTarget = {
+        project: activeTargetProject,
+        worktreePath: activeTargetWorktreePath,
+      };
+      markProjectTargetUnavailable(unavailableTarget);
+      markTargetUnavailable(unavailableTarget);
+    }
+  };
   // Older persisted tabs predate the video tier. Route by the closed extension
   // contract before any viewer can mount and trigger a legacy fsRead.
   const activeIsVideo = Boolean(
@@ -161,7 +211,7 @@ export function EditorTabs({ project }: { project: string | null }) {
       ? activeGitState.rootId
       : undefined;
   const activeFileDiff = useGitFileDiff(
-    project ?? "",
+    targetRef,
     activeGitState?.rootRelativePath ?? "",
     activeDiffRoot,
   );
@@ -169,7 +219,7 @@ export function EditorTabs({ project }: { project: string | null }) {
   const openActiveDiff = () => {
     if (!project || !activeGitState) return;
     openDiff(
-      project,
+      activeTab?.target ?? targetRef,
       activeGitState.path,
       activeGitState.status,
       activeGitState.additions,
@@ -186,7 +236,22 @@ export function EditorTabs({ project }: { project: string | null }) {
     }
   }, [activeTab?.key, activeTab?.hydrated, activeTab?.loading, loadContent]);
 
-  if (!project || projectTabs.length === 0) {
+  const unavailableTabs = project
+    ? tabs.filter((tab) => tab.project === project && !tab.targetAvailable)
+    : [];
+  const downloadTabCopy = useCallback((tab: Tab) => {
+    const blob = new Blob([tab.content], {
+      type: tab.mime ?? "text/plain;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${tab.name || "file"}.local-copy`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  if (!project || (projectTabs.length === 0 && unavailableTabs.length === 0)) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 text-[var(--color-text-muted)] glass-card">
         <FileCode className="h-10 w-10 opacity-20" />
@@ -214,6 +279,7 @@ export function EditorTabs({ project }: { project: string | null }) {
                   path={tab.path}
                   active={tab.key === activeKey}
                   dirty={tab.dirty}
+                  targetAvailable={tab.targetAvailable}
                   gitState={
                     tab.tier === "diff"
                       ? undefined
@@ -223,7 +289,7 @@ export function EditorTabs({ project }: { project: string | null }) {
                     const state = gitIndex.files.get(tab.path);
                     if (!project || !state) return;
                     openDiff(
-                      project,
+                      tab.target,
                       state.path,
                       state.status,
                       state.additions,
@@ -233,7 +299,7 @@ export function EditorTabs({ project }: { project: string | null }) {
                       state.rootRelativePath,
                     );
                   }}
-                  onClick={() => project && setActive(project, tab.key)}
+                  onClick={() => project && setActive(tab.target, tab.key)}
                   onClose={() => close(tab.key)}
                 />
               </ContextMenu.Trigger>
@@ -245,7 +311,7 @@ export function EditorTabs({ project }: { project: string | null }) {
                     if (project) closeOthers(project, tab.key);
                   },
                   onCloseAll: () => {
-                    if (project) closeAll(project);
+                    if (project) closeAll(project, targetRef);
                   },
                 })}
               />
@@ -259,6 +325,48 @@ export function EditorTabs({ project }: { project: string | null }) {
         )}
       </div>
 
+      {unavailableTabs.length > 0 && (
+        <div
+          role="alert"
+          className="shrink-0 flex flex-wrap items-center gap-2 border-b border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[11px] text-amber-300"
+        >
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            Unavailable target recovery: local edits from missing worktrees are
+            preserved and writes stay disabled until the target returns.
+          </span>
+          {unavailableTabs.map((tab) => (
+            <span key={tab.key} className="flex shrink-0 items-center gap-1">
+              <span
+                className="max-w-[12rem] truncate"
+                title={`${tab.target.worktreePath ?? "Project root"}: ${tab.path}`}
+              >
+                {tab.target.worktreePath
+                  ? `${tab.target.worktreePath}: `
+                  : "Project root: "}
+                {tab.name}
+              </span>
+              {tab.dirty && (
+                <button
+                  type="button"
+                  className="rounded border border-amber-400/30 px-1.5 py-0.5 hover:bg-amber-400/10"
+                  onClick={() => downloadTabCopy(tab)}
+                >
+                  Download copy
+                </button>
+              )}
+              <button
+                type="button"
+                className="rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                onClick={() => close(tab.key)}
+              >
+                Close
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Editor area + status bar */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
         <div className="flex-1 overflow-hidden relative">
@@ -266,17 +374,21 @@ export function EditorTabs({ project }: { project: string | null }) {
             <VideoPreview
               key={`${activeTab.key}:${activeTab.previewRevision ?? 0}`}
               project={activeTab.project}
+              target={activeTab.target}
               path={activeTab.path}
               fileName={activeTab.name}
               mime={activeTab.mime ?? videoMimeType(activeTab.name)}
+              onTargetUnavailable={handleActiveTargetUnavailable}
             />
           ) : activeIsImage && activeTab ? (
             <ImagePreview
               key={`${activeTab.key}:${activeTab.previewRevision ?? 0}`}
               project={activeTab.project}
+              target={activeTab.target}
               path={activeTab.path}
               fileName={activeTab.name}
               mime={activeTab.mime ?? imageMimeType(activeTab.name)}
+              onTargetUnavailable={handleActiveTargetUnavailable}
             />
           ) : activeTab === null ? (
             <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
@@ -299,7 +411,9 @@ export function EditorTabs({ project }: { project: string | null }) {
             />
           ) : activeTab.tier === "diff" ? (
             <DiffViewer
+              key={activeTab.key}
               project={activeTab.project}
+              target={activeTab.target}
               filePath={activeTab.path}
               fileStatus={activeTab.fileStatus ?? "modified"}
               additions={activeTab.additions ?? 0}
@@ -307,14 +421,18 @@ export function EditorTabs({ project }: { project: string | null }) {
               commitHash={activeTab.commitHash}
               gitRootId={activeTab.gitRootId}
               diffPath={activeTab.diffPath}
+              targetAvailable={activeTab.targetAvailable}
+              onTargetUnavailable={handleActiveTargetUnavailable}
               onClose={() => close(activeTab.key)}
             />
           ) : activeTab.tier === "large" ? (
             <LargeFileViewer
               project={activeTab.project}
+              target={activeTab.target}
               path={activeTab.path}
               fileName={activeTab.name}
               size={activeTab.size}
+              onTargetUnavailable={handleActiveTargetUnavailable}
             />
           ) : /\.mdx?$/i.test(activeTab.name) ? (
             <Suspense
@@ -332,6 +450,7 @@ export function EditorTabs({ project }: { project: string | null }) {
                 tier={activeTab.tier}
                 mime={activeTab.mime}
                 viewState={activeTab.viewState}
+                readOnly={!activeTab.targetAvailable}
                 onChange={(val) => setContent(activeTab.key, val)}
                 onSave={() => void handleSave(activeTab.key)}
                 onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
@@ -355,6 +474,7 @@ export function EditorTabs({ project }: { project: string | null }) {
                 tier={activeTab.tier}
                 mime={activeTab.mime}
                 viewState={activeTab.viewState}
+                readOnly={!activeTab.targetAvailable}
                 onChange={(val) => setContent(activeTab.key, val)}
                 onSave={() => void handleSave(activeTab.key)}
                 onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}

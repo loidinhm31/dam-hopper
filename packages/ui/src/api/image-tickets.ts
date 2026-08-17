@@ -4,6 +4,7 @@ import {
   MediaSessionError,
   mediaTicketUrl,
   probeMediaTicket,
+  readMediaErrorCode,
 } from "./media-session.js";
 import {
   getActiveProfile,
@@ -163,7 +164,11 @@ export async function issueImageTicket(
       },
     );
     throwIfAborted(timeout.signal, signal);
-    if (!response.ok) throw ticketError(`HTTP_${response.status}`);
+    if (!response.ok) {
+      throw ticketError(
+        await readMediaErrorCode(response, `HTTP_${response.status}`),
+      );
+    }
 
     let payload: unknown;
     try {
