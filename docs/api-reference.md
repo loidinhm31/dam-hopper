@@ -555,6 +555,83 @@ The client preserves this as `ApiRequestError(status, code)` and uses the code
 to render an actionable unavailable state; callers should not treat it as an
 empty branch list.
 
+### Project worktree targets (Phase 1)
+
+Root-sensitive operations use a project target reference:
+
+```json
+{ "project": "demo", "worktreePath": "/worktrees/demo-feature" }
+```
+
+`worktreePath` may be omitted or `null`; both select the configured project
+root for backward-compatible behavior. An explicit path must be absolute and
+must resolve to a worktree currently registered by Git for that project. The
+server canonicalizes and validates membership against a fresh Git snapshot;
+an arbitrary path, a path from another repository, or a removed/recreated
+directory is not authorized. The configured root is also validated when sent
+explicitly.
+
+For a project nested below the repository root, each worktree target projects
+the same relative subdirectory into that worktree. Discovery and resolution
+use these fields (serialized in camelCase):
+
+| Field | Meaning |
+| --- | --- |
+| `path` | Selectable project-directory target. |
+| `repositoryPath` | Git worktree root used for worktree mutations. |
+| `branch`, `commitHash` | Worktree revision metadata. |
+| `isMain`, `isLocked`, `isDetached`, `isBare`, `isPrunable` | Git worktree state. |
+| `isAvailable` | Whether the projected target directory is a usable directory beneath a live, non-bare worktree. |
+
+Resolved targets additionally expose `configuredRoot`, `targetPath`,
+`targetKey`, `isRoot`, and `available`; a root target has `isRoot: true` and
+no `worktree` metadata. Discovery results are returned by the worktree list
+route as the projected worktree objects above.
+
+Target validation errors use stable codes and statuses:
+
+| Code | HTTP | Meaning |
+| --- | ---: | --- |
+| `WORKSPACE_PROJECT_NOT_FOUND` | 404 | Project is not registered. |
+| `WORKSPACE_TARGET_UNREGISTERED` | 400 | Explicit path is not a registered Git worktree. |
+| `WORKSPACE_TARGET_INVALID_PATH` | 400 | Path is empty, contains a NUL, or is not absolute. |
+| `WORKSPACE_TARGET_UNAVAILABLE` | 409 | Registered worktree or projected directory is unavailable. |
+
+### Worktrees
+
+**GET /api/git/{project}/worktrees**
+Refresh and return projected worktree metadata. For nested projects,
+`path` points at the matching subdirectory while `repositoryPath` remains the
+worktree root. A plain non-Git project returns `409` with
+`GIT_NOT_INITIALIZED`.
+
+**POST /api/git/{project}/worktrees**
+Add a worktree from the configured project repository. Body fields are
+`branch` (required), optional `path`, optional `createBranch`, and optional
+`baseBranch`:
+
+```json
+{
+  "branch": "feature/demo",
+  "path": "../demo-feature",
+  "createBranch": true,
+  "baseBranch": "main"
+}
+```
+
+The response is the projected worktree metadata, including both `path` and
+`repositoryPath`; discovery is refreshed after the mutation.
+
+**DELETE /api/git/{project}/worktrees**
+Remove one registered non-main worktree. Body: `{ "path": "<target path>" }`.
+The path is resolved through the target contract, but Git removal operates on
+the corresponding `repositoryPath`. The configured/main worktree cannot be
+removed. Successful response: `{ "ok": true }`.
+
+**POST /api/git/{project}/worktrees/prune**
+Prune stale Git worktree administrative metadata and invalidate the project’s
+cached discovery. Body: `{}`. Successful response: `{ "ok": true }`.
+
 ### Branches
 
 **GET /api/git/{project}/branches**
