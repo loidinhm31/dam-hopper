@@ -231,6 +231,20 @@ vi.mock("@/api/client.js", () => ({
       list: async () => [{ name: "web" }],
     },
   },
+  normalizeProjectTarget: (
+    target: string | { project: string; worktreePath?: string | null },
+  ) =>
+    typeof target === "string"
+      ? { project: target }
+      : target.worktreePath == null
+        ? { project: target.project }
+        : target,
+  projectTargetCacheKey: (
+    target: string | { project: string; worktreePath?: string | null },
+  ) =>
+    typeof target === "string" || target.worktreePath == null
+      ? "root"
+      : `worktree:${target.worktreePath}`,
 }));
 
 vi.mock("@/lib/workspace-mode.js", () => ({
@@ -321,9 +335,9 @@ describe("WorkspacePage notification navigation in Chromium", () => {
     });
 
     expect(container.querySelector('[data-shell="ide"]')).not.toBeNull();
-    expect(oscHandler?.("notify;Codex is ready;Review the completed task.")).toBe(
-      true,
-    );
+    expect(
+      oscHandler?.("notify;Codex is ready;Review the completed task."),
+    ).toBe(true);
     const nativeNotification = FakeNotification.latest;
     expect(nativeNotification?.title).toBe("Codex is ready");
     expect(nativeNotification?.options.body).toBe(
@@ -340,7 +354,9 @@ describe("WorkspacePage notification navigation in Chromium", () => {
     expect(mocks.saveWorkspaceMode).not.toHaveBeenCalled();
     expect(mocks.selectSession).toHaveBeenCalledWith(SESSION_ID);
     expect(
-      container.querySelector('[data-shell="ide"]')?.getAttribute("data-bottom-tool"),
+      container
+        .querySelector('[data-shell="ide"]')
+        ?.getAttribute("data-bottom-tool"),
     ).toBe("terminal");
     expect(mocks.focusCompetingTerminal).not.toHaveBeenCalled();
 
