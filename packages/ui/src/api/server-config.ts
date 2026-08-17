@@ -4,7 +4,7 @@
  * URL: localStorage (survives tab close, shared across tabs)
  * Token: localStorage, scoped by profile ID (survives browser/app recreation)
  *
- * Priority for URL: localStorage → VITE_DAM_HOPPER_SERVER_URL env → same-origin fallback
+ * Priority for URL: active profile → legacy localStorage/env in development → same-origin fallback
  */
 
 const KEY_URL = "damhopper_server_url";
@@ -14,6 +14,7 @@ const KEY_PROFILES = "damhopper_server_profiles";
 const KEY_ACTIVE_PROFILE = "damhopper_active_profile_id";
 const PROFILE_CHANGED_EVENT = "damhopper:profile-changed";
 let profileChangeVersion = 0;
+declare const __DAM_HOPPER_SAME_ORIGIN__: boolean | undefined;
 
 export type KnownServerProfiles =
   | { status: "available"; profiles: ServerProfile[] }
@@ -31,7 +32,7 @@ const profileChangeListeners = new Set<(event: ServerProfileChange) => void>();
 export interface ServerProfile {
   id: string; // UUID v4
   name: string; // "Local Dev", "Production", etc.
-  url: string; // "http://localhost:4800"
+  url: string; // "http://127.0.0.1:4801"
   authType: "basic" | "none"; // Authentication method
   username?: string; // For basic auth display (password never stored)
   createdAt: number; // Unix timestamp
@@ -79,11 +80,19 @@ function getConfiguredServerUrl(): string | null {
 
 /** Returns the configured server URL, stripping trailing slash. */
 export function getServerUrl(): string {
+  const sameOriginProductionBuild = isSameOriginProductionBuild();
+
   // Priority 1: Active profile
   const activeProfile = getActiveProfile();
   if (activeProfile) {
     return activeProfile.url.replace(/\/$/, "");
   }
+
+  // Packaged web builds must not inherit a stale 4800/remote endpoint from a
+  // previous browser profile. The production Vite config also rejects the
+  // build-time override, so same-origin is the only valid fallback.
+  if (sameOriginProductionBuild)
+    return `${location.protocol}//${location.host}`;
 
   // Native mobile and unknown native hosts stay same-origin until a native
   // HTTP/WebSocket transport exists. Windows desktop uses the existing
@@ -421,8 +430,20 @@ export function isNativeWindowsHost(): boolean {
   );
 }
 
+export function isSameOriginProductionBuild(): boolean {
+  return (
+    typeof __DAM_HOPPER_SAME_ORIGIN__ !== "undefined" &&
+    __DAM_HOPPER_SAME_ORIGIN__ === true
+  );
+}
+
 function isSameOriginProfile(profile: ServerProfile): boolean {
-  if (!isNativeBrowserHost() || isNativeWindowsHost()) return true;
+  if (
+    !isSameOriginProductionBuild() &&
+    (!isNativeBrowserHost() || isNativeWindowsHost())
+  ) {
+    return true;
+  }
   if (typeof window === "undefined") return true;
 
   try {

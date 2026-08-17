@@ -54,6 +54,7 @@ describe("server profile migration", () => {
   afterEach(() => {
     delete document.documentElement.dataset.appHost;
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("migrates a legacy cross-origin URL into the active profile", () => {
@@ -167,6 +168,42 @@ describe("server profile migration", () => {
     migrateToProfiles();
 
     expect(getServerUrl()).toBe("http://localhost:4800");
+  });
+
+  it("ignores a stale legacy endpoint in a production same-origin build", () => {
+    vi.stubGlobal("__DAM_HOPPER_SAME_ORIGIN__", true);
+    vi.stubGlobal("location", {
+      protocol: "http:",
+      host: "127.0.0.1:4801",
+      hostname: "127.0.0.1",
+      origin: "http://127.0.0.1:4801",
+    });
+    setServerUrl("http://127.0.0.1:4800");
+
+    expect(getServerUrl()).toBe("http://127.0.0.1:4801");
+  });
+
+  it("ignores a cross-origin active profile in a production same-origin build", () => {
+    vi.stubGlobal("__DAM_HOPPER_SAME_ORIGIN__", true);
+    vi.stubGlobal("location", {
+      protocol: "http:",
+      host: "127.0.0.1:4801",
+      hostname: "127.0.0.1",
+      origin: "http://127.0.0.1:4801",
+    });
+    saveProfiles([
+      {
+        id: "legacy-4800",
+        name: "Legacy",
+        url: "http://127.0.0.1:4800",
+        authType: "basic",
+        createdAt: 1,
+      },
+    ]);
+    setActiveProfile("legacy-4800");
+
+    expect(getActiveProfile()).toBeNull();
+    expect(getServerUrl()).toBe("http://127.0.0.1:4801");
   });
 
   it("keeps persisted tokens isolated by profile", () => {

@@ -23,6 +23,7 @@ import {
   getAuthToken,
   setAuthToken,
   getProfiles,
+  isSameOriginProductionBuild,
 } from "@/api/server-config.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
@@ -182,7 +183,11 @@ function RouteDiagnostics() {
 function ServerProfileGuard({ children }: { children: React.ReactNode }) {
   const profiles = getProfiles();
   const activeProfile = useServerProfile();
-  const needsSetup = profiles.length === 0 || !activeProfile;
+  // Packaged web builds use the serving origin by construction. A stale
+  // cross-origin profile should not force the user into setup before the
+  // same-origin auth flow has a chance to run.
+  const needsSetup =
+    !isSameOriginProductionBuild() && (profiles.length === 0 || !activeProfile);
 
   if (needsSetup) {
     return (
