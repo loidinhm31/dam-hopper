@@ -5,13 +5,18 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
+    thread::JoinHandle,
     time::Duration,
 };
 
 use portable_pty::{Child as PtyChild, CommandBuilder, NativePtySystem, PtySize, PtySystem as _};
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
+#[cfg(test)]
+use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
 use crate::{
@@ -87,10 +92,312 @@ struct RespawnCmd {
     /// Incarnation that exited and requested this restart. A newer create or
     /// restart with the same public ID invalidates this command.
     incarnation: u64,
+    /// Disposal generation of the session that requested the restart.
+    /// A dispose increments the generation so queued or in-flight restarts
+    /// cannot publish a new live session after cleanup.
+    generation: u64,
     _prev_exit_code: i32,
     restart_count: u32,
     respawn_opts: RespawnOpts,
     delay_ms: u64,
+}
+
+#[cfg(test)]
+pub(crate) struct RespawnTestHook {
+    entered: Notify,
+    release: Notify,
+    pause_next: AtomicBool,
+}
+
+#[cfg(test)]
+impl RespawnTestHook {
+    fn new() -> Self {
+        Self {
+            entered: Notify::new(),
+            release: Notify::new(),
+            pause_next: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn pause_next(&self) {
+        self.pause_next.store(true, Ordering::Release);
+    }
+
+    pub(crate) async fn wait_until_paused(&self) {
+        self.entered.notified().await;
+    }
+
+    pub(crate) fn release(&self) {
+        self.release.notify_one();
+    }
+
+    async fn wait_if_paused(&self) {
+        if self.pause_next.swap(false, Ordering::AcqRel) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+    }
+}
+
+#[cfg(test)]
+struct CreatePauseState {
+    pause_next: bool,
+    paused: bool,
+}
+
+#[cfg(test)]
+pub(crate) struct CreateTestHook {
+    entered: Notify,
+    state: Mutex<CreatePauseState>,
+    released: Condvar,
+}
+
+#[cfg(test)]
+impl CreateTestHook {
+    fn new() -> Self {
+        Self {
+            entered: Notify::new(),
+            state: Mutex::new(CreatePauseState {
+                pause_next: false,
+                paused: false,
+            }),
+            released: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn pause_next(&self) {
+        self.state.lock().unwrap().pause_next = true;
+    }
+
+    pub(crate) async fn wait_until_paused(&self) {
+        self.entered.notified().await;
+    }
+
+    pub(crate) fn release(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.paused = false;
+        self.released.notify_one();
+    }
+
+    fn wait_if_paused(&self) {
+        let mut state = self.state.lock().unwrap();
+        if !state.pause_next {
+            return;
+        }
+
+        state.pause_next = false;
+        state.paused = true;
+        self.entered.notify_one();
+        while state.paused {
+            state = self.released.wait(state).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+struct SpawnPauseState {
+    pause_next: bool,
+    paused: bool,
+}
+
+#[cfg(test)]
+pub(crate) struct SpawnTestHook {
+    entered: Notify,
+    state: Mutex<SpawnPauseState>,
+    released: Condvar,
+    async_release: Notify,
+}
+
+#[cfg(test)]
+impl SpawnTestHook {
+    fn new() -> Self {
+        Self {
+            entered: Notify::new(),
+            state: Mutex::new(SpawnPauseState {
+                pause_next: false,
+                paused: false,
+            }),
+            released: Condvar::new(),
+            async_release: Notify::new(),
+        }
+    }
+
+    pub(crate) fn pause_next(&self) {
+        self.state.lock().unwrap().pause_next = true;
+    }
+
+    pub(crate) async fn wait_until_paused(&self) {
+        self.entered.notified().await;
+    }
+
+    pub(crate) fn release(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.paused = false;
+        self.released.notify_one();
+        self.async_release.notify_one();
+    }
+
+    fn begin_pause(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if !state.pause_next {
+            return false;
+        }
+        state.pause_next = false;
+        state.paused = true;
+        self.entered.notify_one();
+        true
+    }
+
+    fn wait_if_paused_sync(&self) {
+        if !self.begin_pause() {
+            return;
+        }
+
+        let mut state = self.state.lock().unwrap();
+        while state.paused {
+            state = self.released.wait(state).unwrap();
+        }
+    }
+
+    async fn wait_if_paused_async(&self) {
+        if !self.begin_pause() {
+            return;
+        }
+        self.async_release.notified().await;
+    }
+}
+
+struct LifecycleGateState {
+    active: usize,
+    disposing: bool,
+    closing: bool,
+}
+
+struct LifecycleGate {
+    state: Mutex<LifecycleGateState>,
+    changed: Condvar,
+}
+
+struct LifecyclePermit {
+    gate: Arc<LifecycleGate>,
+}
+
+struct LifecycleDrain {
+    gate: Arc<LifecycleGate>,
+}
+
+impl LifecycleGate {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(LifecycleGateState {
+                active: 0,
+                disposing: false,
+                closing: false,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn begin(self: &Arc<Self>) -> Result<LifecyclePermit, AppError> {
+        let mut state = self.state.lock().unwrap();
+        while state.disposing {
+            state = self.changed.wait(state).unwrap();
+        }
+        if state.closing {
+            return Err(AppError::Unavailable("PTY manager is shutting down".into()));
+        }
+        state.active += 1;
+        Ok(LifecyclePermit {
+            gate: Arc::clone(self),
+        })
+    }
+
+    fn try_begin(self: &Arc<Self>) -> Option<LifecyclePermit> {
+        let mut state = self.state.lock().unwrap();
+        if state.disposing || state.closing {
+            return None;
+        }
+        state.active += 1;
+        Some(LifecyclePermit {
+            gate: Arc::clone(self),
+        })
+    }
+
+    fn begin_dispose(self: &Arc<Self>, closing: bool) -> LifecycleDrain {
+        let mut state = self.state.lock().unwrap();
+        while state.disposing {
+            state = self.changed.wait(state).unwrap();
+        }
+        state.disposing = true;
+        state.closing |= closing;
+        while state.active > 0 {
+            state = self.changed.wait(state).unwrap();
+        }
+        LifecycleDrain {
+            gate: Arc::clone(self),
+        }
+    }
+
+    fn is_disposing(&self) -> bool {
+        self.state.lock().unwrap().disposing
+    }
+}
+
+impl Drop for LifecyclePermit {
+    fn drop(&mut self) {
+        let mut state = self.gate.state.lock().unwrap();
+        state.active = state.active.saturating_sub(1);
+        if state.active == 0 {
+            self.gate.changed.notify_all();
+        }
+    }
+}
+
+impl Drop for LifecycleDrain {
+    fn drop(&mut self) {
+        let mut state = self.gate.state.lock().unwrap();
+        state.disposing = false;
+        self.gate.changed.notify_all();
+    }
+}
+
+struct ReaderRegistry {
+    handles: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl ReaderRegistry {
+    fn new() -> Self {
+        Self {
+            handles: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn register(&self, handle: JoinHandle<()>) {
+        let mut finished = Vec::new();
+        {
+            let mut handles = self.handles.lock().unwrap();
+            let mut active = Vec::with_capacity(handles.len() + 1);
+            for handle in handles.drain(..) {
+                if handle.is_finished() {
+                    finished.push(handle);
+                } else {
+                    active.push(handle);
+                }
+            }
+            active.push(handle);
+            *handles = active;
+        }
+        for handle in finished {
+            let _ = handle.join();
+        }
+    }
+
+    fn join_all(&self) {
+        let handles = std::mem::take(&mut *self.handles.lock().unwrap());
+        for handle in handles {
+            let _ = handle.join();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -220,15 +527,20 @@ pub struct SessionDetail {
 #[derive(Clone)]
 pub struct PtySessionManager {
     inner: Arc<Mutex<Inner>>,
+    lifecycle_gate: Arc<LifecycleGate>,
+    /// Serializes persistence snapshots with session replacement/disposal so
+    /// an old reader cannot enqueue after a newer same-ID session is published.
+    persistence_gate: Arc<Mutex<()>>,
+    readers: Arc<ReaderRegistry>,
     sink: Arc<dyn EventSink>,
     /// Bounded sender (256 slots) for respawn requests from reader threads.
     /// Consumed by supervisor_loop task. If queue full, supervisor is dead/slow.
     respawn_tx: mpsc::Sender<RespawnCmd>,
     /// Optional FIFO sender for persistence commands to the worker thread.
-    /// The unbounded standard channel makes lifecycle commands nonblocking
-    /// while preserving the order shared by all PTY producers.
+    /// Bounded persistence channel. Periodic snapshots are best effort while
+    /// lifecycle commands wait for space so shutdown stays durable.
     /// None only if the session DB failed to open at startup.
-    persist_tx: Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     /// Optional session store for lazy buffer loading from SQLite.
     /// None only if the session DB failed to open at startup.
     session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
@@ -244,6 +556,12 @@ pub struct PtySessionManager {
     /// commands. Shutdown waits for this to reach zero before closing the
     /// persistence worker.
     active_reader_count: Arc<AtomicUsize>,
+    #[cfg(test)]
+    respawn_test_hook: Arc<RespawnTestHook>,
+    #[cfg(test)]
+    create_test_hook: Arc<CreateTestHook>,
+    #[cfg(test)]
+    spawn_test_hook: Arc<SpawnTestHook>,
 }
 
 struct Inner {
@@ -257,6 +575,14 @@ struct Inner {
     /// intentionally reusable, so every persistence command carries this
     /// second identity as well.
     next_incarnation: u64,
+    /// Incremented whenever all current sessions are disposed. Respawn commands
+    /// from the previous generation are stale, even if their kill marker was
+    /// already removed by tombstone cleanup. In-flight creates use the same
+    /// fence before publishing a newly spawned session.
+    generation: u64,
+    /// Set only for terminal server shutdown. Workspace/settings disposal is
+    /// reusable and therefore leaves this false.
+    closing: bool,
     /// Track session IDs that were explicitly killed by user (kill/remove API).
     /// Reader thread checks this to prevent auto-restart after manual termination.
     killed: HashSet<String>,
@@ -305,6 +631,8 @@ impl Inner {
             dead: HashMap::new(),
             failed_replacements: HashMap::new(),
             next_incarnation: crate::pty::session::now_ms().saturating_mul(1024),
+            generation: 0,
+            closing: false,
             killed: HashSet::new(),
             suppress_exit_counts: HashMap::new(),
             pending_replacements: HashMap::new(),
@@ -493,7 +821,7 @@ impl PtySessionManager {
 
     pub fn with_persist(
         sink: Arc<dyn EventSink>,
-        persist_tx: Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+        persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
         session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
     ) -> Self {
         // Bounded channel prevents DoS if supervisor hangs/panics.
@@ -517,6 +845,9 @@ impl PtySessionManager {
 
         let manager = Self {
             inner: Arc::new(Mutex::new(initial_inner)),
+            lifecycle_gate: Arc::new(LifecycleGate::new()),
+            persistence_gate: Arc::new(Mutex::new(())),
+            readers: Arc::new(ReaderRegistry::new()),
             sink: Arc::clone(&sink),
             respawn_tx,
             persist_tx,
@@ -525,6 +856,12 @@ impl PtySessionManager {
             diagnostics: Arc::new(std::sync::RwLock::new(None)),
             target_context: Arc::new(std::sync::RwLock::new(None)),
             active_reader_count: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            respawn_test_hook: Arc::new(RespawnTestHook::new()),
+            #[cfg(test)]
+            create_test_hook: Arc::new(CreateTestHook::new()),
+            #[cfg(test)]
+            spawn_test_hook: Arc::new(SpawnTestHook::new()),
         };
 
         // Spawn the supervisor task that handles respawn requests.
@@ -534,6 +871,13 @@ impl PtySessionManager {
         let diag_cell = Arc::clone(&manager.diagnostics);
         let target_context_cell = Arc::clone(&manager.target_context);
         let active_reader_count = Arc::clone(&manager.active_reader_count);
+        let lifecycle_gate = Arc::clone(&manager.lifecycle_gate);
+        let persistence_gate = Arc::clone(&manager.persistence_gate);
+        let readers = Arc::clone(&manager.readers);
+        #[cfg(test)]
+        let respawn_test_hook = Arc::clone(&manager.respawn_test_hook);
+        #[cfg(test)]
+        let spawn_test_hook = Arc::clone(&manager.spawn_test_hook);
         tokio::spawn(supervisor_loop(
             respawn_rx,
             inner_clone,
@@ -545,6 +889,13 @@ impl PtySessionManager {
             diag_cell,
             target_context_cell,
             active_reader_count,
+            lifecycle_gate,
+            persistence_gate,
+            readers,
+            #[cfg(test)]
+            respawn_test_hook,
+            #[cfg(test)]
+            spawn_test_hook,
         ));
 
         manager
@@ -567,6 +918,26 @@ impl PtySessionManager {
         context
             .validate_targeted_session(project, worktree_path, requested_cwd)
             .await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_respawn_hook(&self) -> Arc<RespawnTestHook> {
+        Arc::clone(&self.respawn_test_hook)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_create_hook(&self) -> Arc<CreateTestHook> {
+        Arc::clone(&self.create_test_hook)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_spawn_hook(&self) -> Arc<SpawnTestHook> {
+        Arc::clone(&self.spawn_test_hook)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_is_disposing(&self) -> bool {
+        self.lifecycle_gate.is_disposing()
     }
 
     /// Wire the backend diagnostics store after construction (Phase 03).
@@ -601,6 +972,8 @@ impl PtySessionManager {
         initial_buffer: Option<(Vec<u8>, u64)>,
     ) -> Result<SessionMeta, AppError> {
         validate_session_id(&opts.id)?;
+        let _lifecycle_permit = self.lifecycle_gate.begin()?;
+        let _persistence_guard = self.persistence_gate.lock().unwrap();
 
         let (retrying_unavailable_target, retry_buffer) = {
             let inner = self.inner.lock().unwrap();
@@ -618,7 +991,7 @@ impl PtySessionManager {
         let fallback_buffer = retry_buffer.as_ref().map(Arc::clone);
 
         // Kill any existing session with this ID before recreating.
-        self.kill_internal_for_replace(&opts.id);
+        self.kill_internal_impl(&opts.id, true);
 
         // Allocate the new concrete identity before slow PTY setup. Reader
         // threads from the evicted incarnation may finish at any time, and
@@ -642,6 +1015,16 @@ impl PtySessionManager {
         // Reacquire after spawn to update state atomically.
         // SAFETY: kill_internal marks session as killed, so supervisor won't
         // restart it even if we're preempted here.
+        let creation_generation = {
+            let inner = self.inner.lock().unwrap();
+            if inner.closing {
+                return Err(AppError::Unavailable("PTY manager is shutting down".into()));
+            }
+            inner.generation
+        };
+
+        #[cfg(test)]
+        self.spawn_test_hook.wait_if_paused_sync();
 
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -753,13 +1136,26 @@ impl PtySessionManager {
         let lifecycle = session.lifecycle.clone();
         let published_editing = session.published_editing_ref();
 
-        {
+        #[cfg(test)]
+        self.create_test_hook.wait_if_paused();
+
+        let generation = {
             let mut inner = self.inner.lock().unwrap();
             if !inner.replacement_is_current(&opts.id, incarnation) {
                 drop(inner);
                 session.terminate();
                 return Err(AppError::PtyError(
                     "PTY replacement was superseded by a newer request".into(),
+                ));
+            }
+            if self.lifecycle_gate.is_disposing()
+                || inner.closing
+                || inner.generation != creation_generation
+            {
+                drop(inner);
+                session.terminate();
+                return Err(AppError::Unavailable(
+                    "PTY manager was disposed during PTY creation".into(),
                 ));
             }
             // TOCTOU guard: if concurrent create() already inserted this ID while
@@ -775,7 +1171,8 @@ impl PtySessionManager {
             // This ensures create() is fully idempotent across race conditions.
             inner.killed.remove(&opts.id);
             inner.live.insert(opts.id.clone(), session);
-        }
+            creation_generation
+        };
 
         let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
         if let Some(pfm) = &port_forward_manager {
@@ -859,16 +1256,19 @@ impl PtySessionManager {
         let persist_tx = self.persist_tx.clone();
         let session_store = self.session_store.clone();
         let port_forward_manager_for_failure = port_forward_manager.clone();
+        let persistence_gate = Arc::clone(&self.persistence_gate);
+        let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
         let rt_handle = tokio::runtime::Handle::try_current().ok();
         let diag_store = self.diagnostics.read().unwrap().clone();
         self.active_reader_count.fetch_add(1, Ordering::AcqRel);
         let active_reader_count = Arc::clone(&self.active_reader_count);
-        std::thread::Builder::new()
+        let reader_handle = std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
             .spawn(move || {
                 reader_thread(
                     session_id,
                     incarnation,
+                    generation,
                     reader,
                     child,
                     buffer,
@@ -878,6 +1278,7 @@ impl PtySessionManager {
                     respawn_tx,
                     persist_tx,
                     session_store,
+                    persistence_gate,
                     port_forward_manager,
                     project_name,
                     rt_handle,
@@ -901,8 +1302,10 @@ impl PtySessionManager {
                     Some(failure_meta.clone()),
                     Some(failure_persistence.clone()),
                 );
+                self.kill_internal_impl(&opts.id, true);
                 AppError::PtyError(format!("thread spawn failed: {e}"))
             })?;
+        self.readers.register(reader_handle);
 
         self.inner
             .lock()
@@ -1137,6 +1540,7 @@ impl PtySessionManager {
 
     /// Kill + immediately evict all metadata (no 60s TTL).
     pub fn remove(&self, id: &str) -> Result<Option<u64>, AppError> {
+        let _persistence_guard = self.persistence_gate.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         // Allocate a removal watermark after any in-flight replacement. The
         // persistence worker uses it to reject a late SessionCreated from the
@@ -1400,25 +1804,56 @@ impl PtySessionManager {
         result
     }
 
-    /// Dispose all sessions — call on graceful shutdown.
+    /// Dispose all sessions while keeping the manager reusable.
     pub fn dispose(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        info!(count = inner.live.len(), "Disposing all PTY sessions");
-        let live_sessions = inner
-            .live
-            .iter()
-            .map(|(id, session)| (id.clone(), session.incarnation))
-            .collect::<Vec<_>>();
-        for session in inner.live.values() {
+        self.dispose_internal(false);
+    }
+
+    /// Permanently close the manager and dispose all sessions for server exit.
+    pub fn shutdown(&self) {
+        self.dispose_internal(true);
+        self.readers.join_all();
+    }
+
+    fn dispose_internal(&self, closing: bool) {
+        let _lifecycle_drain = self.lifecycle_gate.begin_dispose(closing);
+        let _persistence_guard = self.persistence_gate.lock().unwrap();
+        let (sessions, live_session_ids) = {
+            let mut inner = self.inner.lock().unwrap();
+            info!(count = inner.live.len(), "Disposing all PTY sessions");
+            inner.closing |= closing;
+            inner.generation = inner.generation.wrapping_add(1);
+            let live_session_ids = inner
+                .live
+                .iter()
+                .map(|(id, session)| (id.clone(), session.incarnation))
+                .collect::<Vec<_>>();
+            let session_ids = inner
+                .live
+                .keys()
+                .chain(inner.dead.keys())
+                .cloned()
+                .collect::<Vec<_>>();
+            inner.killed.extend(session_ids);
+            let sessions = inner
+                .live
+                .drain()
+                .map(|(_, session)| session)
+                .collect::<Vec<LiveSession>>();
+            inner.dead.clear();
+            inner.failed_replacements.clear();
+            inner.pending_replacements.clear();
+            (sessions, live_session_ids)
+        };
+
+        // Mark sessions killed before terminating them so reader threads cannot
+        // enqueue an automatic restart while the server is leaving.
+        for session in &sessions {
             session.terminate();
         }
-        inner.live.clear();
-        inner.dead.clear();
-        inner.failed_replacements.clear();
-        drop(inner);
 
         if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
-            for (id, incarnation) in live_sessions {
+            for (id, incarnation) in live_session_ids {
                 pfm.unregister_session(&id, incarnation);
             }
         }
@@ -1466,6 +1901,7 @@ impl PtySessionManager {
 
     /// Persist full snapshots for all live sessions before graceful shutdown.
     pub fn snapshot_live_buffers(&self) {
+        let _persistence_guard = self.persistence_gate.lock().unwrap();
         let snapshots = {
             let inner = self.inner.lock().unwrap();
             inner
@@ -1542,11 +1978,8 @@ impl PtySessionManager {
     // -----------------------------------------------------------------------
 
     fn kill_internal(&self, id: &str) {
+        let _persistence_guard = self.persistence_gate.lock().unwrap();
         self.kill_internal_impl(id, false);
-    }
-
-    fn kill_internal_for_replace(&self, id: &str) {
-        self.kill_internal_impl(id, true);
     }
 
     fn kill_internal_impl(&self, id: &str, suppress_exit: bool) {
@@ -1560,12 +1993,14 @@ impl PtySessionManager {
                     .entry(id.to_string())
                     .or_insert(0) += 1;
             }
-            session.terminate();
+
             let incarnation = session.incarnation;
             let buffer = session.buffer_ref();
+            let shutdown = session.shutdown_ref();
+            session.terminate();
             inner.dead.insert(
                 id.to_string(),
-                DeadSession::killed(session.meta, incarnation, Some(buffer)),
+                DeadSession::killed(session.meta, incarnation, Some(buffer), shutdown),
             );
             Some(incarnation)
         } else {
@@ -1611,6 +2046,7 @@ impl Drop for ReaderGuard {
 fn reader_thread(
     session_id: String,
     incarnation: u64,
+    generation: u64,
     mut reader: Box<dyn std::io::Read + Send>,
     mut child: Box<dyn PtyChild + Send + Sync>,
     buffer: Arc<Mutex<crate::pty::buffer::ScrollbackBuffer>>,
@@ -1618,8 +2054,9 @@ fn reader_thread(
     sink: Arc<dyn EventSink>,
     inner: Arc<Mutex<Inner>>,
     respawn_tx: mpsc::Sender<RespawnCmd>,
-    persist_tx: Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<Arc<SessionStore>>,
+    persistence_gate: Arc<Mutex<()>>,
     port_forward_manager: Option<Arc<PortForwardManager>>,
     project: Option<String>,
     rt_handle: Option<tokio::runtime::Handle>,
@@ -1642,10 +2079,9 @@ fn reader_thread(
 
     let mut chunk = vec![0u8; 4096];
     let mut output_decoder = Utf8StreamDecoder::default();
-    // Throttle buffer snapshots: only send to persist worker every 16KB to reduce memory churn.
-    // Performance: reduces snapshot frequency from ~100/sec to ~6/sec on fast terminals (16x improvement).
-    // Trade-off: Sessions with < 16KB output won't persist to SQLite (acceptable: WS reconnect still works,
-    // only server restart loses buffer for short sessions like quick commands or failed builds).
+    // Throttle periodic snapshots to one per 16KB. The bounded queue drops these
+    // best-effort updates under pressure; reader completion always sends a final
+    // snapshot before its lifecycle transition.
     let mut bytes_since_snapshot = 0usize;
     const SNAPSHOT_THRESHOLD: usize = 16 * 1024; // 16KB
                                                  // Lifecycle-only chunks must not announce editing before prompt bytes exist.
@@ -1677,12 +2113,25 @@ fn reader_thread(
         } else {
             data.to_vec()
         };
-        {
+        let snapshot = {
             let mut buf = buffer.lock().unwrap();
             buf.push(&visible_data);
             bytes_since_snapshot += visible_data.len();
-            if bytes_since_snapshot >= SNAPSHOT_THRESHOLD {
-                let (snapshot_data, total_written) = buf.snapshot();
+            (bytes_since_snapshot >= SNAPSHOT_THRESHOLD && persist_tx.is_some())
+                .then(|| buf.snapshot())
+        };
+        if let Some((snapshot_data, total_written)) = snapshot {
+            let _persistence_guard = persistence_gate.lock().unwrap();
+            let owns_live_session = {
+                let inner_guard = inner.lock().unwrap();
+                inner_guard.generation == generation
+                    && inner_guard
+                        .live
+                        .get(&session_id)
+                        .map(|session| Arc::ptr_eq(&session.shutdown_ref(), &shutdown))
+                        .unwrap_or(false)
+            };
+            if owns_live_session {
                 try_persist_buffer_update(
                     &persist_tx,
                     session_store.as_deref(),
@@ -1776,27 +2225,18 @@ fn reader_thread(
     let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(0);
     info!(id = %session_id, exit_code, "PTY session exited");
 
-    // Send a final full snapshot before SessionExited so short-output sessions
-    // (<16KB) survive server restart.
-    let (data, total_written) = buffer.lock().unwrap().snapshot();
-    persist_buffer_snapshot(
-        &persist_tx,
-        session_store.as_deref(),
-        &session_id,
-        incarnation,
-        data,
-        total_written,
-    );
-    persist_session_exited(
-        &persist_tx,
-        session_store.as_deref(),
-        &session_id,
-        incarnation,
-    );
-
-    let (respawn_opts, restart_count, _was_killed, should_restart, _delay_ms, emit_exit) = {
+    let (
+        respawn_opts,
+        restart_count,
+        _was_killed,
+        should_restart,
+        _delay_ms,
+        emit_exit,
+        persist_exit,
+    ) = {
         let mut inner_guard = inner.lock().unwrap();
-        let was_killed = inner_guard.killed.contains(&session_id);
+        let was_killed =
+            inner_guard.killed.contains(&session_id) || inner_guard.generation != generation;
 
         let owns_live_session = inner_guard
             .live
@@ -1816,6 +2256,7 @@ fn reader_thread(
             let policy = session.respawn_opts.restart_policy;
             let max_retries = session.respawn_opts.restart_max_retries;
             let respawn_opts = session.respawn_opts.clone();
+            let session_shutdown = session.shutdown_ref();
 
             // Decide if we should restart.
             let restart_decision =
@@ -1840,6 +2281,7 @@ fn reader_thread(
                 exit_code,
                 incarnation,
                 Some(Arc::clone(&buffer)),
+                session_shutdown,
             );
             tombstone.will_restart = will_restart;
             tombstone.restart_in_ms = restart_in_ms;
@@ -1864,6 +2306,7 @@ fn reader_thread(
                 was_killed,
                 restart_decision,
                 restart_in_ms.unwrap_or(0),
+                true,
                 true,
             )
         } else if inner_guard.live.contains_key(&session_id) {
@@ -1896,9 +2339,16 @@ fn reader_thread(
                 None,
                 0,
                 false,
+                false,
             )
         } else {
             let suppress_exit = consume_suppressed_exit(&mut inner_guard, &session_id);
+            let persist_exit = !suppress_exit
+                && inner_guard
+                    .dead
+                    .get(&session_id)
+                    .map(|dead| Arc::ptr_eq(&dead.shutdown, &shutdown))
+                    .unwrap_or(false);
             // Session already removed (concurrent kill) — no restart.
             // Still record the exit for diagnostics context.
             record_diag(
@@ -1928,9 +2378,43 @@ fn reader_thread(
                 None,
                 0,
                 !suppress_exit,
+                persist_exit,
             )
         }
     };
+
+    // Send a final full snapshot only for the reader that owns the current
+    // dead tombstone. Stale/replaced readers must not mark a newer same-ID
+    // session dead, and shutdown-drained readers must not enqueue after the
+    // persistence worker is told to stop.
+    if persist_exit {
+        let _persistence_guard = persistence_gate.lock().unwrap();
+        let owns_dead_session = {
+            let inner_guard = inner.lock().unwrap();
+            inner_guard
+                .dead
+                .get(&session_id)
+                .map(|dead| Arc::ptr_eq(&dead.shutdown, &shutdown))
+                .unwrap_or(false)
+        };
+        if owns_dead_session {
+            let (data, total_written) = buffer.lock().unwrap().snapshot();
+            persist_buffer_snapshot(
+                &persist_tx,
+                session_store.as_deref(),
+                &session_id,
+                incarnation,
+                data,
+                total_written,
+            );
+            persist_session_exited(
+                &persist_tx,
+                session_store.as_deref(),
+                &session_id,
+                incarnation,
+            );
+        }
+    }
 
     // Send respawn command if needed.
     // try_send (non-blocking) because queue is bounded. If full, supervisor is
@@ -1939,6 +2423,7 @@ fn reader_thread(
         let cmd = RespawnCmd {
             id: session_id.clone(),
             incarnation,
+            generation,
             _prev_exit_code: exit_code,
             restart_count,
             respawn_opts,
@@ -2011,12 +2496,17 @@ async fn supervisor_loop(
     inner: Arc<Mutex<Inner>>,
     sink: Arc<dyn EventSink>,
     respawn_tx: mpsc::Sender<RespawnCmd>,
-    persist_tx: Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<Arc<SessionStore>>,
     pfm_cell: Arc<std::sync::RwLock<Option<Arc<PortForwardManager>>>>,
     diag_cell: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
     target_context_cell: Arc<std::sync::RwLock<Option<PtyTargetContext>>>,
     active_reader_count: Arc<AtomicUsize>,
+    lifecycle_gate: Arc<LifecycleGate>,
+    persistence_gate: Arc<Mutex<()>>,
+    readers: Arc<ReaderRegistry>,
+    #[cfg(test)] respawn_test_hook: Arc<RespawnTestHook>,
+    #[cfg(test)] spawn_test_hook: Arc<SpawnTestHook>,
 ) {
     while let Some(cmd) = respawn_rx.recv().await {
         let session_id = cmd.id.clone();
@@ -2033,7 +2523,10 @@ async fn supervisor_loop(
         // Check if session was killed during backoff.
         {
             let inner_guard = inner.lock().unwrap();
-            if !inner_guard.respawn_source_is_current(&session_id, cmd.incarnation) {
+            if !inner_guard.respawn_source_is_current(&session_id, cmd.incarnation)
+                || inner_guard.generation != cmd.generation
+                || inner_guard.killed.contains(&session_id)
+            {
                 info!(id = %session_id, "Session killed during backoff — skipping restart");
                 continue;
             }
@@ -2090,6 +2583,13 @@ async fn supervisor_loop(
                         pfm,
                         diag_store.clone(),
                         Arc::clone(&active_reader_count),
+                        Arc::clone(&lifecycle_gate),
+                        Arc::clone(&persistence_gate),
+                        Arc::clone(&readers),
+                        #[cfg(test)]
+                        Arc::clone(&respawn_test_hook),
+                        #[cfg(test)]
+                        Arc::clone(&spawn_test_hook),
                     )
                     .await
                 }
@@ -2114,6 +2614,13 @@ async fn supervisor_loop(
                 pfm,
                 diag_store.clone(),
                 Arc::clone(&active_reader_count),
+                Arc::clone(&lifecycle_gate),
+                Arc::clone(&persistence_gate),
+                Arc::clone(&readers),
+                #[cfg(test)]
+                Arc::clone(&respawn_test_hook),
+                #[cfg(test)]
+                Arc::clone(&spawn_test_hook),
             )
             .await
         };
@@ -2186,7 +2693,7 @@ fn is_target_loss_error(error: &AppError) -> bool {
 /// target-unavailable notification must refuse to touch that newer identity.
 fn finish_respawn_source_failure(
     inner: &Arc<Mutex<Inner>>,
-    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<&SessionStore>,
     session_id: &str,
     incarnation: u64,
@@ -2225,7 +2732,7 @@ fn finish_respawn_source_failure(
 /// either case.
 fn finish_failed_replacement(
     inner: &Arc<Mutex<Inner>>,
-    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<&SessionStore>,
     session_id: &str,
     replacement_incarnation: u64,
@@ -2264,9 +2771,10 @@ fn finish_failed_replacement(
                 meta.target_unavailable || target_unavailable || preserve_target_unavailable;
             let target_unavailable = meta.target_unavailable;
             let buffer = fallback_buffer.or_else(|| Some(session.buffer_ref()));
+            let shutdown = session.shutdown_ref();
             guard.dead.insert(
                 session_id.to_string(),
-                DeadSession::exited(meta, -1, replacement_incarnation, buffer),
+                DeadSession::exited(meta, -1, replacement_incarnation, buffer, shutdown),
             );
             (replacement_incarnation, target_unavailable)
         } else if let Some(mut meta) = failure_meta
@@ -2374,7 +2882,7 @@ fn finish_failed_replacement(
 /// a request handler. The shared FIFO preserves its order relative to create,
 /// exit, and removal commands.
 fn persist_target_unavailable_with_metadata(
-    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<&SessionStore>,
     meta: &SessionMeta,
     incarnation: u64,
@@ -2431,7 +2939,7 @@ fn persist_target_unavailable_with_metadata(
 }
 
 fn persist_target_unavailable(
-    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<&SessionStore>,
     session_id: &str,
     incarnation: u64,
@@ -2468,7 +2976,7 @@ fn persist_target_unavailable(
 }
 
 fn persist_session_dead(
-    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<&SessionStore>,
     session_id: &str,
     incarnation: u64,
@@ -2503,7 +3011,7 @@ fn persist_session_dead(
 }
 
 fn persist_session_exited(
-    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<&SessionStore>,
     session_id: &str,
     incarnation: u64,
@@ -2538,7 +3046,7 @@ fn persist_session_exited(
 }
 
 fn persist_session_created(
-    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<&SessionStore>,
     meta: &SessionMeta,
     incarnation: u64,
@@ -2604,7 +3112,7 @@ fn persist_buffer_direct(
 }
 
 fn try_persist_buffer_update(
-    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<&SessionStore>,
     session_id: &str,
     incarnation: u64,
@@ -2616,14 +3124,15 @@ fn try_persist_buffer_update(
         return;
     };
 
-    match tx.send(crate::persistence::PersistCmd::BufferUpdate {
+    match tx.try_send(crate::persistence::PersistCmd::BufferUpdate {
         session_id: session_id.to_string(),
         incarnation,
         data,
         total_written,
     }) {
         Ok(()) => {}
-        Err(std::sync::mpsc::SendError(command)) => {
+        Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+        Err(std::sync::mpsc::TrySendError::Disconnected(command)) => {
             if let crate::persistence::PersistCmd::BufferUpdate {
                 data,
                 total_written,
@@ -2637,7 +3146,7 @@ fn try_persist_buffer_update(
 }
 
 fn persist_buffer_snapshot(
-    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<&SessionStore>,
     session_id: &str,
     incarnation: u64,
@@ -2674,11 +3183,16 @@ async fn respawn_internal(
     inner: &Arc<Mutex<Inner>>,
     sink: &Arc<dyn EventSink>,
     respawn_tx: &mpsc::Sender<RespawnCmd>,
-    persist_tx: Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<Arc<SessionStore>>,
     port_forward_manager: Option<Arc<PortForwardManager>>,
     diag_store: Option<DiagnosticStore>,
     active_reader_count: Arc<AtomicUsize>,
+    lifecycle_gate: Arc<LifecycleGate>,
+    persistence_gate: Arc<Mutex<()>>,
+    readers: Arc<ReaderRegistry>,
+    #[cfg(test)] respawn_test_hook: Arc<RespawnTestHook>,
+    #[cfg(test)] spawn_test_hook: Arc<SpawnTestHook>,
 ) -> Result<(), AppError> {
     let opts = &cmd.respawn_opts;
     let source_incarnation = cmd.incarnation;
@@ -2706,6 +3220,27 @@ async fn respawn_internal(
             source_buffer,
         )
     };
+
+    let Some(_lifecycle_permit) = lifecycle_gate.try_begin() else {
+        info!(id = %session_id, "Respawn skipped while PTY manager is disposing");
+        return Ok(());
+    };
+
+    // Check before opening a PTY, then repeat the check immediately before
+    // publishing the new session. dispose() can race with either phase.
+    {
+        let inner_guard = inner.lock().unwrap();
+        if lifecycle_gate.is_disposing()
+            || inner_guard.generation != cmd.generation
+            || inner_guard.killed.contains(session_id)
+        {
+            info!(id = %session_id, "Stale respawn request — skipping restart");
+            return Ok(());
+        }
+    }
+
+    #[cfg(test)]
+    spawn_test_hook.wait_if_paused_async().await;
 
     // Build PTY with same config.
     let pty_system = NativePtySystem::default();
@@ -2854,6 +3389,16 @@ async fn respawn_internal(
 
     // Publish only if the source tombstone and this replacement reservation
     // still belong to this respawn. A concurrent create/remove wins.
+    #[cfg(test)]
+    respawn_test_hook.wait_if_paused().await;
+
+    // Serialize publication and its persistence metadata with reader
+    // snapshots. The guard is acquired after the async test hook so this
+    // future remains Send when spawned by Tokio.
+    let _persistence_guard = persistence_gate.lock().unwrap();
+
+    // Insert into live map — if session ID already exists (user called create
+    // concurrently), this will replace it (same behavior as create()).
     {
         let mut inner_guard = inner.lock().unwrap();
         if !inner_guard.respawn_replacement_is_current(session_id, source_incarnation, incarnation)
@@ -2864,7 +3409,15 @@ async fn respawn_internal(
                 "PTY respawn was superseded by a newer request".into(),
             ));
         }
-
+        if lifecycle_gate.is_disposing()
+            || inner_guard.generation != cmd.generation
+            || inner_guard.killed.contains(session_id)
+        {
+            drop(inner_guard);
+            session.terminate();
+            info!(id = %session_id, "Respawn cancelled before publish");
+            return Ok(());
+        }
         // Remove from killed set (allow future restarts if user doesn't kill again).
         inner_guard.killed.remove(session_id);
         inner_guard.dead.remove(session_id);
@@ -2905,6 +3458,7 @@ async fn respawn_internal(
         incarnation,
     ));
     let respawn_tx_clone = respawn_tx.clone();
+    let persistence_gate_clone = Arc::clone(&persistence_gate);
     let project_name = opts.project.clone();
     let rt_handle = tokio::runtime::Handle::try_current().ok();
     let persist_tx_for_failure = persist_tx.clone();
@@ -2912,12 +3466,13 @@ async fn respawn_internal(
     let port_forward_manager_for_failure = port_forward_manager.clone();
     active_reader_count.fetch_add(1, Ordering::AcqRel);
     let active_reader_count_for_reader = Arc::clone(&active_reader_count);
-    std::thread::Builder::new()
+    let reader_handle = std::thread::Builder::new()
         .name(format!("pty-reader:{id_clone}"))
         .spawn(move || {
             reader_thread(
                 id_clone,
                 incarnation,
+                cmd.generation,
                 reader,
                 child,
                 buffer,
@@ -2927,6 +3482,7 @@ async fn respawn_internal(
                 respawn_tx_clone,
                 persist_tx,
                 session_store_for_reader,
+                persistence_gate_clone,
                 port_forward_manager,
                 project_name,
                 rt_handle,
@@ -2955,6 +3511,7 @@ async fn respawn_internal(
             );
             AppError::PtyError(format!("thread spawn failed: {error}"))
         })?;
+    readers.register(reader_handle);
 
     inner
         .lock()
@@ -3279,6 +3836,10 @@ mod tests {
     use super::*;
     use crate::pty::event_sink::NoopEventSink;
 
+    fn terminal_shutdown() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(true))
+    }
+
     #[test]
     fn stale_respawn_reservation_cannot_publish_after_newer_replacement() {
         let mut inner = Inner::new();
@@ -3292,7 +3853,7 @@ mod tests {
         );
         inner.dead.insert(
             "terminal:race".to_string(),
-            DeadSession::exited(meta, 1, source_incarnation, None),
+            DeadSession::exited(meta, 1, source_incarnation, None, terminal_shutdown()),
         );
 
         let stale_replacement = inner.begin_replacement("terminal:race");
@@ -3323,11 +3884,10 @@ mod tests {
             "/tmp".to_string(),
             RestartPolicy::Never,
         );
-        inner
-            .lock()
-            .unwrap()
-            .dead
-            .insert(id.to_string(), DeadSession::exited(meta, 0, 10, None));
+        inner.lock().unwrap().dead.insert(
+            id.to_string(),
+            DeadSession::exited(meta, 0, 10, None, terminal_shutdown()),
+        );
         let reader_sink =
             IncarnationEventSink::new(Arc::clone(&sink), Arc::clone(&inner), id.to_string(), 10);
 
@@ -3388,11 +3948,10 @@ mod tests {
             "/tmp/demo".to_string(),
             RestartPolicy::Always,
         );
-        inner
-            .lock()
-            .unwrap()
-            .dead
-            .insert(id.to_string(), DeadSession::exited(meta, 1, 10, None));
+        inner.lock().unwrap().dead.insert(
+            id.to_string(),
+            DeadSession::exited(meta, 1, 10, None, terminal_shutdown()),
+        );
         inner
             .lock()
             .unwrap()
@@ -3423,9 +3982,10 @@ mod tests {
         meta.incarnation = 10;
         {
             let mut inner = manager.inner.lock().unwrap();
-            inner
-                .dead
-                .insert(id.to_string(), DeadSession::exited(meta, 1, 10, None));
+            inner.dead.insert(
+                id.to_string(),
+                DeadSession::exited(meta, 1, 10, None, terminal_shutdown()),
+            );
             inner.pending_replacements.insert(id.to_string(), 11);
         }
 
@@ -3594,9 +4154,10 @@ mod tests {
 
         {
             let mut inner = manager.inner.lock().unwrap();
-            inner
-                .dead
-                .insert(id.to_string(), DeadSession::exited(old_meta, 1, 10, None));
+            inner.dead.insert(
+                id.to_string(),
+                DeadSession::exited(old_meta, 1, 10, None, terminal_shutdown()),
+            );
             inner.pending_replacements.insert(id.to_string(), 11);
         }
         finish_failed_replacement(
@@ -3643,9 +4204,10 @@ mod tests {
         );
         {
             let mut guard = inner.lock().unwrap();
-            guard
-                .dead
-                .insert(id.to_string(), DeadSession::exited(meta, 1, 10, None));
+            guard.dead.insert(
+                id.to_string(),
+                DeadSession::exited(meta, 1, 10, None, terminal_shutdown()),
+            );
             guard.pending_replacements.insert(id.to_string(), 11);
         }
 
@@ -3673,7 +4235,7 @@ mod tests {
 
     #[test]
     fn target_unavailable_persistence_waits_for_full_queue() {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         tx.send(crate::persistence::PersistCmd::BufferUpdate {
             session_id: "terminal:queued".to_string(),
             incarnation: 1,
@@ -3703,6 +4265,79 @@ mod tests {
                 if session_id == "terminal:unavailable"
         ));
         sender.join().unwrap();
+    }
+
+    #[test]
+    fn periodic_snapshot_is_dropped_when_persistence_queue_is_full() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = crate::persistence::SessionStore::open(temp.path()).unwrap();
+        let meta = SessionMeta::new(
+            "terminal:periodic".to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Never,
+        );
+        store
+            .save_session_for_incarnation(&meta, 2, &HashMap::new(), 80, 24, 0)
+            .unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(crate::persistence::PersistCmd::BufferUpdate {
+            session_id: "terminal:queued".to_string(),
+            incarnation: 1,
+            data: Vec::new(),
+            total_written: 0,
+        })
+        .unwrap();
+
+        try_persist_buffer_update(
+            &Some(tx),
+            Some(&store),
+            "terminal:periodic",
+            2,
+            b"snapshot".to_vec(),
+            8,
+        );
+
+        assert!(matches!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)),
+            Ok(crate::persistence::PersistCmd::BufferUpdate { session_id, .. })
+                if session_id == "terminal:queued"
+        ));
+        assert!(rx.try_recv().is_err());
+        assert!(store.load_buffer("terminal:periodic").unwrap().is_none());
+    }
+
+    #[test]
+    fn periodic_snapshot_falls_back_when_persistence_worker_is_disconnected() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = crate::persistence::SessionStore::open(temp.path()).unwrap();
+        let meta = SessionMeta::new(
+            "terminal:periodic-disconnected".to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Never,
+        );
+        store
+            .save_session_for_incarnation(&meta, 3, &HashMap::new(), 80, 24, 0)
+            .unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        drop(rx);
+
+        try_persist_buffer_update(
+            &Some(tx),
+            Some(&store),
+            "terminal:periodic-disconnected",
+            3,
+            b"snapshot".to_vec(),
+            8,
+        );
+
+        assert_eq!(
+            store.load_buffer("terminal:periodic-disconnected").unwrap(),
+            Some((b"snapshot".to_vec(), 8)),
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3740,7 +4375,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_removed_persistence_waits_for_full_queue() {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         tx.send(crate::persistence::PersistCmd::BufferUpdate {
             session_id: "terminal:queued".to_string(),
             incarnation: 1,
@@ -3792,7 +4427,7 @@ mod tests {
             .save_session_for_incarnation(&meta, 1, &HashMap::new(), 80, 24, 5)
             .unwrap();
 
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
         drop(rx);
         let manager =
             PtySessionManager::with_persist(Arc::new(NoopEventSink), Some(tx), Some(store.clone()));
@@ -3816,7 +4451,7 @@ mod tests {
             .save_session_for_incarnation(&dead_meta, 1, &HashMap::new(), 80, 24, 5)
             .unwrap();
 
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
         drop(rx);
         let persist_tx = Some(tx);
         persist_session_dead(&persist_tx, Some(&store), &dead_meta.id, 1);
@@ -3885,7 +4520,13 @@ mod tests {
         buffer.lock().unwrap().push(b"final output\n");
         manager.inner.lock().unwrap().dead.insert(
             meta.id.clone(),
-            DeadSession::exited(meta.clone(), 0, 1, Some(Arc::clone(&buffer))),
+            DeadSession::exited(
+                meta.clone(),
+                0,
+                1,
+                Some(Arc::clone(&buffer)),
+                terminal_shutdown(),
+            ),
         );
 
         let replay = manager.get_buffer_with_offset(&meta.id, None).unwrap();
