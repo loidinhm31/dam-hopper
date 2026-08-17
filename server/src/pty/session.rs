@@ -266,6 +266,9 @@ impl LiveSession {
 pub struct DeadSession {
     pub meta: SessionMeta,
     pub died_at: Instant,
+    /// Identity of the PTY reader that produced this tombstone. Stale readers
+    /// must not persist an exit event for a newer session with the same ID.
+    pub shutdown: Arc<AtomicBool>,
     /// Set by the restart engine (Phase 4) before re-spawning.
     pub will_restart: bool,
     /// Milliseconds until the next restart attempt; `None` if not restarting.
@@ -276,26 +279,28 @@ impl DeadSession {
     /// Construct a tombstone for a forcibly-killed session (exit_code = -1).
     /// Centralises the `will_restart`/`restart_in_ms` defaults so all kill
     /// paths stay consistent.
-    pub(crate) fn killed(mut meta: SessionMeta) -> Self {
+    pub(crate) fn killed(mut meta: SessionMeta, shutdown: Arc<AtomicBool>) -> Self {
         meta.alive = false;
         meta.exit_code = Some(-1);
         meta.last_exit_at = Some(now_ms());
         Self {
             meta,
             died_at: Instant::now(),
+            shutdown,
             will_restart: false,
             restart_in_ms: None,
         }
     }
 
     /// Construct a tombstone for a process that exited naturally.
-    pub(crate) fn exited(mut meta: SessionMeta, exit_code: i32) -> Self {
+    pub(crate) fn exited(mut meta: SessionMeta, exit_code: i32, shutdown: Arc<AtomicBool>) -> Self {
         meta.alive = false;
         meta.exit_code = Some(exit_code);
         meta.last_exit_at = Some(now_ms());
         Self {
             meta,
             died_at: Instant::now(),
+            shutdown,
             will_restart: false,
             restart_in_ms: None,
         }

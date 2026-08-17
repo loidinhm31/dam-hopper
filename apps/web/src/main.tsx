@@ -10,6 +10,8 @@ import { IdleTransport } from "@dam-hopper/ui/api/idle-transport";
 import { profileScopedQueryKeyHash } from "@dam-hopper/ui/api/query-client";
 import {
   getActiveProfile,
+  getServerUrl,
+  isSameOriginProductionBuild,
   migrateToProfiles,
 } from "@dam-hopper/ui/api/server-config";
 import {
@@ -33,7 +35,9 @@ migrateToProfiles();
 const activeProfile = getActiveProfile();
 const transport = activeProfile
   ? new WsTransport(activeProfile.url, activeProfile.id)
-  : new IdleTransport();
+  : isSameOriginProductionBuild()
+    ? new WsTransport(getServerUrl())
+    : new IdleTransport();
 setClientTransportStatus(transport.getStatus());
 transport.onStatusChange((status) => setClientTransportStatus(status));
 initTransport(transport);

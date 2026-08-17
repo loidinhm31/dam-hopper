@@ -4,7 +4,7 @@
 
 - [Parent plan](./plan.md)
 - [Advisor brief](./reports/01-advisor-decision-brief.md)
-- [Planned architecture](../../docs/system-architecture.md#proposedplanned-systemd-system-service-unimplemented)
+- [Planned architecture](../../docs/system-architecture.md#proposedplanned-systemd-system-service-repository-asset-not-installed)
 - Evidence: `server/src/main.rs`, `server/src/state.rs`, `server/src/api/router.rs`
 
 ## Overview
@@ -88,7 +88,8 @@ graceful exit`. It has no privileged step and no access to live service database
 
 ## Next steps
 
-- On pass, start Phase 02. Phase 01 completed 2026-08-17; Phase 02 remains pending.
+- Phase 01 completed 2026-08-17. Phase 02 implementation and independent review are complete;
+  Phase 03 administrator validation remains pending.
 - On fail, update architecture/plan assumptions; do not create the unit asset.
 
 ## Unresolved Questions

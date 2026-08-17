@@ -347,6 +347,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Graceful shutdown: snapshot live PTY buffers, ask the worker to flush, then wait.
     pty_manager.snapshot_live_buffers();
+    pty_manager.shutdown();
     if let Some(tx) = &persist_tx {
         let _ = tx.send(dam_hopper_server::persistence::PersistCmd::Shutdown);
     }
