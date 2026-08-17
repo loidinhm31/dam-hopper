@@ -3,6 +3,7 @@ use thiserror::Error;
 use crate::browser_debug::BrowserDebugError;
 use crate::fs::FsError;
 use crate::tunnel::TunnelError;
+use crate::workspace_target::WorkspaceTargetError;
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -53,6 +54,9 @@ pub enum AppError {
 
     #[error("Browser debug error: {0}")]
     BrowserDebug(#[from] BrowserDebugError),
+
+    #[error("Workspace target error: {0}")]
+    WorkspaceTarget(WorkspaceTargetError),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -80,6 +84,12 @@ impl AppError {
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
             AppError::Fs(e) => e.status_code(),
             AppError::Unavailable(_) => 503,
+            AppError::WorkspaceTarget(error) => match error {
+                WorkspaceTargetError::UnknownProject => 404,
+                WorkspaceTargetError::UnregisteredTarget => 400,
+                WorkspaceTargetError::UnavailableTarget => 409,
+                WorkspaceTargetError::InvalidPath => 400,
+            },
             AppError::Tunnel(e) => tunnel_error_status(e),
             AppError::BrowserDebug(e) => e.status_code(),
             _ => 500,
@@ -89,6 +99,12 @@ impl AppError {
     pub fn api_code(&self) -> Option<&'static str> {
         match self {
             AppError::GitUnavailable => Some("GIT_NOT_INITIALIZED"),
+            AppError::WorkspaceTarget(error) => Some(match error {
+                WorkspaceTargetError::UnknownProject => "WORKSPACE_PROJECT_NOT_FOUND",
+                WorkspaceTargetError::UnregisteredTarget => "WORKSPACE_TARGET_UNREGISTERED",
+                WorkspaceTargetError::UnavailableTarget => "WORKSPACE_TARGET_UNAVAILABLE",
+                WorkspaceTargetError::InvalidPath => "WORKSPACE_TARGET_INVALID_PATH",
+            }),
             _ => None,
         }
     }

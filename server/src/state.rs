@@ -22,6 +22,10 @@ use crate::system::HostMetricsSampler;
 use crate::telemetry::worker::TelemetryHandle;
 use crate::telemetry::{codex_otlp::CodexExporterManager, TelemetryRuntime};
 use crate::tunnel::TunnelSessionManager;
+use crate::workspace_target::{
+    ProjectTargetRef, ProjectWorktree, ResolvedProjectTarget, WorkspaceTargetError,
+    WorkspaceTargetResolver,
+};
 
 /// Shared application state across all Axum handlers.
 ///
@@ -99,6 +103,8 @@ pub struct AppState {
     pub codex_exporter: CodexExporterManager,
     /// Serializes telemetry queries, deletion, retention, and collector changes.
     pub telemetry_coordinator: Arc<tokio::sync::Mutex<()>>,
+    /// Server-authoritative, short-lived registered worktree discovery cache.
+    pub workspace_target_resolver: WorkspaceTargetResolver,
 }
 
 impl AppState {
@@ -120,6 +126,47 @@ impl AppState {
             .find(|p| p.name == name)
             .map(|p| StdPathBuf::from(&p.path))
             .ok_or_else(|| AppError::NotFound(format!("Project not found: {name}")))
+    }
+
+    /// Resolve a project target after copying the configured path out of the
+    /// config lock. Git and filesystem work therefore never hold that lock.
+    pub async fn resolve_project_target(
+        &self,
+        target_ref: &ProjectTargetRef,
+    ) -> Result<ResolvedProjectTarget, AppError> {
+        let configured_root = self
+            .workspace_target_project_path(&target_ref.project)
+            .await?;
+        self.workspace_target_resolver
+            .resolve(target_ref, &configured_root)
+            .await
+    }
+
+    pub async fn refresh_project_worktrees(
+        &self,
+        project: &str,
+    ) -> Result<Vec<ProjectWorktree>, AppError> {
+        let configured_root = self.workspace_target_project_path(project).await?;
+        self.workspace_target_resolver
+            .refresh_project_worktrees(&configured_root)
+            .await
+    }
+
+    pub async fn invalidate_project_worktrees(&self, project_root: &std::path::Path) {
+        self.workspace_target_resolver
+            .invalidate(project_root)
+            .await;
+    }
+
+    pub async fn workspace_target_project_path(&self, name: &str) -> Result<StdPathBuf, AppError> {
+        let cfg = self.config.read().await;
+        cfg.projects
+            .iter()
+            .find(|project| project.name == name)
+            .map(|project| StdPathBuf::from(&project.path))
+            .ok_or(AppError::WorkspaceTarget(
+                WorkspaceTargetError::UnknownProject,
+            ))
     }
 
     /// Create new AppState with production safety validation for no-auth mode.
@@ -216,6 +263,7 @@ impl AppState {
             codex_exporter: CodexExporterManager::default_paths()
                 .map_err(|error| anyhow::anyhow!("Codex exporter manager unavailable: {error}"))?,
             telemetry_coordinator: Arc::new(tokio::sync::Mutex::new(())),
+            workspace_target_resolver: WorkspaceTargetResolver::new(),
         })
     }
 
