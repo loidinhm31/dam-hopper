@@ -1,6 +1,6 @@
 export const MEDIA_SESSION_AUTHORIZATION_MODE = "session-cookie-v1";
 
-export type MediaSessionErrorCode = "MEDIA_SESSION_UNSUPPORTED";
+export type MediaSessionErrorCode = string;
 
 export class MediaSessionError extends Error {
   constructor(readonly code: MediaSessionErrorCode) {
@@ -50,6 +50,27 @@ export function mediaTicketUrl(
   return url.toString();
 }
 
+/** Read only the server's stable error code from a failed media request. */
+export async function readMediaErrorCode(
+  response: Response,
+  fallback: string,
+): Promise<string> {
+  try {
+    const payload: unknown = await response.clone().json();
+    if (
+      payload &&
+      typeof payload === "object" &&
+      "code" in payload &&
+      typeof payload.code === "string"
+    ) {
+      return payload.code;
+    }
+  } catch {
+    // Keep the status-derived fallback without exposing response text.
+  }
+  return fallback;
+}
+
 /**
  * Verify the authenticated, actor-bound ticket before exposing its URL to an
  * image, video, or browser-managed download. Cookie transport is used when
@@ -65,7 +86,9 @@ export async function probeMediaTicket(
       credentials: "include",
       signal,
     });
-    if (!response.ok) fail("MEDIA_SESSION_UNSUPPORTED");
+    if (!response.ok) {
+      fail(await readMediaErrorCode(response, "MEDIA_SESSION_UNSUPPORTED"));
+    }
   } catch (error) {
     if (signal.aborted || error instanceof MediaSessionError) throw error;
     fail("MEDIA_SESSION_UNSUPPORTED");

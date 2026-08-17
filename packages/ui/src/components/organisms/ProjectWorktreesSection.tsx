@@ -10,6 +10,7 @@ import {
   type ProjectTargetSnapshot,
 } from "@/stores/project-target.js";
 import { WorktreeAddForm } from "@/components/organisms/WorktreeAddForm.js";
+import { useEditorStore } from "@/stores/editor.js";
 
 interface ProjectWorktreesSectionProps {
   projectName: string;
@@ -37,6 +38,12 @@ export function ProjectWorktreesSection({
   );
   const clearUnavailableTarget = useProjectTargetStore(
     (state) => state.clearUnavailableTarget,
+  );
+  const markEditorTargetUnavailable = useEditorStore(
+    (state) => state.markTargetUnavailable,
+  );
+  const markEditorTargetAvailable = useEditorStore(
+    (state) => state.markTargetAvailable,
   );
   const unavailableTargetPath = useProjectTargetStore(
     (state) => state.unavailableTargetByProject[projectName] ?? null,
@@ -69,6 +76,7 @@ export function ProjectWorktreesSection({
           isSelectableWorktree(worktree),
       )
     ) {
+      markEditorTargetAvailable(projectName, unavailableTargetPath);
       clearUnavailableTarget(projectName);
       return;
     }
@@ -78,6 +86,7 @@ export function ProjectWorktreesSection({
     ) {
       return;
     }
+    markEditorTargetUnavailable(projectName, selectedPath);
     markTargetUnavailable(projectName, selectedPath);
   }, [
     clearUnavailableTarget,
@@ -85,6 +94,8 @@ export function ProjectWorktreesSection({
     isFetching,
     isFetched,
     isVisible,
+    markEditorTargetAvailable,
+    markEditorTargetUnavailable,
     markTargetUnavailable,
     projectName,
     selectedPath,
@@ -106,6 +117,21 @@ export function ProjectWorktreesSection({
     });
   }
 
+  function handleReconnect() {
+    const path = unavailableTargetPath;
+    if (!path) return;
+    void refetch().then((result) => {
+      if (
+        result.data?.some(
+          (worktree) =>
+            worktree.path === path && isSelectableWorktree(worktree),
+        )
+      ) {
+        selectTarget(projectName, path);
+      }
+    });
+  }
+
   return (
     <div className="px-3 py-2 space-y-2">
       <ProjectTargetSelector
@@ -122,6 +148,17 @@ export function ProjectWorktreesSection({
         onRefresh={() => void refetch()}
         onRemove={handleRemove}
       />
+
+      {unavailableTargetPath && (
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={handleReconnect}
+          disabled={isFetching}
+        >
+          {isFetching ? "Checking worktree…" : "Reconnect unavailable worktree"}
+        </Button>
+      )}
 
       {mutationError && (
         <p className="text-xs text-[var(--color-danger)]" role="alert">

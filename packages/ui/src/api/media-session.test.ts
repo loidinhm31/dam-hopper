@@ -85,7 +85,9 @@ describe("media session contract", () => {
   });
 
   it("revokes a media session over HTTP with bearer and cookies", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await revokeCurrentMediaSession("http://api.test", "secret-token");
@@ -126,5 +128,28 @@ describe("media session contract", () => {
       code: "MEDIA_SESSION_UNSUPPORTED",
     });
     expect(error.message).not.toContain("private");
+  });
+
+  it("preserves a stable target error returned by the media probe", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ code: "WORKSPACE_TARGET_UNAVAILABLE" }),
+            { status: 404, headers: { "content-type": "application/json" } },
+          ),
+        ),
+    );
+
+    await expect(
+      probeMediaTicket(
+        "https://api.test/api/fs/video/stream/opaque",
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject<Partial<MediaSessionError>>({
+      code: "WORKSPACE_TARGET_UNAVAILABLE",
+    });
   });
 });

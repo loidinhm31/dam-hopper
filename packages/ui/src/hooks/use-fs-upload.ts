@@ -7,7 +7,10 @@ import {
   projectTargetCacheKey,
   type ProjectTargetInput,
 } from "@/api/client.js";
-import { invalidateGitFileOperation } from "@/api/queries.js";
+import {
+  invalidateGitFileOperation,
+  markTargetUnavailableIfNeeded,
+} from "@/api/queries.js";
 
 export interface UploadProgress {
   filename: string;
@@ -46,11 +49,11 @@ export function useFsUpload(
       }
 
       setProgress({ filename: file.name, pct: 0, done: false });
+      const requestTarget =
+        worktreePath == null ? project : { project, worktreePath };
 
       try {
         const t = getTransport() as WsTransport;
-        const requestTarget =
-          worktreePath == null ? project : { project, worktreePath };
         const result = await t.fsUploadFile(requestTarget, dir, file, (pct) => {
           setProgress({ filename: file.name, pct, done: false });
         });
@@ -63,6 +66,7 @@ export function useFsUpload(
           const path = dir ? `${dir}/${file.name}` : file.name;
           void invalidateGitFileOperation(qc, requestTarget, path);
         } else {
+          markTargetUnavailableIfNeeded(requestTarget, result.error);
           setProgress({
             filename: file.name,
             pct: 0,
@@ -72,6 +76,7 @@ export function useFsUpload(
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        markTargetUnavailableIfNeeded(requestTarget, e);
         setProgress({ filename: file.name, pct: 0, done: true, error: msg });
       }
     },
