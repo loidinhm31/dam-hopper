@@ -12,8 +12,9 @@ use base64::Engine as _;
 use russh::keys::{agent::client::AgentClient, HashAlg, PrivateKey};
 use sha2::{Digest, Sha256};
 use tokio::time::timeout;
+use zeroize::Zeroizing;
 
-use super::{CredentialError, KeySource, SafeKeyRecord};
+use super::{CredentialError, KeySource, LoadedSafeKey, SafeKeyRecord};
 use crate::ssh_forward::known_hosts::is_supported_algorithm;
 use crate::ssh_forward::windows_storage_probe::{
     enumerate_directory_tolerant, open_root, validate_retained_handle,
@@ -65,7 +66,7 @@ pub(crate) fn safe_key_inventory() -> Result<Vec<SafeKeyRecord>, CredentialError
 pub(crate) fn load_safe_key(
     key_id: &str,
     passphrase: Option<&str>,
-) -> Result<PrivateKey, CredentialError> {
+) -> Result<LoadedSafeKey, CredentialError> {
     let root = ssh_directory()?;
     let entries = inventory_entries(&root)?;
     for entry in entries {
@@ -78,7 +79,7 @@ pub(crate) fn load_safe_key(
         if validate_retained_handle(&entry.handle, false).is_err() {
             continue;
         }
-        let bytes = match read_bounded(File::from(entry.handle)) {
+        let bytes = match read_bounded(File::from(entry.handle)).map(Zeroizing::new) {
             Ok(bytes) => bytes,
             Err(_) => continue,
         };
@@ -99,9 +100,16 @@ pub(crate) fn load_safe_key(
             };
             return key
                 .decrypt(passphrase.as_bytes())
+                .map(|key| LoadedSafeKey {
+                    key,
+                    encrypted: true,
+                })
                 .map_err(|_| CredentialError::InvalidPassphrase);
         }
-        return Ok(key);
+        return Ok(LoadedSafeKey {
+            key,
+            encrypted: false,
+        });
     }
     Err(CredentialError::KeyNotFound)
 }
@@ -124,7 +132,7 @@ fn scan_inventory(
         if validate_retained_handle(&entry.handle, false).is_err() {
             continue;
         }
-        let bytes = match read_bounded(File::from(entry.handle)) {
+        let bytes = match read_bounded(File::from(entry.handle)).map(Zeroizing::new) {
             Ok(bytes) => bytes,
             Err(_) => continue,
         };

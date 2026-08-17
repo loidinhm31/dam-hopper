@@ -26,6 +26,24 @@ const MAX_PASSWORD_BYTES: usize = 4096;
 const MAX_USERNAME_SCALARS: usize = 64;
 const MAX_CREDENTIAL_ATTEMPT_ID_BYTES: usize = 128;
 
+#[cfg(windows)]
+fn default_remember_for_days() -> u16 {
+    0
+}
+
+#[cfg(windows)]
+fn deserialize_remember_for_days<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u16::deserialize(deserializer)?;
+    if value == 0 || value == 30 {
+        Ok(value)
+    } else {
+        Err(de::Error::custom("remember_for_days_invalid"))
+    }
+}
+
 fn valid_credential_attempt_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_CREDENTIAL_ATTEMPT_ID_BYTES
@@ -355,6 +373,16 @@ pub(crate) struct LoadKeyInput {
     pub(crate) scope_generation: WireCounter,
     pub(crate) profile_id: String,
     pub(crate) key_id: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_credential_attempt_id"
+    )]
+    pub(crate) credential_attempt_id: Option<String>,
+    #[serde(
+        default = "default_remember_for_days",
+        deserialize_with = "deserialize_remember_for_days"
+    )]
+    pub(crate) remember_for_days: u16,
     #[serde(deserialize_with = "deserialize_bounded_passphrase")]
     pub(crate) passphrase: Zeroizing<String>,
 }
@@ -374,6 +402,11 @@ pub(crate) struct LoadPasswordInput {
     pub(crate) username: String,
     #[serde(deserialize_with = "deserialize_bounded_password")]
     pub(crate) password: Zeroizing<String>,
+    #[serde(
+        default = "default_remember_for_days",
+        deserialize_with = "deserialize_remember_for_days"
+    )]
+    pub(crate) remember_for_days: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]

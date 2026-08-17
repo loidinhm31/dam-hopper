@@ -7,7 +7,7 @@
 )]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
     sync::{
@@ -37,6 +37,12 @@ use super::{
         runtime_task_key, ChildShutdown, ConnectionAdmission, ConnectionCancellation,
         ConnectionRegistry, DisconnectPlan, RuleAdmission, RuntimeError,
     },
+    credential_lease::CredentialLease,
+    credential_vault::{
+        arc_clock, scope_prefix_for, target_for, Clock, CredentialIdentity, CredentialKind,
+        CredentialRecord, CredentialStatus, CredentialVault, VaultAuthIdentity, VaultError,
+        VaultTarget, REMEMBER_FOR_DAYS,
+    },
     credentials::{self, CredentialError},
     error::{SshForwardCommandError, SshForwardErrorCode},
     instance::{ClientEpochIssuer, DesktopClientContext},
@@ -47,17 +53,51 @@ use super::{
         SshForwardState, SshForwardTrustRepairMetadata, SshKeyInventory, SshKeyInventoryItem,
         SshKeyInventorySource, UtcTimestamp, WireCounter,
     },
-    profile::{SshForwardProfile, SshForwardRule},
+    profile::{SshForwardAuth, SshForwardProfile, SshForwardRule},
     scope_retention::KnownScopesInput,
-    ssh_client::{forward_socket, ChannelLimiter, SshSession, SshTransportError},
+    ssh_client::{forward_socket, ChannelLimiter, SshSession, SshTransport, SshTransportError},
     store::{FeatureRuntimeLease, ScopeActivityLease, ScopeStore, SshForwardStore, StoredTrust},
 };
+
+#[cfg(not(test))]
+use super::credential_vault::WindowsCredentialVault;
 
 const ACTIVE_FORWARD_LIMIT: usize = 16;
 const HANDSHAKE_CONCURRENCY_LIMIT: usize = 4;
 const EVENT_MIN_INTERVAL: Duration = Duration::from_millis(250);
 const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 const WORKER_REAP_RESERVE: Duration = Duration::from_millis(250);
+
+fn vault_error_code(error: VaultError) -> SshForwardErrorCode {
+    match error {
+        VaultError::Unavailable => SshForwardErrorCode::CredentialVaultUnavailable,
+        VaultError::Corrupt | VaultError::InvalidIdentity | VaultError::InvalidRecord => {
+            SshForwardErrorCode::CredentialVaultCorrupt
+        }
+        VaultError::WriteFailed => SshForwardErrorCode::CredentialNotSaved,
+        VaultError::DeleteFailed => SshForwardErrorCode::CredentialDeleteFailed,
+    }
+}
+
+fn profile_credential_targets(
+    profile: &SshForwardProfile,
+) -> Result<Vec<VaultTarget>, SshForwardErrorCode> {
+    let endpoint = SshEndpoint::new(&profile.ssh_host, profile.ssh_port)?;
+    let auth = match &profile.auth {
+        SshForwardAuth::Agent => VaultAuthIdentity::Password,
+        SshForwardAuth::Key { key_id } => VaultAuthIdentity::KeyPassphrase(key_id.clone()),
+    };
+    let target = target_for(&CredentialIdentity {
+        scope_id: profile.scope_id.clone(),
+        profile_id: profile.id.clone(),
+        endpoint_host: endpoint.host.clone(),
+        endpoint_port: endpoint.port,
+        ssh_user: profile.ssh_user.clone(),
+        auth,
+    })
+    .map_err(vault_error_code)?;
+    Ok(vec![target])
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ActivationIntent {
@@ -96,13 +136,50 @@ struct LoadedPassword {
     credential_attempt_id: String,
     username: Zeroizing<String>,
     password: Zeroizing<String>,
+    identity: CredentialIdentity,
+    remember_for_days: u16,
+}
+
+#[derive(Clone)]
+struct LoadedKeyAttempt {
+    key: Arc<russh::keys::PrivateKey>,
+    encrypted: bool,
+    credential_attempt_id: String,
+    passphrase: Zeroizing<String>,
+    identity: CredentialIdentity,
+    remember_for_days: u16,
+}
+
+struct ResolvedCredentials {
+    key: Option<Arc<russh::keys::PrivateKey>>,
+    key_encrypted: bool,
+    lease: Option<Arc<CredentialLease>>,
+    target: Option<VaultTarget>,
+    saved_reuse: bool,
+    remember_for_days: u16,
+}
+
+impl ResolvedCredentials {
+    fn password(&self) -> Option<(&str, &str)> {
+        self.lease.as_deref().and_then(CredentialLease::password)
+    }
+
+    fn key_passphrase(&self) -> Option<&str> {
+        self.lease.as_deref().and_then(CredentialLease::passphrase)
+    }
+
+    fn is_expired(&self, now: UtcTimestamp) -> bool {
+        self.lease
+            .as_deref()
+            .is_some_and(|lease| lease.is_expired(now))
+    }
 }
 
 struct LoadedPasswordCleanup {
     manager: Arc<SshForwardManager>,
     scope_id: String,
     profile_id: String,
-    key: Option<Arc<russh::keys::PrivateKey>>,
+    key: Option<Arc<LoadedKeyAttempt>>,
     credential: Option<Arc<LoadedPassword>>,
 }
 
@@ -276,8 +353,11 @@ pub(crate) struct SshForwardManager {
     /// V2 connection/rule registry. The legacy map remains only as a
     /// compatibility projection until Phase 04 removes its command aliases.
     connection_registry: Arc<Mutex<ConnectionRegistry>>,
-    loaded_keys: std::sync::Mutex<HashMap<(String, String), Arc<russh::keys::PrivateKey>>>,
+    loaded_keys: std::sync::Mutex<HashMap<(String, String), Arc<LoadedKeyAttempt>>>,
     loaded_passwords: std::sync::Mutex<HashMap<(String, String), Arc<LoadedPassword>>>,
+    rejected_credentials: std::sync::Mutex<HashSet<String>>,
+    credential_vault: Arc<dyn CredentialVault>,
+    clock: Arc<dyn Clock>,
     challenges: Mutex<HostKeyChallengeBook>,
     app: Mutex<Option<AppHandle>>,
     event_times: Mutex<HashMap<String, Instant>>,
@@ -292,6 +372,19 @@ pub(crate) struct SshForwardManager {
 
 impl SshForwardManager {
     pub(crate) fn new(app_config_dir: &Path) -> Result<Self, SshForwardCommandError> {
+        #[cfg(test)]
+        let credential_vault: Arc<dyn CredentialVault> =
+            Arc::new(super::credential_vault::fake::FakeCredentialVault::new());
+        #[cfg(not(test))]
+        let credential_vault: Arc<dyn CredentialVault> = Arc::new(WindowsCredentialVault::new());
+        Self::new_with_dependencies(app_config_dir, credential_vault, arc_clock())
+    }
+
+    fn new_with_dependencies(
+        app_config_dir: &Path,
+        credential_vault: Arc<dyn CredentialVault>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, SshForwardCommandError> {
         let runtime_lease = SshForwardStore::acquire_feature_runtime_lease_at(app_config_dir)
             .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
         let store = Arc::new(
@@ -307,6 +400,10 @@ impl SshForwardManager {
             .into_owned();
         let issuer =
             ClientEpochIssuer::new(identity.clone()).map_err(|code| code.command_error())?;
+        // Expiry is logical and must be enforced before any reconnect. Physical
+        // cleanup is opportunistic; a vault cleanup failure must not make live
+        // startup unsafe or expose native error details.
+        let _ = credential_vault.sweep_expired(clock.now());
         Ok(Self {
             store,
             _runtime_lease: runtime_lease,
@@ -328,6 +425,9 @@ impl SshForwardManager {
             connection_registry: Arc::new(Mutex::new(ConnectionRegistry::new())),
             loaded_keys: std::sync::Mutex::new(HashMap::new()),
             loaded_passwords: std::sync::Mutex::new(HashMap::new()),
+            rejected_credentials: std::sync::Mutex::new(HashSet::new()),
+            credential_vault,
+            clock,
             challenges: Mutex::new(HostKeyChallengeBook::default()),
             app: Mutex::new(None),
             event_times: Mutex::new(HashMap::new()),
@@ -339,6 +439,400 @@ impl SshForwardManager {
             #[cfg(test)]
             activation_test_barrier: Arc::new(ActivationTestBarrier::new()),
         })
+    }
+
+    fn resolve_credentials(
+        &self,
+        scope_id: &str,
+        profile_id: &str,
+        endpoint_host: &str,
+        endpoint_port: u16,
+        ssh_user: &str,
+        auth: &SshForwardAuth,
+        staged_key: Option<&Arc<LoadedKeyAttempt>>,
+        staged_password: Option<&Arc<LoadedPassword>>,
+    ) -> Result<ResolvedCredentials, SshForwardErrorCode> {
+        if staged_password.is_some() && matches!(auth, SshForwardAuth::Key { .. }) {
+            return Err(SshForwardErrorCode::InvalidArgument);
+        }
+        if let Some(staged) = staged_password {
+            let target = target_for(&staged.identity)
+                .map_err(|_| SshForwardErrorCode::CredentialVaultCorrupt)?;
+            let lease = CredentialLease::new_password(
+                staged.identity.clone(),
+                staged.credential_attempt_id.clone(),
+                staged.username.to_string(),
+                staged.password.to_string(),
+            );
+            return Ok(ResolvedCredentials {
+                key: None,
+                key_encrypted: false,
+                lease: Some(Arc::new(lease)),
+                target: Some(target),
+                saved_reuse: false,
+                remember_for_days: staged.remember_for_days,
+            });
+        }
+        if let Some(staged) = staged_key {
+            let target = target_for(&staged.identity)
+                .map_err(|_| SshForwardErrorCode::CredentialVaultCorrupt)?;
+            let lease = CredentialLease::new_key_passphrase(
+                staged.identity.clone(),
+                staged.credential_attempt_id.clone(),
+                staged.passphrase.to_string(),
+            );
+            return Ok(ResolvedCredentials {
+                key: Some(Arc::clone(&staged.key)),
+                key_encrypted: staged.encrypted,
+                lease: Some(Arc::new(lease)),
+                target: Some(target),
+                saved_reuse: false,
+                remember_for_days: staged.remember_for_days,
+            });
+        }
+
+        if matches!(auth, SshForwardAuth::Agent) {
+            // Passwords are an explicit fallback credential for agent-mode
+            // profiles. Never allow a saved password to silently change a
+            // profile configured for a specific local key.
+            let password_identity = CredentialIdentity {
+                scope_id: scope_id.into(),
+                profile_id: profile_id.into(),
+                endpoint_host: endpoint_host.into(),
+                endpoint_port,
+                ssh_user: ssh_user.into(),
+                auth: VaultAuthIdentity::Password,
+            };
+            let password_target = target_for(&password_identity)
+                .map_err(|_| SshForwardErrorCode::CredentialVaultCorrupt)?;
+            let password_rejected = self
+                .rejected_credentials
+                .lock()
+                .expect("rejected credential mutex poisoned")
+                .contains(password_target.identity_digest());
+            let password_read = if password_rejected {
+                None
+            } else {
+                self.credential_vault
+                    .load(&password_target, self.clock.now())
+                    .ok()
+            };
+            if password_read
+                .as_ref()
+                .is_some_and(|read| read.status == CredentialStatus::Saved)
+            {
+                let record = password_read
+                    .and_then(|read| read.credential)
+                    .ok_or(SshForwardErrorCode::CredentialVaultCorrupt)?;
+                let lease = CredentialLease::from_record(
+                    password_identity,
+                    "vault",
+                    record,
+                    Some(ssh_user.into()),
+                )
+                .ok_or(SshForwardErrorCode::CredentialVaultCorrupt)?;
+                return Ok(ResolvedCredentials {
+                    key: None,
+                    key_encrypted: false,
+                    lease: Some(Arc::new(lease)),
+                    target: Some(password_target),
+                    saved_reuse: true,
+                    remember_for_days: 0,
+                });
+            }
+        }
+
+        if let SshForwardAuth::Key { key_id } = auth {
+            let identity = CredentialIdentity {
+                scope_id: scope_id.into(),
+                profile_id: profile_id.into(),
+                endpoint_host: endpoint_host.into(),
+                endpoint_port,
+                ssh_user: ssh_user.into(),
+                auth: VaultAuthIdentity::KeyPassphrase(key_id.clone()),
+            };
+            let target =
+                target_for(&identity).map_err(|_| SshForwardErrorCode::CredentialVaultCorrupt)?;
+            let rejected = self
+                .rejected_credentials
+                .lock()
+                .expect("rejected credential mutex poisoned")
+                .contains(target.identity_digest());
+            let read = if rejected {
+                None
+            } else {
+                self.credential_vault.load(&target, self.clock.now()).ok()
+            };
+            if read
+                .as_ref()
+                .is_some_and(|read| read.status == CredentialStatus::Saved)
+            {
+                let record = read
+                    .and_then(|read| read.credential)
+                    .ok_or(SshForwardErrorCode::CredentialVaultCorrupt)?;
+                let lease = Arc::new(
+                    CredentialLease::from_record(identity, "vault", record, None)
+                        .ok_or(SshForwardErrorCode::CredentialVaultCorrupt)?,
+                );
+                let loaded = match credentials::load_safe_key(key_id, lease.passphrase()) {
+                    Ok(loaded) => loaded,
+                    Err(error) => {
+                        let resolved = ResolvedCredentials {
+                            key: None,
+                            key_encrypted: false,
+                            lease: Some(Arc::clone(&lease)),
+                            target: Some(target.clone()),
+                            saved_reuse: true,
+                            remember_for_days: 0,
+                        };
+                        let code = SshForwardErrorCode::from_credential(error);
+                        return Err(self
+                            .mark_saved_credential_rejected(&resolved)
+                            .err()
+                            .unwrap_or(code));
+                    }
+                };
+                return Ok(ResolvedCredentials {
+                    key: Some(Arc::new(loaded.key)),
+                    key_encrypted: loaded.encrypted,
+                    lease: Some(lease),
+                    target: Some(target),
+                    saved_reuse: true,
+                    remember_for_days: 0,
+                });
+            }
+            return Ok(ResolvedCredentials {
+                key: None,
+                key_encrypted: false,
+                lease: None,
+                target: None,
+                saved_reuse: false,
+                remember_for_days: 0,
+            });
+        }
+        Ok(ResolvedCredentials {
+            key: None,
+            key_encrypted: false,
+            lease: None,
+            target: None,
+            saved_reuse: false,
+            remember_for_days: 0,
+        })
+    }
+
+    fn resolve_live_credentials(
+        &self,
+        scope_id: &str,
+        profile_id: &str,
+        endpoint_host: &str,
+        endpoint_port: u16,
+        ssh_user: &str,
+        auth: &SshForwardAuth,
+        loaded_key: Option<&Arc<LoadedKeyAttempt>>,
+        lease: Arc<CredentialLease>,
+    ) -> Result<ResolvedCredentials, SshForwardErrorCode> {
+        let identity = lease.identity();
+        if identity.scope_id != scope_id
+            || identity.profile_id != profile_id
+            || identity.endpoint_host != endpoint_host
+            || identity.endpoint_port != endpoint_port
+            || identity.ssh_user != ssh_user
+        {
+            return Err(SshForwardErrorCode::CredentialRejected);
+        }
+        let target =
+            target_for(identity).map_err(|_| SshForwardErrorCode::CredentialVaultCorrupt)?;
+        let rejected = target_for(identity).ok().is_some_and(|entry| {
+            self.rejected_credentials
+                .lock()
+                .expect("rejected credential mutex poisoned")
+                .contains(entry.identity_digest())
+        });
+        if rejected {
+            return Err(SshForwardErrorCode::CredentialRejected);
+        }
+        let key_id = match (auth, &identity.auth) {
+            (SshForwardAuth::Agent, VaultAuthIdentity::Password) => None,
+            (SshForwardAuth::Agent, VaultAuthIdentity::KeyPassphrase(key_id)) => {
+                Some(key_id.as_str())
+            }
+            (SshForwardAuth::Key { key_id }, VaultAuthIdentity::KeyPassphrase(saved_key_id))
+                if key_id == saved_key_id =>
+            {
+                Some(key_id.as_str())
+            }
+            _ => return Err(SshForwardErrorCode::CredentialRejected),
+        };
+        let (key, key_encrypted) = if let Some(key_id) = key_id {
+            let loaded = loaded_key
+                .filter(|loaded| loaded.identity == *identity)
+                .map(|loaded| (Arc::clone(&loaded.key), loaded.encrypted));
+            match loaded {
+                Some((key, encrypted)) => (Some(key), encrypted),
+                None => match credentials::load_safe_key(key_id, lease.passphrase()) {
+                    Ok(loaded) => (Some(Arc::new(loaded.key)), loaded.encrypted),
+                    Err(error) => {
+                        let failed = ResolvedCredentials {
+                            key: None,
+                            key_encrypted: false,
+                            lease: Some(Arc::clone(&lease)),
+                            target: Some(target.clone()),
+                            saved_reuse: lease.saved_reuse(),
+                            remember_for_days: 0,
+                        };
+                        let code = SshForwardErrorCode::from_credential(error);
+                        return Err(self
+                            .mark_saved_credential_rejected(&failed)
+                            .err()
+                            .unwrap_or(code));
+                    }
+                },
+            }
+        } else {
+            (None, false)
+        };
+        Ok(ResolvedCredentials {
+            key,
+            key_encrypted,
+            lease: Some(lease.clone()),
+            target: Some(target),
+            saved_reuse: lease.saved_reuse(),
+            remember_for_days: 0,
+        })
+    }
+
+    fn save_credential_if_requested(
+        &self,
+        resolved: &mut ResolvedCredentials,
+        auth: &SshForwardAuth,
+    ) -> Result<(), VaultError> {
+        if resolved.saved_reuse || resolved.remember_for_days != REMEMBER_FOR_DAYS {
+            return Ok(());
+        }
+        let Some(target) = resolved.target.as_ref() else {
+            return Ok(());
+        };
+        let Some(lease) = resolved.lease.as_ref() else {
+            return Ok(());
+        };
+        let (kind, secret) = if let Some((_, password)) = lease.password() {
+            if !matches!(auth, SshForwardAuth::Agent) {
+                return Ok(());
+            }
+            (CredentialKind::Password, password)
+        } else if let Some(passphrase) = lease.passphrase() {
+            if !matches!(auth, SshForwardAuth::Key { .. }) {
+                // Agent authentication may fall back to a staged local key,
+                // but an agent success must never cause that passphrase to be
+                // persisted accidentally.
+                return Ok(());
+            }
+            if !resolved.key_encrypted {
+                return Ok(());
+            }
+            (CredentialKind::KeyPassphrase, passphrase)
+        } else {
+            return Ok(());
+        };
+        let record =
+            CredentialRecord::new(kind, secret, target.identity_digest(), self.clock.now())?;
+        self.credential_vault.save(target, &record)?;
+        self.rejected_credentials
+            .lock()
+            .expect("rejected credential mutex poisoned")
+            .remove(target.identity_digest());
+        resolved.lease = Some(Arc::new(lease.with_expiry(record.expires_at)));
+        Ok(())
+    }
+
+    fn ensure_credential_fresh(
+        &self,
+        resolved: &ResolvedCredentials,
+    ) -> Result<(), SshTransportError> {
+        if resolved.is_expired(self.clock.now()) {
+            Err(SshTransportError::Credential(
+                SshForwardErrorCode::CredentialExpired,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn mark_saved_credential_rejected(
+        &self,
+        resolved: &ResolvedCredentials,
+    ) -> Result<(), SshForwardErrorCode> {
+        if !resolved.saved_reuse {
+            return Ok(());
+        }
+        let Some(target) = resolved.target.as_ref() else {
+            return Ok(());
+        };
+        self.rejected_credentials
+            .lock()
+            .expect("rejected credential mutex poisoned")
+            .insert(target.identity_digest().to_owned());
+        match self
+            .credential_vault
+            .mark_rejected(target, self.clock.now())
+        {
+            Ok(()) => Ok(()),
+            Err(_mark_error) => match self.credential_vault.forget(target) {
+                Ok(()) => {
+                    self.rejected_credentials
+                        .lock()
+                        .expect("rejected credential mutex poisoned")
+                        .remove(target.identity_digest());
+                    Ok(())
+                }
+                Err(_) => {
+                    // Keep the in-memory quarantine and fail closed. The
+                    // persistence failure itself is retryable infrastructure
+                    // state, but reusing this live lease is never safe.
+                    Err(SshForwardErrorCode::CredentialRejected)
+                }
+            },
+        }
+    }
+
+    fn forget_saved_profile_credentials(
+        &self,
+        profile: &SshForwardProfile,
+    ) -> Result<(), SshForwardErrorCode> {
+        for target in profile_credential_targets(profile)? {
+            self.credential_vault
+                .forget(&target)
+                .map_err(vault_error_code)?;
+            self.rejected_credentials
+                .lock()
+                .expect("rejected credential mutex poisoned")
+                .remove(target.identity_digest());
+        }
+        Ok(())
+    }
+
+    fn forget_changed_profile_credentials(
+        &self,
+        previous: &SshForwardProfile,
+        next: &SshForwardProfile,
+    ) -> Result<(), SshForwardErrorCode> {
+        let next_targets = profile_credential_targets(next)?
+            .into_iter()
+            .map(|target| target.target().to_owned())
+            .collect::<std::collections::HashSet<_>>();
+        let auth_changed = previous.auth != next.auth;
+        for target in profile_credential_targets(previous)? {
+            if auth_changed || !next_targets.contains(target.target()) {
+                self.credential_vault
+                    .forget(&target)
+                    .map_err(vault_error_code)?;
+                self.rejected_credentials
+                    .lock()
+                    .expect("rejected credential mutex poisoned")
+                    .remove(target.target());
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn attach_app(&self, app: AppHandle) {
@@ -395,6 +889,13 @@ impl SshForwardManager {
         };
         let _command = self.command_gate.lock().await;
         self.ensure_running()?;
+        // A new desktop client epoch invalidates the previous live lease. The
+        // vault entry remains durable and will be revalidated on the next
+        // explicit connect.
+        self.stop_all_workers().await;
+        self.stop_all_connections().await?;
+        self.clear_live_secrets();
+        let _ = self.credential_vault.sweep_expired(self.clock.now());
         for scope in self
             .store
             .enumerate_scopes()
@@ -769,6 +1270,7 @@ impl SshForwardManager {
         else {
             return Err(SshForwardErrorCode::ProfileNotFound.command_error());
         };
+        let previous_profile = profiles[index].clone();
         if self
             .profile_is_active(&input.request.scope_id, &input.profile_id)
             .await
@@ -786,6 +1288,7 @@ impl SshForwardManager {
         profiles[index] = input.profile.clone();
         let next = super::store::StoredProfiles::from_profiles(&input.request.scope_id, profiles)
             .map_err(|_| SshForwardErrorCode::InvalidArgument.command_error())?;
+        let previous_profiles = current.clone();
         let committed_revision = {
             let _admission = self.intent_admission_gate.lock().await;
             let store = self
@@ -810,14 +1313,28 @@ impl SshForwardManager {
             committed.revision()
         };
         self.update_profile_revision(committed_revision).await;
-        self.loaded_keys
-            .lock()
-            .expect("loaded key mutex poisoned")
-            .remove(&(input.request.scope_id.clone(), input.profile_id.clone()));
-        self.loaded_passwords
-            .lock()
-            .expect("loaded password mutex poisoned")
-            .remove(&(input.request.scope_id.clone(), input.profile_id.clone()));
+        self.clear_live_secrets_for_profile(&input.request.scope_id, &input.profile_id);
+        if let Err(code) =
+            self.forget_changed_profile_credentials(&previous_profile, &input.profile)
+        {
+            // Profile identity cleanup is post-commit by contract. If the
+            // vault cannot finish, restore the prior profile so a retry does
+            // not strand a half-applied identity change.
+            let rollback_failed =
+                match store.replace_profiles(committed_revision, previous_profiles) {
+                    Ok(rolled_back) => {
+                        self.update_profile_revision(rolled_back.revision()).await;
+                        false
+                    }
+                    Err(_) => true,
+                };
+            let code = if rollback_failed {
+                SshForwardErrorCode::CredentialCleanupPending
+            } else {
+                code
+            };
+            return Err(code.command_error());
+        }
         self.emit_hint(
             Some(input.profile_id.clone()),
             SshForwardEventReason::ProfilesChanged,
@@ -864,12 +1381,11 @@ impl SshForwardManager {
         let profiles = current
             .profiles()
             .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
-        if !profiles
+        let deleted_profile = profiles
             .iter()
-            .any(|profile| profile.id == input.profile_id)
-        {
-            return Err(SshForwardErrorCode::ProfileNotFound.command_error());
-        }
+            .find(|profile| profile.id == input.profile_id)
+            .cloned()
+            .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
         let next_profiles = profiles
             .into_iter()
             .filter(|profile| profile.id != input.profile_id)
@@ -877,6 +1393,7 @@ impl SshForwardManager {
         let next =
             super::store::StoredProfiles::from_profiles(&input.request.scope_id, next_profiles)
                 .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+        let previous_profiles = current.clone();
         let committed_revision = {
             let _admission = self.intent_admission_gate.lock().await;
             let store = self
@@ -898,21 +1415,30 @@ impl SshForwardManager {
             let committed = store
                 .replace_profiles(input.request.expected_profiles_revision, next)
                 .map_err(|_| SshForwardErrorCode::ProfilesRevisionConflict.command_error())?;
-            self.challenges
-                .lock()
-                .await
-                .clear_profile(&input.request.scope_id, &input.profile_id);
             committed.revision()
         };
         self.update_profile_revision(committed_revision).await;
-        self.loaded_keys
+        self.clear_live_secrets_for_profile(&input.request.scope_id, &input.profile_id);
+        if let Err(code) = self.forget_saved_profile_credentials(&deleted_profile) {
+            let rollback_failed =
+                match store.replace_profiles(committed_revision, previous_profiles) {
+                    Ok(rolled_back) => {
+                        self.update_profile_revision(rolled_back.revision()).await;
+                        false
+                    }
+                    Err(_) => true,
+                };
+            let code = if rollback_failed {
+                SshForwardErrorCode::CredentialCleanupPending
+            } else {
+                code
+            };
+            return Err(code.command_error());
+        }
+        self.challenges
             .lock()
-            .expect("loaded key mutex poisoned")
-            .remove(&(input.request.scope_id.clone(), input.profile_id.clone()));
-        self.loaded_passwords
-            .lock()
-            .expect("loaded password mutex poisoned")
-            .remove(&(input.request.scope_id.clone(), input.profile_id.clone()));
+            .await
+            .clear_profile(&input.request.scope_id, &input.profile_id);
         self.emit_hint(
             Some(input.profile_id.clone()),
             SshForwardEventReason::ProfilesChanged,
@@ -1528,21 +2054,51 @@ impl SshForwardManager {
                 reservation_cleanup.disarm();
                 return Err(SshForwardErrorCode::ShutdownInProgress.command_error());
             }
-            result = SshSession::connect(
-                &endpoint,
-                &profile.ssh_user,
-                &profile.auth,
-                &trust,
-                loaded_key,
-                loaded_password
-                    .as_deref()
-                    .map(|credential| (credential.username.as_str(), credential.password.as_str())),
-            ) => result,
+            result = async {
+                let deadline = SshTransport::handshake_deadline();
+                let transport = match SshTransport::connect_until(&endpoint, &trust, deadline).await {
+                    Ok(transport) => transport,
+                    Err(error) => return Err((error, None)),
+                };
+                let resolved = match self.resolve_credentials(
+                    scope_id,
+                    connection_id,
+                    &endpoint.host,
+                    endpoint.port,
+                    &profile.ssh_user,
+                    &profile.auth,
+                    loaded_key.as_ref(),
+                    loaded_password.as_ref(),
+                ) {
+                    Ok(resolved) => resolved,
+                    Err(code) => return Err((SshTransportError::Credential(code), None)),
+                };
+                if let Err(error) = self.ensure_credential_fresh(&resolved) {
+                    return Err((error, Some(resolved)));
+                }
+                let session = match transport
+                    .authenticate_until(
+                        &profile.ssh_user,
+                        &profile.auth,
+                        resolved.key.clone(),
+                        resolved.password(),
+                        resolved.key_passphrase(),
+                        deadline,
+                    )
+                    .await
+                {
+                    Ok(session) => session,
+                    Err(error) => return Err((error, Some(resolved))),
+                };
+                Ok::<_, (SshTransportError, Option<ResolvedCredentials>)>((
+                    session, resolved,
+                ))
+            } => result,
         };
         drop(permit);
-        let session = match result {
-            Ok(session) => Arc::new(session),
-            Err(error) => {
+        let (session, mut resolved) = match result {
+            Ok((session, resolved)) => (Arc::new(session), resolved),
+            Err((error, resolved)) => {
                 if let SshTransportError::HostKeyRejected(offered) = &error {
                     let mut challenges = self.challenges.lock().await;
                     let _ = challenges.issue_or_repeat(
@@ -1562,15 +2118,27 @@ impl SshForwardManager {
                         trust.revision(),
                     );
                 }
+                let mut error_code = error.error_code();
+                if matches!(&error, SshTransportError::Authentication) {
+                    // A failed automatic reuse is quarantined without changing
+                    // its fixed expiry. A staged attempt remains eligible for
+                    // explicit replacement on the next connect.
+                    if let Some(resolved) = resolved.as_ref() {
+                        if let Err(code) = self.mark_saved_credential_rejected(resolved) {
+                            error_code = code;
+                        }
+                    }
+                }
                 self.connection_registry
                     .lock()
                     .await
-                    .fail_connection(connection_id, generation, error.error_code())
+                    .fail_connection(connection_id, generation, error_code)
                     .map_err(runtime_command_error)?;
                 reservation_cleanup.disarm();
                 return self.snapshot_inner(context, token, scope_id).await;
             }
         };
+        let _ = self.save_credential_if_requested(&mut resolved, &profile.auth);
         let shutdown = self.is_shutting_down();
         let cancelled = cancellation.is_cancelled();
         if shutdown || cancelled {
@@ -1627,7 +2195,12 @@ impl SshForwardManager {
                 .connection_registry
                 .lock()
                 .await
-                .commit_established(connection_id, generation, Arc::clone(&session))
+                .commit_established(
+                    connection_id,
+                    generation,
+                    Arc::clone(&session),
+                    resolved.lease.clone(),
+                )
                 .map_err(runtime_command_error),
             Err(error) => Err(error),
         };
@@ -2358,8 +2931,18 @@ impl SshForwardManager {
         if !key_matches_profile {
             return Err(SshForwardErrorCode::InvalidArgument.command_error());
         }
-        let key = credentials::load_safe_key(&input.key_id, Some(input.passphrase.as_str()))
+        let endpoint = SshEndpoint::new(&profile.ssh_host, profile.ssh_port)
+            .map_err(|code| code.command_error())?;
+        let loaded = credentials::load_safe_key(&input.key_id, Some(input.passphrase.as_str()))
             .map_err(map_credential_error)?;
+        let identity = CredentialIdentity {
+            scope_id: input.scope_id.clone(),
+            profile_id: input.profile_id.clone(),
+            endpoint_host: endpoint.host,
+            endpoint_port: endpoint.port,
+            ssh_user: profile.ssh_user.clone(),
+            auth: VaultAuthIdentity::KeyPassphrase(input.key_id.clone()),
+        };
         self.ensure_context(&input.context, input.activation_token)
             .await?;
         let snapshot = self
@@ -2370,7 +2953,17 @@ impl SshForwardManager {
             .expect("loaded key mutex poisoned")
             .insert(
                 (input.scope_id.clone(), input.profile_id.clone()),
-                Arc::new(key),
+                Arc::new(LoadedKeyAttempt {
+                    key: Arc::new(loaded.key),
+                    encrypted: loaded.encrypted,
+                    credential_attempt_id: input
+                        .credential_attempt_id
+                        .clone()
+                        .unwrap_or_else(|| "legacy".into()),
+                    passphrase: input.passphrase.clone(),
+                    identity,
+                    remember_for_days: input.remember_for_days,
+                }),
             );
         self.loaded_passwords
             .lock()
@@ -2401,7 +2994,7 @@ impl SshForwardManager {
         {
             return Err(SshForwardErrorCode::InvalidArgument.command_error());
         }
-        store
+        let profile = store
             .load_profiles()
             .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
             .profiles()
@@ -2409,6 +3002,22 @@ impl SshForwardManager {
             .into_iter()
             .find(|profile| profile.id == input.profile_id)
             .ok_or_else(|| SshForwardErrorCode::ProfileNotFound.command_error())?;
+        if matches!(profile.auth, super::profile::SshForwardAuth::Key { .. }) {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        if input.username != profile.ssh_user {
+            return Err(SshForwardErrorCode::InvalidArgument.command_error());
+        }
+        let endpoint = SshEndpoint::new(&profile.ssh_host, profile.ssh_port)
+            .map_err(|code| code.command_error())?;
+        let identity = CredentialIdentity {
+            scope_id: input.scope_id.clone(),
+            profile_id: input.profile_id.clone(),
+            endpoint_host: endpoint.host,
+            endpoint_port: endpoint.port,
+            ssh_user: input.username.clone(),
+            auth: VaultAuthIdentity::Password,
+        };
         self.ensure_context(&input.context, input.activation_token)
             .await?;
         let snapshot = self
@@ -2423,6 +3032,8 @@ impl SshForwardManager {
                     credential_attempt_id: input.credential_attempt_id.clone(),
                     username: Zeroizing::new(input.username.clone()),
                     password: input.password.clone(),
+                    identity,
+                    remember_for_days: input.remember_for_days,
                 }),
             );
         self.loaded_keys
@@ -2501,6 +3112,7 @@ impl SshForwardManager {
             committed.revision()
         };
         self.update_trust_revision(committed_revision).await;
+        self.clear_live_secrets_for_profile(&input.scope_id, &input.profile_id);
         self.emit_hint(
             Some(input.profile_id.clone()),
             SshForwardEventReason::TrustChanged,
@@ -2527,13 +3139,25 @@ impl SshForwardManager {
         {
             return Err(SshForwardErrorCode::ScopeActive.command_error());
         }
-        let purged = match self.store.existing_scope(&input.scope_id) {
-            Ok(store) => store
-                .purge_if_deleted(&input.known_scopes)
-                .map_err(|_| SshForwardErrorCode::ScopePurgeFailed.command_error())?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        let (purged, scope_missing) = match self.store.existing_scope(&input.scope_id) {
+            Ok(store) => (
+                store
+                    .purge_if_deleted(&input.known_scopes)
+                    .map_err(|_| SshForwardErrorCode::ScopePurgeFailed.command_error())?,
+                false,
+            ),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (false, true),
             Err(_) => return Err(SshForwardErrorCode::ScopePurgeFailed.command_error()),
         };
+        if purged || scope_missing {
+            let scope_prefix = scope_prefix_for(&input.scope_id)
+                .map_err(vault_error_code)
+                .map_err(SshForwardErrorCode::command_error)?;
+            self.credential_vault
+                .forget_scope(&scope_prefix)
+                .map_err(vault_error_code)
+                .map_err(SshForwardErrorCode::command_error)?;
+        }
         self.ensure_context(&input.context, input.activation_token)
             .await?;
         Ok(PurgeScopeResult {
@@ -2552,14 +3176,7 @@ impl SshForwardManager {
         let _ = self.stop_all_connections().await;
         *self.active_scope.lock().await = None;
         self.runtimes.lock().await.clear();
-        self.loaded_keys
-            .lock()
-            .expect("loaded key mutex poisoned")
-            .clear();
-        self.loaded_passwords
-            .lock()
-            .expect("loaded password mutex poisoned")
-            .clear();
+        self.clear_live_secrets();
     }
 
     /// Emergency fallback after bounded graceful disposal; it only aborts tasks.
@@ -2567,14 +3184,7 @@ impl SshForwardManager {
         self.shutting_down.store(true, Ordering::Release);
         self.shutdown_cancellation.cancel();
         self.abort_v2_tasks();
-        self.loaded_keys
-            .lock()
-            .expect("loaded key mutex poisoned")
-            .clear();
-        self.loaded_passwords
-            .lock()
-            .expect("loaded password mutex poisoned")
-            .clear();
+        self.clear_live_secrets();
         let aborts = self
             .abort_handles
             .lock()
@@ -2614,6 +3224,28 @@ impl SshForwardManager {
             .remove(&(scope_id.to_owned(), profile_id.to_owned()));
     }
 
+    fn clear_live_secrets(&self) {
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .clear();
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .clear();
+    }
+
+    fn clear_live_secrets_for_profile(&self, scope_id: &str, profile_id: &str) {
+        self.loaded_keys
+            .lock()
+            .expect("loaded key mutex poisoned")
+            .remove(&(scope_id.to_owned(), profile_id.to_owned()));
+        self.loaded_passwords
+            .lock()
+            .expect("loaded password mutex poisoned")
+            .remove(&(scope_id.to_owned(), profile_id.to_owned()));
+    }
+
     fn forget_loaded_key(&self, scope_id: &str, profile_id: &str) {
         self.loaded_keys
             .lock()
@@ -2625,7 +3257,7 @@ impl SshForwardManager {
         &self,
         scope_id: &str,
         profile_id: &str,
-        key: &Arc<russh::keys::PrivateKey>,
+        key: &Arc<LoadedKeyAttempt>,
     ) {
         let mut loaded_keys = self.loaded_keys.lock().expect("loaded key mutex poisoned");
         let key_id = (scope_id.to_owned(), profile_id.to_owned());
@@ -2684,7 +3316,7 @@ impl SshForwardManager {
         profile_id: String,
         generation: WireCounter,
         active_channels: Arc<AtomicU16>,
-        loaded_key: Option<Arc<russh::keys::PrivateKey>>,
+        loaded_key: Option<Arc<LoadedKeyAttempt>>,
         loaded_password: Option<Arc<LoadedPassword>>,
         mut stop_rx: oneshot::Receiver<Instant>,
     ) {
@@ -2704,30 +3336,18 @@ impl SshForwardManager {
         };
         let initial_connect = tokio::select! {
             _ = &mut stop_rx => return,
-            permit = self.handshake_gate.acquire() => {
-                let Ok(permit) = permit else {
-                    self.fail_runtime(&profile_id, generation, SshForwardErrorCode::SshConnectFailed).await;
-                    return;
-                };
-                let result = tokio::select! {
-                    _ = &mut stop_rx => return,
-                    result = SshSession::connect(
-                        &endpoint,
-                        &profile.ssh_user,
-                        &profile.auth,
-                        &trust,
-                        loaded_key.clone(),
-                        loaded_password.as_deref().map(|credential| {
-                            (credential.username.as_str(), credential.password.as_str())
-                        }),
-                    ) => result,
-                };
-                drop(permit);
-                result
-            }
+            result = self.connect_session(
+                &endpoint,
+                &profile,
+                &trust,
+                loaded_key.clone(),
+                loaded_password.clone(),
+                None,
+                true,
+            ) => result,
         };
-        let session = match initial_connect {
-            Ok(session) => session,
+        let (session, credential_lease) = match initial_connect {
+            Ok(result) => result,
             Err(error) => {
                 if let SshTransportError::HostKeyRejected(offered) = &error {
                     let mut challenges = self.challenges.lock().await;
@@ -2767,6 +3387,7 @@ impl SshForwardManager {
             return;
         }
         let mut session = Some(session);
+        let mut credential_lease = credential_lease;
         let listener = listener;
         let limiter = super::ssh_client::ChannelLimiter::default();
         let mut channel_tasks = JoinSet::new();
@@ -2826,11 +3447,13 @@ impl SshForwardManager {
                             &mut stop_rx,
                             loaded_key.clone(),
                             loaded_password.clone(),
+                            credential_lease.clone(),
                         )
                         .await
                     {
-                        ReconnectResult::Connected(next) => {
+                        ReconnectResult::Connected(next, next_lease) => {
                             session = Some(next);
+                            credential_lease = next_lease;
                             if !self.mark_running(&profile_id, generation).await {
                                 if let Some(next) = session.take() {
                                     let _ = timeout(WORKER_SHUTDOWN_GRACE, next.close()).await;
@@ -2870,8 +3493,9 @@ impl SshForwardManager {
         profile: &SshForwardProfile,
         trust: &StoredTrust,
         stop_rx: &mut oneshot::Receiver<Instant>,
-        loaded_key: Option<Arc<russh::keys::PrivateKey>>,
+        loaded_key: Option<Arc<LoadedKeyAttempt>>,
         loaded_password: Option<Arc<LoadedPassword>>,
+        live_lease: Option<Arc<CredentialLease>>,
     ) -> ReconnectResult {
         if !profile.reconnect.enabled {
             return ReconnectResult::Failed(SshForwardErrorCode::SshConnectFailed);
@@ -2903,9 +3527,18 @@ impl SshForwardManager {
             let trust = trust.clone();
             let loaded_key = loaded_key.clone();
             let loaded_password = loaded_password.clone();
+            let live_lease = live_lease.clone();
             let mut connect = tokio::spawn(async move {
                 manager
-                    .connect_session(&endpoint, &profile, &trust, loaded_key, loaded_password)
+                    .connect_session(
+                        &endpoint,
+                        &profile,
+                        &trust,
+                        loaded_key,
+                        loaded_password,
+                        live_lease,
+                        false,
+                    )
                     .await
             });
             loop {
@@ -2927,7 +3560,12 @@ impl SshForwardManager {
                         drop(socket);
                     }
                     result = &mut connect => match result {
-                        Ok(Ok(session)) => return ReconnectResult::Connected(session),
+                        Ok(Ok((session, lease))) => {
+                            return ReconnectResult::Connected(session, lease)
+                        }
+                        Ok(Err(error)) if error.is_terminal_auth() => {
+                            return ReconnectResult::Failed(error.error_code());
+                        }
                         Ok(Err(error)) if final_attempt => {
                             return ReconnectResult::Failed(error.error_code());
                         }
@@ -2945,24 +3583,72 @@ impl SshForwardManager {
         endpoint: &SshEndpoint,
         profile: &SshForwardProfile,
         trust: &StoredTrust,
-        loaded_key: Option<Arc<russh::keys::PrivateKey>>,
+        loaded_key: Option<Arc<LoadedKeyAttempt>>,
         loaded_password: Option<Arc<LoadedPassword>>,
-    ) -> Result<SshSession, SshTransportError> {
+        live_lease: Option<Arc<CredentialLease>>,
+        save_credential: bool,
+    ) -> Result<(SshSession, Option<Arc<CredentialLease>>), SshTransportError> {
         let permit = self
             .handshake_gate
             .acquire()
             .await
             .map_err(|_| SshTransportError::Connect)?;
-        let result = SshSession::connect(
-            endpoint,
-            &profile.ssh_user,
-            &profile.auth,
-            trust,
-            loaded_key,
-            loaded_password
-                .as_deref()
-                .map(|credential| (credential.username.as_str(), credential.password.as_str())),
-        )
+        let result = async {
+            let deadline = SshTransport::handshake_deadline();
+            let transport = SshTransport::connect_until(endpoint, trust, deadline).await?;
+            let mut resolved = match live_lease {
+                Some(lease) => self
+                    .resolve_live_credentials(
+                        &profile.scope_id,
+                        &profile.id,
+                        &endpoint.host,
+                        endpoint.port,
+                        &profile.ssh_user,
+                        &profile.auth,
+                        loaded_key.as_ref(),
+                        lease,
+                    )
+                    .map_err(SshTransportError::Credential)?,
+                None => self
+                    .resolve_credentials(
+                        &profile.scope_id,
+                        &profile.id,
+                        &endpoint.host,
+                        endpoint.port,
+                        &profile.ssh_user,
+                        &profile.auth,
+                        loaded_key.as_ref(),
+                        loaded_password.as_ref(),
+                    )
+                    .map_err(SshTransportError::Credential)?,
+            };
+            self.ensure_credential_fresh(&resolved)?;
+            let session = match transport
+                .authenticate_until(
+                    &profile.ssh_user,
+                    &profile.auth,
+                    resolved.key.clone(),
+                    resolved.password(),
+                    resolved.key_passphrase(),
+                    deadline,
+                )
+                .await
+            {
+                Ok(session) => session,
+                Err(error) => {
+                    if matches!(&error, SshTransportError::Authentication) {
+                        if let Err(code) = self.mark_saved_credential_rejected(&resolved) {
+                            return Err(SshTransportError::Credential(code));
+                        }
+                    }
+                    return Err(error);
+                }
+            };
+            if save_credential {
+                let _ = self.save_credential_if_requested(&mut resolved, &profile.auth);
+            }
+            Ok((session, resolved.lease))
+        }
         .await;
         drop(permit);
         result
@@ -3792,7 +4478,7 @@ impl Drop for ActiveChannelGuard {
 }
 
 enum ReconnectResult {
-    Connected(SshSession),
+    Connected(SshSession, Option<Arc<CredentialLease>>),
     Cancelled(Instant),
     Failed(SshForwardErrorCode),
 }
@@ -3934,10 +4620,15 @@ mod tests {
     use super::{
         abort_channel_tasks, partition_auto_start_candidates, record_activation_intent,
         ActivationBarrierPoint, ActivationIntent, ActivationKey, ConnectionReservationGuard,
-        LoadedPassword, LoadedPasswordCleanup, RuntimeEntry, SshForwardManager,
-        ACTIVE_FORWARD_LIMIT, HANDSHAKE_CONCURRENCY_LIMIT,
+        CredentialLease, LoadedPassword, LoadedPasswordCleanup, ResolvedCredentials, RuntimeEntry,
+        SshForwardManager, ACTIVE_FORWARD_LIMIT, HANDSHAKE_CONCURRENCY_LIMIT,
     };
     use crate::ssh_forward::{
+        credential_vault::{
+            fake::{FakeClock, FakeCredentialVault},
+            target_for, CredentialIdentity, CredentialKind, CredentialRecord, CredentialStatus,
+            CredentialVault, VaultAuthIdentity,
+        },
         error::SshForwardErrorCode,
         known_hosts::{ChallengeContext, OfferedHostKey, SshEndpoint},
         model::{
@@ -4004,6 +4695,15 @@ mod tests {
             credential_attempt_id: "attempt-1".to_owned(),
             username: Zeroizing::new("operator".to_owned()),
             password: Zeroizing::new("secret".to_owned()),
+            identity: CredentialIdentity {
+                scope_id: SCOPE.into(),
+                profile_id: "profile".into(),
+                endpoint_host: "host.example".into(),
+                endpoint_port: 22,
+                ssh_user: "operator".into(),
+                auth: VaultAuthIdentity::Password,
+            },
+            remember_for_days: 0,
         });
         manager
             .loaded_passwords
@@ -4038,6 +4738,15 @@ mod tests {
             credential_attempt_id: "attempt-2".to_owned(),
             username: Zeroizing::new("replacement".to_owned()),
             password: Zeroizing::new("new-secret".to_owned()),
+            identity: CredentialIdentity {
+                scope_id: SCOPE.into(),
+                profile_id: "profile".into(),
+                endpoint_host: "host.example".into(),
+                endpoint_port: 22,
+                ssh_user: "replacement".into(),
+                auth: VaultAuthIdentity::Password,
+            },
+            remember_for_days: 0,
         });
         manager
             .loaded_passwords
@@ -4058,6 +4767,442 @@ mod tests {
             .get(&key)
             .is_some_and(|current| Arc::ptr_eq(current, &replacement)));
 
+        drop(manager);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn credential_resolution_prefers_the_exact_saved_identity_and_quarantines_it() {
+        let config = temp_config_dir("credential-resolution");
+        let now = UtcTimestamp::parse("2026-08-17T00:00:00.000Z").unwrap();
+        let clock = Arc::new(FakeClock::new(now));
+        let vault = Arc::new(FakeCredentialVault::new());
+        let manager = SshForwardManager::new_with_dependencies(
+            &config,
+            Arc::clone(&vault) as Arc<dyn CredentialVault>,
+            Arc::clone(&clock) as Arc<dyn super::Clock>,
+        )
+        .unwrap();
+        let identity = CredentialIdentity {
+            scope_id: SCOPE.into(),
+            profile_id: "profile".into(),
+            endpoint_host: "bastion.example".into(),
+            endpoint_port: 22,
+            ssh_user: "operator".into(),
+            auth: VaultAuthIdentity::Password,
+        };
+        let target = target_for(&identity).unwrap();
+        let record = CredentialRecord::new(
+            CredentialKind::Password,
+            "secret",
+            target.identity_digest(),
+            now,
+        )
+        .unwrap();
+        vault.save(&target, &record).unwrap();
+
+        let resolved = manager
+            .resolve_credentials(
+                SCOPE,
+                "profile",
+                "bastion.example",
+                22,
+                "operator",
+                &SshForwardAuth::Agent,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(resolved.saved_reuse);
+        assert_eq!(resolved.password(), Some(("operator", "secret")));
+        manager.mark_saved_credential_rejected(&resolved).unwrap();
+        let rejected = vault.load(&target, now).unwrap();
+        assert_eq!(rejected.status, CredentialStatus::Rejected);
+        assert!(manager
+            .resolve_credentials(
+                SCOPE,
+                "profile",
+                "bastion.example",
+                22,
+                "operator",
+                &SshForwardAuth::Agent,
+                None,
+                None,
+            )
+            .unwrap()
+            .lease
+            .is_none());
+        drop(manager);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn rejection_persistence_failure_keeps_live_lease_quarantined() {
+        let config = temp_config_dir("rejection-persistence-failure");
+        let now = UtcTimestamp::parse("2026-08-17T00:00:00.000Z").unwrap();
+        let clock = Arc::new(FakeClock::new(now));
+        let vault = Arc::new(FakeCredentialVault::new());
+        let manager = SshForwardManager::new_with_dependencies(
+            &config,
+            Arc::clone(&vault) as Arc<dyn CredentialVault>,
+            Arc::clone(&clock) as Arc<dyn super::Clock>,
+        )
+        .unwrap();
+        let identity = CredentialIdentity {
+            scope_id: SCOPE.into(),
+            profile_id: "profile".into(),
+            endpoint_host: "bastion.example".into(),
+            endpoint_port: 22,
+            ssh_user: "operator".into(),
+            auth: VaultAuthIdentity::Password,
+        };
+        let vault_entry = target_for(&identity).unwrap();
+        vault
+            .save(
+                &vault_entry,
+                &CredentialRecord::new(
+                    CredentialKind::Password,
+                    "secret",
+                    vault_entry.identity_digest(),
+                    now,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let resolved = manager
+            .resolve_credentials(
+                SCOPE,
+                "profile",
+                "bastion.example",
+                22,
+                "operator",
+                &SshForwardAuth::Agent,
+                None,
+                None,
+            )
+            .unwrap();
+        let lease = resolved.lease.clone().unwrap();
+        vault.set_failures(false, true, true);
+        assert_eq!(
+            manager.mark_saved_credential_rejected(&resolved),
+            Err(SshForwardErrorCode::CredentialRejected)
+        );
+        let live_result = manager.resolve_live_credentials(
+            SCOPE,
+            "profile",
+            "bastion.example",
+            22,
+            "operator",
+            &SshForwardAuth::Agent,
+            None,
+            lease,
+        );
+        assert_eq!(
+            live_result.err(),
+            Some(SshForwardErrorCode::CredentialRejected)
+        );
+        drop(manager);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn unencrypted_key_passphrase_is_never_saved() {
+        let config = temp_config_dir("unencrypted-key-passphrase");
+        let now = UtcTimestamp::parse("2026-08-17T00:00:00.000Z").unwrap();
+        let clock = Arc::new(FakeClock::new(now));
+        let vault = Arc::new(FakeCredentialVault::new());
+        let manager = SshForwardManager::new_with_dependencies(
+            &config,
+            Arc::clone(&vault) as Arc<dyn CredentialVault>,
+            Arc::clone(&clock) as Arc<dyn super::Clock>,
+        )
+        .unwrap();
+        let identity = CredentialIdentity {
+            scope_id: SCOPE.into(),
+            profile_id: "profile".into(),
+            endpoint_host: "bastion.example".into(),
+            endpoint_port: 22,
+            ssh_user: "operator".into(),
+            auth: VaultAuthIdentity::KeyPassphrase("workstation".into()),
+        };
+        let vault_entry = target_for(&identity).unwrap();
+        let mut resolved = ResolvedCredentials {
+            key: None,
+            key_encrypted: false,
+            lease: Some(Arc::new(CredentialLease::new_key_passphrase(
+                identity,
+                "attempt",
+                "irrelevant",
+            ))),
+            target: Some(vault_entry.clone()),
+            saved_reuse: false,
+            remember_for_days: 30,
+        };
+        manager
+            .save_credential_if_requested(
+                &mut resolved,
+                &SshForwardAuth::Key {
+                    key_id: "workstation".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            vault.load(&vault_entry, now).unwrap().status,
+            CredentialStatus::None
+        );
+        drop(manager);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn saved_password_cannot_downgrade_key_authentication() {
+        let config = temp_config_dir("credential-kind-isolation");
+        let now = UtcTimestamp::parse("2026-08-17T00:00:00.000Z").unwrap();
+        let clock = Arc::new(FakeClock::new(now));
+        let vault = Arc::new(FakeCredentialVault::new());
+        let manager = SshForwardManager::new_with_dependencies(
+            &config,
+            Arc::clone(&vault) as Arc<dyn CredentialVault>,
+            Arc::clone(&clock) as Arc<dyn super::Clock>,
+        )
+        .unwrap();
+        let password_identity = CredentialIdentity {
+            scope_id: SCOPE.into(),
+            profile_id: "profile".into(),
+            endpoint_host: "bastion.example".into(),
+            endpoint_port: 22,
+            ssh_user: "operator".into(),
+            auth: VaultAuthIdentity::Password,
+        };
+        let password_target = target_for(&password_identity).unwrap();
+        vault
+            .save(
+                &password_target,
+                &CredentialRecord::new(
+                    CredentialKind::Password,
+                    "secret",
+                    password_target.identity_digest(),
+                    now,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let resolved = manager
+            .resolve_credentials(
+                SCOPE,
+                "profile",
+                "bastion.example",
+                22,
+                "operator",
+                &SshForwardAuth::Key {
+                    key_id: "workstation".into(),
+                },
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(!resolved.saved_reuse);
+        assert!(resolved.password().is_none());
+        assert!(resolved.lease.is_none());
+        assert!(vault
+            .load(&password_target, now)
+            .unwrap()
+            .credential
+            .is_some());
+
+        let staged = Arc::new(LoadedPassword {
+            credential_attempt_id: "attempt".into(),
+            username: Zeroizing::new("operator".into()),
+            password: Zeroizing::new("staged-secret".into()),
+            identity: password_identity,
+            remember_for_days: 30,
+        });
+        assert!(matches!(
+            manager.resolve_credentials(
+                SCOPE,
+                "profile",
+                "bastion.example",
+                22,
+                "operator",
+                &SshForwardAuth::Key {
+                    key_id: "workstation".into(),
+                },
+                None,
+                Some(&staged),
+            ),
+            Err(SshForwardErrorCode::InvalidArgument)
+        ));
+
+        drop(manager);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn reconnect_reuses_the_live_lease_without_reading_the_vault() {
+        let config = temp_config_dir("live-credential-lease");
+        let now = UtcTimestamp::parse("2026-08-17T00:00:00.000Z").unwrap();
+        let clock = Arc::new(FakeClock::new(now));
+        let vault = Arc::new(FakeCredentialVault::new());
+        let manager = SshForwardManager::new_with_dependencies(
+            &config,
+            Arc::clone(&vault) as Arc<dyn CredentialVault>,
+            Arc::clone(&clock) as Arc<dyn super::Clock>,
+        )
+        .unwrap();
+        vault.set_failures(true, false, false);
+        let identity = CredentialIdentity {
+            scope_id: SCOPE.into(),
+            profile_id: "profile".into(),
+            endpoint_host: "bastion.example".into(),
+            endpoint_port: 22,
+            ssh_user: "operator".into(),
+            auth: VaultAuthIdentity::Password,
+        };
+        let lease = Arc::new(CredentialLease::new_password(
+            identity, "attempt", "operator", "secret",
+        ));
+        let resolved = manager
+            .resolve_live_credentials(
+                SCOPE,
+                "profile",
+                "bastion.example",
+                22,
+                "operator",
+                &SshForwardAuth::Agent,
+                None,
+                lease,
+            )
+            .unwrap();
+        assert_eq!(resolved.password(), Some(("operator", "secret")));
+        assert!(!resolved.saved_reuse);
+        drop(manager);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn vault_read_failure_does_not_block_direct_auth_modes() {
+        let config = temp_config_dir("vault-read-failure-direct-auth");
+        let now = UtcTimestamp::parse("2026-08-17T00:00:00.000Z").unwrap();
+        let clock = Arc::new(FakeClock::new(now));
+        let vault = Arc::new(FakeCredentialVault::new());
+        let manager = SshForwardManager::new_with_dependencies(
+            &config,
+            Arc::clone(&vault) as Arc<dyn CredentialVault>,
+            Arc::clone(&clock) as Arc<dyn super::Clock>,
+        )
+        .unwrap();
+        vault.set_failures(true, false, false);
+
+        for auth in [
+            SshForwardAuth::Agent,
+            SshForwardAuth::Key {
+                key_id: "workstation".into(),
+            },
+        ] {
+            let resolved = manager
+                .resolve_credentials(
+                    SCOPE,
+                    "profile",
+                    "bastion.example",
+                    22,
+                    "operator",
+                    &auth,
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert!(resolved.lease.is_none());
+        }
+        drop(manager);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn successful_staged_credential_replaces_the_entry_with_a_new_fixed_term() {
+        let config = temp_config_dir("credential-replacement");
+        let now = UtcTimestamp::parse("2026-08-17T00:00:00.000Z").unwrap();
+        let clock = Arc::new(FakeClock::new(now));
+        let vault = Arc::new(FakeCredentialVault::new());
+        let manager = SshForwardManager::new_with_dependencies(
+            &config,
+            Arc::clone(&vault) as Arc<dyn CredentialVault>,
+            Arc::clone(&clock) as Arc<dyn super::Clock>,
+        )
+        .unwrap();
+        let staged = Arc::new(LoadedPassword {
+            credential_attempt_id: "attempt-1".into(),
+            username: Zeroizing::new("operator".into()),
+            password: Zeroizing::new("first".into()),
+            identity: CredentialIdentity {
+                scope_id: SCOPE.into(),
+                profile_id: "profile".into(),
+                endpoint_host: "bastion.example".into(),
+                endpoint_port: 22,
+                ssh_user: "operator".into(),
+                auth: VaultAuthIdentity::Password,
+            },
+            remember_for_days: 30,
+        });
+        let mut first = manager
+            .resolve_credentials(
+                SCOPE,
+                "profile",
+                "bastion.example",
+                22,
+                "operator",
+                &SshForwardAuth::Agent,
+                None,
+                Some(&staged),
+            )
+            .unwrap();
+        let target = first.target.clone().unwrap();
+        manager
+            .save_credential_if_requested(&mut first, &SshForwardAuth::Agent)
+            .unwrap();
+        let first_expiry = vault.load(&target, now).unwrap().expires_at.unwrap();
+        assert!(first.is_expired(first_expiry));
+        clock.set(first_expiry);
+        let reconnect = manager
+            .resolve_live_credentials(
+                SCOPE,
+                "profile",
+                "bastion.example",
+                22,
+                "operator",
+                &SshForwardAuth::Agent,
+                None,
+                first.lease.clone().unwrap(),
+            )
+            .unwrap();
+        assert!(manager.ensure_credential_fresh(&reconnect).is_err());
+
+        let later = now.checked_add_seconds(60).unwrap();
+        clock.set(later);
+        let replacement = LoadedPassword {
+            password: Zeroizing::new("second".into()),
+            credential_attempt_id: "attempt-2".into(),
+            ..staged.as_ref().clone()
+        };
+        let mut second = manager
+            .resolve_credentials(
+                SCOPE,
+                "profile",
+                "bastion.example",
+                22,
+                "operator",
+                &SshForwardAuth::Agent,
+                None,
+                Some(&Arc::new(replacement)),
+            )
+            .unwrap();
+        manager
+            .save_credential_if_requested(&mut second, &SshForwardAuth::Agent)
+            .unwrap();
+        let saved = vault.load(&target, later).unwrap();
+        assert_eq!(saved.status, CredentialStatus::Saved);
+        assert!(saved.expires_at.unwrap() > first_expiry);
+        assert_eq!(saved.credential.unwrap().secret.as_str(), "second");
         drop(manager);
         std::fs::remove_dir_all(config).unwrap();
     }
