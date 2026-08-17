@@ -4,6 +4,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import {
   api,
   isGitUnavailableError,
+  isProjectTargetError,
   normalizeProjectTarget,
   projectTargetCacheKey,
   type ProjectTargetInput,
@@ -42,12 +43,14 @@ import type {
   HostMetrics,
   HostResourceAlertIncident,
   HostResourceSnapshotV1,
+  GitOpResult,
   SshCredentialStatus,
   SshForgetCredentialResult,
   SshLoadKeyResult,
   Worktree,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
+import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 
 type QueryInvalidator = Pick<
   ReturnType<typeof useQueryClient>,
@@ -74,13 +77,116 @@ function gitQueryKey(
   ];
 }
 
-async function reconcileAffectedEditorTabs(project: string, paths: string[]) {
+async function reconcileAffectedEditorTabs(
+  target: ProjectTargetInput,
+  paths: string[],
+) {
   if (paths.length === 0) return;
-  await useEditorStore.getState().reconcileGitMutationFiles(project, paths);
+  await useEditorStore.getState().reconcileGitMutationFiles(target, paths);
 }
 
-async function reconcileProjectEditorTabs(project: string) {
-  await useEditorStore.getState().reconcileGitProjectFiles(project);
+async function reconcileProjectEditorTabs(target: ProjectTargetInput) {
+  await useEditorStore.getState().reconcileGitProjectFiles(target);
+}
+
+async function reconcileAllOpenEditorTargets() {
+  const state = useEditorStore.getState();
+  const targets = new Map<string, ProjectTargetInput>();
+  for (const tab of state.tabs ?? []) {
+    const normalized = normalizeProjectTarget(tab.target);
+    targets.set(
+      `${normalized.project}::${projectTargetCacheKey(normalized)}`,
+      normalized,
+    );
+  }
+  await Promise.all(
+    [...targets.values()].map((target) => reconcileProjectEditorTabs(target)),
+  );
+}
+
+export function markTargetUnavailableIfNeeded(
+  target: ProjectTargetInput,
+  error: unknown,
+) {
+  const values: string[] = [];
+  if (typeof error === "string") values.push(error);
+  if (error instanceof Error) values.push(error.message);
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    for (const key of ["code", "message", "error", "reason"]) {
+      const value = record[key];
+      if (typeof value === "string") values.push(value);
+      else if (value instanceof Error) values.push(value.message);
+    }
+  }
+  if (isProjectTargetError(...values)) {
+    markProjectTargetUnavailable(target);
+    useEditorStore.getState().markTargetUnavailable(target);
+  }
+}
+
+function markFailedGitResults(
+  results: GitOpResult[] | undefined,
+  requestedTargets?: ProjectTargetInput[],
+) {
+  if (!Array.isArray(results)) return;
+
+  for (const result of results) {
+    if (result.success || !isProjectTargetError(result.error)) continue;
+
+    if (requestedTargets) {
+      const candidates = requestedTargets.filter(
+        (candidate) =>
+          normalizeProjectTarget(candidate).project === result.projectName,
+      );
+      const resultTargetPath = Object.prototype.hasOwnProperty.call(
+        result,
+        "worktreePath",
+      )
+        ? (result.worktreePath ?? null)
+        : undefined;
+      const target =
+        resultTargetPath === undefined
+          ? candidates.length === 1
+            ? candidates[0]
+            : undefined
+          : candidates.find(
+              (candidate) =>
+                (normalizeProjectTarget(candidate).worktreePath ?? null) ===
+                resultTargetPath,
+            );
+      if (target) markTargetUnavailableIfNeeded(target, result.error);
+      continue;
+    }
+
+    const openTargets = new Map<string, ProjectTargetInput>();
+    for (const tab of useEditorStore.getState().tabs ?? []) {
+      const normalized = normalizeProjectTarget(tab.target);
+      if (normalized.project !== result.projectName) continue;
+      openTargets.set(
+        `${normalized.project}::${projectTargetCacheKey(normalized)}`,
+        normalized,
+      );
+    }
+    for (const target of openTargets.values()) {
+      markTargetUnavailableIfNeeded(target, result.error);
+    }
+  }
+}
+
+function markOpenEditorTargetsUnavailableIfNeeded(error: unknown) {
+  const state = useEditorStore.getState();
+  const targets = new Map<string, ProjectTargetInput>();
+  for (const tab of state.tabs ?? []) {
+    const normalized = normalizeProjectTarget(tab.target);
+    targets.set(
+      `${normalized.project}::${projectTargetCacheKey(normalized)}`,
+      normalized,
+    );
+  }
+  for (const target of targets.values()) {
+    markTargetUnavailableIfNeeded(target, error);
+  }
 }
 
 export async function invalidateGitFileOperation(
@@ -101,7 +207,7 @@ export async function invalidateGitFileOperation(
         projectTargetCacheKey(normalized),
       ],
     }),
-    reconcileAffectedEditorTabs(normalized.project, [path]),
+    reconcileAffectedEditorTabs(normalized, [path]),
   ]);
 }
 
@@ -126,7 +232,7 @@ export async function invalidateGitHistoryOperation(
     qc.invalidateQueries({
       queryKey: gitQueryKey("git-file-diff", normalized),
     }),
-    reconcileAffectedEditorTabs(normalized.project, affectedPaths),
+    reconcileAffectedEditorTabs(normalized, affectedPaths),
   ]);
 }
 
@@ -157,7 +263,7 @@ export async function invalidateGitBranchOperation(
         projectTargetCacheKey(normalized),
       ],
     }),
-    reconcileProjectEditorTabs(normalized.project),
+    reconcileProjectEditorTabs(normalized),
   ]);
 }
 
@@ -172,6 +278,7 @@ function invalidateGitProjectQueries(
     includeGitLog?: boolean;
     includeProjects?: boolean;
     includeProjectStatus?: boolean;
+    reconcileEditorTabs?: boolean;
   },
 ) {
   const normalized = normalizeProjectTarget(target);
@@ -213,6 +320,9 @@ function invalidateGitProjectQueries(
         projectTargetCacheKey(normalized),
       ],
     });
+  }
+  if (options?.reconcileEditorTabs) {
+    void reconcileProjectEditorTabs(normalized);
   }
 }
 
@@ -707,6 +817,7 @@ export function useGitStage(target: ProjectTargetInput, root?: string) {
         includeGitDiff: true,
         includeProjectStatus: true,
       }),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -720,6 +831,7 @@ export function useGitUnstage(target: ProjectTargetInput, root?: string) {
         includeGitDiff: true,
         includeProjectStatus: true,
       }),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -730,6 +842,7 @@ export function useGitDiscard(target: ProjectTargetInput, root?: string) {
     mutationFn: (path: string) => api.git.discard(normalized, path, root),
     onSuccess: (_data, path) =>
       void invalidateGitFileOperation(qc, normalized, path),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -741,6 +854,7 @@ export function useGitDiscardHunk(target: ProjectTargetInput, root?: string) {
       api.git.discardHunk(normalized, path, hunkIndex, root),
     onSuccess: (_data, { path }) =>
       void invalidateGitFileOperation(qc, normalized, path),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -750,14 +864,9 @@ export function useGitResolve(target: ProjectTargetInput, root?: string) {
   return useMutation({
     mutationFn: ({ path, content }: { path: string; content: string }) =>
       api.git.resolve(normalized, path, content, root),
-    onSuccess: () => {
-      void qc.invalidateQueries({
-        queryKey: gitQueryKey("git-conflicts", normalized),
-      });
-      void qc.invalidateQueries({
-        queryKey: gitQueryKey("git-diff", normalized),
-      });
-    },
+    onSuccess: (_result, { path }) =>
+      void invalidateGitHistoryOperation(qc, normalized, [path]),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -780,6 +889,7 @@ export function useGitCommit(target: ProjectTargetInput, root?: string) {
         includeProjects: true,
         includeProjectStatus: true,
       }),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -801,7 +911,9 @@ export function useGitCreateBranch(target: ProjectTargetInput, root?: string) {
         includeGitLog: true,
         includeProjects: true,
         includeProjectStatus: true,
+        reconcileEditorTabs: Boolean(vars.checkout),
       }),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -827,7 +939,9 @@ export function useGitCheckoutBranch(
         includeGitLog: true,
         includeProjects: true,
         includeProjectStatus: true,
+        reconcileEditorTabs: true,
       }),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -842,6 +956,7 @@ export function useGitDeleteBranch(target: ProjectTargetInput, root?: string) {
         includeBranches: true,
         includeGitLog: true,
       }),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -851,6 +966,7 @@ export function useGitCherryPick(target: ProjectTargetInput, root?: string) {
   return useMutation({
     mutationFn: (hash: string) => api.git.cherryPick(normalized, hash, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -861,6 +977,7 @@ export function useGitReset(target: ProjectTargetInput, root?: string) {
     mutationFn: ({ hash, mode }: { hash: string; mode: ResetMode }) =>
       api.git.reset(normalized, hash, mode, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -873,6 +990,7 @@ export function useGitUndoLastCommit(
   return useMutation({
     mutationFn: () => api.git.undoLastCommit(normalized, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -887,6 +1005,7 @@ export function useGitCherryPickCommitFiles(
       api.git.cherryPickCommitFiles(normalized, hash, paths, root),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, normalized, paths),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -901,6 +1020,7 @@ export function useGitDropCommitFiles(
       api.git.dropCommitFiles(normalized, hash, paths, root),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, normalized, paths),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -911,6 +1031,7 @@ export function useGitDropCommit(target: ProjectTargetInput, root?: string) {
     mutationFn: ({ hash }: { hash: string }) =>
       api.git.dropCommit(normalized, hash, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -924,6 +1045,7 @@ export function useGitEditCommitMessage(
     mutationFn: ({ hash, message }: { hash: string; message: string }) =>
       api.git.editCommitMessage(normalized, hash, message, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -934,6 +1056,7 @@ export function useGitRevertCommit(target: ProjectTargetInput, root?: string) {
     mutationFn: ({ hash }: { hash: string }) =>
       api.git.revertCommit(normalized, hash, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -948,6 +1071,7 @@ export function useGitRevertCommitFiles(
       api.git.revertCommitFiles(normalized, hash, paths, root),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, normalized, paths),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 
@@ -957,13 +1081,24 @@ export function useGitFetch() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (targets?: ProjectTargetInput[]) => api.git.fetch(targets),
-    onSuccess: (_result, targets) =>
-      invalidateGitBulkTargets(qc, targets, {
+    onSuccess: (_result, targets) => {
+      markFailedGitResults(_result, targets);
+      return invalidateGitBulkTargets(qc, targets, {
         includeBranches: true,
         includeGitLog: true,
         includeProjects: true,
         includeProjectStatus: true,
-      }),
+      });
+    },
+    onError: (error, targets) => {
+      if (targets) {
+        for (const target of targets) {
+          markTargetUnavailableIfNeeded(target, error);
+        }
+      } else {
+        markOpenEditorTargetsUnavailableIfNeeded(error);
+      }
+    },
   });
 }
 
@@ -971,8 +1106,9 @@ export function useGitPull() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (targets?: ProjectTargetInput[]) => api.git.pull(targets),
-    onSuccess: (_result, targets) =>
-      invalidateGitBulkTargets(qc, targets, {
+    onSuccess: (_result, targets) => {
+      markFailedGitResults(_result, targets);
+      return invalidateGitBulkTargets(qc, targets, {
         includeBranches: true,
         includeConflicts: true,
         includeFileTree: true,
@@ -980,7 +1116,18 @@ export function useGitPull() {
         includeGitLog: true,
         includeProjects: true,
         includeProjectStatus: true,
-      }),
+        reconcileEditorTabs: true,
+      });
+    },
+    onError: (error, targets) => {
+      if (targets) {
+        for (const target of targets) {
+          markTargetUnavailableIfNeeded(target, error);
+        }
+      } else {
+        markOpenEditorTargetsUnavailableIfNeeded(error);
+      }
+    },
   });
 }
 
@@ -1001,6 +1148,9 @@ function invalidateGitBulkTargets(
       void qc.invalidateQueries({ queryKey: [prefix] });
     }
     void qc.invalidateQueries({ queryKey: ["projects"] });
+    if (options?.reconcileEditorTabs) {
+      void reconcileAllOpenEditorTargets();
+    }
     return;
   }
 
@@ -1048,12 +1198,17 @@ export function useGitPush() {
     },
     onSuccess: (_result, target) => {
       const targetRef = typeof target === "string" ? target : target;
+      markTargetUnavailableIfNeeded(targetRef, _result);
       invalidateGitProjectQueries(qc, targetRef, {
         includeBranches: true,
         includeGitLog: true,
         includeProjects: true,
         includeProjectStatus: true,
       });
+    },
+    onError: (error, target) => {
+      const targetRef = typeof target === "string" ? target : target;
+      markTargetUnavailableIfNeeded(targetRef, error);
     },
   });
 }

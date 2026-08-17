@@ -3,6 +3,7 @@ import type { Worktree } from "@/api/client.js";
 import {
   createProjectTargetSnapshot,
   isSelectableWorktree,
+  markProjectTargetUnavailable,
   useProjectTargetStore,
   worktreeStatusLabel,
 } from "./project-target.js";
@@ -113,6 +114,34 @@ describe("project target helpers", () => {
     store.clearUnavailableTarget("demo-project");
     expect(useProjectTargetStore.getState().unavailableTargetByProject).toEqual(
       {},
+    );
+  });
+
+  it("keeps unavailable identity when selection falls back to the root", () => {
+    const store = useProjectTargetStore.getState();
+    store.selectTarget("demo-project", "/tmp/selected");
+    store.markTargetUnavailable("demo-project", "/tmp/selected");
+    store.selectTarget("demo-project", null);
+
+    expect(useProjectTargetStore.getState().activeTargetByProject).toEqual({});
+    expect(useProjectTargetStore.getState().unavailableTargetByProject).toEqual(
+      { "demo-project": "/tmp/selected" },
+    );
+  });
+
+  it("records direct target failures without relying on the worktree panel", () => {
+    useProjectTargetStore
+      .getState()
+      .selectTarget("demo-project", "/tmp/selected");
+
+    markProjectTargetUnavailable({
+      project: "demo-project",
+      worktreePath: "/tmp/selected",
+    });
+
+    expect(useProjectTargetStore.getState().activeTargetByProject).toEqual({});
+    expect(useProjectTargetStore.getState().unavailableTargetByProject).toEqual(
+      { "demo-project": "/tmp/selected" },
     );
   });
 });

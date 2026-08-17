@@ -7,12 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const startVideoDownload = vi.hoisted(() => vi.fn());
 const fetchMock = vi.hoisted(() => vi.fn());
+const fsOpMock = vi.hoisted(() => vi.fn());
+const getTransportMock = vi.hoisted(() => vi.fn(() => ({ fsOp: fsOpMock })));
+const markTargetUnavailableMock = vi.hoisted(() => vi.fn());
 const queryClient = vi.hoisted(() => ({ invalidateQueries: vi.fn() }));
 
 vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => queryClient }));
 vi.mock("@dam-hopper/shared/logger", () => ({ logger: { error: vi.fn() } }));
-vi.mock("@/api/transport.js", () => ({ getTransport: vi.fn() }));
-vi.mock("@/api/queries.js", () => ({ invalidateGitFileOperation: vi.fn() }));
+vi.mock("@/api/transport.js", () => ({ getTransport: getTransportMock }));
+vi.mock("@/api/queries.js", () => ({
+  invalidateGitFileOperation: vi.fn(),
+  markTargetUnavailableIfNeeded: markTargetUnavailableMock,
+}));
 vi.mock("@/api/server-config.js", () => ({
   getActiveProfile: () => null,
   getAuthToken: () => null,
@@ -58,6 +64,9 @@ afterEach(() => {
   onReady = null;
   document.body.innerHTML = "";
   startVideoDownload.mockReset();
+  fsOpMock.mockReset();
+  getTransportMock.mockClear();
+  markTargetUnavailableMock.mockReset();
   fetchMock.mockReset();
   vi.unstubAllGlobals();
 });
@@ -80,5 +89,46 @@ describe("useFsOps download", () => {
       latestOps().download("archive.iso", 101 * 1024 * 1024),
     ).rejects.toThrow("too large");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed fs mutation result to target recovery", async () => {
+    const result = {
+      ok: false,
+      error: "WORKSPACE_TARGET_UNAVAILABLE",
+    };
+    fsOpMock.mockResolvedValue(result);
+
+    await expect(latestOps().createFile("src/demo.ts")).resolves.toEqual(
+      result,
+    );
+
+    expect(markTargetUnavailableMock).toHaveBeenCalledWith(
+      { project: "demo" },
+      result,
+    );
+  });
+
+  it("preserves target error codes from direct downloads", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      statusText: "Conflict",
+      clone: () => ({
+        json: async () => ({
+          code: "WORKSPACE_TARGET_UNAVAILABLE",
+          message: "Selected worktree is unavailable",
+        }),
+      }),
+    });
+
+    await expect(latestOps().download("src/demo.ts", 1)).rejects.toThrow(
+      "Selected worktree is unavailable",
+    );
+
+    expect(markTargetUnavailableMock).toHaveBeenCalledWith(
+      { project: "demo" },
+      expect.objectContaining({
+        code: "WORKSPACE_TARGET_UNAVAILABLE",
+      }),
+    );
   });
 });

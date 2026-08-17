@@ -16,7 +16,10 @@ import {
   type ImagePreviewTicket,
 } from "@/api/image-tickets.js";
 import { Button } from "@/components/atoms/Button.js";
-import type { ProjectTargetRef } from "@/api/client.js";
+import {
+  isProjectTargetError,
+  type ProjectTargetRef,
+} from "@/api/client.js";
 import {
   getProfileChangeVersion,
   subscribeToProfileChanges,
@@ -31,6 +34,7 @@ interface ImagePreviewProps {
   path: string;
   fileName: string;
   mime?: string;
+  onTargetUnavailable?: () => void;
 }
 
 const imageStateCopy: Record<ImageState, string> = {
@@ -75,6 +79,7 @@ export function ImagePreview({
   path,
   fileName,
   mime,
+  onTargetUnavailable,
 }: ImagePreviewProps) {
   const worktreePath = target?.worktreePath;
   const targetProject = target?.project ?? project;
@@ -88,6 +93,11 @@ export function ImagePreview({
   const [ticketErrorCode, setTicketErrorCode] =
     useState<MediaTicketErrorCode | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+  const onTargetUnavailableRef = useRef(onTargetUnavailable);
+
+  useEffect(() => {
+    onTargetUnavailableRef.current = onTargetUnavailable;
+  }, [onTargetUnavailable]);
 
   const teardownPreview = useCallback(
     (imageOverride: HTMLImageElement | null = imageRef.current) => {
@@ -178,6 +188,13 @@ export function ImagePreview({
           isAbortError(error)
         ) {
           return;
+        }
+        const code =
+          error && typeof error === "object" && "code" in error
+            ? String((error as { code?: unknown }).code ?? "")
+            : undefined;
+        if (isProjectTargetError(code, error instanceof Error ? error.message : undefined)) {
+          onTargetUnavailableRef.current?.();
         }
         setTicketErrorCode(mediaTicketErrorCode(error));
         setImageState("error");

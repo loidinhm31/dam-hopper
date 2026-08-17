@@ -131,6 +131,7 @@ export function SearchPanel({
     replaceNext,
   } = useSearchPanelReplace({
     target: requestTarget,
+    scope,
     matches: contentMatches,
     searchQuery: queries.content,
     replaceQuery,

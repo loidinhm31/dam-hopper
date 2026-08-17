@@ -4,22 +4,26 @@
  * Fetches 64 KB chunks on demand as the user scrolls, using an
  * IntersectionObserver sentinel at the bottom of the list.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileText, Loader2 } from "lucide-react";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
+import {
+  isProjectTargetError,
+  normalizeProjectTarget,
+  projectTargetCacheKey,
+  type ProjectTargetInput,
+} from "@/api/client.js";
 
 const CHUNK_BYTES = 64 * 1024; // 64 KB
 
-// Streaming decoder: preserves incomplete multi-byte sequences across chunks
-// (handles CJK, emoji, etc. that may straddle 64 KB boundaries).
-const streamDecoder = new TextDecoder("utf-8", { fatal: false });
-
 interface LargeFileViewerProps {
   project: string;
+  target?: ProjectTargetInput;
   path: string;
   fileName: string;
   size: number;
+  onTargetUnavailable?: () => void;
 }
 
 function b64ToBytes(b64: string): Uint8Array {
@@ -31,59 +35,112 @@ function b64ToBytes(b64: string): Uint8Array {
 
 export function LargeFileViewer({
   project,
+  target,
   path,
   fileName,
   size,
+  onTargetUnavailable,
 }: LargeFileViewerProps) {
+  const targetRef = useMemo(
+    () => normalizeProjectTarget(target ?? project),
+    [project, target],
+  );
+  const targetKey = projectTargetCacheKey(targetRef);
+  const targetIdentity = `${targetRef.project}::${targetKey}`;
   const [lines, setLines] = useState<string[]>([]);
   const [loadedBytes, setLoadedBytes] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const fetchingRef = useRef(false);
+  const generationRef = useRef(0);
+  const decoderRef = useRef<TextDecoder | null>(null);
+  const onTargetUnavailableRef = useRef(onTargetUnavailable);
+
+  useEffect(() => {
+    onTargetUnavailableRef.current = onTargetUnavailable;
+  }, [onTargetUnavailable]);
 
   const fetchChunk = useCallback(
-    async (offset: number) => {
-      if (fetchingRef.current || offset >= size) return;
+    async (offset: number, generation: number) => {
+      if (
+        generation !== generationRef.current ||
+        fetchingRef.current ||
+        offset >= size
+      )
+        return;
       fetchingRef.current = true;
       setLoading(true);
       try {
         const t = getTransport() as WsTransport;
-        const result = await t.fsRead(project, path, {
+        const result = await t.fsRead(targetRef, path, {
           offset,
           len: CHUNK_BYTES,
         });
+        if (generation !== generationRef.current) return;
         if (!result.ok) {
+          if (
+            isProjectTargetError(
+              result.code,
+              "message" in result ? result.message : undefined,
+            )
+          ) {
+            onTargetUnavailableRef.current?.();
+          }
           setError(`Read error: ${result.code}`);
           return;
         }
         const newOffset = offset + result.size;
         const isLastChunk = newOffset >= size;
+        const decoder = decoderRef.current;
+        if (!decoder) return;
         // stream:true buffers incomplete multi-byte chars across 64KB chunk boundaries
-        const text = streamDecoder.decode(b64ToBytes(result.content), {
+        const text = decoder.decode(b64ToBytes(result.content), {
           stream: !isLastChunk,
         });
+        if (generation !== generationRef.current) return;
         const newLines = text.split("\n");
         setLines((prev) => [...prev, ...newLines]);
         setLoadedBytes(newOffset);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Fetch error");
+        if (generation === generationRef.current) {
+          const code =
+            e && typeof e === "object" && "code" in e
+              ? String((e as { code?: unknown }).code ?? "")
+              : undefined;
+          const message = e instanceof Error ? e.message : undefined;
+          if (isProjectTargetError(code, message)) {
+            onTargetUnavailableRef.current?.();
+          }
+          setError(e instanceof Error ? e.message : "Fetch error");
+        }
       } finally {
-        fetchingRef.current = false;
-        setLoading(false);
+        if (generation === generationRef.current) {
+          fetchingRef.current = false;
+          setLoading(false);
+        }
       }
     },
-    [project, path, size],
+    [path, size, targetRef],
   );
 
   // Load first chunk on mount / path change
   useEffect(() => {
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    fetchingRef.current = false;
+    decoderRef.current = new TextDecoder("utf-8", { fatal: false });
     setLines([]);
     setLoadedBytes(0);
     setError(null);
-    void fetchChunk(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, path]);
+    void fetchChunk(0, generation);
+    return () => {
+      if (generationRef.current === generation) {
+        generationRef.current += 1;
+        fetchingRef.current = false;
+      }
+    };
+  }, [fetchChunk, targetIdentity]);
 
   // IntersectionObserver: fetch next chunk when sentinel enters viewport
   useEffect(() => {
@@ -91,7 +148,9 @@ export function LargeFileViewer({
     if (!sentinel) return;
     const obs = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting) void fetchChunk(loadedBytes);
+        if (entries[0]?.isIntersecting) {
+          void fetchChunk(loadedBytes, generationRef.current);
+        }
       },
       { threshold: 0.1 },
     );

@@ -34,6 +34,31 @@ pub struct ProjectsBody {
     pub targets: Option<Vec<ProjectTargetRef>>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitOperationResultResponse {
+    #[serde(flatten)]
+    result: crate::git::GitOperationResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worktree_path: Option<String>,
+}
+
+fn attach_target_identity(
+    results: Vec<crate::git::GitOperationResult>,
+    projects: &[(String, PathBuf, Option<String>)],
+) -> Vec<GitOperationResultResponse> {
+    results
+        .into_iter()
+        .zip(projects.iter())
+        .map(
+            |(result, (_, _, worktree_path))| GitOperationResultResponse {
+                result,
+                worktree_path: worktree_path.clone(),
+            },
+        )
+        .collect()
+}
+
 pub async fn fetch_projects(
     State(state): State<AppState>,
     Json(body): Json<ProjectsBody>,
@@ -50,13 +75,13 @@ pub async fn fetch_projects(
 
     let refs: Vec<ProjectRef<'_>> = project_list
         .iter()
-        .map(|(n, p)| ProjectRef {
+        .map(|(n, p, _)| ProjectRef {
             name: n.as_str(),
             path: p.as_path(),
         })
         .collect();
     let results = bulk.fetch_all(&refs).await;
-    Ok(Json(results))
+    Ok(Json(attach_target_identity(results, &project_list)))
 }
 
 // ---------------------------------------------------------------------------
@@ -77,13 +102,13 @@ pub async fn pull_projects(
 
     let refs: Vec<ProjectRef<'_>> = project_list
         .iter()
-        .map(|(n, p)| ProjectRef {
+        .map(|(n, p, _)| ProjectRef {
             name: n.as_str(),
             path: p.as_path(),
         })
         .collect();
     let results = bulk.pull_all(&refs).await;
-    Ok(Json(results))
+    Ok(Json(attach_target_identity(results, &project_list)))
 }
 
 // ---------------------------------------------------------------------------
@@ -624,12 +649,16 @@ async fn collect_project_list(
     state: &AppState,
     filter: Option<&[String]>,
     targets: Option<&[ProjectTargetRef]>,
-) -> Result<Vec<(String, PathBuf)>, AppError> {
+) -> Result<Vec<(String, PathBuf, Option<String>)>, AppError> {
     if let Some(targets) = targets {
         let mut project_list = Vec::with_capacity(targets.len());
         for target in targets {
             let resolved = state.resolve_project_target(target).await?;
-            project_list.push((target.project.clone(), resolved.target_path().to_path_buf()));
+            project_list.push((
+                target.project.clone(),
+                resolved.target_path().to_path_buf(),
+                target.worktree_path.clone(),
+            ));
         }
         return Ok(project_list);
     }
@@ -643,7 +672,7 @@ async fn collect_project_list(
                 .map(|f| f.iter().any(|n| n == &p.name))
                 .unwrap_or(true)
         })
-        .map(|p| (p.name.clone(), PathBuf::from(&p.path)))
+        .map(|p| (p.name.clone(), PathBuf::from(&p.path), None))
         .collect())
 }
 

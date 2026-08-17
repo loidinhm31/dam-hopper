@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SearchMatch } from "@/api/fs-types.js";
-import { runReplaceNext, replaceContentSearchMatch } from "./search-replace-next.js";
+import {
+  resolveSearchMatchTarget,
+  runReplaceNext,
+  replaceContentSearchMatch,
+} from "./search-replace-next.js";
 import { sortContentSearchMatches } from "./search-matches.js";
 
 function textResponse(content: string, mtime = 10) {
@@ -14,7 +18,12 @@ function textResponse(content: string, mtime = 10) {
   };
 }
 
-function match(path: string, line: number, col: number, text: string): SearchMatch {
+function match(
+  path: string,
+  line: number,
+  col: number,
+  text: string,
+): SearchMatch {
   return { path, line, col, text };
 }
 
@@ -82,6 +91,23 @@ describe("replaceContentSearchMatch", () => {
 });
 
 describe("runReplaceNext", () => {
+  it("routes workspace matches to each configured project root", () => {
+    const selectedWorktree = {
+      project: "alpha",
+      worktreePath: "/tmp/alpha-worktree",
+    } as const;
+
+    expect(
+      resolveSearchMatchTarget(selectedWorktree, "alpha", "workspace"),
+    ).toBe("alpha");
+    expect(
+      resolveSearchMatchTarget(selectedWorktree, "beta", "workspace"),
+    ).toBe("beta");
+    expect(
+      resolveSearchMatchTarget(selectedWorktree, "alpha", "project"),
+    ).toEqual(selectedWorktree);
+  });
+
   it("blocks replacement when the target file has an open dirty tab", async () => {
     const openMatch = vi.fn();
     const readFile = vi.fn();
@@ -139,11 +165,29 @@ describe("runReplaceNext", () => {
 
   it("replaces, refetches, and advances to the next remaining match", async () => {
     const matches = sortContentSearchMatches([
-      { project: "alpha", path: "src/demo.ts", line: 1, col: 1, text: "needle one" },
-      { project: "beta", path: "src/demo.ts", line: 1, col: 1, text: "needle two" },
+      {
+        project: "alpha",
+        path: "src/demo.ts",
+        line: 1,
+        col: 1,
+        text: "needle one",
+      },
+      {
+        project: "beta",
+        path: "src/demo.ts",
+        line: 1,
+        col: 1,
+        text: "needle two",
+      },
     ]);
     const refreshedMatches = sortContentSearchMatches([
-      { project: "beta", path: "src/demo.ts", line: 1, col: 1, text: "needle two" },
+      {
+        project: "beta",
+        path: "src/demo.ts",
+        line: 1,
+        col: 1,
+        text: "needle two",
+      },
     ]);
     const writeFile = vi.fn(async () => ({ ok: true as const, newMtime: 11 }));
     const reloadOpenTab = vi.fn(async () => undefined);

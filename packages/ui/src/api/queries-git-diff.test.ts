@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
   pull: vi.fn(),
   invalidateQueries: vi.fn(() => Promise.resolve()),
+  reconcileGitMutationFiles: vi.fn(async () => undefined),
+  reconcileGitProjectFiles: vi.fn(async () => undefined),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -25,6 +27,7 @@ vi.mock("./client.js", () => ({
   },
   isGitUnavailableError: (error: unknown) =>
     (error as { code?: string })?.code === "GIT_NOT_INITIALIZED",
+  isProjectTargetError: () => false,
   normalizeProjectTarget: (
     target: string | { project: string; worktreePath?: string },
   ) => (typeof target === "string" ? { project: target } : target),
@@ -36,7 +39,14 @@ vi.mock("./client.js", () => ({
 }));
 
 vi.mock("@/stores/editor.js", () => ({
-  useEditorStore: { getState: vi.fn() },
+  useEditorStore: {
+    getState: vi.fn(() => ({
+      tabs: [],
+      reconcileGitMutationFiles: mocks.reconcileGitMutationFiles,
+      reconcileGitProjectFiles: mocks.reconcileGitProjectFiles,
+      markTargetUnavailable: vi.fn(),
+    })),
+  },
 }));
 
 import {
@@ -132,6 +142,18 @@ describe("target-aware Git mutations", () => {
     expect(mocks.invalidateQueries).not.toHaveBeenCalledWith({
       queryKey: ["branches", "demo", "root"],
     });
+  });
+
+  it("reconciles open tabs only for a targeted pull", () => {
+    const target = { project: "demo", worktreePath: "/tmp/demo-feature" };
+    mocks.reconcileGitProjectFiles.mockClear();
+    const pullMutation = useGitPull() as unknown as {
+      onSuccess: (result: unknown, targets: (typeof target)[]) => void;
+    };
+
+    pullMutation.onSuccess([], [target]);
+
+    expect(mocks.reconcileGitProjectFiles).toHaveBeenCalledWith(target);
   });
 
   it("invalidates status in the selected target after staging", async () => {

@@ -1062,7 +1062,7 @@ export function FileTree({
                     )}
                     onOpenDiff={(state) =>
                       openDiff(
-                        project,
+                        requestTarget,
                         state.path,
                         state.status,
                         state.additions,

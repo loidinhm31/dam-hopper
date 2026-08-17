@@ -60,7 +60,7 @@ import {
   addKeyboardShortcutListener,
   useDocumentKeyboardShortcut,
 } from "@/hooks/use-shortcuts.js";
-import { api } from "@/api/client.js";
+import { api, type ProjectTargetInput } from "@/api/client.js";
 import {
   loadWorkspaceMode,
   saveWorkspaceMode,
@@ -98,6 +98,7 @@ import type {
 } from "@/lib/terminal-workspace-panel.js";
 import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 import { resolveRevealActiveFileOutcome } from "@/lib/reveal-active-file.js";
+import { resolveSearchMatchTarget } from "@/lib/search-replace-next.js";
 import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
 import {
   subscribeToRegistry,
@@ -123,7 +124,7 @@ import {
 export { resolveRevealActiveFileOutcome };
 
 type OpenDiff = (
-  project: string,
+  target: ProjectTargetInput,
   path: string,
   fileStatus: string,
   additions: number,
@@ -134,12 +135,12 @@ type OpenDiff = (
 ) => void;
 
 export function openChangedFileDiff(
-  project: string,
+  target: ProjectTargetInput,
   selection: ChangedFileSelection,
   openDiff: OpenDiff,
 ) {
   openDiff(
-    project,
+    target,
     selection.projectPath,
     selection.status,
     selection.additions,
@@ -805,7 +806,9 @@ export default function WorkspacePage() {
     const activePath =
       projectName === null
         ? null
-        : (useEditorStore.getState().getActiveTab(projectName)?.path ?? null);
+        : (useEditorStore
+            .getState()
+            .getActiveTab(projectTarget?.target ?? projectName)?.path ?? null);
     const nonce = revealRequestNonceRef.current + 1;
     const outcome = resolveRevealActiveFileOutcome({
       projectName,
@@ -830,6 +833,7 @@ export default function WorkspacePage() {
   }, [
     isCompactWorkspace,
     projectName,
+    projectTarget,
     setRequestedCompactSurface,
     setTerminalFilePanelOpen,
     workspaceMode,
@@ -904,21 +908,38 @@ export default function WorkspacePage() {
   );
 
   const openWorkspaceFile = useCallback(
-    (targetProject: string, node: FsArborNode) => {
+    (
+      targetProject: string,
+      node: FsArborNode,
+      targetOverride?: ProjectTargetInput,
+    ) => {
       if (shouldAutoOpenTerminalFilePanel(workspaceMode, isCompactWorkspace)) {
         setTerminalFilePanelOpen(true);
         setTerminalFilePanelEditorFocusSignal((current) => current + 1);
       }
-      return openFile(targetProject, node);
+      const requestTarget =
+        targetOverride ??
+        (targetProject === projectName
+          ? (projectTarget?.target ?? targetProject)
+          : targetProject);
+      return openFile(requestTarget, node);
     },
-    [isCompactWorkspace, openFile, setTerminalFilePanelOpen, workspaceMode],
+    [
+      isCompactWorkspace,
+      openFile,
+      projectName,
+      projectTarget,
+      setTerminalFilePanelOpen,
+      workspaceMode,
+    ],
   );
 
   const handleFileOpen = useCallback(
     (node: FsArborNode) => {
-      if (projectName) void openWorkspaceFile(projectName, node);
+      if (projectName)
+        void openWorkspaceFile(projectName, node, projectTarget?.target);
     },
-    [openWorkspaceFile, projectName],
+    [openWorkspaceFile, projectName, projectTarget],
   );
 
   const handleSearchResultOpen = useCallback(
@@ -934,12 +955,28 @@ export default function WorkspacePage() {
       if (match.project && match.project !== projectName) {
         setActiveProject(match.project);
       }
+      const matchTarget = match.project
+        ? resolveSearchMatchTarget(
+            projectTarget?.target ?? targetProject,
+            targetProject,
+            "workspace",
+          )
+        : targetProject === projectName
+          ? projectTarget?.target
+          : targetProject;
       void openWorkspaceFile(
         targetProject,
         buildSearchMatchFileNode(match.path),
+        matchTarget,
       );
     },
-    [closeSearch, openWorkspaceFile, projectName, setActiveProject],
+    [
+      closeSearch,
+      openWorkspaceFile,
+      projectName,
+      projectTarget,
+      setActiveProject,
+    ],
   );
 
   const handleSelectProjectInTree = useCallback(
@@ -1655,7 +1692,11 @@ export default function WorkspacePage() {
                 target={projectTarget?.target}
                 selectedFile={null}
                 onSelectFile={(selection) =>
-                  openChangedFileDiff(projectName, selection, openDiff)
+                  openChangedFileDiff(
+                    projectTarget?.target ?? projectName,
+                    selection,
+                    openDiff,
+                  )
                 }
               />
             </Suspense>
@@ -1845,7 +1886,11 @@ export default function WorkspacePage() {
         icon: LayoutGrid,
         content: (
           <Suspense fallback={<PanelFallback label="Loading editor…" />}>
-            <EditorTabs project={projectName} />
+            <EditorTabs
+              key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+              project={projectName}
+              target={projectTarget?.target}
+            />
           </Suspense>
         ),
       },
@@ -1968,7 +2013,11 @@ export default function WorkspacePage() {
                 target={projectTarget?.target}
                 selectedFile={null}
                 onSelectFile={(selection) =>
-                  openChangedFileDiff(projectName, selection, openDiff)
+                  openChangedFileDiff(
+                    projectTarget?.target ?? projectName,
+                    selection,
+                    openDiff,
+                  )
                 }
               />
             </Suspense>
@@ -1978,7 +2027,11 @@ export default function WorkspacePage() {
         }
         editorContent={
           <Suspense fallback={<PanelFallback label="Loading editor…" />}>
-            <EditorTabs project={projectName} />
+            <EditorTabs
+              key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+              project={projectName}
+              target={projectTarget?.target}
+            />
           </Suspense>
         }
         onClose={() => setTerminalFilePanelOpen(false)}
@@ -2043,7 +2096,11 @@ export default function WorkspacePage() {
           activateRightTopToolRequest={ideRightTopToolRequest}
           editor={
             <Suspense fallback={<PanelFallback label="Loading editor…" />}>
-              <EditorTabs project={projectName} />
+              <EditorTabs
+                key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+                project={projectName}
+                target={projectTarget?.target}
+              />
             </Suspense>
           }
         />
