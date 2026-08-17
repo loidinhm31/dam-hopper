@@ -45,6 +45,7 @@ import type {
   SshCredentialStatus,
   SshForgetCredentialResult,
   SshLoadKeyResult,
+  Worktree,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 
@@ -234,11 +235,28 @@ export function useHostResourceAlerts(enabled: boolean, limit = 20) {
   });
 }
 
-export function useWorktrees(project: string) {
-  return useQuery({
+export const WORKTREE_DISCOVERY_POLL_INTERVAL_MS = 10_000;
+
+export interface WorktreeQueryOptions {
+  enabled?: boolean;
+  pollWhileVisible?: boolean;
+}
+
+export function useWorktrees(
+  project: string,
+  options: WorktreeQueryOptions = {},
+) {
+  const enabled = !!project && (options.enabled ?? true);
+  return useQuery<Worktree[]>({
     queryKey: ["worktrees", project],
     queryFn: () => api.git.worktrees(project),
-    enabled: !!project,
+    enabled,
+    refetchOnWindowFocus: enabled ? "always" : false,
+    refetchOnReconnect: enabled ? "always" : false,
+    refetchInterval:
+      enabled && options.pollWhileVisible
+        ? WORKTREE_DISCOVERY_POLL_INTERVAL_MS
+        : false,
   });
 }
 

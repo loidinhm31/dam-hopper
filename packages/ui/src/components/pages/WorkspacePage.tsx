@@ -52,6 +52,7 @@ import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useBrowserDebug } from "@/hooks/use-browser-debug.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
 import { useExportDiagnostics } from "@/api/queries.js";
@@ -588,6 +589,7 @@ export default function WorkspacePage() {
 
   const projectName =
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
+  const projectTarget = useProjectTarget(projectName);
 
   const closeTerminalDiagnosticsMenu = useCallback(() => {
     setTerminalDiagnosticsMenuTarget(null);
@@ -1595,6 +1597,7 @@ export default function WorkspacePage() {
           <Suspense fallback={<PanelFallback label="Loading search…" />}>
             <SearchPanel
               project={projectName}
+              target={projectTarget?.target}
               onResultClick={handleSearchResultOpen}
             />
           </Suspense>
@@ -1614,8 +1617,9 @@ export default function WorkspacePage() {
             {projectName ? (
               <Suspense fallback={<PanelFallback label="Loading files…" />}>
                 <FileTree
-                  key={projectName}
+                  key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
                   project={projectName}
+                  target={projectTarget?.target}
                   path=""
                   onFileOpen={handleFileOpen}
                   onOpenTerminal={() => handleLaunchShell(projectName)}
@@ -1696,6 +1700,7 @@ export default function WorkspacePage() {
       fileTreeRevealRequest,
       terminalContent,
       portsContent,
+      projectTarget,
     ],
   );
 
@@ -1714,6 +1719,7 @@ export default function WorkspacePage() {
             <Suspense fallback={<PanelFallback label="Loading project…" />}>
               <ProjectInfoPanel
                 projectName={projectName}
+                target={projectTarget}
                 onLaunchCommand={(cmd) =>
                   handleLaunchTerminal(projectName, cmd)
                 }
@@ -1733,7 +1739,7 @@ export default function WorkspacePage() {
         content: fleetContent,
       },
     ],
-    [fleetContent, handleLaunchTerminal, projectName],
+    [fleetContent, handleLaunchTerminal, projectName, projectTarget],
   );
 
   const compactGitSurface = useMemo<MobileWorkspaceSurface>(
@@ -1761,6 +1767,7 @@ export default function WorkspacePage() {
         <Suspense fallback={<PanelFallback label="Loading project…" />}>
           <ProjectInfoPanel
             projectName={projectName}
+            target={projectTarget}
             onLaunchCommand={(cmd) => handleLaunchTerminal(projectName, cmd)}
           />
         </Suspense>
@@ -1768,7 +1775,7 @@ export default function WorkspacePage() {
         renderCompactPlaceholder("Select a project to inspect")
       ),
     }),
-    [handleLaunchTerminal, projectName],
+    [handleLaunchTerminal, projectName, projectTarget],
   );
 
   const compactIdeSurfaces = useMemo<MobileWorkspaceSurface[]>(
@@ -1782,8 +1789,9 @@ export default function WorkspacePage() {
             {projectName ? (
               <Suspense fallback={<PanelFallback label="Loading files…" />}>
                 <FileTree
-                  key={projectName}
+                  key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
                   project={projectName}
+                  target={projectTarget?.target}
                   path=""
                   onFileOpen={handleFileOpen}
                   onOpenTerminal={() => handleLaunchShell(projectName)}
@@ -1809,6 +1817,7 @@ export default function WorkspacePage() {
           <Suspense fallback={<PanelFallback label="Loading search…" />}>
             <SearchPanel
               project={projectName}
+              target={projectTarget?.target}
               closeOnResultClick
               onResultClick={handleSearchResultOpen}
             />
@@ -1852,6 +1861,7 @@ export default function WorkspacePage() {
       projectName,
       terminalContent,
       browserContent,
+      projectTarget,
     ],
   );
 
@@ -1918,8 +1928,9 @@ export default function WorkspacePage() {
           projectName ? (
             <Suspense fallback={<PanelFallback label="Loading files…" />}>
               <FileTree
-                key={`terminal-panel-${projectName}`}
+                key={`terminal-panel-${projectName}:${projectTarget?.targetKey ?? "root"}`}
                 project={projectName}
+                target={projectTarget?.target}
                 path=""
                 onFileOpen={handleFileOpen}
                 onOpenTerminal={() => handleLaunchShell(projectName)}
@@ -1971,6 +1982,7 @@ export default function WorkspacePage() {
       terminalFilePanelOpen,
       terminalFileTreeResizeHandleProps,
       terminalFileTreeWidth,
+      projectTarget,
     ],
   );
 
@@ -2052,6 +2064,7 @@ export default function WorkspacePage() {
             <Suspense fallback={<PanelFallback label="Loading search…" />}>
               <SearchPanel
                 project={projectName}
+                target={projectTarget?.target}
                 closeOnResultClick
                 inputRef={searchInputRef}
                 onClose={closeSearch}
