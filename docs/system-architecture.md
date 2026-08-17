@@ -1167,7 +1167,7 @@ SSH passphrases are session-only by default. Save-for-later uses the host OS cre
 - If keyring support is unavailable, save-for-later falls back to session-only use with an error.
 - The frontend retry hook performs only one automatic retry after a successful key load and does not keep a long-lived success cache, so later SSH auth failures can reopen the prompt instead of being masked by stale session state.
 
-### SSH port-forwarding control (Phase 02; implemented safeguards, limited GO)
+### SSH port-forwarding control (Phase 03; shipped safeguards)
 
 Phase 01 feasibility passed for Windows ACLs, SSH-agent access, and the
 no-follow/contained-handle primitives. Phase 02 contracts now include the
@@ -1190,8 +1190,9 @@ The SSH endpoint defaults from the active DamHopper server profile hostname with
 but the user must review and save it. The persisted SSH endpoint is explicit and editable; later
 HTTP profile URL changes never silently rewrite it. Both bind and remote target hosts are fixed
 IPv4 `127.0.0.1`; only their integer ports are configurable in `1..=65535`. Remote forwarding,
-SOCKS, non-loopback targets, wildcard/IPv6, port `0`, password persistence, desktop keychain,
-arbitrary paths/options, and browser/mobile support are out of v1 scope.
+SOCKS, non-loopback targets, wildcard/IPv6, port `0`, arbitrary paths/options,
+and browser/mobile support are out of v1 scope. Windows Credential Manager persistence
+is the shipped desktop password/passphrase persistence boundary described below.
 
 ```mermaid
 flowchart LR
@@ -1313,6 +1314,167 @@ stateDiagram-v2
     Failed --> Stopping : stop, scope switch, or app exit
     Stopping --> Stopped : listener, channels, and SSH session closed
 ```
+
+#### Established-connection forwarding model (phase 1 persistence boundary)
+
+The next forwarding iteration separates SSH connection identity/lifecycle from
+individual port rules. One active DamHopper server-profile scope may contain
+many credential-free SSH connection profiles. Each established native
+connection owns one authenticated `SshSession` and may serve many loopback-only
+forwarding rules through independent `direct-tcpip` channels. The existing
+one-active-scope boundary remains: a scope change closes every connection and
+forward in the prior scope.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Disconnected
+    Disconnected --> Authenticating : explicit Connect
+    Authenticating --> TrustBlocked : unknown host key
+    TrustBlocked --> Disconnected : approve exact key for later retry
+    Authenticating --> Established : trust verified and SSH authenticated
+    Authenticating --> Disconnected : cancel or authentication failure
+    Established --> Reconnecting : SSH transport lost
+    Reconnecting --> Established : memory lease or unexpired vault credential succeeds
+    Reconnecting --> Disconnected : retry exhausted or credential invalid
+    Established --> Disconnecting : explicit disconnect, scope switch, or exit
+    Reconnecting --> Disconnecting : explicit disconnect, scope switch, or exit
+    Disconnecting --> Disconnected : live ports, channels, session, and memory lease closed
+```
+
+Forwarding rules have an independent `off -> opening -> on -> closing -> off`
+lifecycle. `opening` is admitted only when native state confirms that the
+referenced connection is `Established` and its expected numeric generation is
+current. Unknown, stale, wrong-scope, disconnected, authenticating, or
+reconnecting connections fail closed without requesting credentials. Opening
+or closing one port cannot tear down healthy sibling ports; disconnecting the
+parent connection closes all children.
+
+Persisted state is the credential-free v2 document in each scope's
+`profiles.toml`. It contains connection profiles (endpoint, SSH user, auth mode
+or safe key reference) and forwarding rules (connection profile ID, local port,
+fixed remote loopback target/port, reconnect/enable intent). It contains no
+password, passphrase, decrypted key, live session, listener, or runtime
+generation. The v2 document carries independent `connectionsRevision` and
+`rulesRevision` counters; each replacement checks the expected counter, updates
+only its collection, and atomically replaces the one validated document.
+
+The first v1 read migrates deterministically: each legacy combined profile
+becomes a rule, and connection profiles are deduplicated only by canonical
+scope + endpoint + SSH user + auth identity. The original v1 bytes are retained
+with scope, length, and SHA-256 metadata in `profiles.v1.rollback.toml` and
+`profiles.v1.rollback.meta` until the migration is superseded. Invalid or
+secret-bearing v1 data is rejected without publishing v2. Restart recovery
+validates rollback artifacts and replacement identities/checksums before
+cleanup; incomplete or tampered artifacts fail closed rather than guessing.
+
+During phase 1, legacy profile reads remain compatibility reads: they do not
+auto-authenticate, start a connection, or request credentials. A legacy-shaped
+write is rebased onto the current v2 document by stable connection-profile ID,
+so concurrent v2-only changes are retained and the rule's `desiredEnabled`
+intent is preserved. Connection/rule persistence therefore records desired
+state only; authentication and live forwarding remain explicit manager
+operations.
+
+The native manager is authoritative. Each established runtime is keyed by the
+stable connection profile ID and guarded by a memory-only connection generation.
+It owns the reusable SSH session, per-connection lifecycle serialization,
+forwarding children, and a memory lease used for the live transport. Port
+commands carry no credentials and cannot initiate authentication.
+
+Successful passphrase or password authentication may save the entered secret
+for exactly 30 days in Windows Credential Manager using user-bound,
+local-machine persistence. The fixed `expiresAt` is set only by a successful
+save/replacement and is not extended by silent reads or reconnects. The vault
+target is an opaque, versioned digest of app + scope + connection profile +
+canonical endpoint + user + auth mode/key ID. The versioned credential blob
+contains the secret and its timestamps; TOML, browser storage, snapshots,
+events, diagnostics, and logs contain metadata only (`saved`, `expiresAt`, safe
+status). Agent and unencrypted-key modes store no secret. SSH authentication is
+trust-first: host-key verification and any explicit approval/repair complete
+before a saved secret is eligible for use.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Absent
+    Absent --> Saved : successful auth and remember for 30 days
+    Saved --> Saved : disconnect, scope switch, trust change, or shutdown
+    Saved --> Rejected : stored credential receives terminal auth failure
+    Rejected --> Saved : successful replacement
+    Saved --> Expired : fixed expiresAt reached
+    Rejected --> Expired : fixed expiresAt reached
+    Expired --> Absent : next read, startup sweep, or explicit cleanup
+    Saved --> Absent : Forget, profile delete, or scope purge
+    Rejected --> Absent : Forget, profile delete, or scope purge
+```
+
+Disconnect, scope switch, trust change, manager shutdown, and app exit close and
+zeroize live sessions, decrypted keys, passwords, and live credential leases but retain
+the unexpired vault entry. A trust change never authorizes credential use: SSH
+host-key verification and explicit repair/approval complete before the vault
+secret may be sent. Terminal authentication failure quarantines the entry from
+automatic reuse until successful replacement, explicit retry, Forget, or
+expiry; it does not silently loop. Expired entries are never returned and are
+deleted at the next app-controlled read/sweep because Windows Credential
+Manager has no autonomous TTL. Explicit Forget, connection-profile deletion,
+and scope purge must verify vault deletion before reporting success; cleanup
+failure is reported as maintenance failure. Reconnect reuses the live lease first
+and then the unexpired, non-quarantined vault entry.
+
+The vault adapter calls Windows Credential Manager directly; it does not shell
+out, write a DPAPI side file, or expose secrets over Tauri IPC. Vault
+unavailability does not tear down a successfully authenticated live session,
+but the snapshot must report that the credential was not saved. The same-user
+process access limitation of Windows Credential Manager remains an explicit
+trust-boundary risk. If persistence maintenance or migration rollback cannot restore
+the prior document/postcondition, the operation returns a maintenance error and does
+not claim success.
+
+Phase 04 explicitly defers adding saved-credential detail to the public snapshot
+metadata contract. Phase 03 snapshots expose only existing safe status fields; they
+never expose credential contents or targets.
+
+Target limits remain explicit and bounded: at most 16 established connections,
+four concurrent handshakes, 64 enabled forwarding rules per active scope, and
+64 channels per connection. Snapshot/event authority, canonical decimal wire
+counters, stale desktop/manager/client/activation rejection, endpoint-first
+host trust, fixed `127.0.0.1` bind/target, and shutdown cleanup invariants remain
+unchanged.
+
+#### Phase 2 lifecycle hardening
+
+The native manager's v2 `ConnectionRegistry` is the single in-memory authority
+for connection and forwarding-rule runtime ownership. A connection reservation
+allocates a connection generation and cancellation token before authentication;
+the live connection owns one shared `SshSession`, and each child rule owns its
+own rule generation and worker. A rule may be admitted only against the current
+established parent generation, so a disconnected or replaced connection cannot
+inherit children from an older instance.
+
+Every asynchronous completion carries the connection ID and generation, rule ID
+and rule generation where applicable, and the reservation's cancellation token.
+Worker exits, reconnect results, and delayed callbacks are ignored when any of
+those identities is stale. Disconnect first advances the parent generation,
+cancels the parent and children, marks children closing, and only then allows
+the connection to be reused. Counter exhaustion is an error rather than a wrap;
+it never partially mutates the parent or its children.
+
+Cancellation is observable by all handshake, reconnect, listener, and channel
+workers. It wakes waiters and makes shutdown/disconnect cleanup bounded and
+idempotent. Failed reservations are reaped even when the initiating task drops;
+if the registry lock is temporarily unavailable, cleanup is deferred and
+rechecked. Shared session close is serialized and safe through `Arc` references,
+so closing one child cannot close a sibling's transport. A worker can mark only
+its current child failed; stale worker exits cannot mutate a reused connection
+or a newer rule generation.
+
+Live-scope mutation is manager-owned. The scope activity lease and operation
+fence prevent direct rule replacement while the scope has active runtime state;
+such writes fail closed rather than allowing a listener to outlive its stored
+definition. Reconciliation applies desired rules under a dedicated gate, keeps
+healthy siblings running, rejects duplicate loopback ports, and removes only
+rules that are off and no longer present. Connection/rule revisions and runtime
+generations remain separate: revisions protect persisted-document updates,
+while generations protect asynchronous live-worker callbacks.
 
 The native manager serializes operations per profile. Start/stop are idempotent; restart performs a
 bounded stop before a new generation. CRUD never implicitly edits a live worker: update/delete of an
