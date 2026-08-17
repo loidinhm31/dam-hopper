@@ -10,6 +10,7 @@ import { AlertTriangle, Download, Film, Loader2, RotateCw } from "lucide-react";
 import { Button } from "@/components/atoms/Button.js";
 import { issueVideoTicket } from "@/api/video-tickets.js";
 import { startVideoDownload } from "@/lib/start-video-download.js";
+import type { ProjectTargetRef } from "@/api/client.js";
 import {
   getProfileChangeVersion,
   subscribeToProfileChanges,
@@ -20,6 +21,7 @@ type MediaTicketErrorCode = "MEDIA_SESSION_UNSUPPORTED";
 
 interface VideoPreviewProps {
   project: string;
+  target?: ProjectTargetRef;
   path: string;
   fileName: string;
   mime?: string;
@@ -85,10 +87,17 @@ function playbackErrorMessage(video: HTMLVideoElement): string {
 
 export function VideoPreview({
   project,
+  target,
   path,
   fileName,
   mime,
 }: VideoPreviewProps) {
+  const worktreePath = target?.worktreePath;
+  const targetProject = target?.project ?? project;
+  const requestTarget =
+    worktreePath == null
+      ? targetProject
+      : { project: targetProject, worktreePath };
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const issueControllerRef = useRef<AbortController | null>(null);
   const playbackRef = useRef<VideoPlaybackHandle | null>(null);
@@ -148,7 +157,7 @@ export function VideoPreview({
     const controller = new AbortController();
     issueControllerRef.current = controller;
 
-    void issueVideoTicket(project, path, "playback", controller.signal)
+    void issueVideoTicket(requestTarget, path, "playback", controller.signal)
       .then((handle) => {
         // issueVideoTicket returns a purpose-discriminated handle. Keep this
         // guard even though this call requests playback: it prevents a client
@@ -200,7 +209,7 @@ export function VideoPreview({
       if (generationRef.current === generation) generationRef.current += 1;
       teardownPlayback(cleanupVideo);
     };
-  }, [path, project, retryToken, teardownPlayback]);
+  }, [path, retryToken, targetProject, teardownPlayback, worktreePath]);
 
   useEffect(
     () =>
@@ -242,7 +251,7 @@ export function VideoPreview({
     try {
       // This intentionally issues a fresh download ticket. It does not touch
       // or await the playback handle/source currently used by the player.
-      await startVideoDownload(project, path);
+      await startVideoDownload(requestTarget, path);
     } catch (error: unknown) {
       const code = mediaTicketErrorCode(error);
       setTicketErrorCode(code);
@@ -254,7 +263,7 @@ export function VideoPreview({
       downloadPendingRef.current = false;
       setDownloadPending(false);
     }
-  }, [path, project]);
+  }, [path, targetProject, worktreePath]);
 
   return (
     <section

@@ -29,6 +29,7 @@ use crate::{
         TELEMETRY_SCHEMA_VERSION,
     },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
+    workspace_target::ProjectTargetRef,
 };
 
 use crate::config::schema::MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES;
@@ -4173,6 +4174,108 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
 }
 
 #[tokio::test]
+async fn media_tickets_stream_only_the_resolved_worktree_and_expire_when_it_is_removed() {
+    let registry = tempfile::tempdir().unwrap();
+    let projects = tempfile::tempdir().unwrap();
+    let repository = projects.path().join("repository");
+    let worktree = projects.path().join("media-worktree");
+    std::fs::create_dir_all(&repository).unwrap();
+    init_repo_with_commit(&repository);
+    std::fs::write(repository.join("clip.webm"), b"root-video").unwrap();
+    std::fs::write(repository.join("cover.png"), b"root-image").unwrap();
+    git(&["add", "clip.webm", "cover.png"], &repository);
+    git(&["commit", "-m", "media"], &repository);
+    git(
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "media-target",
+            worktree.to_str().unwrap(),
+        ],
+        &repository,
+    );
+    std::fs::write(worktree.join("clip.webm"), b"worktree-video").unwrap();
+    std::fs::write(worktree.join("cover.png"), b"worktree-image").unwrap();
+    let state =
+        make_state_with_project_roots(&registry, vec![("test-project", repository.as_path())]);
+
+    let video_response = post_json(
+        state.clone(),
+        "/api/fs/video/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "worktreePath": worktree,
+            "path": "clip.webm",
+            "purpose": "playback"
+        }),
+    )
+    .await;
+    assert_eq!(video_response.status(), StatusCode::CREATED);
+    let video_body = axum::body::to_bytes(video_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let video_ticket = serde_json::from_slice::<serde_json::Value>(&video_body).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let image_response = post_json(
+        state.clone(),
+        "/api/fs/image/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "worktreePath": worktree,
+            "path": "cover.png"
+        }),
+    )
+    .await;
+    assert_eq!(image_response.status(), StatusCode::CREATED);
+    let image_body = axum::body::to_bytes(image_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let image_ticket = serde_json::from_slice::<serde_json::Value>(&image_body).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let origin = [("origin", "https://browser.example")];
+    let video_stream = stream_video(state.clone(), &video_ticket, "GET", &origin).await;
+    assert_eq!(video_stream.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(video_stream.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "worktree-video"
+    );
+    let image_stream = stream_image(state.clone(), &image_ticket, "GET", &origin).await;
+    assert_eq!(image_stream.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(image_stream.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "worktree-image"
+    );
+
+    git(
+        &["worktree", "remove", "--force", worktree.to_str().unwrap()],
+        &repository,
+    );
+    assert_eq!(
+        stream_video(state.clone(), &video_ticket, "GET", &origin)
+            .await
+            .status(),
+        StatusCode::GONE
+    );
+    assert_eq!(
+        stream_image(state, &image_ticket, "GET", &origin)
+            .await
+            .status(),
+        StatusCode::GONE
+    );
+}
+
+#[tokio::test]
 async fn video_ticket_issuance_requires_auth_and_rejects_non_video_or_unsafe_paths() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("document.txt"), "text").unwrap();
@@ -4250,11 +4353,18 @@ async fn video_ticket_issuance_is_not_limited_by_live_ticket_count() {
     let state = make_state_with_project(&tmp);
     let canonical = std::fs::canonicalize(&video).unwrap();
     let metadata = std::fs::metadata(&canonical).unwrap();
+    let target = state
+        .resolve_project_target(&ProjectTargetRef {
+            project: "test-project".into(),
+            worktree_path: None,
+        })
+        .await
+        .unwrap();
 
     for _ in 0..=FORMER_GLOBAL_TICKET_LIMIT {
         let record = crate::fs::VideoTicketRecord {
             purpose: crate::fs::VideoTicketPurpose::Playback,
-            project: "test-project".into(),
+            target: target.clone(),
             project_relative_path: "clip.webm".into(),
             file: crate::fs::VideoFileVersion::from_metadata(canonical.clone(), &metadata).unwrap(),
             mime: "video/webm".into(),

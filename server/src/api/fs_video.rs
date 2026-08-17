@@ -16,6 +16,7 @@ use crate::{
         MediaTicketKind, VideoTicketIssue, VideoTicketPurpose, VideoTicketRecord,
     },
     state::AppState,
+    workspace_target::ProjectTargetRef,
 };
 
 use super::{error::ApiError, fs::resolve, media_stream_response};
@@ -24,6 +25,8 @@ use super::{error::ApiError, fs::resolve, media_stream_response};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueVideoTicketRequest {
     pub project: String,
+    #[serde(default)]
+    pub worktree_path: Option<String>,
     pub path: String,
     pub purpose: VideoTicketPurpose,
 }
@@ -52,9 +55,14 @@ pub async fn issue_ticket(
 ) -> Result<Response, ApiError> {
     let _workspace_context = state.workspace_context_guard.read().await;
     let expected_generation = state.video_stream_tickets.generation();
-    let canonical = resolve(&state, &request.project, &request.path)
+    let target_ref = ProjectTargetRef {
+        project: request.project,
+        worktree_path: request.worktree_path,
+    };
+    let resolved = resolve(&state, &target_ref, &request.path)
         .await
         .map_err(ApiError::from)?;
+    let canonical = resolved.canonical;
     if !is_supported_video(&canonical) {
         return Err(ApiError::from(AppError::InvalidInput(
             "unsupported video type".into(),
@@ -74,7 +82,7 @@ pub async fn issue_ticket(
         .to_owned();
     let record = VideoTicketRecord {
         purpose: request.purpose,
-        project: request.project,
+        target: resolved.target,
         project_relative_path: request.path.into(),
         file: media_stream_response::version_from_open_file(canonical.clone(), &file, &metadata)
             .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?,

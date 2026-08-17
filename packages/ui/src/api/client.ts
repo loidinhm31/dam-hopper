@@ -862,6 +862,25 @@ export interface ProjectTargetRef {
   worktreePath?: string | null;
 }
 
+/** Backward-compatible input accepted while callers migrate to target refs. */
+export type ProjectTargetInput = string | ProjectTargetRef;
+
+export function normalizeProjectTarget(
+  target: ProjectTargetInput,
+): ProjectTargetRef {
+  if (typeof target === "string") return { project: target };
+  return target.worktreePath == null
+    ? { project: target.project }
+    : { project: target.project, worktreePath: target.worktreePath };
+}
+
+export function projectTargetCacheKey(target: ProjectTargetInput): string {
+  const normalized = normalizeProjectTarget(target);
+  return normalized.worktreePath == null
+    ? "root"
+    : `worktree:${normalized.worktreePath}`;
+}
+
 export interface ResolvedProjectTarget {
   project: string;
   configuredRoot: string;
@@ -1571,12 +1590,16 @@ export const api = {
       api.usage.delete({ confirmation: "delete-usage-data", from, to }),
   },
   fs: {
-    list: (project: string, path: string) =>
-      getTransport().invoke<FsListResponse>("fs:list", { project, path }),
-    languageFiles: (project: string) =>
-      getTransport().invoke<LanguageFilesResponse>("fs:languageFiles", {
-        project,
+    list: (target: ProjectTargetInput, path: string) =>
+      getTransport().invoke<FsListResponse>("fs:list", {
+        ...normalizeProjectTarget(target),
+        path,
       }),
+    languageFiles: (target: ProjectTargetInput) =>
+      getTransport().invoke<LanguageFilesResponse>(
+        "fs:languageFiles",
+        normalizeProjectTarget(target),
+      ),
   },
   tunnels: {
     list: () => getTransport().invoke<TunnelInfo[]>("tunnel:list"),
