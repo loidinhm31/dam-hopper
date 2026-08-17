@@ -224,7 +224,7 @@ impl HostKeyChallengeBook {
         validate_uuid_v4(scope_id).map_err(|_| SshForwardErrorCode::InvalidArgument)?;
         self.expire(now);
         if let Some(existing) = self.challenges.values().find(|record| {
-            record.challenge.profile_id == profile_id
+            record.challenge.connection_profile_id == profile_id
                 && record.challenge.scope_id == scope_id
                 && record.challenge.generation == context.generation
                 && record.challenge.ssh_host == endpoint.host
@@ -245,7 +245,7 @@ impl HostKeyChallengeBook {
             .map_err(|_| SshForwardErrorCode::Internal)?;
         let challenge = HostKeyChallenge {
             challenge_id: Uuid::new_v4().to_string(),
-            profile_id: profile_id.into(),
+            connection_profile_id: profile_id.into(),
             scope_id: scope_id.into(),
             generation: context.generation,
             ssh_host: endpoint.host.clone(),
@@ -298,7 +298,7 @@ impl HostKeyChallengeBook {
         if pending.manager_session_id != manager_session_id {
             return Err(SshForwardErrorCode::ManagerSessionMismatch);
         }
-        if pending.challenge.profile_id != profile_id {
+        if pending.challenge.connection_profile_id != profile_id {
             return Err(SshForwardErrorCode::HostKeyChallengeNotFound);
         }
         if pending.challenge.scope_id != scope_id {
@@ -345,7 +345,8 @@ impl HostKeyChallengeBook {
 
     pub(crate) fn clear_profile(&mut self, scope_id: &str, profile_id: &str) {
         self.challenges.retain(|_, record| {
-            record.challenge.scope_id != scope_id || record.challenge.profile_id != profile_id
+            record.challenge.scope_id != scope_id
+                || record.challenge.connection_profile_id != profile_id
         });
     }
 
@@ -361,7 +362,7 @@ impl HostKeyChallengeBook {
         self.expire(now);
         self.challenges.values().any(|record| {
             record.challenge.scope_id == scope_id
-                && record.challenge.profile_id == profile_id
+                && record.challenge.connection_profile_id == profile_id
                 && record.context == context
                 && record.desktop_instance_id == desktop_instance_id
                 && record.manager_session_id == manager_session_id
