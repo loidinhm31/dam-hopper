@@ -844,8 +844,32 @@ export interface GlobalConfig {
 
 export interface Worktree {
   path: string;
+  repositoryPath: string;
   branch: string;
+  commitHash: string;
   isMain: boolean;
+  isLocked: boolean;
+  isDetached: boolean;
+  isBare: boolean;
+  isPrunable: boolean;
+  isAvailable: boolean;
+}
+
+/** Project identity plus an optional registered worktree operation target. */
+export interface ProjectTargetRef {
+  project: string;
+  /** Omitted/null selects the configured project root. */
+  worktreePath?: string | null;
+}
+
+export interface ResolvedProjectTarget {
+  project: string;
+  configuredRoot: string;
+  targetPath: string;
+  targetKey: string;
+  isRoot: boolean;
+  available: boolean;
+  worktree?: Worktree;
 }
 
 export interface Branch {
