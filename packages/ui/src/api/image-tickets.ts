@@ -11,6 +11,7 @@ import {
   getServerUrl,
   normalizeServerUrl,
 } from "./server-config.js";
+import { normalizeProjectTarget, type ProjectTargetInput } from "./client.js";
 
 const IMAGE_TICKET_TIMEOUT_MS = 15_000;
 const STREAM_PATH = /^\/api\/fs\/image\/stream\/[A-Za-z0-9_-]+$/;
@@ -143,7 +144,7 @@ async function revokeTicket(
 
 /** Issues the fixed-purpose, in-memory browser image capability. */
 export async function issueImageTicket(
-  project: string,
+  target: ProjectTargetInput,
   path: string,
   signal?: AbortSignal,
 ): Promise<ImagePreviewTicket> {
@@ -158,7 +159,7 @@ export async function issueImageTicket(
         credentials: "include",
         headers: requestHeaders(snapshot.authToken),
         signal: timeout.signal,
-        body: JSON.stringify({ project, path }),
+        body: JSON.stringify({ ...normalizeProjectTarget(target), path }),
       },
     );
     throwIfAborted(timeout.signal, signal);

@@ -64,9 +64,16 @@ vi.mock("@/api/transport.js", () => ({
   subscribeTransportChanges: () => () => {},
 }));
 
-vi.mock("@/api/client.js", () => ({
-  api: { fs: { list: vi.fn() } },
-}));
+vi.mock("@/api/client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/client.js")>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      fs: { ...actual.api.fs, list: vi.fn() },
+    },
+  };
+});
 
 let root: Root | null = null;
 let eventHandler: ((event: FsEventDto) => void) | undefined;
@@ -281,7 +288,7 @@ describe("useFsSubscription Git refresh", () => {
     );
 
     expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ["fs-tree", "alpha", ""],
+      queryKey: ["fs-tree", "alpha", "root", ""],
     });
     vi.advanceTimersByTime(GIT_FS_INVALIDATION_DEBOUNCE_MS);
     expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledWith({
