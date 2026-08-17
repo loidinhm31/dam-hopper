@@ -1751,6 +1751,17 @@ depend on CLI `ssh_askpass` helpers or TTY prompt shims. The explicit
 force-push action only changes the push refspec mode; it does not relax the
 drop/undo protections for pushed or shared history.
 
+**Worktree-aware Git addressing (Phase 04 complete)** — Git addressing is
+`(project, selected target, nested root)`, with the server validating the
+selected target before discovering its nested roots. REST/WebSocket Git and
+status operations, including bulk Fetch/Pull, carry `worktreePath`; worktree
+management remains anchored to the configured project root. Frontend Git query
+and cache identities, plus mutation invalidation, include `targetKey`, and
+stage/unstage status refresh is target-scoped. Regression coverage verifies
+target validation, propagation, cache isolation, and status refresh behavior.
+Editor/diff work remains deferred to Phase 05, and terminal identity remains
+deferred to Phase 06.
+
 **commit_file_ops.rs** — IntelliJ-compatible history actions:
 
 - `drop_commit()` — local unpushed commit removal; uses hard reset for `HEAD`
