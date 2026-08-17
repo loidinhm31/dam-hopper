@@ -31,6 +31,7 @@ export function ConflictDialog({
           <button
             type="button"
             onClick={onCancel}
+            aria-label="Close save conflict dialog"
             className="rounded p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
           >
             <X className="h-4 w-4" />

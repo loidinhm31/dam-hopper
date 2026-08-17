@@ -16,7 +16,12 @@ import {
   Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import { useGitDiff, useGitUntracked } from "@/api/queries.js";
+import {
+  invalidateGitFileOperation,
+  markTargetUnavailableIfNeeded,
+  useGitDiff,
+  useGitUntracked,
+} from "@/api/queries.js";
 import { api, normalizeProjectTarget } from "@/api/client.js";
 import type { DiffFileEntry, ProjectTargetRef } from "@/api/client.js";
 import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
@@ -437,9 +442,16 @@ export function ChangedFilesList({
     const untrack = trackMutating(key);
     setMutationError(null);
     try {
-      await api.git.stage(targetRef, [entry.path], entryRootId(entry));
+      const result = await api.git.stage(
+        targetRef,
+        [entry.path],
+        entryRootId(entry),
+      );
+      markTargetUnavailableIfNeeded(targetRef, result);
+      if (!result.ok) throw new Error(result.error ?? "Stage failed");
       await invalidateChanges();
-    } catch {
+    } catch (error) {
+      markTargetUnavailableIfNeeded(targetRef, error);
       setMutationError(`Failed to stage ${entry.path.split("/").pop()}`);
     } finally {
       untrack();
@@ -451,9 +463,16 @@ export function ChangedFilesList({
     const untrack = trackMutating(key);
     setMutationError(null);
     try {
-      await api.git.unstage(targetRef, [entry.path], entryRootId(entry));
+      const result = await api.git.unstage(
+        targetRef,
+        [entry.path],
+        entryRootId(entry),
+      );
+      markTargetUnavailableIfNeeded(targetRef, result);
+      if (!result.ok) throw new Error(result.error ?? "Unstage failed");
       await invalidateChanges();
-    } catch {
+    } catch (error) {
+      markTargetUnavailableIfNeeded(targetRef, error);
       setMutationError(`Failed to unstage ${entry.path.split("/").pop()}`);
     } finally {
       untrack();
@@ -465,10 +484,20 @@ export function ChangedFilesList({
     const untrack = trackMutating(key);
     setMutationError(null);
     try {
-      await api.git.discard(targetRef, entry.path, entryRootId(entry));
-      await invalidateChanges();
+      const result = await api.git.discard(
+        targetRef,
+        entry.path,
+        entryRootId(entry),
+      );
+      markTargetUnavailableIfNeeded(targetRef, result);
+      if (!result.ok) throw new Error(result.error ?? "Discard failed");
+      await Promise.all([
+        invalidateChanges(),
+        invalidateGitFileOperation(queryClient, targetRef, entry.path),
+      ]);
       setDiscardConfirm(null);
-    } catch {
+    } catch (error) {
+      markTargetUnavailableIfNeeded(targetRef, error);
       setMutationError(`Failed to discard ${entry.path.split("/").pop()}`);
     } finally {
       untrack();
@@ -479,7 +508,7 @@ export function ChangedFilesList({
     if (files.length === 0) return;
     setMutationError(null);
     try {
-      await Promise.all(
+      const results = await Promise.all(
         groupedByRoot(files).map(([rootId, group]) =>
           api.git.stage(
             targetRef,
@@ -488,8 +517,13 @@ export function ChangedFilesList({
           ),
         ),
       );
+      for (const result of results) {
+        markTargetUnavailableIfNeeded(targetRef, result);
+        if (!result.ok) throw new Error(result.error ?? "Stage failed");
+      }
       await invalidateChanges();
-    } catch {
+    } catch (error) {
+      markTargetUnavailableIfNeeded(targetRef, error);
       setMutationError("Failed to stage all");
     }
   }
@@ -498,7 +532,7 @@ export function ChangedFilesList({
     if (files.length === 0) return;
     setMutationError(null);
     try {
-      await Promise.all(
+      const results = await Promise.all(
         groupedByRoot(files).map(([rootId, group]) =>
           api.git.unstage(
             targetRef,
@@ -507,8 +541,13 @@ export function ChangedFilesList({
           ),
         ),
       );
+      for (const result of results) {
+        markTargetUnavailableIfNeeded(targetRef, result);
+        if (!result.ok) throw new Error(result.error ?? "Unstage failed");
+      }
       await invalidateChanges();
-    } catch {
+    } catch (error) {
+      markTargetUnavailableIfNeeded(targetRef, error);
       setMutationError("Failed to unstage all");
     }
   }
@@ -530,12 +569,15 @@ export function ChangedFilesList({
         amendCommit,
         commitRootId,
       );
+      markTargetUnavailableIfNeeded(targetRef, result);
+      if (!result.ok) throw new Error(result.error ?? "Commit failed");
       await invalidateChanges();
       setCommitMsg("");
       setAmendCommit(false);
       setCommitSuccess(result.hash.slice(0, 7));
       setTimeout(() => setCommitSuccess(null), 3000);
     } catch (e) {
+      markTargetUnavailableIfNeeded(targetRef, e);
       setMutationError(e instanceof Error ? e.message : "Commit failed");
     } finally {
       setIsCommitting(false);

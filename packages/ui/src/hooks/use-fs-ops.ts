@@ -13,7 +13,10 @@ import {
   getAuthToken,
   getServerUrl,
 } from "@/api/server-config.js";
-import { invalidateGitFileOperation } from "@/api/queries.js";
+import {
+  invalidateGitFileOperation,
+  markTargetUnavailableIfNeeded,
+} from "@/api/queries.js";
 import { isVideoFile } from "@/lib/video-file.js";
 import { startVideoDownload } from "@/lib/start-video-download.js";
 
@@ -45,11 +48,25 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
     return getTransport() as WsTransport;
   }
 
+  async function runFsOp(
+    op: "create_file" | "create_dir" | "rename" | "delete" | "move",
+    params: { path: string; newPath?: string; forceGit?: boolean },
+  ): Promise<FsOpResult> {
+    try {
+      const result = await transport().fsOp(op, {
+        ...targetRef,
+        ...params,
+      });
+      markTargetUnavailableIfNeeded(targetRef, result);
+      return result;
+    } catch (error) {
+      markTargetUnavailableIfNeeded(targetRef, error);
+      throw error;
+    }
+  }
+
   async function createFile(path: string): Promise<FsOpResult> {
-    const result = await transport().fsOp("create_file", {
-      ...targetRef,
-      path,
-    });
+    const result = await runFsOp("create_file", { path });
     if (result.ok) {
       invalidateTree();
       invalidateGit(path);
@@ -58,10 +75,7 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
   }
 
   async function createDir(path: string): Promise<FsOpResult> {
-    const result = await transport().fsOp("create_dir", {
-      ...targetRef,
-      path,
-    });
+    const result = await runFsOp("create_dir", { path });
     if (result.ok) {
       invalidateTree();
       invalidateGit(path);
@@ -70,11 +84,7 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
   }
 
   async function rename(path: string, newPath: string): Promise<FsOpResult> {
-    const result = await transport().fsOp("rename", {
-      ...targetRef,
-      path,
-      newPath,
-    });
+    const result = await runFsOp("rename", { path, newPath });
     if (result.ok) {
       invalidateTree();
       invalidateGit(path);
@@ -87,11 +97,7 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
     path: string,
     forceGit = false,
   ): Promise<FsOpResult> {
-    const result = await transport().fsOp("delete", {
-      ...targetRef,
-      path,
-      forceGit,
-    });
+    const result = await runFsOp("delete", { path, forceGit });
     if (result.ok) {
       invalidateTree();
       invalidateGit(path);
@@ -100,11 +106,7 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
   }
 
   async function move(path: string, newPath: string): Promise<FsOpResult> {
-    const result = await transport().fsOp("move", {
-      ...targetRef,
-      path,
-      newPath,
-    });
+    const result = await runFsOp("move", { path, newPath });
     if (result.ok) {
       invalidateTree();
       invalidateGit(path);
@@ -115,7 +117,12 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
 
   async function download(path: string, size?: number): Promise<void> {
     if (isVideoFile(path)) {
-      await startVideoDownload(targetRef, path);
+      try {
+        await startVideoDownload(targetRef, path);
+      } catch (error) {
+        markTargetUnavailableIfNeeded(targetRef, error);
+        throw error;
+      }
       return;
     }
     if (!Number.isFinite(size) || size === undefined) {
@@ -143,7 +150,26 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
         headers,
       });
       if (!response.ok) {
-        throw new Error(`Download failed: ${response.statusText}`);
+        let error: { code?: string; message: string } = {
+          message: `Download failed: ${response.statusText}`,
+        };
+        try {
+          const payload: unknown = await response.clone().json();
+          if (payload && typeof payload === "object") {
+            const record = payload as Record<string, unknown>;
+            error = {
+              code: typeof record.code === "string" ? record.code : undefined,
+              message:
+                typeof record.message === "string"
+                  ? record.message
+                  : error.message,
+            };
+          }
+        } catch {
+          // Keep the HTTP status error when the response is not JSON.
+        }
+        markTargetUnavailableIfNeeded(targetRef, error);
+        throw new Error(error.message);
       }
 
       const blob = await response.blob();

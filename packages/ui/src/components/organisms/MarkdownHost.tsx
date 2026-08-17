@@ -34,6 +34,7 @@ interface MarkdownHostProps {
   onViewStateChange: (vs: unknown) => void;
   lineChanges?: GitLineChange[];
   onGitIndicatorClick?: () => void;
+  readOnly?: boolean;
 }
 
 const MODES: { id: MarkdownMode; label: string }[] = [
@@ -61,6 +62,7 @@ export function MarkdownHost({
   onViewStateChange,
   lineChanges,
   onGitIndicatorClick,
+  readOnly = false,
 }: MarkdownHostProps) {
   const [mode, setMode] = useState<MarkdownMode>(() => loadMarkdownViewMode());
 
@@ -116,6 +118,7 @@ export function MarkdownHost({
                 onViewStateChange={onViewStateChange}
                 lineChanges={lineChanges}
                 onGitIndicatorClick={onGitIndicatorClick}
+                readOnly={readOnly}
               />
             </Suspense>
           </div>

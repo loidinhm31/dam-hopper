@@ -26,9 +26,12 @@ import {
 import { encryptFile, encryptText } from "@/lib/crypto.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import {
+  isProjectTargetError,
   normalizeProjectTarget,
   type ProjectTargetInput,
 } from "@/api/client.js";
+import { useEditorStore } from "@/stores/editor.js";
+import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 
 export type EncryptedWriteStatus =
   | "idle"
@@ -74,6 +77,17 @@ export interface UseEncryptedWriteReturn {
  */
 function buildIdentifier(project: string): string {
   return `enc-${project.replace(/[^a-z0-9]/gi, "-").slice(0, 32)}`;
+}
+
+function isTargetUnavailableError(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : undefined;
+  return isProjectTargetError(
+    code,
+    error instanceof Error ? error.message : undefined,
+  );
 }
 
 export function useEncryptedWrite(): UseEncryptedWriteReturn {
@@ -162,6 +176,10 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         setStatus(result.ok ? "done" : "error");
         if (!result.ok) {
           const msg = result.error ?? "Encrypted upload failed";
+          if (isTargetUnavailableError(result) || isProjectTargetError(msg)) {
+            markProjectTargetUnavailable(targetRef);
+            useEditorStore.getState().markTargetUnavailable(targetRef);
+          }
           setError(msg);
           return { ok: false, error: msg };
         }
@@ -169,6 +187,10 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         return { ok: true, newMtime: result.newMtime };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Encrypted upload failed";
+        if (isTargetUnavailableError(e) || isProjectTargetError(msg)) {
+          markProjectTargetUnavailable(targetRef);
+          useEditorStore.getState().markTargetUnavailable(targetRef);
+        }
         setStatus("error");
         setError(msg);
         clearSession(project);
@@ -212,6 +234,10 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         setStatus(result.ok ? "done" : "error");
         if (!result.ok) {
           const msg = result.error ?? "Encrypted save failed";
+          if (isTargetUnavailableError(result) || isProjectTargetError(msg)) {
+            markProjectTargetUnavailable(targetRef);
+            useEditorStore.getState().markTargetUnavailable(targetRef);
+          }
           setError(msg);
           return { ok: false, error: msg };
         }
@@ -219,6 +245,10 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         return { ok: true, newMtime: result.newMtime };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Encrypted save failed";
+        if (isTargetUnavailableError(e) || isProjectTargetError(msg)) {
+          markProjectTargetUnavailable(targetRef);
+          useEditorStore.getState().markTargetUnavailable(targetRef);
+        }
         setStatus("error");
         setError(msg);
         clearSession(project);

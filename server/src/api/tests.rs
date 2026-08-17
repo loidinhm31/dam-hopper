@@ -3984,6 +3984,7 @@ async fn git_bulk_routes_accept_and_validate_selected_targets() {
     )
     .unwrap();
     assert_eq!(fetch_json[0]["projectName"], "test-project");
+    assert_eq!(fetch_json[0]["worktreePath"], worktree_string);
 
     let pull = post_json(state.clone(), "/api/git/pull", target_body).await;
     assert_eq!(pull.status(), StatusCode::OK);
@@ -3994,6 +3995,7 @@ async fn git_bulk_routes_accept_and_validate_selected_targets() {
     )
     .unwrap();
     assert_eq!(pull_json[0]["projectName"], "test-project");
+    assert_eq!(pull_json[0]["worktreePath"], worktree_string);
 
     let invalid_target = post_json(
         state,

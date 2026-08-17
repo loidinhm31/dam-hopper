@@ -4,6 +4,7 @@ import {
   MediaSessionError,
   mediaTicketUrl,
   probeMediaTicket,
+  readMediaErrorCode,
 } from "./media-session.js";
 import {
   getActiveProfile,
@@ -168,7 +169,11 @@ export async function issueVideoTicket(
         }),
       },
     );
-    if (!response.ok) throw ticketError(`HTTP_${response.status}`);
+    if (!response.ok) {
+      throw ticketError(
+        await readMediaErrorCode(response, `HTTP_${response.status}`),
+      );
+    }
 
     let payload: unknown;
     try {

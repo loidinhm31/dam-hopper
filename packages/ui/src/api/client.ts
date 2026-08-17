@@ -25,6 +25,28 @@ export function isGitUnavailableError(error: unknown): boolean {
   );
 }
 
+const PROJECT_TARGET_ERROR_CODES = [
+  "WORKSPACE_PROJECT_NOT_FOUND",
+  "WORKSPACE_TARGET_UNREGISTERED",
+  "WORKSPACE_TARGET_UNAVAILABLE",
+  "WORKSPACE_TARGET_INVALID_PATH",
+] as const;
+
+/** Returns true when an API value identifies the selected project target. */
+export function isProjectTargetError(
+  ...values: Array<string | null | undefined>
+): boolean {
+  const text = values
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toUpperCase();
+  return (
+    PROJECT_TARGET_ERROR_CODES.some((code) => text.includes(code)) ||
+    ((text.includes("TARGET") || text.includes("WORKTREE")) &&
+      /(UNAVAILABLE|UNREGISTERED|INVALID_PATH)/.test(text))
+  );
+}
+
 export interface SessionInfo {
   id: string;
   project?: string;
@@ -905,6 +927,8 @@ export interface GitOpResult {
   projectName: string;
   success: boolean;
   error?: string;
+  /** Present for bulk operations that were requested against a worktree. */
+  worktreePath?: string | null;
 }
 
 export interface BranchUpdateResult {
@@ -1232,19 +1256,19 @@ export const api = {
         root,
       }),
     stage: (target: ProjectTargetInput, paths: string[], root?: string) =>
-      getTransport().invoke<{ ok: boolean }>("git:stage", {
+      getTransport().invoke<{ ok: boolean; error?: string }>("git:stage", {
         ...normalizeProjectTarget(target),
         paths,
         root,
       }),
     unstage: (target: ProjectTargetInput, paths: string[], root?: string) =>
-      getTransport().invoke<{ ok: boolean }>("git:unstage", {
+      getTransport().invoke<{ ok: boolean; error?: string }>("git:unstage", {
         ...normalizeProjectTarget(target),
         paths,
         root,
       }),
     discard: (target: ProjectTargetInput, path: string, root?: string) =>
-      getTransport().invoke<{ ok: boolean }>("git:discard", {
+      getTransport().invoke<{ ok: boolean; error?: string }>("git:discard", {
         ...normalizeProjectTarget(target),
         path,
         root,
@@ -1255,12 +1279,15 @@ export const api = {
       hunkIndex: number,
       root?: string,
     ) =>
-      getTransport().invoke<{ ok: boolean }>("git:discardHunk", {
-        ...normalizeProjectTarget(target),
-        path,
-        hunkIndex,
-        root,
-      }),
+      getTransport().invoke<{ ok: boolean; error?: string }>(
+        "git:discardHunk",
+        {
+          ...normalizeProjectTarget(target),
+          path,
+          hunkIndex,
+          root,
+        },
+      ),
     conflicts: (target: ProjectTargetInput, root?: string) =>
       getTransport().invoke<ConflictFile[]>("git:conflicts", {
         ...normalizeProjectTarget(target),
@@ -1272,7 +1299,7 @@ export const api = {
       content: string,
       root?: string,
     ) =>
-      getTransport().invoke<{ ok: boolean }>("git:resolve", {
+      getTransport().invoke<{ ok: boolean; error?: string }>("git:resolve", {
         ...normalizeProjectTarget(target),
         path,
         content,
@@ -1284,12 +1311,15 @@ export const api = {
       amend?: boolean,
       root?: string,
     ) =>
-      getTransport().invoke<{ ok: boolean; hash: string }>("git:commit", {
-        ...normalizeProjectTarget(target),
-        message,
-        amend,
-        root,
-      }),
+      getTransport().invoke<{ ok: boolean; hash: string; error?: string }>(
+        "git:commit",
+        {
+          ...normalizeProjectTarget(target),
+          message,
+          amend,
+          root,
+        },
+      ),
     cherryPick: (target: ProjectTargetInput, hash: string, root?: string) =>
       getTransport().invoke<GitActionResult>("git:cherryPick", {
         ...normalizeProjectTarget(target),

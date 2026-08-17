@@ -3,6 +3,7 @@ import {
   normalizeProjectTarget,
   projectTargetCacheKey,
   type ProjectTargetRef,
+  type ProjectTargetInput,
   type Worktree,
 } from "@/api/client.js";
 
@@ -21,7 +22,7 @@ export interface ProjectTargetSnapshot {
 interface ProjectTargetState {
   /** Only non-root worktree paths are stored; absence means configured root. */
   activeTargetByProject: Record<string, string>;
-  /** The last target automatically replaced after discovery found it unavailable. */
+  /** The last target replaced after discovery found it unavailable. */
   unavailableTargetByProject: Record<string, string>;
   selectTarget: (project: string, worktreePath: string | null) => void;
   resetTarget: (project: string) => void;
@@ -89,14 +90,11 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
   unavailableTargetByProject: {},
   selectTarget: (project, worktreePath) =>
     set((state) => {
-      const nextUnavailable = { ...state.unavailableTargetByProject };
-      delete nextUnavailable[project];
       if (worktreePath == null) {
         const next = { ...state.activeTargetByProject };
         delete next[project];
         return {
           activeTargetByProject: next,
-          unavailableTargetByProject: nextUnavailable,
         };
       }
       return {
@@ -104,7 +102,6 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
           ...state.activeTargetByProject,
           [project]: worktreePath,
         },
-        unavailableTargetByProject: nextUnavailable,
       };
     }),
   resetTarget: (project) =>
@@ -120,12 +117,8 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
     }),
   markTargetUnavailable: (project, worktreePath) =>
     set((state) => {
-      if (state.activeTargetByProject[project] !== worktreePath) {
-        return state;
-      }
-
       const next = { ...state.activeTargetByProject };
-      delete next[project];
+      if (next[project] === worktreePath) delete next[project];
       return {
         activeTargetByProject: next,
         unavailableTargetByProject: {
@@ -142,3 +135,12 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
       return { unavailableTargetByProject: next };
     }),
 }));
+
+/** Persist target loss even when the worktree panel is not mounted. */
+export function markProjectTargetUnavailable(target: ProjectTargetInput): void {
+  const normalized = normalizeProjectTarget(target);
+  if (normalized.worktreePath == null) return;
+  useProjectTargetStore
+    .getState()
+    .markTargetUnavailable(normalized.project, normalized.worktreePath);
+}

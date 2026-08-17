@@ -7,14 +7,21 @@ import {
   buildContentSearchMatchKey,
   findNextContentSearchMatch,
 } from "@/lib/search-matches.js";
-import { runReplaceNext } from "@/lib/search-replace-next.js";
+import {
+  resolveSearchMatchTarget,
+  runReplaceNext,
+} from "@/lib/search-replace-next.js";
 import {
   normalizeProjectTarget,
+  projectTargetCacheKey,
   type ProjectTargetInput,
 } from "@/api/client.js";
+import type { SearchScope } from "@/stores/search-ui.js";
+import { markTargetUnavailableIfNeeded } from "@/api/queries.js";
 
 interface UseSearchPanelReplaceOptions {
   target: ProjectTargetInput;
+  scope: SearchScope;
   matches: SearchMatch[];
   searchQuery: string;
   replaceQuery: string;
@@ -23,8 +30,14 @@ interface UseSearchPanelReplaceOptions {
   openMatch: (match: SearchMatch, options?: { closeSearch?: boolean }) => void;
 }
 
+function targetScopeKey(target: ProjectTargetInput): string {
+  const normalized = normalizeProjectTarget(target);
+  return `${normalized.project}::${projectTargetCacheKey(normalized)}`;
+}
+
 export function useSearchPanelReplace({
   target,
+  scope,
   matches,
   searchQuery,
   replaceQuery,
@@ -34,7 +47,6 @@ export function useSearchPanelReplace({
 }: UseSearchPanelReplaceOptions) {
   const targetRef = normalizeProjectTarget(target);
   const project = targetRef.project;
-  const worktreePath = targetRef.worktreePath;
   const tabs = useEditorStore((state) => state.tabs);
   const [selectedMatchKey, setSelectedMatchKey] = useState<string | null>(null);
   const [isReplacing, setIsReplacing] = useState(false);
@@ -83,8 +95,6 @@ export function useSearchPanelReplace({
     setError(null);
 
     try {
-      const requestTarget =
-        worktreePath == null ? project : { project, worktreePath };
       const result = await runReplaceNext({
         currentProject: project,
         matches,
@@ -93,23 +103,59 @@ export function useSearchPanelReplace({
         replaceQuery,
         caseSensitive,
         hasDirtyOpenTab: (targetProject, path) =>
-          tabs.some(
-            (tab) =>
-              tab.project === targetProject && tab.path === path && tab.dirty,
-          ),
+          tabs.some((tab) => {
+            const matchTarget = resolveSearchMatchTarget(
+              targetRef,
+              targetProject,
+              scope,
+            );
+            return (
+              tab.project === targetProject &&
+              tab.path === path &&
+              tab.dirty &&
+              targetScopeKey(tab.target ?? tab.project) ===
+                targetScopeKey(matchTarget)
+            );
+          }),
         openMatch: (match) => openMatch(match, { closeSearch: false }),
-        readFile: (targetProject, path) =>
-          (getTransport() as WsTransport).fsRead(
-            targetProject === project ? requestTarget : targetProject,
-            path,
-          ),
-        writeFile: (targetProject, path, content, expectedMtime) =>
-          (getTransport() as WsTransport).fsWriteFile(
-            targetProject === project ? requestTarget : targetProject,
-            path,
-            content,
-            expectedMtime,
-          ),
+        readFile: async (targetProject, path) => {
+          const matchTarget = resolveSearchMatchTarget(
+            targetRef,
+            targetProject,
+            scope,
+          );
+          try {
+            const result = await (getTransport() as WsTransport).fsRead(
+              matchTarget,
+              path,
+            );
+            if (!result.ok) markTargetUnavailableIfNeeded(matchTarget, result);
+            return result;
+          } catch (caught) {
+            markTargetUnavailableIfNeeded(matchTarget, caught);
+            throw caught;
+          }
+        },
+        writeFile: async (targetProject, path, content, expectedMtime) => {
+          const matchTarget = resolveSearchMatchTarget(
+            targetRef,
+            targetProject,
+            scope,
+          );
+          try {
+            const result = await (getTransport() as WsTransport).fsWriteFile(
+              matchTarget,
+              path,
+              content,
+              expectedMtime,
+            );
+            if (!result.ok) markTargetUnavailableIfNeeded(matchTarget, result);
+            return result;
+          } catch (caught) {
+            markTargetUnavailableIfNeeded(matchTarget, caught);
+            throw caught;
+          }
+        },
         refreshMatches,
         reloadOpenTab: async (targetProject, path) => {
           const tab = useEditorStore
@@ -118,7 +164,11 @@ export function useSearchPanelReplace({
               (candidate) =>
                 candidate.project === targetProject &&
                 candidate.path === path &&
-                !candidate.dirty,
+                !candidate.dirty &&
+                targetScopeKey(candidate.target ?? candidate.project) ===
+                  targetScopeKey(
+                    resolveSearchMatchTarget(targetRef, targetProject, scope),
+                  ),
             );
           if (tab) {
             await useEditorStore.getState().reloadTab(tab.key);
@@ -167,8 +217,9 @@ export function useSearchPanelReplace({
     replaceQuery,
     searchQuery,
     selectedMatch,
-    worktreePath,
+    scope,
     tabs,
+    targetRef,
   ]);
 
   return {

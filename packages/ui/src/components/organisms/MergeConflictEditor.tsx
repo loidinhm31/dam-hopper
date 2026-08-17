@@ -36,6 +36,11 @@ import {
   useGitResolve,
 } from "@/api/queries.js";
 import {
+  normalizeProjectTarget,
+  projectTargetCacheKey,
+  type ProjectTargetInput,
+} from "@/api/client.js";
+import {
   parseConflictRegions,
   acceptConflict,
   hasRemainingConflicts,
@@ -65,6 +70,8 @@ function useConflictStyles() {
 
 interface Props {
   project: string;
+  target?: ProjectTargetInput;
+  targetAvailable?: boolean;
   filePath: string;
   fileLanguage?: string;
   onClose: () => void;
@@ -143,23 +150,27 @@ function buildDecorations(
 }
 
 export function MergeConflictEditor({
-  project,
+  project: projectName,
+  target,
+  targetAvailable = true,
   filePath,
   fileLanguage,
   onClose,
   onResolved,
 }: Props) {
+  const targetRef = normalizeProjectTarget(target ?? projectName);
+  const targetKey = projectTargetCacheKey(targetRef);
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
   useConflictStyles();
 
   const { data: conflicts, isLoading: conflictsLoading } =
-    useGitConflicts(project);
+    useGitConflicts(targetRef);
   const { data: fileDiff, isLoading: diffLoading } = useGitFileDiff(
-    project,
+    targetRef,
     filePath,
   );
-  const resolveMutation = useGitResolve(project);
+  const resolveMutation = useGitResolve(targetRef);
 
   const conflictFile = conflicts?.find((c) => c.path === filePath);
 
@@ -192,7 +203,7 @@ export function MergeConflictEditor({
     resultContentRef.current = "";
     setResolveError(null);
     setSelectedConflict(0);
-  }, [filePath]);
+  }, [filePath, targetKey]);
 
   const conflictRegions = useMemo(
     () => parseConflictRegions(resultContent),
@@ -284,9 +295,9 @@ export function MergeConflictEditor({
     (editor, monaco) => {
       resultEditorRef.current = editor;
       modelsRef.current.result = editor.getModel();
-      if (isAndroidChromeNativeInputSuppressed) {
+      if (isAndroidChromeNativeInputSuppressed || !targetAvailable) {
         editor.updateOptions({ readOnly: true });
-        blurEditorSurface(editor);
+        if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
       }
       editor.onDidChangeModel(() => {
         modelsRef.current.result = editor.getModel();
@@ -306,15 +317,17 @@ export function MergeConflictEditor({
       });
       attachResizeObserver(editor);
     },
-    [isAndroidChromeNativeInputSuppressed, syncScroll],
+    [isAndroidChromeNativeInputSuppressed, syncScroll, targetAvailable],
   );
 
   useEffect(() => {
     const editor = resultEditorRef.current;
     if (!editor) return;
-    editor.updateOptions({ readOnly: isAndroidChromeNativeInputSuppressed });
+    editor.updateOptions({
+      readOnly: isAndroidChromeNativeInputSuppressed || !targetAvailable,
+    });
     if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
-  }, [isAndroidChromeNativeInputSuppressed]);
+  }, [isAndroidChromeNativeInputSuppressed, targetAvailable]);
 
   const handleOursMount: OnMount = useCallback(
     (editor, monaco) => {
@@ -379,7 +392,7 @@ export function MergeConflictEditor({
   // ── Accept actions ───────────────────────────────────────────────────────────
 
   function applyAccept(regionIndex: number, side: "ours" | "theirs") {
-    if (isAndroidChromeNativeInputSuppressed) return;
+    if (isAndroidChromeNativeInputSuppressed || !targetAvailable) return;
     const regions = parseConflictRegions(resultContentRef.current);
     const region = regions[regionIndex];
     if (!region) return;
@@ -409,7 +422,7 @@ export function MergeConflictEditor({
   }
 
   function acceptAll(side: "ours" | "theirs") {
-    if (isAndroidChromeNativeInputSuppressed) return;
+    if (isAndroidChromeNativeInputSuppressed || !targetAvailable) return;
     let content = resultContentRef.current;
     // Accept from last to first to preserve line numbers for earlier conflicts
     const regions = parseConflictRegions(content);
@@ -428,7 +441,12 @@ export function MergeConflictEditor({
   // ── Resolve ──────────────────────────────────────────────────────────────────
 
   async function handleMarkResolved() {
-    if (!allResolved || isAndroidChromeNativeInputSuppressed) return;
+    if (
+      !allResolved ||
+      isAndroidChromeNativeInputSuppressed ||
+      !targetAvailable
+    )
+      return;
     setIsResolving(true);
     setResolveError(null);
     try {
@@ -514,6 +532,7 @@ export function MergeConflictEditor({
             onClick={() => acceptAll("theirs")}
             disabled={
               isAndroidChromeNativeInputSuppressed ||
+              !targetAvailable ||
               conflictRegions.length === 0
             }
             title="Accept all incoming (theirs)"
@@ -525,6 +544,7 @@ export function MergeConflictEditor({
             onClick={() => acceptAll("ours")}
             disabled={
               isAndroidChromeNativeInputSuppressed ||
+              !targetAvailable ||
               conflictRegions.length === 0
             }
             title="Accept all current (ours)"
@@ -536,6 +556,7 @@ export function MergeConflictEditor({
             onClick={() => void handleMarkResolved()}
             disabled={
               isAndroidChromeNativeInputSuppressed ||
+              !targetAvailable ||
               !allResolved ||
               isResolving
             }
@@ -564,6 +585,7 @@ export function MergeConflictEditor({
 
         <button
           onClick={onClose}
+          aria-label="Close merge conflict editor"
           className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors shrink-0"
         >
           <X className="h-3.5 w-3.5" />
@@ -581,11 +603,25 @@ export function MergeConflictEditor({
         </p>
       )}
 
+      {!targetAvailable && (
+        <p
+          role="alert"
+          className="shrink-0 border-b border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-300"
+        >
+          This worktree is unavailable. Conflict edits and resolution are
+          disabled until the target returns.
+        </p>
+      )}
+
       {/* Resolve error */}
       {resolveError && (
         <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-1.5 bg-[var(--color-danger)]/10 border-b border-[var(--color-danger)]/20 text-[var(--color-danger)] text-[11px]">
           <span>{resolveError}</span>
-          <button onClick={() => setResolveError(null)}>
+          <button
+            type="button"
+            aria-label="Dismiss resolve error"
+            onClick={() => setResolveError(null)}
+          >
             <X className="h-3 w-3 opacity-60 hover:opacity-100" />
           </button>
         </div>
@@ -635,7 +671,7 @@ export function MergeConflictEditor({
           theme="vs-dark"
           options={{
             ...editorOptions,
-            readOnly: isAndroidChromeNativeInputSuppressed,
+            readOnly: isAndroidChromeNativeInputSuppressed || !targetAvailable,
           }}
           onMount={handleResultMount}
         />
@@ -668,12 +704,16 @@ export function MergeConflictEditor({
                 onNavigate={() => navigateToConflict(i)}
                 onAcceptOurs={() => applyAccept(i, "ours")}
                 onAcceptTheirs={() => applyAccept(i, "theirs")}
-                actionsDisabled={isAndroidChromeNativeInputSuppressed}
+                actionsDisabled={
+                  isAndroidChromeNativeInputSuppressed || !targetAvailable
+                }
               />
             ))}
 
             <div className="ml-auto shrink-0 flex items-center gap-1">
               <button
+                type="button"
+                aria-label="Previous conflict"
                 onClick={() =>
                   navigateToConflict(Math.max(0, selectedConflict - 1))
                 }
@@ -683,6 +723,8 @@ export function MergeConflictEditor({
                 <ChevronUp className="h-3.5 w-3.5" />
               </button>
               <button
+                type="button"
+                aria-label="Next conflict"
                 onClick={() =>
                   navigateToConflict(
                     Math.min(conflictRegions.length - 1, selectedConflict + 1),

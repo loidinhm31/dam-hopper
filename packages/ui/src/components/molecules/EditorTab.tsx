@@ -3,7 +3,7 @@ import {
   type ComponentPropsWithoutRef,
   type MouseEventHandler,
 } from "react";
-import { X } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
 import type { GitFileState } from "@/lib/git-file-state.js";
@@ -26,6 +26,7 @@ interface EditorTabProps extends Omit<
   onContextMenu?: MouseEventHandler<HTMLDivElement>;
   gitState?: GitFileState;
   onGitIndicatorClick?: () => void;
+  targetAvailable?: boolean;
 }
 
 export const EditorTab = forwardRef<HTMLDivElement, EditorTabProps>(
@@ -40,6 +41,7 @@ export const EditorTab = forwardRef<HTMLDivElement, EditorTabProps>(
       onContextMenu,
       gitState,
       onGitIndicatorClick,
+      targetAvailable = true,
       ...props
     },
     ref,
@@ -69,6 +71,14 @@ export const EditorTab = forwardRef<HTMLDivElement, EditorTabProps>(
             title="Unsaved changes"
           />
         )}
+        {!targetAvailable && (
+          <AlertTriangle
+            className="h-3 w-3 shrink-0 text-amber-400"
+            aria-label="Worktree unavailable"
+          >
+            <title>Worktree unavailable; edits are preserved locally</title>
+          </AlertTriangle>
+        )}
         {gitState && (
           <button
             type="button"
@@ -78,7 +88,10 @@ export const EditorTab = forwardRef<HTMLDivElement, EditorTabProps>(
             )}
             title={`Open diff: ${gitStateTitle(gitState)}`}
             onPointerDown={(event) => {
-              if (event.pointerType === "touch" || event.pointerType === "pen") {
+              if (
+                event.pointerType === "touch" ||
+                event.pointerType === "pen"
+              ) {
                 event.stopPropagation();
               }
             }}
@@ -90,7 +103,8 @@ export const EditorTab = forwardRef<HTMLDivElement, EditorTabProps>(
                 nativeEvent.pointerType !== undefined &&
                 nativeEvent.pointerType !== "mouse";
               const isLegacyNonRightButton =
-                nativeEvent.pointerType === undefined && nativeEvent.button !== 2;
+                nativeEvent.pointerType === undefined &&
+                nativeEvent.button !== 2;
               if (isNonMouseContextMenu || isLegacyNonRightButton) {
                 event.preventDefault();
                 event.stopPropagation();

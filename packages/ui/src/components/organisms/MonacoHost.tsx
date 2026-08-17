@@ -42,6 +42,7 @@ interface MonacoHostProps {
   ) => void;
   lineChanges?: GitLineChange[];
   onGitIndicatorClick?: () => void;
+  readOnly?: boolean;
 }
 
 function blurEditorSurface(
@@ -67,6 +68,7 @@ export function MonacoHost({
   onEditorReady,
   lineChanges,
   onGitIndicatorClick,
+  readOnly = false,
 }: MonacoHostProps) {
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
@@ -108,14 +110,16 @@ export function MonacoHost({
         );
       }
 
-      if (isAndroidChromeNativeInputSuppressed) {
+      if (isAndroidChromeNativeInputSuppressed || readOnly) {
         editor.updateOptions({ readOnly: true });
-        blurEditorSurface(editor);
+        if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
       }
 
       // Ctrl+S / Cmd+S → save (use ref so the latest handleSave is always called)
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
-        isAndroidChromeNativeInputSuppressed ? undefined : onSaveRef.current(),
+        isAndroidChromeNativeInputSuppressed || readOnly
+          ? undefined
+          : onSaveRef.current(),
       );
 
       editor.onMouseDown((event) => {
@@ -197,15 +201,17 @@ export function MonacoHost({
     },
     // Re-run when the tab or platform policy changes; refs keep other callbacks current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [isAndroidChromeNativeInputSuppressed, tabKey],
+    [isAndroidChromeNativeInputSuppressed, readOnly, tabKey],
   );
 
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    editor.updateOptions({ readOnly: isAndroidChromeNativeInputSuppressed });
+    editor.updateOptions({
+      readOnly: isAndroidChromeNativeInputSuppressed || readOnly,
+    });
     if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
-  }, [isAndroidChromeNativeInputSuppressed]);
+  }, [isAndroidChromeNativeInputSuppressed, readOnly]);
 
   // Restore view state when switching tabs (content ref changes)
   useEffect(() => {
@@ -273,7 +279,8 @@ export function MonacoHost({
       language={language}
       theme="vs-dark"
       onChange={(val) => {
-        if (!isAndroidChromeNativeInputSuppressed) onChange(val ?? "");
+        if (!isAndroidChromeNativeInputSuppressed && !readOnly)
+          onChange(val ?? "");
       }}
       onMount={handleMount}
       options={{
@@ -288,7 +295,7 @@ export function MonacoHost({
         renderWhitespace: "selection",
         tabSize: 2,
         automaticLayout: false,
-        readOnly: isAndroidChromeNativeInputSuppressed,
+        readOnly: isAndroidChromeNativeInputSuppressed || readOnly,
       }}
     />
   );

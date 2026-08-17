@@ -28,9 +28,9 @@ Each configured project discovers its registered Git worktrees and exposes a sel
 2. [Target-aware filesystem, WebSocket, and media](./phase-02-target-aware-fs-ws-media.md) — 8h — completed
 3. [Session selection and live discovery](./phase-03-session-selection-and-discovery.md) — 6h — completed
 4. [Git routing and cache isolation](./phase-04-git-routing-and-cache-isolation.md) — 5h — completed
-5. [Editor and diff isolation](./phase-05-editor-and-diff-isolation.md) — 6h — deferred
+5. [Editor and diff isolation](./phase-05-editor-and-diff-isolation.md) — 6h — completed
 6. [Terminal target identity and persistence](./phase-06-terminal-target-identity.md) — 7h — deferred
-7. [Lifecycle integration and release validation](./phase-07-lifecycle-integration-and-validation.md) — 6h
+7. [Lifecycle integration and release validation](./phase-07-lifecycle-integration-and-validation.md) — 6h — pending
 
 ## Dependency order
 
