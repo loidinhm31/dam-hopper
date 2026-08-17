@@ -9,6 +9,7 @@ import { TopNavConnectionButton } from "@/components/molecules/TopNavConnectionB
 import type { ConnectionStatus } from "@/components/atoms/ConnectionDot.js";
 import { cn } from "@/lib/utils.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
+import { useProjectTarget } from "@/hooks/use-project-target.js";
 
 interface TopNavUtilityStripProps {
   activeProfileName?: string;
@@ -39,6 +40,7 @@ export function TopNavUtilityStrip({
   workspaceMode,
   workspaceModeShortcutLabel,
 }: TopNavUtilityStripProps) {
+  const selectedTarget = useProjectTarget(selectedProject ?? null);
   return (
     <div
       data-testid="top-nav-utility-strip"
@@ -91,6 +93,7 @@ export function TopNavUtilityStrip({
           <div className="hidden min-w-0 md:block">
             <GitBranchControl
               project={selectedProject}
+              target={selectedTarget?.target}
               compact
               showFeedback={false}
             />

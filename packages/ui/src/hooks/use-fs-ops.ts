@@ -38,7 +38,7 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
   }
 
   function invalidateGit(path: string) {
-    void invalidateGitFileOperation(qc, project, path);
+    void invalidateGitFileOperation(qc, targetRef, path);
   }
 
   function transport(): WsTransport {

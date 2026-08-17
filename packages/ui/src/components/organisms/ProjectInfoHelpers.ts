@@ -1,4 +1,4 @@
-import type { VcsRoot } from "@/api/client.js";
+import type { ProjectTargetRef, VcsRoot } from "@/api/client.js";
 
 export const DEFAULT_GIT_ROOT_ID = ".";
 
@@ -28,16 +28,27 @@ export function describeProjectInfoRoot(root: VcsRoot) {
   return root.kind === "submodule" ? "Submodule" : "Nested repo";
 }
 
-export function buildProjectInfoPushTarget(project: string, rootId: string) {
-  return buildProjectInfoPushTargetWithMode(project, rootId, false);
+export function buildProjectInfoPushTarget(
+  project: string,
+  rootId: string,
+  target?: ProjectTargetRef,
+) {
+  return buildProjectInfoPushTargetWithMode(project, rootId, false, target);
 }
 
 export function buildProjectInfoPushTargetWithMode(
   project: string,
   rootId: string,
   force: boolean,
+  target?: ProjectTargetRef,
 ) {
-  const target =
-    rootId === DEFAULT_GIT_ROOT_ID ? { project } : { project, root: rootId };
-  return force ? { ...target, force: true } : target;
+  const targetFields =
+    target?.worktreePath == null
+      ? { project }
+      : { project, worktreePath: target.worktreePath };
+  const pushTarget =
+    rootId === DEFAULT_GIT_ROOT_ID
+      ? targetFields
+      : { ...targetFields, root: rootId };
+  return force ? { ...pushTarget, force: true } : pushTarget;
 }

@@ -5,7 +5,12 @@ import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
-import { api, isGitUnavailableError } from "@/api/client.js";
+import {
+  api,
+  isGitUnavailableError,
+  normalizeProjectTarget,
+  projectTargetCacheKey,
+} from "@/api/client.js";
 import {
   useBranches,
   useGitLog,
@@ -17,6 +22,7 @@ import type {
   GitLogEntry,
   DiffFileEntry,
   VcsRoot,
+  ProjectTargetRef,
 } from "@/api/client.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { Button } from "@/components/atoms/Button.js";
@@ -41,6 +47,7 @@ import {
 
 interface WorkspaceGitPanelProps {
   project: string;
+  target?: ProjectTargetRef;
 }
 
 const WORKSPACE_GIT_LOG_LIMIT = 200;
@@ -103,7 +110,11 @@ export function resolveWorkspaceHistoryBranchState(
     };
   }
 
-  if (current.followsActive && activeBranch && current.branch !== activeBranch) {
+  if (
+    current.followsActive &&
+    activeBranch &&
+    current.branch !== activeBranch
+  ) {
     return {
       project,
       root,
@@ -129,16 +140,25 @@ export async function refreshWorkspaceGitPanelQueries(
   offset = 0,
   ref?: string,
   root = DEFAULT_GIT_ROOT_ID,
+  target?: ProjectTargetRef,
 ) {
+  const targetRef = normalizeProjectTarget(target ?? project);
+  const targetKey = projectTargetCacheKey(targetRef);
   const rootKey = root || DEFAULT_GIT_ROOT_ID;
   const queryKeys = [
-    ["branches", project, rootKey],
-    ["project-status", project],
-    ["git-log", project, rootKey],
+    ["branches", targetRef.project, targetKey, rootKey],
+    ["project-status", targetRef.project, targetKey],
+    ["git-log", targetRef.project, targetKey, rootKey],
   ];
 
   if (selectedHash) {
-    queryKeys.push(["git-commit-files", project, rootKey, selectedHash]);
+    queryKeys.push([
+      "git-commit-files",
+      targetRef.project,
+      targetKey,
+      rootKey,
+      selectedHash,
+    ]);
   }
 
   await Promise.all(
@@ -149,20 +169,31 @@ export async function refreshWorkspaceGitPanelQueries(
     queryClient.fetchQuery({
       queryKey: [
         "git-log",
-        project,
+        targetRef.project,
+        targetKey,
         rootKey,
         WORKSPACE_GIT_LOG_LIMIT,
         offset,
         ref ?? null,
       ],
       queryFn: () =>
-        api.git.log(project, WORKSPACE_GIT_LOG_LIMIT, offset, ref, root),
+        api.git.log(targetRef, WORKSPACE_GIT_LOG_LIMIT, offset, ref, root),
     }),
-    queryClient.refetchQueries({ queryKey: ["branches", project, rootKey] }),
-    queryClient.refetchQueries({ queryKey: ["project-status", project] }),
+    queryClient.refetchQueries({
+      queryKey: ["branches", targetRef.project, targetKey, rootKey],
+    }),
+    queryClient.refetchQueries({
+      queryKey: ["project-status", targetRef.project, targetKey],
+    }),
     selectedHash
       ? queryClient.refetchQueries({
-          queryKey: ["git-commit-files", project, rootKey, selectedHash],
+          queryKey: [
+            "git-commit-files",
+            targetRef.project,
+            targetKey,
+            rootKey,
+            selectedHash,
+          ],
         })
       : Promise.resolve(),
   ]);
@@ -202,7 +233,9 @@ export function projectRelativePathForRoot(root: string, path: string) {
   return `${root}/${path}`;
 }
 
-export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
+export function WorkspaceGitPanel({ project, target }: WorkspaceGitPanelProps) {
+  const targetRef = normalizeProjectTarget(target ?? project);
+  const targetKey = projectTargetCacheKey(targetRef);
   const [selectedCommit, setSelectedCommit] = useState<GitLogEntry | null>(
     null,
   );
@@ -220,17 +253,18 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
     followsActive: true,
   });
   const [selectedRootId, setSelectedRootId] = useState(DEFAULT_GIT_ROOT_ID);
+  const [historyTargetKey, setHistoryTargetKey] = useState("root");
   const openDiff = useEditorStore((s) => s.openDiff);
-  const historyActions = useGitHistoryActions(project, selectedRootId);
+  const historyActions = useGitHistoryActions(targetRef, selectedRootId);
   const queryClient = useQueryClient();
   const gitPush = useGitPush();
   const [forcePushOpen, setForcePushOpen] = useState(false);
   const { passphraseDialogProps, statusMessage, executeWithRetry } =
     useGitWithSshRetry();
   const offset = page * WORKSPACE_GIT_LOG_LIMIT;
-  const { data: roots = [], error: rootsError } = useGitRoots(project);
+  const { data: roots = [], error: rootsError } = useGitRoots(targetRef);
   const { data: branches = [], error: branchesError } = useBranches(
-    project,
+    targetRef,
     selectedRootId,
   );
   const rootOptions = workspaceGitRootOptions(roots);
@@ -240,15 +274,16 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
   const selectedRootLabel = selectedRoot
     ? formatProjectInfoRootLabel(selectedRoot)
     : "Project root";
-  const activeBranch =
-    branches.find((branch) => branch.isCurrent)?.name ?? "";
+  const activeBranch = branches.find((branch) => branch.isCurrent)?.name ?? "";
   const historyBranch =
-    historyScope.project === project && historyScope.root === selectedRootId
+    historyTargetKey === targetKey &&
+    historyScope.project === project &&
+    historyScope.root === selectedRootId
       ? historyScope.branch
       : "";
   const historyRef = resolveWorkspaceHistoryRef(branches, historyBranch);
   const { data: logs = [], isLoading: isLogLoading } = useGitLog(
-    project,
+    targetRef,
     WORKSPACE_GIT_LOG_LIMIT,
     offset,
     historyRef,
@@ -267,6 +302,19 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
       setSelectedRootId(DEFAULT_GIT_ROOT_ID);
     }
   }, [roots, selectedRootId]);
+
+  useEffect(() => {
+    if (historyTargetKey === targetKey) return;
+    setHistoryTargetKey(targetKey);
+    setSelectedCommit(null);
+    setPage(0);
+    setHistoryScope({
+      project: "",
+      root: DEFAULT_GIT_ROOT_ID,
+      branch: "",
+      followsActive: true,
+    });
+  }, [historyTargetKey, targetKey]);
 
   useEffect(() => {
     const next = resolveWorkspaceHistoryBranchState(
@@ -335,6 +383,7 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
         offset,
         historyRef,
         selectedRootId,
+        targetRef,
       );
       setSelectedCommit(refreshedSelection);
     } finally {
@@ -384,7 +433,12 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
           setForcePushOpen(false);
           void executeWithRetry({ operation: "push" }, () =>
             gitPush.mutateAsync(
-              buildProjectInfoPushTargetWithMode(project, selectedRootId, true),
+              buildProjectInfoPushTargetWithMode(
+                project,
+                selectedRootId,
+                true,
+                targetRef,
+              ),
             ),
           ).catch(() => {});
         }}
@@ -427,6 +481,7 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
                 </span>
                 <GitBranchControl
                   project={project}
+                  target={targetRef}
                   root={selectedRootId}
                   mode="view"
                   selectedBranch={historyBranch}
@@ -470,7 +525,11 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
                 onClick={() =>
                   void executeWithRetry({ operation: "push" }, () =>
                     gitPush.mutateAsync(
-                      buildProjectInfoPushTarget(project, selectedRootId),
+                      buildProjectInfoPushTarget(
+                        project,
+                        selectedRootId,
+                        targetRef,
+                      ),
                     ),
                   ).catch(() => {})
                 }
@@ -550,7 +609,9 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
                     : undefined
                 }
                 onDropCommit={
-                  isViewingActiveBranch ? historyActions.setDropCommit : undefined
+                  isViewingActiveBranch
+                    ? historyActions.setDropCommit
+                    : undefined
                 }
                 onEditCommitMessage={
                   isViewingActiveBranch
@@ -558,7 +619,9 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
                     : undefined
                 }
                 onReset={
-                  isViewingActiveBranch ? historyActions.setResetCommit : undefined
+                  isViewingActiveBranch
+                    ? historyActions.setResetCommit
+                    : undefined
                 }
               />
             </div>
@@ -569,6 +632,7 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
           <div className="flex-1 min-h-0 min-w-0 md:w-[40%] lg:w-[35%]">
             <CommitDetailsPanel
               project={project}
+              target={targetRef}
               root={selectedRootId}
               commit={selectedCommit}
               onClose={() => setSelectedCommit(null)}

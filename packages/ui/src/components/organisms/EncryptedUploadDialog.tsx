@@ -139,7 +139,7 @@ export function EncryptedUploadDialog({
 
         if (result.ok) {
           const path = dir ? `${dir}/${file.name}` : file.name;
-          void invalidateGitFileOperation(queryClient, project, path);
+          void invalidateGitFileOperation(queryClient, target ?? project, path);
           setFiles((prev) =>
             prev.map((f, idx) =>
               idx === i ? { ...f, state: "done", progress: 100 } : f,
@@ -177,6 +177,7 @@ export function EncryptedUploadDialog({
     uploading,
     project,
     targetProject,
+    target,
     worktreePath,
     dir,
     getPassphrase,

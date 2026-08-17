@@ -3831,6 +3831,192 @@ async fn git_branches_returns_list_for_valid_project() {
 }
 
 #[tokio::test]
+async fn git_routes_isolate_selected_worktree_and_nested_roots() {
+    let project = tempfile::tempdir().unwrap();
+    init_git_repo(project.path());
+    git(&["branch", "feature"], project.path());
+    let worktree_parent = tempfile::tempdir().unwrap();
+    let worktree_path = worktree_parent.path().join("feature-worktree");
+    let worktree_string = worktree_path.to_string_lossy().into_owned();
+    git(
+        &["worktree", "add", &worktree_string, "feature"],
+        project.path(),
+    );
+    std::fs::write(project.path().join("root-only.txt"), "root").unwrap();
+    std::fs::write(worktree_path.join("worktree-only.txt"), "worktree").unwrap();
+
+    let nested = worktree_path.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    init_git_repo(&nested);
+
+    let state = make_state_with_project(&project);
+    let target_query = format!("worktreePath={worktree_string}");
+
+    let branches = get(
+        state.clone(),
+        &format!("/api/git/test-project/branches?{target_query}"),
+    )
+    .await;
+    assert_eq!(branches.status(), StatusCode::OK);
+    let branches_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(branches.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(branches_json
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|branch| branch["name"] == "feature" && branch["isCurrent"] == true));
+
+    let status = get(
+        state.clone(),
+        &format!("/api/projects/test-project/status?{target_query}"),
+    )
+    .await;
+    assert_eq!(status.status(), StatusCode::OK);
+    let status_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(status.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status_json["branch"], "feature");
+
+    let roots = get(
+        state.clone(),
+        &format!("/api/git/test-project/roots?{target_query}"),
+    )
+    .await;
+    assert_eq!(roots.status(), StatusCode::OK);
+    let roots_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(roots.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(roots_json
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|root| root["rootId"] == "nested"));
+
+    let nested_branches = get(
+        state.clone(),
+        &format!("/api/git/test-project/branches?{target_query}&root=nested"),
+    )
+    .await;
+    assert_eq!(nested_branches.status(), StatusCode::OK);
+
+    let root_diff = get(state.clone(), "/api/git/test-project/diff?root=*").await;
+    assert_eq!(root_diff.status(), StatusCode::OK);
+    let root_diff_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(root_diff.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let root_paths: Vec<&str> = root_diff_json["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["path"].as_str())
+        .collect();
+    assert!(root_paths.contains(&"root-only.txt"));
+    assert!(!root_paths
+        .iter()
+        .any(|path| path.ends_with("worktree-only.txt")));
+
+    let target_diff = get(
+        state,
+        &format!("/api/git/test-project/diff?root=*&{target_query}"),
+    )
+    .await;
+    assert_eq!(target_diff.status(), StatusCode::OK);
+    let target_diff_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(target_diff.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let target_paths: Vec<&str> = target_diff_json["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["path"].as_str())
+        .collect();
+    assert!(target_paths
+        .iter()
+        .any(|path| path.ends_with("worktree-only.txt")));
+    assert!(!target_paths
+        .iter()
+        .any(|path| path.ends_with("root-only.txt")));
+}
+
+#[tokio::test]
+async fn git_bulk_routes_accept_and_validate_selected_targets() {
+    let project = tempfile::tempdir().unwrap();
+    init_git_repo(project.path());
+    git(&["branch", "feature"], project.path());
+    let worktree_parent = tempfile::tempdir().unwrap();
+    let worktree_path = worktree_parent.path().join("feature-worktree");
+    let worktree_string = worktree_path.to_string_lossy().into_owned();
+    git(
+        &["worktree", "add", &worktree_string, "feature"],
+        project.path(),
+    );
+    let state = make_state_with_project(&project);
+
+    let target_body = serde_json::json!({
+        "targets": [{
+            "project": "test-project",
+            "worktreePath": worktree_string,
+        }],
+    });
+
+    let fetch = post_json(state.clone(), "/api/git/fetch", target_body.clone()).await;
+    assert_eq!(fetch.status(), StatusCode::OK);
+    let fetch_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(fetch.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(fetch_json[0]["projectName"], "test-project");
+
+    let pull = post_json(state.clone(), "/api/git/pull", target_body).await;
+    assert_eq!(pull.status(), StatusCode::OK);
+    let pull_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(pull.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(pull_json[0]["projectName"], "test-project");
+
+    let invalid_target = post_json(
+        state,
+        "/api/git/pull",
+        serde_json::json!({
+            "targets": [{
+                "project": "test-project",
+                "worktreePath": project.path().join("missing-worktree"),
+            }],
+        }),
+    )
+    .await;
+    assert_eq!(invalid_target.status(), StatusCode::BAD_REQUEST);
+    let invalid_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(invalid_target.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(invalid_json["code"], "WORKSPACE_TARGET_UNREGISTERED");
+}
+
+#[tokio::test]
 async fn git_worktrees_returns_list_for_valid_project() {
     let tmp = tempfile::tempdir().unwrap();
     init_git_repo(tmp.path());

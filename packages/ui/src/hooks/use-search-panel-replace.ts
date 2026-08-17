@@ -34,6 +34,7 @@ export function useSearchPanelReplace({
 }: UseSearchPanelReplaceOptions) {
   const targetRef = normalizeProjectTarget(target);
   const project = targetRef.project;
+  const worktreePath = targetRef.worktreePath;
   const tabs = useEditorStore((state) => state.tabs);
   const [selectedMatchKey, setSelectedMatchKey] = useState<string | null>(null);
   const [isReplacing, setIsReplacing] = useState(false);
@@ -82,6 +83,8 @@ export function useSearchPanelReplace({
     setError(null);
 
     try {
+      const requestTarget =
+        worktreePath == null ? project : { project, worktreePath };
       const result = await runReplaceNext({
         currentProject: project,
         matches,
@@ -97,12 +100,12 @@ export function useSearchPanelReplace({
         openMatch: (match) => openMatch(match, { closeSearch: false }),
         readFile: (targetProject, path) =>
           (getTransport() as WsTransport).fsRead(
-            targetProject === project ? targetRef : targetProject,
+            targetProject === project ? requestTarget : targetProject,
             path,
           ),
         writeFile: (targetProject, path, content, expectedMtime) =>
           (getTransport() as WsTransport).fsWriteFile(
-            targetProject === project ? targetRef : targetProject,
+            targetProject === project ? requestTarget : targetProject,
             path,
             content,
             expectedMtime,
@@ -164,7 +167,7 @@ export function useSearchPanelReplace({
     replaceQuery,
     searchQuery,
     selectedMatch,
-    targetRef.worktreePath,
+    worktreePath,
     tabs,
   ]);
 

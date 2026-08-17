@@ -161,6 +161,49 @@ describe("WsTransport usage setup endpoints", () => {
   });
 });
 
+describe("WsTransport bulk Git targets", () => {
+  it("serializes selected worktrees separately from project names", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("git:fetch", [
+      "demo",
+      { project: "feature-project", worktreePath: "/tmp/feature" },
+    ]);
+    await transport.invoke("git:pull", [
+      { project: "feature-project", worktreePath: "/tmp/feature" },
+    ]);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/git/fetch",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        targets: [
+          { project: "demo" },
+          { project: "feature-project", worktreePath: "/tmp/feature" },
+        ],
+      }),
+    });
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        targets: [{ project: "feature-project", worktreePath: "/tmp/feature" }],
+      }),
+    });
+    transport.destroy();
+  });
+});
+
 describe("WsTransport explorer language scan endpoint", () => {
   it("maps a project name to the protected language-files route", async () => {
     installMockWebSocket();

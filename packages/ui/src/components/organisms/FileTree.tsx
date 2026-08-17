@@ -348,7 +348,7 @@ export function FileTree({
     useFsSubscription(requestTarget, path);
   const languageScan = useExplorerLanguageScan(requestTarget);
   const { cache: languageScanCache, scan } = languageScan;
-  const { data: gitDiff } = useGitDiff(project, "*");
+  const { data: gitDiff } = useGitDiff(requestTarget, "*");
   const openDiff = useEditorStore((s) => s.openDiff);
   const ops = useFsOps(requestTarget, path);
   const { progress, upload, clearProgress } = useFsUpload(requestTarget, path);

@@ -8,7 +8,11 @@ import {
   useProjectStatus,
 } from "@/api/queries.js";
 import { Button } from "@/components/atoms/Button.js";
-import { isGitUnavailableError } from "@/api/client.js";
+import {
+  isGitUnavailableError,
+  normalizeProjectTarget,
+  type ProjectTargetRef,
+} from "@/api/client.js";
 import {
   Select,
   SelectContent,
@@ -28,6 +32,7 @@ import {
 
 interface GitBranchControlProps {
   project: string;
+  target?: ProjectTargetRef;
   root?: string;
   compact?: boolean;
   className?: string;
@@ -77,6 +82,7 @@ export function GitBranchFeedback({
 
 export function GitBranchControl({
   project,
+  target,
   root,
   compact = false,
   className,
@@ -85,15 +91,16 @@ export function GitBranchControl({
   selectedBranch,
   onSelectedBranchChange,
 }: GitBranchControlProps) {
+  const targetRef = normalizeProjectTarget(target ?? project);
   const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";
   const { data: branches = [], error: branchesError } = useBranches(
-    project,
+    targetRef,
     root,
   );
-  const { data: projectStatus } = useProjectStatus(project);
-  const checkoutBranch = useGitCheckoutBranch(project, root);
-  const createBranch = useGitCreateBranch(project, root);
-  const deleteBranch = useGitDeleteBranch(project, root);
+  const { data: projectStatus } = useProjectStatus(targetRef);
+  const checkoutBranch = useGitCheckoutBranch(targetRef, root);
+  const createBranch = useGitCreateBranch(targetRef, root);
+  const deleteBranch = useGitDeleteBranch(targetRef, root);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [selectOpen, setSelectOpen] = useState(false);
