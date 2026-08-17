@@ -33,6 +33,8 @@ pub enum ClientMsg {
     FsSubTree {
         req_id: u64,
         project: String,
+        #[serde(default)]
+        worktree_path: Option<String>,
         path: String,
     },
     #[serde(rename = "fs:unsubscribe_tree")]
@@ -43,6 +45,8 @@ pub enum ClientMsg {
     FsRead {
         req_id: u64,
         project: String,
+        #[serde(default)]
+        worktree_path: Option<String>,
         path: String,
         offset: Option<u64>,
         len: Option<u64>,
@@ -53,6 +57,8 @@ pub enum ClientMsg {
     FsWriteBegin {
         req_id: u64,
         project: String,
+        #[serde(default)]
+        worktree_path: Option<String>,
         path: String,
         /// Client's last-known mtime (Unix seconds). Server rejects if stale.
         expected_mtime: i64,
@@ -83,6 +89,8 @@ pub enum ClientMsg {
         /// "create_file" | "create_dir" | "rename" | "delete" | "move"
         op: String,
         project: String,
+        #[serde(default)]
+        worktree_path: Option<String>,
         /// Source path (relative to project root).
         path: String,
         /// Destination path for rename/move (relative to project root).
@@ -99,6 +107,8 @@ pub enum ClientMsg {
         /// Client-chosen identifier for this upload session.
         upload_id: String,
         project: String,
+        #[serde(default)]
+        worktree_path: Option<String>,
         /// Target directory (relative to project root).
         dir: String,
         /// Filename only — must not contain path separators.
@@ -156,6 +166,8 @@ pub enum ClientMsg {
         /// OPAQUE session_id — server looks up the derived AES key.
         session_id: String,
         project: String,
+        #[serde(default)]
+        worktree_path: Option<String>,
         dir: String,
         filename: String,
         /// Total encrypted blob size in bytes.
@@ -178,6 +190,8 @@ pub enum ClientMsg {
         /// OPAQUE session_id — server looks up the derived AES key.
         session_id: String,
         project: String,
+        #[serde(default)]
+        worktree_path: Option<String>,
         /// File path relative to project root.
         path: String,
     },

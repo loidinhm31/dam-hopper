@@ -49,7 +49,7 @@ describe("issueVideoTicket", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const ticket = await issueVideoTicket(
-      "project",
+      { project: "project", worktreePath: "/tmp/project-worktree" },
       "clips/demo.webm",
       "playback",
     );
@@ -69,6 +69,12 @@ describe("issueVideoTicket", () => {
         }),
       }),
     );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+      project: "project",
+      worktreePath: "/tmp/project-worktree",
+      path: "clips/demo.webm",
+      purpose: "playback",
+    });
     if (ticket.purpose === "playback") await ticket.revoke();
     expect(fetchMock).toHaveBeenLastCalledWith(
       "https://api.test/api/fs/video/tickets",

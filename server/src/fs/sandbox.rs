@@ -3,6 +3,7 @@ use std::path::{Component, Path, PathBuf};
 use tokio::task;
 
 use crate::fs::error::FsError;
+use crate::workspace_target::ResolvedProjectTarget;
 
 /// Validates that a proposed path resolves within a workspace root.
 ///
@@ -51,20 +52,23 @@ impl ProjectSandbox {
     /// Validates `proposed` (an absolute path formed by joining a project root
     /// with a user-supplied relative path) against the selected project root.
     pub async fn validate(&self, project: &str, proposed: PathBuf) -> Result<PathBuf, FsError> {
-        // Reject obvious traversal before probing the filesystem; canonicalize
-        // afterwards so symlink targets are checked against the project root.
-        if proposed.components().any(|c| c == Component::ParentDir) {
-            return Err(FsError::PathEscape);
-        }
-
         let root = self.project_root(project).ok_or(FsError::NotFound)?;
-        let canonical = canonicalize_existing_blocking(proposed).await?;
+        validate_existing_under_root(&root, proposed).await
+    }
 
-        if !canonical.starts_with(&root) {
-            return Err(FsError::PathEscape);
-        }
-
-        Ok(canonical)
+    /// Validate a path beneath a server-resolved project target.
+    ///
+    /// Worktrees may live outside the configured project root, so target
+    /// authorization comes from `WorkspaceTargetResolver`. This method still
+    /// verifies that the descriptor belongs to the configured project before
+    /// applying the existing canonical containment checks beneath its target.
+    pub async fn validate_target(
+        &self,
+        target: &ResolvedProjectTarget,
+        proposed: PathBuf,
+    ) -> Result<PathBuf, FsError> {
+        let root = self.target_root(target)?;
+        validate_existing_under_root(&root, proposed).await
     }
 
     /// Validate a not-yet-existing path by canonicalizing its parent directory.
@@ -74,20 +78,29 @@ impl ProjectSandbox {
         parent: PathBuf,
         name: &str,
     ) -> Result<PathBuf, FsError> {
-        validate_new_name(name)?;
-
-        if parent.components().any(|c| c == Component::ParentDir) {
-            return Err(FsError::PathEscape);
-        }
-
         let root = self.project_root(project).ok_or(FsError::NotFound)?;
-        let canonical_parent = canonicalize_existing_blocking(parent).await?;
+        validate_new_under_root(&root, parent, name).await
+    }
 
-        if !canonical_parent.starts_with(&root) {
+    /// Validate a not-yet-existing path beneath a server-resolved target.
+    pub async fn validate_new_target_path(
+        &self,
+        target: &ResolvedProjectTarget,
+        parent: PathBuf,
+        name: &str,
+    ) -> Result<PathBuf, FsError> {
+        let root = self.target_root(target)?;
+        validate_new_under_root(&root, parent, name).await
+    }
+
+    fn target_root(&self, target: &ResolvedProjectTarget) -> Result<PathBuf, FsError> {
+        let configured_root = self
+            .project_root(target.project())
+            .ok_or(FsError::NotFound)?;
+        if configured_root != *target.configured_root() || !target.available() {
             return Err(FsError::PathEscape);
         }
-
-        Ok(canonical_parent.join(name))
+        Ok(target.target_path().to_path_buf())
     }
 }
 
@@ -163,6 +176,33 @@ async fn canonicalize_existing_blocking(path: PathBuf) -> Result<PathBuf, FsErro
         .map_err(|e| FsError::Io(std::io::Error::other(e)))?
 }
 
+async fn validate_existing_under_root(root: &Path, proposed: PathBuf) -> Result<PathBuf, FsError> {
+    if proposed.components().any(|c| c == Component::ParentDir) {
+        return Err(FsError::PathEscape);
+    }
+    let canonical = canonicalize_existing_blocking(proposed).await?;
+    if !canonical.starts_with(root) {
+        return Err(FsError::PathEscape);
+    }
+    Ok(canonical)
+}
+
+async fn validate_new_under_root(
+    root: &Path,
+    parent: PathBuf,
+    name: &str,
+) -> Result<PathBuf, FsError> {
+    validate_new_name(name)?;
+    if parent.components().any(|c| c == Component::ParentDir) {
+        return Err(FsError::PathEscape);
+    }
+    let canonical_parent = canonicalize_existing_blocking(parent).await?;
+    if !canonical_parent.starts_with(root) {
+        return Err(FsError::PathEscape);
+    }
+    Ok(canonical_parent.join(name))
+}
+
 fn validate_new_name(name: &str) -> Result<(), FsError> {
     if name.is_empty() {
         return Err(FsError::InvalidName("filename is empty".into()));
@@ -179,6 +219,86 @@ fn validate_new_name(name: &str) -> Result<(), FsError> {
 mod tests {
     use super::ProjectSandbox;
     use crate::fs::FsError;
+    use crate::workspace_target::ResolvedProjectTarget;
+
+    fn resolved_target(
+        project: &str,
+        configured_root: std::path::PathBuf,
+        target_path: std::path::PathBuf,
+    ) -> ResolvedProjectTarget {
+        let is_root = configured_root == target_path;
+        ResolvedProjectTarget::from_parts(
+            project.into(),
+            configured_root,
+            target_path,
+            if is_root {
+                "root".into()
+            } else {
+                "worktree".into()
+            },
+            is_root,
+            true,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn isolates_identical_paths_by_resolved_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let configured_root = tmp.path().join("configured");
+        let worktree = tmp.path().join("worktree");
+        std::fs::create_dir_all(&configured_root).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(configured_root.join("same.txt"), "root").unwrap();
+        std::fs::write(worktree.join("same.txt"), "worktree").unwrap();
+
+        let sandbox =
+            ProjectSandbox::new(vec![("project".into(), configured_root.clone())]).unwrap();
+        let root_target = resolved_target(
+            "project",
+            dunce::canonicalize(&configured_root).unwrap(),
+            dunce::canonicalize(&configured_root).unwrap(),
+        );
+        let worktree_target = resolved_target(
+            "project",
+            dunce::canonicalize(&configured_root).unwrap(),
+            dunce::canonicalize(&worktree).unwrap(),
+        );
+
+        let root_file = sandbox
+            .validate_target(&root_target, configured_root.join("same.txt"))
+            .await
+            .unwrap();
+        let worktree_file = sandbox
+            .validate_target(&worktree_target, worktree.join("same.txt"))
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read_to_string(root_file).unwrap(), "root");
+        assert_eq!(std::fs::read_to_string(worktree_file).unwrap(), "worktree");
+    }
+
+    #[tokio::test]
+    async fn rejects_descriptor_for_another_configured_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let configured_root = tmp.path().join("configured");
+        let foreign_root = tmp.path().join("foreign");
+        std::fs::create_dir_all(&configured_root).unwrap();
+        std::fs::create_dir_all(&foreign_root).unwrap();
+        std::fs::write(foreign_root.join("secret.txt"), "secret").unwrap();
+        let sandbox = ProjectSandbox::new(vec![("project".into(), configured_root)]).unwrap();
+        let forged = resolved_target(
+            "project",
+            dunce::canonicalize(&foreign_root).unwrap(),
+            dunce::canonicalize(&foreign_root).unwrap(),
+        );
+
+        let result = sandbox
+            .validate_target(&forged, foreign_root.join("secret.txt"))
+            .await;
+
+        assert!(matches!(result, Err(FsError::PathEscape)));
+    }
 
     #[tokio::test]
     async fn validates_each_project_against_its_own_root() {

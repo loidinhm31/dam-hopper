@@ -55,8 +55,11 @@ function runtimeFor(queryClient: object): ExplorerLanguageScanRuntime {
   return runtime;
 }
 
-export function explorerLanguageScanQueryKey(project: string) {
-  return [EXPLORER_LANGUAGE_SCAN_QUERY_PREFIX, project] as const;
+export function explorerLanguageScanQueryKey(
+  project: string,
+  targetKey = "root",
+) {
+  return [EXPLORER_LANGUAGE_SCAN_QUERY_PREFIX, project, targetKey] as const;
 }
 
 export function emptyExplorerLanguageScanCache(): ExplorerLanguageScanCache {
@@ -72,9 +75,10 @@ export function emptyExplorerLanguageScanCache(): ExplorerLanguageScanCache {
 export function getExplorerLanguageScanCache(
   queryClient: ExplorerLanguageScanCacheQueryClient,
   project: string,
+  targetKey = "root",
 ): ExplorerLanguageScanCache | undefined {
   return queryClient.getQueryData<ExplorerLanguageScanCache>(
-    explorerLanguageScanQueryKey(project),
+    explorerLanguageScanQueryKey(project, targetKey),
   );
 }
 
@@ -82,17 +86,19 @@ export function getExplorerLanguageScanCache(
 export function beginExplorerLanguageScan(
   queryClient: ExplorerLanguageScanCacheQueryClient,
   project: string,
+  targetKey = "root",
 ): ExplorerLanguageScanToken {
   const runtime = runtimeFor(queryClient);
-  const current = getExplorerLanguageScanCache(queryClient, project);
+  const runtimeKey = `${project}\0${targetKey}`;
+  const current = getExplorerLanguageScanCache(queryClient, project, targetKey);
   if (!current) {
     queryClient.setQueryData(
-      explorerLanguageScanQueryKey(project),
+      explorerLanguageScanQueryKey(project, targetKey),
       emptyExplorerLanguageScanCache(),
     );
   }
   const requestId = ++runtime.nextRequestId;
-  runtime.latestRequestByProject.set(project, requestId);
+  runtime.latestRequestByProject.set(runtimeKey, requestId);
   return {
     generation: current?.generation ?? 0,
     workspaceEpoch: runtime.workspaceEpoch,
@@ -105,6 +111,7 @@ export function markExplorerLanguageScanStale(
   queryClient: ExplorerLanguageScanCacheQueryClient,
   project: string,
   workspaceEpoch?: number,
+  targetKey = "root",
 ): void {
   const runtime = runtimeFor(queryClient);
   if (
@@ -113,9 +120,9 @@ export function markExplorerLanguageScanStale(
   ) {
     return;
   }
-  const current = getExplorerLanguageScanCache(queryClient, project);
+  const current = getExplorerLanguageScanCache(queryClient, project, targetKey);
   if (!current) return;
-  queryClient.setQueryData(explorerLanguageScanQueryKey(project), {
+  queryClient.setQueryData(explorerLanguageScanQueryKey(project, targetKey), {
     ...current,
     generation: current.generation + 1,
     stale: true,
@@ -133,12 +140,14 @@ export function commitExplorerLanguageScan(
   scanToken: ExplorerLanguageScanToken,
   result: LanguageFilesResponse,
   scannedAt = Date.now(),
+  targetKey = "root",
 ): ExplorerLanguageScanCommitResult {
   const runtime = runtimeFor(queryClient);
-  const current = getExplorerLanguageScanCache(queryClient, project);
+  const runtimeKey = `${project}\0${targetKey}`;
+  const current = getExplorerLanguageScanCache(queryClient, project, targetKey);
   if (
     runtime.workspaceEpoch !== scanToken.workspaceEpoch ||
-    runtime.latestRequestByProject.get(project) !== scanToken.requestId
+    runtime.latestRequestByProject.get(runtimeKey) !== scanToken.requestId
   ) {
     return { committed: false, cache: current };
   }
@@ -151,7 +160,10 @@ export function commitExplorerLanguageScan(
     stale: current.generation !== scanToken.generation,
     scannedAt,
   } satisfies ExplorerLanguageScanCache;
-  queryClient.setQueryData(explorerLanguageScanQueryKey(project), cache);
+  queryClient.setQueryData(
+    explorerLanguageScanQueryKey(project, targetKey),
+    cache,
+  );
   return { committed: true, cache };
 }
 

@@ -14,6 +14,8 @@
 import type { Transport } from "./transport.js";
 import {
   ApiRequestError,
+  normalizeProjectTarget,
+  type ProjectTargetInput,
   type TerminalLifecycle,
   type TerminalLifecycleEvent,
 } from "./client.js";
@@ -32,6 +34,19 @@ import type {
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 
 type Callback = (...args: unknown[]) => void;
+
+function wsTargetFields(target: ProjectTargetInput): {
+  project: string;
+  worktree_path?: string;
+} {
+  const normalized = normalizeProjectTarget(target);
+  return normalized.worktreePath == null
+    ? { project: normalized.project }
+    : {
+        project: normalized.project,
+        worktree_path: normalized.worktreePath,
+      };
+}
 
 function parseTerminalLifecycleEvent(message: {
   id?: unknown;
@@ -445,18 +460,25 @@ function channelToEndpoint(
 
     // FS (REST for list/stat; subscribe/unsubscribe go over WS)
     case "fs:list": {
-      const d = data as { project: string; path: string };
+      const d = data as {
+        project: string;
+        worktreePath?: string | null;
+        path: string;
+      };
       const params = new URLSearchParams({ project: d.project, path: d.path });
+      if (d.worktreePath != null) params.set("worktreePath", d.worktreePath);
       return { method: "GET", url: `/api/fs/list?${params}` };
     }
     case "fs:languageFiles": {
-      const d = data as { project: string };
+      const d = data as { project: string; worktreePath?: string | null };
       const params = new URLSearchParams({ project: d.project });
+      if (d.worktreePath != null) params.set("worktreePath", d.worktreePath);
       return { method: "GET", url: `/api/fs/language-files?${params}` };
     }
     case "fs:search": {
       const d = data as {
         project?: string;
+        worktreePath?: string | null;
         q: string;
         case?: boolean;
         max?: number;
@@ -464,6 +486,7 @@ function channelToEndpoint(
       };
       const params = new URLSearchParams({ q: d.q });
       if (d.project) params.set("project", d.project);
+      if (d.worktreePath != null) params.set("worktreePath", d.worktreePath);
       if (d.case) params.set("case", "true");
       if (d.max) params.set("max", String(d.max));
       if (d.scope === "workspace") params.set("scope", "workspace");
@@ -472,6 +495,7 @@ function channelToEndpoint(
     case "fs:searchPaths": {
       const d = data as {
         project?: string;
+        worktreePath?: string | null;
         q: string;
         case?: boolean;
         max?: number;
@@ -479,6 +503,7 @@ function channelToEndpoint(
       };
       const params = new URLSearchParams({ q: d.q });
       if (d.project) params.set("project", d.project);
+      if (d.worktreePath != null) params.set("worktreePath", d.worktreePath);
       if (d.case) params.set("case", "true");
       if (d.max) params.set("max", String(d.max));
       if (d.scope === "workspace") params.set("scope", "workspace");
@@ -2035,7 +2060,7 @@ export class WsTransport implements Transport {
   // ── FS subscription methods ───────────────────────────────────────────────
 
   fsSubscribeTree(
-    project: string,
+    target: ProjectTargetInput,
     path: string,
   ): Promise<{ sub_id: number; nodes: ServerTreeNode[] }> {
     return new Promise((resolve, reject) => {
@@ -2047,7 +2072,12 @@ export class WsTransport implements Transport {
       this.pendingFsReqs.set(req_id, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.ws.send(
-          JSON.stringify({ kind: "fs:subscribe_tree", req_id, project, path }),
+          JSON.stringify({
+            kind: "fs:subscribe_tree",
+            req_id,
+            ...wsTargetFields(target),
+            path,
+          }),
         );
       } else {
         clearTimeout(timer);
@@ -2074,7 +2104,7 @@ export class WsTransport implements Transport {
   // ── FS read ───────────────────────────────────────────────────────────────
 
   fsRead(
-    project: string,
+    target: ProjectTargetInput,
     path: string,
     opts?: { offset?: number; len?: number },
   ): Promise<FsReadResponse> {
@@ -2090,7 +2120,7 @@ export class WsTransport implements Transport {
           JSON.stringify({
             kind: "fs:read",
             req_id,
-            project,
+            ...wsTargetFields(target),
             path,
             offset: opts?.offset,
             len: opts?.len,
@@ -2114,7 +2144,7 @@ export class WsTransport implements Transport {
    * the client last observed (Unix seconds); the server rejects if stale.
    */
   async fsWriteFile(
-    project: string,
+    target: ProjectTargetInput,
     path: string,
     content: string,
     expectedMtime: number,
@@ -2125,7 +2155,7 @@ export class WsTransport implements Transport {
 
     // 1. write_begin → get write_id (using binary encoding)
     const writeId = await this.sendWriteBegin(
-      project,
+      target,
       path,
       expectedMtime,
       size,
@@ -2163,7 +2193,7 @@ export class WsTransport implements Transport {
   }
 
   private sendWriteBegin(
-    project: string,
+    target: ProjectTargetInput,
     path: string,
     expectedMtime: number,
     size: number,
@@ -2181,7 +2211,7 @@ export class WsTransport implements Transport {
           JSON.stringify({
             kind: "fs:write_begin",
             req_id,
-            project,
+            ...wsTargetFields(target),
             path,
             expected_mtime: expectedMtime,
             size,
@@ -2306,6 +2336,7 @@ export class WsTransport implements Transport {
     op: "create_file" | "create_dir" | "rename" | "delete" | "move",
     params: {
       project: string;
+      worktreePath?: string | null;
       path: string;
       newPath?: string;
       forceGit?: boolean;
@@ -2325,6 +2356,9 @@ export class WsTransport implements Transport {
             req_id,
             op,
             project: params.project,
+            ...(params.worktreePath == null
+              ? {}
+              : { worktree_path: params.worktreePath }),
             path: params.path,
             new_path: params.newPath,
             force_git: params.forceGit ?? false,
@@ -2347,7 +2381,7 @@ export class WsTransport implements Transport {
    * In-flight window of 4: up to 4 chunk acks can be outstanding simultaneously.
    */
   async fsUploadFile(
-    project: string,
+    target: ProjectTargetInput,
     dir: string,
     file: File,
     onProgress?: (pct: number) => void,
@@ -2357,7 +2391,7 @@ export class WsTransport implements Transport {
     const IN_FLIGHT = 4;
 
     // 1. Begin
-    await this.sendUploadBegin(uploadId, project, dir, file.name, file.size);
+    await this.sendUploadBegin(uploadId, target, dir, file.name, file.size);
 
     // 2. Chunk loop
     const reader = file.stream().getReader();
@@ -2402,7 +2436,7 @@ export class WsTransport implements Transport {
 
   private sendUploadBegin(
     uploadId: string,
-    project: string,
+    target: ProjectTargetInput,
     dir: string,
     filename: string,
     len: number,
@@ -2420,7 +2454,7 @@ export class WsTransport implements Transport {
             kind: "fs:upload_begin",
             req_id,
             upload_id: uploadId,
-            project,
+            ...wsTargetFields(target),
             dir,
             filename,
             len,
@@ -2634,7 +2668,7 @@ export class WsTransport implements Transport {
    * @param onProgress  Optional progress callback (0–100)
    */
   async fsPutFile(
-    project: string,
+    target: ProjectTargetInput,
     dir: string,
     file: File,
     sessionId: string,
@@ -2648,7 +2682,7 @@ export class WsTransport implements Transport {
     await this.sendPutBegin(
       uploadId,
       sessionId,
-      project,
+      target,
       dir,
       file.name,
       file.size,
@@ -2705,7 +2739,7 @@ export class WsTransport implements Transport {
    * @param sessionId  OPAQUE session_id from login flow
    */
   async fsPutSave(
-    project: string,
+    target: ProjectTargetInput,
     path: string,
     blob: Blob,
     sessionId: string,
@@ -2726,7 +2760,7 @@ export class WsTransport implements Transport {
             kind: "fs:put_save",
             req_id,
             session_id: sessionId,
-            project,
+            ...wsTargetFields(target),
             path,
           }),
         );
@@ -2742,7 +2776,7 @@ export class WsTransport implements Transport {
   private sendPutBegin(
     uploadId: string,
     sessionId: string,
-    project: string,
+    target: ProjectTargetInput,
     dir: string,
     filename: string,
     len: number,
@@ -2761,7 +2795,7 @@ export class WsTransport implements Transport {
             req_id,
             upload_id: uploadId,
             session_id: sessionId,
-            project,
+            ...wsTargetFields(target),
             dir,
             filename,
             len,

@@ -37,15 +37,66 @@ pub struct ProjectTargetRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedProjectTarget {
-    pub project: String,
-    pub configured_root: PathBuf,
-    pub target_path: PathBuf,
+    project: String,
+    configured_root: PathBuf,
+    target_path: PathBuf,
     /// Stable, opaque input for downstream target-key derivation.
-    pub target_key: String,
-    pub is_root: bool,
-    pub available: bool,
+    target_key: String,
+    is_root: bool,
+    available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<ProjectWorktree>,
+    worktree: Option<ProjectWorktree>,
+}
+
+impl ResolvedProjectTarget {
+    #[cfg(test)]
+    pub(crate) fn from_parts(
+        project: String,
+        configured_root: PathBuf,
+        target_path: PathBuf,
+        target_key: String,
+        is_root: bool,
+        available: bool,
+        worktree: Option<ProjectWorktree>,
+    ) -> Self {
+        Self {
+            project,
+            configured_root,
+            target_path,
+            target_key,
+            is_root,
+            available,
+            worktree,
+        }
+    }
+
+    pub(crate) fn project(&self) -> &str {
+        &self.project
+    }
+
+    pub(crate) fn configured_root(&self) -> &Path {
+        &self.configured_root
+    }
+
+    pub(crate) fn target_path(&self) -> &Path {
+        &self.target_path
+    }
+
+    pub(crate) fn target_key(&self) -> &str {
+        &self.target_key
+    }
+
+    pub(crate) fn is_root(&self) -> bool {
+        self.is_root
+    }
+
+    pub(crate) fn available(&self) -> bool {
+        self.available
+    }
+
+    pub(crate) fn worktree(&self) -> Option<&ProjectWorktree> {
+        self.worktree.as_ref()
+    }
 }
 
 /// Worktree metadata projected into the configured project's directory.

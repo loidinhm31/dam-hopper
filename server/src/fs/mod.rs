@@ -12,6 +12,7 @@ pub(crate) mod media_ticket;
 pub mod mutate;
 pub mod ops;
 pub mod sandbox;
+pub(crate) mod secure_path;
 pub mod upload;
 pub mod video_ticket;
 pub mod watcher;
@@ -40,6 +41,7 @@ pub use video_ticket::{
     VideoTicketRecord,
 };
 pub use watcher::FsWatcherManager;
+use watcher::WatcherKey;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -48,6 +50,8 @@ use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 use tokio::sync::broadcast;
+
+use crate::workspace_target::ResolvedProjectTarget;
 
 /// A single node in the tree snapshot — relative path from the subscribed root.
 #[derive(Debug, Clone, Serialize)]
@@ -64,8 +68,8 @@ pub struct TreeNode {
 }
 
 struct SubInfo {
-    /// Absolute path of the watcher root (for release).
-    watcher_root: PathBuf,
+    /// Immutable project + target identity used to release the watcher.
+    watcher_key: WatcherKey,
     /// Absolute path prefix used to filter broadcast events.
     filter_prefix: PathBuf,
 }
@@ -124,13 +128,13 @@ impl FsSubsystem {
         };
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.sandbox = sandbox;
-        let watcher_roots: Vec<PathBuf> = inner
+        let watcher_keys: Vec<WatcherKey> = inner
             .subs
             .drain()
-            .map(|(_, info)| info.watcher_root)
+            .map(|(_, info)| info.watcher_key)
             .collect();
-        for watcher_root in watcher_roots {
-            inner.watcher_mgr.release(&watcher_root);
+        for watcher_key in watcher_keys {
+            inner.watcher_mgr.release(&watcher_key);
         }
     }
 
@@ -166,16 +170,54 @@ impl FsSubsystem {
         if !filter_abs_path.starts_with(&watcher_root) {
             return Err(FsError::PathEscape);
         }
+        let watcher_key = WatcherKey {
+            project: project.to_owned(),
+            target_key: "root".to_owned(),
+            root: watcher_root,
+        };
+        Self::subscribe_with_key(&mut inner, watcher_key, filter_abs_path)
+    }
+
+    /// Subscribe beneath a server-resolved project target.
+    pub fn subscribe_target_tree(
+        &self,
+        target: &ResolvedProjectTarget,
+        filter_abs_path: PathBuf,
+    ) -> Result<(u64, broadcast::Receiver<FsEvent>), FsError> {
+        let mut inner = self.inner.lock().expect("FsSubsystem: Mutex poisoned");
+        let sandbox = inner.sandbox.as_ref().ok_or(FsError::Unavailable)?;
+        let configured_root = sandbox
+            .project_root(target.project())
+            .ok_or(FsError::NotFound)?;
+        if configured_root != *target.configured_root()
+            || !target.available()
+            || !filter_abs_path.starts_with(target.target_path())
+        {
+            return Err(FsError::PathEscape);
+        }
+        let watcher_key = WatcherKey {
+            project: target.project().to_owned(),
+            target_key: target.target_key().to_owned(),
+            root: target.target_path().to_path_buf(),
+        };
+        Self::subscribe_with_key(&mut inner, watcher_key, filter_abs_path)
+    }
+
+    fn subscribe_with_key(
+        inner: &mut Inner,
+        watcher_key: WatcherKey,
+        filter_abs_path: PathBuf,
+    ) -> Result<(u64, broadcast::Receiver<FsEvent>), FsError> {
         let rx = inner
             .watcher_mgr
-            .subscribe(&watcher_root)
+            .subscribe(&watcher_key)
             .map_err(|e| FsError::Io(std::io::Error::other(e)))?;
         let sub_id = inner.next_sub_id;
         inner.next_sub_id += 1;
         inner.subs.insert(
             sub_id,
             SubInfo {
-                watcher_root,
+                watcher_key,
                 filter_prefix: filter_abs_path,
             },
         );
@@ -186,7 +228,7 @@ impl FsSubsystem {
     pub fn unsubscribe_tree(&self, sub_id: u64) {
         let mut inner = self.inner.lock().expect("FsSubsystem: Mutex poisoned");
         if let Some(info) = inner.subs.remove(&sub_id) {
-            inner.watcher_mgr.release(&info.watcher_root);
+            inner.watcher_mgr.release(&info.watcher_key);
         }
     }
 

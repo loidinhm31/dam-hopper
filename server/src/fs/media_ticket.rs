@@ -8,6 +8,8 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::{rngs::OsRng, RngCore};
 
+use crate::workspace_target::ResolvedProjectTarget;
+
 use super::media_session::{
     MediaSessionBinding, MediaSessionDigest, MediaSessionLease, MediaSessionToken,
     MEDIA_SESSION_ABSOLUTE_TTL, MEDIA_SESSION_IDLE_TTL,
@@ -74,7 +76,7 @@ impl MediaFileVersion {
 pub(crate) struct MediaTicketRecord {
     pub kind: MediaTicketKind,
     pub purpose: MediaTicketPurpose,
-    pub project: String,
+    pub target: ResolvedProjectTarget,
     pub project_relative_path: PathBuf,
     pub file: MediaFileVersion,
     pub mime: String,
@@ -817,7 +819,15 @@ mod tests {
         MediaTicketRecord {
             kind,
             purpose: MediaTicketPurpose::Playback,
-            project: "project".into(),
+            target: ResolvedProjectTarget::from_parts(
+                "project".into(),
+                PathBuf::from("/private"),
+                PathBuf::from("/private"),
+                "root".into(),
+                true,
+                true,
+                None,
+            ),
             project_relative_path: PathBuf::from("media.bin"),
             file: MediaFileVersion::from_metadata(PathBuf::from("/private/media.bin"), &metadata)
                 .unwrap(),

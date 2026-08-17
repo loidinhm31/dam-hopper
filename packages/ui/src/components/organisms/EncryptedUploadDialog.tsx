@@ -23,9 +23,11 @@ import {
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useEncryptedWrite } from "@/hooks/use-encrypted-write.js";
 import { invalidateGitFileOperation } from "@/api/queries.js";
+import type { ProjectTargetRef } from "@/api/client.js";
 
 interface EncryptedUploadDialogProps {
   project: string;
+  target?: ProjectTargetRef;
   dir: string;
   onClose: () => void;
   onSuccess?: (newMtime: number | undefined) => void;
@@ -40,10 +42,13 @@ interface FileStatus {
 
 export function EncryptedUploadDialog({
   project,
+  target,
   dir,
   onClose,
   onSuccess,
 }: EncryptedUploadDialogProps) {
+  const worktreePath = target?.worktreePath;
+  const targetProject = target?.project ?? project;
   // Always encrypted — caller must only render this dialog when Lock mode is ON
   const { getPassphrase, promptPassphrase, setPassphrase } = useEncryptMode();
   const { uploadFile } = useEncryptedWrite();
@@ -117,12 +122,19 @@ export function EncryptedUploadDialog({
       );
 
       try {
-        const result = await uploadFile(project, dir, file, passphrase, (pct) =>
-          setFiles((prev) =>
-            prev.map((f, idx) =>
-              idx === i ? { ...f, state: "uploading", progress: pct } : f,
+        const result = await uploadFile(
+          worktreePath == null
+            ? targetProject
+            : { project: targetProject, worktreePath },
+          dir,
+          file,
+          passphrase,
+          (pct) =>
+            setFiles((prev) =>
+              prev.map((f, idx) =>
+                idx === i ? { ...f, state: "uploading", progress: pct } : f,
+              ),
             ),
-          ),
         );
 
         if (result.ok) {
@@ -164,6 +176,8 @@ export function EncryptedUploadDialog({
     files,
     uploading,
     project,
+    targetProject,
+    worktreePath,
     dir,
     getPassphrase,
     promptPassphrase,

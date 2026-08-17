@@ -228,7 +228,7 @@ pub async fn remove_worktree_route(
         })
         .await
         .map_err(ApiError::from_app)?;
-    let worktree = target.worktree.ok_or_else(|| {
+    let worktree = target.worktree().cloned().ok_or_else(|| {
         ApiError::from_app(crate::error::AppError::InvalidInput(
             "The configured project root cannot be removed as a worktree".to_string(),
         ))

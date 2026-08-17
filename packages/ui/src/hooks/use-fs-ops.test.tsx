@@ -68,7 +68,10 @@ describe("useFsOps download", () => {
 
     await latestOps().download("clips/demo.MP4", 3 * 1024 * 1024 * 1024);
 
-    expect(startVideoDownload).toHaveBeenCalledWith("demo", "clips/demo.MP4");
+    expect(startVideoDownload).toHaveBeenCalledWith(
+      { project: "demo" },
+      "clips/demo.MP4",
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

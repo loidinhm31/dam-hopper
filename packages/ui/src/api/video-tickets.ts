@@ -11,6 +11,7 @@ import {
   getServerUrl,
   normalizeServerUrl,
 } from "./server-config.js";
+import { normalizeProjectTarget, type ProjectTargetInput } from "./client.js";
 
 const VIDEO_TICKET_TIMEOUT_MS = 15_000;
 const STREAM_PATH = /^\/api\/fs\/video\/stream\/[A-Za-z0-9_-]+$/;
@@ -144,7 +145,7 @@ async function revokeTicket(
 
 /** Issues a purpose-bound, in-memory browser media capability. */
 export async function issueVideoTicket(
-  project: string,
+  target: ProjectTargetInput,
   path: string,
   purpose: VideoTicketPurpose,
   signal?: AbortSignal,
@@ -160,7 +161,11 @@ export async function issueVideoTicket(
         credentials: "include",
         headers: requestHeaders(snapshot.authToken),
         signal: timeout.signal,
-        body: JSON.stringify({ project, path, purpose }),
+        body: JSON.stringify({
+          ...normalizeProjectTarget(target),
+          path,
+          purpose,
+        }),
       },
     );
     if (!response.ok) throw ticketError(`HTTP_${response.status}`);

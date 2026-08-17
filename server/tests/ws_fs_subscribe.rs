@@ -6,9 +6,12 @@
 use std::{
     net::SocketAddr,
     path::Path,
+    process::Command,
     sync::Arc,
     time::{Duration, Instant},
 };
+
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
@@ -157,6 +160,43 @@ async fn next_json(
             _ => return None,
         }
     }
+}
+
+fn git(cwd: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn repository_with_worktree(parent: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let repository = parent.join("repository");
+    let worktree = parent.join("feature-worktree");
+    std::fs::create_dir_all(&repository).unwrap();
+    git(&repository, &["init", "-b", "main"]);
+    git(&repository, &["config", "user.email", "test@example.com"]);
+    git(&repository, &["config", "user.name", "Test"]);
+    std::fs::write(repository.join("same.txt"), "root").unwrap();
+    git(&repository, &["add", "same.txt"]);
+    git(&repository, &["commit", "-m", "initial"]);
+    git(
+        &repository,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(worktree.join("same.txt"), "worktree").unwrap();
+    (repository, worktree)
 }
 
 // ---------------------------------------------------------------------------
@@ -486,4 +526,98 @@ async fn watcher_events_are_isolated_between_project_roots() {
 
     alpha_ws.close(None).await.unwrap();
     beta_ws.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn root_and_worktree_reads_and_watchers_are_isolated_on_one_connection() {
+    let registry = tempfile::tempdir().unwrap();
+    let projects = tempfile::tempdir().unwrap();
+    let (repository, worktree) = repository_with_worktree(projects.path());
+    let state =
+        make_test_state_with_project_roots(&registry, vec![("project", repository.as_path())]);
+    let addr = spawn_server(state).await;
+    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
+    let (mut ws, _) = connect_async(&url).await.unwrap();
+
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:read",
+            "req_id": 30,
+            "project": "project",
+            "path": "same.txt"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let root_read = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(
+        BASE64.decode(root_read["data"].as_str().unwrap()).unwrap(),
+        b"root"
+    );
+
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:read",
+            "req_id": 31,
+            "project": "project",
+            "worktree_path": worktree,
+            "path": "same.txt"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let worktree_read = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(
+        BASE64
+            .decode(worktree_read["data"].as_str().unwrap())
+            .unwrap(),
+        b"worktree"
+    );
+
+    ws.send(Message::Text(
+        json!({ "kind": "fs:subscribe_tree", "req_id": 32, "project": "project", "path": "" })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let root_snapshot = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    let root_sub_id = root_snapshot["sub_id"].as_u64().unwrap();
+
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:subscribe_tree",
+            "req_id": 33,
+            "project": "project",
+            "worktree_path": worktree,
+            "path": ""
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let worktree_snapshot = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    let worktree_sub_id = worktree_snapshot["sub_id"].as_u64().unwrap();
+    assert_ne!(root_sub_id, worktree_sub_id);
+
+    std::fs::write(worktree.join("target-only.txt"), "target").unwrap();
+    let event = next_json(&mut ws, Duration::from_secs(3))
+        .await
+        .expect("worktree event");
+    assert_eq!(event["kind"], "fs:event");
+    assert_eq!(event["sub_id"], worktree_sub_id);
+
+    let spurious = next_json(&mut ws, Duration::from_millis(700)).await;
+    assert!(
+        spurious
+            .as_ref()
+            .is_none_or(|message| message["sub_id"] != root_sub_id),
+        "root watcher received worktree event: {spurious:?}"
+    );
+    ws.close(None).await.unwrap();
 }

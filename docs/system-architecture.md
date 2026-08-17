@@ -130,6 +130,82 @@ Handles registry loading, legacy discovery fallback, and feature flags.
 5. Current working directory via legacy upward `dam-hopper.toml` discovery
 6. Empty config fallback
 
+### Project worktree targets (planned)
+
+A configured project remains the stable authorization, configuration, and
+top-bar identity. A Git worktree is an optional execution target beneath that
+project; selecting one does not rewrite `ProjectConfig.path`, switch the active
+project, or create a synthetic project. Root-sensitive operations carry an
+explicit target reference:
+
+```text
+ProjectTargetRef {
+  project: string,
+  worktreePath?: string  // absent means the configured project root
+}
+```
+
+The browser keeps one selected target per project in session memory. Restarting
+the browser therefore selects the configured root again. The server does not
+hold a global "active worktree" because requests, watchers, media tickets,
+editor state, and terminal sessions for several targets may coexist.
+
+```mermaid
+flowchart LR
+    Selector["Project panel worktree selector"] --> TargetStore["Session target store"]
+    TargetStore --> Panels["Explorer, Search, Git, Editor, Terminal"]
+    Panels --> Transport["REST and WebSocket target reference"]
+    Transport --> Resolver["Project target resolver"]
+    Resolver --> Registry["Configured project root"]
+    Resolver --> Worktrees["git worktree list --porcelain"]
+    Resolver --> Sandbox["Target-aware filesystem sandbox"]
+    Sandbox --> Files["Files and watchers"]
+    Resolver --> GitOps["Git operations"]
+    Resolver --> Pty["PTY cwd, metadata, and restore"]
+    Resolver --> Media["Target-bound media tickets"]
+```
+
+The resolver is authoritative. For a root target it returns the canonical
+configured path. For a worktree target it canonicalizes the request and accepts
+it only if Git reports that path as a registered worktree of the configured
+repository. An existing arbitrary sibling directory, a worktree belonging to a
+different repository, and a missing/prunable worktree are not valid targets for
+new operations. Worktree discovery may use a short-lived cache, but add, remove,
+prune, explicit refresh, and availability changes invalidate it.
+
+`ProjectSandbox` evolves from one root per project to validation by project and
+resolved target root. This changes the set of approved roots, not the traversal
+rules: canonical containment, symlink, write, upload, and encrypted-write checks
+remain in force. File watcher subscription keys and media tickets include target
+identity so concurrent roots cannot overwrite or authorize one another. Shared
+state locks are never held while invoking Git or awaiting filesystem work.
+
+Frontend caches use `(project, targetKey, ...)`. Editor tab keys use
+`(project, targetKey, path)` and persisted legacy tabs migrate to the configured
+root. Terminal IDs and persisted metadata also contain a stable target
+discriminator, while the canonical path remains structured metadata rather than
+being embedded verbatim into display IDs. The Git panel's existing nested-repo
+`root` remains a separate axis after the project target; it is not reused as the
+worktree selector.
+
+```mermaid
+stateDiagram-v2
+    [*] --> ConfiguredRoot
+    ConfiguredRoot --> WorktreeSelected: select registered worktree
+    WorktreeSelected --> ConfiguredRoot: select root
+    WorktreeSelected --> TargetUnavailable: path removed or prunable
+    TargetUnavailable --> ConfiguredRoot: fallback for new operations
+    TargetUnavailable --> OrphanResources: preserve dirty tabs and live terminals
+    OrphanResources --> [*]: resources closed explicitly
+```
+
+Removing a worktree through DamHopper is blocked while it has dirty editor tabs
+or live terminals; Git's own dirty-worktree protection remains the final disk
+safety check. If a worktree disappears externally, the UI falls back to the
+configured root for new operations, keeps dirty tabs with an unavailable warning,
+and leaves existing terminal processes at their original cwd until the user
+closes them. It never silently discards editor data or moves a running process.
+
 ### shared/
 
 Dependency-free runtime helpers shared by browser packages.
@@ -759,6 +835,8 @@ pub struct PersistedSession {
 - HashMap<project_name, canonical_root> initialized at startup + workspace switch
 - Cheap clone; canonicalization done at init time
 - Never held across `.await`
+- Planned worktree targets extend validation to an authorized
+  `(project_name, canonical_target_root)` pair without allowing arbitrary paths
 
 **ops.rs** — Filesystem operations:
 
@@ -768,6 +846,23 @@ pub struct PersistedSession {
 - `detect_binary()` — heuristic detection
 - `atomic_write_with_check()` (Phase 04) — mtime-guarded atomic write via tempfile + rename
 - `search()` (Phase 07) — .gitignore-aware text search using `ignore` crate; returns file + match context; results capped at 1000
+
+**Phase 2 delayed-write hardening (Unix/Linux):** The WebSocket write protocol and
+chunked uploads keep their temporary file in the target filesystem, verify the
+declared byte count, and revalidate the authorized project/worktree target at
+commit. On Unix/Linux, the final commit is target-relative: parent directories
+are opened with no-symlink-following flags, the target root identity captured at
+begin is checked again, the expected file mtime is checked with the opened
+directory, and the temporary file is atomically renamed through that directory
+handle. This prevents a delayed commit from resolving a replaced path tree
+against a different filesystem object while the operation was in flight.
+
+The accepted scope for this phase is Unix/Linux handle-anchored,
+target-relative commits. Windows retains a path-based fallback: it rechecks the
+target-root identity and expected mtime before persisting the temporary file,
+but cannot provide the same handle-anchored rename guarantee. That Windows race
+window is known and explicitly out of scope for Phase 2; it must not be
+described as equivalent to the Unix/Linux guarantee.
 
 **mod.rs** — `FsSubsystem` (Arc<Mutex<Inner>>):
 

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::fs::ops::{self, MAX_READ_BYTES, MAX_WORKSPACE_SEARCH_RESULTS};
 use crate::state::AppState;
+use crate::workspace_target::{ProjectTargetRef, ResolvedProjectTarget};
 
 use super::error::ApiError;
 
@@ -26,8 +27,11 @@ pub enum SearchScope {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchParams {
     pub project: Option<String>,
+    #[serde(default)]
+    pub worktree_path: Option<String>,
     pub q: String,
     pub case: Option<bool>,
     pub max: Option<usize>,
@@ -50,8 +54,11 @@ pub struct PathSearchResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LanguageFilesParams {
     pub project: String,
+    #[serde(default)]
+    pub worktree_path: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -59,14 +66,20 @@ pub struct LanguageFilesParams {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectPathParams {
     pub project: String,
+    #[serde(default)]
+    pub worktree_path: Option<String>,
     pub path: String,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadParams {
     pub project: String,
+    #[serde(default)]
+    pub worktree_path: Option<String>,
     pub path: String,
     pub offset: Option<u64>,
     pub len: Option<u64>,
@@ -87,21 +100,34 @@ pub struct BinaryResponse {
 // Helper: resolve + validate a project-relative path
 // ---------------------------------------------------------------------------
 
+pub(super) struct ResolvedFsPath {
+    pub target: ResolvedProjectTarget,
+    pub canonical: std::path::PathBuf,
+}
+
 pub(super) async fn resolve(
     state: &AppState,
-    project: &str,
+    target_ref: &ProjectTargetRef,
     rel_path: &str,
-) -> Result<std::path::PathBuf, AppError> {
+) -> Result<ResolvedFsPath, AppError> {
     if std::path::Path::new(rel_path).is_absolute() {
         return Err(AppError::Fs(crate::fs::FsError::PathEscape));
     }
-    let project_abs = state.project_path(project).await?;
+    let target = state.resolve_project_target(target_ref).await?;
     let sandbox = state.fs.sandbox().map_err(AppError::Fs)?;
-    let proposed = project_abs.join(rel_path);
-    sandbox
-        .validate(project, proposed)
+    let proposed = target.target_path().join(rel_path);
+    let canonical = sandbox
+        .validate_target(&target, proposed)
         .await
-        .map_err(AppError::Fs)
+        .map_err(AppError::Fs)?;
+    Ok(ResolvedFsPath { target, canonical })
+}
+
+fn target_ref(project: String, worktree_path: Option<String>) -> ProjectTargetRef {
+    ProjectTargetRef {
+        project,
+        worktree_path,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -112,10 +138,16 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ProjectPathParams>,
 ) -> Result<Json<ListResponse>, ApiError> {
-    let canonical = resolve(&state, &params.project, &params.path)
+    let resolved = resolve(
+        &state,
+        &target_ref(params.project, params.worktree_path),
+        &params.path,
+    )
+    .await
+    .map_err(ApiError::from)?;
+    let entries = ops::list_dir(&resolved.canonical)
         .await
-        .map_err(ApiError::from)?;
-    let entries = ops::list_dir(&canonical).await.map_err(AppError::Fs)?;
+        .map_err(AppError::Fs)?;
     Ok(Json(ListResponse { entries }))
 }
 
@@ -127,9 +159,14 @@ pub async fn read(
     State(state): State<AppState>,
     Query(params): Query<ReadParams>,
 ) -> Result<Response, ApiError> {
-    let canonical = resolve(&state, &params.project, &params.path)
-        .await
-        .map_err(ApiError::from)?;
+    let resolved = resolve(
+        &state,
+        &target_ref(params.project, params.worktree_path),
+        &params.path,
+    )
+    .await
+    .map_err(ApiError::from)?;
+    let canonical = resolved.canonical;
 
     let (is_binary, mime) = ops::detect_binary(&canonical).await.map_err(AppError::Fs)?;
 
@@ -164,10 +201,14 @@ pub async fn stat(
     State(state): State<AppState>,
     Query(params): Query<ProjectPathParams>,
 ) -> Result<Json<crate::fs::FileStat>, ApiError> {
-    let canonical = resolve(&state, &params.project, &params.path)
-        .await
-        .map_err(ApiError::from)?;
-    let file_stat = ops::stat(&canonical).await.map_err(AppError::Fs)?;
+    let resolved = resolve(
+        &state,
+        &target_ref(params.project, params.worktree_path),
+        &params.path,
+    )
+    .await
+    .map_err(ApiError::from)?;
+    let file_stat = ops::stat(&resolved.canonical).await.map_err(AppError::Fs)?;
     Ok(Json(file_stat))
 }
 
@@ -179,10 +220,14 @@ pub async fn language_files(
     State(state): State<AppState>,
     Query(params): Query<LanguageFilesParams>,
 ) -> Result<Json<ops::LanguageScanResult>, ApiError> {
-    let root = resolve(&state, &params.project, "")
-        .await
-        .map_err(ApiError::from)?;
-    let result = ops::scan_language_files(&root)
+    let resolved = resolve(
+        &state,
+        &target_ref(params.project, params.worktree_path),
+        "",
+    )
+    .await
+    .map_err(ApiError::from)?;
+    let result = ops::scan_language_files(&resolved.canonical)
         .await
         .map_err(AppError::Fs)?;
     Ok(Json(result))
@@ -196,9 +241,14 @@ pub async fn download(
     State(state): State<AppState>,
     Query(params): Query<ProjectPathParams>,
 ) -> Result<Response, ApiError> {
-    let canonical = resolve(&state, &params.project, &params.path)
-        .await
-        .map_err(ApiError::from)?;
+    let resolved = resolve(
+        &state,
+        &target_ref(params.project, params.worktree_path),
+        &params.path,
+    )
+    .await
+    .map_err(ApiError::from)?;
+    let canonical = resolved.canonical;
 
     let meta = tokio::fs::metadata(&canonical)
         .await
@@ -264,6 +314,11 @@ pub async fn search(
     let query = params.q.clone();
 
     if params.scope == SearchScope::Workspace {
+        if params.worktree_path.is_some() {
+            return Err(ApiError::from(AppError::InvalidInput(
+                "worktreePath is not supported for workspace scope".into(),
+            )));
+        }
         let projects: Vec<(String, std::path::PathBuf)> = {
             let cfg = state.config.read().await;
             cfg.projects
@@ -284,11 +339,11 @@ pub async fn search(
                 "project parameter required for project scope".into(),
             ))
         })?;
-        let root = resolve(&state, &project_name, "")
+        let root = resolve(&state, &target_ref(project_name, params.worktree_path), "")
             .await
             .map_err(ApiError::from)?;
         let max = params.max.unwrap_or(200).min(ops::MAX_SEARCH_RESULTS);
-        let (matches, truncated) = ops::search_files(&root, &query, case, max)
+        let (matches, truncated) = ops::search_files(&root.canonical, &query, case, max)
             .await
             .map_err(AppError::Fs)?;
         Ok(Json(SearchResponse {
@@ -311,6 +366,11 @@ pub async fn search_paths(
     let query = params.q.clone();
 
     if params.scope == SearchScope::Workspace {
+        if params.worktree_path.is_some() {
+            return Err(ApiError::from(AppError::InvalidInput(
+                "worktreePath is not supported for workspace scope".into(),
+            )));
+        }
         let projects: Vec<(String, std::path::PathBuf)> = {
             let cfg = state.config.read().await;
             cfg.projects
@@ -332,11 +392,11 @@ pub async fn search_paths(
                 "project parameter required for project scope".into(),
             ))
         })?;
-        let root = resolve(&state, &project_name, "")
+        let root = resolve(&state, &target_ref(project_name, params.worktree_path), "")
             .await
             .map_err(ApiError::from)?;
         let max = params.max.unwrap_or(200).min(ops::MAX_SEARCH_RESULTS);
-        let (matches, truncated) = ops::search_paths(&root, &query, case, max)
+        let (matches, truncated) = ops::search_paths(&root.canonical, &query, case, max)
             .await
             .map_err(AppError::Fs)?;
         Ok(Json(PathSearchResponse {

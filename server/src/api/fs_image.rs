@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
 use axum::{
     extract::{Path as AxumPath, State},
@@ -18,14 +18,21 @@ use crate::{
         ImageTicketIssue, ImageTicketRecord, MediaTicketKind,
     },
     state::AppState,
+    workspace_target::ProjectTargetRef,
 };
 
-use super::{error::ApiError, fs::resolve, media_stream_response};
+use super::{
+    error::ApiError,
+    fs::{resolve, ResolvedFsPath},
+    media_stream_response,
+};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueImageTicketRequest {
     pub project: String,
+    #[serde(default)]
+    pub worktree_path: Option<String>,
     pub path: String,
 }
 #[derive(Deserialize)]
@@ -51,7 +58,12 @@ pub async fn issue_ticket(
 ) -> Result<Response, ApiError> {
     let _workspace_context = state.workspace_context_guard.read().await;
     let expected_generation = state.image_stream_tickets.generation();
-    let canonical = resolve_image_path(&state, &request.project, &request.path).await?;
+    let target_ref = ProjectTargetRef {
+        project: request.project,
+        worktree_path: request.worktree_path,
+    };
+    let resolved = resolve_image_path(&state, &target_ref, &request.path).await?;
+    let canonical = resolved.canonical;
     let mime = image_mime(&canonical)
         .ok_or_else(|| ApiError::from(AppError::InvalidInput("unsupported image type".into())))?;
     let file = media_stream_response::open_regular_file(&canonical)
@@ -62,7 +74,7 @@ pub async fn issue_ticket(
         .await
         .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?;
     let record = ImageTicketRecord {
-        project: request.project,
+        target: resolved.target,
         project_relative_path: request.path.into(),
         file: media_stream_response::version_from_open_file(canonical.clone(), &file, &metadata)
             .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?,
@@ -147,18 +159,14 @@ pub(crate) async fn stream_ticket(
 
 async fn resolve_image_path(
     state: &AppState,
-    project: &str,
+    target_ref: &ProjectTargetRef,
     relative_path: &str,
-) -> Result<PathBuf, ApiError> {
-    let canonical = resolve(state, project, relative_path)
+) -> Result<ResolvedFsPath, ApiError> {
+    let resolved = resolve(state, target_ref, relative_path)
         .await
         .map_err(safe_resolution_error)?;
-    let root = state
-        .project_path(project)
-        .await
-        .map_err(safe_resolution_error)?;
-    reject_symlink_components(&root, relative_path).await?;
-    Ok(canonical)
+    reject_symlink_components(resolved.target.target_path(), relative_path).await?;
+    Ok(resolved)
 }
 
 async fn reject_symlink_components(root: &Path, relative_path: &str) -> Result<(), ApiError> {
