@@ -73,6 +73,76 @@ export interface SshForwardProfile {
   createdAt: UtcTimestamp;
   updatedAt: UtcTimestamp;
 }
+export interface SshConnectionProfile {
+  id: string;
+  scopeId: string;
+  name: string;
+  sshHost: string;
+  sshPort: number;
+  sshUser: string;
+  auth: { mode: "agent" } | { mode: "key"; keyId: string };
+  createdAt: UtcTimestamp;
+  updatedAt: UtcTimestamp;
+}
+export interface SshForwardRule {
+  id: string;
+  scopeId: string;
+  connectionProfileId: string;
+  name: string;
+  localPort: number;
+  targetHost: "127.0.0.1";
+  targetPort: number;
+  desiredEnabled: boolean;
+  reconnect: { enabled: boolean; maxAttempts: number };
+  createdAt: UtcTimestamp;
+  updatedAt: UtcTimestamp;
+}
+export type SshConnectionState =
+  | "disconnected"
+  | "authenticating"
+  | "established"
+  | "reconnecting"
+  | "disconnecting";
+export interface SshConnectionRuntime {
+  connectionProfileId: string;
+  generation: WireCounter;
+  state: SshConnectionState;
+  retryAttempt: number;
+  activeChannels: number;
+  stateChangedAt: UtcTimestamp;
+  startedAt?: UtcTimestamp;
+  errorCode?: SshForwardErrorCode;
+}
+export type SshForwardRuleState =
+  | "off"
+  | "opening"
+  | "on"
+  | "closing"
+  | "failed";
+export interface SshForwardRuleRuntime {
+  ruleId: string;
+  connectionProfileId: string;
+  connectionGeneration: WireCounter;
+  generation: WireCounter;
+  state: SshForwardRuleState;
+  bindHost: "127.0.0.1";
+  localPort: number;
+  activeChannels: number;
+  stateChangedAt: UtcTimestamp;
+  startedAt?: UtcTimestamp;
+  errorCode?: SshForwardErrorCode;
+}
+export type SshForwardCredentialStatus =
+  | "none"
+  | "saved"
+  | "rejected"
+  | "expired"
+  | "unavailable";
+export interface SshForwardCredentialState {
+  connectionProfileId: string;
+  status: SshForwardCredentialStatus;
+  expiresAt?: UtcTimestamp;
+}
 export interface SshForwardRuntime {
   profileId: string;
   generation: WireCounter;
@@ -98,7 +168,9 @@ export interface SshForwardRuntime {
 }
 export interface HostKeyChallenge {
   challengeId: string;
-  profileId: string;
+  connectionProfileId: string;
+  /** @deprecated Phase-5 compatibility projection for the legacy UI. */
+  profileId?: string;
   scopeId: string;
   generation: WireCounter;
   sshHost: string;
@@ -116,8 +188,15 @@ export interface SshForwardSnapshot {
   scopeId: string;
   activationToken: WireCounter;
   scopeGeneration: WireCounter;
+  connectionsRevision: WireCounter;
+  rulesRevision: WireCounter;
   profilesRevision: WireCounter;
   trustRevision: WireCounter;
+  connections: SshConnectionProfile[];
+  rules: SshForwardRule[];
+  connectionRuntimes: SshConnectionRuntime[];
+  ruleRuntimes: SshForwardRuleRuntime[];
+  credentialStates: SshForwardCredentialState[];
   profiles: SshForwardProfile[];
   runtimes: SshForwardRuntime[];
   hostKeyChallenges: HostKeyChallenge[];
@@ -162,6 +241,8 @@ export type SshForwardErrorCode =
   | "SCOPE_ACTIVE"
   | "SCOPE_PURGE_FAILED"
   | "PROFILES_REVISION_CONFLICT"
+  | "CONNECTIONS_REVISION_CONFLICT"
+  | "RULES_REVISION_CONFLICT"
   | "TRUST_REVISION_CONFLICT"
   | "GENERATION_CONFLICT"
   | "COUNTER_EXHAUSTED"
@@ -170,6 +251,14 @@ export type SshForwardErrorCode =
   | "PROFILE_LIMIT"
   | "ACTIVE_FORWARD_LIMIT"
   | "AUTO_START_SKIPPED_LIMIT"
+  | "CONNECTION_REQUIRED"
+  | "CONNECTION_LIMIT"
+  | "CONNECTION_NOT_ESTABLISHED"
+  | "STALE_CONNECTION_GENERATION"
+  | "RULE_LIMIT"
+  | "STALE_RULE_GENERATION"
+  | "PORT_CONFLICT"
+  | "CHANNEL_LIMIT"
   | "KEY_NOT_FOUND"
   | "KEY_UNSAFE"
   | "KEY_ENCRYPTED_USE_AGENT"
@@ -184,6 +273,14 @@ export type SshForwardErrorCode =
   | "SSH_CONNECT_TIMEOUT"
   | "SSH_CONNECT_FAILED"
   | "AUTH_FAILED"
+  | "AUTH_REQUIRED"
+  | "CREDENTIAL_VAULT_UNAVAILABLE"
+  | "CREDENTIAL_VAULT_CORRUPT"
+  | "CREDENTIAL_EXPIRED"
+  | "CREDENTIAL_REJECTED"
+  | "CREDENTIAL_DELETE_FAILED"
+  | "CREDENTIAL_CLEANUP_PENDING"
+  | "CREDENTIAL_NOT_SAVED"
   | "LOCAL_PORT_IN_USE"
   | "BIND_FAILED"
   | "CHANNEL_OPEN_TIMEOUT"
@@ -206,7 +303,11 @@ export interface SshForwardError {
   retryable: boolean;
   scopeId?: string;
   profileId?: string;
+  connectionProfileId?: string;
+  ruleId?: string;
   currentProfilesRevision?: WireCounter;
+  currentConnectionsRevision?: WireCounter;
+  currentRulesRevision?: WireCounter;
   currentTrustRevision?: WireCounter;
   currentScopeGeneration?: WireCounter;
   currentGeneration?: WireCounter;
@@ -224,6 +325,8 @@ const SSH_FORWARD_ERROR_CODES: readonly SshForwardErrorCode[] = [
   "SCOPE_ACTIVE",
   "SCOPE_PURGE_FAILED",
   "PROFILES_REVISION_CONFLICT",
+  "CONNECTIONS_REVISION_CONFLICT",
+  "RULES_REVISION_CONFLICT",
   "TRUST_REVISION_CONFLICT",
   "GENERATION_CONFLICT",
   "COUNTER_EXHAUSTED",
@@ -232,6 +335,14 @@ const SSH_FORWARD_ERROR_CODES: readonly SshForwardErrorCode[] = [
   "PROFILE_LIMIT",
   "ACTIVE_FORWARD_LIMIT",
   "AUTO_START_SKIPPED_LIMIT",
+  "CONNECTION_REQUIRED",
+  "CONNECTION_LIMIT",
+  "CONNECTION_NOT_ESTABLISHED",
+  "STALE_CONNECTION_GENERATION",
+  "RULE_LIMIT",
+  "STALE_RULE_GENERATION",
+  "PORT_CONFLICT",
+  "CHANNEL_LIMIT",
   "KEY_NOT_FOUND",
   "KEY_UNSAFE",
   "KEY_ENCRYPTED_USE_AGENT",
@@ -246,6 +357,14 @@ const SSH_FORWARD_ERROR_CODES: readonly SshForwardErrorCode[] = [
   "SSH_CONNECT_TIMEOUT",
   "SSH_CONNECT_FAILED",
   "AUTH_FAILED",
+  "AUTH_REQUIRED",
+  "CREDENTIAL_VAULT_UNAVAILABLE",
+  "CREDENTIAL_VAULT_CORRUPT",
+  "CREDENTIAL_EXPIRED",
+  "CREDENTIAL_REJECTED",
+  "CREDENTIAL_DELETE_FAILED",
+  "CREDENTIAL_CLEANUP_PENDING",
+  "CREDENTIAL_NOT_SAVED",
   "LOCAL_PORT_IN_USE",
   "BIND_FAILED",
   "CHANNEL_OPEN_TIMEOUT",
@@ -278,6 +397,8 @@ export function parseSshForwardError(value: unknown): SshForwardError | null {
     candidate === undefined || Boolean(parseWireCounter(candidate));
   if (
     !counter(raw.currentProfilesRevision) ||
+    !counter(raw.currentConnectionsRevision) ||
+    !counter(raw.currentRulesRevision) ||
     !counter(raw.currentTrustRevision) ||
     !counter(raw.currentScopeGeneration) ||
     !counter(raw.currentGeneration)
@@ -286,6 +407,10 @@ export function parseSshForwardError(value: unknown): SshForwardError | null {
   if (
     (raw.scopeId !== undefined && typeof raw.scopeId !== "string") ||
     (raw.profileId !== undefined && typeof raw.profileId !== "string")
+    ||
+    (raw.connectionProfileId !== undefined &&
+      typeof raw.connectionProfileId !== "string") ||
+    (raw.ruleId !== undefined && typeof raw.ruleId !== "string")
   )
     return null;
   return {
@@ -294,11 +419,27 @@ export function parseSshForwardError(value: unknown): SshForwardError | null {
     retryable: raw.retryable,
     ...(typeof raw.scopeId === "string" ? { scopeId: raw.scopeId } : {}),
     ...(typeof raw.profileId === "string" ? { profileId: raw.profileId } : {}),
+    ...(typeof raw.connectionProfileId === "string"
+      ? { connectionProfileId: raw.connectionProfileId }
+      : {}),
+    ...(typeof raw.ruleId === "string" ? { ruleId: raw.ruleId } : {}),
     ...(parseWireCounter(raw.currentProfilesRevision)
       ? {
           currentProfilesRevision: parseWireCounter(
             raw.currentProfilesRevision,
           )!,
+        }
+      : {}),
+    ...(parseWireCounter(raw.currentConnectionsRevision)
+      ? {
+          currentConnectionsRevision: parseWireCounter(
+            raw.currentConnectionsRevision,
+          )!,
+        }
+      : {}),
+    ...(parseWireCounter(raw.currentRulesRevision)
+      ? {
+          currentRulesRevision: parseWireCounter(raw.currentRulesRevision)!,
         }
       : {}),
     ...(parseWireCounter(raw.currentTrustRevision)
@@ -321,11 +462,22 @@ export interface SshForwardEventHint {
   activationToken: WireCounter;
   scopeId: string;
   scopeGeneration: WireCounter;
+  connectionsRevision: WireCounter;
+  rulesRevision: WireCounter;
   profilesRevision: WireCounter;
   trustRevision: WireCounter;
+  connectionProfileId?: string;
+  ruleId?: string;
+  connectionGeneration?: WireCounter;
+  ruleGeneration?: WireCounter;
   profileId?: string;
   generation?: WireCounter;
-  reason: "profilesChanged" | "runtimeChanged" | "trustChanged";
+  reason:
+    | "profilesChanged"
+    | "connectionsChanged"
+    | "rulesChanged"
+    | "runtimeChanged"
+    | "trustChanged";
 }
 export type SshForwardHostEvent = {
   type: "changed";
@@ -337,6 +489,50 @@ export interface SshForwardHost {
   openClient(knownScopes: KnownScopesInput): Promise<OpenClientResult>;
   activateScope(scopeId: string | null): Promise<ScopeActivation>;
   snapshot(): Promise<SshForwardSnapshot>;
+  createConnection(connection: SshConnectionProfile): Promise<SshForwardSnapshot>;
+  updateConnection(
+    connectionProfileId: string,
+    expectedGeneration: WireCounter,
+    connection: SshConnectionProfile,
+  ): Promise<SshForwardSnapshot>;
+  deleteConnection(
+    connectionProfileId: string,
+    expectedGeneration: WireCounter,
+  ): Promise<SshForwardSnapshot>;
+  createRule(
+    connectionProfileId: string,
+    expectedConnectionGeneration: WireCounter,
+    rule: SshForwardRule,
+  ): Promise<SshForwardSnapshot>;
+  updateRule(
+    connectionProfileId: string,
+    expectedConnectionGeneration: WireCounter,
+    ruleId: string,
+    expectedRuleGeneration: WireCounter,
+    rule: SshForwardRule,
+  ): Promise<SshForwardSnapshot>;
+  deleteRule(
+    connectionProfileId: string,
+    expectedConnectionGeneration: WireCounter,
+    ruleId: string,
+    expectedRuleGeneration: WireCounter,
+  ): Promise<SshForwardSnapshot>;
+  connect(
+    connectionProfileId: string,
+    expectedGeneration: WireCounter,
+    credentialAttemptId?: string,
+  ): Promise<SshForwardSnapshot>;
+  disconnect(
+    connectionProfileId: string,
+    expectedGeneration: WireCounter,
+  ): Promise<SshForwardSnapshot>;
+  setRuleEnabled(
+    connectionProfileId: string,
+    expectedConnectionGeneration: WireCounter,
+    ruleId: string,
+    expectedRuleGeneration: WireCounter,
+    enabled: boolean,
+  ): Promise<SshForwardSnapshot>;
   createProfile(profile: SshForwardProfile): Promise<SshForwardSnapshot>;
   updateProfile(
     profileId: string,
@@ -366,12 +562,16 @@ export interface SshForwardHost {
     profileId: string,
     keyId: string,
     passphrase: string,
+    expectedGeneration?: WireCounter,
+    rememberForDays?: 0 | 30,
   ): Promise<SshForwardSnapshot>;
   loadPassword(
     profileId: string,
     username: string,
     password: string,
     credentialAttemptId: string,
+    expectedGeneration?: WireCounter,
+    rememberForDays?: 0 | 30,
   ): Promise<SshForwardSnapshot>;
   approveHost(
     profileId: string,
@@ -379,6 +579,10 @@ export interface SshForwardHost {
     challengeId: string,
     algorithm: string,
     fingerprint: string,
+  ): Promise<SshForwardSnapshot>;
+  forgetCredential(
+    connectionProfileId: string,
+    expectedGeneration: WireCounter,
   ): Promise<SshForwardSnapshot>;
   purgeScope(
     scopeId: string,

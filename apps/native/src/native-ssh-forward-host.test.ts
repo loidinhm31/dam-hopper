@@ -35,11 +35,34 @@ const snapshot = {
   activationToken: "10",
   scopeId,
   scopeGeneration: "1",
+  connectionsRevision: "1",
+  rulesRevision: "1",
   profilesRevision: "1",
   trustRevision: "1",
+  connections: [],
+  rules: [],
+  connectionRuntimes: [],
+  ruleRuntimes: [],
+  credentialStates: [],
   profiles: [],
   runtimes: [],
   hostKeyChallenges: [],
+};
+const legacyProfile = {
+  id: profileId,
+  scopeId,
+  name: "metrics",
+  sshHost: "bastion.example",
+  sshPort: 22,
+  sshUser: "operator",
+  auth: { mode: "agent" },
+  localPort: 3001,
+  targetHost: "127.0.0.1",
+  targetPort: 3001,
+  autoStart: false,
+  reconnect: { enabled: false, maxAttempts: 0 },
+  createdAt: "2026-08-15T17:51:28.376Z",
+  updatedAt: "2026-08-15T19:10:52.954Z",
 };
 const restartError = {
   code: "MANAGER_SESSION_MISMATCH",
@@ -52,24 +75,28 @@ describe("native ssh forwarding host", () => {
     listen.mockReset();
     listen.mockResolvedValue(vi.fn());
   });
-  it("maps exactly the fourteen Rust command names", () => {
+  it("maps exactly the eighteen Rust command names", () => {
     expect(Object.values(NATIVE_SSH_FORWARD_COMMANDS)).toEqual([
       "ssh_forward_open_client",
       "ssh_forward_activate_scope",
       "ssh_forward_snapshot",
-      "ssh_forward_create_profile",
-      "ssh_forward_update_profile",
-      "ssh_forward_delete_profile",
-      "ssh_forward_start",
-      "ssh_forward_stop",
-      "ssh_forward_restart",
+      "ssh_forward_create_connection",
+      "ssh_forward_update_connection",
+      "ssh_forward_delete_connection",
+      "ssh_forward_create_rule",
+      "ssh_forward_update_rule",
+      "ssh_forward_delete_rule",
+      "ssh_forward_connect",
+      "ssh_forward_disconnect",
+      "ssh_forward_set_rule_enabled",
       "ssh_forward_list_keys",
       "ssh_forward_load_key",
       "ssh_forward_load_password",
+      "ssh_forward_forget_credential",
       "ssh_forward_approve_host",
       "ssh_forward_purge_scope",
     ]);
-    expect(Object.keys(NATIVE_SSH_FORWARD_COMMANDS)).toHaveLength(14);
+    expect(Object.keys(NATIVE_SSH_FORWARD_COMMANDS)).toHaveLength(18);
   });
   it("does zero Tauri calls unless the Windows capability is enabled", () => {
     for (const platform of ["android", "ios", "linux", "macos", "unknown"])
@@ -105,12 +132,18 @@ describe("native ssh forwarding host", () => {
     invoke.mockReset();
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce({ ...activation, scopeGeneration: "wrong" });
+      .mockResolvedValueOnce({ ...activation, scopeGeneration: "wrong" })
+      .mockResolvedValueOnce({ ...activation, activationToken: "11" });
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
     await expect(host.activateScope(scopeId)).rejects.toMatchObject({
       code: "IPC_UNAVAILABLE",
     });
+    await host.activateScope(scopeId);
+    expect(invoke.mock.calls[2]).toEqual([
+      "ssh_forward_activate_scope",
+      { input: { context, activationToken: "11", scopeId } },
+    ]);
   });
   it("rejects superseded A after B and C without publishing A's scope", async () => {
     let resolveA!: (value: typeof activation) => void;
@@ -141,6 +174,35 @@ describe("native ssh forwarding host", () => {
     resolveA(activation);
     await expect(a).rejects.toMatchObject({ code: "ACTIVATION_SUPERSEDED" });
   });
+  it("rejects Rust-incompatible numeric shorthand hosts", async () => {
+    const malformed = {
+      ...snapshot,
+      connections: [
+        {
+          id: profileId,
+          scopeId,
+          name: "metrics",
+          sshHost: "1",
+          sshPort: 22,
+          sshUser: "operator",
+          auth: { mode: "agent" },
+          createdAt: "2026-08-15T17:51:28.376Z",
+          updatedAt: "2026-08-15T19:10:52.954Z",
+        },
+      ],
+      credentialStates: [{ connectionProfileId: profileId, status: "none" }],
+    };
+    invoke
+      .mockResolvedValueOnce(opened)
+      .mockResolvedValueOnce(activation)
+      .mockResolvedValueOnce(malformed);
+    const host = createNativeSshForwardHost("windows")!;
+    await host.openClient({ status: "available", ids: [scopeId] });
+    await host.activateScope(scopeId);
+    await expect(host.snapshot()).rejects.toMatchObject({
+      code: "IPC_UNAVAILABLE",
+    });
+  });
   it("rejects a command result from an old client epoch", async () => {
     let resolveSnapshot!: (value: typeof snapshot) => void;
     invoke
@@ -164,6 +226,39 @@ describe("native ssh forwarding host", () => {
     await host.openClient({ status: "available", ids: [scopeId] });
     resolveSnapshot(snapshot);
     await expect(stale).rejects.toMatchObject({ code: "IPC_UNAVAILABLE" });
+  });
+  it("does not let an older concurrent snapshot regress accepted freshness", async () => {
+    let resolveOld!: (value: typeof snapshot) => void;
+    let resolveNew!: (value: typeof snapshot) => void;
+    const newer = { ...snapshot, connectionsRevision: "2" as const };
+    invoke
+      .mockResolvedValueOnce(opened)
+      .mockResolvedValueOnce(activation)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNew = resolve;
+          }),
+      );
+    const host = createNativeSshForwardHost("windows")!;
+    await host.openClient({ status: "available", ids: [scopeId] });
+    await host.activateScope(scopeId);
+    const old = host.snapshot();
+    const current = host.snapshot();
+    await vi.waitFor(() => {
+      expect(resolveOld).toEqual(expect.any(Function));
+      expect(resolveNew).toEqual(expect.any(Function));
+    });
+    resolveNew(newer);
+    await expect(current).resolves.toEqual(newer);
+    resolveOld(snapshot);
+    await expect(old).resolves.toEqual(newer);
   });
   it("accepts a persisted profile snapshot with trust-repair metadata", async () => {
     const persisted = {
@@ -284,7 +379,7 @@ describe("native ssh forwarding host", () => {
     await expect(host.start(profileId, "1")).rejects.toEqual(restartError);
     expect(
       invoke.mock.calls.filter(
-        ([command]) => command === NATIVE_SSH_FORWARD_COMMANDS.start,
+        ([command]) => command === NATIVE_SSH_FORWARD_COMMANDS.connect,
       ),
     ).toHaveLength(1);
   });
@@ -316,6 +411,8 @@ describe("native ssh forwarding host", () => {
       activationToken: "10",
       scopeId,
       scopeGeneration: "1",
+      connectionsRevision: "10",
+      rulesRevision: "1",
       profilesRevision: "10",
       trustRevision: "1",
       reason: "profilesChanged",
@@ -347,6 +444,7 @@ describe("native ssh forwarding host", () => {
     });
     const runningSnapshot = {
       ...snapshot,
+      profiles: [legacyProfile],
       runtimes: [
         {
           profileId,
@@ -379,6 +477,8 @@ describe("native ssh forwarding host", () => {
         activationToken: "10",
         scopeId,
         scopeGeneration: "1",
+        connectionsRevision: "1",
+        rulesRevision: "1",
         profilesRevision: "1",
         trustRevision: "1",
         profileId,
@@ -394,7 +494,7 @@ describe("native ssh forwarding host", () => {
       ).toHaveLength(2),
     );
   });
-  it("defers hint snapshots while a lifecycle command is in flight", async () => {
+  it("defers hint snapshots while a connection command is in flight", async () => {
     let handler: ((event: { payload: unknown }) => void) | undefined;
     listen.mockImplementation(async (_name, next) => {
       handler = next;
@@ -402,6 +502,7 @@ describe("native ssh forwarding host", () => {
     });
     const failedSnapshot = {
       ...snapshot,
+      profiles: [legacyProfile],
       runtimes: [
         {
           profileId,
@@ -417,7 +518,7 @@ describe("native ssh forwarding host", () => {
         },
       ],
     };
-    let resolveStart!: (value: typeof failedSnapshot) => void;
+    let resolveConnect!: (value: typeof failedSnapshot) => void;
     invoke
       .mockResolvedValueOnce(opened)
       .mockResolvedValueOnce(activation)
@@ -425,7 +526,7 @@ describe("native ssh forwarding host", () => {
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
-            resolveStart = resolve;
+            resolveConnect = resolve;
           }),
       )
       .mockResolvedValueOnce(failedSnapshot);
@@ -433,7 +534,7 @@ describe("native ssh forwarding host", () => {
     await host.openClient({ status: "available", ids: [scopeId] });
     await host.activateScope(scopeId);
     await host.snapshot();
-    const start = host.start(profileId, "0");
+    const connect = host.connect(profileId, "0");
     handler!({
       payload: {
         desktopInstanceId: context.desktopInstanceId,
@@ -442,6 +543,8 @@ describe("native ssh forwarding host", () => {
         activationToken: "10",
         scopeId,
         scopeGeneration: "1",
+        connectionsRevision: "1",
+        rulesRevision: "1",
         profilesRevision: "1",
         trustRevision: "1",
         profileId,
@@ -454,8 +557,8 @@ describe("native ssh forwarding host", () => {
         ([command]) => command === NATIVE_SSH_FORWARD_COMMANDS.snapshot,
       ),
     ).toHaveLength(1);
-    resolveStart(failedSnapshot);
-    await expect(start).resolves.toEqual(failedSnapshot);
+    resolveConnect(failedSnapshot);
+    await expect(connect).resolves.toEqual(failedSnapshot);
     await vi.waitFor(() =>
       expect(
         invoke.mock.calls.filter(
