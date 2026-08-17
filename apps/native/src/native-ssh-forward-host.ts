@@ -11,6 +11,8 @@ import {
   type KnownScopesInput,
   type OpenClientResult,
   type ScopeActivation,
+  type SshConnectionProfile,
+  type SshForwardRule,
   type SshForwardError,
   type SshForwardEventHint,
   type SshForwardHost,
@@ -25,21 +27,22 @@ export const NATIVE_SSH_FORWARD_COMMANDS = {
   openClient: "ssh_forward_open_client",
   activateScope: "ssh_forward_activate_scope",
   snapshot: "ssh_forward_snapshot",
-  createProfile: "ssh_forward_create_profile",
-  updateProfile: "ssh_forward_update_profile",
-  deleteProfile: "ssh_forward_delete_profile",
-  start: "ssh_forward_start",
-  stop: "ssh_forward_stop",
-  restart: "ssh_forward_restart",
+  createConnection: "ssh_forward_create_connection",
+  updateConnection: "ssh_forward_update_connection",
+  deleteConnection: "ssh_forward_delete_connection",
+  createRule: "ssh_forward_create_rule",
+  updateRule: "ssh_forward_update_rule",
+  deleteRule: "ssh_forward_delete_rule",
+  connect: "ssh_forward_connect",
+  disconnect: "ssh_forward_disconnect",
+  setRuleEnabled: "ssh_forward_set_rule_enabled",
   listKeys: "ssh_forward_list_keys",
   loadKey: "ssh_forward_load_key",
   loadPassword: "ssh_forward_load_password",
+  forgetCredential: "ssh_forward_forget_credential",
   approveHost: "ssh_forward_approve_host",
   purgeScope: "ssh_forward_purge_scope",
-} as const satisfies Record<
-  Exclude<keyof SshForwardHost, "subscribe" | "dispose">,
-  string
->;
+} as const;
 
 const IPC_UNAVAILABLE: SshForwardError = {
   code: "IPC_UNAVAILABLE",
@@ -63,7 +66,28 @@ const DISPOSITIONS = new Set([
   "started",
   "skippedActiveLimit",
 ]);
-const REASONS = new Set(["profilesChanged", "runtimeChanged", "trustChanged"]);
+const REASONS = new Set([
+  "profilesChanged",
+  "connectionsChanged",
+  "rulesChanged",
+  "runtimeChanged",
+  "trustChanged",
+]);
+const CONNECTION_STATES = new Set([
+  "disconnected",
+  "authenticating",
+  "established",
+  "reconnecting",
+  "disconnecting",
+]);
+const RULE_STATES = new Set(["off", "opening", "on", "closing", "failed"]);
+const CREDENTIAL_STATUSES = new Set([
+  "none",
+  "saved",
+  "rejected",
+  "expired",
+  "unavailable",
+]);
 const ALGORITHMS = new Set([
   "ssh-ed25519",
   "ecdsa-sha2-nistp256",
@@ -135,6 +159,8 @@ function canonicalHost(value: unknown): value is string {
     return value
       .split(".")
       .every((part) => /^(0|[1-9]\d{0,2})$/.test(part) && Number(part) <= 255);
+  if (/^\d+$/.test(value)) return false;
+  if (/^\d+(?:\.\d+)+$/.test(value)) return false;
   return value
     .split(".")
     .every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
@@ -224,6 +250,85 @@ function validTrustRepair(
     boundedText(raw.executablePath, 4096)
   );
 }
+function validAuth(value: unknown): boolean {
+  const auth = record(value);
+  return (
+    !!auth &&
+    ((exactKeys(auth, ["mode"]) && auth.mode === "agent") ||
+      (exactKeys(auth, ["mode", "keyId"]) &&
+        auth.mode === "key" &&
+        safeAscii(auth.keyId, 128)))
+  );
+}
+function validConnection(value: unknown): value is SshConnectionProfile {
+  const raw = record(value);
+  return (
+    !!raw &&
+    exactKeys(raw, [
+      "id",
+      "scopeId",
+      "name",
+      "sshHost",
+      "sshPort",
+      "sshUser",
+      "auth",
+      "createdAt",
+      "updatedAt",
+    ]) &&
+    uuid(raw.id) &&
+    uuid(raw.scopeId) &&
+    boundedText(raw.name, 64) &&
+    canonicalHost(raw.sshHost) &&
+    port(raw.sshPort) &&
+    boundedText(raw.sshUser, 64) &&
+    validAuth(raw.auth) &&
+    validTimestamp(raw.createdAt) &&
+    validTimestamp(raw.updatedAt)
+  );
+}
+function validRule(value: unknown): value is SshForwardRule {
+  const raw = record(value);
+  const reconnect = raw ? record(raw.reconnect) : null;
+  return (
+    !!raw &&
+    exactKeys(raw, [
+      "id",
+      "scopeId",
+      "connectionProfileId",
+      "name",
+      "localPort",
+      "targetHost",
+      "targetPort",
+      "desiredEnabled",
+      "reconnect",
+      "createdAt",
+      "updatedAt",
+    ]) &&
+    uuid(raw.id) &&
+    uuid(raw.scopeId) &&
+    uuid(raw.connectionProfileId) &&
+    boundedText(raw.name, 64) &&
+    port(raw.localPort) &&
+    raw.targetHost === "127.0.0.1" &&
+    port(raw.targetPort) &&
+    typeof raw.desiredEnabled === "boolean" &&
+    !!reconnect &&
+    exactKeys(reconnect, ["enabled", "maxAttempts"]) &&
+    typeof reconnect.enabled === "boolean" &&
+    typeof reconnect.maxAttempts === "number" &&
+    Number.isInteger(reconnect.maxAttempts) &&
+    reconnect.maxAttempts >= 0 &&
+    reconnect.maxAttempts <= 5 &&
+    validTimestamp(raw.createdAt) &&
+    validTimestamp(raw.updatedAt)
+  );
+}
+function validRuntimeError(value: unknown): boolean {
+  return (
+    value === undefined ||
+    !!parseSshForwardError({ code: value, message: "", retryable: false })
+  );
+}
 function validSnapshot(
   value: unknown,
   context: DesktopClientContext,
@@ -241,8 +346,15 @@ function validSnapshot(
         "scopeId",
         "activationToken",
         "scopeGeneration",
+        "connectionsRevision",
+        "rulesRevision",
         "profilesRevision",
         "trustRevision",
+        "connections",
+        "rules",
+        "connectionRuntimes",
+        "ruleRuntimes",
+        "credentialStates",
         "profiles",
         "runtimes",
         "hostKeyChallenges",
@@ -254,16 +366,187 @@ function validSnapshot(
     raw.scopeId !== scopeId ||
     raw.activationToken !== token ||
     raw.scopeGeneration !== scopeGeneration ||
+    !counter(raw.connectionsRevision) ||
+    !counter(raw.rulesRevision) ||
     !counter(raw.profilesRevision) ||
     !counter(raw.trustRevision) ||
+    !Array.isArray(raw.connections) ||
+    !Array.isArray(raw.rules) ||
+    !Array.isArray(raw.connectionRuntimes) ||
+    !Array.isArray(raw.ruleRuntimes) ||
+    !Array.isArray(raw.credentialStates) ||
     !Array.isArray(raw.profiles) ||
     !Array.isArray(raw.runtimes) ||
     !Array.isArray(raw.hostKeyChallenges) ||
-    !raw.profiles.every(validProfile) ||
+    !raw.profiles.every(
+      (profile) => validProfile(profile) && profile.scopeId === scopeId,
+    ) ||
     (raw.trustRepair !== undefined && !validTrustRepair(raw.trustRepair))
   )
     return false;
+  const connectionIds = new Set(
+    raw.connections.filter(validConnection).map((connection) => connection.id),
+  );
+  const ruleIds = new Set(raw.rules.filter(validRule).map((rule) => rule.id));
+  const legacyProfileIds = new Set(
+    raw.profiles.filter(validProfile).map((profile) => profile.id),
+  );
+  const legacyRuntimeProfileIds = new Set(
+    raw.runtimes.map((runtime) => record(runtime)?.profileId),
+  );
+  const ruleParents = new Map(
+    raw.rules
+      .filter(validRule)
+      .map((rule) => [rule.id, rule.connectionProfileId]),
+  );
+  const credentialStateIds = new Set(
+    raw.credentialStates.map(
+      (credential) => record(credential)?.connectionProfileId,
+    ),
+  );
+  const connectionRuntimeIds = new Set(
+    raw.connectionRuntimes.map(
+      (runtime) => record(runtime)?.connectionProfileId,
+    ),
+  );
+  const ruleRuntimeIds = new Set(
+    raw.ruleRuntimes.map((runtime) => record(runtime)?.ruleId),
+  );
+  const challengeIds = new Set(
+    raw.hostKeyChallenges.map((challenge) => record(challenge)?.challengeId),
+  );
+  const connectionRuntimeGenerations = new Map<string, unknown>(
+    raw.connectionRuntimes
+      .map(record)
+      .filter(
+        (runtime): runtime is Record<string, unknown> =>
+          runtime !== null &&
+          typeof runtime.connectionProfileId === "string" &&
+          typeof runtime.generation === "string",
+      )
+      .map(
+        (runtime) =>
+          [runtime.connectionProfileId as string, runtime.generation] as [
+            string,
+            unknown,
+          ],
+      ),
+  );
   return (
+    raw.connections.length <= 64 &&
+    raw.rules.length <= 64 &&
+    raw.profiles.length <= 64 &&
+    raw.runtimes.length <= 64 &&
+    raw.connectionRuntimes.length <= 16 &&
+    raw.ruleRuntimes.length <= 64 &&
+    raw.credentialStates.length <= 64 &&
+    raw.hostKeyChallenges.length <= 64 &&
+    connectionIds.size === raw.connections.length &&
+    ruleIds.size === raw.rules.length &&
+    legacyProfileIds.size === raw.profiles.length &&
+    legacyRuntimeProfileIds.size === raw.runtimes.length &&
+    credentialStateIds.size === raw.credentialStates.length &&
+    raw.credentialStates.length === raw.connections.length &&
+    connectionRuntimeIds.size === raw.connectionRuntimes.length &&
+    ruleRuntimeIds.size === raw.ruleRuntimes.length &&
+    challengeIds.size === raw.hostKeyChallenges.length &&
+    raw.connections.every(
+      (connection) =>
+        validConnection(connection) && connection.scopeId === scopeId,
+    ) &&
+    raw.rules.every(
+      (rule) =>
+        validRule(rule) &&
+        rule.scopeId === scopeId &&
+        connectionIds.has(rule.connectionProfileId),
+    ) &&
+    raw.connectionRuntimes.every((runtime) => {
+      const item = record(runtime);
+      return (
+        !!item &&
+        exactKeys(
+          item,
+          [
+            "connectionProfileId",
+            "generation",
+            "state",
+            "retryAttempt",
+            "activeChannels",
+            "stateChangedAt",
+          ],
+          ["startedAt", "errorCode"],
+        ) &&
+        uuid(item.connectionProfileId) &&
+        connectionIds.has(item.connectionProfileId) &&
+        counter(item.generation) &&
+        typeof item.state === "string" &&
+        CONNECTION_STATES.has(item.state) &&
+        typeof item.retryAttempt === "number" &&
+        Number.isInteger(item.retryAttempt) &&
+        item.retryAttempt >= 0 &&
+        item.retryAttempt <= 5 &&
+        typeof item.activeChannels === "number" &&
+        Number.isInteger(item.activeChannels) &&
+        item.activeChannels >= 0 &&
+        item.activeChannels <= 65535 &&
+        validTimestamp(item.stateChangedAt) &&
+        (item.startedAt === undefined || validTimestamp(item.startedAt)) &&
+        validRuntimeError(item.errorCode)
+      );
+    }) &&
+    raw.ruleRuntimes.every((runtime) => {
+      const item = record(runtime);
+      return (
+        !!item &&
+        exactKeys(
+          item,
+          [
+            "ruleId",
+            "connectionProfileId",
+            "connectionGeneration",
+            "generation",
+            "state",
+            "bindHost",
+            "localPort",
+            "activeChannels",
+            "stateChangedAt",
+          ],
+          ["startedAt", "errorCode"],
+        ) &&
+        uuid(item.ruleId) &&
+        ruleIds.has(item.ruleId) &&
+        uuid(item.connectionProfileId) &&
+        connectionIds.has(item.connectionProfileId) &&
+        ruleParents.get(item.ruleId) === item.connectionProfileId &&
+        connectionRuntimeGenerations.get(item.connectionProfileId) ===
+          item.connectionGeneration &&
+        counter(item.connectionGeneration) &&
+        counter(item.generation) &&
+        typeof item.state === "string" &&
+        RULE_STATES.has(item.state) &&
+        item.bindHost === "127.0.0.1" &&
+        port(item.localPort) &&
+        typeof item.activeChannels === "number" &&
+        Number.isInteger(item.activeChannels) &&
+        item.activeChannels >= 0 &&
+        item.activeChannels <= 65535 &&
+        validTimestamp(item.stateChangedAt) &&
+        (item.startedAt === undefined || validTimestamp(item.startedAt)) &&
+        validRuntimeError(item.errorCode)
+      );
+    }) &&
+    raw.credentialStates.every((credential) => {
+      const item = record(credential);
+      return (
+        !!item &&
+        exactKeys(item, ["connectionProfileId", "status"], ["expiresAt"]) &&
+        uuid(item.connectionProfileId) &&
+        connectionIds.has(item.connectionProfileId) &&
+        typeof item.status === "string" &&
+        CREDENTIAL_STATUSES.has(item.status) &&
+        (item.expiresAt === undefined || validTimestamp(item.expiresAt))
+      );
+    }) &&
     raw.runtimes.every((runtime) => {
       const item = record(runtime);
       return (
@@ -284,6 +567,7 @@ function validSnapshot(
           ["startedAt", "errorCode"],
         ) &&
         uuid(item.profileId) &&
+        legacyProfileIds.has(item.profileId) &&
         counter(item.generation) &&
         typeof item.state === "string" &&
         STATES.has(item.state) &&
@@ -315,7 +599,7 @@ function validSnapshot(
         !!item &&
         exactKeys(item, [
           "challengeId",
-          "profileId",
+          "connectionProfileId",
           "scopeId",
           "generation",
           "sshHost",
@@ -325,7 +609,8 @@ function validSnapshot(
           "expiresAt",
         ]) &&
         uuid(item.challengeId) &&
-        uuid(item.profileId) &&
+        uuid(item.connectionProfileId) &&
+        connectionIds.has(item.connectionProfileId) &&
         item.scopeId === scopeId &&
         counter(item.generation) &&
         canonicalHost(item.sshHost) &&
@@ -353,6 +638,7 @@ function validKeys(
     raw.scopeId === scopeId &&
     raw.scopeGeneration === scopeGeneration &&
     Array.isArray(raw.keys) &&
+    raw.keys.length <= 256 &&
     raw.keys.every((key) => {
       const item = record(key);
       return (
@@ -381,14 +667,19 @@ function validKeys(
 export class NativeSshForwardHost implements SshForwardHost {
   private context: DesktopClientContext | null = null;
   private activationToken: WireCounter | null = null;
+  private pendingActivationToken: WireCounter | null = null;
   private scopeId: string | null = null;
   private scopeGeneration: WireCounter | null = null;
   private snapshotState: SshForwardSnapshot | null = null;
-  private hintFreshness: [WireCounter, WireCounter, WireCounter] | null = null;
+  private hintFreshness:
+    | [WireCounter, WireCounter, WireCounter, WireCounter, WireCounter]
+    | null = null;
   private knownScopes: KnownScopesInput = { status: "unavailable" };
   private operation = 0;
   private mutationInFlight = 0;
   private mutationWaiters: Array<() => void> = [];
+  private snapshotRequestSequence = 0;
+  private acceptedSnapshotRequest = 0;
   private reopening = false;
   private snapshotInFlight = false;
   private snapshotTrailing = false;
@@ -425,6 +716,7 @@ export class NativeSshForwardHost implements SshForwardHost {
       throw IPC_UNAVAILABLE;
     this.context = raw.context;
     this.activationToken = raw.activationTokenFloor;
+    this.pendingActivationToken = null;
     this.scopeId = raw.activeScopeId;
     this.scopeGeneration = raw.scopeGeneration;
     this.snapshotState = null;
@@ -434,97 +726,305 @@ export class NativeSshForwardHost implements SshForwardHost {
   async activateScope(scopeId: string | null): Promise<ScopeActivation> {
     if (
       !this.context ||
-      !this.activationToken ||
+      (!this.activationToken && !this.pendingActivationToken) ||
       (scopeId !== null && !uuid(scopeId))
     )
       throw IPC_UNAVAILABLE;
-    const token = incrementWireCounter(this.activationToken);
+    const token = incrementWireCounter(
+      this.pendingActivationToken ?? this.activationToken!,
+    );
     if (!token)
       throw { ...IPC_UNAVAILABLE, code: "COUNTER_EXHAUSTED" as const };
     const operation = ++this.operation,
       context = this.context;
-    this.activationToken = token;
-    this.scopeId = scopeId;
+    this.pendingActivationToken = token;
     this.snapshotState = null;
-    const result = await this.invoke<ScopeActivation>(
-      NATIVE_SSH_FORWARD_COMMANDS.activateScope,
-      { input: { context, activationToken: token, scopeId } },
-    );
-    if (!this.validActivation(result, context, token, scopeId))
-      throw IPC_UNAVAILABLE;
-    if (!this.isCurrent(context, token, scopeId, operation))
-      throw {
-        ...IPC_UNAVAILABLE,
-        code: "ACTIVATION_SUPERSEDED" as const,
-        message: "Activation was superseded by a newer scope request.",
-        retryable: true,
-      };
-    this.scopeGeneration = result.scopeGeneration;
-    this.acceptSnapshot(result.snapshot);
-    return result;
+    this.scopeGeneration = null;
+    this.hintFreshness = null;
+    try {
+      const result = await this.invoke<ScopeActivation>(
+        NATIVE_SSH_FORWARD_COMMANDS.activateScope,
+        { input: { context, activationToken: token, scopeId } },
+      );
+      if (!this.validActivation(result, context, token, scopeId))
+        throw IPC_UNAVAILABLE;
+      if (!this.isCurrentActivationAttempt(context, token, operation))
+        throw {
+          ...IPC_UNAVAILABLE,
+          code: "ACTIVATION_SUPERSEDED" as const,
+          message: "Activation was superseded by a newer scope request.",
+          retryable: true,
+        };
+      this.activationToken = token;
+      this.pendingActivationToken = null;
+      this.scopeId = scopeId;
+      this.scopeGeneration = result.scopeGeneration;
+      this.acceptSnapshot(result.snapshot);
+      return result.snapshot
+        ? { ...result, snapshot: this.snapshotState }
+        : result;
+    } catch (error) {
+      if (this.isCurrentActivationAttempt(context, token, operation)) {
+        const parsed = parseSshForwardError(error);
+        if (
+          parsed?.code === "CLIENT_EPOCH_STALE" ||
+          parsed?.code === "ACTIVATION_SUPERSEDED"
+        ) {
+          // These errors mean the manager rejected the activation before the
+          // client established a usable token floor. Re-open the client so a
+          // fresh epoch/session can be issued instead of retrying forever.
+          this.context = null;
+          this.activationToken = null;
+          this.pendingActivationToken = null;
+        } else {
+          // The manager may have admitted this token before it could publish
+          // a response, so retain the floor while quarantining the scope.
+          this.activationToken = token;
+          this.pendingActivationToken = null;
+        }
+        this.scopeId = null;
+        this.scopeGeneration = null;
+        this.snapshotState = null;
+        this.hintFreshness = null;
+      }
+      throw error;
+    }
   }
   async snapshot(): Promise<SshForwardSnapshot> {
     await this.waitForMutationsToSettle();
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.snapshot, {}, true, false);
+    const snapshotRequest = ++this.snapshotRequestSequence;
+    return this.command(
+      NATIVE_SSH_FORWARD_COMMANDS.snapshot,
+      {},
+      true,
+      false,
+      snapshotRequest,
+    );
+  }
+  createConnection(
+    connection: SshConnectionProfile,
+  ): Promise<SshForwardSnapshot> {
+    return this.command(NATIVE_SSH_FORWARD_COMMANDS.createConnection, {
+      expectedConnectionsRevision: this.requireSnapshot().connectionsRevision,
+      connection,
+    });
+  }
+  updateConnection(
+    connectionProfileId: string,
+    expectedGeneration: WireCounter,
+    connection: SshConnectionProfile,
+  ): Promise<SshForwardSnapshot> {
+    return this.command(NATIVE_SSH_FORWARD_COMMANDS.updateConnection, {
+      expectedConnectionsRevision: this.requireSnapshot().connectionsRevision,
+      connectionProfileId,
+      expectedGeneration,
+      connection,
+    });
+  }
+  deleteConnection(
+    connectionProfileId: string,
+    expectedGeneration: WireCounter,
+  ): Promise<SshForwardSnapshot> {
+    return this.command(NATIVE_SSH_FORWARD_COMMANDS.deleteConnection, {
+      expectedConnectionsRevision: this.requireSnapshot().connectionsRevision,
+      connectionProfileId,
+      expectedGeneration,
+    });
+  }
+  createRule(
+    connectionProfileId: string,
+    expectedConnectionGeneration: WireCounter,
+    rule: SshForwardRule,
+  ): Promise<SshForwardSnapshot> {
+    return this.command(NATIVE_SSH_FORWARD_COMMANDS.createRule, {
+      expectedRulesRevision: this.requireSnapshot().rulesRevision,
+      connectionProfileId,
+      expectedConnectionGeneration,
+      rule,
+    });
+  }
+  updateRule(
+    connectionProfileId: string,
+    expectedConnectionGeneration: WireCounter,
+    ruleId: string,
+    expectedRuleGeneration: WireCounter,
+    rule: SshForwardRule,
+  ): Promise<SshForwardSnapshot> {
+    return this.command(NATIVE_SSH_FORWARD_COMMANDS.updateRule, {
+      expectedRulesRevision: this.requireSnapshot().rulesRevision,
+      connectionProfileId,
+      expectedConnectionGeneration,
+      ruleId,
+      expectedRuleGeneration,
+      rule,
+    });
+  }
+  deleteRule(
+    connectionProfileId: string,
+    expectedConnectionGeneration: WireCounter,
+    ruleId: string,
+    expectedRuleGeneration: WireCounter,
+  ): Promise<SshForwardSnapshot> {
+    return this.command(NATIVE_SSH_FORWARD_COMMANDS.deleteRule, {
+      expectedRulesRevision: this.requireSnapshot().rulesRevision,
+      connectionProfileId,
+      expectedConnectionGeneration,
+      ruleId,
+      expectedRuleGeneration,
+    });
+  }
+  connect(
+    connectionProfileId: string,
+    expectedGeneration: WireCounter,
+    credentialAttemptId?: string,
+  ): Promise<SshForwardSnapshot> {
+    return this.command(NATIVE_SSH_FORWARD_COMMANDS.connect, {
+      connectionProfileId,
+      expectedGeneration,
+      ...(credentialAttemptId ? { credentialAttemptId } : {}),
+    });
+  }
+  disconnect(
+    connectionProfileId: string,
+    expectedGeneration: WireCounter,
+  ): Promise<SshForwardSnapshot> {
+    return this.command(NATIVE_SSH_FORWARD_COMMANDS.disconnect, {
+      connectionProfileId,
+      expectedGeneration,
+    });
+  }
+  setRuleEnabled(
+    connectionProfileId: string,
+    expectedConnectionGeneration: WireCounter,
+    ruleId: string,
+    expectedRuleGeneration: WireCounter,
+    enabled: boolean,
+  ): Promise<SshForwardSnapshot> {
+    return this.command(NATIVE_SSH_FORWARD_COMMANDS.setRuleEnabled, {
+      connectionProfileId,
+      expectedConnectionGeneration,
+      ruleId,
+      expectedRuleGeneration,
+      enabled,
+    });
   }
   createProfile(profile: SshForwardProfile): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.createProfile, {
-      profile,
-      expectedProfilesRevision: this.requireSnapshot().profilesRevision,
-    });
+    return this.createConnection({
+      id: profile.id,
+      scopeId: profile.scopeId,
+      name: profile.name,
+      sshHost: profile.sshHost,
+      sshPort: profile.sshPort,
+      sshUser: profile.sshUser,
+      auth: profile.auth,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+    }).then((snapshot) =>
+      this.createRule(
+        profile.id,
+        this.connectionGeneration(profile.id, snapshot),
+        {
+          id: profile.id,
+          scopeId: profile.scopeId,
+          connectionProfileId: profile.id,
+          name: profile.name,
+          localPort: profile.localPort,
+          targetHost: profile.targetHost,
+          targetPort: profile.targetPort,
+          desiredEnabled: profile.autoStart,
+          reconnect: profile.reconnect,
+          createdAt: profile.createdAt,
+          updatedAt: profile.updatedAt,
+        },
+      ),
+    );
   }
   updateProfile(
     profileId: string,
     expectedGeneration: WireCounter,
     profile: SshForwardProfile,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.updateProfile, {
-      profileId,
-      expectedGeneration,
-      profile,
-      expectedProfilesRevision: this.requireSnapshot().profilesRevision,
-    });
+    return this.updateConnection(profileId, expectedGeneration, {
+      id: profileId,
+      scopeId: profile.scopeId,
+      name: profile.name,
+      sshHost: profile.sshHost,
+      sshPort: profile.sshPort,
+      sshUser: profile.sshUser,
+      auth: profile.auth,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+    }).then((snapshot) =>
+      this.updateRule(
+        profileId,
+        this.connectionGeneration(profileId, snapshot),
+        profileId,
+        this.ruleGeneration(profileId, snapshot),
+        {
+          id: profileId,
+          scopeId: profile.scopeId,
+          connectionProfileId: profileId,
+          name: profile.name,
+          localPort: profile.localPort,
+          targetHost: profile.targetHost,
+          targetPort: profile.targetPort,
+          desiredEnabled: profile.autoStart,
+          reconnect: profile.reconnect,
+          createdAt: profile.createdAt,
+          updatedAt: profile.updatedAt,
+        },
+      ),
+    );
   }
   deleteProfile(
     profileId: string,
     expectedGeneration: WireCounter,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.deleteProfile, {
+    const snapshot = this.requireSnapshot();
+    return this.deleteRule(
       profileId,
       expectedGeneration,
-      expectedProfilesRevision: this.requireSnapshot().profilesRevision,
-    });
+      profileId,
+      this.ruleGeneration(profileId, snapshot),
+    ).then(() => this.deleteConnection(profileId, expectedGeneration));
   }
   start(
     profileId: string,
     expectedGeneration: WireCounter,
     credentialAttemptId?: string,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.start, {
+    return this.connect(
       profileId,
       expectedGeneration,
-      ...(credentialAttemptId ? { credentialAttemptId } : {}),
-    });
+      credentialAttemptId,
+    ).then((snapshot) =>
+      this.setRuleEnabled(
+        profileId,
+        this.connectionGeneration(profileId, snapshot),
+        profileId,
+        this.ruleGeneration(profileId, snapshot),
+        true,
+      ),
+    );
   }
   stop(
     profileId: string,
     expectedGeneration: WireCounter,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.stop, {
-      profileId,
-      expectedGeneration,
-    });
+    return this.disconnect(profileId, expectedGeneration);
   }
   restart(
     profileId: string,
     expectedGeneration: WireCounter,
     credentialAttemptId?: string,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.restart, {
-      profileId,
-      expectedGeneration,
-      ...(credentialAttemptId ? { credentialAttemptId } : {}),
-    });
+    return this.disconnect(profileId, expectedGeneration).then(() =>
+      this.start(
+        profileId,
+        this.connectionGeneration(profileId),
+        credentialAttemptId,
+      ),
+    );
   }
   listKeys(): Promise<KeyInventory> {
     return this.command(NATIVE_SSH_FORWARD_COMMANDS.listKeys, {}, false, false);
@@ -533,9 +1033,14 @@ export class NativeSshForwardHost implements SshForwardHost {
     profileId: string,
     keyId: string,
     passphrase: string,
+    expectedGeneration?: WireCounter,
+    rememberForDays: 0 | 30 = 0,
   ): Promise<SshForwardSnapshot> {
     return this.command(NATIVE_SSH_FORWARD_COMMANDS.loadKey, {
-      profileId,
+      connectionProfileId: profileId,
+      expectedGeneration:
+        expectedGeneration ?? this.connectionGeneration(profileId),
+      rememberForDays,
       keyId,
       passphrase,
     });
@@ -545,9 +1050,14 @@ export class NativeSshForwardHost implements SshForwardHost {
     username: string,
     password: string,
     credentialAttemptId: string,
+    expectedGeneration?: WireCounter,
+    rememberForDays: 0 | 30 = 0,
   ): Promise<SshForwardSnapshot> {
     return this.command(NATIVE_SSH_FORWARD_COMMANDS.loadPassword, {
-      profileId,
+      connectionProfileId: profileId,
+      expectedGeneration:
+        expectedGeneration ?? this.connectionGeneration(profileId),
+      rememberForDays,
       username,
       password,
       credentialAttemptId,
@@ -561,12 +1071,21 @@ export class NativeSshForwardHost implements SshForwardHost {
     fingerprintValue: string,
   ): Promise<SshForwardSnapshot> {
     return this.command(NATIVE_SSH_FORWARD_COMMANDS.approveHost, {
-      profileId,
+      connectionProfileId: profileId,
       expectedGeneration,
       challengeId,
       algorithm,
       fingerprint: fingerprintValue,
       expectedTrustRevision: this.requireSnapshot().trustRevision,
+    });
+  }
+  forgetCredential(
+    connectionProfileId: string,
+    expectedGeneration: WireCounter,
+  ): Promise<SshForwardSnapshot> {
+    return this.command(NATIVE_SSH_FORWARD_COMMANDS.forgetCredential, {
+      connectionProfileId,
+      expectedGeneration,
     });
   }
   async purgeScope(
@@ -605,6 +1124,7 @@ export class NativeSshForwardHost implements SshForwardHost {
     if (!this.disposed) {
       this.disposed = true;
       ++this.operation;
+      this.pendingActivationToken = null;
       for (const resolve of this.mutationWaiters.splice(0)) resolve();
       this.unlisten?.();
       this.unlisten = null;
@@ -616,6 +1136,7 @@ export class NativeSshForwardHost implements SshForwardHost {
     extra: Record<string, unknown>,
     mayReplaySnapshot = false,
     mutating = true,
+    snapshotRequest?: number,
   ): Promise<T> {
     if (
       !this.context ||
@@ -645,7 +1166,11 @@ export class NativeSshForwardHost implements SshForwardHost {
         !this.isCurrent(context, token, scopeId, operation, scopeGeneration)
       )
         throw IPC_UNAVAILABLE;
-      if (this.isSnapshot(result)) this.acceptSnapshot(result);
+      if (this.isSnapshot(result)) {
+        this.acceptSnapshot(result, snapshotRequest);
+        if (!this.snapshotState) throw IPC_UNAVAILABLE;
+        return this.snapshotState as T;
+      }
       return result;
     } catch (error) {
       const parsed = parseSshForwardError(error);
@@ -661,7 +1186,13 @@ export class NativeSshForwardHost implements SshForwardHost {
         /* Preserve the original restart signal when rehydration is unavailable. */
       }
       if (mayReplaySnapshot)
-        return this.command<T>(command, extra, false, mutating);
+        return this.command<T>(
+          command,
+          extra,
+          false,
+          mutating,
+          snapshotRequest,
+        );
       throw parsed;
     } finally {
       if (mutating) this.finishMutation();
@@ -716,6 +1247,19 @@ export class NativeSshForwardHost implements SshForwardHost {
         this.scopeGeneration === scopeGeneration)
     );
   }
+  private isCurrentActivationAttempt(
+    context: DesktopClientContext,
+    token: WireCounter,
+    operation: number,
+  ): boolean {
+    return (
+      !this.disposed &&
+      operation === this.operation &&
+      this.context !== null &&
+      sameContext(this.context, context) &&
+      this.pendingActivationToken === token
+    );
+  }
   private validActivation(
     value: unknown,
     context: DesktopClientContext,
@@ -764,18 +1308,61 @@ export class NativeSshForwardHost implements SshForwardHost {
     if (!this.snapshotState) throw IPC_UNAVAILABLE;
     return this.snapshotState;
   }
+  private connectionGeneration(
+    connectionProfileId: string,
+    snapshot = this.requireSnapshot(),
+  ): WireCounter {
+    return (
+      snapshot.connectionRuntimes.find(
+        (runtime) => runtime.connectionProfileId === connectionProfileId,
+      )?.generation ?? ("0" as WireCounter)
+    );
+  }
+  private ruleGeneration(
+    ruleId: string,
+    snapshot = this.requireSnapshot(),
+  ): WireCounter {
+    return (
+      snapshot.ruleRuntimes.find((runtime) => runtime.ruleId === ruleId)
+        ?.generation ?? ("0" as WireCounter)
+    );
+  }
   private isSnapshot(value: unknown): value is SshForwardSnapshot {
     const raw = record(value);
-    return raw !== null && "profilesRevision" in raw && "trustRevision" in raw;
+    return (
+      raw !== null && "connectionsRevision" in raw && "rulesRevision" in raw
+    );
   }
-  private acceptSnapshot(snapshot: SshForwardSnapshot | null): void {
-    this.snapshotState = snapshot;
+  private acceptSnapshot(
+    snapshot: SshForwardSnapshot | null,
+    snapshotRequest?: number,
+  ): void {
+    if (
+      snapshot &&
+      snapshotRequest !== undefined &&
+      snapshotRequest < this.acceptedSnapshotRequest
+    )
+      return;
+    if (snapshotRequest !== undefined)
+      this.acceptedSnapshotRequest = snapshotRequest;
+    this.snapshotState = snapshot ? this.normaliseSnapshot(snapshot) : snapshot;
     if (snapshot)
       this.hintFreshness = [
         snapshot.scopeGeneration,
+        snapshot.connectionsRevision,
+        snapshot.rulesRevision,
         snapshot.profilesRevision,
         snapshot.trustRevision,
       ];
+  }
+  private normaliseSnapshot(snapshot: SshForwardSnapshot): SshForwardSnapshot {
+    return {
+      ...snapshot,
+      hostKeyChallenges: snapshot.hostKeyChallenges.map((challenge) => ({
+        ...challenge,
+        profileId: challenge.connectionProfileId,
+      })),
+    };
   }
   private async invoke<T>(
     command: string,
@@ -815,11 +1402,20 @@ export class NativeSshForwardHost implements SshForwardHost {
           "activationToken",
           "scopeId",
           "scopeGeneration",
+          "connectionsRevision",
+          "rulesRevision",
           "profilesRevision",
           "trustRevision",
           "reason",
         ],
-        ["profileId", "generation"],
+        [
+          "profileId",
+          "generation",
+          "connectionProfileId",
+          "ruleId",
+          "connectionGeneration",
+          "ruleGeneration",
+        ],
       ) ||
       raw.desktopInstanceId !== context.desktopInstanceId ||
       raw.managerSessionId !== context.managerSessionId ||
@@ -827,25 +1423,43 @@ export class NativeSshForwardHost implements SshForwardHost {
       raw.activationToken !== this.activationToken ||
       raw.scopeId !== this.scopeId ||
       !counter(raw.scopeGeneration) ||
+      !counter(raw.connectionsRevision) ||
+      !counter(raw.rulesRevision) ||
       !counter(raw.profilesRevision) ||
       !counter(raw.trustRevision) ||
       (raw.profileId !== undefined && !uuid(raw.profileId)) ||
       (raw.generation !== undefined && !counter(raw.generation)) ||
+      (raw.connectionProfileId !== undefined &&
+        !uuid(raw.connectionProfileId)) ||
+      (raw.ruleId !== undefined && !uuid(raw.ruleId)) ||
+      (raw.connectionGeneration !== undefined &&
+        !counter(raw.connectionGeneration)) ||
+      (raw.ruleGeneration !== undefined && !counter(raw.ruleGeneration)) ||
       typeof raw.reason !== "string" ||
       !REASONS.has(raw.reason)
     )
       return;
-    const current: [WireCounter, WireCounter, WireCounter] = this
-        .hintFreshness ?? [
+    const current: [
+        WireCounter,
+        WireCounter,
+        WireCounter,
+        WireCounter,
+        WireCounter,
+      ] = this.hintFreshness ?? [
         snapshot.scopeGeneration,
+        snapshot.connectionsRevision,
+        snapshot.rulesRevision,
         snapshot.profilesRevision,
         snapshot.trustRevision,
       ],
-      next: [WireCounter, WireCounter, WireCounter] = [
-        raw.scopeGeneration,
-        raw.profilesRevision,
-        raw.trustRevision,
-      ];
+      next: [WireCounter, WireCounter, WireCounter, WireCounter, WireCounter] =
+        [
+          raw.scopeGeneration,
+          raw.connectionsRevision,
+          raw.rulesRevision,
+          raw.profilesRevision,
+          raw.trustRevision,
+        ];
     if (
       next.some(
         (value, index) =>
@@ -858,16 +1472,9 @@ export class NativeSshForwardHost implements SshForwardHost {
         ))
     )
       return;
-    if (
-      next.some(
-        (value, index) =>
-          wireCounterToBigInt(value) > wireCounterToBigInt(current[index]!),
-      )
-    )
-      this.hintFreshness = next;
     this.requestHintSnapshot(hint);
   }
-  private requestHintSnapshot(hint: SshForwardEventHint): void {
+  private requestHintSnapshot(hint: SshForwardEventHint, retry = 0): void {
     if (this.mutationInFlight > 0) {
       this.snapshotTrailing = true;
       this.snapshotTrailingHint = hint;
@@ -884,7 +1491,10 @@ export class NativeSshForwardHost implements SshForwardHost {
         for (const listener of this.listeners)
           listener({ type: "changed", hint, snapshot });
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!this.disposed && retry < 1 && !this.snapshotTrailing)
+          queueMicrotask(() => this.requestHintSnapshot(hint, retry + 1));
+      })
       .finally(() => {
         this.snapshotInFlight = false;
         this.flushTrailingSnapshot(hint);
@@ -900,7 +1510,40 @@ export class NativeSshForwardHost implements SshForwardHost {
     const nextHint = this.snapshotTrailingHint ?? fallbackHint;
     this.snapshotTrailing = false;
     this.snapshotTrailingHint = null;
-    if (nextHint) this.requestHintSnapshot(nextHint);
+    if (nextHint && this.shouldRefreshHint(nextHint))
+      this.requestHintSnapshot(nextHint);
+  }
+  private shouldRefreshHint(hint: SshForwardEventHint): boolean {
+    const snapshot = this.snapshotState;
+    if (!snapshot) return true;
+    const current = this.hintFreshness ?? [
+      snapshot.scopeGeneration,
+      snapshot.connectionsRevision,
+      snapshot.rulesRevision,
+      snapshot.profilesRevision,
+      snapshot.trustRevision,
+    ];
+    const next = [
+      hint.scopeGeneration,
+      hint.connectionsRevision,
+      hint.rulesRevision,
+      hint.profilesRevision,
+      hint.trustRevision,
+    ];
+    if (
+      next.some(
+        (value, index) =>
+          wireCounterToBigInt(value) < wireCounterToBigInt(current[index]!),
+      )
+    )
+      return false;
+    return (
+      hint.reason === "runtimeChanged" ||
+      next.some(
+        (value, index) =>
+          wireCounterToBigInt(value) > wireCounterToBigInt(current[index]!),
+      )
+    );
   }
 }
 /** SSH forwarding native capability has currently shipped only on Windows. */

@@ -12,6 +12,8 @@ import { toSshForwardError } from "@/lib/ssh-forward-error-copy.js";
 const REFRESHABLE_CONFLICT_CODES = new Set<SshForwardError["code"]>([
   "SCOPE_GENERATION_CONFLICT",
   "PROFILES_REVISION_CONFLICT",
+  "CONNECTIONS_REVISION_CONFLICT",
+  "RULES_REVISION_CONFLICT",
   "TRUST_REVISION_CONFLICT",
   "GENERATION_CONFLICT",
   "HOST_KEY_CHALLENGE_NOT_FOUND",
@@ -285,6 +287,10 @@ export function useSshForward() {
       if (
         wireCounterToBigInt(hint.scopeGeneration) <
           wireCounterToBigInt(current.scopeGeneration) ||
+        wireCounterToBigInt(hint.connectionsRevision) <
+          wireCounterToBigInt(current.connectionsRevision) ||
+        wireCounterToBigInt(hint.rulesRevision) <
+          wireCounterToBigInt(current.rulesRevision) ||
         wireCounterToBigInt(hint.profilesRevision) <
           wireCounterToBigInt(current.profilesRevision) ||
         wireCounterToBigInt(hint.trustRevision) <
@@ -303,6 +309,10 @@ export function useSshForward() {
         hintedSnapshot.scopeId === hint.scopeId &&
         wireCounterToBigInt(hintedSnapshot.scopeGeneration) >=
           wireCounterToBigInt(hint.scopeGeneration) &&
+        wireCounterToBigInt(hintedSnapshot.connectionsRevision) >=
+          wireCounterToBigInt(hint.connectionsRevision) &&
+        wireCounterToBigInt(hintedSnapshot.rulesRevision) >=
+          wireCounterToBigInt(hint.rulesRevision) &&
         wireCounterToBigInt(hintedSnapshot.profilesRevision) >=
           wireCounterToBigInt(hint.profilesRevision) &&
         wireCounterToBigInt(hintedSnapshot.trustRevision) >=

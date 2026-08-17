@@ -20,6 +20,11 @@ describe("SSH-forward Rust/TypeScript DTO fixtures", () => {
       "openClientResult",
       "sshForwardProfile",
       "sshForwardKeyAuth",
+      "sshConnectionProfile",
+      "sshForwardRule",
+      "connectionRuntime",
+      "ruleRuntime",
+      "credentialState",
       "runtimeWithoutOptionals",
       "runtimeWithOptionals",
       "hostKeyChallenge",
@@ -76,6 +81,15 @@ describe("SSH-forward Rust/TypeScript DTO fixtures", () => {
       keyId: "workstation",
     });
     expect(fixtures.dtoSamples.sshForwardKeyAuth).not.toHaveProperty("key_id");
+  });
+
+  it("keeps the v2 projection secret-free and connection-scoped", () => {
+    const snapshot = fixtures.dtoSamples.sshForwardSnapshot as Record<string, unknown>;
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toMatch(/password|passphrase|privateKey|vaultTarget|credentialAttempt/i);
+    expect(snapshot.connections).toEqual([fixtures.dtoSamples.sshConnectionProfile]);
+    expect(snapshot.rules).toEqual([fixtures.dtoSamples.sshForwardRule]);
+    expect(snapshot.credentialStates).toEqual([fixtures.dtoSamples.credentialState]);
   });
 
   it("keeps wire scalars typed and rejects fixture-domain invalid values", () => {

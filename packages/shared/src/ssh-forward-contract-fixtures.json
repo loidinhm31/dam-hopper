@@ -41,6 +41,56 @@
       "mode": "key",
       "keyId": "workstation"
     },
+    "sshConnectionProfile": {
+      "id": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+      "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
+      "name": "metrics-connection",
+      "sshHost": "bastion.example",
+      "sshPort": 22,
+      "sshUser": "operator",
+      "auth": { "mode": "agent" },
+      "createdAt": "2026-08-10T12:34:56.789Z",
+      "updatedAt": "2026-08-10T12:34:56.789Z"
+    },
+    "sshForwardRule": {
+      "id": "7f6b9e8e-5df2-4b1f-9de6-b2c2d2abf1cb",
+      "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
+      "connectionProfileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+      "name": "metrics",
+      "localPort": 15432,
+      "targetHost": "127.0.0.1",
+      "targetPort": 5432,
+      "desiredEnabled": true,
+      "reconnect": { "enabled": true, "maxAttempts": 5 },
+      "createdAt": "2026-08-10T12:34:56.789Z",
+      "updatedAt": "2026-08-10T12:34:56.789Z"
+    },
+    "connectionRuntime": {
+      "connectionProfileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+      "generation": "100",
+      "state": "established",
+      "retryAttempt": 0,
+      "activeChannels": 1,
+      "stateChangedAt": "2026-08-10T12:34:56.789Z",
+      "startedAt": "2026-08-10T12:34:57.789Z"
+    },
+    "ruleRuntime": {
+      "ruleId": "7f6b9e8e-5df2-4b1f-9de6-b2c2d2abf1cb",
+      "connectionProfileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+      "connectionGeneration": "100",
+      "generation": "100",
+      "state": "on",
+      "bindHost": "127.0.0.1",
+      "localPort": 15432,
+      "activeChannels": 1,
+      "stateChangedAt": "2026-08-10T12:34:56.789Z",
+      "startedAt": "2026-08-10T12:34:57.789Z"
+    },
+    "credentialState": {
+      "connectionProfileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+      "status": "saved",
+      "expiresAt": "2026-09-09T12:34:56.789Z"
+    },
     "runtimeWithoutOptionals": {
       "profileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
       "generation": "100",
@@ -67,7 +117,7 @@
     },
     "hostKeyChallenge": {
       "challengeId": "7f6b9e8e-5df2-4b1f-9de6-b2c2d2abf1cb",
-      "profileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+      "connectionProfileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
       "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
       "generation": "100",
       "sshHost": "bastion.example",
@@ -85,8 +135,70 @@
       "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
       "activationToken": "99",
       "scopeGeneration": "100",
+      "connectionsRevision": "9",
+      "rulesRevision": "10",
       "profilesRevision": "9",
       "trustRevision": "10",
+      "connections": [
+        {
+          "id": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+          "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
+          "name": "metrics-connection",
+          "sshHost": "bastion.example",
+          "sshPort": 22,
+          "sshUser": "operator",
+          "auth": { "mode": "agent" },
+          "createdAt": "2026-08-10T12:34:56.789Z",
+          "updatedAt": "2026-08-10T12:34:56.789Z"
+        }
+      ],
+      "rules": [
+        {
+          "id": "7f6b9e8e-5df2-4b1f-9de6-b2c2d2abf1cb",
+          "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
+          "connectionProfileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+          "name": "metrics",
+          "localPort": 15432,
+          "targetHost": "127.0.0.1",
+          "targetPort": 5432,
+          "desiredEnabled": true,
+          "reconnect": { "enabled": true, "maxAttempts": 5 },
+          "createdAt": "2026-08-10T12:34:56.789Z",
+          "updatedAt": "2026-08-10T12:34:56.789Z"
+        }
+      ],
+      "connectionRuntimes": [
+        {
+          "connectionProfileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+          "generation": "100",
+          "state": "established",
+          "retryAttempt": 0,
+          "activeChannels": 1,
+          "stateChangedAt": "2026-08-10T12:34:56.789Z",
+          "startedAt": "2026-08-10T12:34:57.789Z"
+        }
+      ],
+      "ruleRuntimes": [
+        {
+          "ruleId": "7f6b9e8e-5df2-4b1f-9de6-b2c2d2abf1cb",
+          "connectionProfileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+          "connectionGeneration": "100",
+          "generation": "100",
+          "state": "on",
+          "bindHost": "127.0.0.1",
+          "localPort": 15432,
+          "activeChannels": 1,
+          "stateChangedAt": "2026-08-10T12:34:56.789Z",
+          "startedAt": "2026-08-10T12:34:57.789Z"
+        }
+      ],
+      "credentialStates": [
+        {
+          "connectionProfileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+          "status": "saved",
+          "expiresAt": "2026-09-09T12:34:56.789Z"
+        }
+      ],
       "profiles": [
         {
           "id": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
@@ -123,7 +235,7 @@
       "hostKeyChallenges": [
         {
           "challengeId": "7f6b9e8e-5df2-4b1f-9de6-b2c2d2abf1cb",
-          "profileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+          "connectionProfileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
           "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
           "generation": "100",
           "sshHost": "bastion.example",
@@ -175,6 +287,8 @@
       "activationToken": "99",
       "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
       "scopeGeneration": "100",
+      "connectionsRevision": "9",
+      "rulesRevision": "10",
       "profilesRevision": "9",
       "trustRevision": "10",
       "reason": "runtimeChanged"
@@ -186,6 +300,8 @@
       "activationToken": "99",
       "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
       "scopeGeneration": "100",
+      "connectionsRevision": "9",
+      "rulesRevision": "10",
       "profilesRevision": "9",
       "trustRevision": "10",
       "profileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
