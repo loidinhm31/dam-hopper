@@ -17,8 +17,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { useGitDiff, useGitUntracked } from "@/api/queries.js";
-import { api } from "@/api/client.js";
-import type { DiffFileEntry } from "@/api/client.js";
+import { api, normalizeProjectTarget } from "@/api/client.js";
+import type { DiffFileEntry, ProjectTargetRef } from "@/api/client.js";
 import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
 import { ContextMenu } from "@/components/ui/ContextMenu.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
@@ -29,6 +29,7 @@ import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicy
 
 export interface ChangedFilesListProps {
   project: string;
+  target?: ProjectTargetRef;
   selectedFile: string | null;
   onSelectFile: (selection: ChangedFileSelection) => void;
 }
@@ -307,9 +308,11 @@ export function stagedRootIdsForEntries(entries: DiffFileEntry[]) {
 
 export function ChangedFilesList({
   project,
+  target,
   selectedFile,
   onSelectFile,
 }: ChangedFilesListProps) {
+  const targetRef = normalizeProjectTarget(target ?? project);
   const queryClient = useQueryClient();
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
@@ -328,7 +331,7 @@ export function ChangedFilesList({
   const [extraUntracked, setExtraUntracked] = useState<DiffFileEntry[]>([]);
 
   const { data, isLoading, isError, refetch } = useGitDiff(
-    project,
+    targetRef,
     AGGREGATE_ROOT_ID,
   );
 
@@ -345,7 +348,7 @@ export function ChangedFilesList({
 
   // Fetch next page of untracked files when user clicks "Load more"
   const { data: nextPageData, isFetching: isLoadingMore } = useGitUntracked(
-    project,
+    targetRef,
     (untrackedPage + 1) * UNTRACKED_PAGE_SIZE,
     UNTRACKED_PAGE_SIZE,
     false,
@@ -355,7 +358,7 @@ export function ChangedFilesList({
   useEffect(() => {
     setExtraUntracked([]);
     setUntrackedPage(0);
-  }, [project, data]);
+  }, [targetRef.project, targetRef.worktreePath, data]);
 
   useEffect(() => {
     if (nextPageData && untrackedPage > 0) {
@@ -385,9 +388,33 @@ export function ChangedFilesList({
 
   async function invalidateChanges() {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["git-diff", project] }),
-      queryClient.invalidateQueries({ queryKey: ["git-untracked", project] }),
-      queryClient.invalidateQueries({ queryKey: ["project-status", project] }),
+      queryClient.invalidateQueries({
+        queryKey: [
+          "git-diff",
+          targetRef.project,
+          targetRef.worktreePath == null
+            ? "root"
+            : `worktree:${targetRef.worktreePath}`,
+        ],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: [
+          "git-untracked",
+          targetRef.project,
+          targetRef.worktreePath == null
+            ? "root"
+            : `worktree:${targetRef.worktreePath}`,
+        ],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: [
+          "project-status",
+          targetRef.project,
+          targetRef.worktreePath == null
+            ? "root"
+            : `worktree:${targetRef.worktreePath}`,
+        ],
+      }),
     ]);
   }
 
@@ -410,7 +437,7 @@ export function ChangedFilesList({
     const untrack = trackMutating(key);
     setMutationError(null);
     try {
-      await api.git.stage(project, [entry.path], entryRootId(entry));
+      await api.git.stage(targetRef, [entry.path], entryRootId(entry));
       await invalidateChanges();
     } catch {
       setMutationError(`Failed to stage ${entry.path.split("/").pop()}`);
@@ -424,7 +451,7 @@ export function ChangedFilesList({
     const untrack = trackMutating(key);
     setMutationError(null);
     try {
-      await api.git.unstage(project, [entry.path], entryRootId(entry));
+      await api.git.unstage(targetRef, [entry.path], entryRootId(entry));
       await invalidateChanges();
     } catch {
       setMutationError(`Failed to unstage ${entry.path.split("/").pop()}`);
@@ -438,7 +465,7 @@ export function ChangedFilesList({
     const untrack = trackMutating(key);
     setMutationError(null);
     try {
-      await api.git.discard(project, entry.path, entryRootId(entry));
+      await api.git.discard(targetRef, entry.path, entryRootId(entry));
       await invalidateChanges();
       setDiscardConfirm(null);
     } catch {
@@ -455,7 +482,7 @@ export function ChangedFilesList({
       await Promise.all(
         groupedByRoot(files).map(([rootId, group]) =>
           api.git.stage(
-            project,
+            targetRef,
             group.entries.map((entry) => entry.path),
             rootId,
           ),
@@ -474,7 +501,7 @@ export function ChangedFilesList({
       await Promise.all(
         groupedByRoot(files).map(([rootId, group]) =>
           api.git.unstage(
-            project,
+            targetRef,
             group.entries.map((entry) => entry.path),
             rootId,
           ),
@@ -498,7 +525,7 @@ export function ChangedFilesList({
     setIsCommitting(true);
     try {
       const result = await api.git.commit(
-        project,
+        targetRef,
         commitMsg,
         amendCommit,
         commitRootId,

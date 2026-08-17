@@ -179,9 +179,9 @@ describe("useFsSubscription Git refresh", () => {
     });
     expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledTimes(3);
     expect(mocks.queryClient.invalidateQueries.mock.calls).toEqual([
-      [{ queryKey: ["git-diff", "alpha"] }],
-      [{ queryKey: ["git-untracked", "alpha"] }],
-      [{ queryKey: ["git-file-diff", "alpha"] }],
+      [{ queryKey: ["git-diff", "alpha", "root"] }],
+      [{ queryKey: ["git-untracked", "alpha", "root"] }],
+      [{ queryKey: ["git-file-diff", "alpha", "root"] }],
     ]);
   });
 
@@ -292,7 +292,7 @@ describe("useFsSubscription Git refresh", () => {
     });
     vi.advanceTimersByTime(GIT_FS_INVALIDATION_DEBOUNCE_MS);
     expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ["git-diff", "alpha"],
+      queryKey: ["git-diff", "alpha", "root"],
     });
   });
 });

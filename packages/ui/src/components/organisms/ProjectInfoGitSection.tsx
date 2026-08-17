@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { Download, GitBranch, RefreshCw, Upload } from "lucide-react";
-import { isGitUnavailableError } from "@/api/client.js";
+import {
+  isGitUnavailableError,
+  normalizeProjectTarget,
+  type ProjectTargetRef,
+} from "@/api/client.js";
 import {
   useBranches,
   useGitFetch,
@@ -25,10 +29,13 @@ import {
 
 export function ProjectInfoGitSection({
   projectName,
+  target,
 }: {
   projectName: string;
+  target?: ProjectTargetRef;
 }) {
-  const { data: roots = [], error: rootsError } = useGitRoots(projectName);
+  const targetRef = normalizeProjectTarget(target ?? projectName);
+  const { data: roots = [], error: rootsError } = useGitRoots(targetRef);
   const rootOptions = projectInfoRootOptions(roots);
   const [selectedRootId, setSelectedRootId] = useState(DEFAULT_GIT_ROOT_ID);
   const resolvedRootId = rootOptions.some(
@@ -37,7 +44,7 @@ export function ProjectInfoGitSection({
     ? selectedRootId
     : (rootOptions[0]?.rootId ?? DEFAULT_GIT_ROOT_ID);
   const { data: branches = [], error: branchesError } = useBranches(
-    projectName,
+    targetRef,
     resolvedRootId,
   );
   const gitFetch = useGitFetch();
@@ -82,6 +89,7 @@ export function ProjectInfoGitSection({
                 projectName,
                 resolvedRootId,
                 true,
+                targetRef,
               ),
             ),
           ).catch(() => {});
@@ -113,7 +121,7 @@ export function ProjectInfoGitSection({
           loading={gitFetch.isPending}
           onClick={() =>
             void executeWithRetry({ operation: "fetch" }, () =>
-              gitFetch.mutateAsync([projectName]),
+              gitFetch.mutateAsync([targetRef]),
             ).catch(() => {})
           }
         >
@@ -126,7 +134,7 @@ export function ProjectInfoGitSection({
           loading={gitPull.isPending}
           onClick={() =>
             void executeWithRetry({ operation: "pull" }, () =>
-              gitPull.mutateAsync([projectName]),
+              gitPull.mutateAsync([targetRef]),
             ).catch(() => {})
           }
         >
@@ -140,7 +148,11 @@ export function ProjectInfoGitSection({
           onClick={() =>
             void executeWithRetry({ operation: "push" }, () =>
               gitPush.mutateAsync(
-                buildProjectInfoPushTarget(projectName, resolvedRootId),
+                buildProjectInfoPushTarget(
+                  projectName,
+                  resolvedRootId,
+                  targetRef,
+                ),
               ),
             ).catch(() => {})
           }

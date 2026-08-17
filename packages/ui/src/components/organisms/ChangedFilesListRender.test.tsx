@@ -21,6 +21,9 @@ vi.mock("@/api/queries.js", () => ({
 
 vi.mock("@/api/client.js", () => ({
   api: { git: {} },
+  normalizeProjectTarget: (target: string | { project: string }) =>
+    typeof target === "string" ? { project: target } : target,
+  projectTargetCacheKey: (target: { project: string }) => target.project,
 }));
 
 vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({

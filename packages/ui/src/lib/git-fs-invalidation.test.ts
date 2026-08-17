@@ -26,9 +26,9 @@ describe("scheduleGitFsInvalidation", () => {
 
     expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(3);
     expect(queryClient.invalidateQueries.mock.calls).toEqual([
-      [{ queryKey: ["git-diff", "alpha"] }],
-      [{ queryKey: ["git-untracked", "alpha"] }],
-      [{ queryKey: ["git-file-diff", "alpha"] }],
+      [{ queryKey: ["git-diff", "alpha", "root"] }],
+      [{ queryKey: ["git-untracked", "alpha", "root"] }],
+      [{ queryKey: ["git-file-diff", "alpha", "root"] }],
     ]);
   });
 
@@ -42,10 +42,10 @@ describe("scheduleGitFsInvalidation", () => {
 
     expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(6);
     expect(queryClient.invalidateQueries.mock.calls).toContainEqual([
-      { queryKey: ["git-diff", "alpha"] },
+      { queryKey: ["git-diff", "alpha", "root"] },
     ]);
     expect(queryClient.invalidateQueries.mock.calls).toContainEqual([
-      { queryKey: ["git-diff", "beta"] },
+      { queryKey: ["git-diff", "beta", "root"] },
     ]);
 
     queryClient.invalidateQueries.mockClear();
@@ -79,5 +79,32 @@ describe("scheduleGitFsInvalidation", () => {
 
     expect(firstClient.invalidateQueries).toHaveBeenCalledTimes(3);
     expect(secondClient.invalidateQueries).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps worktree refreshes in separate target buckets", () => {
+    vi.useFakeTimers();
+    const queryClient = createQueryClient();
+
+    scheduleGitFsInvalidation(queryClient, {
+      project: "alpha",
+      worktreePath: "/tmp/alpha-feature",
+    });
+    scheduleGitFsInvalidation(queryClient, {
+      project: "alpha",
+      worktreePath: "/tmp/alpha-fix",
+    });
+    vi.advanceTimersByTime(GIT_FS_INVALIDATION_DEBOUNCE_MS);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(6);
+    expect(queryClient.invalidateQueries.mock.calls).toContainEqual([
+      {
+        queryKey: ["git-diff", "alpha", "worktree:/tmp/alpha-feature"],
+      },
+    ]);
+    expect(queryClient.invalidateQueries.mock.calls).toContainEqual([
+      {
+        queryKey: ["git-diff", "alpha", "worktree:/tmp/alpha-fix"],
+      },
+    ]);
   });
 });

@@ -153,14 +153,17 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
           return next;
         },
       );
-      scheduleGitFsInvalidation(qc, project);
+      scheduleGitFsInvalidation(
+        qc,
+        worktreePath == null ? project : { project, worktreePath },
+      );
     });
 
     return () => {
       off();
       t.fsUnsubscribeTree(subId);
     };
-  }, [subId, project, targetKey, path, qc, transportGeneration]);
+  }, [subId, project, worktreePath, targetKey, path, qc, transportGeneration]);
 
   /** Load children for a dir node and splice them into the cached tree. */
   async function loadChildren(nodeId: string) {

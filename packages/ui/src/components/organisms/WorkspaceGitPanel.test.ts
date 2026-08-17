@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/api/client.js", () => ({
   isGitUnavailableError: () => false,
+  normalizeProjectTarget: (target: string | { project: string }) =>
+    typeof target === "string" ? { project: target } : target,
+  projectTargetCacheKey: () => "root",
   api: {
     git: {
       log: vi.fn(),
@@ -172,18 +175,38 @@ describe("WorkspaceGitPanel refresh helpers", () => {
 
     expect(refreshed).toEqual(selectedCommit);
     expect(invalidateQueries.mock.calls).toEqual([
-      [{ queryKey: ["branches", "demo-project", "."] }],
-      [{ queryKey: ["project-status", "demo-project"] }],
-      [{ queryKey: ["git-log", "demo-project", "."] }],
-      [{ queryKey: ["git-commit-files", "demo-project", ".", "abc1234"] }],
+      [{ queryKey: ["branches", "demo-project", "root", "."] }],
+      [{ queryKey: ["project-status", "demo-project", "root"] }],
+      [{ queryKey: ["git-log", "demo-project", "root", "."] }],
+      [
+        {
+          queryKey: [
+            "git-commit-files",
+            "demo-project",
+            "root",
+            ".",
+            "abc1234",
+          ],
+        },
+      ],
     ]);
     expect(refetchQueries.mock.calls).toEqual([
-      [{ queryKey: ["branches", "demo-project", "."] }],
-      [{ queryKey: ["project-status", "demo-project"] }],
-      [{ queryKey: ["git-commit-files", "demo-project", ".", "abc1234"] }],
+      [{ queryKey: ["branches", "demo-project", "root", "."] }],
+      [{ queryKey: ["project-status", "demo-project", "root"] }],
+      [
+        {
+          queryKey: [
+            "git-commit-files",
+            "demo-project",
+            "root",
+            ".",
+            "abc1234",
+          ],
+        },
+      ],
     ]);
     expect(fetchQuery).toHaveBeenCalledWith({
-      queryKey: ["git-log", "demo-project", ".", 200, 0, null],
+      queryKey: ["git-log", "demo-project", "root", ".", 200, 0, null],
       queryFn: expect.any(Function),
     });
   });
@@ -236,13 +259,13 @@ describe("WorkspaceGitPanel refresh helpers", () => {
 
     expect(refreshed).toBeNull();
     expect(invalidateQueries.mock.calls).toEqual([
-      [{ queryKey: ["branches", "demo-project", "."] }],
-      [{ queryKey: ["project-status", "demo-project"] }],
-      [{ queryKey: ["git-log", "demo-project", "."] }],
+      [{ queryKey: ["branches", "demo-project", "root", "."] }],
+      [{ queryKey: ["project-status", "demo-project", "root"] }],
+      [{ queryKey: ["git-log", "demo-project", "root", "."] }],
     ]);
     expect(refetchQueries.mock.calls).toEqual([
-      [{ queryKey: ["branches", "demo-project", "."] }],
-      [{ queryKey: ["project-status", "demo-project"] }],
+      [{ queryKey: ["branches", "demo-project", "root", "."] }],
+      [{ queryKey: ["project-status", "demo-project", "root"] }],
     ]);
   });
 
@@ -266,7 +289,15 @@ describe("WorkspaceGitPanel refresh helpers", () => {
     );
 
     expect(fetchQuery).toHaveBeenCalledWith({
-      queryKey: ["git-log", "demo-project", ".", 200, 0, "feature/demo"],
+      queryKey: [
+        "git-log",
+        "demo-project",
+        "root",
+        ".",
+        200,
+        0,
+        "feature/demo",
+      ],
       queryFn: expect.any(Function),
     });
   });
@@ -290,14 +321,15 @@ describe("WorkspaceGitPanel refresh helpers", () => {
     );
 
     expect(invalidateQueries.mock.calls).toEqual([
-      [{ queryKey: ["branches", "demo-project", "modules/child"] }],
-      [{ queryKey: ["project-status", "demo-project"] }],
-      [{ queryKey: ["git-log", "demo-project", "modules/child"] }],
+      [{ queryKey: ["branches", "demo-project", "root", "modules/child"] }],
+      [{ queryKey: ["project-status", "demo-project", "root"] }],
+      [{ queryKey: ["git-log", "demo-project", "root", "modules/child"] }],
       [
         {
           queryKey: [
             "git-commit-files",
             "demo-project",
+            "root",
             "modules/child",
             "abc1234",
           ],
@@ -308,6 +340,7 @@ describe("WorkspaceGitPanel refresh helpers", () => {
       queryKey: [
         "git-log",
         "demo-project",
+        "root",
         "modules/child",
         200,
         0,
@@ -316,7 +349,7 @@ describe("WorkspaceGitPanel refresh helpers", () => {
       queryFn: expect.any(Function),
     });
     expect(gitLogMock).toHaveBeenCalledWith(
-      "demo-project",
+      { project: "demo-project" },
       200,
       0,
       "child-main",
@@ -464,10 +497,7 @@ describe("WorkspaceGitPanel VCS root helpers", () => {
       "modules/child/README.md",
     );
     expect(
-      projectRelativePathForRoot(
-        "modules/child",
-        "modules/child/README.md",
-      ),
+      projectRelativePathForRoot("modules/child", "modules/child/README.md"),
     ).toBe("modules/child/README.md");
     expect(projectRelativePathForRoot(".", "README.md")).toBe("README.md");
   });
@@ -480,6 +510,6 @@ describe("WorkspaceGitPanel VCS root helpers", () => {
     expect(markup).toContain("Push");
     expect(markup).toContain("History");
     expect(markup).toContain("GitLogTree:edit-message");
-    expect(markup).toContain("data-testid=\"workspace-git-push-button\"");
+    expect(markup).toContain('data-testid="workspace-git-push-button"');
   });
 });

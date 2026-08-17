@@ -6,27 +6,30 @@ import {
   useGitDiscard,
   useGitCommit,
 } from "@/api/queries.js";
-import type { DiffFileEntry } from "@/api/client.js";
+import { normalizeProjectTarget } from "@/api/client.js";
+import type { DiffFileEntry, ProjectTargetRef } from "@/api/client.js";
 import { Button } from "@/components/atoms/Button.js";
 import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface GitLocalChangesProps {
   project: string;
+  target?: ProjectTargetRef;
 }
 
-export function GitLocalChanges({ project }: GitLocalChangesProps) {
+export function GitLocalChanges({ project, target }: GitLocalChangesProps) {
+  const targetRef = normalizeProjectTarget(target ?? project);
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
-  const { data: diff, isLoading, refetch } = useGitDiff(project);
+  const { data: diff, isLoading, refetch } = useGitDiff(targetRef);
   const [commitMessage, setCommitMessage] = useState("");
   const [amendCommit, setAmendCommit] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
 
-  const stageMutation = useGitStage(project);
-  const unstageMutation = useGitUnstage(project);
-  const discardMutation = useGitDiscard(project);
-  const commitMutation = useGitCommit(project);
+  const stageMutation = useGitStage(targetRef);
+  const unstageMutation = useGitUnstage(targetRef);
+  const discardMutation = useGitDiscard(targetRef);
+  const commitMutation = useGitCommit(targetRef);
 
   const stagedFiles = diff?.entries.filter((e) => e.staged) || [];
   const unstagedFiles = diff?.entries.filter((e) => !e.staged) || [];

@@ -15,6 +15,7 @@ use crate::git::{
     staged_vcs_root_ids,
 };
 use crate::state::AppState;
+use crate::workspace_target::ProjectTargetRef;
 
 use super::error::ApiError;
 
@@ -27,10 +28,7 @@ pub async fn list_diff(
     Path(project): Path<String>,
     Query(q): Query<RootQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let path = resolve_target_path(&state, &project, q.worktree_path).await?;
     let resp = tokio::task::spawn_blocking(move || {
         if q.root.as_deref() == Some("*") {
             let roots = discover_available_vcs_roots(&path)?;
@@ -53,15 +51,19 @@ pub async fn list_diff(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UntrackedQuery {
     #[serde(default)]
     pub offset: usize,
     pub limit: Option<usize>,
+    pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RootQuery {
+    pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
 
@@ -70,10 +72,7 @@ pub async fn list_untracked(
     Path(project): Path<String>,
     Query(q): Query<UntrackedQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let path = resolve_target_path(&state, &project, q.worktree_path).await?;
     let limit = q.limit.unwrap_or(git::UNTRACKED_PAGE_SIZE);
     let offset = q.offset;
     let root = q.root;
@@ -94,8 +93,10 @@ pub async fn list_untracked(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FilePathQuery {
     pub path: String,
+    pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
 
@@ -104,10 +105,7 @@ pub async fn get_file_diff(
     Path(project): Path<String>,
     Query(q): Query<FilePathQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let proj_path = resolve_target_path(&state, &project, q.worktree_path).await?;
     let rel = q.path;
     let root = q.root;
     let content = tokio::task::spawn_blocking(move || {
@@ -125,8 +123,10 @@ pub async fn get_file_diff(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PathsBody {
     pub paths: Vec<String>,
+    pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
 
@@ -135,10 +135,7 @@ pub async fn stage(
     Path(project): Path<String>,
     Json(body): Json<PathsBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let proj_path = resolve_target_path(&state, &project, body.worktree_path).await?;
     let paths = body.paths;
     let root = body.root;
     tokio::task::spawn_blocking(move || {
@@ -161,10 +158,7 @@ pub async fn unstage(
     Path(project): Path<String>,
     Json(body): Json<PathsBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let proj_path = resolve_target_path(&state, &project, body.worktree_path).await?;
     let paths = body.paths;
     let root = body.root;
     tokio::task::spawn_blocking(move || {
@@ -183,8 +177,10 @@ pub async fn unstage(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SinglePathBody {
     pub path: String,
+    pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
 
@@ -193,10 +189,7 @@ pub async fn discard(
     Path(project): Path<String>,
     Json(body): Json<SinglePathBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let proj_path = resolve_target_path(&state, &project, body.worktree_path).await?;
     let rel = body.path;
     let root = body.root;
     tokio::task::spawn_blocking(move || {
@@ -218,6 +211,7 @@ pub async fn discard(
 pub struct DiscardHunkBody {
     pub path: String,
     pub hunk_index: usize,
+    pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
 
@@ -226,10 +220,7 @@ pub async fn discard_hunk(
     Path(project): Path<String>,
     Json(body): Json<DiscardHunkBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let proj_path = resolve_target_path(&state, &project, body.worktree_path).await?;
     let rel = body.path;
     let idx = body.hunk_index;
     let root = body.root;
@@ -252,10 +243,7 @@ pub async fn list_conflicts(
     Path(project): Path<String>,
     Query(q): Query<RootQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let path = resolve_target_path(&state, &project, q.worktree_path).await?;
     let conflicts = tokio::task::spawn_blocking(move || {
         let root = resolve_git_request_root(&path, q.root.as_deref())?;
         git::get_conflicts(&root.root_path)
@@ -271,9 +259,11 @@ pub async fn list_conflicts(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResolveBody {
     pub path: String,
     pub content: String,
+    pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
 
@@ -282,10 +272,7 @@ pub async fn resolve(
     Path(project): Path<String>,
     Json(body): Json<ResolveBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let proj_path = resolve_target_path(&state, &project, body.worktree_path).await?;
     let rel = body.path;
     let content = body.content;
     let root = body.root;
@@ -304,9 +291,11 @@ pub async fn resolve(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitBody {
     pub message: String,
     pub amend: Option<bool>,
+    pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
 
@@ -321,10 +310,7 @@ pub async fn commit(
     Path(project): Path<String>,
     Json(body): Json<CommitBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let proj_path = resolve_target_path(&state, &project, body.worktree_path).await?;
     let message = body.message;
     let amend = body.amend.unwrap_or(false);
     let root = body.root;
@@ -350,10 +336,7 @@ pub async fn get_commit_files(
     Path((project, hash)): Path<(String, String)>,
     Query(q): Query<RootQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let path = resolve_target_path(&state, &project, q.worktree_path).await?;
     let resp = tokio::task::spawn_blocking(move || {
         let root = resolve_git_request_root(&path, q.root.as_deref())?;
         let mut entries = git::get_commit_files(&root.root_path, &hash)?;
@@ -378,10 +361,7 @@ pub async fn get_commit_file_diff(
     Path((project, hash)): Path<(String, String)>,
     Query(q): Query<FilePathQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state
-        .project_path(&project)
-        .await
-        .map_err(ApiError::from_app)?;
+    let proj_path = resolve_target_path(&state, &project, q.worktree_path).await?;
     let rel = q.path;
     let root = q.root;
     let content = tokio::task::spawn_blocking(move || {
@@ -434,4 +414,19 @@ fn reject_mixed_root_commit(project_path: &std::path::Path) -> Result<(), crate:
         )));
     }
     Ok(())
+}
+
+async fn resolve_target_path(
+    state: &AppState,
+    project_name: &str,
+    worktree_path: Option<String>,
+) -> Result<std::path::PathBuf, ApiError> {
+    state
+        .resolve_project_target(&ProjectTargetRef {
+            project: project_name.to_string(),
+            worktree_path,
+        })
+        .await
+        .map(|target| target.target_path().to_path_buf())
+        .map_err(ApiError::from_app)
 }

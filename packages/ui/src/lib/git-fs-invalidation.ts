@@ -1,4 +1,9 @@
 import type { QueryClient } from "@tanstack/react-query";
+import {
+  normalizeProjectTarget,
+  projectTargetCacheKey,
+  type ProjectTargetInput,
+} from "@/api/client.js";
 
 /**
  * The server already coalesces watcher events for 150 ms. A small client-side
@@ -17,35 +22,38 @@ const GIT_QUERY_PREFIXES = [
   "git-file-diff",
 ] as const;
 
-/** Schedule one project-scoped refresh for all visible Git cache families. */
+/** Schedule one target-scoped refresh for all visible Git cache families. */
 export function scheduleGitFsInvalidation(
   queryClient: GitFsQueryClient,
-  project: string,
+  target: ProjectTargetInput,
 ): void {
-  let projectTimers = pendingTimers.get(queryClient);
-  if (!projectTimers) {
-    projectTimers = new Map();
-    pendingTimers.set(queryClient, projectTimers);
+  const normalized = normalizeProjectTarget(target);
+  const targetKey = projectTargetCacheKey(normalized);
+  const timerKey = `${normalized.project}\0${targetKey}`;
+  let targetTimers = pendingTimers.get(queryClient);
+  if (!targetTimers) {
+    targetTimers = new Map();
+    pendingTimers.set(queryClient, targetTimers);
   }
 
-  const existingTimer = projectTimers.get(project);
+  const existingTimer = targetTimers.get(timerKey);
   if (existingTimer !== undefined) clearTimeout(existingTimer);
 
   const queryClientRef = new WeakRef(queryClient);
   const timer = setTimeout(() => {
-    projectTimers?.delete(project);
+    targetTimers?.delete(timerKey);
     const currentQueryClient = queryClientRef.deref();
     if (!currentQueryClient) return;
-    if (projectTimers?.size === 0) {
+    if (targetTimers?.size === 0) {
       pendingTimers.delete(currentQueryClient);
     }
 
     for (const prefix of GIT_QUERY_PREFIXES) {
       void currentQueryClient.invalidateQueries({
-        queryKey: [prefix, project],
+        queryKey: [prefix, normalized.project, targetKey],
       });
     }
   }, GIT_FS_INVALIDATION_DEBOUNCE_MS);
 
-  projectTimers.set(project, timer);
+  targetTimers.set(timerKey, timer);
 }

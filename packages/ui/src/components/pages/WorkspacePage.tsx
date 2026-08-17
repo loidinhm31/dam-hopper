@@ -1577,14 +1577,18 @@ export default function WorkspacePage() {
     () =>
       projectName ? (
         <Suspense fallback={<PanelFallback label="Loading Git…" />}>
-          <WorkspaceGitPanel key={projectName} project={projectName} />
+          <WorkspaceGitPanel
+            key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+            project={projectName}
+            target={projectTarget?.target}
+          />
         </Suspense>
       ) : (
         <div className="p-4 text-xs text-[var(--color-text-muted)] italic text-center">
           Select a project to see Git status
         </div>
       ),
-    [projectName],
+    [projectName, projectTarget],
   );
 
   const leftTools = useMemo<ToolWindowDef[]>(
@@ -1648,6 +1652,7 @@ export default function WorkspacePage() {
             <Suspense fallback={<PanelFallback label="Loading changes…" />}>
               <ChangedFilesList
                 project={projectName}
+                target={projectTarget?.target}
                 selectedFile={null}
                 onSelectFile={(selection) =>
                   openChangedFileDiff(projectName, selection, openDiff)
@@ -1675,7 +1680,11 @@ export default function WorkspacePage() {
         position: "bottom",
         content: projectName ? (
           <Suspense fallback={<PanelFallback label="Loading Git…" />}>
-            <WorkspaceGitPanel key={projectName} project={projectName} />
+            <WorkspaceGitPanel
+              key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+              project={projectName}
+              target={projectTarget?.target}
+            />
           </Suspense>
         ) : (
           <div className="p-4 text-xs text-[var(--color-text-muted)] italic text-center">
@@ -1749,13 +1758,17 @@ export default function WorkspacePage() {
       icon: GitMerge,
       content: projectName ? (
         <Suspense fallback={<PanelFallback label="Loading Git…" />}>
-          <WorkspaceGitPanel key={projectName} project={projectName} />
+          <WorkspaceGitPanel
+            key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+            project={projectName}
+            target={projectTarget?.target}
+          />
         </Suspense>
       ) : (
         renderCompactPlaceholder("Select a project to see Git status")
       ),
     }),
-    [projectName],
+    [projectName, projectTarget],
   );
 
   const compactProjectSurface = useMemo<MobileWorkspaceSurface>(
@@ -1950,8 +1963,9 @@ export default function WorkspacePage() {
           projectName ? (
             <Suspense fallback={<PanelFallback label="Loading changes…" />}>
               <ChangedFilesList
-                key={`terminal-panel-changes-${projectName}`}
+                key={`terminal-panel-changes-${projectName}:${projectTarget?.targetKey ?? "root"}`}
                 project={projectName}
+                target={projectTarget?.target}
                 selectedFile={null}
                 onSelectFile={(selection) =>
                   openChangedFileDiff(projectName, selection, openDiff)

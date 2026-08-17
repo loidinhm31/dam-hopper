@@ -48,6 +48,38 @@ function wsTargetFields(target: ProjectTargetInput): {
       };
 }
 
+function restTargetFields(data: unknown): {
+  project: string;
+  worktreePath?: string;
+} {
+  if (typeof data === "string") return { project: data };
+  const value = data as { project: string; worktreePath?: string | null };
+  const normalized = normalizeProjectTarget({
+    project: value.project,
+    worktreePath: value.worktreePath,
+  });
+  return normalized.worktreePath == null
+    ? { project: normalized.project }
+    : { project: normalized.project, worktreePath: normalized.worktreePath };
+}
+
+function restTargetListFields(data: unknown):
+  | Array<{
+      project: string;
+      worktreePath?: string;
+    }>
+  | undefined {
+  if (!Array.isArray(data)) return undefined;
+  return data.map((target) => restTargetFields(target));
+}
+
+function setWorktreePath(
+  params: URLSearchParams,
+  target: { worktreePath?: string },
+) {
+  if (target.worktreePath) params.set("worktreePath", target.worktreePath);
+}
+
 function parseTerminalLifecycleEvent(message: {
   id?: unknown;
   lifecycle?: unknown;
@@ -255,30 +287,49 @@ function channelToEndpoint(
         method: "GET",
         url: `/api/projects/${encodeURIComponent(data as string)}`,
       };
-    case "projects:status":
+    case "projects:status": {
+      const target = restTargetFields(data);
+      const params = new URLSearchParams();
+      setWorktreePath(params, target);
+      const qs = params.toString();
       return {
         method: "GET",
-        url: `/api/projects/${encodeURIComponent(data as string)}/status`,
+        url: `/api/projects/${encodeURIComponent(target.project)}/status${qs ? `?${qs}` : ""}`,
       };
+    }
 
     // Git
     case "git:fetch":
       return {
         method: "POST",
         url: "/api/git/fetch",
-        body: { projects: data },
+        body: { targets: restTargetListFields(data) },
       };
     case "git:pull":
-      return { method: "POST", url: "/api/git/pull", body: { projects: data } };
+      return {
+        method: "POST",
+        url: "/api/git/pull",
+        body: { targets: restTargetListFields(data) },
+      };
     case "git:push": {
       const d =
         typeof data === "string"
-          ? { project: data, root: undefined }
-          : (data as { project: string; root?: string; force?: boolean });
+          ? { project: data, root: undefined, worktreePath: undefined }
+          : (data as {
+              project: string;
+              worktreePath?: string;
+              root?: string;
+              force?: boolean;
+            });
       return {
         method: "POST",
         url: "/api/git/push",
-        body: { project: d.project, root: d.root, force: d.force },
+        body: {
+          project: d.project,
+          worktreePath: d.worktreePath,
+          root: d.root,
+          force: d.force,
+        },
       };
     }
     case "git:worktrees":
@@ -286,11 +337,16 @@ function channelToEndpoint(
         method: "GET",
         url: `/api/git/${encodeURIComponent(data as string)}/worktrees`,
       };
-    case "git:roots":
+    case "git:roots": {
+      const target = restTargetFields(data);
+      const params = new URLSearchParams();
+      setWorktreePath(params, target);
+      const qs = params.toString();
       return {
         method: "GET",
-        url: `/api/git/${encodeURIComponent(data as string)}/roots`,
+        url: `/api/git/${encodeURIComponent(target.project)}/roots${qs ? `?${qs}` : ""}`,
       };
+    }
     case "git:addWorktree": {
       const d = data as { project: string; options: unknown };
       return {
@@ -308,11 +364,13 @@ function channelToEndpoint(
       };
     }
     case "git:branches": {
-      const d =
-        typeof data === "string"
-          ? { project: data, root: undefined }
-          : (data as { project: string; root?: string });
+      const d = data as {
+        project: string;
+        worktreePath?: string;
+        root?: string;
+      };
       const params = new URLSearchParams();
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       const qs = params.toString();
       return {
@@ -323,17 +381,19 @@ function channelToEndpoint(
     case "git:createBranch": {
       const d = data as {
         project: string;
+        worktreePath?: string;
         options: { name: string; startPoint?: string; checkout?: boolean };
       };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/branches`,
-        body: d.options,
+        body: { ...d.options, worktreePath: d.worktreePath },
       };
     }
     case "git:checkoutBranch": {
       const d = data as {
         project: string;
+        worktreePath?: string;
         options: {
           branch: string;
           startPoint?: string;
@@ -344,12 +404,13 @@ function channelToEndpoint(
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/branches/checkout`,
-        body: d.options,
+        body: { ...d.options, worktreePath: d.worktreePath },
       };
     }
     case "git:deleteBranch": {
       const d = data as {
         project: string;
+        worktreePath?: string;
         options: {
           name: string;
           root?: string;
@@ -358,20 +419,30 @@ function channelToEndpoint(
       return {
         method: "DELETE",
         url: `/api/git/${encodeURIComponent(d.project)}/branches`,
-        body: d.options,
+        body: { ...d.options, worktreePath: d.worktreePath },
       };
     }
     case "git:updateBranch": {
-      const d = data as { project: string; branch?: string; root?: string };
+      const d = data as {
+        project: string;
+        worktreePath?: string;
+        branch?: string;
+        root?: string;
+      };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/branches/update`,
-        body: { branch: d.branch, root: d.root },
+        body: {
+          branch: d.branch,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:log": {
       const d = data as {
         project: string;
+        worktreePath?: string;
         limit?: number;
         offset?: number;
         ref?: string;
@@ -381,6 +452,7 @@ function channelToEndpoint(
       if (d.limit !== undefined) params.set("limit", String(d.limit));
       if (d.offset !== undefined) params.set("offset", String(d.offset));
       if (d.ref !== undefined) params.set("ref", d.ref);
+      setWorktreePath(params, d);
       if (d.root !== undefined) params.set("root", d.root);
       const qs = params.toString();
       return {
@@ -627,8 +699,13 @@ function channelToEndpoint(
 
     // Git diff / change management
     case "git:diff": {
-      const d = data as { project: string; root?: string };
+      const d = data as {
+        project: string;
+        worktreePath?: string;
+        root?: string;
+      };
       const params = new URLSearchParams();
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       const qs = params.toString();
       return {
@@ -639,6 +716,7 @@ function channelToEndpoint(
     case "git:untrackedFiles": {
       const d = data as {
         project: string;
+        worktreePath?: string;
         offset: number;
         limit: number;
         root?: string;
@@ -647,6 +725,7 @@ function channelToEndpoint(
         offset: String(d.offset),
         limit: String(d.limit),
       });
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       return {
         method: "GET",
@@ -654,8 +733,14 @@ function channelToEndpoint(
       };
     }
     case "git:fileDiff": {
-      const d = data as { project: string; path: string; root?: string };
+      const d = data as {
+        project: string;
+        path: string;
+        worktreePath?: string;
+        root?: string;
+      };
       const params = new URLSearchParams({ path: d.path });
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       return {
         method: "GET",
@@ -663,27 +748,54 @@ function channelToEndpoint(
       };
     }
     case "git:stage": {
-      const d = data as { project: string; paths: string[]; root?: string };
+      const d = data as {
+        project: string;
+        paths: string[];
+        worktreePath?: string;
+        root?: string;
+      };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/stage`,
-        body: { paths: d.paths, root: d.root },
+        body: {
+          paths: d.paths,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:unstage": {
-      const d = data as { project: string; paths: string[]; root?: string };
+      const d = data as {
+        project: string;
+        paths: string[];
+        worktreePath?: string;
+        root?: string;
+      };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/unstage`,
-        body: { paths: d.paths, root: d.root },
+        body: {
+          paths: d.paths,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:discard": {
-      const d = data as { project: string; path: string; root?: string };
+      const d = data as {
+        project: string;
+        path: string;
+        worktreePath?: string;
+        root?: string;
+      };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/discard`,
-        body: { path: d.path, root: d.root },
+        body: {
+          path: d.path,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:discardHunk": {
@@ -691,17 +803,28 @@ function channelToEndpoint(
         project: string;
         path: string;
         hunkIndex: number;
+        worktreePath?: string;
         root?: string;
       };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/discard-hunk`,
-        body: { path: d.path, hunkIndex: d.hunkIndex, root: d.root },
+        body: {
+          path: d.path,
+          hunkIndex: d.hunkIndex,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:conflicts": {
-      const d = data as { project: string; root?: string };
+      const d = data as {
+        project: string;
+        worktreePath?: string;
+        root?: string;
+      };
       const params = new URLSearchParams();
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       const qs = params.toString();
       return {
@@ -714,12 +837,18 @@ function channelToEndpoint(
         project: string;
         path: string;
         content: string;
+        worktreePath?: string;
         root?: string;
       };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/resolve`,
-        body: { path: d.path, content: d.content, root: d.root },
+        body: {
+          path: d.path,
+          content: d.content,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:commit": {
@@ -727,20 +856,35 @@ function channelToEndpoint(
         project: string;
         message: string;
         amend?: boolean;
+        worktreePath?: string;
         root?: string;
       };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/commit`,
-        body: { message: d.message, amend: d.amend, root: d.root },
+        body: {
+          message: d.message,
+          amend: d.amend,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:cherryPick": {
-      const d = data as { project: string; hash: string; root?: string };
+      const d = data as {
+        project: string;
+        hash: string;
+        worktreePath?: string;
+        root?: string;
+      };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/cherry-pick`,
-        body: { hash: d.hash, root: d.root },
+        body: {
+          hash: d.hash,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:reset": {
@@ -748,17 +892,28 @@ function channelToEndpoint(
         project: string;
         hash: string;
         mode: string;
+        worktreePath?: string;
         root?: string;
       };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/reset`,
-        body: { hash: d.hash, mode: d.mode, root: d.root },
+        body: {
+          hash: d.hash,
+          mode: d.mode,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:undoLastCommit": {
-      const d = data as { project: string; root?: string };
+      const d = data as {
+        project: string;
+        worktreePath?: string;
+        root?: string;
+      };
       const params = new URLSearchParams();
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       const qs = params.toString();
       return {
@@ -767,8 +922,14 @@ function channelToEndpoint(
       };
     }
     case "git:commitFiles": {
-      const d = data as { project: string; hash: string; root?: string };
+      const d = data as {
+        project: string;
+        hash: string;
+        worktreePath?: string;
+        root?: string;
+      };
       const params = new URLSearchParams();
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       const qs = params.toString();
       return {
@@ -777,8 +938,14 @@ function channelToEndpoint(
       };
     }
     case "git:commitMessage": {
-      const d = data as { project: string; hash: string; root?: string };
+      const d = data as {
+        project: string;
+        hash: string;
+        worktreePath?: string;
+        root?: string;
+      };
       const params = new URLSearchParams();
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       const qs = params.toString();
       return {
@@ -791,12 +958,17 @@ function channelToEndpoint(
         project: string;
         hash: string;
         message: string;
+        worktreePath?: string;
         root?: string;
       };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/message`,
-        body: { message: d.message, root: d.root },
+        body: {
+          message: d.message,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:commitFileDiff": {
@@ -804,9 +976,11 @@ function channelToEndpoint(
         project: string;
         hash: string;
         path: string;
+        worktreePath?: string;
         root?: string;
       };
       const params = new URLSearchParams({ path: d.path });
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       return {
         method: "GET",
@@ -818,12 +992,17 @@ function channelToEndpoint(
         project: string;
         hash: string;
         paths: string[];
+        worktreePath?: string;
         root?: string;
       };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/cherry-pick-files`,
-        body: { paths: d.paths, root: d.root },
+        body: {
+          paths: d.paths,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:dropCommitFiles": {
@@ -831,17 +1010,28 @@ function channelToEndpoint(
         project: string;
         hash: string;
         paths: string[];
+        worktreePath?: string;
         root?: string;
       };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/drop-files`,
-        body: { paths: d.paths, root: d.root },
+        body: {
+          paths: d.paths,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
     case "git:dropCommit": {
-      const d = data as { project: string; hash: string; root?: string };
+      const d = data as {
+        project: string;
+        hash: string;
+        worktreePath?: string;
+        root?: string;
+      };
       const params = new URLSearchParams();
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       const qs = params.toString();
       return {
@@ -850,8 +1040,14 @@ function channelToEndpoint(
       };
     }
     case "git:revertCommit": {
-      const d = data as { project: string; hash: string; root?: string };
+      const d = data as {
+        project: string;
+        hash: string;
+        worktreePath?: string;
+        root?: string;
+      };
       const params = new URLSearchParams();
+      setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
       const qs = params.toString();
       return {
@@ -864,12 +1060,17 @@ function channelToEndpoint(
         project: string;
         hash: string;
         paths: string[];
+        worktreePath?: string;
         root?: string;
       };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/revert-files`,
-        body: { paths: d.paths, root: d.root },
+        body: {
+          paths: d.paths,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
       };
     }
 

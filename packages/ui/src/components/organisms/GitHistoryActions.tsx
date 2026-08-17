@@ -16,7 +16,9 @@ import type {
   GitActionResult,
   GitLogEntry,
   ResetMode,
+  ProjectTargetInput,
 } from "@/api/client.js";
+import { normalizeProjectTarget, projectTargetCacheKey } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
 import { Button } from "@/components/atoms/Button.js";
 import {
@@ -518,8 +520,13 @@ export interface GitSelectedChangesOperation {
   files: DiffFileEntry[];
 }
 
-export function useGitHistoryActions(project: string, root?: string) {
-  const scope = `${project}\0${root ?? "."}`;
+export function useGitHistoryActions(
+  target: ProjectTargetInput,
+  root?: string,
+) {
+  const targetRef = normalizeProjectTarget(target);
+  const project = targetRef.project;
+  const scope = `${project}\0${projectTargetCacheKey(targetRef)}\0${root ?? "."}`;
   const [resetCommitState, setResetCommitState] = useState<{
     project: string;
     commit: GitLogEntry | null;
@@ -548,15 +555,15 @@ export function useGitHistoryActions(project: string, root?: string) {
     project: string;
     value: GitHistoryActionStatus | null;
   }>({ project: "", value: null });
-  const cherryPickMutation = useGitCherryPick(project, root);
-  const resetMutation = useGitReset(project, root);
-  const undoLastCommitMutation = useGitUndoLastCommit(project, root);
-  const cherryPickFilesMutation = useGitCherryPickCommitFiles(project, root);
-  const revertFilesMutation = useGitRevertCommitFiles(project, root);
-  const dropFilesMutation = useGitDropCommitFiles(project, root);
-  const dropCommitMutation = useGitDropCommit(project, root);
-  const editCommitMutation = useGitEditCommitMessage(project, root);
-  const revertCommitMutation = useGitRevertCommit(project, root);
+  const cherryPickMutation = useGitCherryPick(targetRef, root);
+  const resetMutation = useGitReset(targetRef, root);
+  const undoLastCommitMutation = useGitUndoLastCommit(targetRef, root);
+  const cherryPickFilesMutation = useGitCherryPickCommitFiles(targetRef, root);
+  const revertFilesMutation = useGitRevertCommitFiles(targetRef, root);
+  const dropFilesMutation = useGitDropCommitFiles(targetRef, root);
+  const dropCommitMutation = useGitDropCommit(targetRef, root);
+  const editCommitMutation = useGitEditCommitMessage(targetRef, root);
+  const revertCommitMutation = useGitRevertCommit(targetRef, root);
   const resetCommit =
     resetCommitState.project === scope ? resetCommitState.commit : null;
   const dropCommit =
@@ -566,16 +573,14 @@ export function useGitHistoryActions(project: string, root?: string) {
   const revertCommit =
     revertCommitState.project === scope ? revertCommitState.commit : null;
   const undoLastCommit =
-    undoLastCommitState.project === scope
-      ? undoLastCommitState.commit
-      : null;
+    undoLastCommitState.project === scope ? undoLastCommitState.commit : null;
   const selectedChangesOperation =
     selectedChangesState.project === scope
       ? selectedChangesState.operation
       : null;
   const status = statusState.project === scope ? statusState.value : null;
   const commitMessageQuery = useGitCommitMessage(
-    project,
+    targetRef,
     editCommit?.hash ?? "",
     root,
   );

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { GitBranch, GitMerge, Folder, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { CollapsibleSection } from "@/components/atoms/CollapsibleSection.js";
-import { useProject } from "@/api/queries.js";
+import { useProject, useProjectStatus } from "@/api/queries.js";
 import type { TreeCommand } from "@/hooks/use-terminal-tree.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
 import type { ProjectTargetSnapshot } from "@/stores/project-target.js";
@@ -49,6 +49,8 @@ export function ProjectInfoPanel({
   const { data: project, isLoading } = useProject(projectName);
   const derivedTarget = useProjectTarget(projectName);
   const target = targetOverride ?? derivedTarget;
+  const targetRef = target?.target ?? { project: projectName };
+  const { data: targetStatus } = useProjectStatus(targetRef);
   const [worktreesOpen, setWorktreesOpen] = useState(false);
 
   if (isLoading) {
@@ -76,13 +78,15 @@ export function ProjectInfoPanel({
             {project.name}
           </h2>
           <TypeBadge type={project.type} />
-          {project.status && (
+          {(targetStatus ?? project.status) && (
             <>
               <span className="flex items-center gap-1 text-xs text-[var(--color-text-muted)]">
                 <GitBranch className="h-3 w-3" />
-                {project.status.branch}
+                {(targetStatus ?? project.status)?.branch}
               </span>
-              <StatusBadge isClean={project.status.isClean} />
+              <StatusBadge
+                isClean={(targetStatus ?? project.status)?.isClean ?? true}
+              />
             </>
           )}
         </div>
@@ -94,7 +98,7 @@ export function ProjectInfoPanel({
           icon={GitBranch}
           defaultOpen={true}
         >
-          <ProjectInfoGitSection projectName={projectName} />
+          <ProjectInfoGitSection projectName={projectName} target={targetRef} />
         </CollapsibleSection>
 
         <CollapsibleSection
