@@ -152,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
                 Ok(store) => {
                     tracing::info!(path = %db_path.display(), "Session store opened");
                     let store_arc = std::sync::Arc::new(store);
-                    let (tx, rx) = std::sync::mpsc::channel();
+                    let (tx, rx) = std::sync::mpsc::sync_channel(256);
                     let worker =
                         dam_hopper_server::persistence::PersistWorker::new(rx, store_arc.clone());
                     let handle = std::thread::Builder::new()
@@ -360,6 +360,7 @@ async fn main() -> anyhow::Result<()> {
     pty_manager.snapshot_live_buffers();
     pty_manager.stop_all_for_shutdown();
     pty_manager.wait_for_readers().await;
+    pty_manager.shutdown();
     if let Some(tx) = &persist_tx {
         let _ = tx.send(dam_hopper_server::persistence::PersistCmd::Shutdown);
     }
