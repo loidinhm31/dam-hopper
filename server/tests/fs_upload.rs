@@ -2,7 +2,7 @@ use opaque_ke::ServerSetup;
 /// WS upload protocol integration tests.
 ///
 /// Tests the full fs:upload_begin → fs:upload_chunk (binary) → fs:upload_commit cycle.
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, path::Path, process::Command, sync::Arc, time::Duration};
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
@@ -131,24 +131,34 @@ async fn next_json(ws: &mut WsStream, timeout: Duration) -> Option<Value> {
 
 /// Full upload: begin → N chunks → commit. Returns the result message.
 async fn do_upload(ws: &mut WsStream, upload_id: &str, filename: &str, data: &[u8]) -> Value {
+    do_upload_to(ws, upload_id, filename, data, None).await
+}
+
+async fn do_upload_to(
+    ws: &mut WsStream,
+    upload_id: &str,
+    filename: &str,
+    data: &[u8],
+    worktree_path: Option<&Path>,
+) -> Value {
     let len = data.len() as u64;
 
     // Begin
-    ws.send(Message::Text(
-        json!({
-            "kind": "fs:upload_begin",
-            "req_id": 100,
-            "upload_id": upload_id,
-            "project": "proj",
-            "dir": "",
-            "filename": filename,
-            "len": len,
-        })
-        .to_string()
-        .into(),
-    ))
-    .await
-    .unwrap();
+    let mut begin = json!({
+        "kind": "fs:upload_begin",
+        "req_id": 100,
+        "upload_id": upload_id,
+        "project": "proj",
+        "dir": "",
+        "filename": filename,
+        "len": len,
+    });
+    if let Some(worktree_path) = worktree_path {
+        begin["worktree_path"] = json!(worktree_path);
+    }
+    ws.send(Message::Text(begin.to_string().into()))
+        .await
+        .unwrap();
 
     let begin_ack = next_json(ws, Duration::from_secs(5))
         .await
@@ -199,6 +209,19 @@ async fn do_upload(ws: &mut WsStream, upload_id: &str, filename: &str, data: &[u
         .expect("upload_result")
 }
 
+fn git(cwd: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -218,6 +241,263 @@ async fn upload_happy_path_file_content_matches() {
     let written = std::fs::read(tmp.path().join("hello-upload.txt")).unwrap();
     assert_eq!(written, content);
 
+    ws.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn upload_targets_registered_worktree_and_rejects_unregistered_sibling() {
+    let project = tempfile::tempdir().unwrap();
+    let targets = tempfile::tempdir().unwrap();
+    let worktree = targets.path().join("feature-worktree");
+    git(project.path(), &["init", "-b", "main"]);
+    git(
+        project.path(),
+        &["config", "user.email", "test@example.com"],
+    );
+    git(project.path(), &["config", "user.name", "Test"]);
+    std::fs::write(project.path().join("README.md"), "root").unwrap();
+    git(project.path(), &["add", "README.md"]);
+    git(project.path(), &["commit", "-m", "initial"]);
+    git(
+        project.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            worktree.to_str().unwrap(),
+        ],
+    );
+
+    let addr = spawn_server(make_state(&project)).await;
+    let mut ws = connect(addr).await;
+    let result = do_upload_to(
+        &mut ws,
+        "worktree-upload",
+        "target.txt",
+        b"target",
+        Some(&worktree),
+    )
+    .await;
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(
+        std::fs::read(worktree.join("target.txt")).unwrap(),
+        b"target"
+    );
+    assert!(!project.path().join("target.txt").exists());
+
+    let foreign = targets.path().join("foreign");
+    std::fs::create_dir(&foreign).unwrap();
+    let mut begin = json!({
+        "kind": "fs:upload_begin",
+        "req_id": 102,
+        "upload_id": "foreign-upload",
+        "project": "proj",
+        "worktree_path": foreign,
+        "dir": "",
+        "filename": "escape.txt",
+        "len": 1,
+    });
+    ws.send(Message::Text(begin.take().to_string().into()))
+        .await
+        .unwrap();
+    let rejected = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_ne!(rejected["kind"], "fs:upload_begin_ok");
+    assert!(!foreign.join("escape.txt").exists());
+    ws.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn upload_commit_rejects_removed_and_recreated_worktree_target() {
+    let project = tempfile::tempdir().unwrap();
+    let targets = tempfile::tempdir().unwrap();
+    let worktree = targets.path().join("replaceable-worktree");
+    git(project.path(), &["init", "-b", "main"]);
+    git(
+        project.path(),
+        &["config", "user.email", "test@example.com"],
+    );
+    git(project.path(), &["config", "user.name", "Test"]);
+    std::fs::write(project.path().join("README.md"), "root").unwrap();
+    git(project.path(), &["add", "README.md"]);
+    git(project.path(), &["commit", "-m", "initial"]);
+    git(
+        project.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "replaceable",
+            worktree.to_str().unwrap(),
+        ],
+    );
+
+    let addr = spawn_server(make_state(&project)).await;
+    let mut ws = connect(addr).await;
+    let content = b"delayed upload";
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:upload_begin",
+            "req_id": 120,
+            "upload_id": "replace-target",
+            "project": "proj",
+            "worktree_path": worktree,
+            "dir": "",
+            "filename": "must-not-land.txt",
+            "len": content.len(),
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let begin = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(begin["kind"], "fs:upload_begin_ok", "{begin}");
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:upload_chunk",
+            "upload_id": "replace-target",
+            "seq": 0,
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    ws.send(Message::Binary(content.to_vec().into()))
+        .await
+        .unwrap();
+    let chunk = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(chunk["kind"], "fs:upload_chunk_ack", "{chunk}");
+
+    git(
+        project.path(),
+        &["worktree", "remove", "--force", worktree.to_str().unwrap()],
+    );
+    git(
+        project.path(),
+        &["worktree", "add", worktree.to_str().unwrap(), "replaceable"],
+    );
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:upload_commit",
+            "req_id": 121,
+            "upload_id": "replace-target",
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let result = next_json(&mut ws, Duration::from_secs(10)).await.unwrap();
+    assert_eq!(result["kind"], "fs:upload_result", "{result}");
+    assert_eq!(result["ok"], false, "{result}");
+    assert!(!worktree.join("must-not-land.txt").exists());
+    ws.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn write_commit_rejects_removed_and_recreated_worktree_target() {
+    let project = tempfile::tempdir().unwrap();
+    let targets = tempfile::tempdir().unwrap();
+    let worktree = targets.path().join("replaceable-write-worktree");
+    git(project.path(), &["init", "-b", "main"]);
+    git(
+        project.path(),
+        &["config", "user.email", "test@example.com"],
+    );
+    git(project.path(), &["config", "user.name", "Test"]);
+    std::fs::write(project.path().join("README.md"), "root").unwrap();
+    git(project.path(), &["add", "README.md"]);
+    git(project.path(), &["commit", "-m", "initial"]);
+    git(
+        project.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "replaceable-write",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    let file = worktree.join("delayed.txt");
+    std::fs::write(&file, "old").unwrap();
+    let expected_mtime = std::fs::metadata(&file)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let addr = spawn_server(make_state(&project)).await;
+    let mut ws = connect(addr).await;
+    let content = b"new content";
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:write_begin",
+            "req_id": 130,
+            "project": "proj",
+            "worktree_path": worktree,
+            "path": "delayed.txt",
+            "expected_mtime": expected_mtime,
+            "size": content.len(),
+            "encoding": "binary",
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let begin = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(begin["kind"], "fs:write_ack", "{begin}");
+    let write_id = begin["write_id"].as_u64().unwrap();
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:write_chunk_binary",
+            "write_id": write_id,
+            "seq": 0,
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    ws.send(Message::Binary(content.to_vec().into()))
+        .await
+        .unwrap();
+    let chunk = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(chunk["kind"], "fs:write_chunk_ack", "{chunk}");
+
+    git(
+        project.path(),
+        &["worktree", "remove", "--force", worktree.to_str().unwrap()],
+    );
+    git(
+        project.path(),
+        &[
+            "worktree",
+            "add",
+            worktree.to_str().unwrap(),
+            "replaceable-write",
+        ],
+    );
+
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:write_commit",
+            "write_id": write_id,
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let result = next_json(&mut ws, Duration::from_secs(10)).await.unwrap();
+    assert_eq!(result["kind"], "fs:write_result", "{result}");
+    assert_eq!(result["ok"], false, "{result}");
+    assert!(!worktree.join("delayed.txt").exists());
     ws.close(None).await.unwrap();
 }
 

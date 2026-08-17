@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,13 +22,20 @@ struct WatcherHandle {
     _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct WatcherKey {
+    pub project: String,
+    pub target_key: String,
+    pub root: PathBuf,
+}
+
 /// Shared, refcounted file-system watcher registry.
 ///
 /// One recursive watcher per workspace root, created on first subscriber,
 /// dropped on last unsubscribe. Clone is cheap — Arc-backed.
 #[derive(Clone, Default)]
 pub struct FsWatcherManager {
-    inner: Arc<Mutex<HashMap<PathBuf, WatcherHandle>>>,
+    inner: Arc<Mutex<HashMap<WatcherKey, WatcherHandle>>>,
 }
 
 impl FsWatcherManager {
@@ -40,12 +47,21 @@ impl FsWatcherManager {
     ///
     /// Spawns a watcher if none exists for this root. Returns a broadcast
     /// receiver. Errors only if notify fails to watch the path.
-    pub fn subscribe(&self, root: &Path) -> Result<broadcast::Receiver<FsEvent>, notify::Error> {
+    pub(crate) fn subscribe(
+        &self,
+        key: &WatcherKey,
+    ) -> Result<broadcast::Receiver<FsEvent>, notify::Error> {
         let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
 
-        if let Some(handle) = map.get_mut(root) {
+        if let Some(handle) = map.get_mut(key) {
             handle.refcount += 1;
-            debug!(root = %root.display(), refcount = handle.refcount, "watcher ref++");
+            debug!(
+                project = %key.project,
+                target_key = %key.target_key,
+                root = %key.root.display(),
+                refcount = handle.refcount,
+                "watcher ref++"
+            );
             return Ok(handle.tx.subscribe());
         }
 
@@ -78,18 +94,23 @@ impl FsWatcherManager {
         // operates on depth-1 nodes anyway, so deep events would be no-ops.
         {
             let mut d = debouncer;
-            d.watch(root, notify::RecursiveMode::NonRecursive)?;
+            d.watch(&key.root, notify::RecursiveMode::NonRecursive)?;
 
             let rx = tx.subscribe();
             map.insert(
-                root.to_path_buf(),
+                key.clone(),
                 WatcherHandle {
                     tx,
                     refcount: 1,
                     _debouncer: d,
                 },
             );
-            debug!(root = %root.display(), "watcher spawned, refcount=1");
+            debug!(
+                project = %key.project,
+                target_key = %key.target_key,
+                root = %key.root.display(),
+                "watcher spawned, refcount=1"
+            );
             return Ok(rx);
         }
     }
@@ -97,27 +118,28 @@ impl FsWatcherManager {
     /// Release a subscription for `root`.
     ///
     /// Decrements refcount. Drops the watcher when refcount reaches zero.
-    pub fn release(&self, root: &Path) {
+    pub(crate) fn release(&self, key: &WatcherKey) {
         let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
 
-        if let Some(handle) = map.get_mut(root) {
+        if let Some(handle) = map.get_mut(key) {
             handle.refcount = handle.refcount.saturating_sub(1);
-            debug!(root = %root.display(), refcount = handle.refcount, "watcher ref--");
+            debug!(root = %key.root.display(), refcount = handle.refcount, "watcher ref--");
             if handle.refcount == 0 {
-                map.remove(root);
-                debug!(root = %root.display(), "watcher dropped (refcount=0)");
+                map.remove(key);
+                debug!(root = %key.root.display(), "watcher dropped (refcount=0)");
             }
         }
     }
 
     /// Current refcount for a root — for tests.
     #[cfg(test)]
-    pub fn refcount(&self, root: &Path) -> usize {
+    pub(crate) fn refcount(&self, root: &std::path::Path) -> usize {
         self.inner
             .lock()
             .expect("FsWatcherManager poisoned")
-            .get(root)
-            .map(|h| h.refcount)
-            .unwrap_or(0)
+            .iter()
+            .filter(|(key, _)| key.root == root)
+            .map(|(_, handle)| handle.refcount)
+            .sum()
     }
 }

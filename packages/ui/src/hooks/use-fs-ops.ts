@@ -4,6 +4,11 @@ import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import type { FsOpResult } from "@/api/fs-types.js";
 import {
+  normalizeProjectTarget,
+  projectTargetCacheKey,
+  type ProjectTargetInput,
+} from "@/api/client.js";
+import {
   getActiveProfile,
   getAuthToken,
   getServerUrl,
@@ -20,12 +25,15 @@ const MAX_BLOB_DOWNLOAD_BYTES = 100 * 1024 * 1024;
  * Watcher events will also trigger invalidation via useFsSubscription, so
  * double invalidation is idempotent and safe.
  */
-export function useFsOps(project: string, subscribedPath: string) {
+export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
   const qc = useQueryClient();
+  const targetRef = normalizeProjectTarget(target);
+  const project = targetRef.project;
+  const targetKey = projectTargetCacheKey(targetRef);
 
   function invalidateTree() {
     void qc.invalidateQueries({
-      queryKey: ["fs-tree", project, subscribedPath],
+      queryKey: ["fs-tree", project, targetKey, subscribedPath],
     });
   }
 
@@ -38,7 +46,10 @@ export function useFsOps(project: string, subscribedPath: string) {
   }
 
   async function createFile(path: string): Promise<FsOpResult> {
-    const result = await transport().fsOp("create_file", { project, path });
+    const result = await transport().fsOp("create_file", {
+      ...targetRef,
+      path,
+    });
     if (result.ok) {
       invalidateTree();
       invalidateGit(path);
@@ -47,7 +58,10 @@ export function useFsOps(project: string, subscribedPath: string) {
   }
 
   async function createDir(path: string): Promise<FsOpResult> {
-    const result = await transport().fsOp("create_dir", { project, path });
+    const result = await transport().fsOp("create_dir", {
+      ...targetRef,
+      path,
+    });
     if (result.ok) {
       invalidateTree();
       invalidateGit(path);
@@ -56,7 +70,11 @@ export function useFsOps(project: string, subscribedPath: string) {
   }
 
   async function rename(path: string, newPath: string): Promise<FsOpResult> {
-    const result = await transport().fsOp("rename", { project, path, newPath });
+    const result = await transport().fsOp("rename", {
+      ...targetRef,
+      path,
+      newPath,
+    });
     if (result.ok) {
       invalidateTree();
       invalidateGit(path);
@@ -70,7 +88,7 @@ export function useFsOps(project: string, subscribedPath: string) {
     forceGit = false,
   ): Promise<FsOpResult> {
     const result = await transport().fsOp("delete", {
-      project,
+      ...targetRef,
       path,
       forceGit,
     });
@@ -82,7 +100,11 @@ export function useFsOps(project: string, subscribedPath: string) {
   }
 
   async function move(path: string, newPath: string): Promise<FsOpResult> {
-    const result = await transport().fsOp("move", { project, path, newPath });
+    const result = await transport().fsOp("move", {
+      ...targetRef,
+      path,
+      newPath,
+    });
     if (result.ok) {
       invalidateTree();
       invalidateGit(path);
@@ -93,7 +115,7 @@ export function useFsOps(project: string, subscribedPath: string) {
 
   async function download(path: string, size?: number): Promise<void> {
     if (isVideoFile(path)) {
-      await startVideoDownload(project, path);
+      await startVideoDownload(targetRef, path);
       return;
     }
     if (!Number.isFinite(size) || size === undefined) {
@@ -105,6 +127,9 @@ export function useFsOps(project: string, subscribedPath: string) {
       );
     }
     const params = new URLSearchParams({ project, path });
+    if (targetRef.worktreePath != null) {
+      params.set("worktreePath", targetRef.worktreePath);
+    }
     const profile = getActiveProfile();
     const serverUrl = profile?.url ?? getServerUrl();
     const token = getAuthToken(profile?.id);

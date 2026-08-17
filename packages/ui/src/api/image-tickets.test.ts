@@ -48,7 +48,10 @@ describe("issueImageTicket", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    const ticket = await issueImageTicket("project", "images/preview.webp");
+    const ticket = await issueImageTicket(
+      { project: "project", worktreePath: "/tmp/project-worktree" },
+      "images/preview.webp",
+    );
 
     expect(ticket).toMatchObject({
       purpose: "preview",
@@ -65,6 +68,11 @@ describe("issueImageTicket", () => {
         }),
       }),
     );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+      project: "project",
+      worktreePath: "/tmp/project-worktree",
+      path: "images/preview.webp",
+    });
 
     await ticket.revoke();
     expect(fetchMock).toHaveBeenLastCalledWith(

@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::workspace_target::ResolvedProjectTarget;
+
 use super::{
     media_session::MediaSessionToken,
     media_ticket::{
@@ -38,7 +40,7 @@ pub fn is_supported_image(path: &Path) -> bool {
 
 #[derive(Clone)]
 pub struct ImageTicketRecord {
-    pub project: String,
+    pub target: ResolvedProjectTarget,
     pub project_relative_path: PathBuf,
     pub file: MediaFileVersion,
     pub mime: String,
@@ -136,7 +138,7 @@ impl ImageTicketRecord {
         MediaTicketRecord {
             kind: MediaTicketKind::Image,
             purpose: MediaTicketPurpose::Preview,
-            project: self.project,
+            target: self.target,
             project_relative_path: self.project_relative_path,
             file: self.file,
             mime: self.mime,
@@ -147,7 +149,7 @@ impl ImageTicketRecord {
     fn from_media(record: MediaTicketRecord) -> Option<Self> {
         (record.kind == MediaTicketKind::Image && record.purpose == MediaTicketPurpose::Preview)
             .then_some(Self {
-                project: record.project,
+                target: record.target,
                 project_relative_path: record.project_relative_path,
                 file: record.file,
                 mime: record.mime,

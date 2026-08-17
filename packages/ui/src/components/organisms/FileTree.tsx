@@ -28,6 +28,7 @@ import { useFsSubscription } from "@/hooks/use-fs-subscription.js";
 import { useFsOps } from "@/hooks/use-fs-ops.js";
 import { useFsUpload } from "@/hooks/use-fs-upload.js";
 import type { FsArborNode } from "@/api/fs-types.js";
+import type { ProjectTargetRef } from "@/api/client.js";
 import { TreeContextMenu } from "./TreeContextMenu.js";
 import { UploadDropzone } from "./UploadDropzone.js";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog.js";
@@ -297,6 +298,7 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
 
 interface FileTreeProps {
   project: string;
+  target?: ProjectTargetRef;
   path?: string;
   onFileOpen?: (node: FsArborNode) => void;
   onOpenTerminal?: () => void;
@@ -316,12 +318,19 @@ interface DeleteState {
 
 export function FileTree({
   project,
+  target,
   path = "",
   onFileOpen,
   onOpenTerminal,
   className,
   revealRequest,
 }: FileTreeProps) {
+  const worktreePath = target?.worktreePath;
+  const targetProject = target?.project ?? project;
+  const requestTarget =
+    worktreePath == null
+      ? targetProject
+      : { project: targetProject, worktreePath };
   const {
     explorerShowHidden: showHidden,
     explorerLanguageFilter: configuredLanguageFilter,
@@ -336,16 +345,16 @@ export function FileTree({
   const languageFilterId = useId();
   const [encUploadOpen, setEncUploadOpen] = useState(false);
   const { data, isLoading, isError, error, loadChildren, refetch, isFetching } =
-    useFsSubscription(project, path);
-  const languageScan = useExplorerLanguageScan(project);
+    useFsSubscription(requestTarget, path);
+  const languageScan = useExplorerLanguageScan(requestTarget);
   const { cache: languageScanCache, scan } = languageScan;
   const { data: gitDiff } = useGitDiff(project, "*");
   const openDiff = useEditorStore((s) => s.openDiff);
-  const ops = useFsOps(project, path);
-  const { progress, upload, clearProgress } = useFsUpload(project, path);
+  const ops = useFsOps(requestTarget, path);
+  const { progress, upload, clearProgress } = useFsUpload(requestTarget, path);
   const { isEncryptEnabled } = useEncryptMode();
   const { data: projectData } = useProject(project);
-  const projectRoot = projectData?.path ?? "";
+  const projectRoot = worktreePath ?? projectData?.path ?? "";
   const { copied, copy } = useCopyToClipboard();
 
   const [newItemDialog, setNewItemDialog] = useState<{
@@ -1161,6 +1170,7 @@ export function FileTree({
       {encUploadOpen && (
         <EncryptedUploadDialog
           project={project}
+          target={target}
           dir={uploadDir}
           onClose={() => setEncUploadOpen(false)}
         />

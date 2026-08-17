@@ -16,6 +16,7 @@ import {
   type ImagePreviewTicket,
 } from "@/api/image-tickets.js";
 import { Button } from "@/components/atoms/Button.js";
+import type { ProjectTargetRef } from "@/api/client.js";
 import {
   getProfileChangeVersion,
   subscribeToProfileChanges,
@@ -26,6 +27,7 @@ type MediaTicketErrorCode = "MEDIA_SESSION_UNSUPPORTED";
 
 interface ImagePreviewProps {
   project: string;
+  target?: ProjectTargetRef;
   path: string;
   fileName: string;
   mime?: string;
@@ -69,10 +71,13 @@ function revokePreview(ticket: ImagePreviewTicket | null): void {
 
 export function ImagePreview({
   project,
+  target,
   path,
   fileName,
   mime,
 }: ImagePreviewProps) {
+  const worktreePath = target?.worktreePath;
+  const targetProject = target?.project ?? project;
   const imageRef = useRef<HTMLImageElement | null>(null);
   const issueControllerRef = useRef<AbortController | null>(null);
   const previewRef = useRef<ImagePreviewTicket | null>(null);
@@ -112,7 +117,13 @@ export function ImagePreview({
     const controller = new AbortController();
     issueControllerRef.current = controller;
 
-    void issueImageTicket(project, path, controller.signal)
+    void issueImageTicket(
+      worktreePath == null
+        ? targetProject
+        : { project: targetProject, worktreePath },
+      path,
+      controller.signal,
+    )
       .then((ticket) => {
         if (ticket.purpose !== "preview") {
           revokePreview(ticket);
@@ -176,7 +187,7 @@ export function ImagePreview({
       if (generationRef.current === generation) generationRef.current += 1;
       teardownPreview(cleanupImage);
     };
-  }, [path, project, retryToken, teardownPreview]);
+  }, [path, retryToken, targetProject, teardownPreview, worktreePath]);
 
   useEffect(
     () =>

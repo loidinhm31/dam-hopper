@@ -9,16 +9,24 @@ import {
   sortPathSearchMatches,
 } from "@/lib/search-matches.js";
 import type { SearchMode, SearchScope } from "@/stores/search-ui.js";
+import {
+  normalizeProjectTarget,
+  projectTargetCacheKey,
+  type ProjectTargetInput,
+} from "@/api/client.js";
 
 const DEBOUNCE_MS = 350;
 const MAX_QUERY_LEN = 200;
 
 export function useFileSearch(
-  project: string | null,
+  target: ProjectTargetInput | null,
   scope: SearchScope = "project",
   mode: SearchMode = "content",
   query = "",
 ) {
+  const targetRef = target == null ? null : normalizeProjectTarget(target);
+  const project = targetRef?.project ?? null;
+  const targetKey = targetRef == null ? null : projectTargetCacheKey(targetRef);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
@@ -36,6 +44,7 @@ export function useFileSearch(
     queryKey: [
       mode === "filename" ? "fs-path-search" : "fs-search",
       isWorkspace ? "__workspace__" : project,
+      isWorkspace ? "__workspace__" : targetKey,
       trimmedQuery,
       caseSensitive,
       scope,
@@ -44,7 +53,7 @@ export function useFileSearch(
       getTransport().invoke(
         mode === "filename" ? "fs:searchPaths" : "fs:search",
         {
-          ...(isWorkspace ? {} : { project }),
+          ...(isWorkspace || targetRef == null ? {} : targetRef),
           q: trimmedQuery,
           case: caseSensitive || undefined,
           scope: isWorkspace ? "workspace" : undefined,

@@ -25,6 +25,10 @@ import {
 } from "@/lib/opaque-session.js";
 import { encryptFile, encryptText } from "@/lib/crypto.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
+import {
+  normalizeProjectTarget,
+  type ProjectTargetInput,
+} from "@/api/client.js";
 
 export type EncryptedWriteStatus =
   | "idle"
@@ -43,7 +47,7 @@ export interface EncryptedUploadResult {
 export interface UseEncryptedWriteReturn {
   /** Upload an encrypted File to the given directory. */
   uploadFile: (
-    project: string,
+    target: ProjectTargetInput,
     dir: string,
     file: File,
     passphrase: string,
@@ -52,7 +56,7 @@ export interface UseEncryptedWriteReturn {
 
   /** Save encrypted text content to the given path. */
   saveText: (
-    project: string,
+    target: ProjectTargetInput,
     path: string,
     text: string,
     passphrase: string,
@@ -118,12 +122,14 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
 
   const uploadFile = useCallback(
     async (
-      project: string,
+      target: ProjectTargetInput,
       dir: string,
       file: File,
       passphrase: string,
       onProgress?: (pct: number) => void,
     ): Promise<EncryptedUploadResult> => {
+      const targetRef = normalizeProjectTarget(target);
+      const project = targetRef.project;
       setError(null);
       try {
         const session = await getOrCreateSession(project, passphrase);
@@ -145,7 +151,7 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         });
 
         const result = await transport.fsPutFile(
-          project,
+          targetRef,
           dir,
           encFile,
           session.sessionId,
@@ -174,11 +180,13 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
 
   const saveText = useCallback(
     async (
-      project: string,
+      target: ProjectTargetInput,
       path: string,
       text: string,
       passphrase: string,
     ): Promise<EncryptedUploadResult> => {
+      const targetRef = normalizeProjectTarget(target);
+      const project = targetRef.project;
       setError(null);
       try {
         const session = await getOrCreateSession(project, passphrase);
@@ -195,7 +203,7 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         const transport = getTransport() as WsTransport;
 
         const result = await transport.fsPutSave(
-          project,
+          targetRef,
           path,
           blob,
           session.sessionId,

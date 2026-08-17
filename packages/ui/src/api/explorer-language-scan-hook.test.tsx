@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./client.js";
 import { useExplorerLanguageScan } from "./queries.js";
 import { handleWorkspaceChanged } from "@/hooks/use-sse.js";
+import { explorerLanguageScanQueryKey } from "@/lib/explorer-language-scan.js";
 
 let root: Root | null = null;
 
@@ -57,7 +58,7 @@ describe("useExplorerLanguageScan", () => {
       .spyOn(api.fs, "languageFiles")
       .mockResolvedValue({ files: [], truncated: false, limit: 20_000 });
     const queryClient = new QueryClient();
-    queryClient.setQueryData(["explorer-language-scan", "alpha"], {
+    queryClient.setQueryData(explorerLanguageScanQueryKey("alpha", "root"), {
       result: { files: [], truncated: false, limit: 20_000 },
       generation: 0,
       resultVersion: 1,
