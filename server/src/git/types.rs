@@ -391,7 +391,7 @@ pub struct ConflictFile {
 
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Worktree {
     pub path: String,
@@ -399,6 +399,10 @@ pub struct Worktree {
     pub commit_hash: String,
     pub is_main: bool,
     pub is_locked: bool,
+    pub is_detached: bool,
+    pub is_bare: bool,
+    pub is_prunable: bool,
+    pub is_available: bool,
 }
 
 pub struct WorktreeAddOptions {

@@ -538,6 +538,7 @@ async fn reload_config(state: &AppState) -> Result<(), ApiError> {
     let new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
     state.media_tickets.revoke_all();
     state.fs.reinit_sandbox(project_roots_from_config(&new_cfg));
+    state.workspace_target_resolver.invalidate_all().await;
     state
         .host_resource_monitor
         .reconfigure(new_cfg.server.host_resources.clone())

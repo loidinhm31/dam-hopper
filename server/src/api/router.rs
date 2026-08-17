@@ -124,6 +124,10 @@ fn build_router_with_web_dir_and_origins(
         .route("/api/git/pull", post(git::pull_projects))
         .route("/api/git/push", post(git::push_project))
         .route("/api/git/{project}/roots", get(git::get_vcs_roots))
+        .route(
+            "/api/git/{project}/worktrees/prune",
+            post(git::prune_worktrees_route),
+        )
         .route("/api/git/{project}/worktrees", get(git::get_worktrees))
         .route(
             "/api/git/{project}/worktrees",

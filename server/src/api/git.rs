@@ -6,18 +6,20 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::error::AppError;
 use crate::git::bulk::ProjectRef;
 use crate::git::progress::create_progress_channel;
 use crate::git::{
     add_worktree, checkout_branch, cherry_pick, cherry_pick_commit_files, create_branch,
     delete_branch, discover_available_vcs_roots, drop_commit, drop_commit_files,
-    edit_commit_message, get_commit_message, get_log, list_branches, list_worktrees,
+    edit_commit_message, get_commit_message, get_log, list_branches, prune_worktrees,
     remove_worktree, reset_to_commit, resolve_git_request_root, revert_commit, revert_commit_files,
     undo_last_commit, update_branch, BulkGitService, CheckoutStrategy, ResetMode,
     WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
 use crate::state::AppState;
+use crate::workspace_target::{is_not_git_repository_error, ProjectTargetRef};
 
 use super::error::ApiError;
 
@@ -131,8 +133,10 @@ pub async fn get_worktrees(
     State(state): State<AppState>,
     Path(project): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = resolve_project_path(&state, &project).await?;
-    let worktrees = list_worktrees(&path).await.map_err(ApiError::from_app)?;
+    let worktrees = state
+        .refresh_project_worktrees(&project)
+        .await
+        .map_err(map_worktree_git_error)?;
     Ok(Json(worktrees))
 }
 
@@ -144,7 +148,10 @@ pub async fn get_vcs_roots(
     State(state): State<AppState>,
     Path(project): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = resolve_project_path(&state, &project).await?;
+    let path = state
+        .workspace_target_project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let roots = discover_available_vcs_roots(&path).map_err(ApiError::from_app)?;
     Ok(Json(roots))
 }
@@ -167,7 +174,10 @@ pub async fn add_worktree_route(
     Path(project): Path<String>,
     Json(body): Json<AddWorktreeBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = resolve_project_path(&state, &project).await?;
+    let path = state
+        .workspace_target_project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let opts = WorktreeAddOptions {
         branch: body.branch,
         path: body.path,
@@ -176,7 +186,20 @@ pub async fn add_worktree_route(
     };
     let worktree = add_worktree(&path, opts)
         .await
-        .map_err(ApiError::from_app)?;
+        .map_err(map_worktree_git_error)?;
+    state.invalidate_project_worktrees(&path).await;
+    let worktrees = state
+        .refresh_project_worktrees(&project)
+        .await
+        .map_err(map_worktree_git_error)?;
+    let worktree = worktrees
+        .into_iter()
+        .find(|candidate| candidate.repository_path == worktree.path)
+        .ok_or_else(|| {
+            ApiError::from_app(crate::error::AppError::Internal(
+                "Worktree created but target metadata was not found".to_string(),
+            ))
+        })?;
     Ok(Json(worktree))
 }
 
@@ -194,11 +217,60 @@ pub async fn remove_worktree_route(
     Path(project): Path<String>,
     Json(body): Json<RemoveWorktreeBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let project_path = resolve_project_path(&state, &project).await?;
-    remove_worktree(&project_path, &body.path)
+    let project_path = state
+        .workspace_target_project_path(&project)
         .await
         .map_err(ApiError::from_app)?;
+    let target = state
+        .resolve_project_target(&ProjectTargetRef {
+            project: project.clone(),
+            worktree_path: Some(body.path),
+        })
+        .await
+        .map_err(ApiError::from_app)?;
+    let worktree = target.worktree.ok_or_else(|| {
+        ApiError::from_app(crate::error::AppError::InvalidInput(
+            "The configured project root cannot be removed as a worktree".to_string(),
+        ))
+    })?;
+    if worktree.is_main {
+        return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+            "The configured project root cannot be removed as a worktree".to_string(),
+        )));
+    }
+    remove_worktree(&project_path, &worktree.repository_path)
+        .await
+        .map_err(ApiError::from_app)?;
+    state.invalidate_project_worktrees(&project_path).await;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/git/:project/worktrees/prune
+// ---------------------------------------------------------------------------
+
+pub async fn prune_worktrees_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let project_path = state
+        .workspace_target_project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
+    prune_worktrees(&project_path)
+        .await
+        .map_err(map_worktree_git_error)?;
+    state.invalidate_project_worktrees(&project_path).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn map_worktree_git_error(error: AppError) -> ApiError {
+    match error {
+        AppError::Git(message) if is_not_git_repository_error(&message) => {
+            ApiError::from_app(AppError::GitUnavailable)
+        }
+        error => ApiError::from_app(error),
+    }
 }
 
 // ---------------------------------------------------------------------------

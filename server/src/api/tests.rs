@@ -3849,6 +3849,134 @@ async fn git_worktrees_returns_list_for_valid_project() {
 }
 
 #[tokio::test]
+async fn git_worktree_target_on_plain_project_returns_stable_error() {
+    let project = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&project);
+
+    let resp = delete_json(
+        state,
+        "/api/git/test-project/worktrees",
+        serde_json::json!({ "path": target.path() }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "WORKSPACE_TARGET_UNREGISTERED");
+}
+
+#[tokio::test]
+async fn git_worktree_routes_return_typed_unavailable_for_plain_project() {
+    let project = tempfile::tempdir().unwrap();
+
+    let resp = get(
+        make_state_with_project(&project),
+        "/api/git/test-project/worktrees",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "GIT_NOT_INITIALIZED");
+
+    let resp = post_json(
+        make_state_with_project(&project),
+        "/api/git/test-project/worktrees/prune",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "GIT_NOT_INITIALIZED");
+}
+
+#[tokio::test]
+async fn git_worktree_add_and_remove_routes_use_project_targets() {
+    let project = tempfile::tempdir().unwrap();
+    init_git_repo(project.path());
+    git(&["branch", "feature"], project.path());
+    let worktree_path = project.path().join("feature-worktree");
+    let state = make_state_with_project(&project);
+
+    let resp = delete_json(
+        state.clone(),
+        "/api/git/test-project/worktrees",
+        serde_json::json!({ "path": project.path() }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = post_json(
+        state.clone(),
+        "/api/git/test-project/worktrees",
+        serde_json::json!({
+            "branch": "feature",
+            "path": "feature-worktree",
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["path"], worktree_path.to_string_lossy().as_ref());
+    assert_eq!(
+        json["repositoryPath"],
+        worktree_path.to_string_lossy().as_ref()
+    );
+    assert!(json["isAvailable"].as_bool().unwrap());
+
+    let resp = delete_json(
+        state,
+        "/api/git/test-project/worktrees",
+        serde_json::json!({ "path": worktree_path }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(!worktree_path.exists());
+}
+
+#[tokio::test]
+async fn git_worktree_prune_route_invalidates_removed_worktree_metadata() {
+    let project = tempfile::tempdir().unwrap();
+    init_git_repo(project.path());
+    git(&["branch", "stale"], project.path());
+    let worktree_path = project.path().join("stale-worktree");
+    let worktree_string = worktree_path.to_string_lossy().into_owned();
+    git(
+        &["worktree", "add", &worktree_string, "stale"],
+        project.path(),
+    );
+    std::fs::remove_dir_all(&worktree_path).unwrap();
+
+    let state = make_state_with_project(&project);
+    let resp = post_json(
+        state.clone(),
+        "/api/git/test-project/worktrees/prune",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = get(state, "/api/git/test-project/worktrees").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
 async fn git_roots_returns_primary_root_for_valid_project() {
     let tmp = tempfile::tempdir().unwrap();
     init_git_repo(tmp.path());
