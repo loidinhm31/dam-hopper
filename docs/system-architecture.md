@@ -2275,6 +2275,8 @@ Frontend now uses a split host/package layout: `apps/web` is the thin Vite brows
 - Subscribes to Transport events: `onTerminalExit`, `onProcessRestarted`, `onTransportStatus`
 - Owns a session-local xterm search controller backed by the official search addon
 - Routes Ctrl/Cmd+F from the active pane to that controller; the browser default is suppressed and the keystroke stays client-only, so it never enters PTY input. Ctrl/Cmd+Shift+F remains the file-search shortcut.
+- Applies the shared persisted terminal font size to its live xterm instance, invalidates terminal geometry, and schedules the existing fit path; xterm's resize event remains the only PTY dimension writer.
+- Consumes editable page-global font shortcuts before browser or terminal input. The defaults use physical keys `Ctrl+Alt+Shift+Equal` (the `+` key) and `Ctrl+Alt+Minus`; the xterm handler prevents a matching shortcut from reaching the PTY twice.
 - Stores the base xterm key handler so temporary `PaneContainer` routing can be removed without disabling terminal shortcuts, including split-to-runtime transitions
 - Closes find state for inactive, detached, or reparented terminals so stale queries and decorations do not survive host changes
 - Writes ANSI banners for lifecycle events:
@@ -2282,6 +2284,65 @@ Frontend now uses a split host/package layout: `apps/web` is the thin Vite brows
   - Restart: Yellow `[Process restarted (#N)]`
   - Reconnect: Dim `[Reconnecting…]` / `[Reconnected]`
 - Reconnects through one in-flight `terminal:attach`; a timeout verifies session liveness, then retries with capped exponential backoff or creates one confirmed-dead replacement
+
+### Browser-local terminal output activity
+
+Runtime terminal rows derive recent-output activity from the existing terminal
+rendering path; there is no server, SSE, or WebSocket protocol change. The data
+flow is:
+
+```
+/ws terminal:output { kind, id, data }
+  -> WsTransport listener dispatch keyed by terminal session id
+  -> TerminalPanel attach/replay gate
+  -> writeLiveData(data) and xterm write
+  -> memory-only per-session browser-local activity snapshot store
+  -> TerminalRuntimeNavigatorItem for the same session id
+```
+
+`writeLiveData` marks a non-empty chunk only when it passes the replay gate for
+xterm writing. Historical `terminal:buffer` replay does not count. Live chunks
+queued during replay count only after replay completes and each chunk flows
+through `writeLiveData`. Every mounted `TerminalPanel`, including hidden panels
+retained by `TerminalKeepAliveHost`, independently updates its session entry.
+
+The store publishes only per-session activity snapshots containing derived
+recent/quiet state and stream readiness needed for the gray state; its internal
+bookkeeping also retains the latest observed-output timestamp and timer/
+subscription state. It never stores, persists, logs, or forwards output content. The
+recent-output window is fixed at 3,000 ms in v1. A first chunk transitions the
+session to recent output and schedules an expiry check. Later chunks update the
+timestamp without notifying React or recreating the timer. Each expiry callback
+compares the current time with the latest timestamp and either schedules the
+remaining duration or publishes one quiet transition. This timestamp check is
+required because background-tab timers may run late.
+
+Runtime row state precedence is fixed:
+
+1. `alive === false`: stopped (red or muted stopped treatment).
+2. Transport disconnected, attaching, or replaying: stream unavailable (gray).
+3. Live output observed within 3,000 ms: receiving output (green).
+4. Otherwise: quiet/no recent output observed (yellow).
+
+Attach/replay start, transport disconnect or replacement, terminal exit, and
+panel cleanup clear recent activity and reset stream readiness so stale green
+cannot survive a lifecycle boundary. Each mounted panel owns its registration;
+owner-checked callbacks make late output or readiness updates from a prior
+disconnect, exit, attach reset, replacement, or disposed panel no-ops. Fresh
+post-replay output may activate the row again. Store subscribers are notified
+only when the externally visible activity/stream state changes, not for every
+PTY chunk. Labels and tooltips distinguish receiving, quiet,
+connecting/disconnected/replaying, and stopped; color is never the only cue.
+
+Key invariants:
+
+- Session ID is the isolation key; output from terminal A cannot affect terminal B.
+- Activity means browser-observed live output accepted by xterm, not process work,
+  command execution, health, server-authoritative idleness, or delivery proof.
+- Replay and synthetic lifecycle banners never create recent-output activity.
+- Hidden kept-alive mounted terminals participate; unmounted/disposed panels do not.
+- Activity state is memory-only, bounded by mounted session lifecycle, and content-free.
+- The feature adds no SSE endpoint, server timer, persistence, or protocol field.
 
 **TerminalTreeView** (`packages/ui/src/components/organisms/TerminalTreeView.tsx`)
 
@@ -2501,6 +2562,11 @@ API layer (handlers) catch AppError → HTTP status:
 **Phase 07 (Complete):** IDE explorer enhancements:
 
 - **Markdown split-view preview:** `MarkdownHost` + `MarkdownPreview` components in packages/ui/src/components/organisms/. EditorTabs routes .md/.mdx files to MarkdownHost. Toggle modes: Edit | Split | Preview-only.
+- Markdown view mode is one browser-local presentation preference shared by all
+  Markdown files across projects and workspaces in the app origin. It is stored
+  as a single versioned localStorage value; files without a valid value use
+  Split. Storage failures and invalid values are non-fatal; this preference
+  never changes server, workspace, project-file, API, or database state.
 - **Drag-and-drop file move:** FileTree.tsx DnD via react-arborist's built-in `onMove`. Drop on dir → move into dir. Drop on file → move to file's parent. Calls existing `ops.move()` with server-side sandbox validation.
 - **Backend search API:** `GET /api/fs/search?project=X&q=QUERY[&case=bool&max=N]` in server/src/api/fs.rs. Uses `ignore` crate v0.4 for .gitignore-aware directory walking. Plain text search (regex-escaped server-side). Results capped at 1000, default 200.
 - **Frontend search panel:** New "SEARCH" tab in SidebarTabSwitcher. SearchPanel component with debounced input (useDeferredValue), results grouped by file with match highlighting. `useFileSearch` hook in packages/ui/src/hooks/. Ctrl+Shift+F keyboard shortcut to focus search. Gated behind ide_explorer feature flag.

@@ -9,7 +9,12 @@ import {
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
+import { useCallback, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils.js";
+import {
+  getTerminalOutputActivitySnapshot,
+  subscribeToTerminalOutputActivity,
+} from "@/lib/terminal-output-activity.js";
 import {
   openTerminalDiagnosticsContextMenu,
   type TerminalDiagnosticsMenuHandler,
@@ -143,10 +148,44 @@ function RuntimeSessionLeaf({
   onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
   touchOptimized?: boolean;
 }) {
-  const statusClass =
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      subscribeToTerminalOutputActivity(session.sessionId, listener),
+    [session.sessionId],
+  );
+  const getSnapshot = useCallback(
+    () => getTerminalOutputActivitySnapshot(session.sessionId),
+    [session.sessionId],
+  );
+  const activitySnapshot = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getSnapshot,
+  );
+  const activityPresentation =
     session.alive === false
-      ? "bg-[var(--color-warning)]"
-      : "bg-[var(--color-success)]";
+      ? {
+          label: "Stopped",
+          title: "Terminal stopped",
+          className: "bg-[var(--color-danger)]",
+        }
+      : !activitySnapshot.streamReady
+        ? {
+            label: "Output unavailable",
+            title: "Output stream unavailable",
+            className: "bg-[var(--color-text-muted)]",
+          }
+        : activitySnapshot.recentOutput
+          ? {
+              label: "Receiving output",
+              title: "Receiving output",
+              className: "bg-[var(--color-success)]",
+            }
+          : {
+              label: "Quiet",
+              title: "Quiet; no recent output observed",
+              className: "bg-[var(--color-warning)]",
+            };
 
   return (
     <div
@@ -179,8 +218,14 @@ function RuntimeSessionLeaf({
           }
         >
           <span
-            className={cn("h-1.5 w-1.5 shrink-0 rounded-full", statusClass)}
+            aria-hidden="true"
+            className={cn(
+              "h-1.5 w-1.5 shrink-0 rounded-full",
+              activityPresentation.className,
+            )}
+            title={activityPresentation.title}
           />
+          <span className="sr-only">{activityPresentation.label}</span>
           <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 truncate font-mono">{session.label}</span>
         </button>
@@ -357,7 +402,9 @@ export function TerminalRuntimeNavigatorItem({
         <>
           <div className="flex items-center gap-2">
             <Circle className="h-3.5 w-3.5 shrink-0 fill-[var(--color-primary)] text-[var(--color-primary)]" />
-            <span className="font-mono text-[var(--color-text)]">:{item.port}</span>
+            <span className="font-mono text-[var(--color-text)]">
+              :{item.port}
+            </span>
             <span className="truncate">Detached port</span>
           </div>
           <div className="mt-1 flex flex-wrap gap-1 pl-5">

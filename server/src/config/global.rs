@@ -126,6 +126,7 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
         let toml_key = match key.as_str() {
             "systemFontSize" => "system_font_size",
             "editorFontSize" => "editor_font_size",
+            "terminalFontSize" => "terminal_font_size",
             "editorZoomWheelEnabled" => "editor_zoom_wheel_enabled",
             "searchTextShortcut" => "search_text_shortcut",
             "searchFilenameShortcut" => "search_filename_shortcut",
@@ -135,6 +136,8 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "gitPanelShortcut" => "git_panel_shortcut",
             "portsPanelShortcut" => "ports_panel_shortcut",
             "fleetTerminalShortcut" => "fleet_terminal_shortcut",
+            "terminalFontSizeIncreaseShortcut" => "terminal_font_size_increase_shortcut",
+            "terminalFontSizeDecreaseShortcut" => "terminal_font_size_decrease_shortcut",
             "hostResourcePinnedMount" => "host_resource_pinned_mount",
             "terminalSuggestionsEnabled" => "terminal_suggestions_enabled",
             "terminalAutoSwitchProjectEnabled" => "terminal_auto_switch_project_enabled",
