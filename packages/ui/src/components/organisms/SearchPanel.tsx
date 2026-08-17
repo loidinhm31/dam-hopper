@@ -19,9 +19,11 @@ import { SearchPanelResults } from "@/components/organisms/SearchPanelResults.js
 import { useSearchPanelReplace } from "@/hooks/use-search-panel-replace.js";
 import type { PathSearchMatch, SearchMatch } from "@/api/fs-types.js";
 import { cn } from "@/lib/utils.js";
+import type { ProjectTargetRef } from "@/api/client.js";
 
 interface SearchPanelProps {
   project: string;
+  target?: ProjectTargetRef;
   onResultClick: (
     match: SearchResultItem,
     options?: { closeSearch?: boolean },
@@ -34,12 +36,19 @@ interface SearchPanelProps {
 
 export function SearchPanel({
   project,
+  target,
   onResultClick,
   closeOnResultClick = false,
   onClose,
   inputRef,
   consumeOpenSelection = Boolean(onClose),
 }: SearchPanelProps) {
+  const worktreePath = target?.worktreePath;
+  const targetProject = target?.project ?? project;
+  const requestTarget =
+    worktreePath == null
+      ? targetProject
+      : { project: targetProject, worktreePath };
   const localInputRef = useRef<HTMLInputElement>(null);
   const resolvedRef = inputRef ?? localInputRef;
   const {
@@ -56,19 +65,23 @@ export function SearchPanel({
   } = useSearchUiStore();
   const query = queries[mode];
   const { caseSensitive, setCaseSensitive, data, isLoading, isError, refetch } =
-    useFileSearch(project, scope, mode, query);
+    useFileSearch(requestTarget, scope, mode, query);
 
   const contentMatches = useMemo(
     () =>
       mode === "content"
-        ? ((data?.matches ?? []) as SearchResultItem[]).filter(isContentSearchMatch)
+        ? ((data?.matches ?? []) as SearchResultItem[]).filter(
+            isContentSearchMatch,
+          )
         : [],
     [data?.matches, mode],
   );
   const pathMatches = useMemo(
     () =>
       mode === "filename"
-        ? ((data?.matches ?? []) as SearchResultItem[]).filter(isPathSearchMatch)
+        ? ((data?.matches ?? []) as SearchResultItem[]).filter(
+            isPathSearchMatch,
+          )
         : [],
     [data?.matches, mode],
   );
@@ -117,7 +130,7 @@ export function SearchPanel({
     selectMatch,
     replaceNext,
   } = useSearchPanelReplace({
-    project,
+    target: requestTarget,
     matches: contentMatches,
     searchQuery: queries.content,
     replaceQuery,

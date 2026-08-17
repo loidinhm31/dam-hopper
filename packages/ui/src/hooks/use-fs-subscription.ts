@@ -9,6 +9,11 @@ import type {
   FsTreeData,
 } from "@/api/fs-types.js";
 import { api } from "@/api/client.js";
+import {
+  normalizeProjectTarget,
+  projectTargetCacheKey,
+  type ProjectTargetInput,
+} from "@/api/client.js";
 import { scheduleGitFsInvalidation } from "@/lib/git-fs-invalidation.js";
 import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
 import {
@@ -73,19 +78,25 @@ export function applyFsDelta(
  * Returns the TanStack Query result for `['fs-tree', project, path]`.
  * Also exposes `loadChildren` for lazy dir expansion.
  */
-export function useFsSubscription(project: string, path: string) {
+export function useFsSubscription(target: ProjectTargetInput, path: string) {
   const qc = useQueryClient();
+  const targetRef = normalizeProjectTarget(target);
+  const project = targetRef.project;
+  const worktreePath = targetRef.worktreePath;
+  const targetKey = projectTargetCacheKey(targetRef);
+  const requestTarget =
+    worktreePath == null ? project : { project, worktreePath };
   const transportGeneration = useTransportGeneration();
   const boundTransportGenerationRef = useRef(transportGeneration);
 
   const query = useQuery<FsTreeData>({
-    queryKey: ["fs-tree", project, path],
+    queryKey: ["fs-tree", project, targetKey, path],
     queryFn: async ({ signal }) => {
       // Re-resolve transport each time to handle reconfigureTransport() calls.
       const t = getTransport() as WsTransport;
       let sub_id: number | undefined;
       try {
-        const result = await t.fsSubscribeTree(project, path);
+        const result = await t.fsSubscribeTree(requestTarget, path);
         sub_id = result.sub_id;
         // If TanStack Query cancelled this queryFn (component unmounted while in-flight),
         // immediately release the subscription the server has already created.
@@ -116,7 +127,7 @@ export function useFsSubscription(project: string, path: string) {
     if (boundTransportGenerationRef.current !== transportGeneration) {
       boundTransportGenerationRef.current = transportGeneration;
       void qc.resetQueries({
-        queryKey: ["fs-tree", project, path],
+        queryKey: ["fs-tree", project, targetKey, path],
         exact: true,
       });
       return;
@@ -127,16 +138,21 @@ export function useFsSubscription(project: string, path: string) {
       if (explorerLanguageScanWorkspaceEpoch(qc) !== workspaceEpoch) {
         return;
       }
-      markExplorerLanguageScanStale(qc, project, workspaceEpoch);
-      qc.setQueryData<FsTreeData>(["fs-tree", project, path], (prev) => {
-        if (!prev) return prev;
-        const next = applyFsDelta(prev, ev);
-        if (next === null) {
-          void qc.invalidateQueries({ queryKey: ["fs-tree", project, path] });
-          return prev;
-        }
-        return next;
-      });
+      markExplorerLanguageScanStale(qc, project, workspaceEpoch, targetKey);
+      qc.setQueryData<FsTreeData>(
+        ["fs-tree", project, targetKey, path],
+        (prev) => {
+          if (!prev) return prev;
+          const next = applyFsDelta(prev, ev);
+          if (next === null) {
+            void qc.invalidateQueries({
+              queryKey: ["fs-tree", project, targetKey, path],
+            });
+            return prev;
+          }
+          return next;
+        },
+      );
       scheduleGitFsInvalidation(qc, project);
     });
 
@@ -144,11 +160,11 @@ export function useFsSubscription(project: string, path: string) {
       off();
       t.fsUnsubscribeTree(subId);
     };
-  }, [subId, project, path, qc, transportGeneration]);
+  }, [subId, project, targetKey, path, qc, transportGeneration]);
 
   /** Load children for a dir node and splice them into the cached tree. */
   async function loadChildren(nodeId: string) {
-    const resp = await api.fs.list(project, nodeId);
+    const resp = await api.fs.list(requestTarget, nodeId);
     const children = resp.entries.map(
       (e) =>
         ({
@@ -162,10 +178,13 @@ export function useFsSubscription(project: string, path: string) {
         }) as FsArborNode,
     );
 
-    qc.setQueryData<FsTreeData>(["fs-tree", project, path], (prev) => {
-      if (!prev) return prev;
-      return { ...prev, nodes: spliceChildren(prev.nodes, nodeId, children) };
-    });
+    qc.setQueryData<FsTreeData>(
+      ["fs-tree", project, targetKey, path],
+      (prev) => {
+        if (!prev) return prev;
+        return { ...prev, nodes: spliceChildren(prev.nodes, nodeId, children) };
+      },
+    );
 
     return children;
   }

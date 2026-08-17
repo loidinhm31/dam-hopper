@@ -8,9 +8,13 @@ import {
   findNextContentSearchMatch,
 } from "@/lib/search-matches.js";
 import { runReplaceNext } from "@/lib/search-replace-next.js";
+import {
+  normalizeProjectTarget,
+  type ProjectTargetInput,
+} from "@/api/client.js";
 
 interface UseSearchPanelReplaceOptions {
-  project: string;
+  target: ProjectTargetInput;
   matches: SearchMatch[];
   searchQuery: string;
   replaceQuery: string;
@@ -20,7 +24,7 @@ interface UseSearchPanelReplaceOptions {
 }
 
 export function useSearchPanelReplace({
-  project,
+  target,
   matches,
   searchQuery,
   replaceQuery,
@@ -28,6 +32,8 @@ export function useSearchPanelReplace({
   refreshMatches,
   openMatch,
 }: UseSearchPanelReplaceOptions) {
+  const targetRef = normalizeProjectTarget(target);
+  const project = targetRef.project;
   const tabs = useEditorStore((state) => state.tabs);
   const [selectedMatchKey, setSelectedMatchKey] = useState<string | null>(null);
   const [isReplacing, setIsReplacing] = useState(false);
@@ -36,8 +42,9 @@ export function useSearchPanelReplace({
 
   const selectedMatch = useMemo(
     () =>
-      matches.find((match) => buildContentSearchMatchKey(match) === selectedMatchKey) ??
-      null,
+      matches.find(
+        (match) => buildContentSearchMatchKey(match) === selectedMatchKey,
+      ) ?? null,
     [matches, selectedMatchKey],
   );
 
@@ -89,10 +96,13 @@ export function useSearchPanelReplace({
           ),
         openMatch: (match) => openMatch(match, { closeSearch: false }),
         readFile: (targetProject, path) =>
-          (getTransport() as WsTransport).fsRead(targetProject, path),
+          (getTransport() as WsTransport).fsRead(
+            targetProject === project ? targetRef : targetProject,
+            path,
+          ),
         writeFile: (targetProject, path, content, expectedMtime) =>
           (getTransport() as WsTransport).fsWriteFile(
-            targetProject,
+            targetProject === project ? targetRef : targetProject,
             path,
             content,
             expectedMtime,
@@ -121,7 +131,9 @@ export function useSearchPanelReplace({
 
       if (result.kind === "stale") {
         setSelectedMatchKey(
-          result.nextMatch ? buildContentSearchMatchKey(result.nextMatch) : null,
+          result.nextMatch
+            ? buildContentSearchMatchKey(result.nextMatch)
+            : null,
         );
         setWarning(result.message);
         return;
@@ -136,7 +148,9 @@ export function useSearchPanelReplace({
         result.nextMatch ? buildContentSearchMatchKey(result.nextMatch) : null,
       );
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Replace Next failed.");
+      setError(
+        caught instanceof Error ? caught.message : "Replace Next failed.",
+      );
     } finally {
       setIsReplacing(false);
     }
@@ -150,6 +164,7 @@ export function useSearchPanelReplace({
     replaceQuery,
     searchQuery,
     selectedMatch,
+    targetRef.worktreePath,
     tabs,
   ]);
 

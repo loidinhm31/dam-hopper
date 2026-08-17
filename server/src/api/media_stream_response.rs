@@ -17,6 +17,7 @@ use crate::{
         MediaTicketPurpose, MediaTicketRecord, VideoTicketPurpose,
     },
     state::AppState,
+    workspace_target::ProjectTargetRef,
 };
 
 use super::{
@@ -160,13 +161,25 @@ fn requested_range(headers: &HeaderMap, size: u64) -> Result<Option<ByteRange>, 
 }
 
 async fn open_revalidated(state: &AppState, record: &MediaTicketRecord) -> Option<tokio::fs::File> {
-    let canonical = resolve(
+    let target_ref = ProjectTargetRef {
+        project: record.target.project().to_owned(),
+        worktree_path: (!record.target.is_root())
+            .then(|| record.target.target_path().to_string_lossy().into_owned()),
+    };
+    let resolved = resolve(
         state,
-        &record.project,
+        &target_ref,
         &record.project_relative_path.to_string_lossy(),
     )
     .await
     .ok()?;
+    if resolved.target.target_key() != record.target.target_key()
+        || resolved.target.target_path() != record.target.target_path()
+        || resolved.target.configured_root() != record.target.configured_root()
+    {
+        return None;
+    }
+    let canonical = resolved.canonical;
     if canonical != record.file.canonical_path {
         return None;
     }
