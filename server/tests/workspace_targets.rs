@@ -96,18 +96,21 @@ async fn resolver_accepts_root_worktree_spaces_and_symlink_aliases() {
         .resolve(&target("demo", None), repo.path())
         .await
         .unwrap();
-    assert!(root.is_root);
-    assert_eq!(root.target_path, dunce::canonicalize(repo.path()).unwrap());
-    assert_eq!(root.target_key, "root");
+    assert!(root.is_root());
+    assert_eq!(
+        root.target_path(),
+        dunce::canonicalize(repo.path()).unwrap().as_path()
+    );
+    assert_eq!(root.target_key(), "root");
 
     let explicit_root = resolver
         .resolve(&target("demo", Some(repo.path())), repo.path())
         .await
         .unwrap();
-    assert!(!explicit_root.is_root);
-    assert!(explicit_root.worktree.as_ref().unwrap().is_main);
+    assert!(!explicit_root.is_root());
+    assert!(explicit_root.worktree().unwrap().is_main);
     assert_eq!(
-        explicit_root.worktree.as_ref().unwrap().repository_path,
+        explicit_root.worktree().unwrap().repository_path,
         repo.path().to_string_lossy().as_ref()
     );
 
@@ -115,13 +118,13 @@ async fn resolver_accepts_root_worktree_spaces_and_symlink_aliases() {
         .resolve(&target("demo", Some(&alias)), repo.path())
         .await
         .unwrap();
-    assert!(!resolved.is_root);
-    assert!(resolved.available);
+    assert!(!resolved.is_root());
+    assert!(resolved.available());
     assert_eq!(
-        resolved.target_path,
-        dunce::canonicalize(&worktree_path).unwrap()
+        resolved.target_path(),
+        dunce::canonicalize(&worktree_path).unwrap().as_path()
     );
-    assert_eq!(resolved.worktree.as_ref().unwrap().branch, "feature");
+    assert_eq!(resolved.worktree().unwrap().branch, "feature");
 }
 
 #[tokio::test]
@@ -150,8 +153,8 @@ async fn resolver_maps_nested_project_to_the_same_subdirectory_in_each_worktree(
         .unwrap();
 
     assert_eq!(
-        resolved.target_path,
-        dunce::canonicalize(&selected_path).unwrap()
+        resolved.target_path(),
+        dunce::canonicalize(&selected_path).unwrap().as_path()
     );
     let listed = resolver.refresh_project_worktrees(&nested).await.unwrap();
     let listed_feature = listed

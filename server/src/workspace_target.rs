@@ -70,31 +70,31 @@ impl ResolvedProjectTarget {
         }
     }
 
-    pub(crate) fn project(&self) -> &str {
+    pub fn project(&self) -> &str {
         &self.project
     }
 
-    pub(crate) fn configured_root(&self) -> &Path {
+    pub fn configured_root(&self) -> &Path {
         &self.configured_root
     }
 
-    pub(crate) fn target_path(&self) -> &Path {
+    pub fn target_path(&self) -> &Path {
         &self.target_path
     }
 
-    pub(crate) fn target_key(&self) -> &str {
+    pub fn target_key(&self) -> &str {
         &self.target_key
     }
 
-    pub(crate) fn is_root(&self) -> bool {
+    pub fn is_root(&self) -> bool {
         self.is_root
     }
 
-    pub(crate) fn available(&self) -> bool {
+    pub fn available(&self) -> bool {
         self.available
     }
 
-    pub(crate) fn worktree(&self) -> Option<&ProjectWorktree> {
+    pub fn worktree(&self) -> Option<&ProjectWorktree> {
         self.worktree.as_ref()
     }
 }
