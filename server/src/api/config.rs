@@ -1,10 +1,10 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
     Json,
 };
 use serde_json::Value;
-use std::path::{Path as FsPath, Path as StdPath, PathBuf};
+use std::path::{Path as FsPath, Path as StdPath};
 
 use crate::config::parser::project_path_for_toml;
 use crate::config::schema::DamHopperConfig;
@@ -14,6 +14,7 @@ use crate::config::{
 use crate::error::AppError;
 use crate::state::{project_roots_from_config, AppState};
 use crate::utils::atomic_write;
+use crate::workspace_target::ProjectTargetRef;
 
 use super::error::ApiError;
 
@@ -323,22 +324,26 @@ pub async fn get_project(
 // GET /api/projects/:name/status — git status for a single project
 // ---------------------------------------------------------------------------
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectStatusQuery {
+    pub worktree_path: Option<String>,
+}
+
 pub async fn get_project_status(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    Query(query): Query<ProjectStatusQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path: PathBuf = {
-        let cfg = state.config.read().await;
-        cfg.projects
-            .iter()
-            .find(|p| p.name == name)
-            .map(|p| PathBuf::from(&p.path))
-            .ok_or_else(|| {
-                ApiError::from_app(AppError::NotFound(format!("Project not found: {name}")))
-            })?
-    };
+    let target = state
+        .resolve_project_target(&ProjectTargetRef {
+            project: name.clone(),
+            worktree_path: query.worktree_path,
+        })
+        .await
+        .map_err(ApiError::from_app)?;
 
-    let status = crate::git::get_status(&path, &name)
+    let status = crate::git::get_status(target.target_path(), &name)
         .unwrap_or_else(|e| crate::git::GitStatus::error(&name, e.to_string()));
 
     Ok(Json(status))

@@ -76,6 +76,7 @@ vi.mock("@/api/queries.js", () => ({
     },
     isLoading: false,
   })),
+  useProjectStatus: vi.fn(() => ({ data: undefined, isLoading: false })),
   useWorktrees: worktreeQueryMock.useWorktrees,
   useBranches: vi.fn(() => ({ data: [] })),
   useGitRoots: vi.fn(() => ({

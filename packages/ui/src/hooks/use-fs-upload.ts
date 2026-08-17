@@ -29,6 +29,7 @@ export function useFsUpload(
   const qc = useQueryClient();
   const targetRef = normalizeProjectTarget(target);
   const project = targetRef.project;
+  const worktreePath = targetRef.worktreePath;
   const targetKey = projectTargetCacheKey(targetRef);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
 
@@ -48,7 +49,9 @@ export function useFsUpload(
 
       try {
         const t = getTransport() as WsTransport;
-        const result = await t.fsUploadFile(targetRef, dir, file, (pct) => {
+        const requestTarget =
+          worktreePath == null ? project : { project, worktreePath };
+        const result = await t.fsUploadFile(requestTarget, dir, file, (pct) => {
           setProgress({ filename: file.name, pct, done: false });
         });
 
@@ -58,7 +61,7 @@ export function useFsUpload(
             queryKey: ["fs-tree", project, targetKey, subscribedPath],
           });
           const path = dir ? `${dir}/${file.name}` : file.name;
-          void invalidateGitFileOperation(qc, project, path);
+          void invalidateGitFileOperation(qc, requestTarget, path);
         } else {
           setProgress({
             filename: file.name,
@@ -72,7 +75,7 @@ export function useFsUpload(
         setProgress({ filename: file.name, pct: 0, done: true, error: msg });
       }
     },
-    [project, subscribedPath, targetKey, targetRef.worktreePath, qc],
+    [project, subscribedPath, targetKey, worktreePath, qc],
   );
 
   function clearProgress() {
