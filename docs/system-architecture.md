@@ -130,7 +130,7 @@ Handles registry loading, legacy discovery fallback, and feature flags.
 5. Current working directory via legacy upward `dam-hopper.toml` discovery
 6. Empty config fallback
 
-### Project worktree targets (planned)
+### Project worktree targets (Phase 3 complete)
 
 A configured project remains the stable authorization, configuration, and
 top-bar identity. A Git worktree is an optional execution target beneath that
@@ -146,9 +146,12 @@ ProjectTargetRef {
 ```
 
 The browser keeps one selected target per project in session memory. Restarting
-the browser therefore selects the configured root again. The server does not
-hold a global "active worktree" because requests, watchers, media tickets,
-editor state, and terminal sessions for several targets may coexist.
+the browser therefore selects the configured root again. The selector discovers
+registered worktrees on mount and supports an explicit refresh; discovery rows
+may come from the bounded server cache, but the cache is never an authorization
+decision. The server does not hold a global "active worktree" because requests,
+watchers, media tickets, editor state, and terminal sessions for several targets
+may coexist.
 
 ```mermaid
 flowchart LR
@@ -167,11 +170,14 @@ flowchart LR
 
 The resolver is authoritative. For a root target it returns the canonical
 configured path. For a worktree target it canonicalizes the request and accepts
-it only if Git reports that path as a registered worktree of the configured
-repository. An existing arbitrary sibling directory, a worktree belonging to a
-different repository, and a missing/prunable worktree are not valid targets for
-new operations. Worktree discovery may use a short-lived cache, but add, remove,
-prune, explicit refresh, and availability changes invalidate it.
+it only if a fresh Git snapshot reports that path as a registered worktree of the
+configured repository, then rechecks that the projected target directory is
+live and usable. An existing arbitrary sibling directory, a worktree belonging
+to a different repository, and a missing/prunable worktree are not valid targets
+for new operations. Discovery uses a short-lived bounded cache for UI listing;
+add, remove, prune, explicit refresh, and project-configuration reload
+invalidate the relevant discovery entry. A failed discovery leaves existing UI
+rows visible with a stale-data warning and offers retry.
 
 `ProjectSandbox` evolves from one root per project to validation by project and
 resolved target root. This changes the set of approved roots, not the traversal
@@ -201,10 +207,20 @@ stateDiagram-v2
 
 Removing a worktree through DamHopper is blocked while it has dirty editor tabs
 or live terminals; Git's own dirty-worktree protection remains the final disk
-safety check. If a worktree disappears externally, the UI falls back to the
-configured root for new operations, keeps dirty tabs with an unavailable warning,
-and leaves existing terminal processes at their original cwd until the user
-closes them. It never silently discards editor data or moves a running process.
+safety check. If the selected worktree disappears externally or becomes
+unavailable during discovery, the session store records the unavailable target,
+falls back to the configured root for new operations, and exposes a notice.
+Dirty tabs retain their target identity with an unavailable warning, while
+existing terminal processes remain at their original cwd until the user closes
+them. It never silently discards editor data or moves a running process.
+
+The selected target is propagated with each root-sensitive REST and WebSocket
+request rather than inferred from global UI state. File, search, Git, editor,
+terminal, watcher, and media paths resolve through the same project/target
+contract; workspace-scoped operations that do not support a worktree reject an
+unexpected `worktreePath`. Target-aware cache keys prevent results from one
+worktree replacing another, and legacy requests without `worktreePath` continue
+to address the configured project root.
 
 ### shared/
 

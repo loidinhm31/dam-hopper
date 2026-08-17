@@ -11,6 +11,7 @@ import { createChangedFileSelection } from "@/components/organisms/ChangedFilesL
 import { COMPACT_WORKSPACE_QUERY } from "@/hooks/compact-workspace-media-query.js";
 import { TERMINAL_FILE_PANEL_OPEN_KEY } from "@/lib/terminal-floating-file-panel-state.js";
 import type { TerminalWorkspacePanelControls } from "@/lib/terminal-workspace-panel.js";
+import { useProjectTargetStore } from "@/stores/project-target.js";
 
 let mockWorkspaceMode: "ide" | "terminal" = "ide";
 let mockActiveProject: string | null = null;
@@ -27,10 +28,21 @@ let mockFreeTerminalSavePrompt: {
   error?: string;
 } | null = null;
 let lastTerminalWorkspaceShellProps: Record<string, unknown> | null = null;
+let lastIdeShellProps: Record<string, unknown> | null = null;
 const terminalPanelControls: TerminalWorkspacePanelControls = {
   zIndex: 20,
   onActivate: () => undefined,
 };
+const projectTargetMock = vi.hoisted(() => ({
+  current: null as {
+    project: string;
+    target: { project: string; worktreePath?: string };
+    targetKey: string;
+    label: string;
+    isRoot: boolean;
+    available: boolean;
+  } | null,
+}));
 
 function renderTerminalOverlayContent() {
   const renderContent =
@@ -73,7 +85,10 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@/components/templates/IdeShell.js", () => ({
-  IdeShell: () => <div data-shell="ide-shell" />,
+  IdeShell: (props: Record<string, unknown>) => {
+    lastIdeShellProps = props;
+    return <div data-shell="ide-shell" />;
+  },
 }));
 
 vi.mock("@/components/templates/TerminalWorkspaceShell.js", () => ({
@@ -91,6 +106,10 @@ vi.mock("@/components/organisms/TopNav.js", () => ({
 
 vi.mock("@/hooks/use-sidebar-collapse.js", () => ({
   useSidebarCollapse: () => ({ collapsed: true, toggle: () => {} }),
+}));
+
+vi.mock("@/hooks/use-project-target.js", () => ({
+  useProjectTarget: () => projectTargetMock.current,
 }));
 
 vi.mock("@/components/atoms/Button.js", () => ({
@@ -186,6 +205,18 @@ vi.mock("@/api/client.js", () => ({
       list: async () => [{ name: "demo-project" }],
     },
   },
+  normalizeProjectTarget: (target: {
+    project: string;
+    worktreePath?: string | null;
+  }) =>
+    target.worktreePath == null
+      ? { project: target.project }
+      : { project: target.project, worktreePath: target.worktreePath },
+  projectTargetCacheKey: (target: {
+    project: string;
+    worktreePath?: string | null;
+  }) =>
+    target.worktreePath == null ? "root" : `worktree:${target.worktreePath}`,
 }));
 
 vi.mock("@/lib/workspace-mode.js", () => ({
@@ -251,6 +282,8 @@ describe("WorkspacePage", () => {
     mockLaunchForm = null;
     mockFreeTerminalSavePrompt = null;
     lastTerminalWorkspaceShellProps = null;
+    lastIdeShellProps = null;
+    projectTargetMock.current = null;
     lastTerminalManagerOptions = null;
     mockSetActiveProject.mockClear();
     localStorageState.clear();
@@ -259,6 +292,7 @@ describe("WorkspacePage", () => {
     localStorageMock.removeItem.mockClear();
     localStorageMock.clear.mockClear();
     vi.stubGlobal("localStorage", localStorageMock);
+    useProjectTargetStore.getState().resetTarget("demo-project");
   });
 
   afterEach(() => {
@@ -313,6 +347,109 @@ describe("WorkspacePage", () => {
     expect(markup).toContain('data-shell="ide-shell"');
     expect(markup).not.toContain("Panels");
     expect(markup).not.toContain("IDE companion");
+  });
+
+  it("passes one selected target reference to Explorer, Search, and Project", () => {
+    stubMatchMedia(false);
+    projectTargetMock.current = {
+      project: "demo-project",
+      target: {
+        project: "demo-project",
+        worktreePath: "/tmp/demo-feature",
+      },
+      targetKey: "worktree:/tmp/demo-feature",
+      label: "feature/demo",
+      isRoot: false,
+      available: true,
+    };
+
+    try {
+      renderToStaticMarkup(<WorkspacePage />);
+
+      const leftTools = lastIdeShellProps?.leftTools as Array<{
+        id: string;
+        content: ReactElement;
+      }>;
+      const rightTools = lastIdeShellProps?.rightTools as Array<{
+        id: string;
+        content: ReactElement;
+      }>;
+      const searchSuspense = leftTools.find((tool) => tool.id === "search")
+        ?.content as ReactElement<{
+        children: ReactElement<{ target?: unknown }>;
+      }>;
+      const explorerSurface = leftTools.find((tool) => tool.id === "explorer")
+        ?.content as ReactElement<{
+        children: ReactElement<{
+          children: ReactElement<{ target?: unknown }>;
+        }>;
+      }>;
+      const projectSurface = rightTools.find(
+        (tool) => tool.id === "project-info",
+      )?.content as ReactElement<{
+        children: ReactElement<{
+          children: ReactElement<{ target?: { target?: unknown } }>;
+        }>;
+      }>;
+
+      const searchTarget = searchSuspense.props.children.props.target;
+      const explorerTarget =
+        explorerSurface.props.children.props.children.props.target;
+      const projectTarget =
+        projectSurface.props.children.props.children.props.target?.target;
+
+      expect(searchTarget).toEqual({
+        project: "demo-project",
+        worktreePath: "/tmp/demo-feature",
+      });
+      expect(explorerTarget).toBe(searchTarget);
+      expect(projectTarget).toBe(searchTarget);
+    } finally {
+      projectTargetMock.current = null;
+    }
+  });
+
+  it("remounts Explorer when the selected target changes", () => {
+    stubMatchMedia(false);
+
+    const getExplorerKey = () => {
+      const leftTools = lastIdeShellProps?.leftTools as Array<{
+        id: string;
+        content: ReactElement;
+      }>;
+      const explorerSurface = leftTools.find((tool) => tool.id === "explorer")
+        ?.content as ReactElement<{
+        children: ReactElement<{ children: ReactElement }>;
+      }>;
+      const fileTree = explorerSurface.props.children.props.children;
+      return fileTree.key;
+    };
+
+    try {
+      projectTargetMock.current = null;
+      renderToStaticMarkup(<WorkspacePage />);
+      const rootKey = getExplorerKey();
+
+      projectTargetMock.current = {
+        project: "demo-project",
+        target: {
+          project: "demo-project",
+          worktreePath: "/tmp/demo-feature",
+        },
+        targetKey: "worktree:/tmp/demo-feature",
+        label: "feature/demo",
+        isRoot: false,
+        available: true,
+      };
+      renderToStaticMarkup(<WorkspacePage />);
+      const worktreeKey = getExplorerKey();
+
+      expect(rootKey).toBe("demo-project:root");
+      expect(worktreeKey).toBe("demo-project:worktree:/tmp/demo-feature");
+      expect(worktreeKey).not.toBe(rootKey);
+    } finally {
+      projectTargetMock.current = null;
+    }
   });
 
   it("keeps the desktop terminal shell on wide viewports and exposes the files toggle", () => {
