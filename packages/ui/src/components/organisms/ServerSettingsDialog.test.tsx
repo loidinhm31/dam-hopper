@@ -57,7 +57,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
       }),
     );
 
-    expect(markup).toContain('placeholder="http://localhost:4800" disabled=""');
+    expect(markup).toContain('placeholder="http://127.0.0.1:4801" disabled=""');
     expect(markup).toContain(
       "Unavailable on Android Chrome: text entry is disabled",
     );
@@ -97,7 +97,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
     });
 
     const urlInput = document.querySelector<HTMLInputElement>(
-      'input[placeholder="http://localhost:4800"]',
+      'input[placeholder="http://127.0.0.1:4801"]',
     );
     const passwordInput = document.querySelector<HTMLInputElement>(
       'input[type="password"]',

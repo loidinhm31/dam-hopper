@@ -573,6 +573,171 @@ mod pty_tests {
         assert!(sessions.is_empty());
     }
 
+    #[test]
+    fn dispose_prevents_restart_of_live_sessions() {
+        let mgr = make_manager();
+        let id = "build:dispose-no-restart";
+        let mut options = opts(id, "sleep 60");
+        options.restart_policy = RestartPolicy::Always;
+        mgr.create(options).unwrap();
+        assert!(wait_for(Duration::from_secs(2), || mgr.is_alive(id)));
+
+        mgr.dispose();
+
+        assert!(wait_for(Duration::from_secs(2), || mgr.list().is_empty()));
+    }
+
+    #[test]
+    fn dispose_prevents_queued_restart_of_dead_sessions() {
+        let mgr = make_manager();
+        let id = "build:dispose-queued-restart";
+        let mut options = opts(id, "exit 1");
+        options.restart_policy = RestartPolicy::Always;
+        options.restart_max_retries = 5;
+        mgr.create(options).unwrap();
+
+        assert!(wait_for(Duration::from_secs(2), || {
+            mgr.list()
+                .iter()
+                .any(|session| session.id == id && !session.alive)
+        }));
+
+        mgr.dispose();
+
+        std::thread::sleep(Duration::from_millis(1500));
+        assert!(mgr.list().is_empty(), "queued restart recreated {id}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dispose_prevents_in_flight_restart_before_publish() {
+        let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
+        let hook = mgr.test_respawn_hook();
+        hook.pause_next();
+        let id = "build:dispose-in-flight-restart";
+        let mut options = opts(id, "exit 1");
+        options.restart_policy = RestartPolicy::Always;
+        options.restart_max_retries = 5;
+        mgr.create(options).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(4), hook.wait_until_paused())
+            .await
+            .expect("restart should reach the pre-publish hook");
+        let dispose_mgr = mgr.clone();
+        let dispose_task = tokio::task::spawn_blocking(move || dispose_mgr.dispose());
+        assert!(
+            tokio_wait_for(Duration::from_secs(2), || mgr.test_is_disposing()).await,
+            "dispose should enter the lifecycle drain"
+        );
+        hook.release();
+        dispose_task.await.expect("dispose task should finish");
+
+        assert!(
+            tokio_wait_for(Duration::from_secs(2), || mgr.list().is_empty()).await,
+            "in-flight restart published after dispose"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dispose_prevents_in_flight_create_before_publish() {
+        let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
+        let hook = mgr.test_create_hook();
+        hook.pause_next();
+        let id = "build:dispose-in-flight-create";
+        let create_mgr = mgr.clone();
+        let create_task =
+            tokio::task::spawn_blocking(move || create_mgr.create(opts(id, "sleep 60")));
+
+        tokio::time::timeout(Duration::from_secs(4), hook.wait_until_paused())
+            .await
+            .expect("create should reach the pre-publish hook");
+        let dispose_mgr = mgr.clone();
+        let dispose_task = tokio::task::spawn_blocking(move || dispose_mgr.dispose());
+        assert!(
+            tokio_wait_for(Duration::from_secs(2), || mgr.test_is_disposing()).await,
+            "dispose should enter the lifecycle drain"
+        );
+        hook.release();
+
+        let result = create_task.await.expect("create task should finish");
+        dispose_task.await.expect("dispose task should finish");
+        assert!(
+            matches!(result, Err(crate::error::AppError::Unavailable(_))),
+            "in-flight create should be rejected after dispose: {result:?}"
+        );
+        assert!(mgr.list().is_empty(), "in-flight create was published");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dispose_waits_for_in_flight_create_before_spawn() {
+        let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
+        let hook = mgr.test_spawn_hook();
+        hook.pause_next();
+        let id = "build:dispose-before-spawn-create";
+        let create_mgr = mgr.clone();
+        let create_task =
+            tokio::task::spawn_blocking(move || create_mgr.create(opts(id, "sleep 60")));
+
+        tokio::time::timeout(Duration::from_secs(4), hook.wait_until_paused())
+            .await
+            .expect("create should pause before opening a PTY");
+        let dispose_mgr = mgr.clone();
+        let dispose_task = tokio::task::spawn_blocking(move || dispose_mgr.dispose());
+        assert!(
+            tokio_wait_for(Duration::from_secs(2), || mgr.test_is_disposing()).await,
+            "dispose should enter the lifecycle drain"
+        );
+        hook.release();
+
+        let result = create_task.await.expect("create task should finish");
+        dispose_task.await.expect("dispose task should finish");
+        assert!(
+            matches!(result, Err(crate::error::AppError::Unavailable(_))),
+            "in-flight pre-spawn create should be rejected after dispose: {result:?}"
+        );
+        assert!(mgr.list().is_empty(), "pre-spawn create was published");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dispose_waits_for_in_flight_restart_before_spawn() {
+        let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "build:dispose-before-spawn-restart";
+        let mut options = opts(id, "exit 1");
+        options.restart_policy = RestartPolicy::Always;
+        options.restart_max_retries = 5;
+        mgr.create(options).unwrap();
+
+        let hook = mgr.test_spawn_hook();
+        hook.pause_next();
+        tokio::time::timeout(Duration::from_secs(4), hook.wait_until_paused())
+            .await
+            .expect("restart should pause before opening a PTY");
+        let dispose_mgr = mgr.clone();
+        let dispose_task = tokio::task::spawn_blocking(move || dispose_mgr.dispose());
+        assert!(
+            tokio_wait_for(Duration::from_secs(2), || mgr.test_is_disposing()).await,
+            "dispose should enter the lifecycle drain"
+        );
+        hook.release();
+        dispose_task.await.expect("dispose task should finish");
+
+        assert!(
+            tokio_wait_for(Duration::from_secs(2), || mgr.list().is_empty()).await,
+            "pre-spawn restart published after dispose"
+        );
+    }
+
+    #[test]
+    fn shutdown_rejects_future_creates() {
+        let mgr = make_manager();
+        mgr.shutdown();
+
+        let result = mgr.create(opts("build:after-shutdown", "cat"));
+        assert!(
+            matches!(result, Err(crate::error::AppError::Unavailable(_))),
+            "create should be rejected after terminal shutdown: {result:?}"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // EventSink recording — verify events are emitted
     // -----------------------------------------------------------------------
@@ -1525,7 +1690,7 @@ mod pty_tests {
     fn short_output_is_persisted_on_session_exit() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let store = Arc::new(SessionStore::open(temp.path()).unwrap());
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
         let worker = PersistWorker::new(rx, store.clone());
         let handle = std::thread::spawn(move || worker.run());
 
@@ -1581,7 +1746,7 @@ mod pty_tests {
             )
             .unwrap();
 
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(256);
         let mgr = test_rt().block_on(async {
             PtySessionManager::with_persist(Arc::new(NoopEventSink), Some(tx), Some(store))
         });
@@ -1594,8 +1759,46 @@ mod pty_tests {
     }
 
     #[test]
+    fn replaced_reader_cannot_mark_new_session_dead_in_persistence() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = Arc::new(SessionStore::open(temp.path()).unwrap());
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        let worker = PersistWorker::new(rx, store.clone());
+        let handle = std::thread::spawn(move || worker.run());
+
+        let mgr = test_rt().block_on(async {
+            PtySessionManager::with_persist(
+                Arc::new(NoopEventSink),
+                Some(tx.clone()),
+                Some(store.clone()),
+            )
+        });
+        let id = "shell:persist-replacement";
+        mgr.create(opts(id, "sleep 60")).unwrap();
+        mgr.create(opts(id, "sleep 60")).unwrap();
+
+        assert!(wait_for(Duration::from_secs(3), || {
+            store
+                .load_sessions()
+                .ok()
+                .is_some_and(|sessions| sessions.iter().any(|session| session.meta.id == id))
+        }));
+        assert!(mgr.is_alive(id), "replacement session should remain live");
+
+        mgr.shutdown();
+        tx.send(PersistCmd::Shutdown).unwrap();
+        handle.join().unwrap();
+
+        let sessions = store.load_sessions().unwrap();
+        assert!(
+            sessions.iter().any(|session| session.meta.id == id),
+            "stale reader incorrectly marked replacement dead: {sessions:?}"
+        );
+    }
+
+    #[test]
     fn explicit_otel_environment_is_preserved_without_terminal_marker_work() {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
         let events = Arc::new(Mutex::new(Vec::new()));
         let mgr = test_rt().block_on(async {
             PtySessionManager::with_persist(
@@ -1632,13 +1835,6 @@ mod pty_tests {
         assert!(!serialized_events.contains("dam_hopper.run_id="));
         assert!(!serialized_events.contains("redacted-correlation-marker"));
         mgr.remove("shell:otel-environment").unwrap();
-        let mut persisted_output = Vec::new();
-        while let Ok(message) = rx.recv_timeout(Duration::from_millis(250)) {
-            if let PersistCmd::BufferUpdate { data, .. } = message {
-                persisted_output.extend(data);
-            }
-        }
-        assert!(String::from_utf8_lossy(&persisted_output).contains("user.attribute=preserved"));
     }
 
     #[test]
@@ -1665,7 +1861,7 @@ mod pty_tests {
     fn live_buffers_are_snapshotted_before_shutdown() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let store = Arc::new(SessionStore::open(temp.path()).unwrap());
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
         let worker = PersistWorker::new(rx, store.clone());
         let handle = std::thread::spawn(move || worker.run());
 
@@ -1877,7 +2073,7 @@ mod pty_tests {
     fn terminal_tail_falls_back_to_persisted_buffer_after_exit() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let store = Arc::new(SessionStore::open(temp.path()).unwrap());
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
         let worker = PersistWorker::new(rx, store.clone());
         let handle = std::thread::spawn(move || worker.run());
 

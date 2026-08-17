@@ -315,6 +315,9 @@ pub struct DeadSession {
     /// worker has applied its final snapshot.
     pub buffer: Option<Arc<Mutex<ScrollbackBuffer>>>,
     pub died_at: Instant,
+    /// Identity of the PTY reader that produced this tombstone. Stale readers
+    /// must not persist an exit event for a newer session with the same ID.
+    pub shutdown: Arc<AtomicBool>,
     /// Set by the restart engine (Phase 4) before re-spawning.
     pub will_restart: bool,
     /// Milliseconds until the next restart attempt; `None` if not restarting.
@@ -329,6 +332,7 @@ impl DeadSession {
         mut meta: SessionMeta,
         incarnation: u64,
         buffer: Option<Arc<Mutex<ScrollbackBuffer>>>,
+        shutdown: Arc<AtomicBool>,
     ) -> Self {
         meta.alive = false;
         meta.exit_code = Some(-1);
@@ -338,6 +342,7 @@ impl DeadSession {
             incarnation,
             buffer,
             died_at: Instant::now(),
+            shutdown,
             will_restart: false,
             restart_in_ms: None,
         }
@@ -349,6 +354,7 @@ impl DeadSession {
         exit_code: i32,
         incarnation: u64,
         buffer: Option<Arc<Mutex<ScrollbackBuffer>>>,
+        shutdown: Arc<AtomicBool>,
     ) -> Self {
         meta.alive = false;
         meta.exit_code = Some(exit_code);
@@ -358,6 +364,7 @@ impl DeadSession {
             incarnation,
             buffer,
             died_at: Instant::now(),
+            shutdown,
             will_restart: false,
             restart_in_ms: None,
         }
@@ -373,6 +380,7 @@ impl DeadSession {
             incarnation,
             buffer: None,
             died_at: Instant::now(),
+            shutdown: Arc::new(AtomicBool::new(true)),
             will_restart: false,
             restart_in_ms: None,
         }

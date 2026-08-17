@@ -585,7 +585,7 @@ export function ServerSettingsDialog({
                 setUrl(e.target.value);
                 setTestState("idle");
               }}
-              placeholder="http://localhost:4800"
+              placeholder="http://127.0.0.1:4801"
               disabled={isAndroidChromeNativeInputSuppressed}
               className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
               style={{
@@ -604,9 +604,9 @@ export function ServerSettingsDialog({
             )}
             {urlSchemeValid && crossOrigin && (
               <p className="mt-1.5 text-xs text-yellow-400/80">
-                Separate-origin access requires this exact frontend origin in the
-                server&apos;s DAM_HOPPER_CORS_ORIGINS setting. Media still requires
-                authenticated tickets.
+                Separate-origin access requires this exact frontend origin in
+                the server&apos;s DAM_HOPPER_CORS_ORIGINS setting. Media still
+                requires authenticated tickets.
               </p>
             )}
           </div>

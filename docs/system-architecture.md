@@ -15,7 +15,7 @@
 └──────────────────────┬──────────────────────────────────────┘
                        │ HTTP/WebSocket
 ┌──────────────────────▼──────────────────────────────────────┐
-│  dam-hopper-server (Rust, Axum, port 4800)                    │
+│  dam-hopper-server (Rust/Axum; 4801 systemd; 4800 legacy)   │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─ AppState (shared across all handlers)                  │
 │  │  ├─ workspace_dir: Arc<RwLock<PathBuf>>                │
@@ -55,6 +55,11 @@
 │     └─ Broadcast channels (PTY output, git progress)      │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+The overview names both launch modes for context. The systemd deployment uses
+only `127.0.0.1:4801`; the existing `4800` nohup service is a legacy launch
+outside this deployment and is not touched by its installer, validation, or
+rollback.
 
 ### Host resource monitoring and remediation (planned)
 
@@ -796,12 +801,13 @@ pub struct PersistedSession {
 
 ### Persist Worker (Phase 05)
 
-**Purpose**: Async worker thread that batches terminal session buffers and persists them to SQLite without blocking the PTY hot path.
+**Purpose**: Async worker thread that batches terminal session buffers and persists them to SQLite while bounding PTY snapshot memory use.
 
 **Architecture:**
 
 - **Dedicated thread**: `persist-worker` (std::thread, not tokio)
-- **Non-blocking design**: PTY threads use `try_send()` to send commands
+- **Snapshot delivery**: PTY readers use non-blocking `try_send()` for periodic buffer snapshots; a full queue drops only that best-effort update
+- **Lifecycle delivery**: create, exit, removal, and shutdown commands use ordered `send()` calls; final buffer persistence falls back to the store if the worker is disconnected
 - **Bounded channel**: sync_channel(256) prevents unbounded memory growth
 - **Batching**: HashMap deduplication (only latest buffer per session written)
 - **Throttling**: 16KB snapshots (prevents 256MB/sec → 16MB/sec memory churn reduction)
@@ -814,7 +820,7 @@ pub struct PersistedSession {
 | `SessionCreated` | PtySessionManager | On spawn            | Records metadata to SQLite               |
 | `SessionExited`  | PTY reader        | On EOF              | Immediate flush (no 5s wait)             |
 | `SessionRemoved` | PtySessionManager | On kill             | Deletes from database                    |
-| `Shutdown`       | main.rs           | On drop(persist_tx) | Final flush and exit                     |
+| `Shutdown`       | main.rs           | After readers drain | Final flush and exit                     |
 
 **Main Loop** (`PersistWorker::run()`):
 
@@ -826,10 +832,10 @@ pub struct PersistedSession {
 **Graceful Shutdown:**
 
 1. Server receives SIGTERM
-2. main.rs drops `persist_tx`
-3. Worker detects channel disconnect
-4. Worker calls `flush_all()` (no data loss)
-5. Worker thread exits
+2. PTY manager snapshots live buffers, stops producers, and waits for readers
+3. main.rs sends `PersistCmd::Shutdown`
+4. Worker flushes its pending buffers and exits
+5. main.rs joins the worker thread
 
 **Performance Characteristics:**
 
@@ -842,20 +848,20 @@ pub struct PersistedSession {
 
 **Integration Points:**
 
-1. **PtySessionManager** — holds `Option<Sender<PersistCmd>>`
+1. **PtySessionManager** — holds `Option<SyncSender<PersistCmd>>`
    - `create()` sends SessionCreated
    - `kill()` sends SessionRemoved
-   - Reader thread sends BufferUpdate (throttled)
-   - Reader thread sends SessionExited
+   - Reader thread sends throttled, best-effort BufferUpdate snapshots
+   - Reader thread sends a final buffer snapshot and SessionExited before it exits
 
 2. **main.rs** — manages worker lifecycle
    - Spawns worker thread on startup (if enabled)
-   - Holds persist_tx; drops on shutdown
-   - All pending buffers flushed before process exit
+   - Holds persist_tx and explicitly sends Shutdown after reader drain
+   - Joins the worker after its final flush before process exit
 
 3. **SessionStore** — shared via Arc<Mutex>
    - Worker calls save_session, save_buffer, delete_session
-   - No blocking on hot path (worker runs on dedicated thread)
+   - Periodic PTY snapshots do not block on persistence; lifecycle transitions may wait for bounded queue capacity
 
 **Use Cases:**
 
@@ -2077,6 +2083,61 @@ Server bootstrap:
 - `AppState` construction
 - Router registration (ide_explorer routes conditional)
 - Port binding + graceful shutdown
+
+## PROPOSED/PLANNED: systemd system service (repository asset; not installed)
+
+This section records design invariants and the repository unit asset. No systemd
+unit is installed or started by repository automation; administrator acceptance is
+still required.
+
+- An administrator owns and manages the system unit at
+  `/etc/systemd/system/dam-hopper.service`, but the service process always runs
+  directly as `User=loidinh`; it must never start as root or retain privileges.
+- Runtime identity and paths are explicit: `HOME=/home/loidinh`,
+  `XDG_CONFIG_HOME=/home/loidinh/.config`,
+  `--config /home/loidinh/.config/dam-hopper/dam-hopper.toml`,
+  binary `/opt/dam-hopper/bin/dam-hopper-server`, working directory
+  `/home/loidinh`, and same-process web assets
+  `DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web`. The repository asset and
+  administrator handoff are in `deploy/systemd/dam-hopper.service` and
+  `docs/linux-systemd.md`; the administrator still has to build/install the web
+  directory.
+- The service bind is `127.0.0.1:4801`. Authentication stays enabled:
+  the unit sets `RUST_ENV=production`, contains neither `--no-auth` nor
+  `DAM_HOPPER_NO_AUTH`, and fails closed if a home `.env` attempts to enable no-auth.
+- The unit uses `Restart=on-failure`, sends normal `SIGTERM`, and the server
+  snapshots buffers, marks PTYs killed, terminates their process groups, then
+  relies on systemd's bounded stop timeout for final cgroup cleanup. A per-disposal
+  generation fence prevents queued/in-flight automatic PTY respawns and in-flight
+  PTY creates from publishing after disposal; a persistence gate identity-checks
+  periodic/final reader snapshots against replacement sessions, and terminal server
+  shutdown joins readers before sending persistence shutdown; creates that begin
+  after shutdown starts are rejected.
+- stdout/stderr go to journald; no separate log-file or PID-file lifecycle is
+  introduced.
+- Feasibility smoke and UI development proxy work use port `4801` plus isolated
+  config, token, session SQLite, and telemetry SQLite paths. The existing
+  nohup service on `4800` remains outside this deployment and must not be
+  touched by repository validation. The two launch methods must never
+  concurrently open or reuse the live service databases.
+- Neither the server nor repository scripts invoke sudo, embed a privileged
+  helper, or perform installation. Administrative ownership changes, unit
+  installation, reload, enable/start, and rollback remain a documented handoff.
+- First install refuses existing exact unit/binary/web targets and parent
+  `/opt/dam-hopper`/`bin` symlinks, creates a unique verified staging directory,
+  and records a root-owned nonce/hash/file-inventory manifest before staged
+  moves. Its fail-closed cleanup removes only paths still matching that manifest
+  and retains the marker when verification/cleanup is incomplete; the installed
+  `bin` directory is traversable by `loidinh`. Rollback verifies the manifest,
+  re-checks systemd inactive/MainPID/4801 ownership after stopping, rejects
+  symlinks, and removes only manifest-backed assets. An upgrade or pre-existing
+  target requires an administrator backup/restore plan.
+- The packaged web build is same-origin by construction: Vite rejects a production
+  backend override, and runtime profile/localStorage resolution ignores stale
+  cross-origin endpoints so the browser falls back to the serving origin on `4801`.
+- Rollback stops/disables the unit and reloads systemd. Restoring the prior launch
+  method is optional and remains a separate administrator decision after confirming
+  a single process owns the port and live SQLite files.
 
 ## Host resource monitoring (current delivery; remediation deferred)
 

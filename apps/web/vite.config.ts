@@ -9,14 +9,23 @@ const uiStyles = fileURLToPath(
   new URL("../../packages/ui/src/index.css", import.meta.url),
 );
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const backend =
-    env.VITE_DAM_HOPPER_SERVER_URL?.replace(/\/$/, "") ||
-    "http://127.0.0.1:4800";
+  const configuredBackend = env.VITE_DAM_HOPPER_SERVER_URL?.replace(/\/$/, "");
+  if (command === "build" && configuredBackend) {
+    throw new Error(
+      "VITE_DAM_HOPPER_SERVER_URL must be unset for the production same-origin build; use it only for isolated Vite development on port 4801.",
+    );
+  }
+  const backend = configuredBackend || "http://127.0.0.1:4801";
 
   return {
     base: "./",
+    define: {
+      // The packaged web build must stay on its serving origin. This also lets
+      // the shared server-profile code ignore stale localStorage endpoints.
+      __DAM_HOPPER_SAME_ORIGIN__: JSON.stringify(command === "build"),
+    },
     plugins: [react(), tailwindcss(), fixBrokenXtermRequestMode()],
     resolve: {
       alias: {

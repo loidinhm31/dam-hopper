@@ -1,0 +1,29 @@
+[Unit]
+Description=DamHopper server (system service, loidinh runtime)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=loidinh
+Group=loidinh
+WorkingDirectory=/home/loidinh
+Environment=HOME=/home/loidinh
+Environment=XDG_CONFIG_HOME=/home/loidinh/.config
+Environment=DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web
+Environment=RUST_LOG=info
+Environment=RUST_ENV=production
+ExecStart=/opt/dam-hopper/bin/dam-hopper-server --config /home/loidinh/.config/dam-hopper/dam-hopper.toml --host 127.0.0.1 --port 4801
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=20s
+UMask=0077
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dam-hopper
+
+[Install]
+WantedBy=multi-user.target
