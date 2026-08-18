@@ -276,6 +276,37 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     expect(mocks.onOutput).toHaveBeenCalledTimes(2);
   });
 
+  it("sends the immutable worktree target when recovery creates a session", async () => {
+    mocks.transport.invoke.mockImplementation((method: string) =>
+      method === "terminal:listDetailed"
+        ? Promise.resolve([])
+        : Promise.resolve(undefined),
+    );
+
+    await act(async () => {
+      root.render(
+        <TerminalPanel
+          sessionId="terminal:feature:_:1"
+          project="web"
+          command="bash"
+          cwd="/workspace/web-feature"
+          worktreePath="/workspace/web-feature"
+        />,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.transport.invoke).toHaveBeenCalledWith(
+        "terminal:create",
+        expect.objectContaining({
+          project: "web",
+          cwd: "/workspace/web-feature",
+          worktreePath: "/workspace/web-feature",
+        }),
+      );
+    });
+  });
+
   it("updates live xterm font size and schedules the existing fit path", async () => {
     await act(async () => {
       root.render(

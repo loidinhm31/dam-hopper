@@ -2,10 +2,29 @@ import { useMemo } from "react";
 import { useProjects, useGlobalConfig } from "@/api/queries.js";
 import { useTerminalSessions } from "@/api/queries.js";
 import { sanitizeSessionSegment } from "@/lib/utils.js";
-import type { ProjectType } from "@/api/client.js";
-import type { SessionInfo } from "@/api/client.js";
+import {
+  targetScopedCommandSessionId,
+  terminalProfileSessionPrefix,
+} from "@/lib/terminal-target-identity.js";
+import type {
+  ProjectTargetInput,
+  ProjectType,
+  SessionInfo,
+} from "@/api/client.js";
+import { normalizeProjectTarget } from "@/api/client.js";
+import { useProjectTargetStore } from "@/stores/project-target.js";
+import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 
 export const FREE_TERMINAL_PREFIX = "free:" as const;
+
+export function isRecoverableTerminalSession(
+  session: Pick<SessionInfo, "id" | "targetUnavailable">,
+): boolean {
+  return (
+    session.targetUnavailable === true ||
+    session.id.startsWith(FREE_TERMINAL_PREFIX)
+  );
+}
 
 export interface TreeCommand {
   key: string;
@@ -32,20 +51,123 @@ export interface TreeProject {
   activeCount: number;
 }
 
+function comparablePath(path: string): string {
+  return normalizeProjectTargetPath(path);
+}
+
+/** Return true for a target path or any directory below it. */
+export function isPathWithinTarget(path: string, targetPath: string): boolean {
+  const child = comparablePath(path);
+  const root = comparablePath(targetPath);
+  if (!child || !root) return false;
+  if (root === "/") return child.startsWith("/");
+  return child === root || child.startsWith(`${root}/`);
+}
+
+export function sessionBelongsToProjectTarget(
+  session: Pick<SessionInfo, "project" | "cwd" | "alive" | "worktreePath">,
+  target: ProjectTargetInput,
+  configuredRoot: string,
+): boolean {
+  const normalized = normalizeProjectTarget(target);
+  return (
+    session.alive === true &&
+    session.project === normalized.project &&
+    (normalized.worktreePath != null
+      ? (session.worktreePath != null &&
+          normalizeProjectTargetPath(session.worktreePath) ===
+            normalizeProjectTargetPath(normalized.worktreePath)) ||
+        (session.worktreePath == null &&
+          isPathWithinTarget(session.cwd, normalized.worktreePath))
+      : isPathWithinTarget(session.cwd, configuredRoot))
+  );
+}
+
+/** Match persisted sessions to a target without requiring the session to be live. */
+export function sessionMatchesProjectTarget(
+  session: Pick<SessionInfo, "project" | "cwd" | "worktreePath">,
+  target: ProjectTargetInput,
+  configuredRoot: string,
+): boolean {
+  const normalized = normalizeProjectTarget(target);
+  if (session.project !== normalized.project) return false;
+  if (normalized.worktreePath != null) {
+    return (
+      (session.worktreePath != null &&
+        normalizeProjectTargetPath(session.worktreePath) ===
+          normalizeProjectTargetPath(normalized.worktreePath)) ||
+      (session.worktreePath == null &&
+        isPathWithinTarget(session.cwd, normalized.worktreePath))
+    );
+  }
+  return (
+    session.worktreePath == null &&
+    isPathWithinTarget(session.cwd, configuredRoot)
+  );
+}
+
+export function countLiveTerminalSessionsForTarget(
+  sessions: ReadonlyArray<
+    Pick<SessionInfo, "project" | "cwd" | "alive" | "worktreePath">
+  >,
+  target: ProjectTargetInput,
+  configuredRoot: string,
+): number {
+  return sessions.filter((session) =>
+    sessionBelongsToProjectTarget(session, target, configuredRoot),
+  ).length;
+}
+
+export function markOrphanedSessions(
+  sessions: SessionInfo[],
+  unavailableTargets: Record<string, string[]>,
+): SessionInfo[] {
+  return sessions.map((session) => {
+    const targetPaths =
+      session.project == null
+        ? []
+        : (unavailableTargets[session.project] ?? []);
+    const orphaned =
+      session.targetUnavailable === true ||
+      (session.alive === true &&
+        (session.worktreePath != null
+          ? targetPaths.some(
+              (targetPath) =>
+                normalizeProjectTargetPath(targetPath) ===
+                normalizeProjectTargetPath(session.worktreePath!),
+            )
+          : targetPaths.some((targetPath) =>
+              isPathWithinTarget(session.cwd, targetPath),
+            )));
+    return orphaned ? { ...session, orphaned: true } : session;
+  });
+}
+
 export function useTerminalTree() {
   const { data: projects = [], isLoading: projectsLoading } = useProjects();
   const { data: sessions = [], isLoading: sessionsLoading } =
     useTerminalSessions();
   const { data: globalConfig } = useGlobalConfig();
+  const unavailableTargets = useProjectTargetStore(
+    (state) => state.unavailableTargetsByProject,
+  );
+  const activeTargetByProject = useProjectTargetStore(
+    (state) => state.activeTargetByProject,
+  );
+
+  const sessionsWithTargetState = useMemo(
+    () => markOrphanedSessions(sessions, unavailableTargets),
+    [sessions, unavailableTargets],
+  );
 
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionInfo>();
-    for (const s of sessions) if (s.id) map.set(s.id, s);
+    for (const s of sessionsWithTargetState) if (s.id) map.set(s.id, s);
     return map;
-  }, [sessions]);
+  }, [sessionsWithTargetState]);
 
   const freeTerminals = useMemo<SessionInfo[]>(() => {
-    const list = sessions.filter((s) => s.id?.startsWith(FREE_TERMINAL_PREFIX));
+    const list = sessionsWithTargetState.filter(isRecoverableTerminalSession);
     const order = globalConfig?.ui?.terminalOrder ?? [];
 
     if (order.length > 0) {
@@ -62,7 +184,7 @@ export function useTerminalTree() {
     }
 
     return list.sort((a, b) => a.startedAt - b.startedAt);
-  }, [sessions, globalConfig]);
+  }, [sessionsWithTargetState, globalConfig]);
 
   const tree = useMemo<TreeProject[]>(() => {
     const projectOrder = globalConfig?.ui?.projectOrder ?? [];
@@ -70,11 +192,19 @@ export function useTerminalTree() {
 
     const unsortedTree = projects.map((p) => {
       const commands: TreeCommand[] = [];
+      const activeWorktreePath = activeTargetByProject[p.name];
+      const activeTarget = activeWorktreePath
+        ? { project: p.name, worktreePath: activeWorktreePath }
+        : p.name;
 
       // Build command
       const buildCmd = p.services?.[0]?.buildCommand;
       if (buildCmd) {
-        const sessionId = `build:${p.name}`;
+        const sessionId = targetScopedCommandSessionId(
+          "build",
+          p.name,
+          activeWorktreePath,
+        );
         commands.push({
           key: "build",
           label: "Build",
@@ -88,7 +218,11 @@ export function useTerminalTree() {
       // Run command
       const runCmd = p.services?.[0]?.runCommand;
       if (runCmd) {
-        const sessionId = `run:${p.name}`;
+        const sessionId = targetScopedCommandSessionId(
+          "run",
+          p.name,
+          activeWorktreePath,
+        );
         commands.push({
           key: "run",
           label: "Run",
@@ -102,7 +236,12 @@ export function useTerminalTree() {
       // Custom commands from config
       for (const [key, cmd] of Object.entries(p.commands ?? {})) {
         const safeKey = key.replace(/[^a-zA-Z0-9:._-]/g, "-");
-        const sessionId = `custom:${p.name}:${safeKey}`;
+        const sessionId = targetScopedCommandSessionId(
+          "custom",
+          p.name,
+          activeWorktreePath,
+          safeKey,
+        );
         commands.push({
           key,
           type: "custom",
@@ -117,9 +256,15 @@ export function useTerminalTree() {
         const sanitizedName = sanitizeSessionSegment(
           terminal.name.replace(/ /g, "_"),
         );
-        const prefix = `terminal:${p.name}:${sanitizedName}:`;
-        const matchingSessions = sessions.filter((s) =>
-          s.id?.startsWith(prefix),
+        const prefix = terminalProfileSessionPrefix(
+          p.name,
+          sanitizedName,
+          activeWorktreePath,
+        );
+        const matchingSessions = sessionsWithTargetState.filter(
+          (s) =>
+            s.id?.startsWith(prefix) &&
+            sessionMatchesProjectTarget(s, activeTarget, p.path),
         );
         commands.push({
           key: `terminal:${terminal.name}`,
@@ -174,7 +319,13 @@ export function useTerminalTree() {
     }
 
     return unsortedTree;
-  }, [projects, sessionMap, sessions, globalConfig]);
+  }, [
+    activeTargetByProject,
+    globalConfig,
+    projects,
+    sessionMap,
+    sessionsWithTargetState,
+  ]);
 
   return { tree, freeTerminals, isLoading: projectsLoading || sessionsLoading };
 }

@@ -555,7 +555,7 @@ The client preserves this as `ApiRequestError(status, code)` and uses the code
 to render an actionable unavailable state; callers should not treat it as an
 empty branch list.
 
-### Project worktree targets (Phase 1)
+### Project worktree targets (Phases 1–7)
 
 Root-sensitive operations use a project target reference:
 
@@ -575,13 +575,13 @@ For a project nested below the repository root, each worktree target projects
 the same relative subdirectory into that worktree. Discovery and resolution
 use these fields (serialized in camelCase):
 
-| Field | Meaning |
-| --- | --- |
-| `path` | Selectable project-directory target. |
-| `repositoryPath` | Git worktree root used for worktree mutations. |
-| `branch`, `commitHash` | Worktree revision metadata. |
-| `isMain`, `isLocked`, `isDetached`, `isBare`, `isPrunable` | Git worktree state. |
-| `isAvailable` | Whether the projected target directory is a usable directory beneath a live, non-bare worktree. |
+| Field                                                      | Meaning                                                                                         |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `path`                                                     | Selectable project-directory target.                                                            |
+| `repositoryPath`                                           | Git worktree root used for worktree mutations.                                                  |
+| `branch`, `commitHash`                                     | Worktree revision metadata.                                                                     |
+| `isMain`, `isLocked`, `isDetached`, `isBare`, `isPrunable` | Git worktree state.                                                                             |
+| `isAvailable`                                              | Whether the projected target directory is a usable directory beneath a live, non-bare worktree. |
 
 Resolved targets additionally expose `configuredRoot`, `targetPath`,
 `targetKey`, `isRoot`, and `available`; a root target has `isRoot: true` and
@@ -590,12 +590,20 @@ route as the projected worktree objects above.
 
 Target validation errors use stable codes and statuses:
 
-| Code | HTTP | Meaning |
-| --- | ---: | --- |
-| `WORKSPACE_PROJECT_NOT_FOUND` | 404 | Project is not registered. |
-| `WORKSPACE_TARGET_UNREGISTERED` | 400 | Explicit path is not a registered Git worktree. |
-| `WORKSPACE_TARGET_INVALID_PATH` | 400 | Path is empty, contains a NUL, or is not absolute. |
-| `WORKSPACE_TARGET_UNAVAILABLE` | 409 | Registered worktree or projected directory is unavailable. |
+| Code                            | HTTP | Meaning                                                    |
+| ------------------------------- | ---: | ---------------------------------------------------------- |
+| `WORKSPACE_PROJECT_NOT_FOUND`   |  404 | Project is not registered.                                 |
+| `WORKSPACE_TARGET_UNREGISTERED` |  400 | Explicit path is not a registered Git worktree.            |
+| `WORKSPACE_TARGET_INVALID_PATH` |  400 | Path is empty, contains a NUL, or is not absolute.         |
+| `WORKSPACE_TARGET_UNAVAILABLE`  |  409 | Registered worktree or projected directory is unavailable. |
+
+**POST /api/git/fetch** and **POST /api/git/pull** accept a project list or
+explicit target list. Each explicit target is resolved independently so one
+missing or unavailable worktree does not discard results for the other targets.
+The response is an array of operation results; target-scoped entries include
+`worktreePath`, and a failed entry can include `targetUnavailable: true` when
+the server confirmed that target disappeared. Generic request-level failures
+are not attributed to every requested target.
 
 ### Worktrees
 
@@ -627,6 +635,23 @@ Remove one registered non-main worktree. Body: `{ "path": "<target path>" }`.
 The path is resolved through the target contract, but Git removal operates on
 the corresponding `repositoryPath`. The configured/main worktree cannot be
 removed. Successful response: `{ "ok": true }`.
+
+The browser re-fetches discovery immediately before this request. It refuses
+to start removal when the exact target owns dirty editor tabs or live terminal
+sessions, and explains the blockers in the Project panel. Git still enforces
+its own dirty/untracked protection; the user must refresh and retry after
+closing or saving those resources. A successful removal invalidates discovery
+and falls back new operations to the configured root when the removed target
+was selected.
+
+If Git reports a registered path as missing or prunable, the row remains
+visible as unavailable. New operations fail closed rather than redirecting to
+the root, while the UI selects the root for subsequent operations and keeps
+existing editor tabs. Live terminal rows whose `project`/`cwd` still identify
+the unavailable target are labelled `orphaned` until the session is closed.
+The immutable `worktreePath` marker is authoritative for target-scoped
+sessions; `project`/`cwd` containment is used only for legacy sessions without
+that marker.
 
 **POST /api/git/{project}/worktrees/prune**
 Prune stale Git worktree administrative metadata and invalidate the project’s
@@ -1007,7 +1032,7 @@ Blocked pushed-history example:
 
 ## Reconnection Flow (Phase A feature)
 
-**Location:** `packages/web/src/api/transport.ts`
+**Location:** `packages/ui/src/api/transport.ts`
 
 The `Transport` interface abstracts WebSocket and REST communication. All frontend modules use `getTransport()` to access the singleton instance.
 
@@ -1020,8 +1045,10 @@ Example:
 
 ```ts
 const sessions = await transport.invoke<Array<{ id: string }>>("terminal:list");
-const newSession = await transport.invoke<{ id: string }>("terminal:create", {
+const newSession = await transport.invoke<SessionInfo>("terminal:create", {
   project: "api-server",
+  worktreePath: "/worktrees/api-feature",
+  cwd: ".",
   command: "npm run dev",
   cols: 80,
   rows: 24,
@@ -1142,12 +1169,28 @@ Response: `{ projects: [ { name, path, type } ] }`
 
 ### Terminals
 
-**POST /api/pty/spawn**
-Create new PTY session (idempotent as of Phase 07).
+**POST /api/terminal** (transport channel: `terminal:create`)
+Create a new PTY session (idempotent as of Phase 07).
 
-Body: `{ project, profile, env_overrides? }`
+Body: `{ id, project?, cwd?, worktreePath?, command, cols, rows, env? }`
 
-Response: `{ sessionId: uuid }`
+When `worktreePath` is present, the server resolves it as a registered,
+available worktree for `project`, resolves relative `cwd` values beneath that
+target, rejects cwd values outside it, and persists the canonical target in
+session metadata. `worktreePath` requires `project`; omitting it preserves
+configured-root or legacy project behavior.
+
+Response: the created `SessionInfo`, including `worktreePath` when the session
+is target-scoped.
+
+If an automatic restart can no longer validate a target, the server also emits
+the generic push event `terminal:target-unavailable` with
+`{ project, worktreePath, sessionId, targetUnavailable: true, willRestart: false }`.
+The same event may follow a create failure when fresh validation proves the
+target disappeared. Ordinary PTY or cwd failures remain ordinary errors. The
+browser records that exact target as unavailable, keeps the session metadata
+and scrollback as a non-running orphan, and routes later new operations to the
+configured root.
 
 **Idempotency Guarantees (Phase 07):**
 
@@ -1413,7 +1456,7 @@ export interface ServerProfile {
 
 ### API Functions
 
-All functions in `packages/web/src/api/server-config.ts`.
+All functions in `packages/ui/src/api/server-config.ts`.
 
 **Profile Getters:**
 
@@ -1834,7 +1877,7 @@ Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broa
 { "kind": "terminal:write", "id": "uuid", "data": "..." }
 ```
 
-**Terminal Messages:**
+**Legacy WebSocket Terminal Messages (historical; new creation uses REST):**
 
 - `{ kind: "terminal:spawn", project, profile, env_overrides? }` → server responds with `{ kind: "terminal:spawned", id, ... }`
 - `{ kind: "terminal:write", id, data }` — send input
@@ -1849,6 +1892,11 @@ Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broa
 - `{ kind: "terminal:output", id, chunk }` — server pushes PTY output
 - `{ kind: "terminal:buffer", id, data, offset, reset, truncated }` — server response to `terminal:attach` with buffer content, current offset, and replay instructions
 - `{ kind: "terminal:exited", id, code }` — session ended
+
+The current browser terminal creation path is the REST `terminal:create`
+channel documented above. Target-scoped command and profile IDs use stable
+opaque target discriminators; target routing itself is server-validated and
+represented by `worktreePath` session metadata.
 
 **File Tree Subscription (Phase 03):**
 

@@ -120,6 +120,7 @@ export function ProjectInfoPanel({
         <CollapsibleSection title="Commands" icon={Terminal} defaultOpen={true}>
           <ProjectInfoCommandsSection
             projectName={projectName}
+            target={targetRef}
             onLaunchCommand={onLaunchCommand}
           />
         </CollapsibleSection>

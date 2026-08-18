@@ -30,6 +30,18 @@ export function editorTargetScopeKey(target: ProjectTargetInput): string {
   return `${normalized.project}::${projectTargetCacheKey(normalized)}`;
 }
 
+/** Count unsaved editor tabs owned by one immutable project target. */
+export function countDirtyTabsForTarget(
+  tabs: ReadonlyArray<Pick<Tab, "project" | "target" | "dirty">>,
+  target: ProjectTargetInput,
+): number {
+  const scopeKey = editorTargetScopeKey(target);
+  return tabs.filter(
+    (tab) =>
+      tab.dirty && editorTargetScopeKey(tab.target ?? tab.project) === scopeKey,
+  ).length;
+}
+
 function compositeTabKey(
   kind: "file" | "diff",
   target: ProjectTargetInput,

@@ -124,6 +124,7 @@ Review outcome: 7.5/10, conditionally shippable for Unix/Linux. The implementati
 - Ticket records bind project, canonical target identity, relative path, purpose, session, and expiry.
 - Do not log media tokens or encrypted content when adding diagnostics.
 
-## Next steps
+## Handoff
 
-Proceed to Phase 03; root and multi-target filesystem integration tests and the broader validation gate have passed.
+Phase 02 is complete; its validation and final review passed. The remaining
+phases are recorded as completed in the root plan.

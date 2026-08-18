@@ -681,6 +681,35 @@ interface TerminalPanelProps {
 - Keeps the root-aware project selector test-covered, including default-root fallback, child-root push payloads, and selector rendering.
 - Reuses the shared retry status model so SSH retry feedback matches the Git page and other callers.
 
+### Project worktree target lifecycle
+
+`ProjectWorktreesSection` owns the Project panel's target selector and keeps
+the configured project identity separate from the selected Git worktree. One
+session-memory selection is shared by Explorer, search/replace, Git, editor,
+diff, media, and terminal creation; switching the target changes their scoped
+query/cache inputs without changing the project name or configured root.
+
+Before app-initiated removal, the section refreshes Git discovery and checks
+the exact `(project, targetPath)` against editor tabs and live terminal
+sessions. Dirty tabs and live sessions are listed in an accessible blocker
+message, so the app never removes a target while it owns unsaved work or an
+active PTY. Git's own dirty/untracked protection remains authoritative after
+that UI check.
+
+External disappearance and prunable discovery rows remain visible as
+unavailable. New requests use the configured root only after the target store
+has recorded the unavailable target; existing dirty editor tabs are preserved,
+and live sessions whose immutable server-validated `worktreePath` matches that
+path display an `orphaned` warning in `TerminalTreeView`. Older sessions
+without that metadata fall back to their `project`/`cwd` for reconciliation.
+Target-scoped build, run, custom-command, and profile IDs use stable opaque
+target discriminators, while the server keeps the canonical path in metadata.
+A failed target-scoped launch or respawn records the exact worktree as
+unavailable through the shared terminal event bridge only after fresh
+validation confirms target loss. Reloading the browser starts from the
+configured root, while compact and floating surfaces consume the same target
+snapshot.
+
 ### Passphrase Dialog
 
 **Location:** `packages/ui/src/components/organisms/PassphraseDialog.tsx`

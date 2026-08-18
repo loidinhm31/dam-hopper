@@ -307,6 +307,10 @@ export default defineConfig({
     dedupe: ["@tanstack/react-query", "react", "react-dom"],
   },
   test: {
+    // Browser suites share the Vite media fixture server and Chromium has a
+    // finite resource budget. Serial files keep native media readiness checks
+    // deterministic when the full suite is run.
+    fileParallelism: false,
     include: ["browser-tests/**/*.browser.{ts,tsx}"],
     browser: {
       enabled: true,

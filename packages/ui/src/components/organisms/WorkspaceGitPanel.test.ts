@@ -6,6 +6,7 @@ vi.mock("@/api/client.js", () => ({
   isGitUnavailableError: () => false,
   normalizeProjectTarget: (target: string | { project: string }) =>
     typeof target === "string" ? { project: target } : target,
+  normalizeProjectTargetPath: (path: string) => path,
   projectTargetCacheKey: () => "root",
   api: {
     git: {

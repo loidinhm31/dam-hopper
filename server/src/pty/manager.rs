@@ -2,7 +2,11 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
     io::Read as _,
-    sync::{atomic::Ordering, Arc, Mutex},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -14,6 +18,8 @@ use crate::{
     config::schema::RestartPolicy,
     diagnostics::{redact_diagnostic_text, DiagnosticStore, TerminalTail},
     error::AppError,
+    fs::FsSubsystem,
+    persistence::SessionStore,
     port_forward::PortForwardManager,
     pty::{
         event_sink::EventSink,
@@ -21,6 +27,10 @@ use crate::{
         session::{DeadSession, LiveSession, RespawnOpts, SessionMeta, SessionType},
         shell_integration::{interactive_shell_executable, ShellIntegration},
         shell_lifecycle::{LifecycleEvent, LifecycleState, ShellLifecycle},
+    },
+    workspace_target::{
+        target_path_identity, target_path_is_within, target_path_relative, ProjectTargetRef,
+        WorkspaceTargetError, WorkspaceTargetResolver,
     },
 };
 
@@ -74,6 +84,9 @@ pub struct TerminalAttachSnapshot {
 #[derive(Clone)]
 struct RespawnCmd {
     id: String,
+    /// Incarnation that exited and requested this restart. A newer create or
+    /// restart with the same public ID invalidates this command.
+    incarnation: u64,
     _prev_exit_code: i32,
     restart_count: u32,
     respawn_opts: RespawnOpts,
@@ -93,6 +106,7 @@ pub struct PtyCreateOpts {
     pub cols: u16,
     pub rows: u16,
     pub project: Option<String>,
+    pub worktree_path: Option<String>,
     pub restart_policy: RestartPolicy,
     pub restart_max_retries: u32,
 }
@@ -109,9 +123,82 @@ impl PtyCreateOpts {
             cols: self.cols,
             rows: self.rows,
             project: self.project.clone(),
+            worktree_path: self.worktree_path.clone(),
             restart_policy: self.restart_policy,
             restart_max_retries: self.restart_max_retries,
         }
+    }
+}
+
+/// Target resolver and lifecycle guard shared by automatic PTY respawns.
+/// Installed after application state is built so test-only managers can remain
+/// lightweight while production respawns fail closed on stale targets.
+#[derive(Clone)]
+pub struct PtyTargetContext {
+    fs: FsSubsystem,
+    resolver: WorkspaceTargetResolver,
+    lifecycle_guard: Arc<tokio::sync::RwLock<()>>,
+}
+
+impl PtyTargetContext {
+    pub fn new(
+        fs: FsSubsystem,
+        resolver: WorkspaceTargetResolver,
+        lifecycle_guard: Arc<tokio::sync::RwLock<()>>,
+    ) -> Self {
+        Self {
+            fs,
+            resolver,
+            lifecycle_guard,
+        }
+    }
+
+    async fn validate_targeted_session(
+        &self,
+        project: &str,
+        worktree_path: &str,
+        requested_cwd: &str,
+    ) -> Result<(String, String), AppError> {
+        let sandbox = self.fs.sandbox().map_err(AppError::Fs)?;
+        let configured_root = sandbox
+            .project_root(project)
+            .ok_or_else(|| AppError::NotFound(format!("Project not found: {project}")))?;
+        let target = self
+            .resolver
+            .resolve(
+                &ProjectTargetRef {
+                    project: project.to_string(),
+                    worktree_path: Some(worktree_path.to_string()),
+                },
+                &configured_root,
+            )
+            .await?;
+        let requested = PathBuf::from(requested_cwd);
+        let proposed = if requested.is_absolute() {
+            if target_path_is_within(&requested, target.target_path()) {
+                requested
+            } else {
+                target_path_relative(&requested, &configured_root)
+                    .map(|relative| target.target_path().join(relative))
+                    .unwrap_or_else(|| PathBuf::from(requested_cwd))
+            }
+        } else {
+            target.target_path().join(requested)
+        };
+        let cwd = sandbox
+            .validate_target(&target, proposed)
+            .await
+            .map_err(AppError::Fs)?;
+        if !cwd.is_dir() {
+            return Err(AppError::InvalidInput(format!(
+                "Terminal cwd is not a directory: {}",
+                cwd.display()
+            )));
+        }
+        Ok((
+            target.target_path().to_string_lossy().into_owned(),
+            cwd.to_string_lossy().into_owned(),
+        ))
     }
 }
 
@@ -137,9 +224,11 @@ pub struct PtySessionManager {
     /// Bounded sender (256 slots) for respawn requests from reader threads.
     /// Consumed by supervisor_loop task. If queue full, supervisor is dead/slow.
     respawn_tx: mpsc::Sender<RespawnCmd>,
-    /// Optional sender for persistence commands to worker thread.
+    /// Optional FIFO sender for persistence commands to the worker thread.
+    /// The unbounded standard channel makes lifecycle commands nonblocking
+    /// while preserving the order shared by all PTY producers.
     /// None only if the session DB failed to open at startup.
-    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+    persist_tx: Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
     /// Optional session store for lazy buffer loading from SQLite.
     /// None only if the session DB failed to open at startup.
     session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
@@ -149,17 +238,64 @@ pub struct PtySessionManager {
     /// Backend diagnostics store — set after construction via `set_diagnostics`.
     /// Reader threads and lifecycle methods record terminal events here (Phase 03).
     diagnostics: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
+    /// Target validation and lifecycle guard shared by automatic respawns.
+    target_context: Arc<std::sync::RwLock<Option<PtyTargetContext>>>,
+    /// Number of reader threads that can still enqueue final persistence
+    /// commands. Shutdown waits for this to reach zero before closing the
+    /// persistence worker.
+    active_reader_count: Arc<AtomicUsize>,
 }
 
 struct Inner {
     live: HashMap<String, LiveSession>,
     dead: HashMap<String, DeadSession>,
+    /// Target-scoped creates that failed before an in-memory tombstone could
+    /// be created. The API may convert one to an unavailable tombstone only
+    /// while its public ID remains unclaimed by a newer incarnation.
+    failed_replacements: HashMap<String, FailedReplacement>,
+    /// Allocator for concrete PTY incarnations. The public session ID is
+    /// intentionally reusable, so every persistence command carries this
+    /// second identity as well.
+    next_incarnation: u64,
     /// Track session IDs that were explicitly killed by user (kill/remove API).
     /// Reader thread checks this to prevent auto-restart after manual termination.
     killed: HashSet<String>,
     /// Count of replaced readers that must not emit exit events against reused
     /// public ids. Multiple rapid recreates can have multiple old readers.
     suppress_exit_counts: HashMap<String, usize>,
+    /// PTY setup currently in progress for each reusable public id. This keeps
+    /// a slow stale create/respawn from publishing after a newer replacement
+    /// has started.
+    pending_replacements: HashMap<String, u64>,
+}
+
+struct FailedReplacement {
+    meta: SessionMeta,
+    incarnation: u64,
+    buffer: Option<Arc<Mutex<crate::pty::buffer::ScrollbackBuffer>>>,
+    persistence: Option<FailedReplacementPersistence>,
+    created_at: std::time::Instant,
+}
+
+/// Persistence-only snapshot retained when a target-scoped create fails
+/// before a live PTY can emit the normal SessionCreated command.
+#[derive(Clone)]
+struct FailedReplacementPersistence {
+    env: HashMap<String, String>,
+    cols: u16,
+    rows: u16,
+    restart_max_retries: u32,
+}
+
+impl From<&PtyCreateOpts> for FailedReplacementPersistence {
+    fn from(opts: &PtyCreateOpts) -> Self {
+        Self {
+            env: HashMap::clone(&opts.env),
+            cols: opts.cols,
+            rows: opts.rows,
+            restart_max_retries: opts.restart_max_retries,
+        }
+    }
 }
 
 impl Inner {
@@ -167,9 +303,186 @@ impl Inner {
         Self {
             live: HashMap::new(),
             dead: HashMap::new(),
+            failed_replacements: HashMap::new(),
+            next_incarnation: crate::pty::session::now_ms().saturating_mul(1024),
             killed: HashSet::new(),
             suppress_exit_counts: HashMap::new(),
+            pending_replacements: HashMap::new(),
         }
+    }
+
+    fn allocate_incarnation(&mut self) -> u64 {
+        let incarnation = self.next_incarnation;
+        self.next_incarnation = self.next_incarnation.saturating_add(1);
+        incarnation
+    }
+
+    fn begin_replacement(&mut self, id: &str) -> u64 {
+        self.failed_replacements.remove(id);
+        let incarnation = self.allocate_incarnation();
+        self.pending_replacements
+            .insert(id.to_string(), incarnation);
+        incarnation
+    }
+
+    fn replacement_is_current(&self, id: &str, incarnation: u64) -> bool {
+        self.pending_replacements.get(id).copied() == Some(incarnation)
+    }
+
+    fn finish_replacement(&mut self, id: &str, incarnation: u64) {
+        if self.replacement_is_current(id, incarnation) {
+            self.pending_replacements.remove(id);
+        }
+    }
+
+    fn respawn_source_is_current(&self, id: &str, incarnation: u64) -> bool {
+        !self.killed.contains(id)
+            && !self.live.contains_key(id)
+            && self
+                .dead
+                .get(id)
+                .map(|session| session.incarnation == incarnation)
+                .unwrap_or(false)
+    }
+
+    fn respawn_replacement_is_current(
+        &self,
+        id: &str,
+        source_incarnation: u64,
+        replacement_incarnation: u64,
+    ) -> bool {
+        self.respawn_source_is_current(id, source_incarnation)
+            && self.replacement_is_current(id, replacement_incarnation)
+    }
+
+    fn advance_past(&mut self, persisted_max: Option<u64>) {
+        if let Some(maximum) = persisted_max {
+            self.next_incarnation = self
+                .next_incarnation
+                .max(maximum.saturating_add(1).min(i64::MAX as u64));
+        }
+    }
+}
+
+/// Serializes reader events against ID reuse. A reader from an older
+/// incarnation may finish after a replacement has acquired the same public
+/// session ID. Holding the manager lock through the ownership check and the
+/// synchronous sink send means either the old event is delivered before the
+/// replacement wins, or it is discarded after the replacement wins.
+struct IncarnationEventSink {
+    sink: Arc<dyn EventSink>,
+    inner: Arc<Mutex<Inner>>,
+    session_id: String,
+    incarnation: u64,
+}
+
+impl IncarnationEventSink {
+    fn new(
+        sink: Arc<dyn EventSink>,
+        inner: Arc<Mutex<Inner>>,
+        session_id: String,
+        incarnation: u64,
+    ) -> Self {
+        Self {
+            sink,
+            inner,
+            session_id,
+            incarnation,
+        }
+    }
+
+    fn with_current(&self, emit: impl FnOnce(&dyn EventSink)) {
+        let guard = self.inner.lock().unwrap();
+        let no_newer_replacement = guard
+            .pending_replacements
+            .get(&self.session_id)
+            .map(|incarnation| *incarnation == self.incarnation)
+            .unwrap_or(true);
+        let current = guard
+            .live
+            .get(&self.session_id)
+            .map(|session| session.incarnation == self.incarnation)
+            .or_else(|| {
+                guard
+                    .dead
+                    .get(&self.session_id)
+                    .map(|session| session.incarnation == self.incarnation)
+            })
+            .unwrap_or(false);
+        if current && no_newer_replacement {
+            emit(self.sink.as_ref());
+        }
+    }
+}
+
+impl EventSink for IncarnationEventSink {
+    fn send_terminal_data(&self, session_id: &str, data: &str) {
+        self.with_current(|sink| sink.send_terminal_data(session_id, data));
+    }
+
+    fn send_terminal_exit(&self, session_id: &str, exit_code: Option<i32>) {
+        self.with_current(|sink| sink.send_terminal_exit(session_id, exit_code));
+    }
+
+    fn send_terminal_changed(&self) {
+        self.with_current(|sink| sink.send_terminal_changed());
+    }
+
+    fn send_terminal_lifecycle(
+        &self,
+        session_id: &str,
+        state: &str,
+        generation: u64,
+        command: Option<&str>,
+    ) {
+        self.with_current(|sink| {
+            sink.send_terminal_lifecycle(session_id, state, generation, command)
+        });
+    }
+
+    fn broadcast(&self, event_type: &str, payload: serde_json::Value) {
+        self.with_current(|sink| sink.broadcast(event_type, payload));
+    }
+
+    fn send_host_alert_changed(&self, alert: &crate::system::AlertSummary) {
+        self.sink.send_host_alert_changed(alert);
+    }
+
+    fn send_host_resource_alert_changed(
+        &self,
+        incident: &crate::system::alerts::ResourceAlertIncident,
+    ) {
+        self.sink.send_host_resource_alert_changed(incident);
+    }
+
+    fn send_terminal_exit_enhanced(
+        &self,
+        session_id: &str,
+        exit_code: Option<i32>,
+        will_restart: bool,
+        restart_in_ms: Option<u64>,
+        restart_count: Option<u32>,
+    ) {
+        self.with_current(|sink| {
+            sink.send_terminal_exit_enhanced(
+                session_id,
+                exit_code,
+                will_restart,
+                restart_in_ms,
+                restart_count,
+            )
+        });
+    }
+
+    fn send_process_restarted(
+        &self,
+        session_id: &str,
+        restart_count: u32,
+        previous_exit_code: Option<i32>,
+    ) {
+        self.with_current(|sink| {
+            sink.send_process_restarted(session_id, restart_count, previous_exit_code)
+        });
     }
 }
 
@@ -180,7 +493,7 @@ impl PtySessionManager {
 
     pub fn with_persist(
         sink: Arc<dyn EventSink>,
-        persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+        persist_tx: Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
         session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
     ) -> Self {
         // Bounded channel prevents DoS if supervisor hangs/panics.
@@ -192,15 +505,26 @@ impl PtySessionManager {
 
         // Clone persist_tx before moving it into manager.
         let persist_tx_clone = persist_tx.clone();
+        let session_store_clone = session_store.clone();
+
+        let mut initial_inner = Inner::new();
+        if let Some(store) = &session_store {
+            match store.max_session_incarnation() {
+                Ok(maximum) => initial_inner.advance_past(maximum),
+                Err(error) => warn!(%error, "Failed to seed PTY incarnation allocator"),
+            }
+        }
 
         let manager = Self {
-            inner: Arc::new(Mutex::new(Inner::new())),
+            inner: Arc::new(Mutex::new(initial_inner)),
             sink: Arc::clone(&sink),
             respawn_tx,
             persist_tx,
             session_store,
             port_forward_manager: Arc::new(std::sync::RwLock::new(None)),
             diagnostics: Arc::new(std::sync::RwLock::new(None)),
+            target_context: Arc::new(std::sync::RwLock::new(None)),
+            active_reader_count: Arc::new(AtomicUsize::new(0)),
         };
 
         // Spawn the supervisor task that handles respawn requests.
@@ -208,17 +532,41 @@ impl PtySessionManager {
         let sink_clone = Arc::clone(&sink);
         let pfm_cell = Arc::clone(&manager.port_forward_manager);
         let diag_cell = Arc::clone(&manager.diagnostics);
+        let target_context_cell = Arc::clone(&manager.target_context);
+        let active_reader_count = Arc::clone(&manager.active_reader_count);
         tokio::spawn(supervisor_loop(
             respawn_rx,
             inner_clone,
             sink_clone,
             respawn_tx_clone,
             persist_tx_clone,
+            session_store_clone,
             pfm_cell,
             diag_cell,
+            target_context_cell,
+            active_reader_count,
         ));
 
         manager
+    }
+
+    pub fn set_target_context(&self, context: PtyTargetContext) {
+        let mut target_context = self.target_context.write().unwrap();
+        *target_context = Some(context);
+    }
+
+    pub async fn validate_targeted_session(
+        &self,
+        project: &str,
+        worktree_path: &str,
+        requested_cwd: &str,
+    ) -> Result<(String, String), AppError> {
+        let context = self.target_context.read().unwrap().clone().ok_or_else(|| {
+            AppError::Unavailable("terminal target context is unavailable".into())
+        })?;
+        context
+            .validate_targeted_session(project, worktree_path, requested_cwd)
+            .await
     }
 
     /// Wire the backend diagnostics store after construction (Phase 03).
@@ -242,10 +590,53 @@ impl PtySessionManager {
     // -----------------------------------------------------------------------
 
     pub fn create(&self, opts: PtyCreateOpts) -> Result<SessionMeta, AppError> {
+        self.create_with_buffer(opts, None)
+    }
+
+    /// Create a restored session with its persisted scrollback hydrated before
+    /// the reader thread can append output or persist a newer snapshot.
+    pub fn create_with_buffer(
+        &self,
+        opts: PtyCreateOpts,
+        initial_buffer: Option<(Vec<u8>, u64)>,
+    ) -> Result<SessionMeta, AppError> {
         validate_session_id(&opts.id)?;
+
+        let (retrying_unavailable_target, retry_buffer) = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .dead
+                .get(&opts.id)
+                .map(|session| {
+                    (
+                        session.meta.target_unavailable,
+                        session.buffer.as_ref().map(Arc::clone),
+                    )
+                })
+                .unwrap_or((false, None))
+        };
+        let fallback_buffer = retry_buffer.as_ref().map(Arc::clone);
 
         // Kill any existing session with this ID before recreating.
         self.kill_internal_for_replace(&opts.id);
+
+        // Allocate the new concrete identity before slow PTY setup. Reader
+        // threads from the evicted incarnation may finish at any time, and
+        // their persistence commands must never be able to mutate this one.
+        let incarnation = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.begin_replacement(&opts.id)
+        };
+        let mut failure_meta = SessionMeta::new_with_target(
+            opts.id.clone(),
+            opts.project.clone(),
+            opts.command.clone(),
+            opts.cwd.clone(),
+            opts.worktree_path.clone(),
+            opts.restart_policy,
+        );
+        failure_meta.incarnation = incarnation;
+        let failure_persistence = FailedReplacementPersistence::from(&opts);
 
         // Release lock before slow I/O operations (openpty, spawn_command).
         // Reacquire after spawn to update state atomically.
@@ -260,7 +651,18 @@ impl PtySessionManager {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| AppError::PtyError(e.to_string()))?;
+            .map_err(|e| {
+                self.mark_replacement_failed(
+                    &opts.id,
+                    incarnation,
+                    false,
+                    retrying_unavailable_target,
+                    fallback_buffer.clone(),
+                    Some(failure_meta.clone()),
+                    Some(failure_persistence.clone()),
+                );
+                AppError::PtyError(e.to_string())
+            })?;
 
         let integration = ShellIntegration::prepare(&opts.command, &opts.env);
         let mut cmd = build_command(&opts);
@@ -280,6 +682,15 @@ impl PtySessionManager {
                 fields.insert("project".into(), project.clone());
             }
             self.record_diag("pty", "terminal.spawn_failed", fields);
+            self.mark_replacement_failed(
+                &opts.id,
+                incarnation,
+                false,
+                retrying_unavailable_target,
+                fallback_buffer.clone(),
+                Some(failure_meta.clone()),
+                Some(failure_persistence.clone()),
+            );
             AppError::PtyError(error)
         })?;
 
@@ -288,6 +699,15 @@ impl PtySessionManager {
             Ok(reader) => reader,
             Err(error) => {
                 let _ = child.kill();
+                self.mark_replacement_failed(
+                    &opts.id,
+                    incarnation,
+                    false,
+                    retrying_unavailable_target,
+                    fallback_buffer.clone(),
+                    Some(failure_meta.clone()),
+                    Some(failure_persistence.clone()),
+                );
                 return Err(AppError::PtyError(format!("clone_reader failed: {error}")));
             }
         };
@@ -296,6 +716,15 @@ impl PtySessionManager {
             Ok(writer) => writer,
             Err(error) => {
                 let _ = child.kill();
+                self.mark_replacement_failed(
+                    &opts.id,
+                    incarnation,
+                    false,
+                    retrying_unavailable_target,
+                    fallback_buffer.clone(),
+                    Some(failure_meta.clone()),
+                    Some(failure_persistence.clone()),
+                );
                 return Err(AppError::PtyError(format!("take_writer failed: {error}")));
             }
         };
@@ -306,17 +735,12 @@ impl PtySessionManager {
             env: persisted_env, ..
         } = respawn_opts.clone();
         let project_name = opts.project.clone();
-        let meta = SessionMeta::new(
-            opts.id.clone(),
-            opts.project.clone(),
-            opts.command.clone(),
-            opts.cwd.clone(),
-            opts.restart_policy,
-        );
+        let meta = failure_meta.clone();
 
         let lifecycle = integration.as_ref().map(ShellIntegration::lifecycle);
         let session = LiveSession::new(
             meta.clone(),
+            incarnation,
             pair.master,
             writer,
             child_killer,
@@ -331,6 +755,13 @@ impl PtySessionManager {
 
         {
             let mut inner = self.inner.lock().unwrap();
+            if !inner.replacement_is_current(&opts.id, incarnation) {
+                drop(inner);
+                session.terminate();
+                return Err(AppError::PtyError(
+                    "PTY replacement was superseded by a newer request".into(),
+                ));
+            }
             // TOCTOU guard: if concurrent create() already inserted this ID while
             // we were spawning, kill it and replace (matches pre-existing behavior).
             if let Some(existing) = inner.live.remove(&opts.id) {
@@ -344,6 +775,37 @@ impl PtySessionManager {
             // This ensures create() is fully idempotent across race conditions.
             inner.killed.remove(&opts.id);
             inner.live.insert(opts.id.clone(), session);
+        }
+
+        let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
+        if let Some(pfm) = &port_forward_manager {
+            pfm.register_session(&opts.id, incarnation);
+        }
+
+        // Hydrate before the reader starts appending output. Startup restore
+        // supplies the persisted snapshot explicitly; retrying an unavailable
+        // identity reuses its in-memory tombstone or loads the durable row.
+        if let Some((data, total_written)) = initial_buffer {
+            buffer.lock().unwrap().hydrate(&data, total_written);
+        } else if retrying_unavailable_target {
+            if let Some(retry_buffer) = retry_buffer {
+                let (data, total_written) = retry_buffer.lock().unwrap().snapshot();
+                buffer.lock().unwrap().hydrate(&data, total_written);
+            } else if let Some(store) = &self.session_store {
+                match store.load_buffer(&opts.id) {
+                    Ok(Some((data, total_written))) => {
+                        buffer.lock().unwrap().hydrate(&data, total_written);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        warn!(
+                            session_id = %opts.id,
+                            %error,
+                            "Failed to hydrate persisted terminal buffer"
+                        );
+                    }
+                }
+            }
         }
 
         // Record terminal lifecycle event for diagnostics (Phase 03).
@@ -371,34 +833,42 @@ impl PtySessionManager {
 
         // Persist metadata before the reader starts so fast commands cannot
         // flush output before the SQLite session row exists.
-        if let Some(tx) = &self.persist_tx {
-            if let Err(e) = tx.send(crate::persistence::PersistCmd::SessionCreated {
-                meta: meta.clone(),
-                env: persisted_env,
-                cols: opts.cols,
-                rows: opts.rows,
-                restart_max_retries: opts.restart_max_retries,
-            }) {
-                warn!("Failed to persist SessionCreated: {}", e);
-            }
-        }
+        persist_session_created(
+            &self.persist_tx,
+            self.session_store.as_deref(),
+            &meta,
+            incarnation,
+            &persisted_env,
+            opts.cols,
+            opts.rows,
+            opts.restart_max_retries,
+        );
 
         // Spawn dedicated reader thread — portable-pty reads are blocking.
         // Must NOT use tokio::spawn_blocking: it consumes a Tokio worker thread
         // for the entire session lifetime, causing starvation under load.
-        let sink = Arc::clone(&self.sink);
-        let inner_ref = Arc::clone(&self.inner);
         let session_id = opts.id.clone();
+        let sink: Arc<dyn EventSink> = Arc::new(IncarnationEventSink::new(
+            Arc::clone(&self.sink),
+            Arc::clone(&self.inner),
+            session_id.clone(),
+            incarnation,
+        ));
+        let inner_ref = Arc::clone(&self.inner);
         let respawn_tx = self.respawn_tx.clone();
         let persist_tx = self.persist_tx.clone();
-        let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
+        let session_store = self.session_store.clone();
+        let port_forward_manager_for_failure = port_forward_manager.clone();
         let rt_handle = tokio::runtime::Handle::try_current().ok();
         let diag_store = self.diagnostics.read().unwrap().clone();
+        self.active_reader_count.fetch_add(1, Ordering::AcqRel);
+        let active_reader_count = Arc::clone(&self.active_reader_count);
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
             .spawn(move || {
                 reader_thread(
                     session_id,
+                    incarnation,
                     reader,
                     child,
                     buffer,
@@ -407,18 +877,37 @@ impl PtySessionManager {
                     inner_ref,
                     respawn_tx,
                     persist_tx,
+                    session_store,
                     port_forward_manager,
                     project_name,
                     rt_handle,
                     diag_store,
                     lifecycle,
                     published_editing,
+                    active_reader_count,
                 );
             })
             .map_err(|e| {
-                self.kill_internal_for_replace(&opts.id);
+                self.active_reader_count.fetch_sub(1, Ordering::AcqRel);
+                if let Some(pfm) = &port_forward_manager_for_failure {
+                    pfm.unregister_session(&opts.id, incarnation);
+                }
+                self.mark_replacement_failed(
+                    &opts.id,
+                    incarnation,
+                    false,
+                    retrying_unavailable_target,
+                    fallback_buffer.clone(),
+                    Some(failure_meta.clone()),
+                    Some(failure_persistence.clone()),
+                );
                 AppError::PtyError(format!("thread spawn failed: {e}"))
             })?;
+
+        self.inner
+            .lock()
+            .unwrap()
+            .finish_replacement(&opts.id, incarnation);
 
         self.sink.send_terminal_changed();
         info!(id = %opts.id, "PTY session created");
@@ -523,6 +1012,22 @@ impl PtySessionManager {
                 reset: replay.reset,
                 truncated: replay.truncated,
             });
+        }
+
+        // A dead tombstone can still own the final in-memory buffer while
+        // its persistence commands are queued. Prefer it so attach/retry is
+        // not briefly behind the bytes the reader has already observed.
+        if let Some(session) = inner.dead.get(id) {
+            if let Some(buffer) = &session.buffer {
+                let buffer = buffer.lock().unwrap();
+                let replay = buffer.read_replay(from_offset);
+                return Ok(TerminalBufferReplay {
+                    data: String::from_utf8_lossy(replay.data).into_owned(),
+                    offset: replay.offset,
+                    reset: replay.reset,
+                    truncated: replay.truncated,
+                });
+            }
         }
 
         // Release lock before slow I/O
@@ -631,8 +1136,20 @@ impl PtySessionManager {
     }
 
     /// Kill + immediately evict all metadata (no 60s TTL).
-    pub fn remove(&self, id: &str) -> Result<(), AppError> {
+    pub fn remove(&self, id: &str) -> Result<Option<u64>, AppError> {
         let mut inner = self.inner.lock().unwrap();
+        // Allocate a removal watermark after any in-flight replacement. The
+        // persistence worker uses it to reject a late SessionCreated from the
+        // replacement that the user just removed, while allowing a genuinely
+        // later create to persist normally.
+        let removal_incarnation = inner.allocate_incarnation();
+        let removed_incarnation = inner
+            .live
+            .get(id)
+            .map(|session| session.incarnation)
+            .or_else(|| inner.dead.get(id).map(|session| session.incarnation));
+        inner.pending_replacements.remove(id);
+        inner.failed_replacements.remove(id);
         // Mark as killed so reader thread won't restart.
         inner.killed.insert(id.to_string());
         // Terminate live session (if any) and record whether it was alive.
@@ -643,6 +1160,11 @@ impl PtySessionManager {
             false
         };
         inner.dead.remove(id);
+        if let Some(incarnation) = removed_incarnation {
+            if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
+                pfm.unregister_session(id, incarnation);
+            }
+        }
         drop(inner);
 
         // Record user-requested removal for diagnostics (Phase 03).
@@ -657,15 +1179,29 @@ impl PtySessionManager {
 
         // Send SessionRemoved to persist worker (if enabled)
         if let Some(tx) = &self.persist_tx {
-            if let Err(e) = tx.try_send(crate::persistence::PersistCmd::SessionRemoved {
+            if let Err(e) = tx.send(crate::persistence::PersistCmd::SessionRemoved {
                 session_id: id.to_string(),
+                incarnation: removal_incarnation,
             }) {
-                warn!("Persist queue full, dropping SessionRemoved: {}", e);
+                warn!("Failed to persist SessionRemoved: {}", e);
+                if let Some(store) = &self.session_store {
+                    store
+                        .delete_session_for_incarnation(id, removal_incarnation)
+                        .map_err(|store_error| {
+                            AppError::PersistenceError(store_error.to_string())
+                        })?;
+                } else {
+                    return Err(AppError::PersistenceError(e.to_string()));
+                }
             }
+        } else if let Some(store) = &self.session_store {
+            store
+                .delete_session_for_incarnation(id, removal_incarnation)
+                .map_err(|store_error| AppError::PersistenceError(store_error.to_string()))?;
         }
 
         self.sink.send_terminal_changed();
-        Ok(())
+        Ok(removed_incarnation)
     }
 
     pub fn is_alive(&self, id: &str) -> bool {
@@ -677,6 +1213,174 @@ impl PtySessionManager {
         let mut result: Vec<SessionMeta> = inner.live.values().map(|s| s.meta.clone()).collect();
         result.extend(inner.dead.values().map(|d| d.meta.clone()));
         result
+    }
+
+    /// Rehydrate an unavailable session identity without attempting to spawn a
+    /// process. Its persisted buffer remains available through the normal
+    /// dead-session replay path, and a later create with the same ID can retry.
+    pub fn restore_unavailable_session(&self, mut meta: SessionMeta, incarnation: u64) {
+        meta.alive = false;
+        meta.incarnation = incarnation;
+        meta.target_unavailable = true;
+        let id = meta.id.clone();
+        let mut inner = self.inner.lock().unwrap();
+        inner.live.remove(&id);
+        inner.pending_replacements.remove(&id);
+        inner.failed_replacements.remove(&id);
+        inner.killed.remove(&id);
+        inner
+            .dead
+            .insert(id, DeadSession::target_unavailable(meta, incarnation));
+    }
+
+    /// Convert a failed automatic respawn into a stable orphan tombstone and
+    /// retain it in persistence so reconnecting clients can close or retry it.
+    pub fn mark_target_unavailable(&self, id: &str, project: &str, worktree_path: &str) -> bool {
+        let target_identity = target_path_identity(Path::new(worktree_path));
+        let mut unavailable_persistence: Option<(SessionMeta, FailedReplacementPersistence)> = None;
+        let incarnation = {
+            let mut inner = self.inner.lock().unwrap();
+            // A create failure is reported asynchronously, so it must not be
+            // allowed to mark a newer live or in-flight incarnation as lost.
+            if inner.live.contains_key(id) || inner.pending_replacements.contains_key(id) {
+                return false;
+            }
+            if let Some(tombstone) = inner.dead.get(id) {
+                let matches_target = tombstone.meta.project.as_deref() == Some(project)
+                    && tombstone.meta.worktree_path.as_deref().is_some_and(|path| {
+                        target_path_identity(Path::new(path)) == target_identity
+                    });
+                if !matches_target {
+                    return false;
+                }
+                let tombstone = inner
+                    .dead
+                    .get_mut(id)
+                    .expect("dead tombstone was checked immediately above");
+                tombstone.meta.alive = false;
+                tombstone.meta.target_unavailable = true;
+                tombstone.will_restart = false;
+                tombstone.restart_in_ms = None;
+                tombstone.meta.incarnation = tombstone.incarnation;
+                tombstone.incarnation
+            } else {
+                let Some(failed) = inner.failed_replacements.remove(id) else {
+                    return false;
+                };
+                let matches_target = failed.meta.project.as_deref() == Some(project)
+                    && failed.meta.worktree_path.as_deref().is_some_and(|path| {
+                        target_path_identity(Path::new(path)) == target_identity
+                    });
+                if !matches_target {
+                    inner.failed_replacements.insert(id.to_string(), failed);
+                    return false;
+                }
+                let FailedReplacement {
+                    meta,
+                    incarnation: failed_incarnation,
+                    buffer,
+                    persistence,
+                    ..
+                } = failed;
+                let mut tombstone = DeadSession::target_unavailable(meta, failed_incarnation);
+                tombstone.buffer = buffer;
+                unavailable_persistence =
+                    persistence.map(|persistence| (tombstone.meta.clone(), persistence));
+                let incarnation = tombstone.incarnation;
+                inner.dead.insert(id.to_string(), tombstone);
+                incarnation
+            }
+        };
+        if let Some((meta, persistence)) = unavailable_persistence {
+            persist_target_unavailable_with_metadata(
+                &self.persist_tx,
+                self.session_store.as_deref(),
+                &meta,
+                incarnation,
+                &persistence,
+            );
+        } else {
+            persist_target_unavailable(
+                &self.persist_tx,
+                self.session_store.as_deref(),
+                id,
+                incarnation,
+            );
+        }
+
+        // Use the same incarnation guard as reader/supervisor events. This
+        // keeps the initial create-failure path from publishing a stale event
+        // if another replacement wins between state mutation and delivery.
+        let event_sink: Arc<dyn EventSink> = Arc::new(IncarnationEventSink::new(
+            Arc::clone(&self.sink),
+            Arc::clone(&self.inner),
+            id.to_string(),
+            incarnation,
+        ));
+        event_sink.broadcast(
+            "terminal:target-unavailable",
+            serde_json::json!({
+                "project": project,
+                "worktreePath": worktree_path,
+                "sessionId": id,
+                "incarnation": incarnation,
+                "targetUnavailable": true,
+                "willRestart": false,
+            }),
+        );
+        event_sink.send_terminal_changed();
+        true
+    }
+
+    /// Close the replacement window after PTY setup fails. The old session has
+    /// already been evicted by `create`; without this tombstone transition its
+    /// persisted row could remain alive and be resurrected on restart.
+    fn mark_replacement_failed(
+        &self,
+        id: &str,
+        replacement_incarnation: u64,
+        target_unavailable: bool,
+        preserve_target_unavailable: bool,
+        fallback_buffer: Option<Arc<Mutex<crate::pty::buffer::ScrollbackBuffer>>>,
+        failure_meta: Option<SessionMeta>,
+        failure_persistence: Option<FailedReplacementPersistence>,
+    ) {
+        finish_failed_replacement(
+            &self.inner,
+            &self.persist_tx,
+            self.session_store.as_deref(),
+            id,
+            replacement_incarnation,
+            target_unavailable,
+            preserve_target_unavailable,
+            fallback_buffer,
+            failure_meta,
+            failure_persistence,
+        );
+    }
+
+    /// Return live sessions that are owned by a target. The immutable target
+    /// marker handles shells that later `cd` elsewhere; cwd containment is
+    /// reserved for older sessions created before target metadata existed.
+    pub fn live_sessions_for_target(&self, project: &str, target_path: &Path) -> Vec<SessionMeta> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .live
+            .values()
+            .filter_map(|session| {
+                let meta = &session.meta;
+                if meta.project.as_deref() != Some(project) {
+                    return None;
+                }
+                let owns_target = match meta.worktree_path.as_deref() {
+                    Some(path) => {
+                        target_path_identity(Path::new(path)) == target_path_identity(target_path)
+                    }
+                    None => target_path_is_within(Path::new(&meta.cwd), target_path),
+                };
+                owns_target.then(|| meta.clone())
+            })
+            .collect()
     }
 
     pub fn list_detailed(&self) -> Vec<SessionDetail> {
@@ -700,11 +1404,64 @@ impl PtySessionManager {
     pub fn dispose(&self) {
         let mut inner = self.inner.lock().unwrap();
         info!(count = inner.live.len(), "Disposing all PTY sessions");
+        let live_sessions = inner
+            .live
+            .iter()
+            .map(|(id, session)| (id.clone(), session.incarnation))
+            .collect::<Vec<_>>();
         for session in inner.live.values() {
             session.terminate();
         }
         inner.live.clear();
         inner.dead.clear();
+        inner.failed_replacements.clear();
+        drop(inner);
+
+        if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
+            for (id, incarnation) in live_sessions {
+                pfm.unregister_session(&id, incarnation);
+            }
+        }
+    }
+
+    /// Stop every current producer while keeping the reader-owned cleanup
+    /// path alive. Reader threads must finish their final snapshots and exit
+    /// commands before the persistence worker receives `Shutdown`.
+    pub fn stop_all_for_shutdown(&self) {
+        let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let sessions = inner
+                .live
+                .iter()
+                .map(|(id, session)| (id.clone(), session.incarnation))
+                .collect::<Vec<_>>();
+            for id in inner.live.keys().cloned().collect::<Vec<_>>() {
+                inner.killed.insert(id);
+            }
+            for id in inner.dead.keys().cloned().collect::<Vec<_>>() {
+                inner.killed.insert(id);
+            }
+            inner.pending_replacements.clear();
+            inner.failed_replacements.clear();
+            for session in inner.live.values() {
+                session.terminate();
+            }
+            if let Some(pfm) = &port_forward_manager {
+                for (id, incarnation) in &sessions {
+                    pfm.unregister_session(id, *incarnation);
+                }
+            }
+        }
+    }
+
+    /// Wait until all reader threads have completed their terminal persistence
+    /// commands. This is async so graceful shutdown does not block a Tokio
+    /// worker while a PTY read is unwinding.
+    pub async fn wait_for_readers(&self) {
+        while self.active_reader_count.load(Ordering::Acquire) != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     /// Persist full snapshots for all live sessions before graceful shutdown.
@@ -716,7 +1473,7 @@ impl PtySessionManager {
                 .iter()
                 .map(|(id, session)| {
                     let (data, total_written) = session.buffer.lock().unwrap().snapshot();
-                    (id.clone(), data, total_written)
+                    (id.clone(), session.incarnation, data, total_written)
                 })
                 .collect::<Vec<_>>()
         };
@@ -725,17 +1482,15 @@ impl PtySessionManager {
             return;
         }
 
-        if let Some(tx) = &self.persist_tx {
-            for (session_id, data, total_written) in snapshots {
-                if let Err(e) = tx.send(crate::persistence::PersistCmd::BufferUpdate {
-                    session_id: session_id.clone(),
-                    data,
-                    total_written,
-                }) {
-                    warn!(session_id, "Failed to persist shutdown snapshot: {}", e);
-                    break;
-                }
-            }
+        for (session_id, incarnation, data, total_written) in snapshots {
+            persist_buffer_snapshot(
+                &self.persist_tx,
+                self.session_store.as_deref(),
+                &session_id,
+                incarnation,
+                data,
+                total_written,
+            );
         }
     }
 
@@ -755,6 +1510,9 @@ impl PtySessionManager {
                 if removed > 0 {
                     debug!(removed, "Dead session tombstones swept");
                 }
+                guard
+                    .failed_replacements
+                    .retain(|_, replacement| replacement.created_at.elapsed() < DEAD_SESSION_TTL);
                 // Clean up killed set entries for sessions that no longer exist.
                 // Prevents unbounded memory growth when session IDs are never reused.
                 let before_killed = guard.killed.len();
@@ -795,7 +1553,7 @@ impl PtySessionManager {
         let mut inner = self.inner.lock().unwrap();
         // Mark as killed BEFORE removing from live — reader thread checks this.
         inner.killed.insert(id.to_string());
-        if let Some(session) = inner.live.remove(id) {
+        let removed_incarnation = if let Some(session) = inner.live.remove(id) {
             if suppress_exit {
                 *inner
                     .suppress_exit_counts
@@ -803,10 +1561,22 @@ impl PtySessionManager {
                     .or_insert(0) += 1;
             }
             session.terminate();
-            inner
-                .dead
-                .insert(id.to_string(), DeadSession::killed(session.meta));
+            let incarnation = session.incarnation;
+            let buffer = session.buffer_ref();
+            inner.dead.insert(
+                id.to_string(),
+                DeadSession::killed(session.meta, incarnation, Some(buffer)),
+            );
+            Some(incarnation)
+        } else {
+            None
+        };
+        if let Some(incarnation) = removed_incarnation {
+            if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
+                pfm.unregister_session(id, incarnation);
+            }
         }
+        drop(inner);
     }
 }
 
@@ -830,8 +1600,17 @@ fn consume_suppressed_exit(inner: &mut Inner, session_id: &str) -> bool {
 // Reader thread
 // ---------------------------------------------------------------------------
 
+struct ReaderGuard(Arc<AtomicUsize>);
+
+impl Drop for ReaderGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 fn reader_thread(
     session_id: String,
+    incarnation: u64,
     mut reader: Box<dyn std::io::Read + Send>,
     mut child: Box<dyn PtyChild + Send + Sync>,
     buffer: Arc<Mutex<crate::pty::buffer::ScrollbackBuffer>>,
@@ -839,14 +1618,17 @@ fn reader_thread(
     sink: Arc<dyn EventSink>,
     inner: Arc<Mutex<Inner>>,
     respawn_tx: mpsc::Sender<RespawnCmd>,
-    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+    persist_tx: Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<Arc<SessionStore>>,
     port_forward_manager: Option<Arc<PortForwardManager>>,
     project: Option<String>,
     rt_handle: Option<tokio::runtime::Handle>,
     diag_store: Option<DiagnosticStore>,
     lifecycle: Option<Arc<Mutex<ShellLifecycle>>>,
     published_editing: Arc<std::sync::atomic::AtomicBool>,
+    active_reader_count: Arc<AtomicUsize>,
 ) {
+    let _reader_guard = ReaderGuard(active_reader_count);
     // Local helper to record a terminal lifecycle event from the reader thread.
     let record_diag = |message: &str, mut fields: BTreeMap<String, String>| {
         if let Some(store) = &diag_store {
@@ -900,15 +1682,16 @@ fn reader_thread(
             buf.push(&visible_data);
             bytes_since_snapshot += visible_data.len();
             if bytes_since_snapshot >= SNAPSHOT_THRESHOLD {
-                if let Some(tx) = &persist_tx {
-                    let (snapshot_data, total_written) = buf.snapshot();
-                    let _ = tx.try_send(crate::persistence::PersistCmd::BufferUpdate {
-                        session_id: session_id.clone(),
-                        data: snapshot_data,
-                        total_written,
-                    });
-                    bytes_since_snapshot = 0;
-                }
+                let (snapshot_data, total_written) = buf.snapshot();
+                try_persist_buffer_update(
+                    &persist_tx,
+                    session_store.as_deref(),
+                    &session_id,
+                    incarnation,
+                    snapshot_data,
+                    total_written,
+                );
+                bytes_since_snapshot = 0;
             }
         }
         let data_str = output_decoder.decode(&visible_data);
@@ -916,6 +1699,7 @@ fn reader_thread(
             crate::port_forward::scan_chunk(
                 &visible_data,
                 &session_id,
+                incarnation,
                 project.as_deref(),
                 pfm,
                 handle,
@@ -994,21 +1778,21 @@ fn reader_thread(
 
     // Send a final full snapshot before SessionExited so short-output sessions
     // (<16KB) survive server restart.
-    if let Some(tx) = &persist_tx {
-        let (data, total_written) = buffer.lock().unwrap().snapshot();
-        if let Err(e) = tx.send(crate::persistence::PersistCmd::BufferUpdate {
-            session_id: session_id.clone(),
-            data,
-            total_written,
-        }) {
-            warn!(session_id = %session_id, "Failed to send final buffer snapshot: {}", e);
-        }
-        if let Err(e) = tx.send(crate::persistence::PersistCmd::SessionExited {
-            session_id: session_id.clone(),
-        }) {
-            warn!(session_id = %session_id, "Persist queue full, dropping SessionExited: {}", e);
-        }
-    }
+    let (data, total_written) = buffer.lock().unwrap().snapshot();
+    persist_buffer_snapshot(
+        &persist_tx,
+        session_store.as_deref(),
+        &session_id,
+        incarnation,
+        data,
+        total_written,
+    );
+    persist_session_exited(
+        &persist_tx,
+        session_store.as_deref(),
+        &session_id,
+        incarnation,
+    );
 
     let (respawn_opts, restart_count, _was_killed, should_restart, _delay_ms, emit_exit) = {
         let mut inner_guard = inner.lock().unwrap();
@@ -1017,7 +1801,10 @@ fn reader_thread(
         let owns_live_session = inner_guard
             .live
             .get(&session_id)
-            .map(|session| Arc::ptr_eq(&session.shutdown_ref(), &shutdown))
+            .map(|session| {
+                session.incarnation == incarnation
+                    && Arc::ptr_eq(&session.shutdown_ref(), &shutdown)
+            })
             .unwrap_or(false);
 
         if owns_live_session {
@@ -1048,7 +1835,12 @@ fn reader_thread(
             };
 
             // Create tombstone with restart metadata.
-            let mut tombstone = DeadSession::exited(session.meta, exit_code);
+            let mut tombstone = DeadSession::exited(
+                session.meta,
+                exit_code,
+                incarnation,
+                Some(Arc::clone(&buffer)),
+            );
             tombstone.will_restart = will_restart;
             tombstone.restart_in_ms = restart_in_ms;
             inner_guard.dead.insert(session_id.clone(), tombstone);
@@ -1095,6 +1887,7 @@ fn reader_thread(
                     cols: 80,
                     rows: 24,
                     project: None,
+                    worktree_path: None,
                     restart_policy: RestartPolicy::Never,
                     restart_max_retries: 0,
                 },
@@ -1126,6 +1919,7 @@ fn reader_thread(
                     cols: 80,
                     rows: 24,
                     project: None,
+                    worktree_path: None,
                     restart_policy: RestartPolicy::Never,
                     restart_max_retries: 0,
                 },
@@ -1144,6 +1938,7 @@ fn reader_thread(
     if let Some(delay) = should_restart {
         let cmd = RespawnCmd {
             id: session_id.clone(),
+            incarnation,
             _prev_exit_code: exit_code,
             restart_count,
             respawn_opts,
@@ -1161,6 +1956,10 @@ fn reader_thread(
     if emit_exit {
         sink.send_terminal_exit(&session_id, Some(exit_code));
         sink.send_terminal_changed();
+    }
+
+    if let Some(pfm) = &port_forward_manager {
+        pfm.unregister_session_with_runtime(&session_id, incarnation, rt_handle.as_ref());
     }
 }
 
@@ -1212,15 +2011,19 @@ async fn supervisor_loop(
     inner: Arc<Mutex<Inner>>,
     sink: Arc<dyn EventSink>,
     respawn_tx: mpsc::Sender<RespawnCmd>,
-    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+    persist_tx: Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<Arc<SessionStore>>,
     pfm_cell: Arc<std::sync::RwLock<Option<Arc<PortForwardManager>>>>,
     diag_cell: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
+    target_context_cell: Arc<std::sync::RwLock<Option<PtyTargetContext>>>,
+    active_reader_count: Arc<AtomicUsize>,
 ) {
     while let Some(cmd) = respawn_rx.recv().await {
         let session_id = cmd.id.clone();
         let restart_attempt = cmd.restart_count + 1;
         let restart_policy = format!("{:?}", cmd.respawn_opts.restart_policy);
         let project = cmd.respawn_opts.project.clone();
+        let target_path = cmd.respawn_opts.worktree_path.clone();
 
         // Wait for backoff delay.
         if cmd.delay_ms > 0 {
@@ -1230,7 +2033,7 @@ async fn supervisor_loop(
         // Check if session was killed during backoff.
         {
             let inner_guard = inner.lock().unwrap();
-            if inner_guard.killed.contains(&session_id) {
+            if !inner_guard.respawn_source_is_current(&session_id, cmd.incarnation) {
                 info!(id = %session_id, "Session killed during backoff — skipping restart");
                 continue;
             }
@@ -1246,19 +2049,108 @@ async fn supervisor_loop(
 
         let pfm = pfm_cell.read().unwrap().clone();
         let diag_store = diag_cell.read().unwrap().clone();
-        if let Err(e) = respawn_internal(
-            &session_id,
-            cmd,
-            &inner,
-            &sink,
-            &respawn_tx,
-            persist_tx.clone(),
-            pfm,
-            diag_store.clone(),
-        )
-        .await
-        {
+        let target_context = target_context_cell.read().unwrap().clone();
+        let mut cmd = cmd;
+        let source_incarnation = cmd.incarnation;
+        let mut target_unavailable = false;
+        let respawn_result = if let Some(context) = target_context {
+            let _lifecycle_guard = context.lifecycle_guard.write().await;
+            let validation = if let Some(worktree_path) = cmd.respawn_opts.worktree_path.clone() {
+                match cmd.respawn_opts.project.as_deref() {
+                    Some(project) => {
+                        context
+                            .validate_targeted_session(
+                                project,
+                                &worktree_path,
+                                &cmd.respawn_opts.cwd,
+                            )
+                            .await
+                    }
+                    None => Err(AppError::InvalidInput(
+                        "A worktree target requires a project".into(),
+                    )),
+                }
+            } else {
+                Ok((String::new(), cmd.respawn_opts.cwd.clone()))
+            };
+            match validation {
+                Ok((canonical_target, canonical_cwd)) => {
+                    if !canonical_target.is_empty() {
+                        cmd.respawn_opts.worktree_path = Some(canonical_target);
+                    }
+                    cmd.respawn_opts.cwd = canonical_cwd;
+                    respawn_internal(
+                        &session_id,
+                        cmd,
+                        &inner,
+                        &sink,
+                        &respawn_tx,
+                        persist_tx.clone(),
+                        session_store.clone(),
+                        pfm,
+                        diag_store.clone(),
+                        Arc::clone(&active_reader_count),
+                    )
+                    .await
+                }
+                Err(error) => {
+                    target_unavailable = is_target_loss_error(&error);
+                    Err(error)
+                }
+            }
+        } else if cmd.respawn_opts.worktree_path.is_some() {
+            Err(AppError::Unavailable(
+                "terminal target context is unavailable".into(),
+            ))
+        } else {
+            respawn_internal(
+                &session_id,
+                cmd,
+                &inner,
+                &sink,
+                &respawn_tx,
+                persist_tx.clone(),
+                session_store.clone(),
+                pfm,
+                diag_store.clone(),
+                Arc::clone(&active_reader_count),
+            )
+            .await
+        };
+        if let Err(e) = respawn_result {
             warn!(id = %session_id, error = %e, "Respawn failed");
+            let failure_state = finish_respawn_source_failure(
+                &inner,
+                &persist_tx,
+                session_store.as_deref(),
+                &session_id,
+                source_incarnation,
+                target_unavailable,
+            );
+            if target_unavailable && failure_state.is_some() {
+                if let (Some(project), Some(worktree_path)) =
+                    (project.as_deref(), target_path.as_deref())
+                {
+                    let event_sink: Arc<dyn EventSink> = Arc::new(IncarnationEventSink::new(
+                        Arc::clone(&sink),
+                        Arc::clone(&inner),
+                        session_id.clone(),
+                        source_incarnation,
+                    ));
+                    event_sink.broadcast(
+                        "terminal:target-unavailable",
+                        serde_json::json!({
+                            "project": project,
+                            "worktreePath": worktree_path,
+                            "sessionId": session_id,
+                            "incarnation": source_incarnation,
+                            "targetUnavailable": true,
+                            "willRestart": false,
+                        }),
+                    );
+                    event_sink.send_terminal_changed();
+                }
+            }
             if let Some(store) = &diag_store {
                 let mut fields = BTreeMap::from([
                     ("sessionId".into(), session_id.clone()),
@@ -1277,6 +2169,503 @@ async fn supervisor_loop(
     }
 }
 
+fn is_target_loss_error(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::WorkspaceTarget(
+            WorkspaceTargetError::UnknownProject
+                | WorkspaceTargetError::UnregisteredTarget
+                | WorkspaceTargetError::UnavailableTarget
+                | WorkspaceTargetError::InvalidPath
+        ) | AppError::Fs(crate::fs::FsError::NotFound)
+    )
+}
+
+/// Finish a failed respawn while still owning the source incarnation. A newer
+/// replacement may already be pending, so both the state transition and the
+/// target-unavailable notification must refuse to touch that newer identity.
+fn finish_respawn_source_failure(
+    inner: &Arc<Mutex<Inner>>,
+    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<&SessionStore>,
+    session_id: &str,
+    incarnation: u64,
+    target_unavailable: bool,
+) -> Option<(u64, bool)> {
+    let state = {
+        let mut guard = inner.lock().unwrap();
+        if guard.pending_replacements.contains_key(session_id) {
+            return None;
+        }
+        let tombstone = guard.dead.get_mut(session_id)?;
+        if tombstone.incarnation != incarnation {
+            return None;
+        }
+        tombstone.meta.alive = false;
+        tombstone.meta.target_unavailable |= target_unavailable;
+        tombstone.will_restart = false;
+        tombstone.restart_in_ms = None;
+        Some((incarnation, tombstone.meta.target_unavailable))
+    };
+
+    if let Some((incarnation, target_unavailable)) = state {
+        if target_unavailable {
+            persist_target_unavailable(persist_tx, session_store, session_id, incarnation);
+        } else {
+            persist_session_dead(persist_tx, session_store, session_id, incarnation);
+        }
+    }
+    state
+}
+
+/// Convert any failed replacement stage into a retained dead tombstone. The
+/// helper covers both setup failures (where the source tombstone still owns
+/// the identity) and reader-thread startup failures (where the replacement
+/// was already published live), retaining the newest scrollback buffer in
+/// either case.
+fn finish_failed_replacement(
+    inner: &Arc<Mutex<Inner>>,
+    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<&SessionStore>,
+    session_id: &str,
+    replacement_incarnation: u64,
+    target_unavailable: bool,
+    preserve_target_unavailable: bool,
+    fallback_buffer: Option<Arc<Mutex<crate::pty::buffer::ScrollbackBuffer>>>,
+    failure_meta: Option<SessionMeta>,
+    failure_persistence: Option<FailedReplacementPersistence>,
+) {
+    let mut replaced_incarnation_to_mark_dead = None;
+    let (incarnation, target_unavailable, failed_session) = {
+        let mut guard = inner.lock().unwrap();
+        if !guard.replacement_is_current(session_id, replacement_incarnation) {
+            return;
+        }
+
+        let live_is_current = guard
+            .live
+            .get(session_id)
+            .map(|session| session.incarnation == replacement_incarnation)
+            .unwrap_or(false);
+        if guard.live.contains_key(session_id) && !live_is_current {
+            return;
+        }
+
+        let failed_session = if live_is_current {
+            guard.live.remove(session_id)
+        } else {
+            None
+        };
+        let (incarnation, target_unavailable) = if let Some(session) = &failed_session {
+            let mut meta = session.meta.clone();
+            meta.alive = false;
+            meta.incarnation = replacement_incarnation;
+            meta.target_unavailable =
+                meta.target_unavailable || target_unavailable || preserve_target_unavailable;
+            let target_unavailable = meta.target_unavailable;
+            let buffer = fallback_buffer.or_else(|| Some(session.buffer_ref()));
+            guard.dead.insert(
+                session_id.to_string(),
+                DeadSession::exited(meta, -1, replacement_incarnation, buffer),
+            );
+            (replacement_incarnation, target_unavailable)
+        } else if let Some(mut meta) = failure_meta
+            .clone()
+            .filter(|meta| meta.worktree_path.is_some())
+        {
+            // A replacement may be changing the target while an older dead
+            // tombstone is still retained under the reusable public ID. Keep
+            // the new target metadata so the authoritative API recheck can
+            // promote this exact failed incarnation to unavailable.
+            if guard
+                .dead
+                .get(session_id)
+                .is_some_and(|tombstone| tombstone.incarnation > replacement_incarnation)
+            {
+                guard.finish_replacement(session_id, replacement_incarnation);
+                return;
+            }
+            let old_tombstone = guard.dead.remove(session_id);
+            replaced_incarnation_to_mark_dead = old_tombstone
+                .as_ref()
+                .map(|tombstone| tombstone.incarnation);
+            let old_buffer = old_tombstone.and_then(|tombstone| tombstone.buffer);
+            meta.alive = false;
+            meta.incarnation = replacement_incarnation;
+            meta.target_unavailable =
+                meta.target_unavailable || target_unavailable || preserve_target_unavailable;
+            let target_unavailable = meta.target_unavailable;
+            guard.failed_replacements.insert(
+                session_id.to_string(),
+                FailedReplacement {
+                    meta,
+                    incarnation: replacement_incarnation,
+                    buffer: fallback_buffer.or(old_buffer),
+                    persistence: failure_persistence.clone(),
+                    created_at: std::time::Instant::now(),
+                },
+            );
+            (replacement_incarnation, target_unavailable)
+        } else if let Some(tombstone) = guard.dead.get_mut(session_id) {
+            if tombstone.incarnation > replacement_incarnation {
+                guard.finish_replacement(session_id, replacement_incarnation);
+                return;
+            }
+            tombstone.meta.alive = false;
+            tombstone.meta.incarnation = tombstone.incarnation;
+            // Retrying an unavailable target is allowed to fail while the
+            // target is still gone. Preserve the recovery marker until a
+            // newer incarnation actually succeeds.
+            tombstone.meta.target_unavailable = tombstone.meta.target_unavailable
+                || target_unavailable
+                || preserve_target_unavailable;
+            if tombstone.buffer.is_none() {
+                tombstone.buffer = fallback_buffer;
+            }
+            tombstone.will_restart = false;
+            tombstone.restart_in_ms = None;
+            (tombstone.incarnation, tombstone.meta.target_unavailable)
+        } else {
+            // A first target-scoped create can fail before it has ever
+            // published a live session. Retain only a manager-owned,
+            // target-bound marker so the API can convert it after its
+            // authoritative target recheck; root/free failures keep the
+            // historical no-tombstone behavior.
+            let Some(mut meta) = failure_meta.filter(|meta| meta.worktree_path.is_some()) else {
+                guard.finish_replacement(session_id, replacement_incarnation);
+                return;
+            };
+            meta.alive = false;
+            meta.incarnation = replacement_incarnation;
+            meta.target_unavailable =
+                meta.target_unavailable || target_unavailable || preserve_target_unavailable;
+            let target_unavailable = meta.target_unavailable;
+            guard.failed_replacements.insert(
+                session_id.to_string(),
+                FailedReplacement {
+                    meta,
+                    incarnation: replacement_incarnation,
+                    buffer: fallback_buffer,
+                    persistence: failure_persistence,
+                    created_at: std::time::Instant::now(),
+                },
+            );
+            (replacement_incarnation, target_unavailable)
+        };
+
+        guard.finish_replacement(session_id, replacement_incarnation);
+        (incarnation, target_unavailable, failed_session)
+    };
+
+    if let Some(session) = failed_session {
+        session.terminate();
+    }
+    if let Some(old_incarnation) = replaced_incarnation_to_mark_dead {
+        persist_session_dead(persist_tx, session_store, session_id, old_incarnation);
+    }
+    if target_unavailable {
+        persist_target_unavailable(persist_tx, session_store, session_id, incarnation);
+    } else {
+        persist_session_dead(persist_tx, session_store, session_id, incarnation);
+    }
+}
+
+/// Target-loss state must be enqueued without blocking the async supervisor or
+/// a request handler. The shared FIFO preserves its order relative to create,
+/// exit, and removal commands.
+fn persist_target_unavailable_with_metadata(
+    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<&SessionStore>,
+    meta: &SessionMeta,
+    incarnation: u64,
+    persistence: &FailedReplacementPersistence,
+) {
+    let command = crate::persistence::PersistCmd::SessionTargetUnavailableUpsert {
+        meta: meta.clone(),
+        incarnation,
+        env: HashMap::clone(&persistence.env),
+        cols: persistence.cols,
+        rows: persistence.rows,
+        restart_max_retries: persistence.restart_max_retries,
+    };
+    if let Some(tx) = persist_tx {
+        if let Err(error) = tx.send(command) {
+            warn!(
+                session_id = %meta.id,
+                error = %error,
+                "Failed to enqueue unavailable target session upsert"
+            );
+            if let Some(store) = session_store {
+                if let Err(store_error) = store.save_session_target_unavailable_for_incarnation(
+                    meta,
+                    incarnation,
+                    &persistence.env,
+                    persistence.cols,
+                    persistence.rows,
+                    persistence.restart_max_retries,
+                ) {
+                    warn!(
+                        session_id = %meta.id,
+                        error = %store_error,
+                        "Failed to persist unavailable target session through store fallback"
+                    );
+                }
+            }
+        }
+    } else if let Some(store) = session_store {
+        if let Err(error) = store.save_session_target_unavailable_for_incarnation(
+            meta,
+            incarnation,
+            &persistence.env,
+            persistence.cols,
+            persistence.rows,
+            persistence.restart_max_retries,
+        ) {
+            warn!(
+                session_id = %meta.id,
+                error = %error,
+                "Failed to persist unavailable target session through store"
+            );
+        }
+    }
+}
+
+fn persist_target_unavailable(
+    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<&SessionStore>,
+    session_id: &str,
+    incarnation: u64,
+) {
+    if let Some(tx) = persist_tx {
+        if let Err(error) = tx.send(crate::persistence::PersistCmd::SessionTargetUnavailable {
+            session_id: session_id.to_string(),
+            incarnation,
+        }) {
+            warn!(session_id, error = %error, "Failed to persist unavailable target session");
+            if let Some(store) = session_store {
+                if let Err(store_error) =
+                    store.mark_session_target_unavailable_for_incarnation(session_id, incarnation)
+                {
+                    warn!(
+                        session_id,
+                        error = %store_error,
+                        "Failed to persist unavailable target session through store fallback"
+                    );
+                }
+            }
+        }
+    } else if let Some(store) = session_store {
+        if let Err(error) =
+            store.mark_session_target_unavailable_for_incarnation(session_id, incarnation)
+        {
+            warn!(
+                session_id,
+                error = %error,
+                "Failed to persist unavailable target session through store"
+            );
+        }
+    }
+}
+
+fn persist_session_dead(
+    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<&SessionStore>,
+    session_id: &str,
+    incarnation: u64,
+) {
+    if let Some(tx) = persist_tx {
+        if let Err(error) = tx.send(crate::persistence::PersistCmd::SessionDead {
+            session_id: session_id.to_string(),
+            incarnation,
+        }) {
+            warn!(session_id, error = %error, "Failed to persist dead terminal session");
+            if let Some(store) = session_store {
+                if let Err(store_error) =
+                    store.mark_session_dead_for_incarnation(session_id, incarnation)
+                {
+                    warn!(
+                        session_id,
+                        error = %store_error,
+                        "Failed to persist dead terminal session through store fallback"
+                    );
+                }
+            }
+        }
+    } else if let Some(store) = session_store {
+        if let Err(error) = store.mark_session_dead_for_incarnation(session_id, incarnation) {
+            warn!(
+                session_id,
+                error = %error,
+                "Failed to persist dead terminal session through store"
+            );
+        }
+    }
+}
+
+fn persist_session_exited(
+    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<&SessionStore>,
+    session_id: &str,
+    incarnation: u64,
+) {
+    if let Some(tx) = persist_tx {
+        if let Err(error) = tx.send(crate::persistence::PersistCmd::SessionExited {
+            session_id: session_id.to_string(),
+            incarnation,
+        }) {
+            warn!(session_id, error = %error, "Failed to persist exited terminal session");
+            if let Some(store) = session_store {
+                if let Err(store_error) =
+                    store.mark_session_dead_for_incarnation(session_id, incarnation)
+                {
+                    warn!(
+                        session_id,
+                        error = %store_error,
+                        "Failed to persist exited terminal session through store fallback"
+                    );
+                }
+            }
+        }
+    } else if let Some(store) = session_store {
+        if let Err(error) = store.mark_session_dead_for_incarnation(session_id, incarnation) {
+            warn!(
+                session_id,
+                error = %error,
+                "Failed to persist exited terminal session through store"
+            );
+        }
+    }
+}
+
+fn persist_session_created(
+    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<&SessionStore>,
+    meta: &SessionMeta,
+    incarnation: u64,
+    env: &HashMap<String, String>,
+    cols: u16,
+    rows: u16,
+    restart_max_retries: u32,
+) {
+    let persist_direct = |store: &SessionStore| {
+        if let Err(error) = store.save_session_for_incarnation(
+            meta,
+            incarnation,
+            env,
+            cols,
+            rows,
+            restart_max_retries,
+        ) {
+            warn!(
+                session_id = %meta.id,
+                error = %error,
+                "Failed to persist created terminal session through store"
+            );
+        }
+    };
+
+    if let Some(tx) = persist_tx {
+        if let Err(error) = tx.send(crate::persistence::PersistCmd::SessionCreated {
+            meta: meta.clone(),
+            incarnation,
+            env: env.clone(),
+            cols,
+            rows,
+            restart_max_retries,
+        }) {
+            warn!(session_id = %meta.id, error = %error, "Failed to persist created terminal session");
+            if let Some(store) = session_store {
+                persist_direct(store);
+            }
+        }
+    } else if let Some(store) = session_store {
+        persist_direct(store);
+    }
+}
+
+fn persist_buffer_direct(
+    session_store: Option<&SessionStore>,
+    session_id: &str,
+    incarnation: u64,
+    data: &[u8],
+    total_written: u64,
+) {
+    if let Some(store) = session_store {
+        if let Err(error) =
+            store.save_buffer_for_incarnation(session_id, incarnation, data, total_written)
+        {
+            warn!(
+                session_id,
+                error = %error,
+                "Failed to persist terminal buffer through store"
+            );
+        }
+    }
+}
+
+fn try_persist_buffer_update(
+    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<&SessionStore>,
+    session_id: &str,
+    incarnation: u64,
+    data: Vec<u8>,
+    total_written: u64,
+) {
+    let Some(tx) = persist_tx else {
+        persist_buffer_direct(session_store, session_id, incarnation, &data, total_written);
+        return;
+    };
+
+    match tx.send(crate::persistence::PersistCmd::BufferUpdate {
+        session_id: session_id.to_string(),
+        incarnation,
+        data,
+        total_written,
+    }) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::SendError(command)) => {
+            if let crate::persistence::PersistCmd::BufferUpdate {
+                data,
+                total_written,
+                ..
+            } = command
+            {
+                persist_buffer_direct(session_store, session_id, incarnation, &data, total_written);
+            }
+        }
+    }
+}
+
+fn persist_buffer_snapshot(
+    persist_tx: &Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<&SessionStore>,
+    session_id: &str,
+    incarnation: u64,
+    data: Vec<u8>,
+    total_written: u64,
+) {
+    let Some(tx) = persist_tx else {
+        persist_buffer_direct(session_store, session_id, incarnation, &data, total_written);
+        return;
+    };
+
+    if let Err(error) = tx.send(crate::persistence::PersistCmd::BufferUpdate {
+        session_id: session_id.to_string(),
+        incarnation,
+        data,
+        total_written,
+    }) {
+        if let crate::persistence::PersistCmd::BufferUpdate {
+            data,
+            total_written,
+            ..
+        } = error.0
+        {
+            persist_buffer_direct(session_store, session_id, incarnation, &data, total_written);
+        }
+    }
+}
+
 /// Internal respawn logic — reuses the same session ID.
 /// Called by supervisor task after backoff delay.
 async fn respawn_internal(
@@ -1285,22 +2674,64 @@ async fn respawn_internal(
     inner: &Arc<Mutex<Inner>>,
     sink: &Arc<dyn EventSink>,
     respawn_tx: &mpsc::Sender<RespawnCmd>,
-    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+    persist_tx: Option<std::sync::mpsc::Sender<crate::persistence::PersistCmd>>,
+    session_store: Option<Arc<SessionStore>>,
     port_forward_manager: Option<Arc<PortForwardManager>>,
     diag_store: Option<DiagnosticStore>,
+    active_reader_count: Arc<AtomicUsize>,
 ) -> Result<(), AppError> {
     let opts = &cmd.respawn_opts;
+    let source_incarnation = cmd.incarnation;
+
+    // Reserve before slow PTY setup so a newer request invalidates this one.
+    let (replacement_incarnation, preserve_target_unavailable, source_buffer) = {
+        let mut guard = inner.lock().unwrap();
+        if !guard.respawn_source_is_current(session_id, source_incarnation) {
+            return Err(AppError::PtyError(
+                "PTY respawn was superseded by a newer request".into(),
+            ));
+        }
+        let preserve_target_unavailable = guard
+            .dead
+            .get(session_id)
+            .map(|session| session.meta.target_unavailable)
+            .unwrap_or(false);
+        let source_buffer = guard
+            .dead
+            .get(session_id)
+            .and_then(|session| session.buffer.as_ref().map(Arc::clone));
+        (
+            guard.begin_replacement(session_id),
+            preserve_target_unavailable,
+            source_buffer,
+        )
+    };
 
     // Build PTY with same config.
     let pty_system = NativePtySystem::default();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: opts.rows,
-            cols: opts.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| AppError::PtyError(e.to_string()))?;
+    let pair = match pty_system.openpty(PtySize {
+        rows: opts.rows,
+        cols: opts.cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        Ok(pair) => pair,
+        Err(error) => {
+            finish_failed_replacement(
+                inner,
+                &persist_tx,
+                session_store.as_deref(),
+                session_id,
+                replacement_incarnation,
+                false,
+                preserve_target_unavailable,
+                source_buffer.clone(),
+                None,
+                None,
+            );
+            return Err(AppError::PtyError(error.to_string()));
+        }
+    };
 
     let integration = ShellIntegration::prepare(&opts.command, &opts.env);
     let mut build_cmd = if cfg!(target_os = "windows") {
@@ -1325,21 +2756,47 @@ async fn respawn_internal(
         c
     };
 
-    build_cmd.cwd(&opts.cwd);
+    build_cmd.cwd(normalized_command_cwd(&opts.cwd));
     apply_child_env(&mut build_cmd, &opts.env);
     if let Some(integration) = &integration {
         integration.apply(&mut build_cmd);
     }
 
-    let mut child = pair
-        .slave
-        .spawn_command(build_cmd)
-        .map_err(|e| AppError::PtyError(format!("spawn failed: {e}")))?;
+    let mut child = match pair.slave.spawn_command(build_cmd) {
+        Ok(child) => child,
+        Err(error) => {
+            finish_failed_replacement(
+                inner,
+                &persist_tx,
+                session_store.as_deref(),
+                session_id,
+                replacement_incarnation,
+                false,
+                preserve_target_unavailable,
+                source_buffer.clone(),
+                None,
+                None,
+            );
+            return Err(AppError::PtyError(format!("spawn failed: {error}")));
+        }
+    };
 
     let reader = match pair.master.try_clone_reader() {
         Ok(reader) => reader,
         Err(error) => {
             let _ = child.kill();
+            finish_failed_replacement(
+                inner,
+                &persist_tx,
+                session_store.as_deref(),
+                session_id,
+                replacement_incarnation,
+                false,
+                preserve_target_unavailable,
+                source_buffer.clone(),
+                None,
+                None,
+            );
             return Err(AppError::PtyError(format!("clone_reader failed: {error}")));
         }
     };
@@ -1348,25 +2805,41 @@ async fn respawn_internal(
         Ok(writer) => writer,
         Err(error) => {
             let _ = child.kill();
+            finish_failed_replacement(
+                inner,
+                &persist_tx,
+                session_store.as_deref(),
+                session_id,
+                replacement_incarnation,
+                false,
+                preserve_target_unavailable,
+                source_buffer.clone(),
+                None,
+                None,
+            );
             return Err(AppError::PtyError(format!("take_writer failed: {error}")));
         }
     };
 
     // Increment restart_count.
-    let mut meta = SessionMeta::new(
+    let mut meta = SessionMeta::new_with_target(
         session_id.to_string(),
         opts.project.clone(),
         opts.command.clone(),
         opts.cwd.clone(),
+        opts.worktree_path.clone(),
         opts.restart_policy,
     );
     meta.restart_count = cmd.restart_count + 1;
     meta.last_exit_at = Some(crate::pty::session::now_ms());
+    meta.incarnation = replacement_incarnation;
 
     let child_killer = child.clone_killer();
     let lifecycle = integration.as_ref().map(ShellIntegration::lifecycle);
+    let incarnation = replacement_incarnation;
     let session = LiveSession::new(
         meta.clone(),
+        incarnation,
         pair.master,
         writer,
         child_killer,
@@ -1379,47 +2852,72 @@ async fn respawn_internal(
     let lifecycle = session.lifecycle.clone();
     let published_editing = session.published_editing_ref();
 
-    // Insert into live map — if session ID already exists (user called create
-    // concurrently), this will replace it (same behavior as create()).
+    // Publish only if the source tombstone and this replacement reservation
+    // still belong to this respawn. A concurrent create/remove wins.
     {
         let mut inner_guard = inner.lock().unwrap();
+        if !inner_guard.respawn_replacement_is_current(session_id, source_incarnation, incarnation)
+        {
+            drop(inner_guard);
+            session.terminate();
+            return Err(AppError::PtyError(
+                "PTY respawn was superseded by a newer request".into(),
+            ));
+        }
+
         // Remove from killed set (allow future restarts if user doesn't kill again).
         inner_guard.killed.remove(session_id);
         inner_guard.dead.remove(session_id);
-        if let Some(existing) = inner_guard.live.remove(session_id) {
-            warn!(id = %session_id, "Concurrent session detected during respawn, replacing");
-            existing.terminate();
-        }
         inner_guard.live.insert(session_id.to_string(), session);
+    }
+
+    if let Some(pfm) = &port_forward_manager {
+        pfm.register_session(session_id, incarnation);
     }
 
     // Re-mark the session as alive in persistence. SessionExited flipped alive=0
     // when the previous run exited; without this, restore after a server restart
     // would skip the re-spawned session.
-    if let Some(tx) = &persist_tx {
-        if let Err(e) = tx.send(crate::persistence::PersistCmd::SessionCreated {
-            meta: meta.clone(),
-            env: opts.env.clone(),
-            cols: opts.cols,
-            rows: opts.rows,
-            restart_max_retries: opts.restart_max_retries,
-        }) {
-            warn!("Failed to persist SessionCreated (respawn): {}", e);
-        }
-    }
-
+    let RespawnOpts {
+        env: persisted_env,
+        cols,
+        rows,
+        restart_max_retries,
+        ..
+    } = opts;
+    persist_session_created(
+        &persist_tx,
+        session_store.as_deref(),
+        &meta,
+        incarnation,
+        persisted_env,
+        *cols,
+        *rows,
+        *restart_max_retries,
+    );
     // Spawn reader thread for the restarted session.
-    let inner_clone = Arc::clone(inner);
-    let sink_clone = Arc::clone(sink);
     let id_clone = session_id.to_string();
+    let inner_clone = Arc::clone(inner);
+    let sink_clone: Arc<dyn EventSink> = Arc::new(IncarnationEventSink::new(
+        Arc::clone(sink),
+        Arc::clone(inner),
+        id_clone.clone(),
+        incarnation,
+    ));
     let respawn_tx_clone = respawn_tx.clone();
     let project_name = opts.project.clone();
     let rt_handle = tokio::runtime::Handle::try_current().ok();
+    let persist_tx_for_failure = persist_tx.clone();
+    let session_store_for_reader = session_store.clone();
+    let port_forward_manager_for_failure = port_forward_manager.clone();
+    active_reader_count.fetch_add(1, Ordering::AcqRel);
+    let active_reader_count_for_reader = Arc::clone(&active_reader_count);
     std::thread::Builder::new()
         .name(format!("pty-reader:{id_clone}"))
         .spawn(move || {
             reader_thread(
                 id_clone,
+                incarnation,
                 reader,
                 child,
                 buffer,
@@ -1428,21 +2926,40 @@ async fn respawn_internal(
                 inner_clone,
                 respawn_tx_clone,
                 persist_tx,
+                session_store_for_reader,
                 port_forward_manager,
                 project_name,
                 rt_handle,
                 diag_store,
                 lifecycle,
                 published_editing,
+                active_reader_count_for_reader,
             );
         })
-        .map_err(|e| {
-            let session = inner.lock().unwrap().live.remove(session_id);
-            if let Some(session) = session {
-                session.terminate();
+        .map_err(|error| {
+            active_reader_count.fetch_sub(1, Ordering::AcqRel);
+            if let Some(pfm) = &port_forward_manager_for_failure {
+                pfm.unregister_session(session_id, incarnation);
             }
-            AppError::PtyError(format!("thread spawn failed: {e}"))
+            finish_failed_replacement(
+                inner,
+                &persist_tx_for_failure,
+                session_store.as_deref(),
+                session_id,
+                incarnation,
+                false,
+                preserve_target_unavailable,
+                source_buffer,
+                None,
+                None,
+            );
+            AppError::PtyError(format!("thread spawn failed: {error}"))
         })?;
+
+    inner
+        .lock()
+        .unwrap()
+        .finish_replacement(session_id, incarnation);
 
     info!(id = %session_id, restart_count = meta.restart_count, "Session restarted");
     Ok(())
@@ -1489,6 +3006,10 @@ fn strip_unc_prefix(path: &str) -> String {
     }
 }
 
+fn normalized_command_cwd(path: &str) -> String {
+    strip_unc_prefix(path)
+}
+
 fn build_command(opts: &PtyCreateOpts) -> CommandBuilder {
     let is_interactive = opts.command.is_empty();
 
@@ -1520,7 +3041,7 @@ fn build_command(opts: &PtyCreateOpts) -> CommandBuilder {
         cmd.arg(arg);
     }
     // Strip UNC prefix to avoid CMD.EXE "UNC paths are not supported" error
-    let safe_cwd = strip_unc_prefix(&opts.cwd);
+    let safe_cwd = normalized_command_cwd(&opts.cwd);
     cmd.cwd(safe_cwd);
     cmd
 }
@@ -1757,6 +3278,620 @@ mod attach_snapshot_tests {
 mod tests {
     use super::*;
     use crate::pty::event_sink::NoopEventSink;
+
+    #[test]
+    fn stale_respawn_reservation_cannot_publish_after_newer_replacement() {
+        let mut inner = Inner::new();
+        let source_incarnation = 41;
+        let meta = SessionMeta::new(
+            "terminal:race".to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Always,
+        );
+        inner.dead.insert(
+            "terminal:race".to_string(),
+            DeadSession::exited(meta, 1, source_incarnation, None),
+        );
+
+        let stale_replacement = inner.begin_replacement("terminal:race");
+        let newer_replacement = inner.begin_replacement("terminal:race");
+
+        assert!(!inner.respawn_replacement_is_current(
+            "terminal:race",
+            source_incarnation,
+            stale_replacement,
+        ));
+        assert!(inner.respawn_replacement_is_current(
+            "terminal:race",
+            source_incarnation,
+            newer_replacement,
+        ));
+    }
+
+    #[test]
+    fn incarnation_event_sink_drops_output_after_replacement_starts() {
+        let (sink, mut receiver) = crate::pty::BroadcastEventSink::new(8);
+        let sink: Arc<dyn EventSink> = Arc::new(sink);
+        let inner = Arc::new(Mutex::new(Inner::new()));
+        let id = "terminal:event-race";
+        let meta = SessionMeta::new(
+            id.to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Never,
+        );
+        inner
+            .lock()
+            .unwrap()
+            .dead
+            .insert(id.to_string(), DeadSession::exited(meta, 0, 10, None));
+        let reader_sink =
+            IncarnationEventSink::new(Arc::clone(&sink), Arc::clone(&inner), id.to_string(), 10);
+
+        reader_sink.send_terminal_data(id, "before\n");
+        assert!(receiver.try_recv().is_ok());
+
+        inner
+            .lock()
+            .unwrap()
+            .pending_replacements
+            .insert(id.to_string(), 11);
+        reader_sink.send_terminal_data(id, "stale\n");
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn incarnation_event_sink_drops_stale_target_loss_notifications() {
+        let (sink, mut receiver) = crate::pty::BroadcastEventSink::new(8);
+        let sink: Arc<dyn EventSink> = Arc::new(sink);
+        let inner = Arc::new(Mutex::new(Inner::new()));
+        let id = "terminal:target-event-race";
+        let mut meta = SessionMeta::new(
+            id.to_string(),
+            Some("demo".to_string()),
+            "cat".to_string(),
+            "/tmp/demo-feature".to_string(),
+            RestartPolicy::Always,
+        );
+        meta.worktree_path = Some("/tmp/demo-feature".to_string());
+        inner
+            .lock()
+            .unwrap()
+            .dead
+            .insert(id.to_string(), DeadSession::target_unavailable(meta, 10));
+        inner
+            .lock()
+            .unwrap()
+            .pending_replacements
+            .insert(id.to_string(), 11);
+
+        let source_sink =
+            IncarnationEventSink::new(Arc::clone(&sink), Arc::clone(&inner), id.to_string(), 10);
+        source_sink.broadcast(
+            "terminal:target-unavailable",
+            serde_json::json!({ "sessionId": id }),
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn source_respawn_failure_cannot_mutate_a_newer_pending_replacement() {
+        let inner = Arc::new(Mutex::new(Inner::new()));
+        let id = "terminal:source-failure-race";
+        let meta = SessionMeta::new(
+            id.to_string(),
+            Some("demo".to_string()),
+            "cat".to_string(),
+            "/tmp/demo".to_string(),
+            RestartPolicy::Always,
+        );
+        inner
+            .lock()
+            .unwrap()
+            .dead
+            .insert(id.to_string(), DeadSession::exited(meta, 1, 10, None));
+        inner
+            .lock()
+            .unwrap()
+            .pending_replacements
+            .insert(id.to_string(), 11);
+
+        assert!(finish_respawn_source_failure(&inner, &None, None, id, 10, true).is_none());
+        let guard = inner.lock().unwrap();
+        let session = guard.dead.get(id).expect("source tombstone should remain");
+        assert!(!session.meta.target_unavailable);
+        assert_eq!(session.incarnation, 10);
+    }
+
+    #[tokio::test]
+    async fn initial_target_loss_cannot_mark_a_newer_pending_replacement() {
+        let (sink, mut receiver) = crate::pty::BroadcastEventSink::new(8);
+        let manager = PtySessionManager::new(Arc::new(sink));
+        let id = "terminal:create-target-race";
+        let target = "/tmp/demo-feature";
+        let mut meta = SessionMeta::new(
+            id.to_string(),
+            Some("demo".to_string()),
+            "cat".to_string(),
+            target.to_string(),
+            RestartPolicy::Never,
+        );
+        meta.worktree_path = Some(target.to_string());
+        meta.incarnation = 10;
+        {
+            let mut inner = manager.inner.lock().unwrap();
+            inner
+                .dead
+                .insert(id.to_string(), DeadSession::exited(meta, 1, 10, None));
+            inner.pending_replacements.insert(id.to_string(), 11);
+        }
+
+        assert!(!manager.mark_target_unavailable(id, "demo", target));
+        assert!(receiver.try_recv().is_err());
+        assert!(
+            !manager
+                .list()
+                .into_iter()
+                .find(|session| session.id == id)
+                .expect("source tombstone should remain")
+                .target_unavailable
+        );
+
+        manager
+            .inner
+            .lock()
+            .unwrap()
+            .pending_replacements
+            .remove(id);
+        assert!(manager.mark_target_unavailable(id, "demo", target));
+        let event = receiver
+            .try_recv()
+            .expect("guarded target-loss event should be emitted");
+        assert!(event.contains("terminal:target-unavailable"));
+        assert!(
+            manager
+                .list()
+                .into_iter()
+                .find(|session| session.id == id)
+                .expect("target tombstone should remain")
+                .target_unavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn initial_target_loss_promotes_a_failed_create_marker() {
+        let (sink, mut receiver) = crate::pty::BroadcastEventSink::new(8);
+        let manager = PtySessionManager::new(Arc::new(sink));
+        let id = "terminal:first-target-loss";
+        let target = "/tmp/first-target";
+        let mut meta = SessionMeta::new(
+            id.to_string(),
+            Some("demo".to_string()),
+            "cat".to_string(),
+            target.to_string(),
+            RestartPolicy::Never,
+        );
+        meta.worktree_path = Some(target.to_string());
+        meta.incarnation = 12;
+        manager.inner.lock().unwrap().failed_replacements.insert(
+            id.to_string(),
+            FailedReplacement {
+                meta,
+                incarnation: 12,
+                buffer: None,
+                persistence: None,
+                created_at: std::time::Instant::now(),
+            },
+        );
+
+        assert!(manager.mark_target_unavailable(id, "demo", target));
+        assert!(receiver
+            .try_recv()
+            .expect("target-loss event should be emitted")
+            .contains("terminal:target-unavailable"));
+        let session = manager
+            .list()
+            .into_iter()
+            .find(|session| session.id == id)
+            .expect("failed target create should become visible as an orphan");
+        assert!(!session.alive);
+        assert!(session.target_unavailable);
+        assert_eq!(session.incarnation, 12);
+    }
+
+    #[tokio::test]
+    async fn first_failed_target_create_is_persisted_for_restart_recovery() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = Arc::new(crate::persistence::SessionStore::open(temp.path()).unwrap());
+        let manager =
+            PtySessionManager::with_persist(Arc::new(NoopEventSink), None, Some(store.clone()));
+        let id = "terminal:first-target-loss-persisted";
+        let target = "/tmp/first-target-persisted";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            command: "npm run dev".to_string(),
+            cwd: target.to_string(),
+            env: HashMap::from([("APP_MODE".to_string(), "worktree".to_string())]),
+            cols: 132,
+            rows: 40,
+            project: Some("demo".to_string()),
+            worktree_path: Some(target.to_string()),
+            restart_policy: RestartPolicy::Always,
+            restart_max_retries: 7,
+        };
+        let mut meta = SessionMeta::new_with_target(
+            opts.id.clone(),
+            opts.project.clone(),
+            opts.command.clone(),
+            opts.cwd.clone(),
+            opts.worktree_path.clone(),
+            opts.restart_policy,
+        );
+        meta.incarnation = 12;
+
+        manager.inner.lock().unwrap().failed_replacements.insert(
+            id.to_string(),
+            FailedReplacement {
+                meta,
+                incarnation: 12,
+                buffer: None,
+                persistence: Some(FailedReplacementPersistence::from(&opts)),
+                created_at: std::time::Instant::now(),
+            },
+        );
+
+        assert!(manager.mark_target_unavailable(id, "demo", target));
+
+        let persisted = store.load_sessions().unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert!(persisted[0].meta.target_unavailable);
+        assert_eq!(persisted[0].incarnation, 12);
+        assert_eq!(persisted[0].meta.worktree_path.as_deref(), Some(target));
+        assert_eq!(persisted[0].cols, 132);
+        assert_eq!(persisted[0].rows, 40);
+    }
+
+    #[tokio::test]
+    async fn failed_replacement_promotes_new_target_metadata_over_old_tombstone() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = Arc::new(crate::persistence::SessionStore::open(temp.path()).unwrap());
+        let manager =
+            PtySessionManager::with_persist(Arc::new(NoopEventSink), None, Some(store.clone()));
+        let id = "terminal:replacement-target-failure";
+        let old_target = "/tmp/old-target";
+        let new_target = "/tmp/new-target";
+        let old_meta = SessionMeta::new_with_target(
+            id.to_string(),
+            Some("demo".to_string()),
+            "old".to_string(),
+            old_target.to_string(),
+            Some(old_target.to_string()),
+            RestartPolicy::Never,
+        );
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            command: "new".to_string(),
+            cwd: new_target.to_string(),
+            env: HashMap::from([("TARGET".to_string(), "new".to_string())]),
+            cols: 100,
+            rows: 30,
+            project: Some("demo".to_string()),
+            worktree_path: Some(new_target.to_string()),
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 4,
+        };
+        let new_meta = SessionMeta::new_with_target(
+            opts.id.clone(),
+            opts.project.clone(),
+            opts.command.clone(),
+            opts.cwd.clone(),
+            opts.worktree_path.clone(),
+            opts.restart_policy,
+        );
+
+        {
+            let mut inner = manager.inner.lock().unwrap();
+            inner
+                .dead
+                .insert(id.to_string(), DeadSession::exited(old_meta, 1, 10, None));
+            inner.pending_replacements.insert(id.to_string(), 11);
+        }
+        finish_failed_replacement(
+            &manager.inner,
+            &None,
+            Some(&store),
+            id,
+            11,
+            false,
+            false,
+            None,
+            Some(new_meta),
+            Some(FailedReplacementPersistence::from(&opts)),
+        );
+
+        assert!(manager.mark_target_unavailable(id, "demo", new_target));
+        let session = manager
+            .list()
+            .into_iter()
+            .find(|session| session.id == id)
+            .expect("failed replacement should retain the new target");
+        assert_eq!(session.worktree_path.as_deref(), Some(new_target));
+        assert_eq!(session.incarnation, 11);
+
+        let persisted = store.load_sessions().unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].meta.worktree_path.as_deref(), Some(new_target));
+        assert_eq!(persisted[0].incarnation, 11);
+        assert!(persisted[0].meta.target_unavailable);
+    }
+
+    #[test]
+    fn failed_replacement_retains_source_buffer_fallback() {
+        let inner = Arc::new(Mutex::new(Inner::new()));
+        let id = "terminal:respawn-buffer-fallback";
+        let source_buffer = Arc::new(Mutex::new(crate::pty::buffer::ScrollbackBuffer::new(1024)));
+        source_buffer.lock().unwrap().push(b"previous output\n");
+        let meta = SessionMeta::new(
+            id.to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Always,
+        );
+        {
+            let mut guard = inner.lock().unwrap();
+            guard
+                .dead
+                .insert(id.to_string(), DeadSession::exited(meta, 1, 10, None));
+            guard.pending_replacements.insert(id.to_string(), 11);
+        }
+
+        finish_failed_replacement(
+            &inner,
+            &None,
+            None,
+            id,
+            11,
+            false,
+            false,
+            Some(Arc::clone(&source_buffer)),
+            None,
+            None,
+        );
+
+        let guard = inner.lock().unwrap();
+        let buffer = guard
+            .dead
+            .get(id)
+            .and_then(|session| session.buffer.as_ref())
+            .expect("failed replacement should retain the source buffer");
+        assert_eq!(buffer.lock().unwrap().as_str_lossy(), "previous output\n");
+    }
+
+    #[test]
+    fn target_unavailable_persistence_waits_for_full_queue() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(crate::persistence::PersistCmd::BufferUpdate {
+            session_id: "terminal:queued".to_string(),
+            incarnation: 1,
+            data: Vec::new(),
+            total_written: 0,
+        })
+        .unwrap();
+
+        let persist_tx = Some(tx.clone());
+        let sender = std::thread::spawn(move || {
+            persist_target_unavailable(&persist_tx, None, "terminal:unavailable", 1);
+        });
+
+        let first = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("the queued command should be available");
+        assert!(matches!(
+            first,
+            crate::persistence::PersistCmd::BufferUpdate { .. }
+        ));
+        let target_loss = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("target-loss persistence must not be dropped when the queue is full");
+        assert!(matches!(
+            target_loss,
+            crate::persistence::PersistCmd::SessionTargetUnavailable { session_id, .. }
+                if session_id == "terminal:unavailable"
+        ));
+        sender.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_retry_keeps_unavailable_tombstone_in_memory() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "terminal:retry-unavailable";
+        let mut meta = SessionMeta::new(
+            id.to_string(),
+            Some("test-project".to_string()),
+            "cat".to_string(),
+            "/missing/worktree".to_string(),
+            RestartPolicy::Never,
+        );
+        meta.worktree_path = Some("/missing/worktree".to_string());
+        meta.target_unavailable = true;
+
+        {
+            let mut inner = manager.inner.lock().unwrap();
+            inner
+                .dead
+                .insert(id.to_string(), DeadSession::target_unavailable(meta, 10));
+            inner.pending_replacements.insert(id.to_string(), 11);
+        }
+
+        manager.mark_replacement_failed(id, 11, false, true, None, None, None);
+
+        let session = manager
+            .list()
+            .into_iter()
+            .find(|session| session.id == id)
+            .expect("failed retry should retain its tombstone");
+        assert!(!session.alive);
+        assert!(session.target_unavailable);
+    }
+
+    #[tokio::test]
+    async fn session_removed_persistence_waits_for_full_queue() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(crate::persistence::PersistCmd::BufferUpdate {
+            session_id: "terminal:queued".to_string(),
+            incarnation: 1,
+            data: Vec::new(),
+            total_written: 0,
+        })
+        .unwrap();
+
+        let manager = Arc::new(PtySessionManager::with_persist(
+            Arc::new(NoopEventSink),
+            Some(tx),
+            None,
+        ));
+        let remover = Arc::clone(&manager);
+        let sender = std::thread::spawn(move || remover.remove("terminal:removed").unwrap());
+
+        let first = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("the queued command should be available");
+        assert!(matches!(
+            first,
+            crate::persistence::PersistCmd::BufferUpdate { .. }
+        ));
+        let removed = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("session removal must not be dropped when the queue is full");
+        assert!(matches!(
+            removed,
+            crate::persistence::PersistCmd::SessionRemoved {
+                session_id,
+            incarnation: _,
+            } if session_id == "terminal:removed"
+        ));
+        sender.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_falls_back_to_store_when_persist_worker_is_disconnected() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = Arc::new(crate::persistence::SessionStore::open(temp.path()).unwrap());
+        let meta = SessionMeta::new(
+            "terminal:disconnected-remove".to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Never,
+        );
+        store
+            .save_session_for_incarnation(&meta, 1, &HashMap::new(), 80, 24, 5)
+            .unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(rx);
+        let manager =
+            PtySessionManager::with_persist(Arc::new(NoopEventSink), Some(tx), Some(store.clone()));
+
+        manager.remove(&meta.id).unwrap();
+        assert!(store.load_sessions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn lifecycle_persistence_falls_back_when_worker_is_disconnected() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = crate::persistence::SessionStore::open(temp.path()).unwrap();
+        let dead_meta = SessionMeta::new(
+            "terminal:dead-fallback".to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Never,
+        );
+        store
+            .save_session_for_incarnation(&dead_meta, 1, &HashMap::new(), 80, 24, 5)
+            .unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(rx);
+        let persist_tx = Some(tx);
+        persist_session_dead(&persist_tx, Some(&store), &dead_meta.id, 1);
+        assert!(store.load_sessions().unwrap().is_empty());
+
+        let unavailable_meta = SessionMeta::new(
+            "terminal:unavailable-fallback".to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Never,
+        );
+        store
+            .save_session_for_incarnation(&unavailable_meta, 2, &HashMap::new(), 80, 24, 5)
+            .unwrap();
+        persist_target_unavailable(&persist_tx, Some(&store), &unavailable_meta.id, 2);
+        let sessions = store.load_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].meta.target_unavailable);
+        persist_session_dead(&persist_tx, Some(&store), &unavailable_meta.id, 2);
+        let sessions = store.load_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].meta.target_unavailable);
+
+        let exited_meta = SessionMeta::new(
+            "terminal:exited-fallback".to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Never,
+        );
+        store
+            .save_session_for_incarnation(&exited_meta, 3, &HashMap::new(), 80, 24, 5)
+            .unwrap();
+        persist_buffer_snapshot(
+            &persist_tx,
+            Some(&store),
+            &exited_meta.id,
+            3,
+            b"tail".to_vec(),
+            4,
+        );
+        assert_eq!(
+            store.load_buffer(&exited_meta.id).unwrap(),
+            Some((b"tail".to_vec(), 4))
+        );
+        persist_session_exited(&persist_tx, Some(&store), &exited_meta.id, 3);
+        assert!(store
+            .load_sessions()
+            .unwrap()
+            .iter()
+            .all(|session| session.meta.id != exited_meta.id));
+    }
+
+    #[tokio::test]
+    async fn final_buffer_is_replayed_from_dead_tombstone_before_persistence() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let meta = SessionMeta::new(
+            "terminal:dead-buffer".to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Never,
+        );
+        let buffer = Arc::new(Mutex::new(crate::pty::buffer::ScrollbackBuffer::new(1024)));
+        buffer.lock().unwrap().push(b"final output\n");
+        manager.inner.lock().unwrap().dead.insert(
+            meta.id.clone(),
+            DeadSession::exited(meta.clone(), 0, 1, Some(Arc::clone(&buffer))),
+        );
+
+        let replay = manager.get_buffer_with_offset(&meta.id, None).unwrap();
+        assert_eq!(replay.data, "final output\n");
+        assert_eq!(replay.offset, 13);
+    }
 
     #[tokio::test]
     async fn get_buffer_with_offset_session_not_found() {

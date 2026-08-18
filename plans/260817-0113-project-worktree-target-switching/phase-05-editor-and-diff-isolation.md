@@ -83,4 +83,6 @@ Increment the editor persistence schema. Each tab owns a normalized target descr
 
 ## Next steps
 
-Proceed to Phase 06 once editor migration, same-path isolation, and unavailable recovery tests pass.
+Phase 05 is complete; editor migration, same-path isolation, and unavailable
+recovery tests pass. Terminal identity and lifecycle validation are complete in
+Phases 06–07.

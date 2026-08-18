@@ -13,6 +13,8 @@ export interface TerminalAttachRecoveryControllerOptions {
   onTimeout: () => void;
   onCreateFailed: (error: unknown) => void;
   onAttachUnavailable: () => void;
+  /** Return true while the first replay belongs to an unavailable target. */
+  shouldRetryAfterReplay?: () => boolean;
   timeoutMs?: number;
   initialRetryDelayMs?: number;
   maxRetryDelayMs?: number;
@@ -28,6 +30,7 @@ export class TerminalAttachRecoveryController {
   private readonly maxRetryDelayMs: number;
   private connected = true;
   private awaitingBuffer = false;
+  private bufferReceived = false;
   private attached = false;
   private attachDeferred = false;
   private started = false;
@@ -57,13 +60,34 @@ export class TerminalAttachRecoveryController {
 
   onBuffer(): void {
     if (this.disposed) return;
+    if (
+      this.options.shouldRetryAfterReplay?.() === true &&
+      !this.createdThisRecovery
+    ) {
+      this.attached = false;
+      this.awaitingBuffer = false;
+      this.bufferReceived = true;
+      this.retryAttempt = 0;
+      this.recoveryReported = false;
+      this.createFailureReported = false;
+      this.invalidatePendingWork();
+      return;
+    }
     this.attached = true;
     this.awaitingBuffer = false;
+    this.bufferReceived = false;
     this.retryAttempt = 0;
     this.recoveryReported = false;
     this.createFailureReported = false;
     this.createdThisRecovery = false;
     this.invalidatePendingWork();
+  }
+
+  /** Start same-ID recovery only after the current replay has been rendered. */
+  onReplayComplete(): void {
+    if (this.disposed || !this.bufferReceived) return;
+    this.bufferReceived = false;
+    this.create(this.generation);
   }
 
   onConnectionStatus(
@@ -82,6 +106,7 @@ export class TerminalAttachRecoveryController {
     this.connected = false;
     this.attached = false;
     this.awaitingBuffer = false;
+    this.bufferReceived = false;
     this.retryAttempt = 0;
     this.recoveryReported = false;
     this.createFailureReported = false;

@@ -117,6 +117,7 @@ fn create_terminal(state: &AppState, root: &std::path::Path) {
             cols: 80,
             rows: 24,
             project: None,
+            worktree_path: None,
             restart_policy: Default::default(),
             restart_max_retries: 0,
         })

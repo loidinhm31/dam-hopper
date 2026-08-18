@@ -1,14 +1,18 @@
 import { Terminal } from "lucide-react";
 import { useProject } from "@/api/queries.js";
+import type { ProjectTargetInput } from "@/api/client.js";
+import { targetScopedCommandSessionId } from "@/lib/terminal-target-identity.js";
 import type { TreeCommand } from "@/hooks/use-terminal-tree.js";
 
 interface ProjectInfoCommandsSectionProps {
   projectName: string;
+  target?: ProjectTargetInput;
   onLaunchCommand?: (command: TreeCommand) => void;
 }
 
 export function ProjectInfoCommandsSection({
   projectName,
+  target,
   onLaunchCommand,
 }: ProjectInfoCommandsSectionProps) {
   const { data: project } = useProject(projectName);
@@ -66,12 +70,16 @@ export function ProjectInfoCommandsSection({
                   key,
                   type,
                   command,
-                  sessionId:
-                    type === "build"
-                      ? `build:${projectName}`
-                      : type === "run"
-                        ? `run:${projectName}`
-                        : `custom:${projectName}:${key.replace(/[^a-zA-Z0-9:._-]/g, "-")}`,
+                  sessionId: targetScopedCommandSessionId(
+                    type,
+                    projectName,
+                    typeof target === "string"
+                      ? undefined
+                      : (target?.worktreePath ?? undefined),
+                    type === "custom"
+                      ? key.replace(/[^a-zA-Z0-9:._-]/g, "-")
+                      : undefined,
+                  ),
                 })
               }
               title={`Launch ${key}`}

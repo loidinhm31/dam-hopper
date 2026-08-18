@@ -7,6 +7,8 @@ import type {
   LanguageFilesResponse,
 } from "./fs-types.js";
 import type { CommandHistoryEntry } from "@/lib/command-history.js";
+import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
+export { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 
 export class ApiRequestError extends Error {
   constructor(
@@ -49,11 +51,19 @@ export function isProjectTargetError(
 
 export interface SessionInfo {
   id: string;
+  /** Opaque concrete PTY identity used to reject stale push events. */
+  incarnation?: number;
   project?: string;
   command: string;
   cwd: string;
+  /** Server-validated canonical worktree target, when session is target-scoped. */
+  worktreePath?: string;
   type: "build" | "run" | "custom" | "shell" | "terminal" | "free" | "unknown";
   alive: boolean;
+  /** Client-only marker when a live session's original target disappeared. */
+  orphaned?: boolean;
+  /** Server marker retained for unavailable sessions across restart. */
+  targetUnavailable?: boolean;
   exitCode?: number | null;
   startedAt: number;
   // Phase 3 restart policy fields (mirrors backend)
@@ -155,6 +165,10 @@ export type DistributionMatrix = Record<
 export interface TunnelInfo {
   id: string;
   port: number;
+  /** Owning PTY session, when the tunnel was created for a terminal port. */
+  sessionId?: string;
+  /** Concrete PTY identity used to reject stale ownership updates. */
+  incarnation?: number;
   label: string;
   driver: string;
   status: "starting" | "ready" | "failed" | "stopped";
@@ -196,6 +210,7 @@ export interface BrowserDebugHandoffResponse {
 export interface DetectedPort {
   port: number;
   session_id: string;
+  incarnation: number;
   project: string | null;
   detected_via: "stdout_regex" | "proc_net";
   state: "provisional" | "listening" | "lost";
@@ -900,7 +915,7 @@ export function projectTargetCacheKey(target: ProjectTargetInput): string {
   const normalized = normalizeProjectTarget(target);
   return normalized.worktreePath == null
     ? "root"
-    : `worktree:${normalized.worktreePath}`;
+    : `worktree:${normalizeProjectTargetPath(normalized.worktreePath)}`;
 }
 
 export interface ResolvedProjectTarget {
@@ -929,6 +944,8 @@ export interface GitOpResult {
   error?: string;
   /** Present for bulk operations that were requested against a worktree. */
   worktreePath?: string | null;
+  /** Server-confirmed target disappearance, distinct from a generic Git error. */
+  targetUnavailable?: boolean;
 }
 
 export interface BranchUpdateResult {
@@ -1605,7 +1622,8 @@ export const api = {
       cwd?: string;
       cols: number;
       rows: number;
-    }) => getTransport().invoke<void>("terminal:create", opts),
+      worktreePath?: string;
+    }) => getTransport().invoke<SessionInfo>("terminal:create", opts),
     kill: (id: string) => getTransport().invoke<void>("terminal:kill", id),
     remove: (id: string) => getTransport().invoke<void>("terminal:remove", id),
     list: () => getTransport().invoke<SessionInfo[]>("terminal:list"),

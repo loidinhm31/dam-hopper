@@ -5,6 +5,8 @@ export interface TerminalSelectionMetadata {
   project: string;
   command: string;
   sessionType?: SessionInfo["type"];
+  cwd?: string;
+  worktreePath?: string;
 }
 
 export interface TerminalProjectSyncOptions {
@@ -23,6 +25,8 @@ export interface TerminalSelectionOptions {
     sessionId: string,
     project: string,
     command: string,
+    cwd?: string,
+    worktreePath?: string,
   ) => void;
 }
 
@@ -69,5 +73,11 @@ export function selectTerminal({
     setActiveProject,
   });
 
-  openTerminalTab(sessionId, project, command);
+  openTerminalTab(
+    sessionId,
+    project,
+    command,
+    metadata?.cwd,
+    metadata?.worktreePath,
+  );
 }

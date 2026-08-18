@@ -130,7 +130,7 @@ Handles registry loading, legacy discovery fallback, and feature flags.
 5. Current working directory via legacy upward `dam-hopper.toml` discovery
 6. Empty config fallback
 
-### Project worktree targets (Phase 3 complete)
+### Project worktree targets (Phase 07 target lifecycle)
 
 A configured project remains the stable authorization, configuration, and
 top-bar identity. A Git worktree is an optional execution target beneath that
@@ -164,7 +164,7 @@ flowchart LR
     Resolver --> Sandbox["Target-aware filesystem sandbox"]
     Sandbox --> Files["Files and watchers"]
     Resolver --> GitOps["Git operations"]
-    Resolver --> Pty["PTY cwd, metadata, and restore"]
+    Resolver --> Pty["PTY cwd, target metadata, and restore"]
     Resolver --> Media["Target-bound media tickets"]
 ```
 
@@ -179,20 +179,38 @@ add, remove, prune, explicit refresh, and project-configuration reload
 invalidate the relevant discovery entry. A failed discovery leaves existing UI
 rows visible with a stale-data warning and offers retry.
 
+App-initiated removal re-fetches discovery immediately before checking
+exact-target ownership, refuses dirty editor tabs or live terminal sessions,
+and only reconciles the target store after Git confirms success. Git's
+dirty/untracked guard remains authoritative and is never bypassed by this UI
+check. When a registered target disappears externally, the selector keeps its
+row as unavailable, records the path in the target store, and routes
+subsequent new operations to the configured root. Existing editor tabs are
+retained and live terminal sessions with matching immutable `worktreePath`
+metadata are marked orphaned. Legacy sessions without that marker fall back to
+project/cwd containment.
+
 `ProjectSandbox` evolves from one root per project to validation by project and
 resolved target root. This changes the set of approved roots, not the traversal
 rules: canonical containment, symlink, write, upload, and encrypted-write checks
 remain in force. File watcher subscription keys and media tickets include target
-identity so concurrent roots cannot overwrite or authorize one another. Shared
-state locks are never held while invoking Git or awaiting filesystem work.
+identity so concurrent roots cannot overwrite or authorize one another.
+Ordinary shared-state locks are not held while invoking Git or awaiting
+filesystem work. The workspace lifecycle guard is the deliberate exception: it
+spans fresh target validation, PTY creation, restore, respawn, and worktree
+removal so those ownership decisions cannot race.
 
 Frontend caches use `(project, targetKey, ...)`. Editor tab keys use
 `(project, targetKey, path)` and persisted legacy tabs migrate to the configured
-root. Terminal IDs and persisted metadata also contain a stable target
-discriminator, while the canonical path remains structured metadata rather than
-being embedded verbatim into display IDs. The Git panel's existing nested-repo
-`root` remains a separate axis after the project target; it is not reused as the
-worktree selector.
+root. Terminal command/profile IDs use a stable opaque target discriminator;
+canonical paths remain structured state rather than being embedded verbatim
+into display IDs. Current `terminal:create` requests carry an optional
+`worktreePath`; the server validates and canonicalizes the registered target,
+constrains cwd to that target, and persists the target marker with the session
+for reconnect, restore, and removal ownership checks. Legacy sessions without
+the marker use project/cwd metadata for orphan detection. The Git panel's
+existing nested-repo `root` remains a separate axis after the project target;
+it is not reused as the worktree selector.
 
 ```mermaid
 stateDiagram-v2
@@ -220,7 +238,12 @@ terminal, watcher, and media paths resolve through the same project/target
 contract; workspace-scoped operations that do not support a worktree reject an
 unexpected `worktreePath`. Target-aware cache keys prevent results from one
 worktree replacing another, and legacy requests without `worktreePath` continue
-to address the configured project root.
+to address the configured project root. Target-scoped terminal create failures
+and respawn validation failures reconcile the exact target through the terminal
+target-unavailable event when fresh validation confirms target loss. Ordinary
+PTY and cwd failures remain local errors. This preserves the session's
+immutable target identity while routing subsequent new operations to the
+configured root.
 
 ### shared/
 
@@ -1662,7 +1685,7 @@ Automatic detection and tracking of ports opened by running processes in PTY ses
 
 **session.rs** — Port state and metadata:
 
-- `DetectedPort` — port number, detection source (stdout_regex or proc_net), session_id, project, state
+- `DetectedPort` — port number, owning PTY `session_id` and `incarnation`, detection source (stdout_regex or proc_net), project, state
 - `PortState` enum — Provisional, Listening, Closed
 
 **mod.rs** — Poller integration:
@@ -1759,8 +1782,9 @@ management remains anchored to the configured project root. Frontend Git query
 and cache identities, plus mutation invalidation, include `targetKey`, and
 stage/unstage status refresh is target-scoped. Regression coverage verifies
 target validation, propagation, cache isolation, and status refresh behavior.
-Editor/diff work remains deferred to Phase 05, and terminal identity remains
-deferred to Phase 06.
+Editor/diff isolation is complete, and terminal command/profile identity now
+uses stable opaque target discriminators while session metadata retains the
+canonical target path.
 
 **commit_file_ops.rs** — IntelliJ-compatible history actions:
 
@@ -1850,7 +1874,7 @@ HTTP request handlers + WebSocket upgrade.
 
 **port_forward.rs** (Phase 03) — Port detection handler:
 
-- `GET /api/ports` — returns all detected ports: `{ "ports": [{ port, session_id, project, state }, ...] }`
+- `GET /api/ports` — returns all detected ports: `{ "ports": [{ port, session_id, incarnation, project, state }, ...] }`; `incarnation` identifies the concrete PTY instance that owns the detection
 - On non-Linux or when manager absent: returns empty ports array
 - Protected endpoint (requires auth token)
 
@@ -2309,11 +2333,17 @@ Appearance.
 ```ts
 export interface SessionInfo {
   id: string;
+  /** Opaque concrete PTY identity used to reject stale push events. */
+  incarnation?: number;
   project?: string;
   command: string;
   cwd: string;
+  /** Server-validated canonical worktree target, when target-scoped. */
+  worktreePath?: string;
   type: "build" | "run" | "custom" | "shell" | "terminal" | "free" | "unknown";
   alive: boolean;
+  /** True when the session's original target is unavailable for respawn. */
+  targetUnavailable?: boolean;
   exitCode?: number | null;
   startedAt: number;
   // Phase 3 restart policy fields
@@ -2331,9 +2361,9 @@ export interface SessionInfo {
 ```
 User launches terminal
   ↓
-terminal:spawn → Backend creates PTY
+terminal:create (with optional worktreePath) → Backend validates target and creates PTY
   ↓
-terminal:spawned → Frontend stores SessionInfo (alive=true)
+Frontend stores the returned SessionInfo (alive=true)
   ↓
 TerminalPanel mounts, xterm renders, streams output
   ↓

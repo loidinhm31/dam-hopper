@@ -88,6 +88,17 @@ function StatusDot({ session }: { session?: SessionInfo | null }) {
   return <span className={`h-2 w-2 rounded-full ${dotColor} shrink-0`} />;
 }
 
+function OrphanedLabel() {
+  return (
+    <span
+      className="shrink-0 rounded bg-[var(--color-warning)]/15 px-1 text-[10px] text-[var(--color-warning)]"
+      title="The original worktree is unavailable; this terminal keeps its existing working directory."
+    >
+      orphaned
+    </span>
+  );
+}
+
 function getProfileEditorKey(projectName: string, profileName: string) {
   return `${projectName}:terminal:${profileName}`;
 }
@@ -180,6 +191,7 @@ function CommandRow({
       <StatusDot session={cmd.session} />
       <Terminal className="h-3 w-3 shrink-0 opacity-60" />
       <span className="flex-1 truncate font-mono">{cmd.label ?? cmd.key}</span>
+      {cmd.session?.orphaned && <OrphanedLabel />}
 
       <div className={rowActionsClass(isCoarsePointer)}>
         {canEdit && onEdit && (
@@ -341,6 +353,7 @@ function InstanceRow({
       <span className="flex-1 truncate font-mono opacity-70">
         instance #{index + 1}
       </span>
+      {session.orphaned && <OrphanedLabel />}
       {session.alive && (
         <button
           type="button"
@@ -425,6 +438,7 @@ function FreeTerminalRow({
       <StatusDot session={session} />
       <Terminal className="h-3 w-3 shrink-0 opacity-60" />
       <span className="flex-1 truncate font-mono">{label}</span>
+      {session.orphaned && <OrphanedLabel />}
       <div className={rowActionsClass(isCoarsePointer)}>
         {session.command && (
           <button
@@ -609,6 +623,9 @@ function ProfileRow({
 }) {
   const sessions = cmd.sessions ?? [];
   const aliveCount = sessions.filter((session) => session.alive).length;
+  const orphanedCount = sessions.filter(
+    (session) => session.alive && session.orphaned,
+  ).length;
 
   return (
     <>
@@ -638,6 +655,7 @@ function ProfileRow({
         />
         <Terminal className="h-3 w-3 shrink-0 opacity-60" />
         <span className="flex-1 truncate font-mono">{cmd.profileName}</span>
+        {orphanedCount > 0 && <OrphanedLabel />}
         {aliveCount > 0 && (
           <span className="rounded-full bg-green-500/20 px-1 text-green-600 text-[10px] font-medium shrink-0">
             {aliveCount}
@@ -1138,7 +1156,13 @@ export function TerminalTreeView({
               <FreeTerminalRow
                 key={session.id}
                 session={session}
-                label={`Terminal ${index + 1}`}
+                label={
+                  session.targetUnavailable
+                    ? `Unavailable target${
+                        session.worktreePath ? `: ${session.worktreePath}` : ""
+                      }`
+                    : `Terminal ${index + 1}`
+                }
                 isSelected={selectedId === `terminal:${session.id}`}
                 isCoarsePointer={isCoarsePointer}
                 onSelect={() => onSelectFreeTerminal(session.id)}

@@ -62,6 +62,7 @@ export function TerminalKeepAliveHost({
             project={session.project}
             command={session.command}
             cwd={session.cwd}
+            worktreePath={session.worktreePath}
             onExit={() => onSessionExit?.(session.sessionId)}
             onNewTerminal={onNewTerminal}
             onTerminalReady={onTerminalReady}

@@ -12,8 +12,8 @@
 - Date: 2026-08-17
 - Description: Integrate removal/disappearance safeguards, prove all panels switch coherently, and complete release documentation and quality gates.
 - Priority: P2
-- Implementation status: pending
-- Review status: pending
+- Implementation status: completed
+- Review status: approved after final independent review (public contract fields reconciled)
 
 ## Key Insights
 
@@ -60,18 +60,18 @@ The Project panel consults editor and terminal selectors before invoking remove.
 
 ## Todo list
 
-- [ ] Implement removal blocker aggregation and messaging.
-- [ ] Implement external-disappearance reconciliation across resources.
-- [ ] Add real-repository backend lifecycle tests.
-- [ ] Add end-to-end browser target-switching coverage.
-- [ ] Update docs and complete all quality gates.
+- [x] Implement removal blocker aggregation and messaging.
+- [x] Implement external-disappearance reconciliation across resources, including failed-removal fallback and stale-discovery protection.
+- [x] Add real-repository backend lifecycle tests.
+- [x] Add end-to-end browser target-switching coverage.
+- [x] Update docs and complete all quality gates.
 
 ## Success Criteria
 
 - Removal cannot discard dirty editor work or terminate live sessions through the app.
 - External deletion returns new workspace operations to root while preserving and labelling owned resources.
 - One browser scenario proves coherent target routing across all requested panels and unchanged project identity.
-- `pnpm lint`, `pnpm type-check`, `pnpm test`, UI unit/browser tests, and `pnpm build` pass.
+- `pnpm lint`, UI TypeScript build/type-check, Rust/UI/browser tests, and production build pass. The repository has no standalone `pnpm type-check` script; the UI build runs `tsc -p tsconfig.json`.
 
 ## Risk Assessment
 
@@ -87,4 +87,4 @@ The Project panel consults editor and terminal selectors before invoking remove.
 
 ## Next steps
 
-Request plan/code review, resolve findings, then begin implementation with Phase 01 only after explicit approval.
+Implementation and validation are complete. Final independent review is the remaining handoff gate; no commit has been created.

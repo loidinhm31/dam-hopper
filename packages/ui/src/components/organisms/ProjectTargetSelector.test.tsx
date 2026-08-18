@@ -92,4 +92,55 @@ describe("ProjectTargetSelector", () => {
     expect(markup).toContain("Using Project root for new operations");
     expect(markup).toContain('role="status"');
   });
+
+  it("lists every unavailable target in the accessible fallback status", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ProjectTargetSelector, {
+        projectRoot: "/tmp/demo",
+        target: createProjectTargetSnapshot("demo-project", null),
+        worktrees: [],
+        isLoading: false,
+        isFetching: false,
+        isFetched: true,
+        isError: false,
+        fallbackNotice:
+          "2 worktrees are unavailable. Using Project root for new operations.",
+        fallbackTargetPaths: ["/tmp/first", "/tmp/second"],
+        removePendingPath: null,
+        onSelect: vi.fn(),
+        onRefresh: vi.fn(),
+        onRemove: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain('aria-label="Unavailable worktree paths"');
+    expect(markup).toContain("/tmp/first");
+    expect(markup).toContain("/tmp/second");
+    expect(markup).toContain("Using Project root for new operations");
+  });
+
+  it("disables a stale row while its unavailable target is being refreshed", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ProjectTargetSelector, {
+        projectRoot: "/tmp/demo",
+        target: createProjectTargetSnapshot("demo-project", null),
+        worktrees: [makeWorktree()],
+        isLoading: false,
+        isFetching: false,
+        isFetched: true,
+        isError: false,
+        fallbackNotice: "The selected worktree is unavailable.",
+        fallbackTargetPaths: ["/tmp/demo-feature"],
+        removePendingPath: null,
+        onSelect: vi.fn(),
+        onRefresh: vi.fn(),
+        onRemove: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain('value="/tmp/demo-feature"');
+    expect(markup).toContain('disabled=""');
+    expect(markup).toContain("Unavailable until worktree refresh");
+  });
 });

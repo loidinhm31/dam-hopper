@@ -468,6 +468,7 @@ pub enum ServerMsg {
     PortDiscovered {
         port: u16,
         session_id: String,
+        incarnation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         project: Option<String>,
         detected_via: String,
@@ -475,7 +476,11 @@ pub enum ServerMsg {
     },
 
     #[serde(rename = "port:lost")]
-    PortLost { port: u16, session_id: String },
+    PortLost {
+        port: u16,
+        session_id: String,
+        incarnation: u64,
+    },
 }
 
 /// Wire message — either a JSON text frame, raw binary frame, or close signal.

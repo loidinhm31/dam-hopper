@@ -31,6 +31,7 @@ vi.mock("./client.js", () => ({
   normalizeProjectTarget: (
     target: string | { project: string; worktreePath?: string },
   ) => (typeof target === "string" ? { project: target } : target),
+  normalizeProjectTargetPath: (path: string) => path,
   projectTargetCacheKey: (target: {
     project: string;
     worktreePath?: string;
