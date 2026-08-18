@@ -91,4 +91,5 @@ Git addressing becomes `(project, target, nestedRoot?)`. The Phase 01 resolver s
 
 ## Next steps
 
-Phase 5 editor/diff isolation and Phase 6 terminal target identity remain deferred.
+Phase 04 is complete; editor/diff isolation, terminal target identity, lifecycle
+integration, and release validation are tracked as completed in Phases 05–07.

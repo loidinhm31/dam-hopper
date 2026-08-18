@@ -9,6 +9,8 @@ mod pty_tests {
         collections::HashMap,
         ffi::OsString,
         fs,
+        path::Path,
+        process::Command,
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
@@ -17,15 +19,18 @@ mod pty_tests {
 
     use crate::config::schema::{RestartPolicy, TelemetryConfig, DEFAULT_RESTART_MAX_RETRIES};
     use crate::diagnostics::DiagnosticStore;
+    use crate::fs::FsSubsystem;
     use crate::persistence::{PersistCmd, PersistWorker, SessionStore};
     use crate::pty::{
         event_sink::{EventSink, NoopEventSink},
         manager::{
             build_child_env_from_parent_snapshot, send_visible_output_then_lifecycle,
-            PtyCreateOpts, PtySessionManager,
+            PtyCreateOpts, PtySessionManager, PtyTargetContext,
         },
         shell_lifecycle::{LifecycleEvent, LifecycleState},
+        SessionMeta,
     };
+    use crate::workspace_target::WorkspaceTargetResolver;
     // Shared multi-thread Tokio runtime for tests. PtySessionManager::new
     // calls tokio::spawn (supervisor loop) which requires an active runtime.
     // The runtime lives for the process lifetime so spawned tasks keep running
@@ -85,9 +90,32 @@ mod pty_tests {
             cols: 80,
             rows: 24,
             project: None,
+            worktree_path: None,
             restart_policy: RestartPolicy::Never,
             restart_max_retries: DEFAULT_RESTART_MAX_RETRIES,
         }
+    }
+
+    fn git(args: &[&str], cwd: &Path) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn init_git_repo(path: &Path) {
+        git(&["init", "-b", "main"], path);
+        git(&["config", "user.email", "test@example.com"], path);
+        git(&["config", "user.name", "Test User"], path);
+        fs::write(path.join("README.md"), "root\n").unwrap();
+        git(&["add", "README.md"], path);
+        git(&["commit", "-m", "init"], path);
     }
 
     #[derive(Debug)]
@@ -1096,6 +1124,115 @@ mod pty_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn respawn_fails_closed_after_worktree_removal_and_recreation() {
+        let repo = tempfile::tempdir().unwrap();
+        let worktree_parent = tempfile::tempdir().unwrap();
+        init_git_repo(repo.path());
+        git(&["branch", "feature"], repo.path());
+        let worktree = worktree_parent.path().join("feature");
+        let worktree_text = worktree.to_string_lossy().into_owned();
+        git(&["worktree", "add", &worktree_text, "feature"], repo.path());
+
+        let fs = FsSubsystem::new(vec![(
+            "test-project".to_string(),
+            repo.path().to_path_buf(),
+        )]);
+        let sink = Arc::new(RecordingSink::default());
+        let events = Arc::clone(&sink.events);
+        let manager = PtySessionManager::new(sink);
+        manager.set_target_context(PtyTargetContext::new(
+            fs,
+            WorkspaceTargetResolver::new(),
+            Arc::new(tokio::sync::RwLock::new(())),
+        ));
+        let (canonical_target, canonical_cwd) = manager
+            .validate_targeted_session("test-project", &worktree_text, &worktree_text)
+            .await
+            .unwrap();
+
+        let marker = worktree_parent.path().join("allow-respawn");
+        let command = format!(
+            "if [ -f {} ]; then sleep 5; else exit 1; fi",
+            marker.display()
+        );
+        let mut options = opts("restart:target", &command);
+        options.project = Some("test-project".to_string());
+        options.cwd = canonical_cwd;
+        options.worktree_path = Some(canonical_target.clone());
+        options.restart_policy = RestartPolicy::Always;
+        options.restart_max_retries = 1;
+        manager.create(options).unwrap();
+
+        assert!(
+            tokio_wait_for(Duration::from_secs(2), || !manager
+                .is_alive("restart:target"))
+            .await,
+            "initial process should exit before the delayed respawn"
+        );
+
+        git(
+            &["worktree", "remove", "--force", &worktree_text],
+            repo.path(),
+        );
+        fs::create_dir(&worktree).unwrap();
+        fs::write(&marker, "recreated target must not authorize respawn\n").unwrap();
+
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(
+            manager
+                .live_sessions_for_target("test-project", Path::new(&canonical_target))
+                .is_empty(),
+            "an unregistered recreated path must not receive an automatic respawn"
+        );
+        assert!(
+            events
+                .lock()
+                .unwrap()
+                .contains(&"broadcast:terminal:target-unavailable".to_string()),
+            "target loss should be surfaced to connected clients"
+        );
+        let orphan = manager
+            .list()
+            .into_iter()
+            .find(|session| session.id == "restart:target")
+            .expect("failed target session should retain its identity");
+        assert!(!orphan.alive);
+        assert!(orphan.target_unavailable);
+        manager.remove("restart:target").unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn target_metadata_is_authoritative_for_live_session_ownership() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_a = temp.path().join("target-a");
+        let target_b = temp.path().join("target-b");
+        let cwd = target_a.join("src");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(&target_b).unwrap();
+
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let mut options = opts("ownership:metadata", "sleep 5");
+        options.project = Some("test-project".to_string());
+        options.cwd = cwd.display().to_string();
+        options.worktree_path = Some(target_b.display().to_string());
+        manager.create(options).unwrap();
+
+        assert!(
+            manager
+                .live_sessions_for_target("test-project", &target_a)
+                .is_empty(),
+            "a target-scoped session must not be attributed to another target by cwd"
+        );
+        assert_eq!(
+            manager
+                .live_sessions_for_target("test-project", &target_b)
+                .len(),
+            1
+        );
+        manager.remove("ownership:metadata").unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn restart_on_failure_policy_stops_after_max_retries() {
         let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
         let mut opts = opts("restart:retries", "exit 1");
@@ -1388,7 +1525,7 @@ mod pty_tests {
     fn short_output_is_persisted_on_session_exit() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let store = Arc::new(SessionStore::open(temp.path()).unwrap());
-        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        let (tx, rx) = std::sync::mpsc::channel();
         let worker = PersistWorker::new(rx, store.clone());
         let handle = std::thread::spawn(move || worker.run());
 
@@ -1422,8 +1559,43 @@ mod pty_tests {
     }
 
     #[test]
+    fn retrying_target_session_hydrates_persisted_scrollback_before_attach() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = Arc::new(SessionStore::open(temp.path()).unwrap());
+        let meta = SessionMeta::new(
+            "shell:retry-buffer".to_string(),
+            None,
+            "old command".to_string(),
+            "/tmp".to_string(),
+            RestartPolicy::Never,
+        );
+        store
+            .save_session_for_incarnation(&meta, 0, &HashMap::new(), 80, 24, 5)
+            .unwrap();
+        store
+            .save_buffer_for_incarnation(
+                "shell:retry-buffer",
+                0,
+                b"persisted target history\n",
+                b"persisted target history\n".len() as u64,
+            )
+            .unwrap();
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mgr = test_rt().block_on(async {
+            PtySessionManager::with_persist(Arc::new(NoopEventSink), Some(tx), Some(store))
+        });
+        mgr.restore_unavailable_session(meta, 0);
+        mgr.create(opts("shell:retry-buffer", "sleep 1")).unwrap();
+
+        let replay = mgr.get_buffer("shell:retry-buffer").unwrap();
+        assert!(replay.contains("persisted target history"), "{replay:?}");
+        mgr.remove("shell:retry-buffer").unwrap();
+    }
+
+    #[test]
     fn explicit_otel_environment_is_preserved_without_terminal_marker_work() {
-        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let (tx, rx) = std::sync::mpsc::channel();
         let events = Arc::new(Mutex::new(Vec::new()));
         let mgr = test_rt().block_on(async {
             PtySessionManager::with_persist(
@@ -1493,7 +1665,7 @@ mod pty_tests {
     fn live_buffers_are_snapshotted_before_shutdown() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let store = Arc::new(SessionStore::open(temp.path()).unwrap());
-        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        let (tx, rx) = std::sync::mpsc::channel();
         let worker = PersistWorker::new(rx, store.clone());
         let handle = std::thread::spawn(move || worker.run());
 
@@ -1705,7 +1877,7 @@ mod pty_tests {
     fn terminal_tail_falls_back_to_persisted_buffer_after_exit() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let store = Arc::new(SessionStore::open(temp.path()).unwrap());
-        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        let (tx, rx) = std::sync::mpsc::channel();
         let worker = PersistWorker::new(rx, store.clone());
         let handle = std::thread::spawn(move || worker.run());
 
@@ -1801,6 +1973,7 @@ mod pty_tests {
             cols,
             rows,
             project,
+            worktree_path: None,
             restart_policy: RestartPolicy::Always,
             restart_max_retries: 1,
         };

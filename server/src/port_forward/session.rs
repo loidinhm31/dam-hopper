@@ -26,6 +26,7 @@ pub enum PortState {
 pub struct DetectedPort {
     pub port: u16,
     pub session_id: String,
+    pub incarnation: u64,
     pub project: Option<String>,
     pub detected_via: DetectedVia,
     pub state: PortState,
@@ -34,10 +35,16 @@ pub struct DetectedPort {
 }
 
 impl DetectedPort {
-    pub fn new_provisional(port: u16, session_id: String, project: Option<String>) -> Self {
+    pub fn new_provisional(
+        port: u16,
+        session_id: String,
+        incarnation: u64,
+        project: Option<String>,
+    ) -> Self {
         Self {
             port,
             session_id,
+            incarnation,
             project,
             detected_via: DetectedVia::StdoutRegex,
             state: PortState::Provisional,
@@ -48,12 +55,14 @@ impl DetectedPort {
     pub fn new_seeded_provisional(
         port: u16,
         session_id: String,
+        incarnation: u64,
         project: Option<String>,
         grace: Duration,
     ) -> Self {
         Self {
             port,
             session_id,
+            incarnation,
             project,
             detected_via: DetectedVia::StdoutRegex,
             state: PortState::Provisional,
