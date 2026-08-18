@@ -10,5 +10,5 @@ pub mod shell_lifecycle;
 mod tests;
 
 pub use event_sink::{BroadcastEventSink, EventSink, NoopEventSink};
-pub use manager::{PtyCreateOpts, PtySessionManager, SessionDetail};
+pub use manager::{PtyCreateOpts, PtySessionManager, PtyTargetContext, SessionDetail};
 pub use session::SessionMeta;

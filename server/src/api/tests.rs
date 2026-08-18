@@ -733,6 +733,7 @@ async fn diagnostics_export_includes_live_terminal_tail() {
             cols: 80,
             rows: 24,
             project: Some("demo".to_string()),
+            worktree_path: None,
             restart_policy: crate::config::schema::RestartPolicy::Never,
             restart_max_retries: 0,
         })
@@ -819,6 +820,7 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
                 cols: 80,
                 rows: 24,
                 project: Some("demo".to_string()),
+                worktree_path: None,
                 restart_policy: crate::config::schema::RestartPolicy::Never,
                 restart_max_retries: 0,
             })
@@ -1872,6 +1874,50 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
         crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_env_file failed")
+}
+
+fn make_state_with_project_root_env_file(
+    workspace: &TempDir,
+    project_root: &Path,
+    env_file: Option<&str>,
+) -> AppState {
+    let workspace_dir = workspace.path().to_path_buf();
+    let mut project = test_project_config(project_root);
+    project.env_file = env_file.map(str::to_string);
+    let config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "test-workspace".into(),
+            root: ".".into(),
+        },
+        agent_store: None,
+        server: crate::config::ServerConfig::default(),
+        projects: vec![project],
+        features: FeaturesConfig::default(),
+        config_path: workspace_dir.join("dam-hopper.toml"),
+    };
+    let (event_sink, _rx) = BroadcastEventSink::new(64);
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
+    let fs = FsSubsystem::new(vec![("test-project".into(), project_root.to_path_buf())]);
+    let tunnel_manager = make_tunnel_manager(&event_sink);
+    AppState::new(
+        workspace_dir,
+        config,
+        GlobalConfig::default(),
+        pty_manager,
+        agent_store,
+        event_sink,
+        TEST_TOKEN.to_string(),
+        fs,
+        None,
+        false,
+        tunnel_manager,
+        None,
+        test_opaque_setup(),
+        DiagnosticStore::new(workspace.path().join("diagnostics.jsonl")),
+        crate::telemetry::TelemetryRuntime::new(),
+    )
+    .expect("make_state_with_project_root_env_file failed")
 }
 
 #[test]
@@ -3579,6 +3625,77 @@ async fn terminal_create_loads_project_env_file_for_terminal_sessions() {
 }
 
 #[tokio::test]
+async fn terminal_create_loads_target_worktree_env_file() {
+    let workspace = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_git_repo(repo.path());
+    git(&["branch", "feature"], repo.path());
+    let worktree_parent = tempfile::tempdir().unwrap();
+    let worktree = worktree_parent.path().join("feature");
+    let worktree_text = worktree.to_string_lossy().into_owned();
+    git(&["worktree", "add", &worktree_text, "feature"], repo.path());
+    std::fs::write(repo.path().join(".env"), "TARGET_ENV=root\n").unwrap();
+    std::fs::write(worktree.join(".env"), "TARGET_ENV=feature\n").unwrap();
+    let state = make_state_with_project_root_env_file(&workspace, repo.path(), Some(".env"));
+
+    let response = post_json(
+        state.clone(),
+        "/api/terminal",
+        serde_json::json!({
+            "id": "target-env-session",
+            "command": "printf '%s\\n' \"$TARGET_ENV\"; cat",
+            "project": "test-project",
+            "worktreePath": worktree_text,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert!(wait_for(Duration::from_secs(2), || {
+        state
+            .pty_manager
+            .get_buffer("target-env-session")
+            .is_ok_and(|buffer| buffer.contains("feature"))
+    }));
+    assert!(!state
+        .pty_manager
+        .get_buffer("target-env-session")
+        .unwrap()
+        .contains("root"));
+    state.pty_manager.remove("target-env-session").unwrap();
+}
+
+#[tokio::test]
+async fn terminal_create_rejects_cwd_outside_target_without_creating_session() {
+    let workspace = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_git_repo(repo.path());
+    git(&["branch", "feature"], repo.path());
+    let worktree_parent = tempfile::tempdir().unwrap();
+    let worktree = worktree_parent.path().join("feature");
+    let worktree_text = worktree.to_string_lossy().into_owned();
+    git(&["worktree", "add", &worktree_text, "feature"], repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let state = make_state_with_project_root_env_file(&workspace, repo.path(), None);
+
+    let response = post_json(
+        state.clone(),
+        "/api/terminal",
+        serde_json::json!({
+            "id": "invalid-target-cwd-session",
+            "command": "cat",
+            "project": "test-project",
+            "worktreePath": worktree_text,
+            "cwd": outside.path(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(state.pty_manager.list().is_empty());
+}
+
+#[tokio::test]
 async fn terminal_create_defaults_project_cwd_to_project_root() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state_with_project_env_file(&tmp, None);
@@ -3997,6 +4114,30 @@ async fn git_bulk_routes_accept_and_validate_selected_targets() {
     assert_eq!(pull_json[0]["projectName"], "test-project");
     assert_eq!(pull_json[0]["worktreePath"], worktree_string);
 
+    let mixed_targets = post_json(
+        state.clone(),
+        "/api/git/fetch",
+        serde_json::json!({
+            "targets": [
+                { "project": "test-project" },
+                {
+                    "project": "test-project",
+                    "worktreePath": worktree_string,
+                },
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(mixed_targets.status(), StatusCode::OK);
+    let mixed_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(mixed_targets.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(mixed_json[0]["worktreePath"].is_null());
+    assert_eq!(mixed_json[1]["worktreePath"], worktree_string);
+
     let invalid_target = post_json(
         state,
         "/api/git/pull",
@@ -4008,14 +4149,19 @@ async fn git_bulk_routes_accept_and_validate_selected_targets() {
         }),
     )
     .await;
-    assert_eq!(invalid_target.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_target.status(), StatusCode::OK);
     let invalid_json: serde_json::Value = serde_json::from_slice(
         &axum::body::to_bytes(invalid_target.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(invalid_json["code"], "WORKSPACE_TARGET_UNREGISTERED");
+    assert_eq!(invalid_json[0]["projectName"], "test-project");
+    assert_eq!(invalid_json[0]["success"], false);
+    assert_eq!(invalid_json[0]["targetUnavailable"], true);
+    assert!(invalid_json[0]["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("registered worktree")));
 }
 
 #[tokio::test]
@@ -4102,6 +4248,14 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("configured project root cannot be removed"));
 
     let resp = post_json(
         state.clone(),
@@ -4132,6 +4286,149 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(!worktree_path.exists());
+}
+
+#[tokio::test]
+async fn terminal_target_metadata_blocks_concurrent_worktree_removal() {
+    let project = tempfile::tempdir().unwrap();
+    let worktree_parent = tempfile::tempdir().unwrap();
+    init_git_repo(project.path());
+    git(&["branch", "feature"], project.path());
+    let worktree_path = worktree_parent.path().join("feature-worktree");
+    let worktree_string = worktree_path.to_string_lossy().into_owned();
+    git(
+        &["worktree", "add", &worktree_string, "feature"],
+        project.path(),
+    );
+    std::fs::create_dir(worktree_path.join("src")).unwrap();
+
+    let state = make_state_with_project(&project);
+    let session_id = "terminal:target-lifecycle";
+    let response = post_json(
+        state.clone(),
+        "/api/terminal",
+        serde_json::json!({
+            "id": session_id,
+            "project": "test-project",
+            "command": "sleep 30",
+            "cwd": "src",
+            "worktreePath": worktree_path,
+            "cols": 80,
+            "rows": 24,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let detailed = get(state.clone(), "/api/terminal").await;
+    let body = axum::body::to_bytes(detailed.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let sessions: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(sessions[0]["worktreePath"], worktree_string);
+    assert_eq!(
+        sessions[0]["cwd"],
+        worktree_path.join("src").to_string_lossy().as_ref()
+    );
+
+    let blocked = delete_json(
+        state.clone(),
+        "/api/git/test-project/worktrees",
+        serde_json::json!({ "path": worktree_path }),
+    )
+    .await;
+    assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
+    let blocked_body = axum::body::to_bytes(blocked.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let blocked_json: serde_json::Value = serde_json::from_slice(&blocked_body).unwrap();
+    assert!(blocked_json["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("live terminal session"));
+
+    let killed = delete_json(
+        state.clone(),
+        &format!("/api/terminal/{session_id}"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(killed.status(), StatusCode::NO_CONTENT);
+    let evicted = delete_json(
+        state.clone(),
+        &format!("/api/terminal/{session_id}/remove"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(evicted.status(), StatusCode::NO_CONTENT);
+
+    let removed = delete_json(
+        state,
+        "/api/git/test-project/worktrees",
+        serde_json::json!({ "path": worktree_path }),
+    )
+    .await;
+    assert_eq!(removed.status(), StatusCode::OK);
+    assert!(!worktree_path.exists());
+}
+
+#[tokio::test]
+async fn terminal_target_metadata_projects_absolute_configured_root_cwd() {
+    let project = tempfile::tempdir().unwrap();
+    let worktree_parent = tempfile::tempdir().unwrap();
+    init_git_repo(project.path());
+    git(&["branch", "feature"], project.path());
+    let project_src = project.path().join("src");
+    std::fs::create_dir(&project_src).unwrap();
+    let worktree_path = worktree_parent.path().join("feature-worktree");
+    let worktree_string = worktree_path.to_string_lossy().into_owned();
+    git(
+        &["worktree", "add", &worktree_string, "feature"],
+        project.path(),
+    );
+    std::fs::create_dir(worktree_path.join("src")).unwrap();
+
+    let state = make_state_with_project(&project);
+    let session_id = "terminal:target-absolute-cwd";
+    let response = post_json(
+        state.clone(),
+        "/api/terminal",
+        serde_json::json!({
+            "id": session_id,
+            "project": "test-project",
+            "command": "sleep 30",
+            "cwd": project_src,
+            "worktreePath": worktree_path,
+            "cols": 80,
+            "rows": 24,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let session: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(session["worktreePath"], worktree_string);
+    assert_eq!(
+        session["cwd"],
+        worktree_path.join("src").to_string_lossy().as_ref()
+    );
+
+    let killed = delete_json(
+        state.clone(),
+        &format!("/api/terminal/{session_id}"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(killed.status(), StatusCode::NO_CONTENT);
+    let removed = delete_json(
+        state,
+        &format!("/api/terminal/{session_id}/remove"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]

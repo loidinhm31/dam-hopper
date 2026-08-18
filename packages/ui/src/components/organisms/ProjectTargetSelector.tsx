@@ -3,7 +3,10 @@ import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/atoms/Button.js";
 import { cn } from "@/lib/utils.js";
 import type { Worktree } from "@/api/client.js";
-import type { ProjectTargetSnapshot } from "@/stores/project-target.js";
+import {
+  worktreeTargetKey,
+  type ProjectTargetSnapshot,
+} from "@/stores/project-target.js";
 import { ProjectTargetWorktreeRow } from "@/components/organisms/ProjectTargetWorktreeRow.js";
 
 interface ProjectTargetSelectorProps {
@@ -15,6 +18,7 @@ interface ProjectTargetSelectorProps {
   isFetched: boolean;
   isError: boolean;
   fallbackNotice: string | null;
+  fallbackTargetPaths?: string[];
   removePendingPath: string | null;
   onSelect: (worktreePath: string | null) => void;
   onRefresh: () => void;
@@ -41,6 +45,7 @@ export function ProjectTargetSelector({
   isFetched,
   isError,
   fallbackNotice,
+  fallbackTargetPaths,
   removePendingPath,
   onSelect,
   onRefresh,
@@ -69,14 +74,26 @@ export function ProjectTargetSelector({
       </div>
 
       {fallbackNotice && (
-        <p
-          className="text-xs text-[var(--color-warning)]"
+        <div
+          className="space-y-1 text-xs text-[var(--color-warning)]"
           role="status"
           aria-live="polite"
           aria-atomic="true"
         >
-          {fallbackNotice}
-        </p>
+          <p>{fallbackNotice}</p>
+          {fallbackTargetPaths && fallbackTargetPaths.length > 0 && (
+            <ul
+              className="list-disc space-y-0.5 pl-4 font-mono text-[10px]"
+              aria-label="Unavailable worktree paths"
+            >
+              {fallbackTargetPaths.map((path) => (
+                <li key={path} className="break-all">
+                  {path}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
       <fieldset
@@ -121,7 +138,16 @@ export function ProjectTargetSelector({
             key={worktree.path}
             groupId={groupId}
             worktree={worktree}
-            selected={selectedPath === worktree.path}
+            disabled={fallbackTargetPaths?.some(
+              (path) =>
+                worktreeTargetKey(target.project, path) ===
+                worktreeTargetKey(target.project, worktree.path),
+            )}
+            selected={
+              selectedPath != null &&
+              worktreeTargetKey(target.project, selectedPath) ===
+                worktreeTargetKey(target.project, worktree.path)
+            }
             removePendingPath={removePendingPath}
             onSelect={onSelect}
             onRemove={onRemove}

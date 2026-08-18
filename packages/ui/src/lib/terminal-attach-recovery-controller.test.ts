@@ -16,6 +16,7 @@ function makeController(
     sendAttach?: () => boolean;
     checkAlive?: () => Promise<boolean>;
     create?: () => Promise<void>;
+    shouldRetryAfterReplay?: () => boolean;
   } = {},
 ) {
   const sendAttach = vi.fn(overrides.sendAttach ?? (() => true));
@@ -30,6 +31,7 @@ function makeController(
     sendAttach,
     checkAlive,
     create,
+    shouldRetryAfterReplay: overrides.shouldRetryAfterReplay,
     onTimeout,
     onCreateFailed,
     onAttachUnavailable,
@@ -134,6 +136,29 @@ describe("TerminalAttachRecoveryController", () => {
     creation.resolve();
     await Promise.resolve();
     expect(sendAttach).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries an unavailable identity after its replay completes", async () => {
+    const shouldRetryAfterReplay = vi.fn(() => true);
+    const creation = deferred<void>();
+    const { controller, create, sendAttach } = makeController({
+      create: () => creation.promise,
+      shouldRetryAfterReplay,
+    });
+
+    controller.start();
+    controller.onBuffer();
+    expect(create).not.toHaveBeenCalled();
+
+    controller.onReplayComplete();
+    expect(create).toHaveBeenCalledTimes(1);
+
+    creation.resolve();
+    await Promise.resolve();
+    expect(sendAttach).toHaveBeenCalledTimes(2);
+
+    controller.onBuffer();
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
   it("does not recreate a session after creation succeeds but replay stays missing", async () => {

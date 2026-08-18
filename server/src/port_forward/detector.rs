@@ -88,6 +88,7 @@ pub fn strip_ansi(input: &str) -> String {
 pub fn scan_chunk(
     data: &[u8],
     session_id: &str,
+    incarnation: u64,
     project: Option<&str>,
     mgr: &Arc<PortForwardManager>,
     rt_handle: &tokio::runtime::Handle,
@@ -106,7 +107,8 @@ pub fn scan_chunk(
                     let session_id = session_id.to_owned();
                     let project = project.map(ToOwned::to_owned);
                     rt_handle.spawn(async move {
-                        mgr.report_stdout_hit(port, session_id, project).await;
+                        mgr.report_stdout_hit(port, session_id, incarnation, project)
+                            .await;
                     });
                     // Only report the first match per chunk to avoid event spam.
                     return;
@@ -165,13 +167,31 @@ async fn linux_poll_loop(pfm: Arc<PortForwardManager>) {
         }
 
         // Snapshot current known ports without holding the lock across awaits.
-        let known: Vec<u16> = pfm.list().await.into_iter().map(|p| p.port).collect();
+        let known: Vec<(u16, u64)> = pfm
+            .list()
+            .await
+            .into_iter()
+            .map(|p| (p.port, p.incarnation))
+            .collect();
 
-        for port in &known {
+        for (port, incarnation) in &known {
             if listening.contains(port) {
-                pfm.confirm_listen(*port).await;
+                pfm.confirm_listen(*port, *incarnation).await;
             } else {
-                pfm.report_lost(*port).await;
+                pfm.report_lost(*port, *incarnation).await;
+            }
+        }
+
+        // Manual tunnels do not have a PTY-owned discovered-port entry. Keep
+        // them in the same loss monitor, but require one observed listening
+        // sample before a later missing sample stops the ownerless tunnel.
+        pfm.sync_ownerless_tunnel_ports().await;
+        let ownerless = pfm.ownerless_tunnel_ports().await;
+        for (id, port, observed_listen) in ownerless {
+            if listening.contains(&port) {
+                pfm.confirm_ownerless_tunnel_listen(id, port).await;
+            } else if observed_listen {
+                pfm.report_ownerless_tunnel_lost(id, port).await;
             }
         }
     }

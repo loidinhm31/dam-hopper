@@ -12,9 +12,51 @@ All messages use JSON with `kind` tag (not legacy `type`). Phase 02 hard-cut fro
 
 **Direction:** Bidirectional (client↔server).
 
+## Project target context
+
+REST requests that operate on project files, Git state, editor/diff data, or
+media carry the explicit `ProjectTargetRef` fields documented in the [API
+reference](./api-reference.md#project-worktree-targets-phases-17). The browser
+stores one selected target per project; the server does not keep a global
+active target. A missing or prunable worktree is unavailable for new target
+operations and must be refreshed or reconnected before it can be selected
+again.
+
+The current application creates terminals through the REST transport channel
+`terminal:create` (`POST /api/terminal`). It accepts an optional
+`worktreePath`; the server resolves that path against a fresh registered
+worktree snapshot, validates the cwd inside the resolved target, and records
+the canonical target in returned and persisted session metadata. Build, run,
+custom-command, and profile session IDs use a stable opaque target
+discriminator, while the canonical path remains in session metadata. Older
+WebSocket terminal messages below are still project/session scoped; legacy
+sessions without target metadata use their `project` and `cwd` for orphan
+detection.
+For target-scoped sessions, the immutable server-validated `worktreePath`
+marker is authoritative; cwd containment is a legacy fallback only.
+
+### Current terminal REST transport
+
+```json
+{
+  "project": "demo",
+  "cwd": ".",
+  "worktreePath": "/worktrees/demo-feature",
+  "command": "npm run dev",
+  "cols": 80,
+  "rows": 24
+}
+```
+
+`worktreePath` is optional and must identify a registered, available worktree
+for the project. A relative `cwd` is resolved beneath that target; an absolute
+cwd must remain inside it. Removal and terminal creation share the server's
+workspace lifecycle guard, so a target cannot be removed while a target-scoped
+terminal is being created or is live.
+
 ## Client→Server Messages
 
-### Terminal
+### Legacy WebSocket terminal messages
 
 | Command           | Payload                            | Response                                                 |
 | ----------------- | ---------------------------------- | -------------------------------------------------------- |
@@ -298,6 +340,30 @@ With restart metadata:
 
 **Usage:** Frontend listens for this to update restart badge and write restart banner.
 
+#### Target Unavailable Event (Phase 07)
+
+When a target-scoped terminal cannot be respawned because its registered
+worktree disappeared or became unavailable, the server sends:
+
+```json
+{
+  "kind": "terminal:target-unavailable",
+  "payload": {
+    "project": "demo",
+    "worktreePath": "/worktrees/demo-feature",
+    "sessionId": "terminal:demo:dev:1",
+    "incarnation": 4,
+    "targetUnavailable": true,
+    "willRestart": false
+  }
+}
+```
+
+The browser records the exact target as unavailable, preserves the session's
+original target metadata, and falls back to the configured project root for
+new operations. A `terminal:changed` event follows so terminal listings can
+refresh.
+
 #### Filesystem Overflow Event (Phase 5+)
 
 ```json
@@ -312,9 +378,11 @@ With restart metadata:
 
 #### Other Terminal Events
 
-```json
-{ "kind": "terminal:spawned", "id": "uuid", ... }
-```
+The historical `terminal:spawned` event is retained only for older clients;
+current browser creation uses the REST `terminal:create` channel above. A
+target-unavailable event is emitted for a create or respawn failure only after
+fresh target validation confirms that the registered target was lost; ordinary
+PTY or cwd failures remain ordinary request/recovery errors.
 
 ### File System — Tree Events
 

@@ -84,10 +84,11 @@ function treeElement(
     alive: boolean;
     startedAt: number;
   }> = [],
+  projectList: TreeProject[] = projects,
 ) {
   return (
     <TerminalTreeView
-      projects={projects}
+      projects={projectList}
       freeTerminals={freeTerminals}
       activeProjectName="web"
       selectedId={null}
@@ -120,8 +121,9 @@ function renderTree(
     alive: boolean;
     startedAt: number;
   }> = [],
+  projectList: TreeProject[] = projects,
 ) {
-  return renderToStaticMarkup(treeElement(freeTerminals));
+  return renderToStaticMarkup(treeElement(freeTerminals, projectList));
 }
 
 describe("TerminalTreeView mobile actions", () => {
@@ -147,6 +149,33 @@ describe("TerminalTreeView mobile actions", () => {
     expect(markup).toContain('title="Launch build"');
     expect(markup).toContain("opacity-100");
     expect(markup).toContain("h-8 w-8 items-center justify-center");
+  });
+
+  it("labels a live session whose worktree is unavailable", () => {
+    const orphanedProject: TreeProject = {
+      ...projects[0],
+      commands: projects[0].commands.map((command) =>
+        command.key === "terminal:Dev"
+          ? {
+              ...command,
+              sessions: [
+                {
+                  id: "terminal:web:Dev:1",
+                  project: "web",
+                  command: "pnpm dev",
+                  cwd: "/workspace/web-feature",
+                  type: "terminal",
+                  alive: true,
+                  startedAt: 1,
+                  orphaned: true,
+                },
+              ],
+            }
+          : command,
+      ),
+    };
+
+    expect(renderTree([], [orphanedProject])).toContain(">orphaned</span>");
   });
 
   it("disables free-terminal profile saving when Android Chrome text input is blocked", () => {

@@ -100,6 +100,7 @@ function mountedForSession(session: SessionInfo): MountedSession {
     project: sessionProject(session),
     command: session.command,
     cwd: session.cwd,
+    worktreePath: session.worktreePath,
   };
 }
 

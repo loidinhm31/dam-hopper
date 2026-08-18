@@ -51,6 +51,8 @@ import type {
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
+import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
+import { rememberTerminalSessionIncarnations } from "@/lib/terminal-incarnation-state.js";
 
 type QueryInvalidator = Pick<
   ReturnType<typeof useQueryClient>,
@@ -107,7 +109,7 @@ async function reconcileAllOpenEditorTargets() {
 export function markTargetUnavailableIfNeeded(
   target: ProjectTargetInput,
   error: unknown,
-) {
+): boolean {
   const values: string[] = [];
   if (typeof error === "string") values.push(error);
   if (error instanceof Error) values.push(error.message);
@@ -122,7 +124,9 @@ export function markTargetUnavailableIfNeeded(
   if (isProjectTargetError(...values)) {
     markProjectTargetUnavailable(target);
     useEditorStore.getState().markTargetUnavailable(target);
+    return true;
   }
+  return false;
 }
 
 function markFailedGitResults(
@@ -132,7 +136,11 @@ function markFailedGitResults(
   if (!Array.isArray(results)) return;
 
   for (const result of results) {
-    if (result.success || !isProjectTargetError(result.error)) continue;
+    if (
+      result.success ||
+      (!result.targetUnavailable && !isProjectTargetError(result.error))
+    )
+      continue;
 
     if (requestedTargets) {
       const candidates = requestedTargets.filter(
@@ -145,17 +153,33 @@ function markFailedGitResults(
       )
         ? (result.worktreePath ?? null)
         : undefined;
+      const normalizedResultTargetPath =
+        resultTargetPath == null
+          ? resultTargetPath
+          : normalizeProjectTargetPath(resultTargetPath);
       const target =
         resultTargetPath === undefined
           ? candidates.length === 1
             ? candidates[0]
             : undefined
-          : candidates.find(
-              (candidate) =>
-                (normalizeProjectTarget(candidate).worktreePath ?? null) ===
-                resultTargetPath,
-            );
-      if (target) markTargetUnavailableIfNeeded(target, result.error);
+          : candidates.find((candidate) => {
+              const candidateTargetPath =
+                normalizeProjectTarget(candidate).worktreePath;
+              return (
+                (candidateTargetPath == null
+                  ? null
+                  : normalizeProjectTargetPath(candidateTargetPath)) ===
+                normalizedResultTargetPath
+              );
+            });
+      if (target) {
+        if (result.targetUnavailable) {
+          markProjectTargetUnavailable(target);
+          useEditorStore.getState().markTargetUnavailable(target);
+        } else {
+          markTargetUnavailableIfNeeded(target, result.error);
+        }
+      }
       continue;
     }
 
@@ -601,8 +625,13 @@ export function useGlobalConfig() {
 export function useTerminalSessions() {
   return useQuery<SessionInfo[]>({
     queryKey: ["terminal-sessions"],
-    queryFn: () =>
-      getTransport().invoke<SessionInfo[]>("terminal:listDetailed"),
+    queryFn: async () => {
+      const sessions = await getTransport().invoke<SessionInfo[]>(
+        "terminal:listDetailed",
+      );
+      rememberTerminalSessionIncarnations(sessions);
+      return sessions;
+    },
     staleTime: Infinity, // driven by terminal:changed push event invalidation
   });
 }
@@ -1091,11 +1120,11 @@ export function useGitFetch() {
       });
     },
     onError: (error, targets) => {
-      if (targets) {
+      if (targets?.length === 1) {
         for (const target of targets) {
           markTargetUnavailableIfNeeded(target, error);
         }
-      } else {
+      } else if (!targets) {
         markOpenEditorTargetsUnavailableIfNeeded(error);
       }
     },
@@ -1120,11 +1149,11 @@ export function useGitPull() {
       });
     },
     onError: (error, targets) => {
-      if (targets) {
+      if (targets?.length === 1) {
         for (const target of targets) {
           markTargetUnavailableIfNeeded(target, error);
         }
-      } else {
+      } else if (!targets) {
         markOpenEditorTargetsUnavailableIfNeeded(error);
       }
     },

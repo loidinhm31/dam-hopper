@@ -12,7 +12,7 @@ use crate::git::progress::{
     create_progress_channel, emit_completed, emit_progress, ProgressSender,
 };
 use crate::git::repository::{self, update_branch};
-use crate::git::types::{BranchUpdateResult, GitOperationResult, GitStatus};
+use crate::git::types::{BranchUpdateResult, GitOperation, GitOperationResult, GitStatus};
 use crate::ssh::SshCredStore;
 
 /// Sentinel project_name for bulk-level progress events (no specific project).
@@ -87,9 +87,14 @@ impl BulkGitService {
         }
 
         let mut results = Vec::with_capacity(total);
-        for h in handles {
-            if let Ok(r) = h.await {
-                results.push(r);
+        for (index, handle) in handles.into_iter().enumerate() {
+            match handle.await {
+                Ok(result) => results.push(result),
+                Err(error) => results.push(bulk_join_failure(
+                    projects[index].name,
+                    GitOperation::Fetch,
+                    error,
+                )),
             }
         }
 
@@ -135,9 +140,14 @@ impl BulkGitService {
         }
 
         let mut results = Vec::with_capacity(total);
-        for h in handles {
-            if let Ok(r) = h.await {
-                results.push(r);
+        for (index, handle) in handles.into_iter().enumerate() {
+            match handle.await {
+                Ok(result) => results.push(result),
+                Err(error) => results.push(bulk_join_failure(
+                    projects[index].name,
+                    GitOperation::Pull,
+                    error,
+                )),
             }
         }
 
@@ -228,6 +238,22 @@ impl BulkGitService {
     }
 }
 
+fn bulk_join_failure(
+    project_name: &str,
+    operation: GitOperation,
+    error: tokio::task::JoinError,
+) -> GitOperationResult {
+    let error_message = format!("bulk {operation} task failed: {error}");
+    GitOperationResult {
+        project_name: project_name.to_string(),
+        operation,
+        success: false,
+        summary: None,
+        error: Some(error_message),
+        duration_ms: 0,
+    }
+}
+
 fn update_all_branches_for_project(path: &Path, _name: &str) -> Vec<BranchUpdateResult> {
     let branches = match repository::list_branches(path) {
         Ok(b) => b,
@@ -249,4 +275,26 @@ fn update_all_branches_for_project(path: &Path, _name: &str) -> Vec<BranchUpdate
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn join_failure_placeholder_keeps_the_input_project_identity() {
+        let join_error = tokio::spawn(async { panic!("synthetic bulk failure") })
+            .await
+            .expect_err("the synthetic task should fail");
+
+        let result = bulk_join_failure("second-project", GitOperation::Pull, join_error);
+
+        assert_eq!(result.project_name, "second-project");
+        assert!(matches!(result.operation, GitOperation::Pull));
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("bulk pull task failed")));
+    }
 }

@@ -60,6 +60,7 @@ import { TerminalFindBar } from "@/components/atoms/TerminalFindBar.js";
 import { TerminalSuggestionGhost } from "@/components/atoms/TerminalSuggestionGhost.js";
 import { TerminalHistoryList } from "@/components/organisms/TerminalHistoryList.js";
 import { getHistory, searchHistory } from "@/lib/command-history.js";
+import { rememberTerminalSessionIncarnation } from "@/lib/terminal-incarnation-state.js";
 
 interface TerminalPanelProps {
   /** Unique session ID (e.g. "build:api-server", "run:api-server") */
@@ -70,6 +71,8 @@ interface TerminalPanelProps {
   command: string;
   /** Working directory — only used when the session must be created (not reconnected) */
   cwd?: string;
+  /** Server-validated worktree target used when creating or recovering this session. */
+  worktreePath?: string;
   /** Called when the PTY process exits */
   onExit?: (exitCode: number | null) => void;
   /** Called when Shift+Enter is pressed — used to open a new terminal */
@@ -123,6 +126,7 @@ export function TerminalPanel({
   project,
   command,
   cwd,
+  worktreePath,
   onExit,
   onNewTerminal,
   onTerminalReady,
@@ -268,6 +272,7 @@ export function TerminalPanel({
     let agentNotifications: TerminalAgentNotificationIntegration | null = null;
     let observer: ResizeObserver | null = null;
     let recoveryController: TerminalAttachRecoveryController | null = null;
+    const retryUnavailableAfterReplayRef = { current: false };
     let releaseTouchScroll = () => {};
     let geometryAdapter: TerminalCursorGeometryAdapter | null = null;
 
@@ -375,6 +380,7 @@ export function TerminalPanel({
               queuedChunkCount: queuedLiveDataSnapshot.length,
             },
           );
+          recoveryController?.onReplayComplete();
         });
         recordClientDiagnostic("transport", "terminal-panel", "buffer_replay", {
           sessionId: safeSessionId,
@@ -519,15 +525,21 @@ export function TerminalPanel({
         project,
       });
       return transport
-        .invoke<string>("terminal:create", {
+        .invoke<SessionInfo>("terminal:create", {
           id: safeSessionId,
           project,
           command,
           cwd,
+          worktreePath,
           cols: finalCols,
           rows: finalRows,
         })
-        .then(() => undefined);
+        .then((session) => {
+          if (session) {
+            rememberTerminalSessionIncarnation(session.id, session.incarnation);
+          }
+          retryUnavailableAfterReplayRef.current = false;
+        });
     };
 
     const sendAttach = (fromOffset?: number, retryAttempt = 0) => {
@@ -565,6 +577,8 @@ export function TerminalPanel({
             ),
           ),
       create: createSession,
+      shouldRetryAfterReplay: () =>
+        retryUnavailableAfterReplayRef.current,
       onTimeout: () => {
         logger.warn(
           "TerminalPanel",
@@ -616,7 +630,13 @@ export function TerminalPanel({
       .then(() => transport.invoke<SessionInfo[]>("terminal:listDetailed"))
       .then((sessions) => {
         if (disposed) return;
-        if (sessions.some((s) => s.id === safeSessionId && s.alive)) {
+        const existingSession = sessions.find((s) => s.id === safeSessionId);
+        retryUnavailableAfterReplayRef.current =
+          existingSession?.targetUnavailable === true;
+        // An unavailable session is intentionally dead but still owns its
+        // persisted scrollback. Attach first so it can be replayed while the
+        // worktree is missing; recovery will create only if attach fails.
+        if (existingSession?.alive || existingSession?.targetUnavailable) {
           recoveryController?.start();
         } else {
           return createSession().then(() => recoveryController?.start());

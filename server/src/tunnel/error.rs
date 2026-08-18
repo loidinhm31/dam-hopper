@@ -11,6 +11,8 @@ pub enum TunnelError {
     NotFound(Uuid),
     #[error("tunnel already running on port {0}")]
     DuplicatePort(u16),
+    #[error("tunnel creation cancelled")]
+    CreationCancelled,
     #[error("spawn failed: {0}")]
     SpawnFailed(String),
     #[error("install failed: {0}")]

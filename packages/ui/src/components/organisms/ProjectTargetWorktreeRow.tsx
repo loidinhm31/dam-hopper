@@ -10,6 +10,7 @@ interface ProjectTargetWorktreeRowProps {
   groupId: string;
   worktree: Worktree;
   selected: boolean;
+  disabled?: boolean;
   removePendingPath: string | null;
   onSelect: (worktreePath: string) => void;
   onRemove: (path: string) => void;
@@ -30,14 +31,16 @@ export function ProjectTargetWorktreeRow({
   groupId,
   worktree,
   selected,
+  disabled = false,
   removePendingPath,
   onSelect,
   onRemove,
 }: ProjectTargetWorktreeRowProps) {
-  const selectable = isSelectableWorktree(worktree);
+  const selectable = isSelectableWorktree(worktree) && !disabled;
   const rowId = `${groupId}-${worktree.path}`;
   const status = [
     selected ? "Current target" : null,
+    disabled ? "Unavailable until worktree refresh" : null,
     worktreeStatusLabel(worktree),
   ]
     .filter((value): value is string => value !== null)
@@ -78,7 +81,7 @@ export function ProjectTargetWorktreeRow({
         type="button"
         className="min-h-11 min-w-11 shrink-0 rounded text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-danger)]/15 hover:text-[var(--color-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)] disabled:cursor-not-allowed disabled:opacity-50"
         onClick={() => onRemove(worktree.path)}
-        disabled={removePendingPath === worktree.path}
+        disabled={disabled || removePendingPath === worktree.path}
         aria-label={`Remove worktree ${worktree.branch || worktree.path}`}
         title="Remove worktree"
       >

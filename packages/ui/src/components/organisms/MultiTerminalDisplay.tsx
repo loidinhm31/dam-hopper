@@ -20,6 +20,7 @@ export interface MountedSession {
   project: string;
   command: string;
   cwd?: string;
+  worktreePath?: string;
 }
 
 interface Props {

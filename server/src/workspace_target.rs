@@ -157,6 +157,9 @@ struct RegisteredWorktree {
     target_path: PathBuf,
     /// Canonical target captured at discovery time for fast cache-hit matching.
     canonical_target_path: Option<PathBuf>,
+    /// Stable lexical identity used for API projection even when the target
+    /// has disappeared and can no longer be canonicalized.
+    stable_target_path: PathBuf,
     available: bool,
 }
 
@@ -413,7 +416,9 @@ impl WorkspaceTargetResolver {
             }
             let canonical_root = dunce::canonicalize(&root).ok()?;
             let canonical_target = dunce::canonicalize(&target).ok()?;
-            if !canonical_target.is_dir() || !canonical_target.starts_with(&canonical_root) {
+            if !canonical_target.is_dir()
+                || !target_path_is_within(&canonical_target, &canonical_root)
+            {
                 return None;
             }
             Some(canonical_target)
@@ -444,7 +449,11 @@ fn project_worktrees(
         .iter()
         .zip(candidates.iter())
         .map(|(worktree, candidate)| {
-            project_worktree_with_path(worktree, &candidate.target_path, candidate.available)
+            project_worktree_with_path(
+                worktree,
+                candidate_project_path(candidate),
+                candidate.available,
+            )
         })
         .collect()
 }
@@ -452,9 +461,13 @@ fn project_worktrees(
 fn project_worktree(candidate: &RegisteredWorktree) -> ProjectWorktree {
     project_worktree_with_path(
         &candidate.worktree,
-        &candidate.target_path,
+        candidate_project_path(candidate),
         candidate.available,
     )
+}
+
+fn candidate_project_path(candidate: &RegisteredWorktree) -> &Path {
+    &candidate.stable_target_path
 }
 
 fn project_worktree_with_path(
@@ -476,6 +489,14 @@ fn project_worktree_with_path(
     }
 }
 
+fn relative_project_root(
+    configured_root: &Path,
+    repository_root: &Path,
+) -> Result<PathBuf, AppError> {
+    target_path_relative(configured_root, repository_root)
+        .ok_or_else(|| WorkspaceTargetError::InvalidPath.into())
+}
+
 async fn discover_targets(
     configured_root: &Path,
     worktrees: Vec<Worktree>,
@@ -484,10 +505,7 @@ async fn discover_targets(
     let repository_root = canonicalize_path(repository_root)
         .await
         .ok_or(WorkspaceTargetError::UnavailableTarget)?;
-    let relative_project_root = configured_root
-        .strip_prefix(&repository_root)
-        .map_err(|_| WorkspaceTargetError::InvalidPath)?
-        .to_path_buf();
+    let relative_project_root = relative_project_root(configured_root, &repository_root)?;
 
     tokio::task::spawn_blocking(move || {
         worktrees
@@ -500,18 +518,22 @@ async fn discover_targets(
                     worktree_root.join(&relative_project_root)
                 };
                 let canonical_target_path = dunce::canonicalize(&target_path).ok();
+                let stable_target_path = canonical_target_path
+                    .clone()
+                    .unwrap_or_else(|| normalize_target_path(target_path.clone()));
                 let canonical_worktree_root = dunce::canonicalize(&worktree_root).ok();
                 let available = !worktree.is_bare
                     && worktree.is_available
                     && canonical_worktree_root.as_ref().is_some_and(|root| {
-                        canonical_target_path
-                            .as_ref()
-                            .is_some_and(|target| target.is_dir() && target.starts_with(root))
+                        canonical_target_path.as_ref().is_some_and(|target| {
+                            target.is_dir() && target_path_is_within(target, root)
+                        })
                     });
                 RegisteredWorktree {
                     worktree,
                     target_path,
                     canonical_target_path,
+                    stable_target_path,
                     available,
                 }
             })
@@ -569,13 +591,119 @@ fn paths_match(
         requested_canonical,
         candidate.canonical_target_path.as_deref(),
     ) {
-        if requested_canonical == candidate_canonical
-            && (!candidate.worktree.is_main || requested == candidate.target_path)
+        if target_path_identity(requested_canonical) == target_path_identity(candidate_canonical)
+            && (!candidate.worktree.is_main
+                || target_path_identity(requested) == target_path_identity(&candidate.target_path))
         {
             return true;
         }
     }
-    requested == candidate.target_path
+    target_path_identity(requested) == target_path_identity(&candidate.stable_target_path)
+}
+
+/// Normalizes path syntax without requiring the path to exist. This keeps a
+/// removed worktree's API identity aligned with its available projection for
+/// `.`/`..` aliases while preserving platform prefixes through `Path`.
+fn normalize_target_path(path: PathBuf) -> PathBuf {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
+/// Returns the stable identity used when comparing target paths that may have
+/// disappeared or arrived through a platform-specific alias. Windows paths
+/// are case-insensitive and may use extended drive/UNC prefixes; POSIX paths
+/// retain their case-sensitive identity.
+pub(crate) fn target_path_identity(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        let mut identity = normalize_target_path(path.to_path_buf())
+            .to_string_lossy()
+            .replace('\\', "/");
+        const EXTENDED_UNC_PREFIX: &str = "//?/UNC/";
+        const EXTENDED_PREFIX: &str = "//?/";
+        if identity.len() >= EXTENDED_UNC_PREFIX.len()
+            && identity[..EXTENDED_UNC_PREFIX.len()].eq_ignore_ascii_case(EXTENDED_UNC_PREFIX)
+        {
+            identity = format!("//{}", &identity[EXTENDED_UNC_PREFIX.len()..]);
+        } else if identity.len() >= EXTENDED_PREFIX.len()
+            && identity[..EXTENDED_PREFIX.len()].eq_ignore_ascii_case(EXTENDED_PREFIX)
+        {
+            identity = identity[EXTENDED_PREFIX.len()..].to_string();
+        }
+        identity = identity.to_ascii_lowercase();
+        return identity;
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Backslashes are ordinary filename bytes on POSIX. Do not turn a
+        // literal `a\\b` component into the distinct `a/b` path.
+        normalize_target_path(path.to_path_buf())
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+/// Compare lexical path ownership using the same platform-aware identity as
+/// target matching. This is intentionally lexical: legacy terminal sessions
+/// may point at a path that has already disappeared, so filesystem
+/// canonicalization would lose the ownership information needed for removal
+/// guards.
+pub(crate) fn target_path_is_within(path: &Path, root: &Path) -> bool {
+    let path_identity = target_path_identity(path);
+    let root_identity = target_path_identity(root);
+    if path_identity == root_identity {
+        return true;
+    }
+
+    let root_prefix = root_identity.trim_end_matches('/');
+    if root_prefix.is_empty() {
+        return path_identity.starts_with('/');
+    }
+
+    path_identity.starts_with(&format!("{root_prefix}/"))
+}
+
+/// Derive a path relative to `root` using the same platform-aware identity as
+/// containment checks. This preserves target switching when Windows changes
+/// case or presents a drive/UNC path through an extended alias.
+pub(crate) fn target_path_relative(path: &Path, root: &Path) -> Option<PathBuf> {
+    if path
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        return None;
+    }
+
+    let path_identity = target_path_identity(path);
+    let root_identity = target_path_identity(root);
+    if path_identity == root_identity {
+        return Some(PathBuf::new());
+    }
+
+    let root_prefix = root_identity.trim_end_matches('/');
+    if root_prefix.is_empty() {
+        return path_identity.strip_prefix('/').map(PathBuf::from);
+    }
+
+    path_identity
+        .strip_prefix(&format!("{root_prefix}/"))
+        .map(PathBuf::from)
 }
 
 fn target_key(path: &Path) -> String {
@@ -635,6 +763,7 @@ mod tests {
             },
             target_path: PathBuf::new(),
             canonical_target_path: None,
+            stable_target_path: PathBuf::new(),
             available: false,
         };
         let generation = resolver.generation_for(&first_key).await;
@@ -684,6 +813,7 @@ mod tests {
                             },
                             target_path: PathBuf::new(),
                             canonical_target_path: None,
+                            stable_target_path: PathBuf::new(),
                             available: false,
                         }],
                         generation,
@@ -716,5 +846,172 @@ mod tests {
             error,
             AppError::WorkspaceTarget(WorkspaceTargetError::UnregisteredTarget)
         ));
+    }
+
+    #[test]
+    fn available_project_worktree_uses_canonical_target_path() {
+        let candidate = RegisteredWorktree {
+            worktree: Worktree {
+                path: "/repo/worktree-alias".to_string(),
+                branch: "feature".to_string(),
+                commit_hash: "abc".to_string(),
+                is_main: false,
+                is_locked: false,
+                is_detached: false,
+                is_bare: false,
+                is_prunable: false,
+                is_available: true,
+            },
+            target_path: PathBuf::from("/repo/worktree-alias/project"),
+            canonical_target_path: Some(PathBuf::from("/real/worktree/project")),
+            stable_target_path: PathBuf::from("/real/worktree/project"),
+            available: true,
+        };
+
+        let projected = project_worktree(&candidate);
+        assert_eq!(projected.path, "/real/worktree/project");
+    }
+
+    #[test]
+    fn unavailable_project_worktree_uses_normalized_target_identity() {
+        let candidate = RegisteredWorktree {
+            worktree: Worktree {
+                path: "/repo/worktree".to_string(),
+                branch: "feature".to_string(),
+                commit_hash: "abc".to_string(),
+                is_main: false,
+                is_locked: false,
+                is_detached: false,
+                is_bare: false,
+                is_prunable: true,
+                is_available: false,
+            },
+            target_path: PathBuf::from("/repo/worktree/./project/../project"),
+            canonical_target_path: None,
+            stable_target_path: PathBuf::from("/repo/worktree/project"),
+            available: false,
+        };
+
+        let projected = project_worktree(&candidate);
+        assert_eq!(projected.path, "/repo/worktree/project");
+    }
+
+    #[test]
+    fn target_path_identity_is_lexically_stable_for_missing_paths() {
+        assert_eq!(
+            target_path_identity(Path::new("/repo/worktree/./project/../project")),
+            "/repo/worktree/project"
+        );
+    }
+
+    #[test]
+    fn target_path_is_within_normalizes_lexical_paths_and_boundaries() {
+        assert!(target_path_is_within(
+            Path::new("/tmp/demo/feature/src/../src"),
+            Path::new("/tmp/demo/feature"),
+        ));
+        assert!(target_path_is_within(
+            Path::new("/tmp/demo/feature"),
+            Path::new("/tmp/demo/feature"),
+        ));
+        assert!(!target_path_is_within(
+            Path::new("/tmp/demo/feature-other"),
+            Path::new("/tmp/demo/feature"),
+        ));
+    }
+
+    #[test]
+    fn target_path_relative_preserves_boundaries_and_rejects_parent_aliases() {
+        assert_eq!(
+            target_path_relative(
+                Path::new("/tmp/demo/project/src"),
+                Path::new("/tmp/demo/project"),
+            ),
+            Some(PathBuf::from("src"))
+        );
+        assert_eq!(
+            target_path_relative(
+                Path::new("/tmp/demo/project-other/src"),
+                Path::new("/tmp/demo/project"),
+            ),
+            None
+        );
+        assert_eq!(
+            target_path_relative(
+                Path::new("/tmp/demo/project/../secret"),
+                Path::new("/tmp/demo/project"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn discovery_relative_project_root_uses_target_identity() {
+        assert_eq!(
+            relative_project_root(
+                Path::new("/tmp/demo/project/src"),
+                Path::new("/tmp/demo/project"),
+            )
+            .unwrap(),
+            PathBuf::from("src")
+        );
+        assert!(relative_project_root(
+            Path::new("/tmp/demo/project-other"),
+            Path::new("/tmp/demo/project"),
+        )
+        .is_err());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn target_path_identity_preserves_posix_literal_backslashes() {
+        assert_ne!(
+            target_path_identity(Path::new("/repo/a\\b")),
+            target_path_identity(Path::new("/repo/a/b"))
+        );
+        assert_eq!(
+            target_path_identity(Path::new("/repo/a\\b/../c")),
+            "/repo/c"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn target_path_identity_accepts_windows_case_and_extended_aliases() {
+        assert_eq!(
+            target_path_identity(Path::new(r"C:\Users\Demo\Project")),
+            target_path_identity(Path::new(r"c:\users\demo\project"))
+        );
+        assert_eq!(
+            target_path_identity(Path::new(r"\\?\UNC\Server\Share\Project\..\src")),
+            "//server/share/src"
+        );
+        assert_eq!(
+            target_path_identity(Path::new(r"\\?\unc\Server\Share\Project")),
+            target_path_identity(Path::new(r"\\?\UNC\server\share\project"))
+        );
+        assert_eq!(
+            target_path_identity(Path::new(r"\\?\C:\Users\Demo\Project")),
+            "c:/users/demo/project"
+        );
+        assert!(target_path_is_within(
+            Path::new(r"\\?\unc\SERVER\SHARE\Project\src"),
+            Path::new(r"\\server\share\project"),
+        ));
+        assert_eq!(
+            target_path_relative(
+                Path::new(r"\\?\UNC\SERVER\SHARE\Project\src"),
+                Path::new(r"\\server\share\project"),
+            ),
+            Some(PathBuf::from("src"))
+        );
+        assert_eq!(
+            relative_project_root(
+                Path::new(r"\\?\UNC\SERVER\SHARE\Project\src"),
+                Path::new(r"\\server\share\project"),
+            )
+            .unwrap(),
+            PathBuf::from("src")
+        );
     }
 }

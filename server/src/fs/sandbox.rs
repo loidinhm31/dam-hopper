@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 use tokio::task;
 
 use crate::fs::error::FsError;
-use crate::workspace_target::ResolvedProjectTarget;
+use crate::workspace_target::{target_path_identity, target_path_is_within, ResolvedProjectTarget};
 
 /// Validates that a proposed path resolves within a workspace root.
 ///
@@ -97,7 +97,9 @@ impl ProjectSandbox {
         let configured_root = self
             .project_root(target.project())
             .ok_or(FsError::NotFound)?;
-        if configured_root != *target.configured_root() || !target.available() {
+        if target_path_identity(&configured_root) != target_path_identity(target.configured_root())
+            || !target.available()
+        {
             return Err(FsError::PathEscape);
         }
         Ok(target.target_path().to_path_buf())
@@ -130,7 +132,7 @@ impl WorkspaceSandbox {
         let root = self.root.clone();
         let canonical = canonicalize_existing_blocking(proposed).await?;
 
-        if !canonical.starts_with(&root) {
+        if !target_path_is_within(&canonical, &root) {
             return Err(FsError::PathEscape);
         }
 
@@ -152,7 +154,7 @@ impl WorkspaceSandbox {
         let root = self.root.clone();
         let canonical_parent = canonicalize_existing_blocking(parent).await?;
 
-        if !canonical_parent.starts_with(&root) {
+        if !target_path_is_within(&canonical_parent, &root) {
             return Err(FsError::PathEscape);
         }
 
@@ -181,7 +183,7 @@ async fn validate_existing_under_root(root: &Path, proposed: PathBuf) -> Result<
         return Err(FsError::PathEscape);
     }
     let canonical = canonicalize_existing_blocking(proposed).await?;
-    if !canonical.starts_with(root) {
+    if !target_path_is_within(&canonical, root) {
         return Err(FsError::PathEscape);
     }
     Ok(canonical)
@@ -197,7 +199,7 @@ async fn validate_new_under_root(
         return Err(FsError::PathEscape);
     }
     let canonical_parent = canonicalize_existing_blocking(parent).await?;
-    if !canonical_parent.starts_with(root) {
+    if !target_path_is_within(&canonical_parent, root) {
         return Err(FsError::PathEscape);
     }
     Ok(canonical_parent.join(name))

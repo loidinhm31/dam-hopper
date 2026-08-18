@@ -1,11 +1,11 @@
 import { create } from "zustand";
 import {
   normalizeProjectTarget,
-  projectTargetCacheKey,
   type ProjectTargetRef,
   type ProjectTargetInput,
   type Worktree,
 } from "@/api/client.js";
+import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 
 export const ROOT_TARGET_KEY = "root";
 
@@ -24,14 +24,22 @@ interface ProjectTargetState {
   activeTargetByProject: Record<string, string>;
   /** The last target replaced after discovery found it unavailable. */
   unavailableTargetByProject: Record<string, string>;
+  /** All unavailable targets retained for orphan-session reconciliation. */
+  unavailableTargetsByProject: Record<string, string[]>;
   selectTarget: (project: string, worktreePath: string | null) => void;
   resetTarget: (project: string) => void;
   markTargetUnavailable: (project: string, worktreePath: string) => void;
-  clearUnavailableTarget: (project: string) => void;
+  clearUnavailableTarget: (project: string, worktreePath?: string) => void;
 }
 
-export function worktreeTargetKey(project: string, worktreePath: string) {
-  return projectTargetCacheKey({ project, worktreePath });
+export function worktreeTargetKey(_project: string, worktreePath: string) {
+  return `worktree:${normalizeProjectTargetPath(worktreePath)}`;
+}
+
+export const normalizeWorktreePath = normalizeProjectTargetPath;
+
+function sameWorktreePath(left: string, right: string): boolean {
+  return normalizeProjectTargetPath(left) === normalizeProjectTargetPath(right);
 }
 
 export function isSelectableWorktree(worktree: Worktree) {
@@ -88,6 +96,7 @@ export function createProjectTargetSnapshot(
 export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
   activeTargetByProject: {},
   unavailableTargetByProject: {},
+  unavailableTargetsByProject: {},
   selectTarget: (project, worktreePath) =>
     set((state) => {
       if (worktreePath == null) {
@@ -110,29 +119,70 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
       delete next[project];
       const nextUnavailable = { ...state.unavailableTargetByProject };
       delete nextUnavailable[project];
+      const nextUnavailableTargets = { ...state.unavailableTargetsByProject };
+      delete nextUnavailableTargets[project];
       return {
         activeTargetByProject: next,
         unavailableTargetByProject: nextUnavailable,
+        unavailableTargetsByProject: nextUnavailableTargets,
       };
     }),
   markTargetUnavailable: (project, worktreePath) =>
     set((state) => {
       const next = { ...state.activeTargetByProject };
-      if (next[project] === worktreePath) delete next[project];
+      if (next[project] && sameWorktreePath(next[project], worktreePath)) {
+        delete next[project];
+      }
+      const existing = state.unavailableTargetsByProject[project] ?? [];
+      const targets = existing.some((path) =>
+        sameWorktreePath(path, worktreePath),
+      )
+        ? existing
+        : [...existing, worktreePath];
       return {
         activeTargetByProject: next,
         unavailableTargetByProject: {
           ...state.unavailableTargetByProject,
           [project]: worktreePath,
         },
+        unavailableTargetsByProject: {
+          ...state.unavailableTargetsByProject,
+          [project]: targets,
+        },
       };
     }),
-  clearUnavailableTarget: (project) =>
+  clearUnavailableTarget: (project, worktreePath) =>
     set((state) => {
       if (!(project in state.unavailableTargetByProject)) return state;
+      if (worktreePath == null) {
+        const next = { ...state.unavailableTargetByProject };
+        const nextTargets = { ...state.unavailableTargetsByProject };
+        delete next[project];
+        delete nextTargets[project];
+        return {
+          unavailableTargetByProject: next,
+          unavailableTargetsByProject: nextTargets,
+        };
+      }
+
+      const remaining = (
+        state.unavailableTargetsByProject[project] ?? []
+      ).filter((path) => !sameWorktreePath(path, worktreePath));
       const next = { ...state.unavailableTargetByProject };
-      delete next[project];
-      return { unavailableTargetByProject: next };
+      const nextTargets = { ...state.unavailableTargetsByProject };
+      if (remaining.length === 0) {
+        delete next[project];
+        delete nextTargets[project];
+      } else {
+        nextTargets[project] = remaining;
+        if (next[project] && sameWorktreePath(next[project], worktreePath)) {
+          next[project] = remaining[remaining.length - 1]!;
+        }
+      }
+      return {
+        unavailableTargetByProject: next,
+        unavailableTargetsByProject: nextTargets,
+      };
     }),
 }));
 

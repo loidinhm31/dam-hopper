@@ -152,4 +152,28 @@ describe("selectTerminal", () => {
     expect(callbacks.setActiveProject).toHaveBeenCalledWith("demo-project");
     expect(events[0]).toBe("set:demo-project");
   });
+
+  it("forwards session cwd and target metadata when selecting a terminal", () => {
+    const callbacks = createCallbacks([]);
+
+    selectTerminal({
+      sessionId: "terminal:demo-project:dev",
+      metadata: {
+        project: "demo-project",
+        command: "pnpm dev",
+        cwd: "/worktrees/demo-feature/src",
+        worktreePath: "/worktrees/demo-feature",
+      },
+      terminalAutoSwitchProjectEnabled: false,
+      ...callbacks,
+    });
+
+    expect(callbacks.openTerminalTab).toHaveBeenCalledWith(
+      "terminal:demo-project:dev",
+      "demo-project",
+      "pnpm dev",
+      "/worktrees/demo-feature/src",
+      "/worktrees/demo-feature",
+    );
+  });
 });

@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { upsertMountedSession } from "./terminal-mounted-sessions.js";
+import {
+  createMountedSession,
+  upsertMountedSession,
+} from "./terminal-mounted-sessions.js";
+
+describe("createMountedSession", () => {
+  it("preserves cwd and target metadata for recovery", () => {
+    expect(
+      createMountedSession("terminal:demo:dev", {
+        project: "demo",
+        command: "pnpm dev",
+        cwd: "/worktrees/demo-feature/src",
+        worktreePath: "/worktrees/demo-feature",
+      }),
+    ).toEqual({
+      sessionId: "terminal:demo:dev",
+      project: "demo",
+      command: "pnpm dev",
+      cwd: "/worktrees/demo-feature/src",
+      worktreePath: "/worktrees/demo-feature",
+    });
+  });
+});
 
 describe("upsertMountedSession", () => {
   it("appends new sessions in insertion order", () => {

@@ -4,6 +4,7 @@ import {
   createProjectTargetSnapshot,
   isSelectableWorktree,
   markProjectTargetUnavailable,
+  normalizeWorktreePath,
   useProjectTargetStore,
   worktreeStatusLabel,
 } from "./project-target.js";
@@ -28,6 +29,7 @@ function resetStore() {
   useProjectTargetStore.setState({
     activeTargetByProject: {},
     unavailableTargetByProject: {},
+    unavailableTargetsByProject: {},
   });
 }
 
@@ -70,6 +72,28 @@ describe("project target helpers", () => {
     });
   });
 
+  it("normalizes aliases while keeping UNC and POSIX namespaces distinct", () => {
+    expect(normalizeWorktreePath("/tmp/demo/./feature/../feature")).toBe(
+      "/tmp/demo/feature",
+    );
+    expect(normalizeWorktreePath(String.raw`\\server\share\feature`)).toBe(
+      "//server/share/feature",
+    );
+    expect(normalizeWorktreePath("/server/share/feature")).toBe(
+      "/server/share/feature",
+    );
+    expect(
+      normalizeWorktreePath(String.raw`C:\Worktrees\Feature`) ===
+        normalizeWorktreePath("c:/worktrees/feature"),
+    ).toBe(true);
+    expect(
+      normalizeWorktreePath(String.raw`\\?\UNC\server\share\feature`),
+    ).toBe("//server/share/feature");
+    expect(
+      normalizeWorktreePath(String.raw`\\?\C:\Worktrees\Feature`),
+    ).toBe("c:/worktrees/feature");
+  });
+
   it("keeps selections isolated per project and resets only the chosen project", () => {
     const store = useProjectTargetStore.getState();
     store.selectTarget("alpha", "/tmp/alpha");
@@ -110,11 +134,17 @@ describe("project target helpers", () => {
     expect(useProjectTargetStore.getState().unavailableTargetByProject).toEqual(
       { "demo-project": "/tmp/selected" },
     );
+    expect(
+      useProjectTargetStore.getState().unavailableTargetsByProject,
+    ).toEqual({ "demo-project": ["/tmp/other", "/tmp/selected"] });
 
     store.clearUnavailableTarget("demo-project");
     expect(useProjectTargetStore.getState().unavailableTargetByProject).toEqual(
       {},
     );
+    expect(
+      useProjectTargetStore.getState().unavailableTargetsByProject,
+    ).toEqual({});
   });
 
   it("keeps unavailable identity when selection falls back to the root", () => {
@@ -127,6 +157,21 @@ describe("project target helpers", () => {
     expect(useProjectTargetStore.getState().unavailableTargetByProject).toEqual(
       { "demo-project": "/tmp/selected" },
     );
+  });
+
+  it("reconciles unavailable aliases by normalized target identity", () => {
+    const store = useProjectTargetStore.getState();
+    store.markTargetUnavailable("demo-project", "/tmp/demo/feature/../feature");
+    store.markTargetUnavailable("demo-project", "/tmp/demo/./feature");
+
+    expect(
+      useProjectTargetStore.getState().unavailableTargetsByProject,
+    ).toEqual({ "demo-project": ["/tmp/demo/feature/../feature"] });
+
+    store.clearUnavailableTarget("demo-project", "/tmp/demo/feature");
+    expect(
+      useProjectTargetStore.getState().unavailableTargetsByProject,
+    ).toEqual({});
   });
 
   it("records direct target failures without relying on the worktree panel", () => {
@@ -142,6 +187,24 @@ describe("project target helpers", () => {
     expect(useProjectTargetStore.getState().activeTargetByProject).toEqual({});
     expect(useProjectTargetStore.getState().unavailableTargetByProject).toEqual(
       { "demo-project": "/tmp/selected" },
+    );
+  });
+
+  it("retains multiple unavailable targets for orphan reconciliation", () => {
+    const store = useProjectTargetStore.getState();
+    store.markTargetUnavailable("demo-project", "/tmp/first");
+    store.markTargetUnavailable("demo-project", "/tmp/second");
+
+    expect(
+      useProjectTargetStore.getState().unavailableTargetsByProject,
+    ).toEqual({ "demo-project": ["/tmp/first", "/tmp/second"] });
+
+    store.clearUnavailableTarget("demo-project", "/tmp/first");
+    expect(
+      useProjectTargetStore.getState().unavailableTargetsByProject,
+    ).toEqual({ "demo-project": ["/tmp/second"] });
+    expect(useProjectTargetStore.getState().unavailableTargetByProject).toEqual(
+      { "demo-project": "/tmp/second" },
     );
   });
 });

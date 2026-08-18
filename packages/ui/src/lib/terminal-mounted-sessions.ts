@@ -1,5 +1,14 @@
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 
+export type MountedSessionMetadata = Omit<MountedSession, "sessionId">;
+
+export function createMountedSession(
+  sessionId: string,
+  metadata: MountedSessionMetadata,
+): MountedSession {
+  return { sessionId, ...metadata };
+}
+
 export function upsertMountedSession(
   sessions: MountedSession[],
   nextSession: MountedSession,
@@ -16,7 +25,8 @@ export function upsertMountedSession(
   if (
     current.project === nextSession.project &&
     current.command === nextSession.command &&
-    current.cwd === nextSession.cwd
+    current.cwd === nextSession.cwd &&
+    current.worktreePath === nextSession.worktreePath
   ) {
     return sessions;
   }

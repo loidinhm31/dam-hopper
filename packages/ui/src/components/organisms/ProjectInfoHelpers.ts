@@ -52,3 +52,20 @@ export function buildProjectInfoPushTargetWithMode(
       : { ...targetFields, root: rootId };
   return force ? { ...pushTarget, force: true } : pushTarget;
 }
+
+export function formatWorktreeRemovalBlockerMessage(
+  dirtyTabs: number,
+  liveTerminals: number,
+): string | null {
+  const blockers: string[] = [];
+  if (dirtyTabs > 0) {
+    blockers.push(`${dirtyTabs} dirty editor tab${dirtyTabs === 1 ? "" : "s"}`);
+  }
+  if (liveTerminals > 0) {
+    blockers.push(
+      `${liveTerminals} live terminal session${liveTerminals === 1 ? "" : "s"}`,
+    );
+  }
+  if (blockers.length === 0) return null;
+  return `Cannot remove this worktree: ${blockers.join(" and ")}. Save or close editor tabs and stop terminal sessions before retrying.`;
+}

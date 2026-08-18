@@ -82,9 +82,10 @@ Add a focused resolver service used by downstream APIs. It reads the canonical c
 - Do not expose filesystem paths belonging to other configured projects or repositories.
 - Sanitize Git/path details in public errors while retaining diagnostic context server-side.
 
-## Next steps
+## Handoff
 
-Proceed to Phase 02. Phase 01 validation and final review approved.
+Phase 01 is complete; its validation and final review passed. The remaining
+phases are recorded as completed in the root plan.
 
 ## Validation summary
 
