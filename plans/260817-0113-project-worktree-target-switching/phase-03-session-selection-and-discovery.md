@@ -88,6 +88,7 @@ A dedicated Zustand store or equivalent focused context owns `activeTargetByProj
 - Display canonical paths as text only and avoid interpolating them into unsafe DOM or command content.
 - Do not cache a rejected client-supplied target as trusted state.
 
-## Next steps
+## Handoff
 
-Proceed to Phases 04–06 after selection provides a stable target reference to consumers.
+Phase 03 is complete; its validation and final review passed. The remaining
+phases are recorded as completed in the root plan.

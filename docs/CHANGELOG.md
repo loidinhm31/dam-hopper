@@ -268,3 +268,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PTY terminal session management.
 - Bulk git operations.
 - Agent store distribution via symlinks.
+
+## 2026-08-18
+
+- **Project worktree target lifecycle (Phase 07).** Added exact-target removal
+  blockers for dirty editor tabs and live terminal sessions, fresh discovery
+  before Git removal, unavailable-target root fallback, preserved editor state,
+  and orphaned terminal labels for sessions whose project/cwd still points at a
+  disappeared worktree. Added real-repository lifecycle coverage and a
+  Chromium coverage through the real `WorkspacePage` surface wiring for the
+  selected-target request boundary; broader Explorer, search, replace, Git,
+  editor/diff, media, and terminal routing uses the shared target context.
+  Terminal creation now carries the selected target through `terminal:create`;
+  the server validates and persists canonical `worktreePath` metadata, loads
+  the configured environment file relative to that target, and coordinates
+  creation/removal ownership checks. Stable opaque target-scoped command/profile
+  IDs prevent root/worktree collisions. Legacy sessions still reconcile
+  through project/cwd metadata, while target-scoped sessions use their immutable
+  server-validated marker. Target-loss create and respawn failures emit
+  reconciliation events only after fresh validation confirms disappearance;
+  unavailable sessions retain their identity and scrollback for close/retry
+  while new work falls back to root.

@@ -8,6 +8,7 @@ vi.mock("@/api/transport.js", () => ({
 }));
 
 import {
+  countDirtyTabsForTarget,
   editorFileTabKey,
   editorTargetScopeKey,
   migrateEditorState,
@@ -221,6 +222,33 @@ describe("editor store project target isolation", () => {
     fsWriteFile.mockReset();
   });
   afterEach(resetEditorStore);
+
+  it("counts dirty tabs only for the exact project target", () => {
+    const worktreeTarget = {
+      project: "alpha",
+      worktreePath: "/tmp/alpha-wt",
+    } as const;
+    const worktreeTab = {
+      ...makeTab("alpha", "src/one.ts"),
+      target: worktreeTarget,
+      targetKey: "worktree:/tmp/alpha-wt",
+      dirty: true,
+    };
+    const rootTab = { ...makeTab("alpha", "src/two.ts"), dirty: true };
+    const otherProjectTab = { ...makeTab("beta", "src/one.ts"), dirty: true };
+
+    expect(
+      countDirtyTabsForTarget(
+        [worktreeTab, rootTab, otherProjectTab],
+        worktreeTarget,
+      ),
+    ).toBe(1);
+    expect(
+      countDirtyTabsForTarget([worktreeTab, rootTab, otherProjectTab], {
+        project: "alpha",
+      }),
+    ).toBe(1);
+  });
 
   it("keeps same-path root and worktree tabs independent", async () => {
     fsRead.mockResolvedValue({

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostResourceSnapshotV1 } from "../api/client.js";
+import { useEditorStore } from "@/stores/editor.js";
+import { useProjectTargetStore } from "@/stores/project-target.js";
 
 const getTransport = vi.hoisted(() => vi.fn());
 
@@ -14,6 +16,7 @@ import {
   resetTransportListeners,
   subscribeIpc,
   handleWorkspaceChanged,
+  handleTerminalTargetUnavailable,
 } from "./use-sse.js";
 
 function validAlertEvent() {
@@ -175,6 +178,111 @@ describe("handleWorkspaceChanged", () => {
   });
 });
 
+describe("handleTerminalTargetUnavailable", () => {
+  beforeEach(() => {
+    useProjectTargetStore.getState().resetTarget("demo");
+    useEditorStore.getState().closeAll("demo");
+  });
+
+  it("reconciles the shared editor/target state and rejects malformed payloads", () => {
+    const markTargetUnavailable = vi.spyOn(
+      useEditorStore.getState(),
+      "markTargetUnavailable",
+    );
+    const target = { project: "demo", worktreePath: "/tmp/demo-feature" };
+    expect(
+      handleTerminalTargetUnavailable({
+        ...target,
+        sessionId: "terminal:demo:1",
+        incarnation: 11,
+        targetUnavailable: true,
+        willRestart: false,
+      }),
+    ).toBe(true);
+    expect(markTargetUnavailable).toHaveBeenCalledWith(target);
+    expect(
+      useProjectTargetStore.getState().unavailableTargetsByProject,
+    ).toEqual({ demo: ["/tmp/demo-feature"] });
+    expect(handleTerminalTargetUnavailable({ project: "demo" })).toBe(false);
+    expect(
+      handleTerminalTargetUnavailable({
+        ...target,
+        sessionId: "terminal:demo:missing-marker",
+        incarnation: 12,
+      }),
+    ).toBe(false);
+    expect(
+      handleTerminalTargetUnavailable({
+        ...target,
+        sessionId: "terminal:demo:restarting",
+        incarnation: 13,
+        targetUnavailable: true,
+        willRestart: true,
+      }),
+    ).toBe(false);
+    markTargetUnavailable.mockRestore();
+  });
+
+  it("ignores a delayed target-loss event from an older incarnation", () => {
+    const markTargetUnavailable = vi.spyOn(
+      useEditorStore.getState(),
+      "markTargetUnavailable",
+    );
+    const sessionId = "terminal:incarnation-race";
+
+    expect(
+      handleTerminalTargetUnavailable({
+        sessionId,
+        incarnation: 11,
+        project: "demo",
+        worktreePath: "/tmp/newer-target",
+        targetUnavailable: true,
+        willRestart: false,
+      }),
+    ).toBe(true);
+    expect(
+      handleTerminalTargetUnavailable({
+        sessionId,
+        incarnation: 10,
+        project: "demo",
+        worktreePath: "/tmp/older-target",
+        targetUnavailable: true,
+        willRestart: false,
+      }),
+    ).toBe(false);
+    expect(markTargetUnavailable).toHaveBeenCalledOnce();
+    expect(
+      useProjectTargetStore.getState().unavailableTargetsByProject,
+    ).toEqual({ demo: ["/tmp/newer-target"] });
+    markTargetUnavailable.mockRestore();
+  });
+
+  it("starts a fresh incarnation namespace after a transport replacement", () => {
+    const markTargetUnavailable = vi.spyOn(
+      useEditorStore.getState(),
+      "markTargetUnavailable",
+    );
+    const sessionId = "terminal:profile-switch";
+    const target = {
+      sessionId,
+      project: "demo",
+      worktreePath: "/tmp/profile-target",
+      targetUnavailable: true,
+      willRestart: false,
+    };
+
+    expect(
+      handleTerminalTargetUnavailable({ ...target, incarnation: 100 }),
+    ).toBe(true);
+    resetTransportListeners();
+    expect(
+      handleTerminalTargetUnavailable({ ...target, incarnation: 1 }),
+    ).toBe(true);
+    expect(markTargetUnavailable).toHaveBeenCalledTimes(2);
+    markTargetUnavailable.mockRestore();
+  });
+});
+
 describe("asHostResourceAlertChangedEvent", () => {
   it("accepts only typed host alert event payloads", () => {
     expect(asHostResourceAlertChangedEvent(validAlertEvent())).not.toBeNull();
@@ -212,7 +320,10 @@ describe("asHostResourceAlertChangedEvent", () => {
       { ...validTemperatureAlertEvent().data, key: "" },
       {
         ...validTemperatureAlertEvent().data,
-        evidence: { temperatureSource: "thermal_zone0", temperatureCelsius: NaN },
+        evidence: {
+          temperatureSource: "thermal_zone0",
+          temperatureCelsius: NaN,
+        },
       },
       {
         ...validTemperatureAlertEvent().data,
@@ -223,13 +334,18 @@ describe("asHostResourceAlertChangedEvent", () => {
       },
     ]) {
       expect(
-        asHostResourceAlertChangedEvent({ ...validTemperatureAlertEvent(), data }),
+        asHostResourceAlertChangedEvent({
+          ...validTemperatureAlertEvent(),
+          data,
+        }),
       ).toBeNull();
     }
   });
 
   it("accepts a complete additive disk event", () => {
-    expect(asHostResourceAlertChangedEvent(validDiskAlertEvent())).not.toBeNull();
+    expect(
+      asHostResourceAlertChangedEvent(validDiskAlertEvent()),
+    ).not.toBeNull();
   });
 
   it.each([
@@ -245,7 +361,10 @@ describe("asHostResourceAlertChangedEvent", () => {
         ...validDiskAlertEvent(),
         data: {
           ...validDiskAlertEvent().data,
-          evidence: { ...validDiskAlertEvent().data.evidence, ...invalidEvidence },
+          evidence: {
+            ...validDiskAlertEvent().data.evidence,
+            ...invalidEvidence,
+          },
         },
       }),
     ).toBeNull();

@@ -20,22 +20,26 @@ import { vi } from "vitest";
 const worktreeQueryMock = vi.hoisted(() => {
   const refetch = vi.fn();
   let data: unknown[] = [];
+  let dataUpdatedAt = 0;
   let isFetching = false;
   return {
     refetch,
     reset: () => {
       data = [];
+      dataUpdatedAt = 0;
       isFetching = false;
       refetch.mockClear();
     },
     setData: (next: unknown[]) => {
       data = next;
+      dataUpdatedAt += 1;
     },
     setFetching: (next: boolean) => {
       isFetching = next;
     },
     useWorktrees: vi.fn(() => ({
       data,
+      dataUpdatedAt,
       isLoading: false,
       isFetching,
       isFetched: true,
@@ -78,6 +82,7 @@ vi.mock("@/api/queries.js", () => ({
   })),
   useProjectStatus: vi.fn(() => ({ data: undefined, isLoading: false })),
   useWorktrees: worktreeQueryMock.useWorktrees,
+  useTerminalSessions: vi.fn(() => ({ data: [] })),
   useBranches: vi.fn(() => ({ data: [] })),
   useGitRoots: vi.fn(() => ({
     data: [

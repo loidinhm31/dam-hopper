@@ -65,6 +65,32 @@ describe("TerminalKeepAliveHost", () => {
     ]);
   });
 
+  it("passes cwd and worktree metadata to recovery panels", () => {
+    renderedPanelProps.length = 0;
+
+    renderToStaticMarkup(
+      <TerminalKeepAliveHost
+        mountedSessions={[
+          {
+            sessionId: "targeted",
+            project: "demo",
+            command: "pnpm dev",
+            cwd: "/worktrees/demo-feature/src",
+            worktreePath: "/worktrees/demo-feature",
+          },
+        ]}
+      />,
+    );
+
+    expect(renderedPanelProps[0]).toEqual(
+      expect.objectContaining({
+        sessionId: "targeted",
+        cwd: "/worktrees/demo-feature/src",
+        worktreePath: "/worktrees/demo-feature",
+      }),
+    );
+  });
+
   it("does not invent an order when supplied tabs omit a mounted session", () => {
     renderedPanelProps.length = 0;
 

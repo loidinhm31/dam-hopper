@@ -212,6 +212,7 @@ vi.mock("@/api/client.js", () => ({
     target.worktreePath == null
       ? { project: target.project }
       : { project: target.project, worktreePath: target.worktreePath },
+  normalizeProjectTargetPath: (path: string) => path,
   projectTargetCacheKey: (target: {
     project: string;
     worktreePath?: string | null;
