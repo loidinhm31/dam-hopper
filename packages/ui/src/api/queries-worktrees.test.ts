@@ -12,6 +12,7 @@ vi.mock("./client.js", () => ({
   api: { git: { worktrees } },
   isGitUnavailableError: vi.fn(),
   normalizeProjectTarget: (target: unknown) => target,
+  normalizeProjectTargetPath: (path: string) => path,
   projectTargetCacheKey: vi.fn(),
 }));
 

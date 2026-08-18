@@ -1,1 +1,6 @@
 *.sh text eol=lf
+
+# These existing UI modules use CRLF; keep Git whitespace checks from treating
+# their intentional line endings as trailing-space errors.
+packages/ui/src/components/organisms/TerminalTreeView.tsx whitespace=cr-at-eol
+packages/ui/src/hooks/use-terminal-manager.ts whitespace=cr-at-eol

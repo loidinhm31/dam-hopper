@@ -54,6 +54,24 @@ current state. If the new server cannot provide deep metrics, the popover labels
 that limitation and keeps compatible CPU/disk data when available. The popover
 is read-only; switching profiles never authorizes a host operation.
 
+## Working in a Git worktree
+
+The Project panel's **Active target** selector lets you choose the configured
+project root or one of its registered Git worktrees. The project name and
+configuration stay unchanged; Explorer, search, replace, Git, editor/diff,
+media, and new terminals use the selected target together.
+
+Before removing a worktree, the app refreshes its Git registration and checks
+for dirty editor tabs or live terminal sessions owned by that exact target.
+Save or close those resources before retrying. Git also protects dirty or
+untracked files, so the app never force-removes a worktree.
+
+If a worktree disappears outside the app, its row remains visible as
+unavailable and new operations return to the project root. Existing editor
+tabs are kept, and live terminals are labelled **orphaned** while their
+original working directory remains unavailable. Use **Refresh worktrees** or
+**Reconnect unavailable worktrees** after restoring the directory.
+
 ## Managing Profiles
 
 ### Edit a Profile
@@ -166,7 +184,7 @@ Ordinary tabs share the active profile and profile-scoped token storage.
 
 ## API Reference (For Developers)
 
-All functions in `packages/web/src/api/server-config.ts`:
+All functions in `packages/ui/src/api/server-config.ts`:
 
 ```typescript
 // Get all profiles

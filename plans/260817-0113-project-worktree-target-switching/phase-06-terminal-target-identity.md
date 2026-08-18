@@ -12,8 +12,8 @@
 - Date: 2026-08-17
 - Description: Give each root/worktree independent terminal sessions, validated cwd/env resolution, grouping, respawn, persistence, and restore behavior.
 - Priority: P2
-- Implementation status: pending
-- Review status: pending
+- Implementation status: completed
+- Review status: completed (follow-up fixes verified; final independent review approved)
 
 ## Key Insights
 
@@ -42,7 +42,7 @@ Terminal creation resolves a target once, validates cwd/env, and stores canonica
 - Modify: `/home/loidinh/WS/dam-hopper-ws/feat-project-worktree-switching/server/src/persistence/mod.rs`
 - Modify: `/home/loidinh/WS/dam-hopper-ws/feat-project-worktree-switching/server/src/persistence/worker.rs`
 - Modify: `/home/loidinh/WS/dam-hopper-ws/feat-project-worktree-switching/server/src/persistence/restore.rs`
-- Create: `/home/loidinh/WS/dam-hopper-ws/feat-project-worktree-switching/server/src/persistence/migrations/004_terminal_target_path.sql`
+- Create: `/home/loidinh/WS/dam-hopper-ws/feat-project-worktree-switching/server/src/persistence/migrations/004_worktree_path.sql`
 - Modify: `/home/loidinh/WS/dam-hopper-ws/feat-project-worktree-switching/packages/ui/src/api/client.ts`
 - Modify: `/home/loidinh/WS/dam-hopper-ws/feat-project-worktree-switching/packages/ui/src/lib/terminal-launch-context.ts`
 - Modify: `/home/loidinh/WS/dam-hopper-ws/feat-project-worktree-switching/packages/ui/src/hooks/use-terminal-manager.ts`
@@ -62,11 +62,11 @@ Terminal creation resolves a target once, validates cwd/env, and stores canonica
 
 ## Todo list
 
-- [ ] Extend terminal and PTY target metadata.
-- [ ] Add and test SQLite migration 004.
-- [ ] Validate target-relative cwd and env files.
-- [ ] Partition terminal IDs and trees by target.
-- [ ] Implement restore/orphan lifecycle without cwd mutation.
+- [x] Extend terminal and PTY target metadata.
+- [x] Add and test SQLite migrations 004–007.
+- [x] Validate target-relative cwd and env files.
+- [x] Partition terminal IDs and trees by target.
+- [x] Implement restore/orphan lifecycle without cwd mutation, including pre-reader buffer hydration, replay, retry, and stale-incarnation guards.
 
 ## Success Criteria
 
@@ -89,4 +89,4 @@ Terminal creation resolves a target once, validates cwd/env, and stores canonica
 
 ## Next steps
 
-Proceed to Phase 07 after migration and terminal restart/orphan tests pass.
+Phase 06 is complete. Migration, restart/orphan, replay, retry, and target-identity tests pass; lifecycle integration and release validation are complete in Phase 07.

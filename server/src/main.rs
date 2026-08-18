@@ -15,7 +15,7 @@ use dam_hopper_server::{
     fs::FsSubsystem,
     port_forward::{proc_poll_loop, PortForwardManager},
     probe_inotify_limit,
-    pty::{BroadcastEventSink, PtySessionManager},
+    pty::{BroadcastEventSink, PtySessionManager, PtyTargetContext},
     state::AppState,
     telemetry::TelemetryRuntime,
     tunnel::{CloudflaredDriver, TunnelSessionManager},
@@ -152,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
                 Ok(store) => {
                     tracing::info!(path = %db_path.display(), "Session store opened");
                     let store_arc = std::sync::Arc::new(store);
-                    let (tx, rx) = std::sync::mpsc::sync_channel(256);
+                    let (tx, rx) = std::sync::mpsc::channel();
                     let worker =
                         dam_hopper_server::persistence::PersistWorker::new(rx, store_arc.clone());
                     let handle = std::thread::Builder::new()
@@ -200,36 +200,13 @@ async fn main() -> anyhow::Result<()> {
             .with_tunnel_manager(tunnel_manager.clone())
             .with_session_store(session_store.clone()),
     );
+    port_forward_manager.enable_session_validation();
 
     // Wire port_forward_manager into pty_manager before restore so relaunched
     // sessions scan stdout immediately.
     {
         let mut cell = pty_manager.port_forward_manager.write().unwrap();
         *cell = Some(std::sync::Arc::clone(&port_forward_manager));
-    }
-
-    // ── Restore sessions from persistence (Phase 06) ──────────────────────────
-    if let Some(store) = &session_store {
-        match dam_hopper_server::persistence::restore_sessions(store, &pty_manager, &config).await {
-            Ok(count) => {
-                tracing::info!(count, "Restored sessions from persistence");
-                let live_session_ids = pty_manager
-                    .list()
-                    .into_iter()
-                    .filter(|session| session.alive)
-                    .map(|session| session.id)
-                    .collect::<Vec<_>>();
-                let seeded = port_forward_manager
-                    .seed_persisted_candidates(&live_session_ids)
-                    .await;
-                if seeded > 0 {
-                    tracing::info!(seeded, "Seeded persisted port candidates");
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to restore sessions from persistence");
-            }
-        }
     }
 
     let store_rel_path = config
@@ -284,6 +261,37 @@ async fn main() -> anyhow::Result<()> {
         diagnostics,
         telemetry_runtime.clone(),
     )?;
+
+    state.pty_manager.set_target_context(PtyTargetContext::new(
+        state.fs.clone(),
+        state.workspace_target_resolver.clone(),
+        state.workspace_context_guard.clone(),
+    ));
+
+    // ── Restore sessions from persistence (Phase 06) ──────────────────────────
+    if let Some(store) = &session_store {
+        match dam_hopper_server::persistence::restore_sessions_with_state(store, &state).await {
+            Ok(count) => {
+                tracing::info!(count, "Restored sessions from persistence");
+                let live_sessions = state
+                    .pty_manager
+                    .list()
+                    .into_iter()
+                    .filter(|session| session.alive)
+                    .map(|session| (session.id, session.incarnation))
+                    .collect::<Vec<_>>();
+                let seeded = port_forward_manager
+                    .seed_persisted_candidates(&live_sessions)
+                    .await;
+                if seeded > 0 {
+                    tracing::info!(seeded, "Seeded persisted port candidates");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to restore sessions from persistence");
+            }
+        }
+    }
 
     let host_resource_monitor_shutdown = state.host_resource_monitor.clone();
     state.host_resource_monitor.start();
@@ -345,8 +353,13 @@ async fn main() -> anyhow::Result<()> {
     browser_debug_artifacts_shutdown.dispose_all().await;
     telemetry_shutdown.shutdown().await;
 
-    // Graceful shutdown: snapshot live PTY buffers, ask the worker to flush, then wait.
+    // Graceful shutdown: snapshot live PTY buffers, stop reader producers, wait
+    // for their final persistence commands, then close the worker. Sending
+    // Shutdown before the readers finish would make the worker discard those
+    // final SessionExited/buffer commands.
     pty_manager.snapshot_live_buffers();
+    pty_manager.stop_all_for_shutdown();
+    pty_manager.wait_for_readers().await;
     if let Some(tx) = &persist_tx {
         let _ = tx.send(dam_hopper_server::persistence::PersistCmd::Shutdown);
     }

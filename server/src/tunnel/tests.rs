@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use tokio::sync::{oneshot, Notify};
 use uuid::Uuid;
 
 use crate::pty::NoopEventSink;
@@ -71,6 +72,8 @@ fn tunnel_session_camel_case() {
     let s = TunnelSession {
         id: Uuid::nil(),
         port: 3000,
+        session_id: None,
+        incarnation: None,
         label: "test".into(),
         driver: "cloudflared".into(),
         status: TunnelStatus::Starting,
@@ -125,6 +128,106 @@ async fn manager_dispose_all_is_immediate_without_tunnels() {
     tokio::time::timeout(Duration::from_millis(100), manager.dispose_all())
         .await
         .expect("an empty manager must not delay server shutdown");
+}
+
+struct BlockingDriver {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+    stopped: Arc<Notify>,
+}
+
+impl TunnelDriver for BlockingDriver {
+    fn name(&self) -> &'static str {
+        "blocking-test"
+    }
+
+    fn start(
+        &self,
+        _port: u16,
+        _label: &str,
+        _event_tx: tokio::sync::mpsc::Sender<TunnelDriverEvent>,
+    ) -> BoxFuture<'_, Result<DriverHandle, TunnelError>> {
+        let started = Arc::clone(&self.started);
+        let release = Arc::clone(&self.release);
+        let stopped = Arc::clone(&self.stopped);
+        Box::pin(async move {
+            let (stop_tx, stop_rx) = oneshot::channel();
+            tokio::spawn(async move {
+                let _ = stop_rx.await;
+                stopped.notify_one();
+            });
+            started.notify_one();
+            release.notified().await;
+            Ok(DriverHandle {
+                pid: None,
+                stop_tx: Some(stop_tx),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn stop_by_port_cancels_driver_startup_without_orphaning_session() {
+    let driver = Arc::new(BlockingDriver {
+        started: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+        stopped: Arc::new(Notify::new()),
+    });
+    let manager = TunnelSessionManager::new(Arc::new(NoopEventSink), driver.clone());
+    let creating = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.create(5173, "manual".to_string()).await })
+    };
+
+    driver.started.notified().await;
+    let id = manager.list().await.first().expect("starting tunnel").id;
+    let (first_stop, second_stop) = tokio::join!(manager.stop(id), manager.stop(id));
+    assert!(first_stop.is_ok());
+    assert!(second_stop.is_ok());
+    driver.release.notify_one();
+
+    assert!(matches!(
+        creating.await.unwrap(),
+        Err(TunnelError::CreationCancelled)
+    ));
+    assert!(manager.list().await.is_empty());
+    tokio::time::timeout(Duration::from_secs(1), driver.stopped.notified())
+        .await
+        .expect("cleanup must stop the driver returned after cancellation");
+}
+
+#[tokio::test]
+async fn dispose_all_cancels_and_awaits_driver_startup() {
+    let driver = Arc::new(BlockingDriver {
+        started: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+        stopped: Arc::new(Notify::new()),
+    });
+    let manager = TunnelSessionManager::new(Arc::new(NoopEventSink), driver.clone());
+    let creating = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.create(8080, "manual".to_string()).await })
+    };
+
+    driver.started.notified().await;
+    let disposing = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.dispose_all().await })
+    };
+    driver.release.notify_one();
+
+    assert!(matches!(
+        creating.await.unwrap(),
+        Err(TunnelError::CreationCancelled)
+    ));
+    tokio::time::timeout(Duration::from_secs(5), disposing)
+        .await
+        .expect("shutdown should await in-flight startup")
+        .unwrap();
+    assert!(manager.list().await.is_empty());
+    tokio::time::timeout(Duration::from_secs(1), driver.stopped.notified())
+        .await
+        .expect("shutdown must stop the driver returned after cancellation");
 }
 
 // ---------------------------------------------------------------------------
