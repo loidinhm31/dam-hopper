@@ -18,6 +18,11 @@ import type {
 } from "../api/client.js";
 import type { ConnectionStatus } from "../components/atoms/ConnectionDot.js";
 import { removeExplorerLanguageScanCaches } from "@/lib/explorer-language-scan.js";
+import {
+  acceptsTerminalSessionIncarnation,
+  resetTerminalSessionIncarnations,
+} from "@/lib/terminal-incarnation-state.js";
+import { useEditorStore } from "@/stores/editor.js";
 
 export type IpcStatus = ConnectionStatus;
 
@@ -30,6 +35,15 @@ export interface IpcEvent {
 export interface HostResourceAlertChangedEvent extends IpcEvent {
   type: "host:alertChanged";
   data: HostResourceAlert | HostResourceResourceAlert;
+}
+
+export interface TerminalTargetUnavailableEvent {
+  sessionId: string;
+  incarnation: number;
+  project: string;
+  worktreePath: string;
+  targetUnavailable: true;
+  willRestart: false;
 }
 
 const ALERT_STATES = new Set<AlertState>([
@@ -86,6 +100,7 @@ const PUSH_EVENT_CHANNELS = [
   "config:changed",
   "workspace:changed",
   "terminal:changed",
+  "terminal:target-unavailable",
   "port:discovered",
   "port:lost",
   "tunnel:created",
@@ -98,6 +113,48 @@ const PUSH_EVENT_CHANNELS = [
   "host:alertChanged",
   "host:alertsInvalidated",
 ] as const;
+
+export function asTerminalTargetUnavailableEvent(
+  value: unknown,
+): TerminalTargetUnavailableEvent | null {
+  if (typeof value !== "object" || value === null) return null;
+  const event = value as Partial<TerminalTargetUnavailableEvent>;
+  return typeof event.sessionId === "string" &&
+    event.sessionId.length > 0 &&
+    typeof event.incarnation === "number" &&
+    Number.isSafeInteger(event.incarnation) &&
+    event.incarnation >= 0 &&
+    typeof event.project === "string" &&
+    event.project.length > 0 &&
+    typeof event.worktreePath === "string" &&
+    event.worktreePath.length > 0 &&
+    event.targetUnavailable === true &&
+    event.willRestart === false
+    ? {
+        sessionId: event.sessionId,
+        incarnation: event.incarnation,
+        project: event.project,
+        worktreePath: event.worktreePath,
+        targetUnavailable: true,
+        willRestart: false,
+      }
+    : null;
+}
+
+export function handleTerminalTargetUnavailable(value: unknown): boolean {
+  const target = asTerminalTargetUnavailableEvent(value);
+  if (!target) return false;
+  if (
+    !acceptsTerminalSessionIncarnation(target.sessionId, target.incarnation)
+  ) {
+    return false;
+  }
+  useEditorStore.getState().markTargetUnavailable({
+    project: target.project,
+    worktreePath: target.worktreePath,
+  });
+  return true;
+}
 
 export function invalidateHostResourceQueries(
   qc: Pick<ReturnType<typeof useQueryClient>, "invalidateQueries">,
@@ -190,7 +247,11 @@ function asHostResourceResourceAlertChangedEvent(
         isBoundedText(evidence.temperatureLabel)) &&
       isFiniteNumber(evidence.temperatureCelsius)) ||
     (isDisk &&
-      hasOnlyKeys(evidence, ["diskMountPoint", "diskName", "diskUsagePercent"]) &&
+      hasOnlyKeys(evidence, [
+        "diskMountPoint",
+        "diskName",
+        "diskUsagePercent",
+      ]) &&
       isBoundedText(evidence.diskMountPoint) &&
       (evidence.diskName == null || isBoundedText(evidence.diskName)) &&
       isNonNegativeFiniteNumber(evidence.diskUsagePercent) &&
@@ -223,7 +284,9 @@ function hasOnlyKeys(
   value: unknown,
   keys: readonly string[],
 ): value is Record<string, unknown> {
-  return isRecord(value) && Object.keys(value).every((key) => keys.includes(key));
+  return (
+    isRecord(value) && Object.keys(value).every((key) => keys.includes(key))
+  );
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -256,9 +319,7 @@ function hasValidOptionalTimestamp(value: unknown): boolean {
 }
 
 function hasValidOptionalPercent(value: unknown): boolean {
-  return (
-    value == null || (isNonNegativeFiniteNumber(value) && value <= 100)
-  );
+  return value == null || (isNonNegativeFiniteNumber(value) && value <= 100);
 }
 
 let initialized = false;
@@ -289,6 +350,7 @@ export function resetTransportListeners(): void {
   unsubscribers.forEach((fn) => fn());
   unsubscribers.length = 0;
   initialized = false;
+  resetTerminalSessionIncarnations();
 }
 
 /** Duck-type interface for WsTransport status methods. Avoids a hard import cycle. */
@@ -384,6 +446,17 @@ export function useIpc(): { status: IpcStatus } {
 
       subscribeIpc("terminal:changed", () => {
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+      }),
+
+      subscribeIpc("terminal:target-unavailable", (event) => {
+        if (!handleTerminalTargetUnavailable(event.data)) return;
+        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        const target = asTerminalTargetUnavailableEvent(event.data);
+        if (target) {
+          void qc.invalidateQueries({
+            queryKey: ["worktrees", target.project],
+          });
+        }
       }),
 
       subscribeIpc("host:alertChanged", (event) => {

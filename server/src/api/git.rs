@@ -14,7 +14,7 @@ use crate::git::{
     delete_branch, discover_available_vcs_roots, drop_commit, drop_commit_files,
     edit_commit_message, get_commit_message, get_log, list_branches, prune_worktrees,
     remove_worktree, reset_to_commit, resolve_git_request_root, revert_commit, revert_commit_files,
-    undo_last_commit, update_branch, BulkGitService, CheckoutStrategy, ResetMode,
+    undo_last_commit, update_branch, BulkGitService, CheckoutStrategy, GitOperation, ResetMode,
     WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
@@ -40,30 +40,93 @@ struct GitOperationResultResponse {
     #[serde(flatten)]
     result: crate::git::GitOperationResult,
     #[serde(skip_serializing_if = "Option::is_none")]
-    worktree_path: Option<String>,
+    /// Outer `None` means the request used the legacy project list; inner
+    /// `None` is an explicit configured-root target and must serialize as
+    /// JSON null so bulk clients can match it unambiguously.
+    worktree_path: Option<Option<String>>,
+    #[serde(skip_serializing_if = "is_false")]
+    target_unavailable: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 fn attach_target_identity(
     results: Vec<crate::git::GitOperationResult>,
-    projects: &[(String, PathBuf, Option<String>)],
+    projects: &[(String, PathBuf, Option<Option<String>>)],
+    operation: GitOperation,
 ) -> Vec<GitOperationResultResponse> {
-    results
-        .into_iter()
-        .zip(projects.iter())
-        .map(
-            |(result, (_, _, worktree_path))| GitOperationResultResponse {
+    let mut results = results.into_iter();
+    projects
+        .iter()
+        .map(|(project, path, worktree_path)| {
+            // BulkGitService preserves one result slot per input, including
+            // task-join failures. Keep this indexed reconciliation defensive
+            // so a future bulk implementation cannot shift target identities.
+            let result = results
+                .next()
+                .unwrap_or_else(|| crate::git::GitOperationResult {
+                    project_name: project.clone(),
+                    operation: operation.clone(),
+                    success: false,
+                    summary: None,
+                    error: Some("bulk operation returned no result".to_string()),
+                    duration_ms: 0,
+                });
+            GitOperationResultResponse {
+                target_unavailable: !result.success && worktree_path.is_some() && !path.exists(),
                 result,
                 worktree_path: worktree_path.clone(),
-            },
-        )
+            }
+        })
         .collect()
+}
+
+struct TargetResolutionFailure {
+    project: String,
+    worktree_path: Option<Option<String>>,
+    error: String,
+    target_unavailable: bool,
+}
+
+fn attach_resolution_failures(
+    failures: Vec<TargetResolutionFailure>,
+    operation: GitOperation,
+) -> Vec<GitOperationResultResponse> {
+    failures
+        .into_iter()
+        .map(|failure| GitOperationResultResponse {
+            result: crate::git::GitOperationResult {
+                project_name: failure.project,
+                operation: operation.clone(),
+                success: false,
+                summary: None,
+                error: Some(failure.error),
+                duration_ms: 0,
+            },
+            worktree_path: failure.worktree_path,
+            target_unavailable: failure.target_unavailable,
+        })
+        .collect()
+}
+
+fn is_unavailable_target_error(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::WorkspaceTarget(
+            crate::workspace_target::WorkspaceTargetError::UnregisteredTarget
+                | crate::workspace_target::WorkspaceTargetError::UnavailableTarget
+                | crate::workspace_target::WorkspaceTargetError::InvalidPath
+        )
+    )
 }
 
 pub async fn fetch_projects(
     State(state): State<AppState>,
     Json(body): Json<ProjectsBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let project_list =
+    let (project_list, failures) =
         collect_project_list(&state, body.projects.as_deref(), body.targets.as_deref()).await?;
     let ssh_cred = state.ssh_creds.read().await.clone();
 
@@ -81,7 +144,9 @@ pub async fn fetch_projects(
         })
         .collect();
     let results = bulk.fetch_all(&refs).await;
-    Ok(Json(attach_target_identity(results, &project_list)))
+    let mut response = attach_target_identity(results, &project_list, GitOperation::Fetch);
+    response.extend(attach_resolution_failures(failures, GitOperation::Fetch));
+    Ok(Json(response))
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +157,7 @@ pub async fn pull_projects(
     State(state): State<AppState>,
     Json(body): Json<ProjectsBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let project_list =
+    let (project_list, failures) =
         collect_project_list(&state, body.projects.as_deref(), body.targets.as_deref()).await?;
     let ssh_cred = state.ssh_creds.read().await.clone();
 
@@ -108,7 +173,9 @@ pub async fn pull_projects(
         })
         .collect();
     let results = bulk.pull_all(&refs).await;
-    Ok(Json(attach_target_identity(results, &project_list)))
+    let mut response = attach_target_identity(results, &project_list, GitOperation::Pull);
+    response.extend(attach_resolution_failures(failures, GitOperation::Pull));
+    Ok(Json(response))
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +312,9 @@ pub async fn remove_worktree_route(
     Path(project): Path<String>,
     Json(body): Json<RemoveWorktreeBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Serialize against terminal creation so the live-session check and Git
+    // mutation form one server-side lifecycle boundary.
+    let _workspace_context = state.workspace_context_guard.write().await;
     let project_path = state
         .workspace_target_project_path(&project)
         .await
@@ -264,6 +334,17 @@ pub async fn remove_worktree_route(
     if worktree.is_main {
         return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
             "The configured project root cannot be removed as a worktree".to_string(),
+        )));
+    }
+    let live_sessions = state
+        .pty_manager
+        .live_sessions_for_target(&project, target.target_path());
+    if !live_sessions.is_empty() {
+        return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+            format!(
+                "Cannot remove worktree while {} live terminal session(s) use it",
+                live_sessions.len()
+            ),
         )));
     }
     remove_worktree(&project_path, &worktree.repository_path)
@@ -649,31 +730,47 @@ async fn collect_project_list(
     state: &AppState,
     filter: Option<&[String]>,
     targets: Option<&[ProjectTargetRef]>,
-) -> Result<Vec<(String, PathBuf, Option<String>)>, AppError> {
+) -> Result<
+    (
+        Vec<(String, PathBuf, Option<Option<String>>)>,
+        Vec<TargetResolutionFailure>,
+    ),
+    AppError,
+> {
     if let Some(targets) = targets {
         let mut project_list = Vec::with_capacity(targets.len());
+        let mut failures = Vec::new();
         for target in targets {
-            let resolved = state.resolve_project_target(target).await?;
-            project_list.push((
-                target.project.clone(),
-                resolved.target_path().to_path_buf(),
-                target.worktree_path.clone(),
-            ));
+            match state.resolve_project_target(target).await {
+                Ok(resolved) => project_list.push((
+                    target.project.clone(),
+                    resolved.target_path().to_path_buf(),
+                    Some(target.worktree_path.clone()),
+                )),
+                Err(error) => failures.push(TargetResolutionFailure {
+                    project: target.project.clone(),
+                    worktree_path: Some(target.worktree_path.clone()),
+                    target_unavailable: is_unavailable_target_error(&error),
+                    error: error.to_string(),
+                }),
+            }
         }
-        return Ok(project_list);
+        return Ok((project_list, failures));
     }
 
     let cfg = state.config.read().await;
-    Ok(cfg
-        .projects
-        .iter()
-        .filter(|p| {
-            filter
-                .map(|f| f.iter().any(|n| n == &p.name))
-                .unwrap_or(true)
-        })
-        .map(|p| (p.name.clone(), PathBuf::from(&p.path), None))
-        .collect())
+    Ok((
+        cfg.projects
+            .iter()
+            .filter(|p| {
+                filter
+                    .map(|f| f.iter().any(|n| n == &p.name))
+                    .unwrap_or(true)
+            })
+            .map(|p| (p.name.clone(), PathBuf::from(&p.path), None))
+            .collect(),
+        Vec::new(),
+    ))
 }
 
 fn forward_progress_events(

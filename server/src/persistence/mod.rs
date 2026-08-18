@@ -1,7 +1,7 @@
 mod restore;
 mod worker;
 
-pub use restore::restore_sessions;
+pub use restore::{restore_sessions, restore_sessions_with_state};
 pub use worker::{PersistCmd, PersistWorker};
 
 use crate::config::RestartPolicy;
@@ -26,6 +26,7 @@ pub struct PersistedSession {
     pub env: HashMap<String, String>,
     pub cols: u16,
     pub rows: u16,
+    pub incarnation: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +34,7 @@ pub struct PersistedPort {
     pub session_id: String,
     pub port: u16,
     pub project: Option<String>,
+    pub incarnation: u64,
 }
 
 impl SessionStore {
@@ -74,22 +76,114 @@ impl SessionStore {
             conn.execute_batch(include_str!("migrations/002_alive.sql"))?;
         }
         conn.execute_batch(include_str!("migrations/003_persisted_ports.sql"))?;
+        let has_worktree_path: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'worktree_path'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_worktree_path == 0 {
+            conn.execute_batch(include_str!("migrations/004_worktree_path.sql"))?;
+        }
+        let has_target_unavailable: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'target_unavailable'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_target_unavailable == 0 {
+            conn.execute_batch(include_str!("migrations/005_target_unavailable.sql"))?;
+        }
+        let has_incarnation: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'incarnation'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_incarnation == 0 {
+            conn.execute_batch(include_str!("migrations/006_incarnation.sql"))?;
+        }
+        conn.execute_batch(include_str!("migrations/007_session_removals.sql"))?;
+        let has_persisted_port_incarnation: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('persisted_ports') WHERE name = 'incarnation'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_persisted_port_incarnation == 0 {
+            conn.execute_batch(include_str!(
+                "migrations/008_persisted_port_incarnation.sql"
+            ))?;
+        }
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
     }
 
-    /// Saves session metadata to the database.
-    pub fn save_session(
+    /// Saves metadata for a concrete PTY incarnation. The UPSERT keeps the
+    /// session buffer row intact and rejects stale reader commands that arrive
+    /// after a newer incarnation has already been persisted.
+    pub fn save_session_for_incarnation(
         &self,
         meta: &SessionMeta,
+        incarnation: u64,
         env: &HashMap<String, String>,
         cols: u16,
         rows: u16,
         restart_max_retries: u32,
     ) -> Result<(), rusqlite::Error> {
+        self.save_session_for_incarnation_with_target_state(
+            meta,
+            incarnation,
+            env,
+            cols,
+            rows,
+            restart_max_retries,
+            false,
+        )
+    }
+
+    /// Upserts a target-scoped session as an unavailable, non-respawning
+    /// identity. This is needed when PTY setup fails before the normal
+    /// `SessionCreated` command can create a row.
+    pub fn save_session_target_unavailable_for_incarnation(
+        &self,
+        meta: &SessionMeta,
+        incarnation: u64,
+        env: &HashMap<String, String>,
+        cols: u16,
+        rows: u16,
+        restart_max_retries: u32,
+    ) -> Result<(), rusqlite::Error> {
+        self.save_session_for_incarnation_with_target_state(
+            meta,
+            incarnation,
+            env,
+            cols,
+            rows,
+            restart_max_retries,
+            true,
+        )
+    }
+
+    fn save_session_for_incarnation_with_target_state(
+        &self,
+        meta: &SessionMeta,
+        incarnation: u64,
+        env: &HashMap<String, String>,
+        cols: u16,
+        rows: u16,
+        restart_max_retries: u32,
+        target_unavailable: bool,
+    ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
+        let removal_watermark: Option<i64> = conn
+            .query_row(
+                "SELECT incarnation FROM session_removals WHERE id = ?1",
+                params![meta.id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if removal_watermark.is_some_and(|watermark| (incarnation as i64) <= watermark) {
+            return Ok(());
+        }
         let env_json = serde_json::to_string(env).unwrap_or_else(|_| "{}".to_string());
 
         let session_type = match meta.session_type {
@@ -109,15 +203,39 @@ impl SessionStore {
         };
 
         conn.execute(
-            "INSERT OR REPLACE INTO sessions
-             (id, project, command, cwd, session_type, restart_policy, restart_max_retries,
-              env_json, cols, rows, created_at, updated_at, alive)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1)",
+            "INSERT INTO sessions
+             (id, project, command, cwd, worktree_path, session_type, restart_policy,
+             restart_max_retries, env_json, cols, rows, created_at, updated_at, alive,
+              target_unavailable, incarnation)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15)
+             ON CONFLICT(id) DO UPDATE SET
+                project = excluded.project,
+                command = excluded.command,
+                cwd = excluded.cwd,
+                worktree_path = excluded.worktree_path,
+                session_type = excluded.session_type,
+                restart_policy = excluded.restart_policy,
+                restart_max_retries = excluded.restart_max_retries,
+                env_json = excluded.env_json,
+                cols = excluded.cols,
+                rows = excluded.rows,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                alive = excluded.alive,
+                target_unavailable = CASE
+                    WHEN sessions.incarnation = excluded.incarnation
+                         AND sessions.target_unavailable = 1
+                    THEN 1
+                    ELSE excluded.target_unavailable
+                END,
+                incarnation = excluded.incarnation
+             WHERE excluded.incarnation >= sessions.incarnation",
             params![
                 meta.id,
                 meta.project,
                 meta.command,
                 meta.cwd,
+                meta.worktree_path,
                 session_type,
                 restart_policy,
                 restart_max_retries as i64,
@@ -126,35 +244,81 @@ impl SessionStore {
                 rows,
                 meta.started_at as i64,
                 now_ms() as i64,
+                target_unavailable as i64,
+                incarnation as i64,
             ],
         )?;
 
+        // A genuinely newer create clears the removal watermark. Older
+        // SessionCreated commands remain blocked by the incarnation UPSERT
+        // condition above even if they arrive after this cleanup.
+        conn.execute(
+            "DELETE FROM session_removals WHERE id = ?1 AND incarnation < ?2",
+            params![meta.id, incarnation as i64],
+        )?;
+
         Ok(())
     }
 
-    /// Marks a session as dead without deleting it, so the buffer remains
-    /// available for replay but `load_sessions` won't resurrect it on startup.
-    pub fn mark_session_dead(&self, id: &str) -> Result<(), rusqlite::Error> {
+    pub fn mark_session_dead_for_incarnation(
+        &self,
+        id: &str,
+        incarnation: u64,
+    ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE sessions SET alive = 0, updated_at = ?1 WHERE id = ?2",
-            params![now_ms() as i64, id],
+            "UPDATE sessions
+             SET alive = 0, updated_at = ?1
+             WHERE id = ?2
+               AND incarnation = ?3
+               AND target_unavailable = 0",
+            params![now_ms() as i64, id, incarnation as i64],
         )?;
         Ok(())
     }
 
-    /// Saves session buffer data (scrollback).
-    pub fn save_buffer(
+    pub fn mark_session_target_unavailable_for_incarnation(
         &self,
         id: &str,
+        incarnation: u64,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions
+             SET alive = 1, target_unavailable = 1, updated_at = ?1
+             WHERE id = ?2 AND incarnation = ?3",
+            params![now_ms() as i64, id, incarnation as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_buffer_for_incarnation(
+        &self,
+        id: &str,
+        incarnation: u64,
         data: &[u8],
         total_written: u64,
     ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
 
+        let current: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sessions WHERE id = ?1 AND incarnation = ?2
+             )",
+            params![id, incarnation as i64],
+            |row| row.get(0),
+        )?;
+        if !current {
+            return Ok(());
+        }
+
         conn.execute(
-            "INSERT OR REPLACE INTO session_buffers (session_id, data, total_written, updated_at)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO session_buffers (session_id, data, total_written, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(session_id) DO UPDATE SET
+                data = excluded.data,
+                total_written = excluded.total_written,
+                updated_at = excluded.updated_at",
             params![id, data, total_written as i64, now_ms() as i64],
         )?;
 
@@ -165,11 +329,16 @@ impl SessionStore {
     pub fn load_sessions(&self) -> Result<Vec<PersistedSession>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, project, command, cwd, session_type, restart_policy,
-                    env_json, cols, rows, created_at
-             FROM sessions
-             WHERE alive = 1
-             ORDER BY created_at DESC",
+            "SELECT s.id, s.project, s.command, s.cwd, s.worktree_path, s.session_type,
+                    s.restart_policy, s.env_json, s.cols, s.rows, s.created_at,
+                    s.target_unavailable, s.incarnation
+             FROM sessions AS s
+             WHERE s.alive = 1
+               AND NOT EXISTS (
+                   SELECT 1 FROM session_removals AS r
+                   WHERE r.id = s.id AND r.incarnation >= s.incarnation
+               )
+             ORDER BY s.created_at DESC",
         )?;
 
         let sessions = stmt
@@ -178,12 +347,15 @@ impl SessionStore {
                 let project: Option<String> = row.get(1)?;
                 let command: String = row.get(2)?;
                 let cwd: String = row.get(3)?;
-                let session_type_str: String = row.get(4)?;
-                let restart_policy_str: String = row.get(5)?;
-                let env_json: String = row.get(6)?;
-                let cols: u16 = row.get(7)?;
-                let rows: u16 = row.get(8)?;
-                let created_at: i64 = row.get(9)?;
+                let worktree_path: Option<String> = row.get(4)?;
+                let session_type_str: String = row.get(5)?;
+                let restart_policy_str: String = row.get(6)?;
+                let env_json: String = row.get(7)?;
+                let cols: u16 = row.get(8)?;
+                let rows: u16 = row.get(9)?;
+                let created_at: i64 = row.get(10)?;
+                let target_unavailable: bool = row.get::<_, i64>(11)? != 0;
+                let incarnation: i64 = row.get(12)?;
 
                 let session_type = match session_type_str.as_str() {
                     "shell" => crate::pty::session::SessionType::Shell,
@@ -206,9 +378,11 @@ impl SessionStore {
 
                 let meta = SessionMeta {
                     id: id.clone(),
+                    incarnation: 0,
                     project,
                     command,
                     cwd,
+                    worktree_path,
                     session_type,
                     alive: false, // Will be set to true when restored
                     exit_code: None,
@@ -216,6 +390,7 @@ impl SessionStore {
                     restart_count: 0,
                     last_exit_at: None,
                     restart_policy,
+                    target_unavailable,
                 };
 
                 Ok(PersistedSession {
@@ -223,6 +398,7 @@ impl SessionStore {
                     env,
                     cols,
                     rows,
+                    incarnation: incarnation.max(0) as u64,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -247,40 +423,118 @@ impl SessionStore {
         .optional()
     }
 
-    /// Deletes a session and its buffer data.
-    pub fn delete_session(&self, id: &str) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
-
-        conn.execute(
-            "DELETE FROM persisted_ports WHERE session_id = ?1",
+    pub fn delete_session_for_incarnation(
+        &self,
+        id: &str,
+        incarnation: u64,
+    ) -> Result<(), rusqlite::Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let transaction = conn.transaction()?;
+        transaction.execute(
+            "INSERT INTO session_removals (id, incarnation, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+                incarnation = excluded.incarnation,
+                updated_at = excluded.updated_at
+             WHERE excluded.incarnation > session_removals.incarnation",
+            params![id, incarnation as i64, now_ms() as i64],
+        )?;
+        transaction.execute(
+            "DELETE FROM persisted_ports
+             WHERE session_id = ?1
+               AND incarnation <= (
+                   SELECT incarnation FROM session_removals WHERE id = ?1
+               )",
             params![id],
         )?;
-        // session_buffers has ON DELETE CASCADE, so this removes both
-        conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
-
+        transaction.execute(
+            "DELETE FROM sessions
+             WHERE id = ?1
+               AND incarnation <= (
+                   SELECT incarnation FROM session_removals WHERE id = ?1
+               )",
+            params![id],
+        )?;
+        transaction.commit()?;
         Ok(())
+    }
+
+    pub fn load_session_incarnation(&self, id: &str) -> Result<Option<u64>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT incarnation FROM sessions WHERE id = ?1",
+            params![id],
+            |row| {
+                let incarnation: i64 = row.get(0)?;
+                Ok(incarnation.max(0) as u64)
+            },
+        )
+        .optional()
+    }
+
+    pub fn max_session_incarnation(&self) -> Result<Option<u64>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let incarnation: Option<i64> = conn.query_row(
+            "SELECT MAX(incarnation) FROM (
+                 SELECT MAX(incarnation) AS incarnation FROM sessions
+                 UNION ALL
+                 SELECT MAX(incarnation) AS incarnation FROM session_removals
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(incarnation.map(|value| value.max(0) as u64))
     }
 
     pub fn save_detected_port(
         &self,
         session_id: &str,
+        incarnation: u64,
         port: u16,
         project: Option<&str>,
     ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
+        let removal_watermark: Option<i64> = conn
+            .query_row(
+                "SELECT incarnation FROM session_removals WHERE id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if removal_watermark.is_some_and(|watermark| (incarnation as i64) <= watermark) {
+            return Ok(());
+        }
         conn.execute(
-            "INSERT OR REPLACE INTO persisted_ports (session_id, port, project, updated_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![session_id, port as i64, project, now_ms() as i64],
+            "INSERT INTO persisted_ports
+                (session_id, port, project, incarnation, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(session_id, port) DO UPDATE SET
+                project = excluded.project,
+                incarnation = excluded.incarnation,
+                updated_at = excluded.updated_at
+             WHERE excluded.incarnation >= persisted_ports.incarnation",
+            params![
+                session_id,
+                port as i64,
+                project,
+                incarnation as i64,
+                now_ms() as i64
+            ],
         )?;
         Ok(())
     }
 
-    pub fn delete_detected_port(&self, session_id: &str, port: u16) -> Result<(), rusqlite::Error> {
+    pub fn delete_detected_port(
+        &self,
+        session_id: &str,
+        incarnation: u64,
+        port: u16,
+    ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "DELETE FROM persisted_ports WHERE session_id = ?1 AND port = ?2",
-            params![session_id, port as i64],
+            "DELETE FROM persisted_ports
+             WHERE session_id = ?1 AND incarnation = ?2 AND port = ?3",
+            params![session_id, incarnation as i64, port as i64],
         )?;
         Ok(())
     }
@@ -288,11 +542,12 @@ impl SessionStore {
     pub fn delete_detected_ports_for_session(
         &self,
         session_id: &str,
+        incarnation: u64,
     ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "DELETE FROM persisted_ports WHERE session_id = ?1",
-            params![session_id],
+            "DELETE FROM persisted_ports WHERE session_id = ?1 AND incarnation = ?2",
+            params![session_id, incarnation as i64],
         )?;
         Ok(())
     }
@@ -300,15 +555,18 @@ impl SessionStore {
     pub fn load_detected_ports(&self) -> Result<Vec<PersistedPort>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT session_id, port, project FROM persisted_ports ORDER BY updated_at DESC",
+            "SELECT session_id, port, project, incarnation
+             FROM persisted_ports ORDER BY updated_at DESC",
         )?;
         let ports = stmt
             .query_map([], |row| {
                 let port: i64 = row.get(1)?;
+                let incarnation: i64 = row.get(3)?;
                 Ok(PersistedPort {
                     session_id: row.get(0)?,
                     port: port as u16,
                     project: row.get(2)?,
+                    incarnation: incarnation.max(0) as u64,
                 })
             })?
             .collect();
@@ -353,9 +611,11 @@ mod tests {
     fn create_test_session() -> SessionMeta {
         SessionMeta {
             id: "test-session-1".to_string(),
+            incarnation: 0,
             project: Some("test-project".to_string()),
             command: "npm run dev".to_string(),
             cwd: "/test/path".to_string(),
+            worktree_path: Some("/test/worktree".to_string()),
             session_type: SessionType::Shell,
             alive: true,
             exit_code: None,
@@ -363,6 +623,7 @@ mod tests {
             restart_count: 0,
             last_exit_at: None,
             restart_policy: RestartPolicy::OnFailure,
+            target_unavailable: false,
         }
     }
 
@@ -381,12 +642,18 @@ mod tests {
             ("PORT".to_string(), "3000".to_string()),
         ]);
 
-        store.save_session(&meta, &env, 120, 32, 5).unwrap();
+        store
+            .save_session_for_incarnation(&meta, 0, &env, 120, 32, 5)
+            .unwrap();
 
         let sessions = store.load_sessions().unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].meta.id, "test-session-1");
         assert_eq!(sessions[0].meta.command, "npm run dev");
+        assert_eq!(
+            sessions[0].meta.worktree_path.as_deref(),
+            Some("/test/worktree")
+        );
         assert_eq!(sessions[0].env.get("NODE_ENV").unwrap(), "development");
         assert_eq!(sessions[0].cols, 120);
         assert_eq!(sessions[0].rows, 32);
@@ -399,10 +666,14 @@ mod tests {
         let env = HashMap::new();
 
         // Save session first (required by FK constraint)
-        store.save_session(&meta, &env, 120, 32, 5).unwrap();
+        store
+            .save_session_for_incarnation(&meta, 0, &env, 120, 32, 5)
+            .unwrap();
 
         let data = b"hello terminal output";
-        store.save_buffer("test-session-1", data, 21).unwrap();
+        store
+            .save_buffer_for_incarnation("test-session-1", 0, data, 21)
+            .unwrap();
 
         let result = store.load_buffer("test-session-1").unwrap();
         assert!(result.is_some());
@@ -418,10 +689,16 @@ mod tests {
         let meta = create_test_session();
         let env = HashMap::new();
 
-        store.save_session(&meta, &env, 120, 32, 5).unwrap();
-        store.save_buffer("test-session-1", b"data", 4).unwrap();
+        store
+            .save_session_for_incarnation(&meta, 0, &env, 120, 32, 5)
+            .unwrap();
+        store
+            .save_buffer_for_incarnation("test-session-1", 0, b"data", 4)
+            .unwrap();
 
-        store.delete_session("test-session-1").unwrap();
+        store
+            .delete_session_for_incarnation("test-session-1", 0)
+            .unwrap();
 
         let sessions = store.load_sessions().unwrap();
         assert_eq!(sessions.len(), 0);
@@ -431,13 +708,104 @@ mod tests {
     }
 
     #[test]
+    fn removal_watermark_is_part_of_incarnation_allocator_seed() {
+        let (store, _temp) = create_test_store();
+        let meta = create_test_session();
+        let env = HashMap::new();
+
+        store
+            .save_session_for_incarnation(&meta, 10, &env, 80, 24, 5)
+            .unwrap();
+        store.delete_session_for_incarnation(&meta.id, 20).unwrap();
+
+        assert_eq!(store.max_session_incarnation().unwrap(), Some(20));
+
+        store
+            .save_session_for_incarnation(&meta, 19, &env, 80, 24, 5)
+            .unwrap();
+        assert!(store.load_sessions().unwrap().is_empty());
+
+        store
+            .save_session_for_incarnation(&meta, 21, &env, 80, 24, 5)
+            .unwrap();
+        assert_eq!(store.load_sessions().unwrap()[0].incarnation, 21);
+    }
+
+    #[test]
+    fn load_sessions_ignores_rows_covered_by_removal_watermark() {
+        let (store, _temp) = create_test_store();
+        let meta = create_test_session();
+        let env = HashMap::new();
+
+        store
+            .save_session_for_incarnation(&meta, 10, &env, 80, 24, 5)
+            .unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO session_removals (id, incarnation, updated_at)
+                 VALUES (?1, ?2, ?3)",
+                params![meta.id, 20_i64, session_now_ms() as i64],
+            )
+            .unwrap();
+        }
+
+        assert!(store.load_sessions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn target_unavailable_state_survives_late_dead_transition() {
+        let (store, _temp) = create_test_store();
+        let meta = create_test_session();
+        let env = HashMap::new();
+
+        store
+            .save_session_for_incarnation(&meta, 10, &env, 80, 24, 5)
+            .unwrap();
+        store
+            .mark_session_target_unavailable_for_incarnation(&meta.id, 10)
+            .unwrap();
+        store
+            .save_session_for_incarnation(&meta, 10, &env, 80, 24, 5)
+            .unwrap();
+        store
+            .mark_session_dead_for_incarnation(&meta.id, 10)
+            .unwrap();
+
+        let sessions = store.load_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].meta.target_unavailable);
+    }
+
+    #[test]
+    fn target_unavailable_upsert_persists_first_failed_create() {
+        let (store, _temp) = create_test_store();
+        let meta = create_test_session();
+        let env = HashMap::from([("SECRET_NAME".to_string(), "redacted-at-test".to_string())]);
+
+        store
+            .save_session_target_unavailable_for_incarnation(&meta, 12, &env, 132, 40, 7)
+            .unwrap();
+
+        let sessions = store.load_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].meta.target_unavailable);
+        assert_eq!(sessions[0].incarnation, 12);
+        assert_eq!(sessions[0].env, env);
+        assert_eq!(sessions[0].cols, 132);
+        assert_eq!(sessions[0].rows, 40);
+    }
+
+    #[test]
     fn save_load_and_delete_detected_ports() {
         let (store, _temp) = create_test_store();
 
         store
-            .save_detected_port("session-a", 5173, Some("web"))
+            .save_detected_port("session-a", 10, 5173, Some("web"))
             .unwrap();
-        store.save_detected_port("session-b", 8080, None).unwrap();
+        store
+            .save_detected_port("session-b", 20, 8080, None)
+            .unwrap();
 
         let ports = store.load_detected_ports().unwrap();
         assert_eq!(ports.len(), 2);
@@ -445,17 +813,53 @@ mod tests {
             session_id: "session-a".to_string(),
             port: 5173,
             project: Some("web".to_string()),
+            incarnation: 10,
         }));
 
-        store.delete_detected_port("session-a", 5173).unwrap();
+        store.delete_detected_port("session-a", 10, 5173).unwrap();
         let ports = store.load_detected_ports().unwrap();
         assert_eq!(ports.len(), 1);
         assert_eq!(ports[0].session_id, "session-b");
 
         store
-            .delete_detected_ports_for_session("session-b")
+            .delete_detected_ports_for_session("session-b", 20)
             .unwrap();
         assert!(store.load_detected_ports().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stale_port_deletion_does_not_touch_new_incarnation() {
+        let (store, _temp) = create_test_store();
+
+        store
+            .save_detected_port("reused", 10, 5173, Some("old"))
+            .unwrap();
+        store
+            .save_detected_port("reused", 11, 5173, Some("new"))
+            .unwrap();
+        store.delete_detected_port("reused", 10, 5173).unwrap();
+
+        let ports = store.load_detected_ports().unwrap();
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].incarnation, 11);
+        assert_eq!(ports[0].project.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn stale_port_save_does_not_overwrite_new_incarnation() {
+        let (store, _temp) = create_test_store();
+
+        store
+            .save_detected_port("reused", 11, 5173, Some("new"))
+            .unwrap();
+        store
+            .save_detected_port("reused", 10, 5173, Some("old"))
+            .unwrap();
+
+        let ports = store.load_detected_ports().unwrap();
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].incarnation, 11);
+        assert_eq!(ports[0].project.as_deref(), Some("new"));
     }
 
     #[test]
@@ -463,9 +867,11 @@ mod tests {
         let (store, _temp) = create_test_store();
         let meta = SessionMeta {
             id: "session-1".to_string(),
+            incarnation: 0,
             project: None,
             command: "test".to_string(),
             cwd: "/".to_string(),
+            worktree_path: None,
             session_type: SessionType::Shell,
             alive: true,
             exit_code: None,
@@ -473,14 +879,19 @@ mod tests {
             restart_count: 0,
             last_exit_at: None,
             restart_policy: RestartPolicy::Never,
+            target_unavailable: false,
         };
         let env = HashMap::new();
 
         // Save session first (required by FK constraint)
-        store.save_session(&meta, &env, 120, 32, 5).unwrap();
+        store
+            .save_session_for_incarnation(&meta, 0, &env, 120, 32, 5)
+            .unwrap();
 
         // Save a buffer with current timestamp
-        store.save_buffer("session-1", b"recent", 6).unwrap();
+        store
+            .save_buffer_for_incarnation("session-1", 0, b"recent", 6)
+            .unwrap();
 
         // Cleanup with 0 TTL should remove everything
         let deleted = store.cleanup_expired(0).unwrap();

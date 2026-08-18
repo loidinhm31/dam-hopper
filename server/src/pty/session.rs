@@ -79,6 +79,8 @@ pub struct RespawnOpts {
     pub cols: u16,
     pub rows: u16,
     pub project: Option<String>,
+    /// Server-validated canonical worktree path for this session.
+    pub worktree_path: Option<String>,
     pub restart_policy: RestartPolicy,
     pub restart_max_retries: u32,
 }
@@ -90,9 +92,21 @@ pub struct RespawnOpts {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
     pub id: String,
+    /// Opaque identity for this concrete PTY incarnation. Public session IDs
+    /// can be reused, so clients must not apply events from an older value.
+    #[serde(default)]
+    pub incarnation: u64,
     pub project: Option<String>,
     pub command: String,
     pub cwd: String,
+    /// Immutable server-validated target ownership, if this is a worktree
+    /// session. This survives shell `cd` changes and reconnects.
+    #[serde(
+        rename = "worktreePath",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub worktree_path: Option<String>,
     #[serde(rename = "type")]
     pub session_type: SessionType,
     pub alive: bool,
@@ -103,6 +117,15 @@ pub struct SessionMeta {
     /// Set by the restart engine when the process exits (Phase 4).
     pub last_exit_at: Option<u64>,
     pub restart_policy: RestartPolicy,
+    /// The process stopped because its registered worktree target disappeared.
+    /// The metadata remains visible for buffer replay, close, or retry with the
+    /// same session ID once the target is available again.
+    #[serde(
+        rename = "targetUnavailable",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    pub target_unavailable: bool,
 }
 
 impl SessionMeta {
@@ -113,18 +136,32 @@ impl SessionMeta {
         cwd: String,
         restart_policy: RestartPolicy,
     ) -> Self {
+        Self::new_with_target(id, project, command, cwd, None, restart_policy)
+    }
+
+    pub fn new_with_target(
+        id: String,
+        project: Option<String>,
+        command: String,
+        cwd: String,
+        worktree_path: Option<String>,
+        restart_policy: RestartPolicy,
+    ) -> Self {
         Self {
             session_type: SessionType::from_id(&id),
             id,
+            incarnation: 0,
             project,
             command,
             cwd,
+            worktree_path,
             alive: true,
             exit_code: None,
             started_at: now_ms(),
             restart_count: 0,
             last_exit_at: None,
             restart_policy,
+            target_unavailable: false,
         }
     }
 }
@@ -139,6 +176,10 @@ impl SessionMeta {
 /// `buffer`. `shutdown` signals the reader thread to stop.
 pub struct LiveSession {
     pub meta: SessionMeta,
+    /// Monotonic identity for this concrete PTY incarnation. Public session
+    /// IDs can be reused, so persistence and reader cleanup must also carry
+    /// this discriminator.
+    pub incarnation: u64,
     pub buffer: Arc<Mutex<ScrollbackBuffer>>,
 
     /// Kept for `resize_pty` — clone_reader already extracted by the time we store this.
@@ -167,6 +208,7 @@ pub struct LiveSession {
 impl LiveSession {
     pub fn new(
         meta: SessionMeta,
+        incarnation: u64,
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn std::io::Write + Send>,
         child_killer: Box<dyn ChildKiller + Send + Sync>,
@@ -181,6 +223,7 @@ impl LiveSession {
             child_killer: Arc::new(Mutex::new(child_killer)),
             shutdown: Arc::new(AtomicBool::new(false)),
             meta,
+            incarnation,
             respawn_opts,
             lifecycle,
             published_editing: Arc::new(AtomicBool::new(false)),
@@ -262,9 +305,15 @@ impl LiveSession {
 // Dead-session tombstone (retained for 60s TTL)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DeadSession {
     pub meta: SessionMeta,
+    /// Incarnation that produced this tombstone.
+    pub incarnation: u64,
+    /// Retain the final in-memory buffer while the tombstone is live. This
+    /// makes attach/retry observe output before an asynchronous persistence
+    /// worker has applied its final snapshot.
+    pub buffer: Option<Arc<Mutex<ScrollbackBuffer>>>,
     pub died_at: Instant,
     /// Set by the restart engine (Phase 4) before re-spawning.
     pub will_restart: bool,
@@ -276,12 +325,18 @@ impl DeadSession {
     /// Construct a tombstone for a forcibly-killed session (exit_code = -1).
     /// Centralises the `will_restart`/`restart_in_ms` defaults so all kill
     /// paths stay consistent.
-    pub(crate) fn killed(mut meta: SessionMeta) -> Self {
+    pub(crate) fn killed(
+        mut meta: SessionMeta,
+        incarnation: u64,
+        buffer: Option<Arc<Mutex<ScrollbackBuffer>>>,
+    ) -> Self {
         meta.alive = false;
         meta.exit_code = Some(-1);
         meta.last_exit_at = Some(now_ms());
         Self {
             meta,
+            incarnation,
+            buffer,
             died_at: Instant::now(),
             will_restart: false,
             restart_in_ms: None,
@@ -289,17 +344,43 @@ impl DeadSession {
     }
 
     /// Construct a tombstone for a process that exited naturally.
-    pub(crate) fn exited(mut meta: SessionMeta, exit_code: i32) -> Self {
+    pub(crate) fn exited(
+        mut meta: SessionMeta,
+        exit_code: i32,
+        incarnation: u64,
+        buffer: Option<Arc<Mutex<ScrollbackBuffer>>>,
+    ) -> Self {
         meta.alive = false;
         meta.exit_code = Some(exit_code);
         meta.last_exit_at = Some(now_ms());
         Self {
             meta,
+            incarnation,
+            buffer,
             died_at: Instant::now(),
             will_restart: false,
             restart_in_ms: None,
         }
     }
+
+    /// Construct a non-restarting tombstone for a session whose target is gone.
+    pub(crate) fn target_unavailable(mut meta: SessionMeta, incarnation: u64) -> Self {
+        meta.alive = false;
+        meta.target_unavailable = true;
+        meta.last_exit_at.get_or_insert_with(now_ms);
+        Self {
+            meta,
+            incarnation,
+            buffer: None,
+            died_at: Instant::now(),
+            will_restart: false,
+            restart_in_ms: None,
+        }
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 // ---------------------------------------------------------------------------

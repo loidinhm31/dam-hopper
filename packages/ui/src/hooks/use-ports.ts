@@ -11,6 +11,11 @@ import { getActiveProfileId } from "../api/server-config.js";
 import { subscribeIpc, hasWsStatus } from "./use-sse.js";
 import { useTransportGeneration } from "./use-transport-generation.js";
 import type { TunnelInfo, DetectedPort } from "../api/client.js";
+import {
+  acceptsTerminalPortIncarnation,
+  confirmTerminalPortIncarnation,
+  retireTerminalPortIncarnation,
+} from "@/lib/terminal-incarnation-state.js";
 
 export interface InstallState {
   status: "idle" | "installing" | "done" | "error";
@@ -32,6 +37,20 @@ export interface PortEntry {
   sessionId: string | null;
   /** Active tunnel for this port, or null if none. */
   tunnel: TunnelInfo | null;
+}
+
+/** Reject delayed port events before they can seed an empty query cache. */
+export function acceptsDetectedPortEvent(port: DetectedPort): boolean {
+  return (
+    !!port &&
+    typeof port.session_id === "string" &&
+    Number.isSafeInteger(port.incarnation) &&
+    acceptsTerminalPortIncarnation(
+      port.session_id,
+      port.port,
+      port.incarnation,
+    )
+  );
 }
 
 export function usePorts(): {
@@ -78,6 +97,13 @@ export function usePorts(): {
       const resp = await transport.invoke<{ ports: DetectedPort[] }>(
         "port:list",
       );
+      for (const port of resp.ports) {
+        confirmTerminalPortIncarnation(
+          port.session_id,
+          port.port,
+          port.incarnation,
+        );
+      }
       return resp.ports;
     },
   });
@@ -123,18 +149,41 @@ export function usePorts(): {
     const unsubs = [
       subscribeIpc("port:discovered", ({ data }) => {
         const port = data as DetectedPort;
+        if (!acceptsDetectedPortEvent(port)) return;
         qc.setQueryData<DetectedPort[]>(["ports"], (prev = []) => {
-          const exists = prev.some((p) => p.port === port.port);
-          if (exists) {
+          const existing = prev.find((p) => p.port === port.port);
+          if (
+            existing &&
+            Number.isSafeInteger(existing.incarnation) &&
+            port.incarnation < existing.incarnation
+          ) {
+            return prev;
+          }
+          if (existing) {
             return prev.map((p) => (p.port === port.port ? port : p));
           }
           return [...prev, port];
         });
       }),
       subscribeIpc("port:lost", ({ data }) => {
-        const { port } = data as { port: number };
+        if (typeof data !== "object" || data === null) return;
+        const { port, session_id, incarnation } = data as {
+          port?: unknown;
+          session_id?: unknown;
+          incarnation?: unknown;
+        };
+        if (
+          typeof port !== "number" ||
+          !Number.isSafeInteger(port) ||
+          typeof session_id !== "string" ||
+          typeof incarnation !== "number" ||
+          !Number.isSafeInteger(incarnation)
+        ) {
+          return;
+        }
+        retireTerminalPortIncarnation(session_id, port, incarnation);
         qc.setQueryData<DetectedPort[]>(["ports"], (prev = []) =>
-          prev.filter((p) => p.port !== port),
+          prev.filter((p) => p.port !== port || p.incarnation !== incarnation),
         );
       }),
     ];
