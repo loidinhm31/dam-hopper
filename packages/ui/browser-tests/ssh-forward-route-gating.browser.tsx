@@ -187,7 +187,10 @@ async function render(
   );
   if (kind === "nativeDesktop") {
     await vi.waitFor(
-      () => expect(container.textContent).toContain("SSH Forwarding"),
+      () => {
+        expect(container.textContent).toContain("SSH Forwarding");
+        expect(desktopHostMock.snapshot).toHaveBeenCalled();
+      },
       { timeout: 10_000 },
     );
   } else {

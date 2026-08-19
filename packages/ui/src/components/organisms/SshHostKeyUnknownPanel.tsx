@@ -39,7 +39,7 @@ export function SshHostKeyUnknownPanel({
           className="flex items-center gap-2 text-xs text-[var(--color-success)]"
         >
           <CheckCircle2 className="h-4 w-4" />
-          Approved; press Start to connect.
+          Approved; press Connect to establish this SSH connection.
         </p>
       ) : (
         <button

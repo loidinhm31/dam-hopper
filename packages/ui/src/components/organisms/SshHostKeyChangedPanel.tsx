@@ -5,12 +5,16 @@ import {
   buildTrustRepairRestoreCommand,
 } from "@/lib/ssh-forward-trust-repair-command.js";
 import type {
+  SshConnectionProfile,
   SshForwardProfile,
   SshForwardTrustRepairMetadata,
 } from "@/lib/ssh-forward-host.js";
 
 interface Props {
-  profile: SshForwardProfile;
+  profile: Pick<
+    SshForwardProfile | SshConnectionProfile,
+    "scopeId" | "sshHost" | "sshPort"
+  >;
   metadata?: SshForwardTrustRepairMetadata;
   fixedError?: string;
 }
@@ -58,7 +62,7 @@ export function SshHostKeyChangedPanel({
       <p className="text-xs text-[var(--color-text-muted)]">
         The repair creates a protected backup and may quarantine removed public
         records. Keep the backup ID, then reopen, compare the new unknown
-        fingerprint exactly, approve it, and press Start.
+        fingerprint exactly, approve it, and press Connect.
       </p>
     </div>
   );

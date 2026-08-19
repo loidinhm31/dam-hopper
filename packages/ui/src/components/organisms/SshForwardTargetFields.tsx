@@ -2,22 +2,19 @@ import type { ChangeEvent } from "react";
 import { inputClass } from "@/components/atoms/Button.js";
 import { SshForwardProfileField } from "@/components/organisms/SshForwardProfileField.js";
 import type {
-  SshForwardProfileDraft,
-  SshForwardProfileErrors,
+  SshForwardRuleDraft,
+  SshForwardRuleErrors,
 } from "@/lib/ssh-forward-form.js";
 
 interface Props {
-  draft: SshForwardProfileDraft;
-  errors: SshForwardProfileErrors;
-  onUpdate: (
-    field: keyof SshForwardProfileDraft,
-    value: string | boolean,
-  ) => void;
+  draft: SshForwardRuleDraft;
+  errors: SshForwardRuleErrors;
+  onUpdate: (field: keyof SshForwardRuleDraft, value: string | boolean) => void;
 }
 
 export function SshForwardTargetFields({ draft, errors, onUpdate }: Props) {
   const input =
-    (field: keyof SshForwardProfileDraft) =>
+    (field: keyof SshForwardRuleDraft) =>
     (event: ChangeEvent<HTMLInputElement>) =>
       onUpdate(field, event.target.value);
   return (
@@ -28,8 +25,10 @@ export function SshForwardTargetFields({ draft, errors, onUpdate }: Props) {
       <SshForwardProfileField
         label="Desktop loopback port"
         error={errors.localPort}
+        errorId="ssh-rule-local-port-error"
       >
         <input
+          id="ssh-rule-local-port"
           className={inputClass}
           type="text"
           inputMode="numeric"
@@ -37,13 +36,18 @@ export function SshForwardTargetFields({ draft, errors, onUpdate }: Props) {
           value={draft.localPort}
           onChange={input("localPort")}
           aria-invalid={Boolean(errors.localPort)}
+          aria-describedby={
+            errors.localPort ? "ssh-rule-local-port-error" : undefined
+          }
         />
       </SshForwardProfileField>
       <SshForwardProfileField
         label="Remote loopback port"
         error={errors.targetPort}
+        errorId="ssh-rule-target-port-error"
       >
         <input
+          id="ssh-rule-target-port"
           className={inputClass}
           type="text"
           inputMode="numeric"
@@ -51,6 +55,9 @@ export function SshForwardTargetFields({ draft, errors, onUpdate }: Props) {
           value={draft.targetPort}
           onChange={input("targetPort")}
           aria-invalid={Boolean(errors.targetPort)}
+          aria-describedby={
+            errors.targetPort ? "ssh-rule-target-port-error" : undefined
+          }
         />
       </SshForwardProfileField>
       <div className="sm:col-span-2">

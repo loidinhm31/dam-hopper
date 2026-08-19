@@ -32,7 +32,7 @@ Replace v1's one-session-per-forward lifecycle with explicit target connection e
 | 2 | Native established-connection registry | Completed 2026-08-17 | 100% | 20h | [phase-02](./phase-02-native-established-connection-registry.md) |
 | 3 | Credential vault, trust, and reconnect lifecycle | Completed 2026-08-17 | 100% | 20h | [phase-03](./phase-03-credential-trust-reconnect-lifecycle.md) |
 | 4 | Tauri and TypeScript contract compatibility | Completed 2026-08-18 | 100% | 12h | [phase-04](./phase-04-tauri-typescript-contract-compatibility.md) |
-| 5 | Explicit-connect multi-port UI | Pending | 0% | 14h | [phase-05](./phase-05-explicit-connect-multi-port-ui.md) |
+| 5 | Explicit-connect multi-port UI | Completed 2026-08-18 | 100% | 14h | [phase-05](./phase-05-explicit-connect-multi-port-ui.md) |
 | 6 | Automated and packaged Windows release gates | Pending | 0% | 16h | [phase-06](./phase-06-tests-windows-release-gates.md) |
 
 ## Dependency order

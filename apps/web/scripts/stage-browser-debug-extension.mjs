@@ -24,6 +24,7 @@ function buildExtension() {
   execFileSync(pnpm, ["--filter", "@dam-hopper/browser-extension", "build"], {
     cwd: repositoryDirectory,
     stdio: "inherit",
+    shell: process.platform === "win32",
   });
 }
 

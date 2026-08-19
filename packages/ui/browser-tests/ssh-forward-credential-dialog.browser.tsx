@@ -43,6 +43,7 @@ describe("SSH forwarding credential dialog in Chromium", () => {
           onSubmit={vi.fn()}
           onCancel={onCancel}
           title="Unlock SSH key for staging"
+          defaultSaveForLater
           passwordAuth={{ username: "operator", onSubmit: onPasswordSubmit }}
         />,
       ),
@@ -72,6 +73,10 @@ describe("SSH forwarding credential dialog in Chromium", () => {
     );
     expect(username?.value).toBe("operator");
     expect(password).not.toBeNull();
+    expect(
+      dialog?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+        ?.checked,
+    ).toBe(true);
 
     await act(async () => {
       setInputValue(username!, "deploy");
@@ -82,7 +87,7 @@ describe("SSH forwarding credential dialog in Chromium", () => {
         ?.querySelector<HTMLButtonElement>('button[type="submit"]')
         ?.click();
     });
-    expect(onPasswordSubmit).toHaveBeenCalledWith("deploy", "secret");
+    expect(onPasswordSubmit).toHaveBeenCalledWith("deploy", "secret", 30);
 
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));

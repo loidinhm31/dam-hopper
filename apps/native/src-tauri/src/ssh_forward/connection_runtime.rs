@@ -3,7 +3,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicBool, AtomicU16, Ordering},
+        atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -21,7 +21,7 @@ use super::{
         SshConnectionRuntime, SshConnectionState, SshForwardRuleRuntime, SshForwardRuleState,
         SshForwardRuntime, SshForwardState, UtcTimestamp, WireCounter,
     },
-    profile::{LoopbackHost, SshConnectionProfile, SshForwardRule},
+    profile::{LoopbackHost, ReconnectPolicy, SshConnectionProfile, SshForwardRule},
     ssh_client::{ChannelLimiter, SshSession},
 };
 
@@ -69,6 +69,81 @@ impl ConnectionCancellation {
             }
             notified.await;
         }
+    }
+}
+
+/// Shared session indirection used by child listeners while a parent
+/// connection is temporarily reconnecting. Children never retain a stale
+/// session after the parent has replaced the transport.
+pub(crate) struct SessionSlot {
+    session: std::sync::Mutex<Option<Arc<SshSession>>>,
+    changed: Notify,
+    version: AtomicU64,
+}
+
+impl SessionSlot {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            session: std::sync::Mutex::new(None),
+            changed: Notify::new(),
+            version: AtomicU64::new(0),
+        })
+    }
+
+    pub(crate) fn current(&self) -> Option<Arc<SshSession>> {
+        self.session
+            .lock()
+            .expect("session slot mutex poisoned")
+            .clone()
+    }
+
+    pub(crate) fn replace(&self, session: Option<Arc<SshSession>>) {
+        {
+            *self.session.lock().expect("session slot mutex poisoned") = session;
+        }
+        self.mark_changed();
+    }
+
+    pub(crate) fn notify_changed(&self) {
+        self.mark_changed();
+    }
+
+    pub(crate) fn clear_if_matches(&self, expected: &Arc<SshSession>) -> bool {
+        let cleared = {
+            let mut current = self.session.lock().expect("session slot mutex poisoned");
+            let matches = current
+                .as_ref()
+                .is_some_and(|session| Arc::ptr_eq(session, expected));
+            if matches {
+                *current = None;
+            }
+            matches
+        };
+        if cleared {
+            self.mark_changed();
+        }
+        cleared
+    }
+
+    pub(crate) fn version(&self) -> u64 {
+        self.version.load(Ordering::Acquire)
+    }
+
+    pub(crate) async fn wait_for_change(&self, observed: u64) {
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.version() != observed {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn mark_changed(&self) {
+        self.version.fetch_add(1, Ordering::AcqRel);
+        self.changed.notify_waiters();
     }
 }
 
@@ -169,6 +244,8 @@ pub(crate) struct ConnectionEntry {
     pub(crate) started_at: Option<UtcTimestamp>,
     pub(crate) error_code: Option<SshForwardErrorCode>,
     pub(crate) session: Option<Arc<SshSession>>,
+    pub(crate) session_slot: Arc<SessionSlot>,
+    pub(crate) reconnect_owner: Option<String>,
     pub(crate) credential_lease: Option<Arc<CredentialLease>>,
     pub(crate) accepted_host_key: Option<OfferedHostKey>,
     pub(crate) channel_limiter: ChannelLimiter,
@@ -188,6 +265,8 @@ impl ConnectionEntry {
             started_at: None,
             error_code: None,
             session: None,
+            session_slot: SessionSlot::new(),
+            reconnect_owner: None,
             credential_lease: None,
             accepted_host_key: None,
             channel_limiter: ChannelLimiter::default(),
@@ -240,9 +319,19 @@ pub(crate) struct RuleReservation {
     pub(crate) connection_generation: WireCounter,
     pub(crate) generation: WireCounter,
     pub(crate) cancellation: Arc<ConnectionCancellation>,
-    pub(crate) session: Arc<SshSession>,
+    pub(crate) session_slot: Arc<SessionSlot>,
     pub(crate) limiter: ChannelLimiter,
     pub(crate) active_channels: Arc<AtomicU16>,
+}
+
+pub(crate) struct ConnectionReconnectContext {
+    pub(crate) profile: SshConnectionProfile,
+    pub(crate) generation: WireCounter,
+    pub(crate) session: Option<Arc<SshSession>>,
+    pub(crate) credential_lease: Option<Arc<CredentialLease>>,
+    pub(crate) session_slot: Arc<SessionSlot>,
+    pub(crate) cancellation: Arc<ConnectionCancellation>,
+    pub(crate) policy: ReconnectPolicy,
 }
 
 pub(crate) struct ChildShutdown {
@@ -343,13 +432,35 @@ impl ConnectionRegistry {
         let accepted_host_key = session
             .verified_host_key()
             .ok_or(RuntimeError::HostKeyIdentityMissing)?;
-        entry.session = Some(session);
+        entry.session = Some(Arc::clone(&session));
+        entry.session_slot.replace(Some(session));
         entry.credential_lease = credential_lease;
         entry.accepted_host_key = Some(accepted_host_key);
         entry.state = SshConnectionState::Established;
         entry.started_at = Some(UtcTimestamp::now());
         entry.state_changed_at = UtcTimestamp::now();
         entry.error_code = None;
+        Ok(())
+    }
+
+    pub(crate) fn set_established_error(
+        &mut self,
+        connection_id: &str,
+        generation: WireCounter,
+        error_code: SshForwardErrorCode,
+    ) -> Result<(), RuntimeError> {
+        let entry = self
+            .entries
+            .get_mut(connection_id)
+            .ok_or(RuntimeError::ConnectionNotFound)?;
+        if entry.generation != generation {
+            return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+        }
+        if entry.state != SshConnectionState::Established {
+            return Err(RuntimeError::ConnectionNotEstablished);
+        }
+        entry.error_code = Some(error_code);
+        entry.state_changed_at = UtcTimestamp::now();
         Ok(())
     }
 
@@ -368,12 +479,226 @@ impl ConnectionRegistry {
         }
         entry.cancellation.cancel();
         entry.session = None;
+        entry.session_slot.replace(None);
+        entry.reconnect_owner = None;
         entry.credential_lease = None;
         entry.accepted_host_key = None;
         entry.state = SshConnectionState::Disconnected;
         entry.error_code = Some(error_code);
         entry.state_changed_at = UtcTimestamp::now();
         Ok(())
+    }
+
+    pub(crate) fn begin_reconnect(
+        &mut self,
+        connection_id: &str,
+        generation: WireCounter,
+        owner: &str,
+    ) -> Result<Option<ConnectionReconnectContext>, RuntimeError> {
+        let entry = self
+            .entries
+            .get_mut(connection_id)
+            .ok_or(RuntimeError::ConnectionNotFound)?;
+        if entry.generation != generation {
+            return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+        }
+        let session = if entry.state == SshConnectionState::Reconnecting {
+            if entry.reconnect_owner.is_some() {
+                return Ok(None);
+            }
+            None
+        } else if entry.state == SshConnectionState::Established {
+            if entry.session_slot.current().is_some() {
+                return Ok(None);
+            }
+            let Some(session) = entry.session.take() else {
+                return Ok(None);
+            };
+            Some(session)
+        } else {
+            return Ok(None);
+        };
+        let mut enabled = false;
+        let mut max_attempts = 0;
+        for child in entry.children.values() {
+            if child.state == SshForwardRuleState::On && child.rule.reconnect.enabled {
+                enabled = true;
+                max_attempts = max_attempts.max(child.rule.reconnect.max_attempts);
+            }
+        }
+        entry.state = SshConnectionState::Reconnecting;
+        entry.retry_attempt = 0;
+        entry.error_code = None;
+        entry.state_changed_at = UtcTimestamp::now();
+        entry.reconnect_owner = Some(owner.to_owned());
+        entry.session_slot.replace(None);
+        Ok(Some(ConnectionReconnectContext {
+            profile: entry.profile.clone(),
+            generation: entry.generation,
+            session,
+            credential_lease: entry.credential_lease.clone(),
+            session_slot: Arc::clone(&entry.session_slot),
+            cancellation: Arc::clone(&entry.cancellation),
+            policy: ReconnectPolicy {
+                enabled,
+                max_attempts,
+            },
+        }))
+    }
+
+    pub(crate) fn set_reconnect_attempt(
+        &mut self,
+        connection_id: &str,
+        generation: WireCounter,
+        attempt: u8,
+    ) -> Result<(), RuntimeError> {
+        let entry = self
+            .entries
+            .get_mut(connection_id)
+            .ok_or(RuntimeError::ConnectionNotFound)?;
+        if entry.generation != generation {
+            return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+        }
+        if entry.state != SshConnectionState::Reconnecting {
+            return Err(RuntimeError::ConnectionNotEstablished);
+        }
+        entry.retry_attempt = attempt;
+        entry.state_changed_at = UtcTimestamp::now();
+        Ok(())
+    }
+
+    pub(crate) fn finish_reconnect(
+        &mut self,
+        connection_id: &str,
+        generation: WireCounter,
+        session: Arc<SshSession>,
+        credential_lease: Option<Arc<CredentialLease>>,
+    ) -> Result<(), RuntimeError> {
+        let entry = self
+            .entries
+            .get_mut(connection_id)
+            .ok_or(RuntimeError::ConnectionNotFound)?;
+        if entry.generation != generation {
+            return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+        }
+        if entry.state != SshConnectionState::Reconnecting {
+            return Err(RuntimeError::ConnectionNotEstablished);
+        }
+        if entry.cancellation.is_cancelled() {
+            return Err(RuntimeError::ConnectionCancelled);
+        }
+        let accepted_host_key = session
+            .verified_host_key()
+            .ok_or(RuntimeError::HostKeyIdentityMissing)?;
+        entry.accepted_host_key = Some(accepted_host_key);
+        entry.session = Some(Arc::clone(&session));
+        entry.session_slot.replace(Some(session));
+        entry.reconnect_owner = None;
+        entry.credential_lease = credential_lease;
+        entry.state = SshConnectionState::Established;
+        entry.retry_attempt = 0;
+        entry.error_code = None;
+        entry.state_changed_at = UtcTimestamp::now();
+        Ok(())
+    }
+
+    pub(crate) fn fail_reconnect(
+        &mut self,
+        connection_id: &str,
+        generation: WireCounter,
+        error_code: SshForwardErrorCode,
+    ) -> Result<(), RuntimeError> {
+        let entry = self
+            .entries
+            .get_mut(connection_id)
+            .ok_or(RuntimeError::ConnectionNotFound)?;
+        if entry.generation != generation {
+            return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+        }
+        if entry.state != SshConnectionState::Reconnecting {
+            return Ok(());
+        }
+        entry.cancellation.cancel();
+        entry.session = None;
+        entry.session_slot.replace(None);
+        entry.reconnect_owner = None;
+        entry.credential_lease = None;
+        entry.accepted_host_key = None;
+        entry.state = SshConnectionState::Disconnected;
+        entry.error_code = Some(error_code);
+        entry.state_changed_at = UtcTimestamp::now();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        for child in entry.children.values_mut() {
+            if child.state != SshForwardRuleState::Off {
+                if let Some(stop_tx) = child.stop_tx.take() {
+                    let _ = stop_tx.send(deadline);
+                }
+                child.state = SshForwardRuleState::Failed;
+                child.error_code = Some(error_code);
+                child.state_changed.notify_waiters();
+                child.state_changed_at = UtcTimestamp::now();
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn abandon_reconnect(
+        &mut self,
+        connection_id: &str,
+        generation: WireCounter,
+        owner: &str,
+    ) -> Result<bool, RuntimeError> {
+        let entry = self
+            .entries
+            .get_mut(connection_id)
+            .ok_or(RuntimeError::ConnectionNotFound)?;
+        if entry.generation != generation
+            || entry.state != SshConnectionState::Reconnecting
+            || entry.reconnect_owner.as_deref() != Some(owner)
+        {
+            return Ok(false);
+        }
+        entry.reconnect_owner = None;
+        entry.state_changed_at = UtcTimestamp::now();
+        entry.session_slot.notify_changed();
+        Ok(true)
+    }
+
+    pub(crate) fn is_reconnect_owner(
+        &self,
+        connection_id: &str,
+        generation: WireCounter,
+        owner: &str,
+    ) -> Result<bool, RuntimeError> {
+        let entry = self
+            .entries
+            .get(connection_id)
+            .ok_or(RuntimeError::ConnectionNotFound)?;
+        if entry.generation != generation {
+            return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+        }
+        Ok(entry.state == SshConnectionState::Reconnecting
+            && entry.reconnect_owner.as_deref() == Some(owner))
+    }
+
+    pub(crate) fn has_reconnectable_rules(
+        &self,
+        connection_id: &str,
+        generation: WireCounter,
+        excluded_rule_id: &str,
+    ) -> Result<bool, RuntimeError> {
+        let entry = self
+            .entries
+            .get(connection_id)
+            .ok_or(RuntimeError::ConnectionNotFound)?;
+        if entry.generation != generation {
+            return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+        }
+        Ok(entry.children.iter().any(|(rule_id, child)| {
+            rule_id != excluded_rule_id
+                && child.state == SshForwardRuleState::On
+                && child.rule.reconnect.enabled
+        }))
     }
 
     pub(crate) fn retain_authenticating_session(
@@ -393,7 +718,8 @@ impl ConnectionRegistry {
             return Err(RuntimeError::ConnectionNotEstablished);
         }
         entry.accepted_host_key = session.verified_host_key();
-        entry.session = Some(session);
+        entry.session = Some(Arc::clone(&session));
+        entry.session_slot.replace(Some(session));
         Ok(())
     }
 
@@ -439,6 +765,8 @@ impl ConnectionRegistry {
         entry.state = SshConnectionState::Disconnecting;
         entry.generation = generation;
         entry.credential_lease.take();
+        entry.reconnect_owner = None;
+        entry.session_slot.replace(None);
         entry.state_changed_at = UtcTimestamp::now();
         Ok(Some(DisconnectPlan {
             generation,
@@ -467,6 +795,7 @@ impl ConnectionRegistry {
         }
         entry.state = SshConnectionState::Disconnected;
         entry.session = None;
+        entry.session_slot.replace(None);
         entry.credential_lease = None;
         entry.accepted_host_key = None;
         entry.error_code = None;
@@ -490,7 +819,8 @@ impl ConnectionRegistry {
         if entry.state != SshConnectionState::Disconnecting {
             return Err(RuntimeError::ConnectionNotEstablished);
         }
-        entry.session = Some(session);
+        entry.session = Some(Arc::clone(&session));
+        entry.session_slot.replace(Some(session));
         Ok(())
     }
 
@@ -507,6 +837,33 @@ impl ConnectionRegistry {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
         }
         self.entries.remove(connection_id);
+        Ok(())
+    }
+
+    pub(crate) fn remove_if_disconnected(
+        &mut self,
+        connection_id: &str,
+        expected_generation: WireCounter,
+    ) -> Result<(), RuntimeError> {
+        self.ensure_disconnected(connection_id, expected_generation)?;
+        self.entries.remove(connection_id);
+        Ok(())
+    }
+
+    pub(crate) fn ensure_disconnected(
+        &self,
+        connection_id: &str,
+        expected_generation: WireCounter,
+    ) -> Result<(), RuntimeError> {
+        let Some(entry) = self.entries.get(connection_id) else {
+            return Ok(());
+        };
+        if entry.generation != expected_generation {
+            return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+        }
+        if entry.state != SshConnectionState::Disconnected {
+            return Err(RuntimeError::ConnectionNotEstablished);
+        }
         Ok(())
     }
 
@@ -639,7 +996,7 @@ impl ConnectionRegistry {
             connection_generation,
             generation,
             cancellation: Arc::clone(&entry.cancellation),
-            session: entry.session.as_ref().expect("checked above").clone(),
+            session_slot: Arc::clone(&entry.session_slot),
             limiter: entry.channel_limiter.clone(),
             active_channels,
         }))
@@ -828,9 +1185,30 @@ impl ConnectionRegistry {
         rule_id: &str,
         expected_rule_generation: WireCounter,
     ) -> Result<(), RuntimeError> {
+        self.ensure_rule_removable(
+            connection_id,
+            connection_generation,
+            rule_id,
+            expected_rule_generation,
+        )?;
+        self.entries
+            .get_mut(connection_id)
+            .expect("validated connection remains present")
+            .children
+            .remove(rule_id);
+        Ok(())
+    }
+
+    pub(crate) fn ensure_rule_removable(
+        &self,
+        connection_id: &str,
+        connection_generation: WireCounter,
+        rule_id: &str,
+        expected_rule_generation: WireCounter,
+    ) -> Result<(), RuntimeError> {
         let entry = self
             .entries
-            .get_mut(connection_id)
+            .get(connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != connection_generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -842,10 +1220,12 @@ impl ConnectionRegistry {
         if child.generation != expected_rule_generation {
             return Err(RuntimeError::StaleRuleGeneration(child.generation));
         }
-        if child.state != SshForwardRuleState::Off {
+        if !matches!(
+            child.state,
+            SshForwardRuleState::Off | SshForwardRuleState::Failed
+        ) {
             return Err(RuntimeError::ConnectionNotEstablished);
         }
-        entry.children.remove(rule_id);
         Ok(())
     }
 
@@ -996,6 +1376,8 @@ impl ConnectionRegistry {
             }
             entry.cancellation.cancel();
             entry.session.take();
+            entry.session_slot.replace(None);
+            entry.reconnect_owner = None;
             entry.credential_lease.take();
         }
         self.entries.clear();
@@ -1067,6 +1449,21 @@ impl ConnectionRegistry {
             return Err(RuntimeError::ConnectionNotEstablished);
         }
         Ok(())
+    }
+
+    pub(crate) fn is_reconnecting(
+        &self,
+        connection_id: &str,
+        generation: WireCounter,
+    ) -> Result<bool, RuntimeError> {
+        let entry = self
+            .entries
+            .get(connection_id)
+            .ok_or(RuntimeError::ConnectionNotFound)?;
+        if entry.generation != generation {
+            return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+        }
+        Ok(entry.state == SshConnectionState::Reconnecting)
     }
 
     fn active_rule_count(&self) -> usize {
@@ -1177,6 +1574,30 @@ mod tests {
             registry.reserve_connection(connection(id), reservation.generation),
             Ok(ConnectionAdmission::AlreadyCurrent(_))
         ));
+    }
+
+    #[test]
+    fn established_connection_can_expose_a_nonfatal_credential_warning() {
+        let mut registry = ConnectionRegistry::new();
+        let id = "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96";
+        let ConnectionAdmission::Reserved(reservation) = registry
+            .reserve_connection(connection(id), WireCounter::ZERO)
+            .unwrap()
+        else {
+            panic!("first connect must reserve");
+        };
+        registry.entries.get_mut(id).unwrap().state = SshConnectionState::Established;
+        registry
+            .set_established_error(
+                id,
+                reservation.generation,
+                SshForwardErrorCode::CredentialNotSaved,
+            )
+            .unwrap();
+        assert_eq!(
+            registry.entries.get(id).unwrap().error_code,
+            Some(SshForwardErrorCode::CredentialNotSaved)
+        );
     }
 
     #[test]
@@ -1648,40 +2069,81 @@ mod tests {
     }
 
     #[test]
-    fn removed_off_rule_is_not_projected_after_reconciliation() {
+    fn removed_inactive_rule_is_not_projected_after_reconciliation() {
+        for state in [SshForwardRuleState::Off, SshForwardRuleState::Failed] {
+            let mut registry = ConnectionRegistry::new();
+            let connection_id = "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96";
+            let ConnectionAdmission::Reserved(reservation) = registry
+                .reserve_connection(connection(connection_id), WireCounter::ZERO)
+                .unwrap()
+            else {
+                panic!("first connect must reserve");
+            };
+            let rule_id = "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0";
+            registry
+                .entries
+                .get_mut(connection_id)
+                .unwrap()
+                .children
+                .insert(
+                    rule_id.into(),
+                    ForwardChild {
+                        state,
+                        ..ForwardChild::new(
+                            rule(rule_id, connection_id, 15432),
+                            WireCounter::parse("2").unwrap(),
+                        )
+                    },
+                );
+            registry
+                .remove_rule(
+                    connection_id,
+                    reservation.generation,
+                    rule_id,
+                    WireCounter::parse("2").unwrap(),
+                )
+                .unwrap();
+            assert!(registry.rule_snapshots().is_empty());
+        }
+    }
+
+    #[test]
+    fn removed_disconnected_connection_does_not_clear_siblings() {
         let mut registry = ConnectionRegistry::new();
-        let connection_id = "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96";
-        let ConnectionAdmission::Reserved(reservation) = registry
-            .reserve_connection(connection(connection_id), WireCounter::ZERO)
+        let deleted_id = "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96";
+        let retained_id = "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0";
+        let ConnectionAdmission::Reserved(deleted) = registry
+            .reserve_connection(connection(deleted_id), WireCounter::ZERO)
             .unwrap()
         else {
             panic!("first connect must reserve");
         };
-        let rule_id = "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0";
         registry
-            .entries
-            .get_mut(connection_id)
-            .unwrap()
-            .children
-            .insert(
-                rule_id.into(),
-                ForwardChild {
-                    state: SshForwardRuleState::Off,
-                    ..ForwardChild::new(
-                        rule(rule_id, connection_id, 15432),
-                        WireCounter::parse("2").unwrap(),
-                    )
-                },
-            );
-        registry
-            .remove_rule(
-                connection_id,
-                reservation.generation,
-                rule_id,
-                WireCounter::parse("2").unwrap(),
+            .fail_connection(
+                deleted_id,
+                deleted.generation,
+                SshForwardErrorCode::SshConnectFailed,
             )
             .unwrap();
-        assert!(registry.rule_snapshots().is_empty());
+        let ConnectionAdmission::Reserved(retained) = registry
+            .reserve_connection(connection(retained_id), WireCounter::ZERO)
+            .unwrap()
+        else {
+            panic!("second connect must reserve");
+        };
+
+        registry
+            .remove_if_disconnected(deleted_id, deleted.generation)
+            .unwrap();
+        assert!(registry
+            .connection_snapshots_for_scope(SCOPE)
+            .iter()
+            .all(|snapshot| snapshot.connection_profile_id != deleted_id));
+        assert!(registry
+            .connection_snapshots_for_scope(SCOPE)
+            .iter()
+            .any(|snapshot| snapshot.connection_profile_id == retained_id
+                && snapshot.generation == retained.generation));
     }
 
     #[tokio::test]
@@ -1705,6 +2167,80 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), cancellation.cancelled())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn session_slot_version_prevents_a_lost_wakeup() {
+        let slot = SessionSlot::new();
+        let observed = slot.version();
+        slot.notify_changed();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            slot.wait_for_change(observed),
+        )
+        .await
+        .unwrap();
+        assert_ne!(slot.version(), observed);
+    }
+
+    #[tokio::test]
+    async fn reconnect_owner_handoff_wakes_a_waiting_child() {
+        let registry = Arc::new(Mutex::new(ConnectionRegistry::new()));
+        let connection_id = "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96";
+        let rule_id = "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0";
+        let generation;
+        let slot;
+        {
+            let mut registry = registry.lock().await;
+            let ConnectionAdmission::Reserved(reservation) = registry
+                .reserve_connection(connection(connection_id), WireCounter::ZERO)
+                .unwrap()
+            else {
+                panic!("reconnect test connection must reserve");
+            };
+            generation = reservation.generation;
+            let entry = registry.entries.get_mut(connection_id).unwrap();
+            entry.state = SshConnectionState::Reconnecting;
+            entry.reconnect_owner = Some("owner-a".into());
+            entry.children.insert(
+                rule_id.into(),
+                ForwardChild {
+                    state: SshForwardRuleState::On,
+                    ..ForwardChild::new(
+                        rule(rule_id, connection_id, 15432),
+                        WireCounter::parse("1").unwrap(),
+                    )
+                },
+            );
+            slot = Arc::clone(&entry.session_slot);
+        }
+
+        let waiter_registry = Arc::clone(&registry);
+        let waiter_slot = Arc::clone(&slot);
+        let waiter = tokio::spawn(async move {
+            let observed = waiter_slot.version();
+            waiter_slot.wait_for_change(observed).await;
+            waiter_registry
+                .lock()
+                .await
+                .begin_reconnect(connection_id, generation, "owner-b")
+                .unwrap()
+                .is_some()
+        });
+
+        tokio::task::yield_now().await;
+        assert!(registry
+            .lock()
+            .await
+            .abandon_reconnect(connection_id, generation, "owner-a")
+            .unwrap());
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+                .await
+                .unwrap()
+                .unwrap()
+        );
     }
 
     #[test]

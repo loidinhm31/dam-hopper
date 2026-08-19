@@ -7,6 +7,7 @@ import { useDialogFocusTrap } from "@/hooks/use-dialog-focus-trap.js";
 import { getSshForwardErrorPresentation } from "@/lib/ssh-forward-error-copy.js";
 import type {
   HostKeyChallenge,
+  SshConnectionProfile,
   SshForwardError,
   SshForwardProfile,
   SshForwardTrustRepairMetadata,
@@ -14,7 +15,9 @@ import type {
 
 interface Props {
   open: boolean;
-  profile: SshForwardProfile;
+  /** v2 connection identity. `profile` remains for old embedded callers. */
+  connection?: SshConnectionProfile;
+  profile?: SshForwardProfile;
   challenge?: HostKeyChallenge;
   errorCode?: SshForwardError["code"];
   metadata?: SshForwardTrustRepairMetadata;
@@ -26,6 +29,7 @@ interface Props {
 
 export function SshHostKeyApprovalDialog({
   open,
+  connection,
   profile,
   challenge,
   errorCode,
@@ -35,12 +39,19 @@ export function SshHostKeyApprovalDialog({
   onApprove,
   onClose,
 }: Props) {
+  const endpoint = connection ?? profile;
   const firstAction = useRef<HTMLButtonElement>(null);
-  const dialogRef = useDialogFocusTrap(open, pending, onClose, firstAction);
-  if (!open) return null;
+  const closeButton = useRef<HTMLButtonElement>(null);
   const changed =
     errorCode === "HOST_KEY_CHANGED" ||
     errorCode === "HOST_KEY_ALGORITHM_CHANGED";
+  const dialogRef = useDialogFocusTrap(
+    open,
+    pending,
+    onClose,
+    challenge && !changed ? firstAction : closeButton,
+  );
+  if (!open || !endpoint) return null;
   const fixedError = errorCode
     ? getSshForwardErrorPresentation({
         code: errorCode,
@@ -82,10 +93,11 @@ export function SshHostKeyApprovalDialog({
               id="ssh-trust-description"
               className="mt-1 text-xs text-[var(--color-text-muted)]"
             >
-              {profile.sshHost}:{profile.sshPort}
+              {endpoint.sshHost}:{endpoint.sshPort}
             </p>
           </div>
           <button
+            ref={closeButton}
             type="button"
             onClick={onClose}
             disabled={pending}
@@ -97,7 +109,7 @@ export function SshHostKeyApprovalDialog({
         </div>
         {changed ? (
           <SshHostKeyChangedPanel
-            profile={profile}
+            profile={endpoint}
             metadata={metadata}
             fixedError={fixedError}
           />

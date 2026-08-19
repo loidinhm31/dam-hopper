@@ -1,27 +1,41 @@
 import type { ServerProfile } from "@/api/server-config.js";
-import type { SshForwardProfile } from "@/lib/ssh-forward-host.js";
+import type {
+  SshConnectionProfile,
+  SshForwardError,
+  SshForwardRule,
+} from "@/lib/ssh-forward-host.js";
+import { generateUUID } from "@/lib/utils.js";
 
 export type SshForwardAuthMode = "agent" | "key";
 
-export interface SshForwardProfileDraft {
+export interface SshConnectionProfileDraft {
   name: string;
   sshHost: string;
   sshPort: string;
   sshUser: string;
   authMode: SshForwardAuthMode;
   keyId: string;
+  reviewed: boolean;
+}
+
+export interface SshForwardRuleDraft {
+  name: string;
   localPort: string;
   targetPort: string;
-  autoStart: boolean;
+  desiredEnabled: boolean;
   reconnectEnabled: boolean;
   reconnectMaxAttempts: string;
   reviewed: boolean;
 }
 
-export type SshForwardProfileField = keyof SshForwardProfileDraft | "form";
-export type SshForwardProfileErrors = Partial<
-  Record<SshForwardProfileField, string>
+export type SshConnectionProfileField =
+  | keyof SshConnectionProfileDraft
+  | "form";
+export type SshForwardRuleField = keyof SshForwardRuleDraft | "form";
+export type SshConnectionProfileErrors = Partial<
+  Record<SshConnectionProfileField, string>
 >;
+export type SshForwardRuleErrors = Partial<Record<SshForwardRuleField, string>>;
 
 export function sshHostFromServerProfile(
   profile: ServerProfile | null,
@@ -35,9 +49,9 @@ export function sshHostFromServerProfile(
   }
 }
 
-export function newSshForwardDraft(
+export function newSshConnectionDraft(
   source: ServerProfile | null,
-): SshForwardProfileDraft {
+): SshConnectionProfileDraft {
   return {
     name: source?.name ?? "",
     sshHost: sshHostFromServerProfile(source),
@@ -45,89 +59,134 @@ export function newSshForwardDraft(
     sshUser: "",
     authMode: "agent",
     keyId: "",
+    reviewed: false,
+  };
+}
+
+export function draftFromSshConnectionProfile(
+  connection: SshConnectionProfile,
+): SshConnectionProfileDraft {
+  return {
+    name: connection.name,
+    sshHost: connection.sshHost,
+    sshPort: String(connection.sshPort),
+    sshUser: connection.sshUser,
+    authMode: connection.auth.mode,
+    keyId: connection.auth.mode === "key" ? connection.auth.keyId : "",
+    reviewed: false,
+  };
+}
+
+export function newSshForwardRuleDraft(): SshForwardRuleDraft {
+  return {
+    name: "",
     localPort: "",
     targetPort: "",
-    autoStart: false,
+    desiredEnabled: false,
     reconnectEnabled: true,
     reconnectMaxAttempts: "5",
     reviewed: false,
   };
 }
 
-export function draftFromSshForwardProfile(
-  profile: SshForwardProfile,
-): SshForwardProfileDraft {
+export function draftFromSshForwardRule(
+  rule: SshForwardRule,
+): SshForwardRuleDraft {
   return {
-    name: profile.name,
-    sshHost: profile.sshHost,
-    sshPort: String(profile.sshPort),
-    sshUser: profile.sshUser,
-    authMode: profile.auth.mode,
-    keyId: profile.auth.mode === "key" ? profile.auth.keyId : "",
-    localPort: String(profile.localPort),
-    targetPort: String(profile.targetPort),
-    autoStart: profile.autoStart,
-    reconnectEnabled: profile.reconnect.enabled,
-    reconnectMaxAttempts: String(profile.reconnect.maxAttempts || 5),
+    name: rule.name,
+    localPort: String(rule.localPort),
+    targetPort: String(rule.targetPort),
+    desiredEnabled: rule.desiredEnabled,
+    reconnectEnabled: rule.reconnect.enabled,
+    reconnectMaxAttempts: String(rule.reconnect.maxAttempts || 5),
     reviewed: false,
   };
 }
 
-export function validateSshForwardDraft(
-  draft: SshForwardProfileDraft,
-): SshForwardProfileErrors {
-  const errors: SshForwardProfileErrors = {};
-  if (!draft.name.trim() || draft.name.trim().length > 64) {
-    errors.name = "Name is required and must be 64 characters or fewer.";
-  }
-  if (!isSafeSshHost(draft.sshHost)) {
+export function validateSshConnectionDraft(
+  draft: SshConnectionProfileDraft,
+): SshConnectionProfileErrors {
+  const errors: SshConnectionProfileErrors = {};
+  const name = draft.name.trim();
+  const sshUser = draft.sshUser.trim();
+  if (!name || name.length > 64 || hasControlCharacter(name))
+    errors.name =
+      "Name is required, must be 64 characters or fewer, and contain no control characters.";
+  if (!isSafeSshHost(draft.sshHost))
     errors.sshHost = "Use a safe ASCII SSH hostname or IPv4 address.";
-  }
   if (parsePort(draft.sshPort) === null) errors.sshPort = portMessage("SSH");
-  if (!draft.sshUser.trim() || draft.sshUser.trim().length > 64) {
-    errors.sshUser = "SSH user is required and must be 64 characters or fewer.";
-  }
-  if (parsePort(draft.localPort) === null)
-    errors.localPort = portMessage("Local");
-  if (parsePort(draft.targetPort) === null)
-    errors.targetPort = portMessage("Target");
-  if (draft.authMode === "key" && !isSafeKeyId(draft.keyId)) {
+  if (!sshUser || sshUser.length > 64 || hasControlCharacter(sshUser))
+    errors.sshUser =
+      "SSH user is required, must be 64 characters or fewer, and contain no control characters.";
+  if (draft.authMode === "key" && !isSafeKeyId(draft.keyId))
     errors.keyId = "Select a local SSH key from the native inventory.";
-  }
-  if (draft.reconnectEnabled) {
-    const attempts = parsePort(draft.reconnectMaxAttempts);
-    if (attempts === null || attempts > 5) {
-      errors.reconnectMaxAttempts = "Choose a reconnect limit from 1 to 5.";
-    }
-  }
   if (!draft.reviewed)
     errors.reviewed = "Review the SSH endpoint before saving.";
   return errors;
 }
 
-export function buildSshForwardProfile(
-  draft: SshForwardProfileDraft,
+export function validateSshForwardRuleDraft(
+  draft: SshForwardRuleDraft,
+): SshForwardRuleErrors {
+  const errors: SshForwardRuleErrors = {};
+  const name = draft.name.trim();
+  if (!name || name.length > 64 || hasControlCharacter(name))
+    errors.name =
+      "Name is required, must be 64 characters or fewer, and contain no control characters.";
+  if (parsePort(draft.localPort) === null)
+    errors.localPort = portMessage("Local");
+  if (parsePort(draft.targetPort) === null)
+    errors.targetPort = portMessage("Target");
+  if (draft.reconnectEnabled) {
+    const attempts = parsePort(draft.reconnectMaxAttempts);
+    if (attempts === null || attempts > 5)
+      errors.reconnectMaxAttempts = "Choose a reconnect limit from 1 to 5.";
+  }
+  if (!draft.reviewed)
+    errors.reviewed = "Review the loopback rule before saving.";
+  return errors;
+}
+
+export function buildSshConnectionProfile(
+  draft: SshConnectionProfileDraft,
   scopeId: string,
-  existing?: SshForwardProfile,
-): SshForwardProfile | null {
-  if (Object.keys(validateSshForwardDraft(draft)).length > 0) return null;
-  const now = new Date().toISOString() as SshForwardProfile["createdAt"];
-  const auth =
-    draft.authMode === "key"
-      ? { mode: "key" as const, keyId: draft.keyId.trim() }
-      : { mode: "agent" as const };
+  existing?: SshConnectionProfile,
+): SshConnectionProfile | null {
+  if (Object.keys(validateSshConnectionDraft(draft)).length > 0) return null;
+  const now = new Date().toISOString() as SshConnectionProfile["createdAt"];
   return {
-    id: existing?.id ?? crypto.randomUUID(),
+    id: existing?.id ?? generateUUID(),
     scopeId,
     name: draft.name.trim(),
     sshHost: canonicalizeSshHost(draft.sshHost),
     sshPort: parsePort(draft.sshPort)!,
     sshUser: draft.sshUser.trim(),
-    auth,
+    auth:
+      draft.authMode === "key"
+        ? { mode: "key", keyId: draft.keyId.trim() }
+        : { mode: "agent" },
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+export function buildSshForwardRule(
+  draft: SshForwardRuleDraft,
+  scopeId: string,
+  connectionProfileId: string,
+  existing?: SshForwardRule,
+): SshForwardRule | null {
+  if (Object.keys(validateSshForwardRuleDraft(draft)).length > 0) return null;
+  const now = new Date().toISOString() as SshForwardRule["createdAt"];
+  return {
+    id: existing?.id ?? generateUUID(),
+    scopeId,
+    connectionProfileId,
+    name: draft.name.trim(),
     localPort: parsePort(draft.localPort)!,
     targetHost: "127.0.0.1",
     targetPort: parsePort(draft.targetPort)!,
-    autoStart: draft.autoStart,
+    desiredEnabled: draft.desiredEnabled,
     reconnect: {
       enabled: draft.reconnectEnabled,
       maxAttempts: draft.reconnectEnabled
@@ -139,6 +198,27 @@ export function buildSshForwardProfile(
   };
 }
 
+/** Map safe native errors to the field that can resolve them. */
+export function mapSshForwardErrorToFields(
+  error: unknown,
+  kind: "connection" | "rule",
+): SshConnectionProfileErrors | SshForwardRuleErrors {
+  const code = (error as Partial<SshForwardError> | null)?.code;
+  if (code === "PORT_CONFLICT" || code === "LOCAL_PORT_IN_USE")
+    return kind === "rule"
+      ? { localPort: "This local port is already in use." }
+      : {};
+  if (code === "KEY_NOT_FOUND" || code === "KEY_UNSAFE")
+    return kind === "connection"
+      ? { keyId: "Choose another key from the native inventory." }
+      : {};
+  if (code === "TARGET_NOT_ALLOWED")
+    return kind === "rule"
+      ? { targetPort: "Only remote 127.0.0.1 is allowed." }
+      : {};
+  return { form: "Review the latest native state and try again." };
+}
+
 export function isSafeSshHost(value: string): boolean {
   const host = value.trim().toLowerCase().replace(/\.+$/, "");
   if (!host || host.length > 253 || !/^[\x00-\x7f]+$/.test(host)) return false;
@@ -147,6 +227,7 @@ export function isSafeSshHost(value: string): boolean {
       .split(".")
       .every((part) => /^(0|[1-9]\d{0,2})$/.test(part) && Number(part) <= 255);
   }
+  if (/^\d+(?:\.\d+)*$/.test(host)) return false;
   return host
     .split(".")
     .every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
@@ -170,4 +251,11 @@ function parsePort(value: string): number | null {
 
 function portMessage(label: string): string {
   return `${label} port must be an integer from 1 to 65535.`;
+}
+
+function hasControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 0x20 || code === 0x7f;
+  });
 }
