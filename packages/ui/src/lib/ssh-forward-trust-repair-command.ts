@@ -1,8 +1,16 @@
-import type { SshForwardProfile } from "@/lib/ssh-forward-host.js";
+import type {
+  SshConnectionProfile,
+  SshForwardProfile,
+} from "@/lib/ssh-forward-host.js";
+
+type TrustRepairEndpoint = Pick<
+  SshForwardProfile | SshConnectionProfile,
+  "scopeId" | "sshHost" | "sshPort"
+>;
 
 export function buildTrustRepairRemoveCommand(
   executablePath: string,
-  profile: SshForwardProfile,
+  profile: TrustRepairEndpoint,
 ): string {
   return `${quoteWindowsCommandArgument(executablePath)} --ssh-forward-trust-repair remove-endpoint --scope ${quoteWindowsCommandArgument(profile.scopeId)} --host ${quoteWindowsCommandArgument(profile.sshHost)} --port ${profile.sshPort}`;
 }

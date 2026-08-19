@@ -252,7 +252,7 @@ impl SshForwardErrorCode {
             BindFailed => ("The desktop loopback listener could not start.", true),
             ChannelOpenTimeout => ("The remote target channel timed out.", true),
             TargetConnectFailed => ("The remote loopback target refused the connection.", true),
-            TargetNotAllowed => ("V1 forwards only to remote 127.0.0.1.", false),
+            TargetNotAllowed => ("Only remote 127.0.0.1 is allowed.", false),
             ShutdownTimeout => (
                 "Native forwarding exceeded its shutdown grace period.",
                 true,
