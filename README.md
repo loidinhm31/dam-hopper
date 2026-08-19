@@ -36,7 +36,7 @@ cd .. && pnpm install && pnpm build
 # Run (web dist is served by the Rust server)
 ./server/target/release/dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml
 # Or omit --config to use the default global registry path
-# Open http://localhost:4800 — token printed to terminal on startup
+# Direct/legacy default: http://127.0.0.1:4800 — token printed to terminal
 ```
 
 ### Linux nohup background server
@@ -113,8 +113,10 @@ pnpm android:dev
 # Android release artifacts (APK + AAB)
 pnpm android:build
 
-# Rust server (requires running Rust server separately)
-cd server && cargo run -- --config /path/to/dam-hopper.toml
+# Rust server for the Vite dev proxy (isolated loopback port 4801)
+pnpm dev:server
+# Or directly:
+cd server && cargo run -- --config /path/to/dam-hopper.toml --host 127.0.0.1 --port 4801
 
 # Build everything
 pnpm build        # web app

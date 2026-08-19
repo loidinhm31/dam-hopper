@@ -17,12 +17,12 @@ pnpm dev
 # Rust server: dev mode
 pnpm dev:server
 # Or directly:
-cd server && cargo run -- --config /path/to/dam-hopper.toml --port 4800
+cd server && cargo run -- --config /path/to/dam-hopper.toml --host 127.0.0.1 --port 4801
 
 # Rust server: watch mode (requires cargo-watch)
 pnpm dev:server:watch
 # Or directly:
-cd server && cargo watch -x run
+cd server && cargo watch -x 'run -- --host 127.0.0.1 --port 4801'
 
 # Rust server: release build
 pnpm build:server
@@ -66,11 +66,11 @@ pnpm check
 **Phase 01: Server-Side Auth Bypass** enables development without MongoDB. Start the server with `--no-auth` to bypass authentication entirely. The default bind is `0.0.0.0`; use only on a trusted development network, never publicly or with sensitive data:
 
 ```bash
-# Via npm script (recommended for dev:server)
+# Via npm script (recommended; loopback 127.0.0.1:4801)
 npm run dev:server -- --no-auth --config /path/to/dam-hopper.toml
 
 # Or directly via cargo
-cd server && cargo run -- --no-auth --config /path/to/dam-hopper.toml
+cd server && cargo run -- --no-auth --config /path/to/dam-hopper.toml --host 127.0.0.1 --port 4801
 
 # Or via environment variable
 DAM_HOPPER_NO_AUTH=1 cargo run -- --config /path/to/dam-hopper.toml
@@ -110,7 +110,7 @@ DamHopper is a monorepo with two components:
 Data flow:
 
 ```
-dam-hopper-server (Rust, Axum, port 4800)
+dam-hopper-server (Rust, Axum; dev script 127.0.0.1:4801, direct/legacy default 4800)
 ├── config/ — TOML parsing, workspace discovery, global config
 ├── pty/ — portable-pty session manager (Map<uuid, PtySession>)
 ├── tunnel/ — TunnelSessionManager + CloudflaredDriver (Map<uuid, TunnelSession>)
