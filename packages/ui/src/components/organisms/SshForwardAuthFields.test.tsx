@@ -1,12 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { SshForwardAuthFields } from "./SshForwardAuthFields.js";
-import { newSshForwardDraft } from "@/lib/ssh-forward-form.js";
+import { newSshConnectionDraft } from "@/lib/ssh-forward-form.js";
 
 describe("SshForwardAuthFields", () => {
-  it("offers only local inventory keys for profile-bound authentication", () => {
+  it("offers only local inventory keys for connection authentication", () => {
     const draft = {
-      ...newSshForwardDraft(null),
+      ...newSshConnectionDraft(null),
       authMode: "key" as const,
     };
     const markup = renderToStaticMarkup(
@@ -38,5 +38,30 @@ describe("SshForwardAuthFields", () => {
     expect(markup).toContain("Local SSH key (passphrase if needed)");
     expect(markup).toContain("key-local");
     expect(markup).not.toContain("agent-0");
+  });
+
+  it("associates inventory failures with the key selector", () => {
+    const draft = {
+      ...newSshConnectionDraft(null),
+      authMode: "key" as const,
+    };
+    const markup = renderToStaticMarkup(
+      <SshForwardAuthFields
+        draft={draft}
+        errors={{ keyId: "Select a local key." }}
+        keys={null}
+        keyError="Local key inventory unavailable."
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('id="ssh-forward-key-id"');
+    expect(markup).toContain('aria-invalid="true"');
+    expect(markup).toContain(
+      'aria-describedby="ssh-forward-key-id-error ssh-forward-key-inventory-error"',
+    );
+    expect(markup).toContain(
+      'id="ssh-forward-key-inventory-error" role="alert"',
+    );
   });
 });

@@ -119,6 +119,12 @@ export type SshForwardRuleState =
   | "on"
   | "closing"
   | "failed";
+
+export function isSshForwardRuleRuntimeActive(
+  state: SshForwardRuleState | undefined,
+): boolean {
+  return state === "opening" || state === "on" || state === "closing";
+}
 export interface SshForwardRuleRuntime {
   ruleId: string;
   connectionProfileId: string;
@@ -406,8 +412,7 @@ export function parseSshForwardError(value: unknown): SshForwardError | null {
     return null;
   if (
     (raw.scopeId !== undefined && typeof raw.scopeId !== "string") ||
-    (raw.profileId !== undefined && typeof raw.profileId !== "string")
-    ||
+    (raw.profileId !== undefined && typeof raw.profileId !== "string") ||
     (raw.connectionProfileId !== undefined &&
       typeof raw.connectionProfileId !== "string") ||
     (raw.ruleId !== undefined && typeof raw.ruleId !== "string")
@@ -489,7 +494,9 @@ export interface SshForwardHost {
   openClient(knownScopes: KnownScopesInput): Promise<OpenClientResult>;
   activateScope(scopeId: string | null): Promise<ScopeActivation>;
   snapshot(): Promise<SshForwardSnapshot>;
-  createConnection(connection: SshConnectionProfile): Promise<SshForwardSnapshot>;
+  createConnection(
+    connection: SshConnectionProfile,
+  ): Promise<SshForwardSnapshot>;
   updateConnection(
     connectionProfileId: string,
     expectedGeneration: WireCounter,

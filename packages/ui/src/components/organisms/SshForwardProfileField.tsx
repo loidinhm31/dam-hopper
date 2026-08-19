@@ -3,10 +3,12 @@ import type { ReactNode } from "react";
 export function SshForwardProfileField({
   label,
   error,
+  errorId,
   children,
 }: {
   label: string;
   error?: string;
+  errorId?: string;
   children: ReactNode;
 }) {
   return (
@@ -14,7 +16,10 @@ export function SshForwardProfileField({
       {label}
       {children}
       {error ? (
-        <span className="text-[11px] normal-case tracking-normal text-[var(--color-danger)]">
+        <span
+          id={errorId}
+          className="text-[11px] normal-case tracking-normal text-[var(--color-danger)]"
+        >
           {error}
         </span>
       ) : null}

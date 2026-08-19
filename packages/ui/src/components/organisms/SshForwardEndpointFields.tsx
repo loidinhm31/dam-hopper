@@ -2,16 +2,16 @@ import type { ChangeEvent, RefObject } from "react";
 import { inputClass } from "@/components/atoms/Button.js";
 import { SshForwardProfileField } from "@/components/organisms/SshForwardProfileField.js";
 import type {
-  SshForwardProfileDraft,
-  SshForwardProfileErrors,
+  SshConnectionProfileDraft,
+  SshConnectionProfileErrors,
 } from "@/lib/ssh-forward-form.js";
 
 interface Props {
-  draft: SshForwardProfileDraft;
-  errors: SshForwardProfileErrors;
+  draft: SshConnectionProfileDraft;
+  errors: SshConnectionProfileErrors;
   firstInput: RefObject<HTMLInputElement | null>;
   onUpdate: (
-    field: keyof SshForwardProfileDraft,
+    field: keyof SshConnectionProfileDraft,
     value: string | boolean,
   ) => void;
 }
@@ -23,7 +23,7 @@ export function SshForwardEndpointFields({
   onUpdate,
 }: Props) {
   const input =
-    (field: keyof SshForwardProfileDraft) =>
+    (field: keyof SshConnectionProfileDraft) =>
     (event: ChangeEvent<HTMLInputElement>) =>
       onUpdate(field, event.target.value);
   return (
@@ -31,8 +31,13 @@ export function SshForwardEndpointFields({
       <legend className="px-1 text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
         SSH endpoint
       </legend>
-      <SshForwardProfileField label="Profile name" error={errors.name}>
+      <SshForwardProfileField
+        label="Connection name"
+        error={errors.name}
+        errorId="ssh-connection-name-error"
+      >
         <input
+          id="ssh-connection-name"
           ref={firstInput}
           className={inputClass}
           value={draft.name}
@@ -40,20 +45,36 @@ export function SshForwardEndpointFields({
           maxLength={64}
           autoComplete="off"
           aria-invalid={Boolean(errors.name)}
+          aria-describedby={
+            errors.name ? "ssh-connection-name-error" : undefined
+          }
         />
       </SshForwardProfileField>
-      <SshForwardProfileField label="SSH host" error={errors.sshHost}>
+      <SshForwardProfileField
+        label="SSH host"
+        error={errors.sshHost}
+        errorId="ssh-connection-host-error"
+      >
         <input
+          id="ssh-connection-host"
           className={inputClass}
           value={draft.sshHost}
           onChange={input("sshHost")}
           maxLength={253}
           autoComplete="off"
           aria-invalid={Boolean(errors.sshHost)}
+          aria-describedby={
+            errors.sshHost ? "ssh-connection-host-error" : undefined
+          }
         />
       </SshForwardProfileField>
-      <SshForwardProfileField label="SSH port" error={errors.sshPort}>
+      <SshForwardProfileField
+        label="SSH port"
+        error={errors.sshPort}
+        errorId="ssh-connection-port-error"
+      >
         <input
+          id="ssh-connection-port"
           className={inputClass}
           type="text"
           inputMode="numeric"
@@ -61,16 +82,27 @@ export function SshForwardEndpointFields({
           value={draft.sshPort}
           onChange={input("sshPort")}
           aria-invalid={Boolean(errors.sshPort)}
+          aria-describedby={
+            errors.sshPort ? "ssh-connection-port-error" : undefined
+          }
         />
       </SshForwardProfileField>
-      <SshForwardProfileField label="SSH user" error={errors.sshUser}>
+      <SshForwardProfileField
+        label="SSH user"
+        error={errors.sshUser}
+        errorId="ssh-connection-user-error"
+      >
         <input
+          id="ssh-connection-user"
           className={inputClass}
           value={draft.sshUser}
           onChange={input("sshUser")}
           maxLength={64}
           autoComplete="username"
           aria-invalid={Boolean(errors.sshUser)}
+          aria-describedby={
+            errors.sshUser ? "ssh-connection-user-error" : undefined
+          }
         />
       </SshForwardProfileField>
     </fieldset>

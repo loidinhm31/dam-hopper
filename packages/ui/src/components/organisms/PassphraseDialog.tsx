@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { KeyRound, X } from "lucide-react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import { cn } from "@/lib/utils.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { useDialogFocusTrap } from "@/hooks/use-dialog-focus-trap.js";
 
 interface Props {
   open: boolean;
@@ -20,11 +21,17 @@ interface Props {
   description?: string;
   submitLabel?: string;
   allowSaveForLater?: boolean;
+  saveForLaterAuth?: "key" | "password" | "both";
   requireKeySelection?: boolean;
   passwordAuth?: {
     username: string;
-    onSubmit: (username: string, password: string) => void;
+    onSubmit: (
+      username: string,
+      password: string,
+      rememberForDays: 0 | 30,
+    ) => void;
   };
+  defaultSaveForLater?: boolean;
 }
 
 export interface PassphraseDialogSubmission {
@@ -57,35 +64,20 @@ export function PassphraseDialog({
   description = "Git could not authenticate with SSH. Enter the passphrase for the selected private key and retry. Leave blank if the key has no passphrase.",
   submitLabel = "Load Key & Retry",
   allowSaveForLater = true,
+  saveForLaterAuth = "both",
   requireKeySelection = false,
   passwordAuth,
+  defaultSaveForLater = false,
 }: Props) {
   const [passphrase, setPassphrase] = useState("");
   const [selectedKey, setSelectedKey] = useState("");
-  const [saveForLater, setSaveForLater] = useState(false);
+  const [saveForLater, setSaveForLater] = useState(defaultSaveForLater);
   const [authMethod, setAuthMethod] = useState<"key" | "password">("key");
   const [username, setUsername] = useState(passwordAuth?.username ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
-
-  // Handle focus
-  useEffect(() => {
-    if (open && !isAndroidChromeNativeInputSuppressed) {
-      const timer = setTimeout(() => inputRef.current?.focus(), 0);
-      return () => clearTimeout(timer);
-    }
-  }, [isAndroidChromeNativeInputSuppressed, open]);
-
-  // Escape to cancel
-  useEffect(() => {
-    if (!open) return;
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [open, onCancel]);
+  const dialogRef = useDialogFocusTrap(open, loading, onCancel, inputRef);
 
   if (!open) return null;
 
@@ -100,7 +92,14 @@ export function PassphraseDialog({
     )
       return;
     if (authMethod === "password") {
-      passwordAuth!.onSubmit(username.trim(), passphrase);
+      passwordAuth!.onSubmit(
+        username.trim(),
+        passphrase,
+        saveForLater &&
+          (saveForLaterAuth === "both" || saveForLaterAuth === authMethod)
+          ? 30
+          : 0,
+      );
     } else {
       const submission = buildPassphraseDialogSubmission(
         passphrase,
@@ -110,14 +109,11 @@ export function PassphraseDialog({
       onSubmit(
         submission.passphrase,
         submission.keyPath,
-        submission.saveForLater,
+        submission.saveForLater &&
+          (saveForLaterAuth === "both" || saveForLaterAuth === authMethod),
       );
     }
     setPassphrase("");
-    setSelectedKey("");
-    setSaveForLater(false);
-    setAuthMethod("key");
-    setUsername(passwordAuth?.username ?? "");
   }
 
   function handleCancel() {
@@ -132,13 +128,20 @@ export function PassphraseDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/50" onClick={handleCancel} />
+      <div
+        className="absolute inset-0 bg-black/50"
+        onClick={() => !loading && handleCancel()}
+      />
 
       {/* Dialog */}
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="passphrase-dialog-title"
+        aria-describedby={`passphrase-dialog-description${
+          error ? " passphrase-dialog-error" : ""
+        }`}
         className="relative z-10 w-full max-w-sm rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl p-5"
       >
         {/* Header */}
@@ -153,13 +156,18 @@ export function PassphraseDialog({
           <button
             type="button"
             onClick={handleCancel}
+            disabled={loading}
+            aria-label="Close SSH credential dialog"
             className="rounded p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <p className="text-xs text-[var(--color-text-muted)] mb-4">
+        <p
+          id="passphrase-dialog-description"
+          className="text-xs text-[var(--color-text-muted)] mb-4"
+        >
           {description}
         </p>
 
@@ -177,10 +185,14 @@ export function PassphraseDialog({
         <form onSubmit={handleSubmit} className="space-y-3">
           {passwordAuth ? (
             <div className="space-y-1">
-              <label className="text-xs font-medium text-[var(--color-text-muted)]">
+              <label
+                htmlFor="ssh-credential-auth-method"
+                className="text-xs font-medium text-[var(--color-text-muted)]"
+              >
                 Authentication method
               </label>
               <select
+                id="ssh-credential-auth-method"
                 value={authMethod}
                 onChange={(event) =>
                   setAuthMethod(event.target.value as "key" | "password")
@@ -198,10 +210,14 @@ export function PassphraseDialog({
           {authMethod === "key" &&
             (keyOptions !== undefined || availableKeys.length > 0) && (
               <div className="space-y-1">
-                <label className="text-xs font-medium text-[var(--color-text-muted)]">
+                <label
+                  htmlFor="ssh-credential-key"
+                  className="text-xs font-medium text-[var(--color-text-muted)]"
+                >
                   SSH Key
                 </label>
                 <select
+                  id="ssh-credential-key"
                   value={selectedKey}
                   onChange={(e) => setSelectedKey(e.target.value)}
                   disabled={loading}
@@ -231,10 +247,14 @@ export function PassphraseDialog({
 
           {authMethod === "password" ? (
             <div className="space-y-1">
-              <label className="text-xs font-medium text-[var(--color-text-muted)]">
+              <label
+                htmlFor="ssh-credential-username"
+                className="text-xs font-medium text-[var(--color-text-muted)]"
+              >
                 Username
               </label>
               <input
+                id="ssh-credential-username"
                 type="text"
                 autoComplete="username"
                 value={username}
@@ -247,10 +267,14 @@ export function PassphraseDialog({
 
           {/* Passphrase or password input */}
           <div className="space-y-1">
-            <label className="text-xs font-medium text-[var(--color-text-muted)]">
+            <label
+              htmlFor="ssh-credential-secret"
+              className="text-xs font-medium text-[var(--color-text-muted)]"
+            >
               {authMethod === "password" ? "Password" : "Passphrase"}
             </label>
             <input
+              id="ssh-credential-secret"
               ref={inputRef}
               type="password"
               autoComplete={
@@ -273,9 +297,11 @@ export function PassphraseDialog({
             />
           </div>
 
-          {authMethod === "key" && allowSaveForLater ? (
+          {allowSaveForLater &&
+          (saveForLaterAuth === "both" || saveForLaterAuth === authMethod) ? (
             <label className="flex items-start gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/40 px-3 py-2 text-xs text-[var(--color-text-muted)]">
               <input
+                id="ssh-credential-remember"
                 type="checkbox"
                 checked={saveForLater}
                 onChange={(e) => setSaveForLater(e.target.checked)}
@@ -283,9 +309,10 @@ export function PassphraseDialog({
                 className="mt-0.5"
               />
               <span>
-                Save for later when device credential storage is available.
+                Remember for 30 days
                 <span className="block text-[11px] opacity-80">
-                  Otherwise the key stays loaded for this server session only.
+                  Fixed expiry in the Windows user vault; the choice is not
+                  sliding. A same-user process may use the saved credential.
                 </span>
               </span>
             </label>
@@ -293,7 +320,13 @@ export function PassphraseDialog({
 
           {/* Error */}
           {error && (
-            <p className="text-xs text-[var(--color-danger)] bg-[var(--color-danger)]/10 rounded px-2 py-1">
+            <p
+              id="passphrase-dialog-error"
+              role="alert"
+              aria-live="assertive"
+              aria-atomic="true"
+              className="text-xs text-[var(--color-danger)] bg-[var(--color-danger)]/10 rounded px-2 py-1"
+            >
               {error}
             </p>
           )}

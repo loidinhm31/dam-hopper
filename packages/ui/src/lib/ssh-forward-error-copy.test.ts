@@ -15,7 +15,7 @@ describe("ssh-forward-error-copy", () => {
     expect(presentation).toEqual({
       code: "HOST_KEY_CHANGED",
       message:
-        "SSH host identity changed. Connection blocked; use stopped-app trust repair.",
+        "SSH host identity changed. Connection blocked before credentials are sent; use stopped-app trust repair.",
       retryable: false,
     });
     expect(presentation.message).not.toContain("secret");
@@ -32,6 +32,6 @@ describe("ssh-forward-error-copy", () => {
 
   it("keeps remediation copy exact and blocking", () => {
     expect(SSH_FORWARD_REMEDIATION_COPY).toContain("Do not approve it yet.");
-    expect(SSH_FORWARD_REMEDIATION_COPY).toContain("then start again.");
+    expect(SSH_FORWARD_REMEDIATION_COPY).toContain("then press Connect again.");
   });
 });

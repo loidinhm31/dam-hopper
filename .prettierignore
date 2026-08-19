@@ -12,3 +12,6 @@ test-results/
 
 # Planning records are immutable evidence, not application source.
 plans/
+
+# Delegated-agent transcripts are generated evidence, not application source.
+.pi-subagents/
