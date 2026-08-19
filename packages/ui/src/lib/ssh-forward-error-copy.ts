@@ -17,7 +17,7 @@ export {
 } from "@/lib/ssh-forward-error-definitions.js";
 
 export const SSH_FORWARD_REMEDIATION_COPY =
-  "Connection blocked because the saved SSH host identity no longer matches. Do not approve it yet. Stop all forwards, quit DamHopper, verify the expected fingerprint with the server administrator, then run the displayed trust-repair command. Reopen DamHopper, start the forward, compare the fingerprint exactly, approve it, then start again.";
+  "Connection blocked because the saved SSH host identity no longer matches. Do not approve it yet. Disconnect all affected connections, quit DamHopper, verify the expected fingerprint with the server administrator, then run the displayed trust-repair command. Reopen DamHopper, press Connect, compare the fingerprint exactly, approve it, then press Connect again.";
 
 export function normalizeSshForwardErrorCode(
   code: SshForwardErrorCode,

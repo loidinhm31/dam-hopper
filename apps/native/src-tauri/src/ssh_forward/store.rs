@@ -893,7 +893,27 @@ impl ScopeStore {
     pub(crate) fn replace_rules(
         &self,
         expected: WireCounter,
+        next: StoredScopeConfigV2,
+    ) -> io::Result<StoredScopeConfigV2> {
+        self.replace_rules_inner(expected, next, false)
+    }
+
+    /// Manager-owned rule writes run while the active scope already holds the
+    /// activity lease. Direct store callers still acquire that lease through
+    /// `replace_rules`, so maintenance cannot mutate a live scope unnoticed.
+    pub(crate) fn replace_rules_with_activity_lease(
+        &self,
+        expected: WireCounter,
+        next: StoredScopeConfigV2,
+    ) -> io::Result<StoredScopeConfigV2> {
+        self.replace_rules_inner(expected, next, true)
+    }
+
+    fn replace_rules_inner(
+        &self,
+        expected: WireCounter,
         mut next: StoredScopeConfigV2,
+        activity_lease_held: bool,
     ) -> io::Result<StoredScopeConfigV2> {
         self.ensure_live()?;
         let _gate = lock(&self.write_gate)?;
@@ -901,7 +921,9 @@ impl ScopeStore {
         // V2 rule revisions are manager-owned while a scope is live. Until
         // the synchronized Phase 04 writer is published, reject direct store
         // writes rather than allowing a listener to outlive its definition.
-        let _activity = self.acquire_activity_lock_locked()?;
+        let _activity = (!activity_lease_held)
+            .then(|| self.acquire_activity_lock_locked())
+            .transpose()?;
         let _fence = self.acquire_scope_operation_fence()?;
         self.ensure_current()?;
         let current = self.load_scope_config_unlocked()?;
