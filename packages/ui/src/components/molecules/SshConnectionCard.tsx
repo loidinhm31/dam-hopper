@@ -105,7 +105,7 @@ export function SshConnectionCard({
   const active = state !== "disconnected";
   const activeRuleCount = rules.filter((rule) => {
     const ruleState = ruleRuntimes.get(rule.id)?.state;
-    return rule.desiredEnabled || isSshForwardRuleRuntimeActive(ruleState);
+    return isSshForwardRuleRuntimeActive(ruleState);
   }).length;
   const error = runtime?.errorCode
     ? getFixedSshForwardError(runtime.errorCode as FixedSshForwardErrorCode)
@@ -131,7 +131,10 @@ export function SshConnectionCard({
               <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
               {connection.sshUser}@{connection.sshHost}:{connection.sshPort}
               <span className="font-sans">
-                · {connection.auth.mode === "key" ? "local key" : "OS agent"}
+                ·{" "}
+                {connection.auth.mode === "key"
+                  ? "local key"
+                  : "password / SSH agent"}
               </span>
             </p>
           </div>
@@ -199,7 +202,7 @@ export function SshConnectionCard({
             <span className="mt-1 block text-[var(--color-text)]">
               {connection.auth.mode === "key"
                 ? `Key ${connection.auth.keyId}`
-                : "OS SSH agent"}
+                : "Username and password / SSH agent"}
             </span>
           </div>
           <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/50 p-2">
@@ -315,8 +318,8 @@ export function SshConnectionCard({
               Forwarding rules
             </h3>
             <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">
-              Listeners stay vault-free. Establish the connection before
-              enabling a port.
+              Configure forwarding rules while disconnected; enable them after
+              the SSH connection is established.
             </p>
           </div>
           <Button
@@ -335,16 +338,13 @@ export function SshConnectionCard({
                 key={rule.id}
                 rule={rule}
                 runtime={ruleRuntimes.get(rule.id)}
-                connectionState={state}
                 pending={pending}
                 enabledRuleLimitReached={enabledRuleLimitReached}
                 onSetEnabled={(enabled) => onSetRuleEnabled(rule, enabled)}
                 onEdit={() => onEditRule(rule)}
                 onDelete={() => onDeleteRule(rule)}
                 onBlockedAction={() =>
-                  onBlockedAction(
-                    "Disable the rule before editing or deleting it.",
-                  )
+                  onBlockedAction("Disable the rule before editing or deleting it.")
                 }
               />
             ))}

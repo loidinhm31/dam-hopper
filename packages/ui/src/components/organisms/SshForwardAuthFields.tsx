@@ -42,7 +42,9 @@ export function SshForwardAuthFields({
             )
           }
         >
-          <option value="agent">OS SSH agent (recommended)</option>
+          <option value="agent">
+            Username/password or SSH agent (recommended)
+          </option>
           <option value="key">Local SSH key (passphrase if needed)</option>
         </select>
       </SshForwardProfileField>
@@ -89,16 +91,17 @@ export function SshForwardAuthFields({
           ) : null}
           {localKeys && localKeys.length === 0 ? (
             <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">
-              No local keys found. Keep OS agent authentication or add a key
-              under your user .ssh directory.
+              No local keys found. Use username/password authentication or an
+              SSH agent, or add a key under your user .ssh directory.
             </p>
           ) : null}
         </SshForwardProfileField>
       ) : (
         <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/50 p-2 text-xs text-[var(--color-text-muted)]">
           <KeyRound className="mb-1 h-4 w-4 text-[var(--color-primary)]" />
-          Authentication uses the OS SSH agent. Native receives only the opaque
-          key selection.
+          Connect can use username/password without configuring an SSH agent; an
+          SSH agent is also supported as a fallback. Native receives no secret
+          in the connection profile.
         </div>
       )}
       <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/50 p-2 text-xs text-[var(--color-text-muted)] sm:col-span-2">

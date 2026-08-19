@@ -775,6 +775,23 @@ impl ConnectionRegistry {
         }))
     }
 
+    pub(crate) fn begin_disconnect_if_matches(
+        &mut self,
+        connection_id: &str,
+        expected_generation: WireCounter,
+        cancellation: &Arc<ConnectionCancellation>,
+    ) -> Result<Option<DisconnectPlan>, RuntimeError> {
+        let Some(entry) = self.entries.get(connection_id) else {
+            return Ok(None);
+        };
+        if entry.generation != expected_generation
+            || !Arc::ptr_eq(&entry.cancellation, cancellation)
+        {
+            return Ok(None);
+        }
+        self.begin_disconnect(connection_id, expected_generation)
+    }
+
     pub(crate) fn finish_disconnect(
         &mut self,
         connection_id: &str,
@@ -1355,6 +1372,19 @@ impl ConnectionRegistry {
         keys
     }
 
+    pub(crate) fn connection_handle(
+        &self,
+        connection_id: &str,
+    ) -> Option<(WireCounter, Arc<Mutex<()>>, Arc<ConnectionCancellation>)> {
+        self.entries.get(connection_id).map(|entry| {
+            (
+                entry.generation,
+                Arc::clone(&entry.lifecycle),
+                Arc::clone(&entry.cancellation),
+            )
+        })
+    }
+
     pub(crate) fn clear_if_disconnected(&mut self) {
         if self
             .entries
@@ -1442,11 +1472,11 @@ impl ConnectionRegistry {
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
         }
-        if entry.cancellation.is_cancelled() {
-            return Err(RuntimeError::ConnectionCancelled);
-        }
         if entry.state != SshConnectionState::Established || entry.session.is_none() {
             return Err(RuntimeError::ConnectionNotEstablished);
+        }
+        if entry.cancellation.is_cancelled() {
+            return Err(RuntimeError::ConnectionCancelled);
         }
         Ok(())
     }
