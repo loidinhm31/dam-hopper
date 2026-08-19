@@ -39,6 +39,7 @@ use super::{
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const AGENT_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
@@ -334,7 +335,12 @@ impl SshTransport {
                     let mut authenticated = false;
                     let mut agent_failure = None;
                     if let Ok(mut agent) = connect_agent().await {
-                        match agent.request_identities().await {
+                        match bounded_agent_operation(
+                            agent.request_identities(),
+                            AGENT_OPERATION_TIMEOUT,
+                        )
+                        .await
+                        {
                             Ok(identities) => {
                                 if identities.is_empty() {
                                     agent_failure = Some(CredentialError::AgentUnavailable);
@@ -604,10 +610,25 @@ where
 }
 
 async fn connect_agent() -> Result<DynamicAgent, CredentialError> {
-    let agent = AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
-        .await
-        .map_err(|_| CredentialError::AgentUnavailable)?;
+    let agent = bounded_agent_operation(
+        AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent"),
+        AGENT_OPERATION_TIMEOUT,
+    )
+    .await?;
     Ok(agent.dynamic())
+}
+
+async fn bounded_agent_operation<F, T, E>(
+    future: F,
+    operation_timeout: Duration,
+) -> Result<T, CredentialError>
+where
+    F: Future<Output = Result<T, E>>,
+{
+    timeout(operation_timeout, future)
+        .await
+        .map_err(|_| CredentialError::AgentUnavailable)?
+        .map_err(|_| CredentialError::AgentUnavailable)
 }
 
 #[allow(dead_code)]
@@ -617,7 +638,9 @@ fn _stream_bounds<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(_: T) {}
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{with_deadline, ChannelLimiter, SshTransportError, MAX_CHANNELS};
+    use super::{
+        bounded_agent_operation, with_deadline, ChannelLimiter, SshTransportError, MAX_CHANNELS,
+    };
     use crate::ssh_forward::error::SshForwardErrorCode;
 
     #[test]
@@ -644,6 +667,23 @@ mod tests {
 
         assert!(matches!(result, Err(SshTransportError::ConnectTimeout)));
         assert!(started.elapsed() < Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn unavailable_agent_operation_is_bounded_and_classified() {
+        let result = bounded_agent_operation(
+            async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Ok::<(), ()>(())
+            },
+            Duration::from_millis(5),
+        )
+        .await;
+
+        assert_eq!(
+            result,
+            Err(crate::ssh_forward::credentials::CredentialError::AgentUnavailable)
+        );
     }
 
     #[test]

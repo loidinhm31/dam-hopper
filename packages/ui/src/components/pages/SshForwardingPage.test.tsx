@@ -6,6 +6,7 @@ import {
   parseWireCounter,
   type SshConnectionProfile,
   type SshConnectionRuntime,
+  type SshForwardError,
   type SshForwardHost,
   type SshForwardRule,
   type SshForwardSnapshot,
@@ -219,6 +220,20 @@ describe("SshForwardingPage", () => {
     expect(markup).toContain("Bastion");
     expect(markup).toContain("127.0.0.1:15432");
     expect(markup).toContain("Any process on this computer can connect");
+  });
+
+  it("does not render a duplicate native error notice", () => {
+    const value = controller({} as SshForwardHost, "nativeDesktop");
+    value.notice = "The SSH connection timed out.";
+    value.forwarding.error = {
+      code: "SSH_CONNECT_TIMEOUT",
+      message: "The SSH connection timed out.",
+      retryable: true,
+    } as SshForwardError;
+    state.value = value;
+
+    const markup = renderToStaticMarkup(<SshForwardingPage />);
+    expect(markup.match(/The SSH connection timed out\./g)).toHaveLength(1);
   });
 
   it("keeps saved-connection and active-session limits separate", () => {
