@@ -1,6 +1,6 @@
 # Linux systemd system service
 
-Status: repository asset and administrator handoff. This repository does not install or start a system unit automatically.
+Status: repository asset and administrator handoff. Repository-side Phase 03 verification was recorded on 2026-08-19; administrator installation, runtime, and rollback acceptance remains pending. This repository does not install or start a system unit automatically.
 
 ## Deployment decision
 
@@ -37,10 +37,8 @@ test -x server/target/release/dam-hopper-server
 test -f apps/web/dist/index.html
 ```
 
-In a repository checkout the unit's absolute binary under `/opt` is normally not
-installed yet, so `systemd-analyze verify` may report that missing executable;
-the unit text is still syntax-checked, and the administrator reruns the command
-after installing the staged binary.
+In a repository checkout the unit's absolute binary under `/opt` is normally not installed yet, so `systemd-analyze verify` may report that missing executable; the unit text is still syntax-checked, and the administrator reruns the command after installing the staged binary.
+The exact isolated temporary-root setup uses `/usr/bin/true` only as a verifier placeholder and is recorded in the [verification report](../plans/260817-1216-systemd-system-service/reports/03-verification-results.md); it does not touch `/opt`, `/etc`, or host systemd state.
 
 For a browser development run, keep the UI proxy on the isolated service port:
 
@@ -62,54 +60,11 @@ Before an administrator installs the unit, independently confirm all of the foll
 
 1. The intended binary and web build are complete and contain no secrets or `.env` files.
 2. `/home/loidinh/.config/dam-hopper/dam-hopper.toml` exists and is readable by `loidinh`.
-3. The token, OPAQUE setup, session database, and telemetry database are user-owned and private (`0600` where applicable).
+3. Existing token/OPAQUE state, session database, and telemetry database are user-owned and private (`0600` where applicable); the service may create missing secret files as `loidinh`.
 4. The existing nohup launch is stopped for the planned cutover, and no process still owns the live SQLite files. A different port does not make shared SQLite ownership safe.
 5. `127.0.0.1:4801` is free. Do not start a second server if the intended ownership checks fail.
 
-The installation block below is a first-install handoff. It intentionally refuses to overwrite an existing unit, binary, web directory, or fresh-install marker. If any exact target exists, stop and make an administrator-owned backup/restore plan before changing it.
-
-```bash
-set -euo pipefail
-
-assert_absent() {
-  local path="$1"
-  if sudo test -e "$path" || sudo test -L "$path"; then
-    echo "Refusing first install: target already exists: $path" >&2
-    exit 1
-  fi
-}
-
-assert_absent /etc/systemd/system/dam-hopper.service
-assert_absent /opt/dam-hopper/bin/dam-hopper-server
-assert_absent /opt/dam-hopper/web
-assert_absent /opt/dam-hopper/.systemd-fresh-install
-
-sudo test -r /home/loidinh/.config/dam-hopper/dam-hopper.toml
-sudo test -f /home/loidinh/.config/dam-hopper/sessions.db
-sudo test -f /home/loidinh/.config/dam-hopper/telemetry.db
-
-fuser_status=0
-sudo fuser -v \
-  /home/loidinh/.config/dam-hopper/sessions.db \
-  /home/loidinh/.config/dam-hopper/telemetry.db || fuser_status=$?
-if [ "$fuser_status" -eq 0 ]; then
-  echo "Refusing install: a process owns a Dam Hopper database" >&2
-  exit 1
-elif [ "$fuser_status" -ne 1 ]; then
-  echo "Unable to determine Dam Hopper database ownership" >&2
-  exit "$fuser_status"
-fi
-
-pgrep_status=0
-pgrep -af -- 'dam-hopper-server' || pgrep_status=$?
-if [ "$pgrep_status" -eq 0 ]; then
-  echo "Refusing install: stop the existing dam-hopper-server first" >&2
-  exit 1
-elif [ "$pgrep_status" -ne 1 ]; then
-  echo "Unable to determine whether dam-hopper-server is running" >&2
-  exit "$pgrep_status"
-fi
-```
+The installation block below is the first-install handoff and performs this guarded preflight. It refuses to overwrite an existing unit, binary, web directory, or fresh-install marker; if any exact target exists, stop and make an administrator-owned backup/restore plan before changing it.
 
 Do not interpret a free `4801` listener as permission to leave the legacy process running: the administrator must complete the planned database ownership handoff first.
 
@@ -137,7 +92,14 @@ bin_installed=0
 web_installed=0
 unit_installed=0
 service_start_attempted=0
-
+runtime_dir=/home/loidinh/.config/dam-hopper
+config_file="$runtime_dir/dam-hopper.toml"
+token_file="$runtime_dir/server-token"
+opaque_file="$runtime_dir/opaque-server-setup"
+sessions_db="$runtime_dir/sessions.db"
+telemetry_db="$runtime_dir/telemetry.db"
+user_uid="$(id -u loidinh)"
+user_gid="$(id -g loidinh)"
 assert_absent() {
   local path="$1"
   if sudo test -e "$path" || sudo test -L "$path"; then
@@ -145,7 +107,24 @@ assert_absent() {
     exit 1
   fi
 }
-
+assert_user_runtime_directory() {
+  local actual access
+  sudo test -d "$runtime_dir" && ! sudo test -L "$runtime_dir" || return 1
+  sudo -u loidinh test -r "$runtime_dir" -a -w "$runtime_dir" -a -x "$runtime_dir" || return 1
+  actual="$(sudo stat -c '%u:%g:%a' "$runtime_dir")" || return 1
+  [ "$actual" = "$user_uid:$user_gid:700" ] || return 1
+}
+assert_user_private_file() {
+  local path="$1" expected_mode="$2" actual
+  sudo test -f "$path" && ! sudo test -L "$path" || return 1
+  sudo -u loidinh test -r "$path" || return 1
+  actual="$(sudo stat -c '%u:%g:%a' "$path")" || return 1
+  [ "$actual" = "$user_uid:$user_gid:$expected_mode" ] || { echo "Refusing install: private state is not user-owned/readable: $path" >&2; return 1; }
+}
+assert_optional_user_private_file() {
+  local path="$1" expected_mode="$2"
+  if sudo test -e "$path" || sudo test -L "$path"; then assert_user_private_file "$path" "$expected_mode"; fi
+}
 assert_safe_directory() {
   local path="$1"
   if sudo test -L "$path"; then
@@ -157,7 +136,6 @@ assert_safe_directory() {
     exit 1
   fi
 }
-
 assert_root_owned_mode() {
   local path="$1"
   local expected="$2"
@@ -167,6 +145,14 @@ assert_root_owned_mode() {
     echo "Refusing first install: unexpected ownership/mode for $path: $actual" >&2
     return 1
   fi
+}
+
+assert_find_empty() {
+  local find_status=0
+  local matches
+  matches="$(sudo find "$@")" || find_status=$?
+  [ "$find_status" -eq 0 ] || return "$find_status"
+  [ -z "$matches" ]
 }
 
 safe_remove_staging() {
@@ -240,13 +226,22 @@ verify_owned_assets() {
   expected_web_dirs="$(manifest_value web_dir_count)" || return 1
   verify_sha256_asset "$binary" "$expected_binary" || return 1
   verify_sha256_asset "$unit" "$expected_unit" || return 1
+  sudo test -d "$bin_dir" || return 1
+  ! sudo test -L "$bin_dir" || return 1
+  assert_root_owned_mode "$bin_dir" "0:0:755" || return 1
   assert_root_owned_mode "$binary" "0:0:755" || return 1
   assert_root_owned_mode "$unit" "0:0:644" || return 1
 
   sudo test -d "$web_dir" || return 1
   ! sudo test -L "$web_dir" || return 1
   assert_root_owned_mode "$web_dir" "0:0:755" || return 1
-  [ -z "$(sudo find "$web_dir" -mindepth 1 ! \( -type f -o -type d \) -print -quit)" ] || return 1
+  assert_find_empty "$web_dir" -type d '!' -user root -print -quit || return 1
+  assert_find_empty "$web_dir" -type d '!' -group root -print -quit || return 1
+  assert_find_empty "$web_dir" -type d '!' -perm 0755 -print -quit || return 1
+  assert_find_empty "$web_dir" -type f '!' -user root -print -quit || return 1
+  assert_find_empty "$web_dir" -type f '!' -group root -print -quit || return 1
+  assert_find_empty "$web_dir" -type f '!' -perm 0644 -print -quit || return 1
+  assert_find_empty "$web_dir" -mindepth 1 '!' '(' -type f -o -type d ')' -print -quit || return 1
   actual_web_files="$(sudo find "$web_dir" -type f | wc -l)" || return 1
   actual_web_dirs="$(sudo find "$web_dir" -type d | wc -l)" || return 1
   [ "$actual_web_files" = "$expected_web_files" ] || return 1
@@ -337,9 +332,12 @@ assert_absent "$bin_dir"
 assert_absent "$binary"
 assert_absent "$web_dir"
 assert_absent "$marker"
-sudo test -r /home/loidinh/.config/dam-hopper/dam-hopper.toml
-sudo test -f /home/loidinh/.config/dam-hopper/sessions.db
-sudo test -f /home/loidinh/.config/dam-hopper/telemetry.db
+assert_user_runtime_directory
+assert_user_private_file "$config_file" 600
+assert_user_private_file "$sessions_db" 600
+assert_user_private_file "$telemetry_db" 600
+assert_optional_user_private_file "$token_file" 600
+assert_optional_user_private_file "$opaque_file" 600
 
 fuser_status=0
 sudo fuser -v \
@@ -468,10 +466,14 @@ curl -sS -o /dev/null -w 'health=%{http_code}\n' \
   http://127.0.0.1:4801/api/health
 curl -sS -o /dev/null -w 'unauthenticated_projects=%{http_code}\n' \
   http://127.0.0.1:4801/api/projects
-TOKEN="$(< /home/loidinh/.config/dam-hopper/server-token)"
+# Read the token as the service user; supply the bearer header on stdin so the
+# token is not placed in curl's argv.
+TOKEN="$(sudo -u loidinh cat /home/loidinh/.config/dam-hopper/server-token)"
 curl -sS -o /dev/null -w 'authenticated_projects=%{http_code}\n' \
-  -H "Authorization: Bearer $TOKEN" \
-  http://127.0.0.1:4801/api/projects
+  -H @- \
+  http://127.0.0.1:4801/api/projects <<EOF
+Authorization: Bearer ${TOKEN}
+EOF
 unset TOKEN
 sudo journalctl -u dam-hopper.service --no-pager -n 50
 ```
@@ -543,6 +545,14 @@ verify_sha256_asset() {
   [ "$actual" = "$expected" ]
 }
 
+assert_find_empty() {
+  local find_status=0
+  local matches
+  matches="$(sudo find "$@")" || find_status=$?
+  [ "$find_status" -eq 0 ] || return "$find_status"
+  [ -z "$matches" ]
+}
+
 verify_owned_assets() {
   local expected_nonce actual_nonce expected_binary expected_unit
   local expected_web_files expected_web_dirs actual_web_files actual_web_dirs
@@ -576,12 +586,21 @@ verify_owned_assets() {
   expected_web_dirs="$(manifest_value web_dir_count)" || return 1
   verify_sha256_asset "$binary" "$expected_binary" || return 1
   verify_sha256_asset "$unit" "$expected_unit" || return 1
+  sudo test -d "$bin_dir" || return 1
+  ! sudo test -L "$bin_dir" || return 1
+  assert_root_owned_mode "$bin_dir" "0:0:755" || return 1
   assert_root_owned_mode "$binary" "0:0:755" || return 1
   assert_root_owned_mode "$unit" "0:0:644" || return 1
   sudo test -d "$web_dir" || return 1
   ! sudo test -L "$web_dir" || return 1
   assert_root_owned_mode "$web_dir" "0:0:755" || return 1
-  [ -z "$(sudo find "$web_dir" -mindepth 1 ! \( -type f -o -type d \) -print -quit)" ] || return 1
+  assert_find_empty "$web_dir" -type d '!' -user root -print -quit || return 1
+  assert_find_empty "$web_dir" -type d '!' -group root -print -quit || return 1
+  assert_find_empty "$web_dir" -type d '!' -perm 0755 -print -quit || return 1
+  assert_find_empty "$web_dir" -type f '!' -user root -print -quit || return 1
+  assert_find_empty "$web_dir" -type f '!' -group root -print -quit || return 1
+  assert_find_empty "$web_dir" -type f '!' -perm 0644 -print -quit || return 1
+  assert_find_empty "$web_dir" -mindepth 1 '!' '(' -type f -o -type d ')' -print -quit || return 1
   actual_web_files="$(sudo find "$web_dir" -type f | wc -l)" || return 1
   actual_web_dirs="$(sudo find "$web_dir" -type d | wc -l)" || return 1
   [ "$actual_web_files" = "$expected_web_files" ] || return 1
@@ -656,10 +675,64 @@ case "$service_active_state" in
     exit 1
     ;;
 esac
-main_pid="$(sudo systemctl show -p MainPID --value dam-hopper.service)"
-if [ "$main_pid" != "0" ]; then
-  echo "Refusing rollback: dam-hopper.service still has MainPID=$main_pid" >&2
-  exit 1
+if [ "$service_load_state" = "loaded" ]; then
+  main_pid_status=0
+  main_pid="$(sudo systemctl show -p MainPID --value dam-hopper.service)" || main_pid_status=$?
+  if [ "$main_pid_status" -ne 0 ]; then
+    echo "Refusing rollback: unable to query dam-hopper.service main PID" >&2
+    exit "$main_pid_status"
+  fi
+  if [ "$main_pid" != "0" ]; then
+    echo "Refusing rollback: dam-hopper.service still has MainPID=$main_pid" >&2
+    exit 1
+  fi
+  control_group_status=0
+  control_group="$(sudo systemctl show -p ControlGroup --value dam-hopper.service)" || control_group_status=$?
+  if [ "$control_group_status" -ne 0 ]; then
+    echo "Refusing rollback: unable to query dam-hopper.service cgroup" >&2
+    exit "$control_group_status"
+  fi
+  case "$control_group" in
+    /system.slice/dam-hopper.service)
+      ;;
+    *)
+      echo "Refusing rollback: unexpected service cgroup: $control_group" >&2
+      exit 1
+      ;;
+  esac
+  cgroup_mount_status=0
+  sudo test -d /sys/fs/cgroup || cgroup_mount_status=$?
+  if [ "$cgroup_mount_status" -ne 0 ]; then
+    echo "Refusing rollback: unable to inspect the cgroup filesystem" >&2
+    exit "$cgroup_mount_status"
+  fi
+  cgroup_root="/sys/fs/cgroup${control_group}"
+  cgroup_root_status=0
+  sudo test -d "$cgroup_root" || cgroup_root_status=$?
+  if [ "$cgroup_root_status" -eq 0 ]; then
+    proc_files_status=0
+    proc_files="$(sudo find "$cgroup_root" -type f -name cgroup.procs -print)" || proc_files_status=$?
+    if [ "$proc_files_status" -ne 0 ]; then
+      echo "Refusing rollback: unable to inspect service cgroup processes" >&2
+      exit "$proc_files_status"
+    fi
+    while IFS= read -r proc_file; do
+      [ -n "$proc_file" ] || continue
+      proc_contents_status=0
+      proc_contents="$(sudo awk 'NF { print; exit }' "$proc_file")" || proc_contents_status=$?
+      if [ "$proc_contents_status" -ne 0 ]; then
+        echo "Refusing rollback: unable to inspect service cgroup process file: $proc_file" >&2
+        exit "$proc_contents_status"
+      fi
+      if [ -n "$proc_contents" ]; then
+        echo "Refusing rollback: service cgroup still contains a process: $proc_file" >&2
+        exit 1
+      fi
+    done <<< "$proc_files"
+  elif [ "$cgroup_root_status" -ne 1 ]; then
+    echo "Refusing rollback: unable to inspect service cgroup" >&2
+    exit "$cgroup_root_status"
+  fi
 fi
 listener_status=0
 sudo fuser -n tcp 4801 || listener_status=$?
@@ -692,11 +765,24 @@ The cleanup targets are exact first-install assets; the marker and absence gate 
 Rollback verifies the root-owned manifest before querying the system manager. It independently
 accepts only the known `loaded`/`not-found` load states and known active states. If the unit is
 active, activating, or stopping—even when its unit-file path has disappeared—it must be stopped
-and disabled first; rollback then re-checks that the service is inactive, `MainPID=0`, and port
-`4801` is free before deleting the verified assets. An unknown manager status or changed asset
-aborts the rollback.
+and disabled first; rollback then re-checks that the service is inactive. A loaded unit must also
+have `MainPID=0`, the expected cgroup, and no remaining cgroup processes; a `not-found` unit has
+no unit-owned cgroup and skips those loaded-unit checks. Port `4801` must be free before deleting
+the verified assets. An unknown manager status or changed asset aborts the rollback.
 
 Restoring the legacy nohup launch is optional and requires a separate administrator decision. Do it only after checking that no process owns the live databases and that exactly one intended process will own the legacy `4800` listener. This repository does not perform that cutover.
+
+## Phase 03 verification status
+
+Repository evidence recorded on 2026-08-19 is limited to non-privileged inspection:
+
+- PASS — unit invariants match the planned identity, paths, loopback port, production auth guard, journald, restart, and SIGTERM fields.
+- PASS — `systemd-analyze verify` succeeds in an isolated verifier root containing a placeholder executable; the direct checkout invocation reports only the expected absent `/opt/dam-hopper/bin/dam-hopper-server`.
+- PASS — `pnpm build:server`, `pnpm build`, `pnpm --filter @dam-hopper/ui test`, `pnpm test`, and `pnpm lint` completed with zero failures; the UI suite covered 173 files and 1,109 tests, and PTY disposal/shutdown coverage passed in the backend suite.
+- PASS — changed-file scope, whitespace, runtime forbidden-pattern, credential-pattern, and secret-filename scans.
+- NOT RUN — administrator installation, root-owned asset/mode checks, effective UID, active listener, authenticated health checks, journald, restart, and rollback preservation.
+
+The complete command ledger and evidence boundaries are in [`03-verification-results.md`](../plans/260817-1216-systemd-system-service/reports/03-verification-results.md). Repository evidence does not establish that a systemd unit is installed or that it owns the live runtime.
 
 ## Evidence boundaries and onboarding
 
