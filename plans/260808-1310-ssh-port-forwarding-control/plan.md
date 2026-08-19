@@ -110,4 +110,12 @@ remain agent-first and label any passphrase fallback with the forward name.
 flow. The username is prefilled from the forward but editable for the current retry. Password
 credentials travel only through the Windows Tauri IPC boundary, are used for the requested
 Start/Restart attempt, and remain absent from profiles, storage, logs, the HTTP server, and the
-browser host snapshot.
+ browser host snapshot.
+
+**2026-08-19 - Final Windows completion correction:** The explicit SSH connect path now releases
+its admission locks before finalization, so successful authentication reaches `Established` instead
+of being reported as an internal timeout. Child forwarding rules can be added, edited, removed, or
+have desired enablement changed while disconnected; enabled intent is reconciled after Connect.
+Native validation passed with 207 tests and 1 ignored; UI validation passed with 1,177 tests, plus
+build, lint, formatting, and the local SSH forwarding regression. The accepted Windows-only plan
+scope is complete.

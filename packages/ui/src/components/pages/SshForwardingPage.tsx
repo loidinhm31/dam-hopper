@@ -23,6 +23,10 @@ export function SshForwardingPage() {
   const errorPresentation = forwarding.error
     ? getSshForwardErrorPresentation(forwarding.error)
     : null;
+  const notice =
+    controller.notice && controller.notice !== errorPresentation?.message
+      ? controller.notice
+      : null;
   if (host === null || environment.kind !== "nativeDesktop") return null;
 
   const rules = forwarding.snapshot?.rules ?? [];
@@ -84,8 +88,9 @@ export function SshForwardingPage() {
               <code className="mx-1 font-mono text-[var(--color-text)]">
                 127.0.0.1
               </code>
-              only. Save connections without secrets, then Connect explicitly
-              before enabling child ports.
+              only. Save connections without secrets. Configure forwarding rules
+              at any time, then Connect to start the SSH session and desired
+              rules.
             </p>
             <div
               className="mt-2 flex flex-wrap gap-2"
@@ -138,12 +143,12 @@ export function SshForwardingPage() {
           local processes.
         </aside>
 
-        {controller.notice ? (
+        {notice ? (
           <p
             role="alert"
             className="rounded border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 p-3 text-xs text-[var(--color-warning)]"
           >
-            {controller.notice}
+            {notice}
           </p>
         ) : null}
         {errorPresentation ? (
@@ -180,8 +185,8 @@ export function SshForwardingPage() {
               No SSH connections in this DamHopper scope.
             </p>
             <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-              Add a reviewed credential-free endpoint, then Connect to verify
-              trust and authentication.
+              Add a reviewed credential-free endpoint and forwarding rules,
+              then Connect to verify trust and authentication.
             </p>
             <Button
               className="mt-4"
@@ -281,7 +286,7 @@ export function SshForwardingPage() {
           open
           key={controller.passphraseTarget.connection.id}
           title={`Credentials for ${controller.passphraseTarget.connection.name}`}
-          description={`SSH could not authenticate ${controller.passphraseTarget.connection.sshUser}@${controller.passphraseTarget.connection.sshHost}. ${controller.passphraseTarget.connection.auth.mode === "agent" ? "Enter a passphrase or choose username and password." : "Enter the passphrase for the configured SSH key."} Credentials are used only for this explicit Connect attempt unless you keep the default 30-day vault option.`}
+          description={`SSH could not authenticate ${controller.passphraseTarget.connection.sshUser}@${controller.passphraseTarget.connection.sshHost}. ${controller.passphraseTarget.connection.auth.mode === "agent" ? "Enter username and password, or choose a local SSH key." : "Enter the passphrase for the configured SSH key."} Credentials are used only for this explicit Connect attempt unless you keep the default 30-day vault option.`}
           submitLabel="Unlock and connect"
           allowSaveForLater
           saveForLaterAuth={
