@@ -6,7 +6,8 @@ use std::sync::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{
-    command, AppHandle, Emitter, Manager, State, Webview, WebviewBuilder, WebviewUrl, WebviewWindow,
+    command, AppHandle, Emitter, Manager, Runtime, State, Webview, WebviewBuilder, WebviewUrl,
+    WebviewWindow,
 };
 use url::Url;
 
@@ -154,7 +155,7 @@ impl BrowserDebugController {
             return Err("target URL is not an approved loopback or tunnel origin".into());
         }
         validate_bounds(&input.bounds)?;
-        let storage = ProfileStorage::resolve(&main.app_handle(), &input.profile_id)?;
+        let storage = ProfileStorage::resolve(main.app_handle(), &input.profile_id)?;
         let active = ActiveBrowser {
             profile_id: input.profile_id.clone(),
             session_id: random_id("browser-debug-session")?,
@@ -490,7 +491,7 @@ impl BrowserDebugController {
         Ok(())
     }
 
-    pub fn destroy(&self, app: &AppHandle) -> Result<(), String> {
+    pub fn destroy<R: Runtime>(&self, app: &AppHandle<R>) -> Result<(), String> {
         let child = app.get_webview(CHILD_LABEL);
         self.clear_state();
         if let Some(child) = child {
@@ -534,7 +535,7 @@ impl BrowserDebugController {
         }
     }
 
-    pub fn cleanup_on_main_close(&self, app: &AppHandle) {
+    pub fn cleanup_on_main_close<R: Runtime>(&self, app: &AppHandle<R>) {
         let _ = self.destroy(app);
     }
 }

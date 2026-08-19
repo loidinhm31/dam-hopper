@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "093acc98-7d34-4dee-915d-67a01dcff54f",
+  "title": "Final review of Phase 04 completion changes after fresh validation. Verify the latest implementat...",
+  "objective": "Final review of Phase 04 completion changes after fresh validation. Verify the latest implementation/tests and determine whether the written Phase 04 status/TODOs can be changed to Complete. Pay attention to: actual production russh listener test, purge pending-intent guard and race test, challenge approval/restart test, 1000 randomized real activation schedules, force_close cleanup with and without Tokio runtime, shutdown trigger seam/event tests, and whether any remaining limitation prevents an honest completion claim. Do not edit files. Environment: Windows 11 x64, Rust/Cargo stable 1.96, cwd G:\\ws\\sharing\\dam-hopper, branch features/ssh-port-forwarding-control.\n\n## Subagent: code-reviewer\nID: evcrate-node-0-1f03ac77-a11d-4566-8992-0493e28aa2ab | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\code-reviewer-260814-1041-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260814-1041-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-14T03:41:53.869Z",
+  "updatedAt": "2026-08-14T03:44:20.807Z",
+  "runs": [
+    {
+      "runId": "2eced7de",
+      "mode": "single",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-14T03:44:20.806Z",
+      "completedAt": "2026-08-14T03:44:20.806Z",
+      "usage": {
+        "tokens": 113289
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\2eced7de_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\2eced7de_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-13T16-58-22-327Z_019ffc0f-80f7-79c4-92bb-7260ddccb07c.jsonl",
+  "summary": "## Code Review Summary\n\n### Scope\n- Reviewed: Phase 04 plan/status; `manager.rs`, `shutdown.rs`, `lib.rs`, commands; Phase 05 adapter.\n- Focus: fresh Windows native validation.\n- Updated plans: none (requested no edits).\n\n### Overall Assessment\nImplementation and fresh native validation are strong. Prior `0xc0000139` blocker is cleared locally: full native suite passed. But Phase 04 TODO status cannot honestly become fully Complete yet: two required test claims lack deterministic evidence.\n\n### High Priority Findings\n1. **Challenge approval → explicit new Start untested**\n   - `repeated_challenge_blocks_restart_until_stop_clears_it` manually seeds the challenge and verifies Start/Restart remain blocked, then approval leaves runtime `Failed` (`manager.rs:2616–2730`).\n   - It never calls the required explicit **new Start after approval** and proves listener/running generation succeeds.\n   - Thus Phase 04 TODO “Challenge repeat/approval/explicit restart behavior passes” remains incomplete.\n\n2. **Pending-intent purge race test is not deterministic**\n   - Guard exists and is correct-looking: rejects active scope or `intent.desired_scope_id` (`manager.rs:1129–1137`).\n   - Test releases `command_gate` before invoking purge (`2577–2610`). Activation can acquire that fair gate, commit scope, and make purge fail solely via active-scope check.\n   - It does not prove the pending-intent branch blocks purge before activation commits. Keep purge TODO incomplete until a controlled barrier asserts `active_scope == None`, pending desired scope exists, then purge returns `SCOPE_ACTIVE`.\n\n### Positive Observations\n- **Production russh test passed:** real in-process `russh` server, key auth, trusted host key, production worker reaches `Running`, loopback listener accepts, Stop makes it unreachable (`2737–2875`).\n- **1,000 real randomized activations passed:** concurrent manager activation schedule commits token `1000` and expected scope.\n- **force_close coverage passed:** runtime loc...",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

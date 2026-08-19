@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "id": "a500d2f2-bd0b-4841-9c62-b0211249471a",
+  "title": "Environment: Windows 11 Pro build 26200 x64, CWD G:/ws/sharing/dam-hopper, branch features/ssh-po...",
+  "objective": "Environment: Windows 11 Pro build 26200 x64, CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwarding-control, PM pnpm. User asks to fix Phase 04 native test startup failure without changing feature direction. Reproduce/analyze only; do not edit source, Cargo.toml, lockfile, plans, or environment. Failure: `cargo test --lib ssh_forward::manager` and `cargo test --lib shutdown` compile, then test exe exits before assertions with 0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND. Reproduction command currently uses apps/native/src-tauri/target/debug/deps/dam_hopper_native_lib-a4811109c7d9f3ba.exe. PE imports confirmed: api-ms-win-core-synch-l1-2-0.dll (WaitOnAddress/WakeByAddress*), bcryptprimitives.dll (ProcessPrng), VCRUNTIME140.dll, CRT API sets. System32 bcryptprimitives exports ProcessPrng. PATH contains G:/env/jdk-21.0.9/bin with api-ms-win-core-synch-l1-2-0.dll and vcruntime140.dll; minimal PATH rerun still reproduced. Cargo.toml pins russh 0.62.5 + ring, Windows deps windows 0.61/windows-sys 0.61. Determine likely root cause and minimal safe fix/verification, preserving approved russh/ring/native direction. Use debugging root-cause discipline. No speculative app edits. Concise report, terminal result only; unresolved questions last.\n\n## Subagent: debugger\nID: evcrate-node-0-b54caa37-3937-42fa-8e4b-df2a2a51bd2a | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\debugger-260814-0024-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260814-0024-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-13T17:24:17.235Z",
+  "updatedAt": "2026-08-13T17:27:43.893Z",
+  "runs": [
+    {
+      "runId": "5ddeb20a",
+      "mode": "single",
+      "agent": "debugger",
+      "status": "completed",
+      "startedAt": "2026-08-13T17:27:43.893Z",
+      "completedAt": "2026-08-13T17:27:43.893Z",
+      "usage": {
+        "tokens": 56152
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-13T16-58-22-327Z_019ffc0f-80f7-79c4-92bb-7260ddccb07c.jsonl",
+  "summary": "## Root cause\n\nReproduced both commands: compile succeeds; test process exits pre-harness with `0xc0000139`.\n\nLikely cause is an incompatible/stale Windows API-set DLL from `G:\\env\\jdk-21.0.9\\bin`, not Phase 04 code, russh, or ring:\n\n- Test PE imports `api-ms-win-core-synch-l1-2-0.dll` functions `WaitOnAddress` / `WakeByAddress*`.\n- JDK supplies that API-set DLL (10.0.22621.1778); System32 does not contain API-set DLL files normally.\n- This API-set DLL is a loader-forwarder contract and must not be deployed/shadowed by application/JDK PATH entries.\n- The JDK DLL can be selected during startup and lacks/misforwards an entrypoint expected by the current Windows 11 loader/runtime.\n- `bcryptprimitives!ProcessPrng` is present on the installed system (10.0.26100.9168), so it is not the failing import.\n- Minimal Git-Bash PATH still failed, but it is not conclusive: Windows DLL resolution can still use already-loaded/process-level DLL search state. Existing PATH evidence remains the strongest causal lead.\n- `windows`/`windows-sys` 0.61 merely expose normal Windows 8+/10+ APIs. `getrandom 0.3.4` causes the expected `ProcessPrng` import; russh/ring do not explain API-set shadowing.\n\n## Minimal safe fix\n\nEnvironment-only, preserving approved native/russh/ring direction:\n\n1. Remove `G:\\env\\jdk-21.0.9\\bin` from global/user `PATH`; invoke Java via a launcher/script or set it only for Java commands.\n2. Do **not** add, copy, rename, or ship `api-ms-win-*.dll` or CRT DLLs beside the native executable.\n3. Start a fresh terminal/IDE (important: inherited process DLL/search state must be cleared).\n4. If Java must remain globally available, replace that JDK distribution or ensure its `bin` contains no `api-ms-win-*.dll` / MSVC runtime payloads.\n\nNo source, manifest, lockfile, plan, or environment files modified.\n\n## Verification\n\nFrom a newly started shell with the JDK directory absent from inherited `PATH`:\n\n```powershell\ncd G:\\ws\\sharing\\dam-hopper\\apps\\native\\src-tauri\ncargo clean...",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

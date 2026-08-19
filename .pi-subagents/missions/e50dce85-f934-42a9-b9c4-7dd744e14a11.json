@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "e50dce85-f934-42a9-b9c4-7dd744e14a11",
+  "title": "Analyze the remaining Phase 04 acceptance gaps and propose the smallest real Rust tests that can ...",
+  "objective": "Analyze the remaining Phase 04 acceptance gaps and propose the smallest real Rust tests that can run on this Windows host. Focus on proving (a) a manager-owned loopback listener becomes unreachable after stop/dispose within 5 seconds, and (b) shutdown coordinator close/exit handling is one-shot and bounded without requiring a real WebView. Inspect existing tests and Tauri 2.11.5 APIs. Do not edit files. Environment: Windows 11 x64, Rust/Cargo stable 1.96, cwd G:\\ws\\sharing\\dam-hopper, branch features/ssh-port-forwarding-control. Return concrete test design and limitations.\n\n## Subagent: tester\nID: evcrate-node-0-e477ea9b-e693-41e6-ad4e-c2cb15720ba3 | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\tester-260814-1002-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260814-1002-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-14T03:02:14.130Z",
+  "updatedAt": "2026-08-14T03:03:09.600Z",
+  "runs": [
+    {
+      "runId": "4e1dec3e",
+      "mode": "single",
+      "agent": "tester",
+      "status": "completed",
+      "startedAt": "2026-08-14T03:03:09.600Z",
+      "completedAt": "2026-08-14T03:03:09.600Z",
+      "usage": {
+        "tokens": 28465
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\4e1dec3e_tester_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\4e1dec3e_tester_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-13T16-58-22-327Z_019ffc0f-80f7-79c4-92bb-7260ddccb07c.jsonl",
+  "summary": "Turn budget wrap-up was requested after 6 assistant turns (soft limit 6, grace 1). Process-mode live steering is unavailable, so the child was warned at launch to wrap up by this budget. Output may be partial.\n\n## Test design\n\n### A. Loopback listener unreachable after `stop`/`dispose`\n\n**Smallest meaningful test:** Windows-only async integration/unit test around a real `SshForwardManager`, using an in-process local SSH test server.\n\n1. Create isolated temp config directory.\n2. Construct manager with `SshForwardManager::new`.\n3. Seed one valid scope/profile:\n   - `local_port = 0` preferred, if model supports ephemeral ports; otherwise reserve an unused Windows port.\n   - SSH endpoint points to an in-process `russh` server.\n   - target points to a harmless local TCP test service.\n4. Open client, activate scope, start profile.\n5. Poll snapshot until `Running`; obtain the assigned local port.\n6. Confirm `TcpStream::connect((\"127.0.0.1\", port))` succeeds.\n7. Call `manager.stop(...)` (separate test) or `manager.dispose()` (acceptance test).\n8. Within a 5-second deadline, repeatedly attempt new connections until they fail with `ConnectionRefused`/`NotFound`.\n9. Assert no connection succeeds after shutdown completion.\n\nImportant implementation detail already present: `run_profile` drops `listener` before waiting for SSH/channel cleanup. The test should assert **port reachability**, not merely worker state.\n\nRecommended helper:\n\n```rust\nasync fn assert_unreachable_within(addr: SocketAddr, deadline: Duration) {\n    let end = Instant::now() + deadline;\n    loop {\n        match TcpStream::connect(addr).await {\n            Err(_) => return,\n            Ok(stream) => {\n                drop(stream);\n                if Instant::now() >= end {\n                    panic!(\"loopback listener still reachable: {addr}\");\n                }\n            }\n        }\n        tokio::time::sleep(Duration::from_millis(25)).await;\n    }\n}\n```\n\nUse a bounded timeout around `stop`/`dispose` itse...",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

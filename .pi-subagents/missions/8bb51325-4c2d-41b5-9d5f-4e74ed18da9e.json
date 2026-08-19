@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "8bb51325-4c2d-41b5-9d5f-4e74ed18da9e",
+  "title": "Re-review Phase 04 after the latest changes. New work includes: a real in-process russh server te...",
+  "objective": "Re-review Phase 04 after the latest changes. New work includes: a real in-process russh server test exercising production run_profile/listener then manager.stop; manager scope-switch/dispose/purge/challenge tests; force_close lock-contention cleanup; generic Tauri Runtime shutdown test seam using trigger_with_exit; event-handler seam tests in lib.rs; test-only tauri/rand dependencies and SSH private-key injection under cfg(test). Assess correctness, security, test isolation, and whether Phase 04 can now be marked complete against its written plan. Do not edit files. Environment: Windows 11 x64, Rust/Cargo stable 1.96, cwd G:\\ws\\sharing\\dam-hopper, branch features/ssh-port-forwarding-control. Existing working-tree changes are intentional.\n\n## Subagent: code-reviewer\nID: evcrate-node-0-84efb203-3f12-4d9a-a231-2d5569ddec58 | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\code-reviewer-260814-1032-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260814-1032-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-14T03:32:02.991Z",
+  "updatedAt": "2026-08-14T03:35:15.976Z",
+  "runs": [
+    {
+      "runId": "39b7d17b",
+      "mode": "single",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-14T03:35:15.976Z",
+      "completedAt": "2026-08-14T03:35:15.976Z",
+      "usage": {
+        "tokens": 113218
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\39b7d17b_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\39b7d17b_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-13T16-58-22-327Z_019ffc0f-80f7-79c4-92bb-7260ddccb07c.jsonl",
+  "summary": "Turn budget wrap-up was requested after 10 assistant turns (soft limit 10, grace 1). Process-mode live steering is unavailable, so the child was warned at launch to wrap up by this budget. Output may be partial.\n\n## Code Review Summary\n\n### Scope\n- Files: `manager.rs`, `ssh_client.rs`, `shutdown.rs`, `lib.rs`, `Cargo.toml`, Phase 04 plan\n- LOC analyzed: ~3,700\n- Focus: latest Phase 04 runtime tests/lifecycle seams\n- Updated plans: none; user requested no edits\n\n### Overall Assessment\nReal Windows native tests now run: russh listener/`manager.stop`, manager lifecycle, shutdown, and SSH-forward suite pass. No production key-injection leak: injection is `cfg(test)` only.\n\n**Phase 04 cannot yet be marked complete.**\n\n### High Priority Findings\n1. **Mandatory Clippy gate fails**\n   - `cargo clippy --all-targets -- -D warnings` fails on two `needless_borrow`s:\n     - `manager.rs:2546`\n     - `manager.rs:2657`\n   - The written Phase 04 success criteria explicitly require Clippy clean.\n   - Fix the two redundant `&` references, rerun gate.\n\n### Medium Priority Improvements\n1. **`force_close` cleanup is not reliable when no Tokio runtime is entered**\n   - `manager.rs:1180+` only schedules deferred runtime-map cleanup after lock contention if `tokio::runtime::Handle::try_current()` succeeds.\n   - `RunEvent::Exit` is synchronous/event-loop code and may not have an entered Tokio handle. Workers are aborted through `abort_handles`, but `runtimes` can remain uncleared after contention.\n   - Use the Tauri async runtime for deferred cleanup, or otherwise make cleanup runtime-independent. Add a contention test initiated from a non-Tokio thread.\n\n2. **Written-plan test evidence remains incomplete**\n   - Challenge manager test issues/repeats then stops, but does not call `approve_host` and prove approval is consumed while a subsequent explicit Start creates the new generation.\n   - Purge test proves active denial and idempotency, not staged/racing activation denial.\n   - “1,000 sch...",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

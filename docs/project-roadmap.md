@@ -26,11 +26,24 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - **Phase 01 — [COMPLETED 2026-08-16]**: persisted terminal font size and editable increase/decrease shortcuts, live xterm refit/PTY geometry updates, accessible Settings controls, and regression coverage delivered. Validation: 1,079 UI tests, 124 Chromium tests, UI build/lint, and 74 Rust config tests passed. [Plan](../plans/260816-1356-terminal-font-size-shortcuts/plan.md).
 
+### Terminal Output Activity Indicator (2026-08-17)
+
+- **Phases 01–03 — [COMPLETED 2026-08-17 01:20:11 +07:00]**: browser-local per-session receiving/quiet/unavailable/stopped indicator, lifecycle/replay/hidden-kept-alive coverage, accessibility and bounded-render regressions delivered. Validation: focused UI 26/26, focused browser 6/6, full UI 1,096/1,096, full browser 127/127, UI/root build, lint, and diff-check passed. Docs validation warn-only; no backend, transport/SSE, persistence, or output-content retention changes. [Plan](../plans/260816-1854-terminal-output-activity-indicator/plan.md).
+
 - **Current Phase:** Session Model Delegation Audit complete (Phase 07 released 2026-08-01)
 - **Last Milestone:** Release gates, tests, and documentation completed (review approved 9.3/10)
 - **Total Phases Completed:** 36 phases (prior roadmap phases plus Terminal Usage Analytics 03–07 and completed Session Model Delegation Audit 01, 02, 04–07)
 - **Next Milestone:** Product follow-ups: terminal commit status Phase 03 validation and release checks
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
+
+### Native SSH Port-Forwarding Control (2026-08-09; superseded)
+
+- The initial Phase 01 blocked/no-go entry is superseded by the completed Phase 01–06 Windows-only milestone below; Phase 07 release gates remain deferred.
+
+### Native SSH Port-Forwarding Control (2026-08-15)
+
+- **Phases 01–06 — [COMPLETED 2026-08-14; Windows-only scope]**: Phase 01 Windows dependency/ACL feasibility, Phase 02 native contracts and scope retention, Phase 03 SSH transport/trust, Phase 04 manager/IPC lifecycle, Phase 05 browser-safe host/adapter, and Phase 06 desktop-only control surface are complete. The delivered surface is host-gated to the native desktop, uses explicit reviewed endpoints and lifecycle actions, exposes agent/opaque-key inventory and host-key approval/remediation, and keeps browser/mobile forwarding routes and calls absent. Validation passed: UI 181 files/1,050 tests, Chromium 28 files/121 tests, and Rust 140 passed/1 ignored; build, lint, `cargo check`, `cargo fmt`, and diff checks passed. [Plan](../plans/260808-1310-ssh-port-forwarding-control/plan.md).
+- **Phase 07 — [COMPLETED 2026-08-15; WINDOWS-ONLY SCOPE]**: Windows CI/release gates cover Rust format/lint/unit checks, the ignored real OpenSSH remote-loopback forwarding test, deterministic smoke/evidence validation, no-bundle Tauri compilation, and the explicit unsigned NSIS package profile. WebView2/OpenSSH preflight and protected same-commit evidence binding are implemented. Protected runtime evidence remains a production-release prerequisite; macOS, Linux, Android, iOS, signed updater artifacts, and platform expansion are deferred to a separate plan.
 
 ### Programming Language Navigation in Explorer (2026-08-10)
 

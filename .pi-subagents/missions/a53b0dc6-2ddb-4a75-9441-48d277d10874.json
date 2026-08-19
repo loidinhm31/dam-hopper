@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "id": "a53b0dc6-2ddb-4a75-9441-48d277d10874",
+  "title": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwarding-contro...",
+  "objective": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwarding-control. Runtime test execution deferred: 0xc0000139. Review the latest worker terminal-cleanup implementation in apps/native/src-tauri/src/ssh_forward/manager.rs only. Verify normal completion, failure, cancellation, restart races, and newer-generation safety; ensure a worker does not await/drop its own JoinHandle and manager maps do not retain stale abort/worker handles. No edits. Terminal report: score, critical/warnings, tested assumptions, unresolved questions last.",
+  "status": "completed",
+  "createdAt": "2026-08-13T11:42:41.335Z",
+  "updatedAt": "2026-08-13T11:45:13.929Z",
+  "runs": [
+    {
+      "runId": "call_ra85zuq9szewwUsJnRvGATrg|fc_0723c5b70ccc75b4016a7dadaba85081918070b03be4129c0f",
+      "mode": "workflow",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-13T11:45:13.928Z",
+      "completedAt": "2026-08-13T11:45:13.928Z",
+      "usage": {
+        "tokens": 70364
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\2ad987dc_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\2ad987dc_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow completed.\n\nReturn:\n{\n  \"key\": \"terminal-worker-cleanup-review\",\n  \"ok\": true,\n  \"runId\": \"2ad987dc\",\n  \"output\": \"## Code Review Summary\\n\\n**Score: 7.5/10**  \\nScope: `apps/native/src-tauri/src/ssh_forward/manager.rs` (2,447 LOC), terminal-cleanup paths only. No edits.\\n\\n### Critical Issues\\n- None.\\n\\n### Warnings\\n- **High — `apps/native/src-tauri/src/ssh_forward/manager.rs:1164-1182`**: `force_close()` clears `abort_handles` before a fallible `runtimes.try_lock()`. If that lock is briefly held, workers are aborted but their `RuntimeEntry.worker` / `stop_tx` remain in the manager map. Because aborting the wrapper prevents `finished_tx.send()`, `worker_finished()` will not later remove those stale handles. Retry/schedule map cleanup after lock contention, or make cleanup ownership independent of `try_lock`.\\n- **High — `apps/native/src-tauri/src/ssh_forward/manager.rs:1271-1273, 1636-1658`**: a `TcpListener::accept()` error breaks the worker without calling `fail_runtime`. `worker_finished()` removes the handle but leaves the matching runtime state as `Running`/`Starting` with no worker. UI and active-forward accounting can report a live forward that has ended. Mark matching generation failed before breaking.\\n\\n### Verified behavior\\n- Normal worker completion after explicit failure, connection failure, reconnect exhaustion, or graceful stop signals `finished_tx`; external notifier removes only matching-generation `worker`, `stop_tx`, and abort handle.\\n- Worker never awaits its own `JoinHandle`; `close_workers_until` owns and awaits moved handles externally.\\n- Stop/restart retires old worker handles before registering a replacement; generation comparison prevents old completion from removing newer-generation handles.\\n- Graceful shutdown signals all workers before waiting; forced phase aborts recorded workers and attempts joins.\\n- Existing tests cover graceful worker signaling, forced cancellation/drop behavior, and channel-task drainage. They do...",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete high-severity findings identified at manager.rs:1164-1182 and manager.rs:1271-1273/1636-1658."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml --check",
+          "result": "passed",
+          "summary": "Formatting validation completed with exit 0."
+        },
+        {
+          "command": "git diff --check -- apps/native/src-tauri/src/ssh_forward/manager.rs",
+          "result": "passed",
+          "summary": "No whitespace errors."
+        },
+        {
+          "command": "Rust runtime tests/typecheck",
+          "result": "not-run",
+          "summary": "Deferred by supplied Windows runtime failure 0xc0000139."
+        }
+      ],
+      "validationOutput": [
+        "Reviewed normal completion, failure, cancellation, restart, and generation-safety paths.",
+        "No self-JoinHandle await found.",
+        "Existing cleanup tests do not exercise force_close lock contention or listener-accept failure."
+      ],
+      "residualRisks": [
+        "force_close can retain stale runtime worker/stop handles when runtimes.try_lock fails.",
+        "Listener accept failure can leave a workerless runtime reported as active."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No reviewer edits. Reviewed untracked manager.rs implementation.",
+      "reviewFindings": [
+        "high: apps/native/src-tauri/src/ssh_forward/manager.rs:1164-1182 - force_close clears abort handles even if runtimes.try_lock fails, leaving stale runtime handles after wrapper abort prevents completion notification.",
+        "high: apps/native/src-tauri/src/ssh_forward/manager.rs:1271-1273,1636-1658 - listener.accept failure exits worker without a matching failure state transition, leaving a workerless active runtime."
+      ],
+      "manualNotes": "No edits made. Runtime execution intentionally deferred."
+    }
+  }
+}

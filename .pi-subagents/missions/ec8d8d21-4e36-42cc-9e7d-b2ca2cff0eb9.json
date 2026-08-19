@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "ec8d8d21-4e36-42cc-9e7d-b2ca2cff0eb9",
+  "title": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, timezone Asia/Bangkok. Perform the one fin...",
+  "objective": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, timezone Asia/Bangkok. Perform the one final independent acceptance review for Phase 05 SSH forwarding host/context/native adapter. Do not edit files or plan docs. Inspect current working tree and specifically verify: (1) hook consumes adapter event.snapshot without duplicate snapshot IPC while preserving fallback hosts, (2) strict DTO/error/timestamp/context validation, (3) stale activation/command response gates and no mutation replay after MANAGER_SESSION_MISMATCH, (4) hint freshness/coalescing, (5) scope deletion deactivation-before-purge and unavailable inventory behavior, (6) Windows-only factory/capability behavior, (7) Rust IPC/error parity and tests. Validation already observed: UI 169 files/981 tests pass, native 2 files/17 tests pass, UI/native builds pass, lint 0 errors/0 warnings after test cleanup, cargo fmt/check/clippy -D warnings pass, git diff --check pass. Root pnpm test has unrelated existing Rust windows_by_handle E0658; Phase 04 native runtime remains blocked by STATUS_ENTRYPOINT_NOT_FOUND 0xc0000139. Return terminal score, critical findings, warnings, files reviewed, validation, recommendation, residual risks, unresolved questions last.\n\n## Subagent: code-reviewer\nID: evcrate-node-0-efdfbdf2-1d3d-4895-b01f-e374a20f5f5f | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\code-reviewer-260813-2044-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260813-2044-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-13T13:44:23.441Z",
+  "updatedAt": "2026-08-13T13:46:30.156Z",
+  "runs": [
+    {
+      "runId": "3c22e5f5",
+      "mode": "single",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-13T13:46:30.156Z",
+      "completedAt": "2026-08-13T13:46:30.156Z",
+      "usage": {
+        "tokens": 105336
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\3c22e5f5_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\3c22e5f5_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Turn budget wrap-up was requested after 8 assistant turns (soft limit 8, grace 2). Process-mode live steering is unavailable, so the child was warned at launch to wrap up by this budget. Output may be partial.\n\n## Code Review Summary\n\n### Scope\n- Files reviewed: Phase 05 UI hook/context/DTO; native adapter/tests; Rust IPC/manager/model/error/scope retention/store; bootstrap.\n- Focus: final independent Phase 05 acceptance.\n- No files or plans edited.\n\n### Overall Assessment\n**Terminal score: 8.8/10 — conditional accept.** Phase 05 requirements are implemented and targeted/full package tests pass. Cannot declare release-ready due existing native runtime blocker.\n\n### Critical Findings\n- None.\n\n### Warnings\n- **Medium:** `useSshForward` accepts `event.snapshot` after validating only hint/current identity, not validating snapshot context/revisions itself (`packages/ui/src/hooks/use-ssh-forward.ts:31-40`). Safe with the native adapter’s strict validation, but an alternate host can inject a mismatched snapshot. Validate snapshot identity before `setSnapshot`.\n- **Low:** Native adapter is extremely compressed (multiple 1-line methods), reducing auditability/maintainability in a security-sensitive boundary.\n- **Low:** `requestHintSnapshot` trailing refresh retains the first hint object; published trailing snapshot may carry stale hint metadata. Snapshot is authoritative; consumers should not rely on hint metadata.\n\n### Acceptance Checks\n1. **Adapter event snapshot / fallback:** Pass. Hook consumes `event.snapshot` without extra IPC; absent snapshot falls back to refresh. Browser/default host remains null.\n2. **Strict validation:** Pass. Exact DTO keys, UUID/context/counter/timestamp/profile/runtime/challenge/key validation; Rust `deny_unknown_fields`; canonical scalar parity fixtures.\n3. **Stale gates / no mutation replay:** Pass. Operation/context/token/scope-generation gates; mismatch rehydrates and only snapshot path replays. Mutation test verifies one `start` call.\n4...",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "runId": "3c22e5f5",
+  "agent": "code-reviewer",
+  "task": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, timezone Asia/Bangkok. Perform the one final independent acceptance review for Phase 05 SSH forwarding host/context/native adapter. Do not edit files or plan docs. Inspect current working tree and specifically verify: (1) hook consumes adapter event.snapshot without duplicate snapshot IPC while preserving fallback hosts, (2) strict DTO/error/timestamp/context validation, (3) stale activation/command response gates and no mutation replay after MANAGER_SESSION_MISMATCH, (4) hint freshness/coalescing, (5) scope deletion deactivation-before-purge and unavailable inventory behavior, (6) Windows-only factory/capability behavior, (7) Rust IPC/error parity and tests. Validation already observed: UI 169 files/981 tests pass, native 2 files/17 tests pass, UI/native builds pass, lint 0 errors/0 warnings after test cleanup, cargo fmt/check/clippy -D warnings pass, git diff --check pass. Root pnpm test has unrelated existing Rust windows_by_handle E0658; Phase 04 native runtime remains blocked by STATUS_ENTRYPOINT_NOT_FOUND 0xc0000139. Return terminal score, critical findings, warnings, files reviewed, validation, recommendation, residual risks, unresolved questions last.\n\n## Subagent: code-reviewer\nID: evcrate-node-0-efdfbdf2-1d3d-4895-b01f-e374a20f5f5f | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\code-reviewer-260813-2044-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260813-2044-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "exitCode": 0,
+  "processSignal": "SIGTERM",
+  "usage": {
+    "input": 100926,
+    "output": 4410,
+    "cacheRead": 365056,
+    "cacheWrite": 0,
+    "cost": 0.3277832,
+    "turns": 8
+  },
+  "model": "openai-codex/gpt-5.6-terra:high",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-terra:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-terra:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 100926,
+        "output": 4410,
+        "cacheRead": 365056,
+        "cacheWrite": 0,
+        "cost": 0.3277832,
+        "turns": 8
+      }
+    }
+  ],
+  "durationMs": 126700,
+  "toolCount": 20,
+  "launchContractDigest": "f6f7421efd0cb65e4af6b44267082505484916fe3d3524de80a11e7d48dd3a55",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:6bbd3ab6ff42e3f1"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:6bbd3ab6ff42e3f1"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": true
+    }
+  },
+  "transcriptPath": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\3c22e5f5_code-reviewer_0_transcript.jsonl",
+  "timestamp": 1786628790153
+}

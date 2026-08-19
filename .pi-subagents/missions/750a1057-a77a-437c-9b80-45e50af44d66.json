@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "id": "750a1057-a77a-437c-9b80-45e50af44d66",
+  "title": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper. Review latest Phase 04 current uncommitted...",
+  "objective": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper. Review latest Phase 04 current uncommitted code, specifically last fixes: force_close map cleanup and listener accept failure handling, plus concurrent auto-start/worker reaping. Runtime executable tests are blocked externally (0xc0000139), so assess static correctness only. Return terminal score, critical/warnings, next actionable plan phase recommendation. Do not edit. Concise; unresolved questions last.",
+  "status": "completed",
+  "createdAt": "2026-08-13T11:46:32.744Z",
+  "updatedAt": "2026-08-13T11:47:48.943Z",
+  "runs": [
+    {
+      "runId": "call_Qwcq18qiCIjNF8zGIk44Y548|fc_0723c5b70ccc75b4016a7dae93c4f481919e1f83c5b8648daf",
+      "mode": "workflow",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-13T11:47:48.943Z",
+      "completedAt": "2026-08-13T11:47:48.943Z",
+      "usage": {
+        "tokens": 68427
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\82138618_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\82138618_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow completed.\n\nReturn:\n{\n  \"key\": \"phase-04-final-static-review\",\n  \"ok\": true,\n  \"runId\": \"82138618\",\n  \"output\": \"## Code Review Summary\\n\\n### Scope\\n- Files: `manager.rs`, `shutdown.rs`, `lib.rs`, IPC/model/store/trust changes.\\n- Focus: force-close cleanup, listener accept failures, concurrent auto-start/reaping.\\n- Static only; native test executables externally blocked (`0xc0000139`).\\n\\n### Overall Assessment\\n**Score: 8/10.** Targeted fixes are statically sound: workers receive stop before concurrent join/reap; reconnect drops accepted clients while handshake proceeds; auto-start reserves deterministic candidates and bounds handshakes to four.\\n\\n### Critical Issues\\n- None.\\n\\n### Warnings\\n- **Medium** — `apps/native/src-tauri/src/ssh_forward/manager.rs:1164`: `force_close()` clears `abort_handles` only if `runtimes.try_lock()` succeeds. Under lock contention, aborted-handle map entries remain until process termination. Clear `abort_handles` independently of `runtimes` acquisition.\\n- **Low** — `apps/native/src-tauri/src/ssh_forward/manager.rs:1376,1404`: listener `accept()` failure during reconnect returns `LocalPortInUse`, although the listener is already bound. Use `BindFailed`/dedicated accept failure to preserve accurate diagnostics.\\n\\n### Positive Observations\\n- `close_workers_until()` signals every worker before awaiting and uses a single aggregate deadline with cancellation/reap reserve.\\n- Main accept loop fails safely rather than panicking; reconnect rejects new local clients while preserving listener reservation.\\n- Auto-start sort `(created_at, id)`, pre-reservation, cap visibility, and semaphore-based four-handshake concurrency match Phase 04 requirements.\\n- `worker_finished()` removes completed worker and abort-handle entries for its generation.\\n\\n### Recommended Next Phase\\nResolve the `force_close` map-cleanup warning, then proceed to **Phase 05 adapter** while retaining Phase 04 as blocked pending runtime tests on a known-goo...",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete findings reported for apps/native/src-tauri/src/ssh_forward/manager.rs with severity and lines."
+        }
+      ],
+      "changedFiles": [
+        "apps/native/src-tauri/src/lib.rs",
+        "apps/native/src-tauri/src/shutdown.rs",
+        "apps/native/src-tauri/src/ssh_forward/manager.rs",
+        "apps/native/src-tauri/src/ssh_forward/commands.rs",
+        "apps/native/src-tauri/src/ssh_forward/model.rs",
+        "apps/native/src-tauri/src/ssh_forward/known_hosts.rs"
+      ],
+      "testsAddedOrUpdated": [
+        "apps/native/src-tauri/src/ssh_forward/manager.rs",
+        "apps/native/src-tauri/src/ssh_forward/known_hosts.rs",
+        "apps/native/src-tauri/src/shutdown.rs"
+      ],
+      "commandsRun": [
+        {
+          "command": "cargo fmt --check",
+          "result": "passed",
+          "summary": "Static formatting passed."
+        },
+        {
+          "command": "cargo check",
+          "result": "passed",
+          "summary": "Native Rust crate type-check passed."
+        },
+        {
+          "command": "cargo clippy --all-targets -- -D warnings",
+          "result": "passed",
+          "summary": "No clippy warnings."
+        },
+        {
+          "command": "cargo test --manifest-path apps/native/src-tauri/Cargo.toml",
+          "result": "not-run",
+          "summary": "Executable runtime tests externally blocked by Windows 0xc0000139."
+        }
+      ],
+      "validationOutput": [
+        "Static Rust quality gates passed.",
+        "Runtime behavior not attested because test executables cannot start on this host."
+      ],
+      "residualRisks": [
+        "force_close may retain abort_handles if runtimes mutex is contended.",
+        "Listener accept failure is reported as LocalPortInUse during reconnect.",
+        "Shutdown, listener closure, and concurrency behavior lack executable Windows evidence."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Adds Phase 04 native SSH lifecycle manager, IPC commands, shutdown coordination, deterministic concurrent auto-start, and worker shutdown/reap logic.",
+      "reviewFindings": [
+        "medium: apps/native/src-tauri/src/ssh_forward/manager.rs:1164 - force_close clears abort_handles only when runtimes.try_lock succeeds; decouple map cleanup from runtime lock acquisition.",
+        "low: apps/native/src-tauri/src/ssh_forward/manager.rs:1376,1404 - reconnect accept errors map to LocalPortInUse although binding already succeeded; use an accept-specific/bind failure code.",
+        "no blockers: worker signaling/reaping and concurrent auto-start are statically coherent."
+      ],
+      "manualNotes": "Terminal score 8/10. Recommend Phase 05 after medium cleanup; retain Phase 04 blocked until known-good Windows runtime evidence."
+    }
+  }
+}

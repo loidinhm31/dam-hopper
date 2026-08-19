@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.damhopper",
   "build": {
-    "beforeDevCommand": "pnpm build",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' asset: https://asset.localhost; img-src 'self' asset: data: blob: https:; media-src https:; connect-src http://localhost:* http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:* ws://[::1]:* https: wss: tauri:; worker-src 'self' blob:"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' asset: https://asset.localhost; img-src 'self' asset: data: blob: https:; media-src https:; connect-src http://localhost:* http://127.0.0.1:* http://[::1]:* http: ws://localhost:* ws://127.0.0.1:* ws://[::1]:* ws: https: wss: tauri:; worker-src 'self' blob:"
     }
   },
   "bundle": {
@@ -36,13 +36,5 @@
       "icons/icon.icns"
     ],
     "createUpdaterArtifacts": true
-  },
-  "plugins": {
-    "updater": {
-      "endpoints": [
-        "thub.com/loidinhm31/dam-hopper/releases/latest/download/latest.json"
-      ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZBMkU1NUFGNkUzRDc4REYKUldUZmVEMXVyMVV1YXVpRHlORDNqZUdPaUdlWm1ZanhmMklWUkdVSU9WZVY5ZnV3Kyt6bzlMYjgK"
-    }
   }
 }
