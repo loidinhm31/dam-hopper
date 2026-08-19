@@ -4,7 +4,6 @@ import { Button } from "@/components/atoms/Button.js";
 import { Switch } from "@/components/atoms/Switch.js";
 import { isSshForwardRuleRuntimeActive } from "@/lib/ssh-forward-host.js";
 import type {
-  SshConnectionState,
   SshForwardRule,
   SshForwardRuleRuntime,
 } from "@/lib/ssh-forward-host.js";
@@ -12,7 +11,6 @@ import type {
 interface Props {
   rule: SshForwardRule;
   runtime?: SshForwardRuleRuntime;
-  connectionState: SshConnectionState;
   pending: boolean;
   enabledRuleLimitReached?: boolean;
   onSetEnabled: (enabled: boolean) => void;
@@ -33,7 +31,6 @@ function statusVariant(
 export function SshForwardRuleCard({
   rule,
   runtime,
-  connectionState,
   pending,
   enabledRuleLimitReached = false,
   onSetEnabled,
@@ -44,18 +41,13 @@ export function SshForwardRuleCard({
   const state = runtime?.state ?? "off";
   const runtimeActive = isSshForwardRuleRuntimeActive(state);
   const checked = rule.desiredEnabled || runtimeActive;
-  const active = checked;
-  const established = connectionState === "established";
+  const active = runtimeActive;
+  const pendingActivation = rule.desiredEnabled && !runtimeActive && state !== "failed";
   const enabling = !checked;
   const toggleDisabled =
     pending ||
     state === "closing" ||
-    (enabling && (!established || (enabledRuleLimitReached && !runtimeActive)));
-  const blockedCopy = !established
-    ? active
-      ? "Disconnecting the rule is still available while the connection recovers."
-      : "Establish the SSH connection before enabling this rule."
-    : undefined;
+    (enabling && enabledRuleLimitReached);
 
   return (
     <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)]/70 p-3">
@@ -98,7 +90,9 @@ export function SshForwardRuleCard({
             onClick={active ? onBlockedAction : onEdit}
             disabled={pending}
             aria-label={`Edit ${rule.name}`}
-            title={active ? "Disable the rule before editing" : undefined}
+            title={
+              active ? "Disable the rule before editing" : undefined
+            }
           >
             <Edit2 className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Edit</span>
@@ -109,22 +103,25 @@ export function SshForwardRuleCard({
             onClick={active ? onBlockedAction : onDelete}
             disabled={pending}
             aria-label={`Delete ${rule.name}`}
-            title={active ? "Disable the rule before deleting" : undefined}
+            title={
+              active ? "Disable the rule before deleting" : undefined
+            }
           >
             <Trash2 className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Delete</span>
           </Button>
         </div>
       </div>
-      {blockedCopy ? (
-        <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
-          {blockedCopy}
-        </p>
-      ) : null}
       {runtime?.errorCode ? (
         <p role="alert" className="mt-2 text-[11px] text-[var(--color-danger)]">
           The listener could not establish. Review the connection state, then
           retry the rule.
+        </p>
+      ) : null}
+      {pendingActivation ? (
+        <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+          Desired state saved; the listener will start after the SSH connection
+          is established.
         </p>
       ) : null}
     </div>

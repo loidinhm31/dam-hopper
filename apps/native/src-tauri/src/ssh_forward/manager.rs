@@ -73,6 +73,10 @@ use super::credential_vault::WindowsCredentialVault;
 const ACTIVE_FORWARD_LIMIT: usize = 16;
 const HANDSHAKE_CONCURRENCY_LIMIT: usize = 4;
 const EVENT_MIN_INTERVAL: Duration = Duration::from_millis(250);
+// Transport/authentication have their own deadline; this outer bound also
+// covers manager admission and finalization so the desktop caller always
+// receives a result.
+const CONNECT_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 const WORKER_REAP_RESERVE: Duration = Duration::from_millis(250);
 
@@ -1658,7 +1662,7 @@ impl SshForwardManager {
     }
 
     pub(crate) async fn create_rule(
-        &self,
+        self: &Arc<Self>,
         input: &super::model::CreateRuleInput,
     ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
         let _rule_reconciliation = self.rule_reconciliation_gate.lock().await;
@@ -1728,6 +1732,28 @@ impl SshForwardManager {
             committed.rules_revision,
         )
         .await;
+        let should_reconcile = self
+            .connection_registry
+            .lock()
+            .await
+            .ensure_established(
+                &input.request.connection_profile_id,
+                input.request.expected_connection_generation,
+            )
+            .is_ok();
+        drop(_command);
+        drop(_rule_reconciliation);
+        if should_reconcile {
+            self.enable_desired_rules(
+                &input.request.context,
+                input.request.activation_token,
+                &input.request.scope_id,
+                input.request.scope_generation,
+                &input.request.connection_profile_id,
+                input.request.expected_connection_generation,
+            )
+            .await;
+        }
         self.emit_collection_hint_checked(
             &input.request.scope_id,
             input.request.scope_generation,
@@ -1744,7 +1770,7 @@ impl SshForwardManager {
     }
 
     pub(crate) async fn update_rule(
-        &self,
+        self: &Arc<Self>,
         input: &super::model::UpdateRuleInput,
     ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
         let _rule_reconciliation = self.rule_reconciliation_gate.lock().await;
@@ -1822,6 +1848,28 @@ impl SshForwardManager {
                 )
             })?;
         self.update_rules_revision(committed.rules_revision).await;
+        let should_reconcile = self
+            .connection_registry
+            .lock()
+            .await
+            .ensure_established(
+                &input.request.connection_profile_id,
+                input.request.expected_connection_generation,
+            )
+            .is_ok();
+        drop(_command);
+        drop(_rule_reconciliation);
+        if should_reconcile {
+            self.enable_desired_rules(
+                &input.request.context,
+                input.request.activation_token,
+                &input.request.scope_id,
+                input.request.scope_generation,
+                &input.request.connection_profile_id,
+                input.request.expected_connection_generation,
+            )
+            .await;
+        }
         self.emit_collection_hint_checked(
             &input.request.scope_id,
             input.request.scope_generation,
@@ -3032,6 +3080,7 @@ impl SshForwardManager {
             );
         }
         drop(_intent_admission);
+        drop(_connection_admission);
         reservation_cleanup.disarm();
         drop(_lifecycle);
         self.enable_desired_rules(
@@ -3180,6 +3229,8 @@ impl SshForwardManager {
         let store = self
             .checked_scope(context, token, scope_id, scope_generation)
             .await?;
+        self.check_connection_generation(scope_id, connection_id, connection_generation)
+            .await?;
         let current = store
             .load_scope_config()
             .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
@@ -3209,7 +3260,17 @@ impl SshForwardManager {
         self.update_rules_revision_for_scope(scope_id, scope_generation, committed.rules_revision)
             .await;
 
-        let runtime_result = if enabled {
+        let connection_established = self
+            .connection_registry
+            .lock()
+            .await
+            .ensure_established(connection_id, connection_generation)
+            .is_ok();
+        let runtime_result = if !connection_established {
+            // A disconnected connection can still save the desired intent.
+            // Reconciliation will materialize an enabled rule after Connect.
+            Ok(())
+        } else if enabled {
             match committed.rules() {
                 Ok(rules) => match rules
                     .into_iter()
@@ -3346,15 +3407,99 @@ impl SshForwardManager {
                 return Err(SshForwardErrorCode::InvalidArgument.command_error());
             }
         }
-        self.connect_connection(
-            &input.context,
-            input.activation_token,
-            &input.scope_id,
-            input.scope_generation,
-            &input.connection_profile_id,
-            input.expected_generation,
+        self.connect_with_timeout(input, CONNECT_COMMAND_TIMEOUT)
+            .await
+    }
+
+    async fn connect_with_timeout(
+        self: &Arc<Self>,
+        input: &super::model::ConnectionLifecycleInput,
+        command_timeout: Duration,
+    ) -> Result<SshForwardSnapshot, SshForwardCommandError> {
+        let result = timeout(
+            command_timeout,
+            self.connect_connection(
+                &input.context,
+                input.activation_token,
+                &input.scope_id,
+                input.scope_generation,
+                &input.connection_profile_id,
+                input.expected_generation,
+            ),
+        )
+        .await;
+        if let Ok(result) = result {
+            return result;
+        }
+
+        if let Some(generation) = self
+            .cleanup_timed_out_connection(&input.connection_profile_id, input.expected_generation)
+            .await
+        {
+            self.emit_connection_hint_checked(
+                &input.scope_id,
+                input.scope_generation,
+                input.activation_token,
+                input.connection_profile_id.clone(),
+                generation,
+                SshForwardEventReason::RuntimeChanged,
+            )
+            .await;
+        }
+        let mut error = SshForwardErrorCode::SshConnectTimeout.command_error();
+        error.connection_profile_id = Some(input.connection_profile_id.clone());
+        Err(error)
+    }
+
+    async fn cleanup_timed_out_connection(
+        &self,
+        connection_id: &str,
+        expected_generation: WireCounter,
+    ) -> Option<WireCounter> {
+        let Some(attempt_generation) = expected_generation.increment().ok() else {
+            return None;
+        };
+        let Some((generation, lifecycle, cancellation)) = self
+            .connection_registry
+            .lock()
+            .await
+            .connection_handle(connection_id)
+        else {
+            return None;
+        };
+        if generation != attempt_generation {
+            return None;
+        }
+        cancellation.cancel();
+        let deadline = Instant::now() + WORKER_SHUTDOWN_GRACE;
+        let _connection_admission = timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            self.connection_admission_gate.lock(),
         )
         .await
+        .ok()?;
+        let _lifecycle = timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            lifecycle.lock(),
+        )
+        .await
+        .ok()?;
+        let plan = self
+            .connection_registry
+            .lock()
+            .await
+            .begin_disconnect_if_matches(connection_id, generation, &cancellation)
+            .ok()??;
+        let next_generation = plan.generation;
+        let failed_session = self.close_disconnect_plan_until(plan, deadline).await;
+        let mut registry = self.connection_registry.lock().await;
+        if let Some(session) = failed_session {
+            let _ = registry.retain_disconnect_session(connection_id, next_generation, session);
+        } else {
+            let _ = registry.finish_disconnect(connection_id, next_generation);
+            registry.clear_if_disconnected();
+        }
+        Some(next_generation)
     }
 
     pub(crate) async fn disconnect(
@@ -3795,7 +3940,15 @@ impl SshForwardManager {
     }
 
     async fn close_disconnect_plan(&self, plan: DisconnectPlan) -> Option<Arc<SshSession>> {
-        let deadline = Instant::now() + WORKER_SHUTDOWN_GRACE;
+        self.close_disconnect_plan_until(plan, Instant::now() + WORKER_SHUTDOWN_GRACE)
+            .await
+    }
+
+    async fn close_disconnect_plan_until(
+        &self,
+        plan: DisconnectPlan,
+        deadline: Instant,
+    ) -> Option<Arc<SshSession>> {
         let mut workers = Vec::new();
         let mut task_keys = Vec::new();
         for child in plan.children {
@@ -6629,10 +6782,11 @@ mod tests {
         error::SshForwardErrorCode,
         known_hosts::{ChallengeContext, OfferedHostKey, SshEndpoint},
         model::{
-            ApproveHostInput, ConnectionMutationInput, CreateConnectionInput, CreateRuleInput,
-            DeleteConnectionInput, DeleteRuleInput, ProfileLifecycleInput, PurgeScopeInput,
-            RuleMutationInput, ScopeContextInput, SetRuleEnabledInput, SshForwardState,
-            UpdateConnectionInput, UpdateRuleInput, UtcTimestamp, WireCounter,
+            ApproveConnectionHostInput, ApproveHostInput, ConnectionLifecycleInput,
+            ConnectionMutationInput, CreateConnectionInput, CreateRuleInput, DeleteConnectionInput,
+            DeleteRuleInput, ProfileLifecycleInput, PurgeScopeInput, RuleMutationInput,
+            ScopeContextInput, SetRuleEnabledInput, SshConnectionState, SshForwardRuleState,
+            SshForwardState, UpdateConnectionInput, UpdateRuleInput, UtcTimestamp, WireCounter,
         },
         profile::{
             LoopbackHost, ReconnectPolicy, SshConnectionProfile, SshForwardAuth, SshForwardProfile,
@@ -8703,6 +8857,256 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, SshForwardErrorCode::ShutdownInProgress);
+        drop(manager);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn v2_connect_reaches_established_after_host_approval() {
+        let config = temp_config_dir("v2-connect-established");
+        let manager = Arc::new(SshForwardManager::new(&config).unwrap());
+        let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+        let client_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+        crate::ssh_forward::ssh_client::install_test_private_key(
+            client_key
+                .to_openssh(LineEnding::LF)
+                .unwrap()
+                .to_string()
+                .into_bytes(),
+        );
+
+        let socket = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let server_address = socket.local_addr().unwrap();
+        let server_config = russh::server::Config {
+            keys: vec![host_key],
+            auth_rejection_time: Duration::from_millis(0),
+            auth_rejection_time_initial: Some(Duration::from_millis(0)),
+            ..Default::default()
+        };
+        let (server_ready_tx, server_ready_rx) = tokio::sync::oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let mut server = TestSshServer;
+            let running_server = server.run_on_socket(Arc::new(server_config), &socket);
+            let server_handle = running_server.handle();
+            let _ = server_ready_tx.send(server_handle);
+            running_server.await
+        });
+        let _server_handle = server_ready_rx.await.unwrap();
+
+        let opened = manager
+            .open_client(KnownScopesInput::Available {
+                ids: vec![SCOPE.into()],
+            })
+            .await
+            .unwrap();
+        let activation = manager
+            .activate_scope(
+                &opened.context,
+                WireCounter::parse("1").unwrap(),
+                Some(SCOPE.into()),
+            )
+            .await
+            .unwrap();
+        let timestamp = UtcTimestamp::parse("2026-08-19T00:00:00.000Z").unwrap();
+        let connection = SshConnectionProfile {
+            id: "e2634e77-b0b5-4b21-bd2f-462c9e3b7a96".into(),
+            scope_id: SCOPE.into(),
+            name: "local-test".into(),
+            ssh_host: "127.0.0.1".into(),
+            ssh_port: server_address.port(),
+            ssh_user: "operator".into(),
+            auth: SshForwardAuth::Key {
+                key_id: crate::ssh_forward::ssh_client::TEST_PRIVATE_KEY_ID.into(),
+            },
+            created_at: timestamp,
+            updated_at: timestamp,
+        };
+        manager
+            .create_connection(&CreateConnectionInput {
+                request: ConnectionMutationInput {
+                    context: opened.context.clone(),
+                    activation_token: WireCounter::parse("1").unwrap(),
+                    scope_id: SCOPE.into(),
+                    scope_generation: activation.scope_generation,
+                    expected_connections_revision: WireCounter::ZERO,
+                },
+                connection: connection.clone(),
+            })
+            .await
+            .unwrap();
+
+        let first = tokio::time::timeout(
+            Duration::from_secs(5),
+            manager.connect_connection(
+                &opened.context,
+                WireCounter::parse("1").unwrap(),
+                SCOPE,
+                activation.scope_generation,
+                &connection.id,
+                WireCounter::ZERO,
+            ),
+        )
+        .await
+        .expect("initial V2 connect did not return a host-key challenge")
+        .unwrap();
+        let challenge = first
+            .host_key_challenges
+            .iter()
+            .find(|challenge| challenge.connection_profile_id == connection.id)
+            .cloned()
+            .expect("V2 connect did not publish a host-key challenge");
+        let approved = manager
+            .approve_connection_host(&ApproveConnectionHostInput {
+                context: opened.context.clone(),
+                activation_token: WireCounter::parse("1").unwrap(),
+                scope_id: SCOPE.into(),
+                scope_generation: activation.scope_generation,
+                connection_profile_id: connection.id.clone(),
+                expected_generation: WireCounter::parse("1").unwrap(),
+                challenge_id: challenge.challenge_id,
+                algorithm: challenge.algorithm,
+                fingerprint: challenge.fingerprint,
+                expected_trust_revision: first.trust_revision,
+            })
+            .await
+            .unwrap();
+        let generation = approved
+            .connection_runtimes
+            .iter()
+            .find(|runtime| runtime.connection_profile_id == connection.id)
+            .expect("approved connection runtime is missing")
+            .generation;
+
+        let connected = tokio::time::timeout(
+            Duration::from_secs(5),
+            manager.connect_connection(
+                &opened.context,
+                WireCounter::parse("1").unwrap(),
+                SCOPE,
+                activation.scope_generation,
+                &connection.id,
+                generation,
+            ),
+        )
+        .await
+        .expect("V2 connect did not finish")
+        .unwrap();
+        let connected_runtime = connected
+            .connection_runtimes
+            .iter()
+            .find(|runtime| runtime.connection_profile_id == connection.id)
+            .expect("connected runtime is missing");
+        assert_eq!(connected_runtime.state, SshConnectionState::Established);
+        let connected_generation = connected_runtime.generation;
+
+        let local_port = {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let rule = SshForwardRule {
+            id: "f2634e77-b0b5-4b21-bd2f-462c9e3b7a96".into(),
+            scope_id: SCOPE.into(),
+            connection_profile_id: connection.id.clone(),
+            name: "local-forward".into(),
+            local_port,
+            target_host: LoopbackHost,
+            target_port: server_address.port(),
+            desired_enabled: true,
+            reconnect: ReconnectPolicy {
+                enabled: false,
+                max_attempts: 1,
+            },
+            created_at: timestamp,
+            updated_at: timestamp,
+        };
+        let with_rule = manager
+            .create_rule(&CreateRuleInput {
+                request: RuleMutationInput {
+                    context: opened.context.clone(),
+                    activation_token: WireCounter::parse("1").unwrap(),
+                    scope_id: SCOPE.into(),
+                    scope_generation: activation.scope_generation,
+                    expected_rules_revision: connected.rules_revision,
+                    connection_profile_id: connection.id.clone(),
+                    expected_connection_generation: connected_generation,
+                },
+                rule: rule.clone(),
+            })
+            .await
+            .unwrap();
+        let runtime = with_rule
+            .rule_runtimes
+            .iter()
+            .find(|runtime| runtime.rule_id == rule.id)
+            .expect("created desired-enabled rule runtime is missing");
+        assert_eq!(runtime.state, SshForwardRuleState::On);
+        assert_eq!(runtime.error_code, None);
+
+        server_task.abort();
+        let _ = server_task.await;
+        drop(manager);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn connect_command_timeout_releases_a_stuck_native_operation() {
+        let config = temp_config_dir("connect-command-timeout");
+        let manager = Arc::new(SshForwardManager::new(&config).unwrap());
+        let opened = manager
+            .open_client(KnownScopesInput::Available {
+                ids: vec![SCOPE.into()],
+            })
+            .await
+            .unwrap();
+        let input = ConnectionLifecycleInput {
+            context: opened.context,
+            activation_token: WireCounter::parse("1").unwrap(),
+            scope_id: SCOPE.into(),
+            scope_generation: WireCounter::parse("1").unwrap(),
+            connection_profile_id: "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96".into(),
+            expected_generation: WireCounter::ZERO,
+            credential_attempt_id: None,
+        };
+        let (started, error) = {
+            let _command = manager.command_gate.lock().await;
+            let started = Instant::now();
+            let error = manager
+                .connect_with_timeout(&input, Duration::from_millis(10))
+                .await
+                .unwrap_err();
+            (started, error)
+        };
+
+        assert_eq!(error.code, SshForwardErrorCode::SshConnectTimeout);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let connection = SshConnectionProfile {
+            id: input.connection_profile_id.clone(),
+            scope_id: SCOPE.into(),
+            name: "probe".into(),
+            ssh_host: "bastion.example".into(),
+            ssh_port: 22,
+            ssh_user: "operator".into(),
+            auth: SshForwardAuth::Agent,
+            created_at: UtcTimestamp::parse("2026-08-10T12:34:56.789Z").unwrap(),
+            updated_at: UtcTimestamp::parse("2026-08-10T12:34:56.789Z").unwrap(),
+        };
+        assert!(matches!(
+            manager
+                .connection_registry
+                .lock()
+                .await
+                .reserve_connection(connection, WireCounter::ZERO),
+            Ok(ConnectionAdmission::Reserved(_))
+        ));
+        manager
+            .cleanup_timed_out_connection(&input.connection_profile_id, WireCounter::ZERO)
+            .await;
+        assert!(manager
+            .connection_registry
+            .lock()
+            .await
+            .connection_keys()
+            .is_empty());
         drop(manager);
         std::fs::remove_dir_all(config).unwrap();
     }

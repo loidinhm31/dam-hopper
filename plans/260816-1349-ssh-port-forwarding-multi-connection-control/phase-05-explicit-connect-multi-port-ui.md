@@ -12,7 +12,7 @@
 - Date: 2026-08-16
 - Description: Make target establishment/authentication explicit, then provide prompt-free connection-grouped port toggles.
 - Priority: P2
-- Implementation status: Completed 2026-08-18
+- Implementation status: Completed 2026-08-18; connect deadlock and offline rule-intent fixes applied 2026-08-19
 - Review status: Completed after UI/accessibility/security-copy and native lifecycle review; Phase 06 release gates remain pending
 
 ## Key Insights
@@ -30,7 +30,7 @@
 - Host-key change keeps “credential saved” metadata but blocks Connect and clearly states the secret will not be sent until explicit trust repair/approval.
 - Expired/rejected/unavailable status requires prompt/replacement; vault save failure keeps the live connection Established but warns “not saved.” Forget confirmation removes only the saved credential, not the profile or current connection unless native policy requires disconnect first.
 - Password username edit updates the disconnected connection profile before staging password; refreshed revisions/generation are used for load/connect.
-- Only Established connections expose enabled rule toggles. Enable/disable calls never open credential dialogs. During Reconnecting, new enables are disabled; existing rules show waiting/rejecting-new-clients state and remain individually disable-able via cleanup path.
+- Child rules are durable configuration: add, edit, remove, enable, and disable work while the parent is Disconnected, Authenticating, Reconnecting, or Disconnecting and never open credential dialogs. Enabling offline records desired intent; Connect establishes/authenticates SSH first, then reconciles desired rules. Live listeners still require an Established parent, and teardown may close them internally.
 - Add/edit/delete rule separately from connection. Rule fields: name, local port, fixed target explanation, target port, desired-enabled/reconnect intent. Prevent edit/delete while active; expose Disable then Edit/Delete.
 - Disconnect warns when child rules are on and confirms all listeners/channels will close. Delete requires Disconnected and no active children.
 - Support up to 16 simultaneous connection groups and 64 enabled rules without a single-selected-server assumption.
@@ -67,7 +67,7 @@
 - `G:\ws\sharing\dam-hopper\packages\ui\src\components\organisms\SshForwardProfileFields.tsx` — **delete after replacement**: remove combined field composition.
 - `G:\ws\sharing\dam-hopper\packages\ui\src\components\organisms\SshForwardProfileReview.tsx` — **delete after replacement**: remove combined review.
 - `G:\ws\sharing\dam-hopper\packages\ui\src\hooks\use-ssh-forward.test.tsx` — **modify**: v2 hook actions, stale refresh, no credential call on rule toggles.
-- `G:\ws\sharing\dam-hopper\packages\ui\src\components\pages\SshForwardingPage.test.tsx` — **modify**: grouped connections/rules and authoritative state gating.
+- `G:\ws\sharing\dam-hopper\packages\ui\src\components\pages\SshForwardingPage.test.tsx` — **modify**: grouped connections/rules, snapshot state, and offline desired intent.
 - `G:\ws\sharing\dam-hopper\packages\ui\src\components\organisms\SshConnectionDialog.test.tsx` — **create**: connection form, focus, edit restrictions.
 - `G:\ws\sharing\dam-hopper\packages\ui\src\components\organisms\SshForwardRuleDialog.test.tsx` — **create**: rule form, loopback/port/reconnect validation.
 - `G:\ws\sharing\dam-hopper\packages\ui\browser-tests\ssh-forward-credential-dialog.browser.tsx` — **modify**: explicit Connect trust/key/password and prompt-count flows.
@@ -81,7 +81,7 @@
 4. Preserve host-key flow: show exact endpoint/algorithm/fingerprint/expiry; approval never auto-connects; UI instructs and requires a new Connect action.
 5. Preserve credential flow: encrypted selected key requests passphrase; agent/key auth failure may offer explicit username/password method; update username first if changed; stage remember intent then Connect. Only successful auth may show Saved until.
 6. Build connection and rule dialogs/cards. Group all matching rules under each connection and surface orphan data only as a blocking corruption error.
-7. Gate toggles from authoritative runtime: Established enables; Reconnecting disables new enables; disconnected toggle explains Connect first; disable remains available for an existing child.
+7. Keep rule configuration independent from the SSH lifecycle: native mutations validate scope/generations and persist desired intent offline; runtime listeners reconcile only after an Established parent, while UI labels desired-but-not-live rules as pending.
 8. Add disconnect/delete/Forget confirmations, limit copy, saved/rejected/expired/unavailable credential states, fixed-expiry copy, loopback local-process warning, and app-restart reuse copy.
 9. Remove legacy components/imports after replacement; keep route and `SshForwardScopeBridge` behavior unchanged.
 10. Add unit/browser tests for keyboard focus, dialogs, trust retry, encrypted key, username/password edit, remember default/opt-out, restart reuse, Forget, expiry/rejection, no-prompt port toggles, two connections/multiple ports, sibling failure, scope switch, and unavailable browser/mobile route.
@@ -99,8 +99,8 @@
 
 ## Success Criteria
 
-- A user must establish/authenticate a target before any child rule can turn on.
-- After Established, multiple rule toggles complete without another trust/credential prompt.
+- A user can add, edit, remove, enable, or disable child-rule intent before connecting; these actions never open a credential dialog.
+- Connect establishes/authenticates the target before materializing desired child listeners, and multiple established rule toggles complete without another trust/credential prompt.
 - Two or more server connections remain Established simultaneously and their rules operate independently.
 - Wrong/stale/disconnected connections show deterministic errors and never trigger credential UI from a rule toggle.
 - An unexpired saved credential reconnects after disconnect, scope round-trip, or app restart without a credential dialog; fixed expiry, rejection, or Forget returns to the prompt flow.

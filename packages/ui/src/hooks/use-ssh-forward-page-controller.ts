@@ -203,7 +203,6 @@ export function useSshForwardPageController() {
       ruleRuntimes.get(ruleId)?.generation ?? ("0" as WireCounter),
     [ruleRuntimes],
   );
-
   useEffect(() => {
     if (
       host &&
@@ -214,14 +213,13 @@ export function useSshForwardPageController() {
   }, [environment.kind, host, readiness, refreshForwarding]);
 
   const run = useCallback(async (operation: () => Promise<unknown>) => {
-    const operationEpoch = transientEpoch.current;
     setNotice(null);
     try {
       await operation();
       return true;
-    } catch (error) {
-      if (operationEpoch === transientEpoch.current)
-        setNotice(getSshForwardErrorPresentation(error).message);
+    } catch {
+      // The mutation hook publishes native errors through forwarding.error;
+      // duplicating them here would render the same message twice.
       return false;
     }
   }, []);
@@ -248,12 +246,15 @@ export function useSshForwardPageController() {
     },
     [forwarding.pending],
   );
-  const openNewRule = useCallback((connection: SshConnectionProfile) => {
-    setNotice(null);
-    setRuleFormConnection(connection);
-    setRuleFormExisting(null);
-    setRuleFormOpen(true);
-  }, []);
+  const openNewRule = useCallback(
+    (connection: SshConnectionProfile) => {
+      setNotice(null);
+      setRuleFormConnection(connection);
+      setRuleFormExisting(null);
+      setRuleFormOpen(true);
+    },
+    [],
+  );
   const openEditRule = useCallback(
     (connection: SshConnectionProfile, rule: SshForwardRule) => {
       setNotice(null);
@@ -322,9 +323,9 @@ export function useSshForwardPageController() {
               key.keyId === connection.auth.keyId),
         );
         setPassphraseTarget({ connection, keys, errorCode });
-      } catch (error) {
-        if (requestEpoch === transientEpoch.current)
-          setNotice(getSshForwardErrorPresentation(error).message);
+      } catch {
+        // listKeys is a mutation, so its native error is already published by
+        // the forwarding hook. Keep the catch to finish prompt bookkeeping.
       } finally {
         if (promptRequestId.current === requestId)
           promptInFlight.current = false;
@@ -400,7 +401,8 @@ export function useSshForwardPageController() {
         } else if (CREDENTIAL_PROMPT_CODES.has(parsed.code)) {
           void requestCredential(connection, parsed.code);
         } else {
-          setNotice(getSshForwardErrorPresentation(parsed).message);
+          // The mutation hook already published this error through
+          // forwarding.error; do not render a duplicate controller notice.
         }
       }
     },
@@ -461,7 +463,7 @@ export function useSshForwardPageController() {
       (forwarding.snapshot?.rules ?? []).filter((rule) => {
         if (rule.connectionProfileId !== connectionId) return false;
         const state = ruleRuntimes.get(rule.id)?.state;
-        return rule.desiredEnabled || isSshForwardRuleRuntimeActive(state);
+        return isSshForwardRuleRuntimeActive(state);
       }).length,
     [forwarding.snapshot?.rules, ruleRuntimes],
   );
@@ -512,7 +514,7 @@ export function useSshForwardPageController() {
   const requestDeleteRule = useCallback(
     (connection: SshConnectionProfile, rule: SshForwardRule) => {
       const state = ruleRuntimes.get(rule.id)?.state;
-      if (rule.desiredEnabled || isSshForwardRuleRuntimeActive(state)) {
+      if (isSshForwardRuleRuntimeActive(state)) {
         setNotice("Disable the rule before editing or deleting it.");
         return;
       }
@@ -557,7 +559,7 @@ export function useSshForwardPageController() {
           connectionGeneration(target.connection.id),
         ),
       );
-    if (target.kind === "deleteRule" && target.rule)
+    if (target.kind === "deleteRule" && target.rule) {
       return run(() =>
         forwarding.deleteRule(
           target.connection.id,
@@ -566,6 +568,7 @@ export function useSshForwardPageController() {
           ruleGeneration(target.rule!.id),
         ),
       );
+    }
     return run(() =>
       forwarding.forgetCredential(
         target.connection.id,
@@ -586,8 +589,8 @@ export function useSshForwardPageController() {
       connection: SshConnectionProfile,
       rule: SshForwardRule,
       enabled: boolean,
-    ) =>
-      run(() =>
+    ) => {
+      void run(() =>
         forwarding.setRuleEnabled(
           connection.id,
           connectionGeneration(connection.id),
@@ -595,8 +598,14 @@ export function useSshForwardPageController() {
           ruleGeneration(rule.id),
           enabled,
         ),
-      ),
-    [connectionGeneration, forwarding, ruleGeneration, run],
+      );
+    },
+    [
+      connectionGeneration,
+      forwarding,
+      ruleGeneration,
+      run,
+    ],
   );
 
   const saveConnection = useCallback(

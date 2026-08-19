@@ -18,11 +18,10 @@ const rule: SshForwardRule = {
 };
 
 describe("SshForwardRuleCard", () => {
-  it("blocks enabling until the parent connection is established", () => {
+  it("allows changing desired state while disconnected", () => {
     const markup = renderToStaticMarkup(
       <SshForwardRuleCard
         rule={rule}
-        connectionState="disconnected"
         pending={false}
         onSetEnabled={() => {}}
         onEdit={() => {}}
@@ -30,9 +29,24 @@ describe("SshForwardRuleCard", () => {
         onBlockedAction={() => {}}
       />,
     );
-    expect(markup).toContain("Establish the SSH connection before enabling");
     expect(markup).toContain('role="switch"');
-    expect(markup).toContain('disabled=""');
+    expect(markup).not.toContain('disabled=""');
+  });
+
+  it("shows desired-enabled disconnected rules as pending, not active", () => {
+    const markup = renderToStaticMarkup(
+      <SshForwardRuleCard
+        rule={{ ...rule, desiredEnabled: true }}
+        pending={false}
+        onSetEnabled={() => {}}
+        onEdit={() => {}}
+        onDelete={() => {}}
+        onBlockedAction={() => {}}
+      />,
+    );
+    expect(markup).toContain('aria-checked="true"');
+    expect(markup).toContain("Desired state saved; the listener will start");
+    expect(markup).not.toContain("Disable the rule before editing");
   });
 
   it("allows editing a rule whose listener failed to start", () => {
@@ -51,7 +65,6 @@ describe("SshForwardRuleCard", () => {
           stateChangedAt: rule.updatedAt,
           errorCode: "BIND_FAILED",
         }}
-        connectionState="established"
         pending={false}
         onSetEnabled={() => {}}
         onEdit={() => {}}
@@ -63,7 +76,7 @@ describe("SshForwardRuleCard", () => {
     expect(markup).toContain("The listener could not establish");
   });
 
-  it("keeps an active runtime child disableable during recovery and at capacity", () => {
+  it("keeps the rule controls available while the connection is recovering", () => {
     const markup = renderToStaticMarkup(
       <SshForwardRuleCard
         rule={rule}
@@ -78,7 +91,6 @@ describe("SshForwardRuleCard", () => {
           activeChannels: 0,
           stateChangedAt: rule.updatedAt,
         }}
-        connectionState="reconnecting"
         pending={false}
         enabledRuleLimitReached
         onSetEnabled={() => {}}

@@ -115,7 +115,8 @@ export function SshForwardRuleDialog({
               <strong className="text-[var(--color-text)]">
                 {connection.name}
               </strong>
-              . The connection must be Established before the rule can enable.
+              . Save the desired rule now; Connect establishes SSH before
+              starting an enabled listener.
             </p>
           </div>
           <button
