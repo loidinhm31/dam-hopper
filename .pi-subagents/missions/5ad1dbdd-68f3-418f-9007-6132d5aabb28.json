@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "id": "5ad1dbdd-68f3-418f-9007-6132d5aabb28",
+  "title": "Environment: Windows 11 (win32), CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwardin...",
+  "objective": "Environment: Windows 11 (win32), CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwarding-control. User authorized edits to existing uncommitted SSH-forwarding files, preserve unrelated .pnpm-store/ and artifacts. Inspect apps/native/src-tauri/src/ssh_forward/manager.rs and Phase 04 plan. Propose minimal Rust-level patch design for: (1) reconnect must keep listener bound but reject fresh connections without starving/cancelling an in-flight reconnect, and (2) worker/channel/reconnect tasks must be fully joined/reaped within one 5-second aggregate deadline on normal stop/dispose. Assess sync force_close fallback separately. Do not edit. Cite exact functions/types and test cases. Concise; unresolved questions last.",
+  "status": "completed",
+  "createdAt": "2026-08-12T17:16:17.693Z",
+  "updatedAt": "2026-08-12T17:17:39.130Z",
+  "runs": [
+    {
+      "runId": "call_GBLTLVPqyxXgfQstoxyzZeuh|fc_0723c5b70ccc75b4016a7caa5d750c81918551787b21d6c7d5",
+      "mode": "workflow",
+      "agent": "oracle",
+      "status": "completed",
+      "startedAt": "2026-08-12T17:17:39.130Z",
+      "completedAt": "2026-08-12T17:17:39.130Z",
+      "usage": {
+        "tokens": 82361
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\3274a42f_oracle_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\3274a42f_oracle_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow completed.\n\nReturn:\n{\n  \"key\": \"lifecycle-design-review\",\n  \"ok\": true,\n  \"runId\": \"3274a42f\",\n  \"output\": \"## Findings\\n\\n1. **High — reconnect queues clients**  \\n   `apps/native/src-tauri/src/ssh_forward/manager.rs:1255-1308` stops polling `listener.accept()` while awaiting `reconnect_session()`. The listener remains bound, but the OS backlog accepts fresh loopback clients.  \\n   **Patch:** pass `&TcpListener` into `reconnect_session`. During backoff, accept-and-drop fresh sockets. During a connect attempt, spawn the connect future into a `JoinHandle`; select between `listener.accept()` (drop socket), stop signal, and `&mut connect_handle`. Dropping the `&mut JoinHandle` poll future does not cancel the spawned connection, so a flood cannot cancel/starve an in-flight reconnect. On stop/final failure, abort **and join** that handle before return.\\n\\n2. **High — normal worker disposal does not prove full reaping within one deadline**  \\n   `close_workers()` at `manager.rs:1582-1594` signals and waits workers serially; after timeout it adds a further 100ms per worker. `abort_channel_tasks()` at `1883-1892` can return with `JoinSet` entries still unjoined. `run_profile()` independently uses several 5-second waits (`1284-1287`, `1311-1313`), exceeding a caller’s aggregate shutdown budget.  \\n   **Patch:** introduce internal `WorkerStop { deadline: Instant }`, replacing `oneshot::Sender<()>`. `close_workers()`:\\n   - creates one `deadline = now + 5s`;\\n   - sends it to **all** workers before awaiting any;\\n   - waits all worker handles against the shared deadline;\\n   - reserves a small final reaping slice (e.g. 250ms), aborts all pending workers, then joins every aborted handle by the original deadline;\\n   - removes `abort_handles` only after joins resolve.\\n   \\n   `run_profile()` receives the deadline and passes it to one `cleanup_profile_resources()` helper. That helper aborts **and drains** `channel_tasks` until the deadline, then closes the session wi...",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete high-severity findings and minimal patch design cited at manager.rs:1255-1308, 1153-1172, 1582-1594, and 1883-1892."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "nl -ba apps/native/src-tauri/src/ssh_forward/manager.rs | sed -n '1140,1340p;1535,1600p;1865,1910p'",
+          "result": "passed",
+          "summary": "Inspected reconnect, worker shutdown, force-close, and channel reaping paths."
+        },
+        {
+          "command": "nl -ba plans/260808-1310-ssh-port-forwarding-control/phase-04-native-manager-tauri-ipc.md | sed -n '10,30p;110,135p;205,235p'",
+          "result": "passed",
+          "summary": "Verified Phase 04 blocker and shutdown requirements."
+        },
+        {
+          "command": "git diff --check -- apps/native/src-tauri/src/ssh_forward/manager.rs",
+          "result": "passed",
+          "summary": "No whitespace errors in inspected untracked file."
+        }
+      ],
+      "validationOutput": [
+        "No edits made, as assigned.",
+        "Plan explicitly identifies the two reviewed lifecycle defects."
+      ],
+      "residualRisks": [
+        "Tokio abort cannot guarantee termination of blocking/non-cooperative work.",
+        "Windows STATUS_ENTRYPOINT_NOT_FOUND still blocks runtime test evidence."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No diff; design review only.",
+      "reviewFindings": [
+        "high: apps/native/src-tauri/src/ssh_forward/manager.rs:1255-1308 - reconnect stops accepting sockets, permitting listener backlog.",
+        "high: apps/native/src-tauri/src/ssh_forward/manager.rs:1582-1594 and 1883-1892 - worker/channel tasks may be aborted or dropped without full join under one aggregate deadline.",
+        "medium: apps/native/src-tauri/src/ssh_forward/manager.rs:1153-1172 - synchronous force_close is emergency best-effort, not graceful disposal proof."
+      ],
+      "manualNotes": "Implement deadline propagation through the worker stop signal; do not use an inline reconnect connect future in a listener-accept select because each accepted socket would cancel it."
+    }
+  }
+}

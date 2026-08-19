@@ -36,6 +36,15 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Next Milestone:** Product follow-ups: terminal commit status Phase 03 validation and release checks
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
+### Native SSH Port-Forwarding Control (2026-08-09; superseded)
+
+- The initial Phase 01 blocked/no-go entry is superseded by the completed Phase 01–06 Windows-only milestone below; Phase 07 release gates remain deferred.
+
+### Native SSH Port-Forwarding Control (2026-08-15)
+
+- **Phases 01–06 — [COMPLETED 2026-08-14; Windows-only scope]**: Phase 01 Windows dependency/ACL feasibility, Phase 02 native contracts and scope retention, Phase 03 SSH transport/trust, Phase 04 manager/IPC lifecycle, Phase 05 browser-safe host/adapter, and Phase 06 desktop-only control surface are complete. The delivered surface is host-gated to the native desktop, uses explicit reviewed endpoints and lifecycle actions, exposes agent/opaque-key inventory and host-key approval/remediation, and keeps browser/mobile forwarding routes and calls absent. Validation passed: UI 181 files/1,050 tests, Chromium 28 files/121 tests, and Rust 140 passed/1 ignored; build, lint, `cargo check`, `cargo fmt`, and diff checks passed. [Plan](../plans/260808-1310-ssh-port-forwarding-control/plan.md).
+- **Phase 07 — [COMPLETED 2026-08-15; WINDOWS-ONLY SCOPE]**: Windows CI/release gates cover Rust format/lint/unit checks, the ignored real OpenSSH remote-loopback forwarding test, deterministic smoke/evidence validation, no-bundle Tauri compilation, and the explicit unsigned NSIS package profile. WebView2/OpenSSH preflight and protected same-commit evidence binding are implemented. Protected runtime evidence remains a production-release prerequisite; macOS, Linux, Android, iOS, signed updater artifacts, and platform expansion are deferred to a separate plan.
+
 ### Programming Language Navigation in Explorer (2026-08-10)
 
 - **Phase 03 — [COMPLETED 2026-08-10 00:36:17 +07:00]**: full-project Rust/JS-TS/Java navigation, manual scan states, navigation-only capability gating, selection cleanup, commit-gated reveal, and focused release validation completed.

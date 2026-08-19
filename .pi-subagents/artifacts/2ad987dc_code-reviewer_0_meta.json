@@ -1,0 +1,152 @@
+{
+  "runId": "2ad987dc",
+  "agent": "code-reviewer",
+  "task": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwarding-control. Runtime test execution deferred: 0xc0000139. Review the latest worker terminal-cleanup implementation in apps/native/src-tauri/src/ssh_forward/manager.rs only. Verify normal completion, failure, cancellation, restart races, and newer-generation safety; ensure a worker does not await/drop its own JoinHandle and manager maps do not retain stale abort/worker handles. No edits. Terminal report: score, critical/warnings, tested assumptions, unresolved questions last.",
+  "exitCode": 0,
+  "processSignal": "SIGTERM",
+  "usage": {
+    "input": 63207,
+    "output": 7157,
+    "cacheRead": 132608,
+    "cacheWrite": 0,
+    "cost": 0.23881960000000002,
+    "turns": 6
+  },
+  "model": "openai-codex/gpt-5.6-terra",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-terra"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-terra",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 63207,
+        "output": 7157,
+        "cacheRead": 132608,
+        "cacheWrite": 0,
+        "cost": 0.23881960000000002,
+        "turns": 6
+      }
+    }
+  ],
+  "durationMs": 152490,
+  "toolCount": 16,
+  "launchContractDigest": "6ea9b1669dad2ae0743754a1c99ea8bfd7c8615b9b6ea1ec3f0e8a5192ff228d",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:6bbd3ab6ff42e3f1"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:6bbd3ab6ff42e3f1"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete high-severity findings identified at manager.rs:1164-1182 and manager.rs:1271-1273/1636-1658."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml --check",
+          "result": "passed",
+          "summary": "Formatting validation completed with exit 0."
+        },
+        {
+          "command": "git diff --check -- apps/native/src-tauri/src/ssh_forward/manager.rs",
+          "result": "passed",
+          "summary": "No whitespace errors."
+        },
+        {
+          "command": "Rust runtime tests/typecheck",
+          "result": "not-run",
+          "summary": "Deferred by supplied Windows runtime failure 0xc0000139."
+        }
+      ],
+      "validationOutput": [
+        "Reviewed normal completion, failure, cancellation, restart, and generation-safety paths.",
+        "No self-JoinHandle await found.",
+        "Existing cleanup tests do not exercise force_close lock contention or listener-accept failure."
+      ],
+      "residualRisks": [
+        "force_close can retain stale runtime worker/stop handles when runtimes.try_lock fails.",
+        "Listener accept failure can leave a workerless runtime reported as active."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No reviewer edits. Reviewed untracked manager.rs implementation.",
+      "reviewFindings": [
+        "high: apps/native/src-tauri/src/ssh_forward/manager.rs:1164-1182 - force_close clears abort handles even if runtimes.try_lock fails, leaving stale runtime handles after wrapper abort prevents completion notification.",
+        "high: apps/native/src-tauri/src/ssh_forward/manager.rs:1271-1273,1636-1658 - listener.accept failure exits worker without a matching failure state transition, leaving a workerless active runtime."
+      ],
+      "manualNotes": "No edits made. Runtime execution intentionally deferred."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": false
+    }
+  },
+  "transcriptPath": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\2ad987dc_code-reviewer_0_transcript.jsonl",
+  "timestamp": 1786621513919
+}

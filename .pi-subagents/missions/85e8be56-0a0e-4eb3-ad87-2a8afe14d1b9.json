@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "id": "85e8be56-0a0e-4eb3-ad87-2a8afe14d1b9",
+  "title": "Environment Windows 11; CWD G:/ws/sharing/dam-hopper. Review current Phase 05 SSH-forward host im...",
+  "objective": "Environment Windows 11; CWD G:/ws/sharing/dam-hopper. Review current Phase 05 SSH-forward host implementation after all remediation against plan phase-05-host-context-native-adapter.md. Inspect adapter, shared host parser, bridge, hook, server-config, composition, and tests. Validate no mutation replay; exactly one hint refresh owner; strict DTO/error parsing; deletion sequencing; Windows-only factory; required test coverage. Runtime Phase04 loader issue is deferred. Do not edit. Terminal report: score/10, critical, warnings, suggestions, reviewed files, validation commands/results, unresolved questions last.",
+  "status": "completed",
+  "createdAt": "2026-08-13T12:24:00.058Z",
+  "updatedAt": "2026-08-13T12:26:47.620Z",
+  "runs": [
+    {
+      "runId": "call_4UiBGMywdTk8S0b7mo3O0QDE|fc_0723c5b70ccc75b4016a7db75a347c8191afef079b175bc333",
+      "mode": "workflow",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-13T12:26:47.620Z",
+      "completedAt": "2026-08-13T12:26:47.620Z",
+      "usage": {
+        "tokens": 93133
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\078b7ab1_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\078b7ab1_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow completed.\n\nReturn:\n{\n  \"key\": \"phase-05-final-review\",\n  \"ok\": true,\n  \"runId\": \"078b7ab1\",\n  \"output\": \"## Code Review Summary\\n\\n**Score: 5/10 — not ready for attested Phase 05 acceptance.**\\n\\n### Reviewed files\\n- `apps/native/src/native-ssh-forward-host.ts`\\n- `apps/native/src/native-ssh-forward-host.test.ts`\\n- `apps/native/src/main.tsx`\\n- `packages/ui/src/lib/ssh-forward-host.ts`\\n- `packages/ui/src/lib/ssh-forward-host.test.ts`\\n- `packages/ui/src/contexts/SshForwardHostContext.tsx`\\n- `packages/ui/src/hooks/use-ssh-forward.ts`\\n- `packages/ui/src/api/server-config.ts`\\n- `plans/260808-1310-ssh-port-forwarding-control/phase-05-host-context-native-adapter.md`\\n- Relevant Rust DTO/command contracts.\\n\\n### Critical\\n- None.\\n\\n### Warnings\\n- **High — stale activation is returned/published:** `apps/native/src/native-ssh-forward-host.ts:76`. A late A activation response is only prevented from updating adapter fields; it is still returned to the caller. `SshForwardScopeBridge` then writes `activeScopeId = result.scopeId` at `packages/ui/src/contexts/SshForwardHostContext.tsx:29-31`. A/B/C can therefore publish stale A after C. Must reject/ignore superseded responses before resolving to caller.\\n- **High — stale command snapshot can overwrite authoritative cache:** `apps/native/src/native-ssh-forward-host.ts:90,96`. Commands validate against captured context/token but do not confirm they still equal live adapter state after `await`. A late snapshot after activation/new client epoch can replace current `snapshotState`, violating exact-current acceptance.\\n- **High — timestamp parser is not equivalent to strict Rust validation:** `packages/ui/src/lib/ssh-forward-host.ts:19`. `Date.parse` accepts normalized impossible dates such as `2026-02-30T00:00:00.000Z`; Rust `PrimitiveDateTime::parse` rejects them. This undermines strict DTO parity. Same issue duplicated in adapter `validTimestamp` at `apps/native/src/native-ssh-forward-host.ts:62`.\\n- **Medium —...",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete findings reported with paths and severities, including stale activation publication, stale snapshot acceptance, strict timestamp mismatch, missing coverage, and unchecked plan tasks."
+        }
+      ],
+      "changedFiles": [
+        "apps/native/src/native-ssh-forward-host.ts",
+        "apps/native/src/native-ssh-forward-host.test.ts",
+        "apps/native/src/main.tsx",
+        "packages/ui/src/lib/ssh-forward-host.ts",
+        "packages/ui/src/lib/ssh-forward-host.test.ts",
+        "packages/ui/src/contexts/SshForwardHostContext.tsx",
+        "packages/ui/src/hooks/use-ssh-forward.ts",
+        "packages/ui/src/api/server-config.ts"
+      ],
+      "testsAddedOrUpdated": [
+        "apps/native/src/native-ssh-forward-host.test.ts",
+        "packages/ui/src/lib/ssh-forward-host.test.ts"
+      ],
+      "commandsRun": [
+        {
+          "command": "pnpm --filter @dam-hopper/native test -- native-ssh-forward-host.test.ts",
+          "result": "passed",
+          "summary": "2 files, 15 tests passed."
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/native build",
+          "result": "passed",
+          "summary": "browser bridge build, TypeScript, and Vite build passed."
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/ui build",
+          "result": "passed",
+          "summary": "TypeScript build passed."
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/ui test -- src/lib/ssh-forward-host.test.ts src/api/server-config.test.ts",
+          "result": "failed",
+          "summary": "975 tests run; unrelated transport-utils expectation failure."
+        },
+        {
+          "command": "git diff --check",
+          "result": "passed",
+          "summary": "No whitespace errors."
+        }
+      ],
+      "validationOutput": [
+        "Windows-only factory and 12-command map tests pass.",
+        "Native and UI builds pass.",
+        "Required context/hook tests are absent.",
+        "UI test suite has an unrelated existing transport-utils failure."
+      ],
+      "residualRisks": [
+        "Late A/B activation responses can publish stale scope identity through the bridge.",
+        "Late command snapshots can overwrite current native-authoritative state.",
+        "Impossible ISO dates are accepted in TypeScript but rejected by Rust.",
+        "Phase 05 acceptance test matrix is materially incomplete."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Phase 05 host contract, Windows native adapter, context bridge, hook, server-profile notifications, composition, and partial tests added.",
+      "reviewFindings": [
+        "high: apps/native/src/native-ssh-forward-host.ts:76 - stale activation response resolves to caller and can be published by bridge.",
+        "high: apps/native/src/native-ssh-forward-host.ts:90,96 - late command result can overwrite current snapshot state.",
+        "high: packages/ui/src/lib/ssh-forward-host.ts:19 and apps/native/src/native-ssh-forward-host.ts:62 - Date.parse accepts invalid calendar timestamps unlike Rust.",
+        "medium: packages/ui/src/contexts/SshForwardHostContext.test.tsx and packages/ui/src/hooks/use-ssh-forward.test.tsx - required test files absent.",
+        "medium: plans/260808-1310-ssh-port-forwarding-control/phase-05-host-context-native-adapter.md - all TODO items remain unchecked."
+      ],
+      "manualNotes": "Runtime Phase04 loader issue was deferred per request and not assessed."
+    }
+  }
+}

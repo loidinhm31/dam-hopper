@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "id": "425636b8-35f3-40b6-b9e9-ca819d787cb7",
+  "title": "Environment: Windows 11 (win32), CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwardin...",
+  "objective": "Environment: Windows 11 (win32), CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwarding-control, pnpm monorepo. Read plans/260808-1310-ssh-port-forwarding-control/plan.md and phase-04-native-manager-tauri-ipc.md plus relevant apps/native/src-tauri SSH-forward code. Audit current implementation versus Phase 04 only. Identify exact files, task dependency map, evidence for the two known blockers (worker cancellation/reaping and reconnect listener rejection), uncommitted-work ownership risks, and the minimal commands needed to validate. Do not edit files. Concise report; unresolved questions last.",
+  "status": "completed",
+  "createdAt": "2026-08-12T16:59:18.132Z",
+  "updatedAt": "2026-08-12T17:00:30.778Z",
+  "runs": [
+    {
+      "runId": "call_0EwLKbDKE1NxGZgT9zum3ClT|fc_0723c5b70ccc75b4016a7ca661adc881918e365057c92a6827",
+      "mode": "workflow",
+      "agent": "scout",
+      "status": "completed",
+      "startedAt": "2026-08-12T17:00:30.778Z",
+      "completedAt": "2026-08-12T17:00:30.778Z",
+      "usage": {
+        "tokens": 53136
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\53538c23_scout_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\53538c23_scout_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow completed.\n\nReturn:\n{\n  \"key\": \"phase-04-audit\",\n  \"ok\": true,\n  \"runId\": \"53538c23\",\n  \"output\": \"## scout-260812-2359-phase-04-audit\\n\\n**Phase 04: blocked; not approvable.**\\n\\n### Findings\\n- **BLOCKER — worker cancellation/reaping:** `apps/native/src-tauri/src/ssh_forward/manager.rs:1153-1172,1542-1600,1883-1893` aborts worker/channel tasks but lacks a bounded proof that all `JoinHandle`/`JoinSet` children are joined/reaped. `force_close()` clears handles/maps immediately; `close_workers()` allows only a separate 100ms post-abort wait; `abort_channel_tasks()` exits on deadline with unfinished children. Worker owns listener/session/channel tasks, so shutdown cannot attest no surviving task/handle within shared 5s.\\n- **BLOCKER — reconnect listener admission:** `apps/native/src-tauri/src/ssh_forward/manager.rs:1255-1306` retains `TcpListener` while `reconnect_session()` awaits retries. The listener is not polled during that await, but stays kernel-bound; new local TCP clients can queue in its backlog rather than receive rejection while runtime is `Reconnecting`.\\n- **HIGH — uncommitted ownership risk:** Core Phase-04 additions are untracked: `src/shutdown.rs`, `src/ssh_forward/commands.rs`, `src/ssh_forward/manager.rs`. They are absent from `git diff --name-only`; a normal staged/partial commit can omit the implementation entirely.\\n- **MEDIUM — mixed ownership scope:** Modified Phase-02/03 files (`instance.rs`, `known_hosts.rs`, `model.rs`, `store.rs`) plus Phase-04 plan/status files are co-mingled with Phase-04 wiring. Establish ownership/commit boundary before remediation.\\n\\n### Present Phase-04 coverage\\n- Exact 12-command handler and Windows/main-webview capability surface: `commands.rs`, `command_names.in.rs`, `permissions/ssh-forward.toml`, `capabilities/ssh-forward.json`, `lib.rs`.\\n- Manager ordering, profile lifecycle, reconnect state, scope activation/autostart: `manager.rs`.\\n- Close/exit coordinator and Browser Debug coordination: `shutd...",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete Phase-04 blockers and ownership risks identified with exact native file paths and code regions."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git status --short && git diff --name-only && git diff --cached --name-only && git branch --show-current",
+          "result": "passed",
+          "summary": "Found modified and untracked Phase-04 work; no staged files reported."
+        },
+        {
+          "command": "git diff --stat ... | findstr /R \"^[+-]\"",
+          "result": "failed",
+          "summary": "Windows findstr invocation failed; diff stat still reported 9 tracked modified files."
+        },
+        {
+          "command": "cargo test --manifest-path apps/native/src-tauri/Cargo.toml ssh_forward::manager",
+          "result": "not-run",
+          "summary": "Plan records Windows STATUS_ENTRYPOINT_NOT_FOUND before assertions."
+        }
+      ],
+      "validationOutput": [
+        "Phase-04 static validation is plan-attested, not rerun in this audit.",
+        "Two lifecycle blockers remain unresolved."
+      ],
+      "residualRisks": [
+        "Forced cancellation may leave worker/channel/session resources unreaped beyond the shared shutdown deadline.",
+        "Reconnecting listener can backlog new local clients instead of rejecting them.",
+        "Untracked manager, command, and shutdown implementation can be omitted from a commit."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No edits made by audit. Worktree contains tracked Phase-04 wiring changes and untracked core manager/commands/shutdown files.",
+      "reviewFindings": [
+        "blocker: apps/native/src-tauri/src/ssh_forward/manager.rs:1153-1172,1542-1600,1883-1893 - abort paths do not prove all worker/channel tasks are reaped within the shared 5-second deadline.",
+        "blocker: apps/native/src-tauri/src/ssh_forward/manager.rs:1255-1306 - listener remains bound during reconnect retries, allowing kernel backlog queuing rather than rejection.",
+        "high: apps/native/src-tauri/src/ssh_forward/manager.rs, commands.rs, shutdown.rs - core Phase-04 files are untracked and at commit-omission risk."
+      ],
+      "manualNotes": "Unresolved questions: none beyond the plan's existing need to prove pinned Tauri close/exit behavior through runtime tests."
+    }
+  }
+}

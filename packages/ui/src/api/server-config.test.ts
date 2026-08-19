@@ -16,6 +16,8 @@ import {
   setAuthToken,
   setServerUrl,
   shouldClearAuthTokenForUrlChange,
+  readServerProfiles,
+  subscribeToProfileChanges,
 } from "./server-config.js";
 
 function mockStorage(): Storage {
@@ -72,7 +74,7 @@ describe("server profile migration", () => {
     expect(getActiveProfile()?.id).toBe("profile-id");
   });
 
-  it("hides separate-origin active profiles from native browser transport", () => {
+  it("hides separate-origin active profiles from unsupported native hosts", () => {
     saveProfiles([
       {
         id: "remote",
@@ -84,9 +86,28 @@ describe("server profile migration", () => {
     ]);
     setActiveProfile("remote");
     document.documentElement.dataset.appHost = "native";
+    document.documentElement.dataset.appPlatform = "android";
 
     expect(getActiveProfile()).toBeNull();
     expect(getServerUrl()).toBe("http://127.0.0.1:4800");
+  });
+
+  it("allows separate-origin profiles on Windows native desktop", () => {
+    saveProfiles([
+      {
+        id: "remote",
+        name: "Remote",
+        url: "http://remote.example:4800",
+        authType: "none",
+        createdAt: 1,
+      },
+    ]);
+    setActiveProfile("remote");
+    document.documentElement.dataset.appHost = "native";
+    document.documentElement.dataset.appPlatform = "windows";
+
+    expect(getActiveProfile()?.id).toBe("remote");
+    expect(getServerUrl()).toBe("http://remote.example:4800");
   });
 
   it("normalizes equivalent URLs without treating trailing slashes as changes", () => {
@@ -269,6 +290,22 @@ describe("server profile migration", () => {
 
     expect(clearAuthToken("profile-a")).toBe(false);
     expect(sessionStorage.getItem("damhopper_auth_token_profile-a")).toBeNull();
+  });
+
+  it("reports unavailable profile reads rather than an authoritative empty list", () => {
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => { throw new Error("unavailable"); });
+    expect(readServerProfiles()).toEqual({ status: "unavailable" });
+  });
+
+  it("emits typed active and deleted events only after delete commits", () => {
+    const events: unknown[] = [];
+    const unsubscribe = subscribeToProfileChanges((event) => events.push(event));
+    const profile = { id: "profile-a", name: "A", url: "http://a.test", authType: "basic" as const, createdAt: 1 };
+    saveProfiles([profile]);
+    setActiveProfile(profile.id);
+    expect(deleteProfile(profile.id)).toBe(true);
+    expect(events).toContainEqual({ type: "deleted", deletedProfileId: profile.id, knownProfileIds: { status: "available", ids: [] } });
+    unsubscribe();
   });
 
   it("selects a replacement and clears credentials when deleting active profile", () => {

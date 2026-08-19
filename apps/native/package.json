@@ -5,14 +5,18 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @dam-hopper/browser-bridge build && tsc -p tsconfig.json && vite build",
+    "test": "vitest run",
     "dev": "vite",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "pnpm --filter @dam-hopper/browser-bridge build && tauri build --bundles deb,rpm",
+    "tauri:build:windows": "pnpm --filter @dam-hopper/browser-bridge build && tauri build --bundles nsis --config src-tauri/tauri.windows.package.conf.json",
     "tauri:probe": "node scripts/smoke-browser-debug.mjs --runtime",
     "smoke:build": "node scripts/smoke-browser-debug.mjs --build-only",
     "smoke:evidence": "node scripts/smoke-browser-debug.mjs --validate-evidence",
+    "smoke:ssh-forward": "node scripts/smoke-ssh-forward.mjs",
+    "test:e2e:ssh-forward": "cargo test --manifest-path src-tauri/Cargo.toml --test ssh_forward_e2e -- --ignored --nocapture",
     "tauri:android:init": "tauri android init --ci --skip-targets-install",
     "tauri:android:dev": "tauri android dev --host",
     "tauri:android:build": "tauri android build",
@@ -38,6 +42,7 @@
     "@vitejs/plugin-react": "^4.3.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^4.1.5"
   }
 }

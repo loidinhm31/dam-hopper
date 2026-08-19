@@ -1,0 +1,148 @@
+{
+  "runId": "831eb6d9",
+  "agent": "code-reviewer",
+  "task": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper. Static-only final review of apps/native/src-tauri/src/ssh_forward/manager.rs changes after previous review: force_close now clears abort map independent of runtime lock; reconnect accept failure maps BindFailed. Confirm no regressions in these two fixes. Runtime tests blocked by external 0xc0000139, do not require them. No edits. Concise terminal report with score, critical/warnings, unresolved questions last.",
+  "exitCode": 0,
+  "processSignal": "SIGTERM",
+  "usage": {
+    "input": 31128,
+    "output": 2190,
+    "cacheRead": 47616,
+    "cacheWrite": 0,
+    "cost": 0.0980592,
+    "turns": 4
+  },
+  "model": "openai-codex/gpt-5.6-terra",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-terra"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-terra",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 31128,
+        "output": 2190,
+        "cacheRead": 47616,
+        "cacheWrite": 0,
+        "cost": 0.0980592,
+        "turns": 4
+      }
+    }
+  ],
+  "durationMs": 56137,
+  "toolCount": 9,
+  "launchContractDigest": "98b160730b7cf9c4f5a68245dcd3526fe93e61d52c25cde8a26a0aae79641747",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:6bbd3ab6ff42e3f1"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:6bbd3ab6ff42e3f1"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete high-severity finding reported at apps/native/src-tauri/src/ssh_forward/manager.rs:1380; force_close cleanup independently verified at lines 1164-1189."
+        }
+      ],
+      "changedFiles": [
+        "apps/native/src-tauri/src/ssh_forward/manager.rs"
+      ],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "cargo check --lib (apps/native/src-tauri)",
+          "result": "passed",
+          "summary": "Finished dev profile successfully."
+        },
+        {
+          "command": "git diff --check",
+          "result": "passed",
+          "summary": "No whitespace errors."
+        }
+      ],
+      "validationOutput": [
+        "Static verification confirms force_close clears abort_handles before any runtime try_lock.",
+        "Reconnect has a remaining listener.accept() error path mapping to LocalPortInUse at manager.rs:1380."
+      ],
+      "residualRisks": [
+        "Runtime tests not run per instruction; external Windows loader error 0xc0000139 blocks them.",
+        "Reconnect-backoff accept failure remains misclassified as LocalPortInUse."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Reviewed untracked SSH forwarding manager implementation; no edits made.",
+      "reviewFindings": [
+        "high: apps/native/src-tauri/src/ssh_forward/manager.rs:1380 - reconnect-backoff listener.accept() failure returns LocalPortInUse instead of BindFailed; later equivalent path correctly uses BindFailed.",
+        "no blockers: apps/native/src-tauri/src/ssh_forward/manager.rs:1164-1189 - force_close clears abort map independently of runtime lock acquisition."
+      ],
+      "manualNotes": "Static-only review; runtime validation intentionally omitted."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": true
+    }
+  },
+  "transcriptPath": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\831eb6d9_code-reviewer_0_transcript.jsonl",
+  "timestamp": 1786621782489
+}

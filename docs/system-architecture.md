@@ -194,6 +194,12 @@ It resets lifecycle trust on a terminal attach/replay, invalid marker or transit
 alternate-buffer entry, and a new PTY incarnation. No lifecycle event establishes
 trust for unsupported shells.
 
+Phase 02 storage hardening now includes deterministic exclusive staging-file replacement race
+validation, canonical decoded SHA-256 fingerprint validation, and forced-process crash/restart
+replacement recovery with idempotent purge. Phase 03+ delivery and release evidence remains
+pending; Linux, macOS, iOS, and Windows-agent/platform support remain deferred. These proofs do
+not claim v1 release readiness or that all safeguards above are complete.
+
 ```mermaid
 stateDiagram-v2
   [*] --> Unverified
@@ -618,7 +624,7 @@ permissions to `core:default`.
 
 - `apps/native/src-tauri` contains the default Tauri builder, the main window config, and the checked-in Android Studio project under `src-tauri/gen/android`.
 - No filesystem, shell, opener, HTTP, or sidecar plugin permissions are granted in Phase 03. The native CSP allows local/profile HTTP and WebSocket connections but keeps default script execution to self.
-- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. Packaged native browser transport ignores separate-origin profiles by policy; a native HTTP/WebSocket transport is deferred. Separate web frontends require an exact backend `DAM_HOPPER_CORS_ORIGINS` entry.
+- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. Windows native desktop may use separate-origin profiles through the existing browser transport when the backend has an exact `DAM_HOPPER_CORS_ORIGINS` entry; Android, iOS, and unsupported native hosts remain same-origin by policy. Separate web frontends also require an exact backend `DAM_HOPPER_CORS_ORIGINS` entry.
 
 **Native browser-debug controller (Phase 03):**
 
@@ -1160,6 +1166,378 @@ SSH passphrases are session-only by default. Save-for-later uses the host OS cre
 - It does not protect against a compromised same-user process or DamHopper itself while running.
 - If keyring support is unavailable, save-for-later falls back to session-only use with an error.
 - The frontend retry hook performs only one automatic retry after a successful key load and does not keep a long-lived success cache, so later SSH auth failures can reopen the prompt instead of being masked by stale session state.
+
+### SSH port-forwarding control (Phase 03; shipped safeguards)
+
+Phase 01 feasibility passed for Windows ACLs, SSH-agent access, and the
+no-follow/contained-handle primitives. Phase 02 contracts now include the
+forwarding manager/runtime safeguards below. Linux, macOS, and iOS remain
+deferred; see the Phase 01 native dependency/platform gate report.
+
+The planned SSH forwarding implementation is a native desktop capability. The shared React UI talks to a host interface; only
+`apps/native` supplies a Tauri-backed implementation. Rust code in `apps/native/src-tauri` owns the
+SSH protocol, desktop loopback listeners, profile/trust/meta persistence, host trust, credentials,
+activation ordering, scope purge, lifecycle, and shutdown. The Axum server has no forwarding CRUD
+route, manager, store, flag, state, or WebSocket event. Existing `server/src/port_forward/**`, PTY
+port detection, `/api/ssh/*`, Git credentials, and shared `WsTransport` behavior remain protected,
+unrelated, and unchanged.
+
+V1 supports SSH local forwarding only:
+
+`desktop 127.0.0.1:localPort -> native Rust SSH client -> remote 127.0.0.1:targetPort`.
+
+The SSH endpoint defaults from the active DamHopper server profile hostname with port 22 prefilled,
+but the user must review and save it. The persisted SSH endpoint is explicit and editable; later
+HTTP profile URL changes never silently rewrite it. Both bind and remote target hosts are fixed
+IPv4 `127.0.0.1`; only their integer ports are configurable in `1..=65535`. Remote forwarding,
+SOCKS, non-loopback targets, wildcard/IPv6, port `0`, arbitrary paths/options,
+and browser/mobile support are out of v1 scope. Windows Credential Manager persistence
+is the shipped desktop password/passphrase persistence boundary described below.
+
+```mermaid
+flowchart LR
+    UI[Shared SSH forwarding page] --> Host[SshForwardHost interface]
+    Host -->|Tauri invoke| IPC[Desktop-only IPC commands]
+    IPC --> Ordering[Desktop identity and activation ordering]
+    Ordering --> Manager[Native SshForwardManager]
+    Manager --> Profiles[(Native per-server-profile TOML)]
+    Manager --> KnownHosts[(Native per-server-profile known hosts)]
+    Manager --> ScopeMeta[(Scope retention metadata)]
+    Manager --> Agent[OS SSH agent or safe key inventory]
+    Manager --> Listener[Desktop 127.0.0.1 listener]
+    Listener -->|SSH direct-tcpip| Target[Remote 127.0.0.1 target]
+    Manager -->|Low-rate Tauri event hint| Host
+    Delete[Observed ServerProfile deletion] -->|deactivate then purge| Manager
+    Web[Browser and native mobile] -. host unavailable .-> UI
+    Axum[DamHopper Axum server] -. no forwarding dependency .-> Manager
+```
+
+`apps/native/src/native-ssh-forward-host.ts` is the only **SSH-forwarding** frontend module that
+imports Tauri invoke/event APIs; other native adapters remain separate. `packages/ui` defines the
+host interface/context and renders no route, navigation, query, invoke, or listener when the host is
+absent. Commands return authoritative snapshots. Events are bounded refetch hints, never patches.
+The adapter rejects stale desktop/manager/client/activation/scope/profile identities.
+
+Activation ordering is manager-authoritative. Rust persists a stable desktop UUID, creates a random
+manager-session UUID per native process, and atomically issues a monotonically increasing client
+epoch to each webview adapter. Within its epoch, the caller issues canonical decimal-string
+`activationToken` values. Rust strictly parses both counters to `u64` and compares epoch then token
+numerically; wire strings are never compared lexicographically (`9 < 10`, `99 < 100`). Rust records
+the latest `(clientEpoch, activationToken)` intent before the
+serialized activation gate, then rechecks it after each stop/load await and before commit,
+auto-start, event, or response. Delayed A or B can never overwrite latest C. A new reload epoch that
+activates the same scope takes ordering ownership but rehydrates the existing listener without
+stop/start or generation change. Process restart changes manager-session ID, so memory-only epochs,
+tokens, scope/runtime generations safely reset; old IPC clients/tasks no longer exist.
+
+Native state separates durable intent from live resources:
+
+- `NativeSshForwardProfile`: UUID, active DamHopper server-profile scope ID, name, explicit SSH
+  host/port/user, auth mode (`agent` or safe inventory key reference), desktop local port, fixed
+  remote target host `127.0.0.1`, target port, auto-start, and bounded reconnect policy. It contains no passphrase, private key,
+  HTTP auth token, task handle, socket, or raw SSH option.
+- `NativeSshForwardRuntime`: profile ID, scope ID, generation, state, desktop bind address,
+  timestamps, retry count, channel count, and stable redacted error code. It is memory-only.
+- Profile, known-host, and scope-meta files live under Tauri `app_config_dir`, partitioned by a hash
+  of the active server-profile UUID. Mutations share one strict manager/runtime lock and are
+  serialized/atomically replaced; Unix files use mode `0600`. Observed `ServerProfile` deletion
+  deactivates then calls inactive `purge_scope`. For a known scope, unavailable browser storage is
+  a no-write condition: it does not advance aging, create metadata, or purge. Unobserved absent
+  scopes quarantine 30 continuous days; active/staged scopes never purge.
+- The app-config root, scope directories, and every profile/trust/meta read, temp write, atomic
+  replace, backup, quarantine, tombstone, and purge use retained no-follow/reparse-safe contained
+  directory handles. Link/reparse/hard-link/component swaps fail closed; validated paths are never
+  reopened by string.
+
+All IPC revisions, scope/runtime generations, client epochs, and activation tokens are canonical
+unsigned decimal strings, never JSON numbers. Strings are wire encoding only; Rust parses to `u64`
+and TypeScript parses to `BigInt` before numeric equality/order/freshness decisions. Lexical compare
+is prohibited. Rust uses checked `u64` increments and fails
+`COUNTER_EXHAUSTED` rather than wrap/reset. Wire timestamps are RFC3339 UTC with exact milliseconds
+and `Z`. Persisted profile/trust revisions survive restart; manager/client/activation/runtime
+counters are memory-only as described above.
+
+V1 prefers the OS SSH agent. An optional key mode selects only an inventory entry beneath the
+desktop user's SSH directory and loads it through a platform no-follow/contained-handle operation.
+When the Windows agent is unavailable, the desktop UI may ask for the selected encrypted key's
+passphrase through the Tauri IPC boundary. Rust decrypts the key in memory, keeps only the
+profile-scoped decrypted key for the active desktop session, and never persists, logs, or sends the
+passphrase to the HTTP server. The Start/Restart credential prompt also offers an editable username
+and ephemeral SSH password method, like VS Code Remote-SSH; native Rust zeroizes and clears that
+credential after a failed authentication, and it never enters the profile, browser snapshot, logs,
+or HTTP server. There is no path picker, keychain, or subprocess fallback.
+
+Host trust lookup is endpoint-first. SSH host is canonical safe ASCII DNS (lowercase, trailing dots
+removed) or canonical IPv4 plus port; validation is applied before lookup and mutation. An endpoint
+with no records produces one bounded unknown-key challenge. Approval must echo the exact canonical
+algorithm and `SHA256:` fingerprint; Rust persists the held full key and requires an explicit later
+Start. A trusted endpoint accepts only unique exact pre-recorded algorithm/full-key pairs, with a
+hard cap of eight algorithms. Same algorithm/new key or an unrecorded algorithm at an existing
+endpoint hard-fails without an approval shortcut.
+
+Every profile/trust/meta operation revalidates the retained contained handle and scope identity
+before use; handles are not replaced by path-based reopen. The desktop identity cache is scoped to
+the current native process/session and is never treated as durable trust or cross-process identity.
+
+Changed-key/algorithm remediation is stopped-app only. The trust file is
+`<Tauri app_config_dir>/ssh-forward/scopes/<sha256(scope UUID)>/known-hosts.toml`; the root is resolved
+by Tauri for identifier `com.damhopper` (normally `%APPDATA%\com.damhopper`,
+`$HOME/Library/Application Support/com.damhopper`, or
+`${XDG_CONFIG_HOME:-$HOME/.config}/com.damhopper`), never by hardcoded username. The signed executable
+offers a pre-webview `--ssh-forward-trust-repair` mode with scope/host/port or opaque backup ID only,
+no path/key argument or IPC. It requires the normal manager's runtime lock exclusively, creates a
+contained protected whole-file backup and optional endpoint quarantine, removes only the canonical
+endpoint records, checked-increments trust revision, fsyncs, and permission-preserving atomically
+replaces. Recovery verifies backup checksum/scope and unchanged post-repair revision, imports records,
+increments again, and never rolls revision back. Reopen, Start to obtain unknown challenge, compare
+the exact algorithm/fingerprint out of band, approve, then explicitly Start. Direct key insertion,
+`trust anyway`, and running-state trust deletion are prohibited.
+
+The exact user copy is: “Connection blocked because the saved SSH host identity no longer matches.
+Do not approve it yet. Stop all forwards, quit DamHopper, verify the expected fingerprint with the
+server administrator, then run the displayed trust-repair command. Reopen DamHopper, start the
+forward, compare the fingerprint exactly, approve it, then start again.”
+
+```mermaid
+stateDiagram-v2
+    [*] --> Stopped
+    Stopped --> Starting : start or scoped auto-start
+    Starting --> Running : host trusted, SSH authenticated, local listener bound
+    Starting --> Failed : validation, trust, auth, SSH, or bind failure
+    Starting --> Stopping : stop, scope switch, or app exit
+    Running --> Reconnecting : SSH transport lost
+    Running --> Stopping : stop, scope switch, or app exit
+    Reconnecting --> Running : same generation reconnected
+    Reconnecting --> Failed : retry budget exhausted
+    Reconnecting --> Stopping : stop, scope switch, or app exit
+    Failed --> Starting : explicit retry
+    Failed --> Stopping : stop, scope switch, or app exit
+    Stopping --> Stopped : listener, channels, and SSH session closed
+```
+
+#### Established-connection forwarding model (phase 1 persistence boundary)
+
+The next forwarding iteration separates SSH connection identity/lifecycle from
+individual port rules. One active DamHopper server-profile scope may contain
+many credential-free SSH connection profiles. Each established native
+connection owns one authenticated `SshSession` and may serve many loopback-only
+forwarding rules through independent `direct-tcpip` channels. The existing
+one-active-scope boundary remains: a scope change closes every connection and
+forward in the prior scope.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Disconnected
+    Disconnected --> Authenticating : explicit Connect
+    Authenticating --> TrustBlocked : unknown host key
+    TrustBlocked --> Disconnected : approve exact key for later retry
+    Authenticating --> Established : trust verified and SSH authenticated
+    Authenticating --> Disconnected : cancel or authentication failure
+    Established --> Reconnecting : SSH transport lost
+    Reconnecting --> Established : memory lease or unexpired vault credential succeeds
+    Reconnecting --> Disconnected : retry exhausted or credential invalid
+    Established --> Disconnecting : explicit disconnect, scope switch, or exit
+    Reconnecting --> Disconnecting : explicit disconnect, scope switch, or exit
+    Disconnecting --> Disconnected : live ports, channels, session, and memory lease closed
+```
+
+Forwarding rules have an independent `off -> opening -> on -> closing -> off`
+lifecycle. `opening` is admitted only when native state confirms that the
+referenced connection is `Established` and its expected numeric generation is
+current. Unknown, stale, wrong-scope, disconnected, authenticating, or
+reconnecting connections fail closed without requesting credentials. Opening
+or closing one port cannot tear down healthy sibling ports; disconnecting the
+parent connection closes all children.
+
+Persisted state is the credential-free v2 document in each scope's
+`profiles.toml`. It contains connection profiles (endpoint, SSH user, auth mode
+or safe key reference) and forwarding rules (connection profile ID, local port,
+fixed remote loopback target/port, reconnect/enable intent). It contains no
+password, passphrase, decrypted key, live session, listener, or runtime
+generation. The v2 document carries independent `connectionsRevision` and
+`rulesRevision` counters; each replacement checks the expected counter, updates
+only its collection, and atomically replaces the one validated document.
+
+The first v1 read migrates deterministically: each legacy combined profile
+becomes a rule, and connection profiles are deduplicated only by canonical
+scope + endpoint + SSH user + auth identity. The original v1 bytes are retained
+with scope, length, and SHA-256 metadata in `profiles.v1.rollback.toml` and
+`profiles.v1.rollback.meta` until the migration is superseded. Invalid or
+secret-bearing v1 data is rejected without publishing v2. Restart recovery
+validates rollback artifacts and replacement identities/checksums before
+cleanup; incomplete or tampered artifacts fail closed rather than guessing.
+
+During phase 1, legacy profile reads remain compatibility reads: they do not
+auto-authenticate, start a connection, or request credentials. A legacy-shaped
+write is rebased onto the current v2 document by stable connection-profile ID,
+so concurrent v2-only changes are retained and the rule's `desiredEnabled`
+intent is preserved. Connection/rule persistence therefore records desired
+state only; authentication and live forwarding remain explicit manager
+operations.
+
+The native manager is authoritative. Each established runtime is keyed by the
+stable connection profile ID and guarded by a memory-only connection generation.
+It owns the reusable SSH session, per-connection lifecycle serialization,
+forwarding children, and a memory lease used for the live transport. Port
+commands carry no credentials and cannot initiate authentication.
+
+Successful passphrase or password authentication may save the entered secret
+for exactly 30 days in Windows Credential Manager using user-bound,
+local-machine persistence. The fixed `expiresAt` is set only by a successful
+save/replacement and is not extended by silent reads or reconnects. The vault
+target is an opaque, versioned digest of app + scope + connection profile +
+canonical endpoint + user + auth mode/key ID. The versioned credential blob
+contains the secret and its timestamps; TOML, browser storage, snapshots,
+events, diagnostics, and logs contain metadata only (`saved`, `expiresAt`, safe
+status). Agent and unencrypted-key modes store no secret. SSH authentication is
+trust-first: host-key verification and any explicit approval/repair complete
+before a saved secret is eligible for use.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Absent
+    Absent --> Saved : successful auth and remember for 30 days
+    Saved --> Saved : disconnect, scope switch, trust change, or shutdown
+    Saved --> Rejected : stored credential receives terminal auth failure
+    Rejected --> Saved : successful replacement
+    Saved --> Expired : fixed expiresAt reached
+    Rejected --> Expired : fixed expiresAt reached
+    Expired --> Absent : next read, startup sweep, or explicit cleanup
+    Saved --> Absent : Forget, profile delete, or scope purge
+    Rejected --> Absent : Forget, profile delete, or scope purge
+```
+
+Disconnect, scope switch, trust change, manager shutdown, and app exit close and
+zeroize live sessions, decrypted keys, passwords, and live credential leases but retain
+the unexpired vault entry. A trust change never authorizes credential use: SSH
+host-key verification and explicit repair/approval complete before the vault
+secret may be sent. Terminal authentication failure quarantines the entry from
+automatic reuse until successful replacement, explicit retry, Forget, or
+expiry; it does not silently loop. Expired entries are never returned and are
+deleted at the next app-controlled read/sweep because Windows Credential
+Manager has no autonomous TTL. Explicit Forget, connection-profile deletion,
+and scope purge must verify vault deletion before reporting success; cleanup
+failure is reported as maintenance failure. Reconnect reuses the live lease first
+and then the unexpired, non-quarantined vault entry.
+
+The vault adapter calls Windows Credential Manager directly; it does not shell
+out, write a DPAPI side file, or expose secrets over Tauri IPC. Vault
+unavailability does not tear down a successfully authenticated live session,
+but the snapshot must report that the credential was not saved. The same-user
+process access limitation of Windows Credential Manager remains an explicit
+trust-boundary risk. If persistence maintenance or migration rollback cannot restore
+the prior document/postcondition, the operation returns a maintenance error and does
+not claim success.
+
+Phase 04 explicitly defers adding saved-credential detail to the public snapshot
+metadata contract. Phase 03 snapshots expose only existing safe status fields; they
+never expose credential contents or targets.
+
+Target limits remain explicit and bounded: at most 16 established connections,
+four concurrent handshakes, 64 enabled forwarding rules per active scope, and
+64 channels per connection. Snapshot/event authority, canonical decimal wire
+counters, stale desktop/manager/client/activation rejection, endpoint-first
+host trust, fixed `127.0.0.1` bind/target, and shutdown cleanup invariants remain
+unchanged.
+
+#### Phase 2 lifecycle hardening
+
+The native manager's v2 `ConnectionRegistry` is the single in-memory authority
+for connection and forwarding-rule runtime ownership. A connection reservation
+allocates a connection generation and cancellation token before authentication;
+the live connection owns one shared `SshSession`, and each child rule owns its
+own rule generation and worker. A rule may be admitted only against the current
+established parent generation, so a disconnected or replaced connection cannot
+inherit children from an older instance.
+
+Every asynchronous completion carries the connection ID and generation, rule ID
+and rule generation where applicable, and the reservation's cancellation token.
+Worker exits, reconnect results, and delayed callbacks are ignored when any of
+those identities is stale. Disconnect first advances the parent generation,
+cancels the parent and children, marks children closing, and only then allows
+the connection to be reused. Counter exhaustion is an error rather than a wrap;
+it never partially mutates the parent or its children.
+
+Cancellation is observable by all handshake, reconnect, listener, and channel
+workers. It wakes waiters and makes shutdown/disconnect cleanup bounded and
+idempotent. Failed reservations are reaped even when the initiating task drops;
+if the registry lock is temporarily unavailable, cleanup is deferred and
+rechecked. Shared session close is serialized and safe through `Arc` references,
+so closing one child cannot close a sibling's transport. A worker can mark only
+its current child failed; stale worker exits cannot mutate a reused connection
+or a newer rule generation.
+
+Live-scope mutation is manager-owned. The scope activity lease and operation
+fence prevent direct rule replacement while the scope has active runtime state;
+such writes fail closed rather than allowing a listener to outlive its stored
+definition. Reconciliation applies desired rules under a dedicated gate, keeps
+healthy siblings running, rejects duplicate loopback ports, and removes only
+rules that are off and no longer present. Connection/rule revisions and runtime
+generations remain separate: revisions protect persisted-document updates,
+while generations protect asynchronous live-worker callbacks.
+
+The native manager serializes operations per profile. Start/stop are idempotent; restart performs a
+bounded stop before a new generation. CRUD never implicitly edits a live worker: update/delete of an
+active profile returns `PROFILE_ACTIVE`, and the UI exposes Stop then Update/Delete as two explicit
+operations. Activating a different DamHopper server-profile scope stops all forwards from the prior
+scope before committing the new scope. Auto-start candidates sort by `(createdAt, id)`, reserve the
+first 16 slots deterministically, launch at most four handshakes concurrently, and leave overflow
+stopped with visible `AUTO_START_SKIPPED_LIMIT`. Reloading the webview with the same scope rehydrates
+the existing runtime without duplicating listeners.
+
+Unknown trust leaves the admitted generation failed with one challenge. Repeated Start/Restart while
+that challenge is current returns it without another generation; Stop clears it; expiry allows a new
+generation/challenge. Approval consumes it but never auto-starts. Reconnect keeps the same listener
+and generation, rejects new local clients until SSH returns, re-verifies trust, and closes channels
+from the lost transport.
+
+Tauri registers exactly 13 Windows desktop commands: open client, activate scope, snapshot, profile CRUD,
+start, stop, restart, key inventory, ephemeral key unlock, exact host-key approval, and inactive scope purge. `build.rs`
+uses `AppManifest::commands`; checked-in `permissions/ssh-forward.toml` allows exactly those names;
+`ssh-forward-main` grants that app permission only to `main` on Windows. The existing
+main `default` capability still grants `core:default` (including event listen/unlisten/emit), and
+capabilities merge; this feature adds no core permission and makes no false minimal-core claim. No
+shell/general filesystem/HTTP/opener capability is granted. Every
+command validates UUID/scope, safe ASCII SSH endpoint hosts, integer ports `1..=65535`, fixed local
+bind `127.0.0.1`, fixed remote target `127.0.0.1`, bounded strings, revision, and lifecycle state.
+Local port `0`, wildcard binds, alternate remote targets, and client-supplied paths are rejected.
+The sole `ssh-forward:changed` hint includes desktop instance, manager session, client epoch,
+activation token, scope ID/generation, revisions, and optional profile/generation. The adapter
+requires exact current desktop/manager/client-epoch/activation/scope identity before a numeric
+freshness check may schedule refetch. Mismatched hints do nothing; events never become authority.
+
+SSH/agent/native-handle Cargo dependencies use desktop target-OS dependency sections and modules/
+handlers use `cfg(desktop)`. Android/iOS Cargo trees and generated handlers contain none of the 13
+commands or accepted SSH dependencies; native mobile frontend creates no host/call.
+
+Profiles are capped at 64 per scope, active forwards at 16, and channels at 64 per forward. Connect
+and authentication share a 15-second timeout; channel open uses 10 seconds; shutdown grace is 5
+seconds. Reconnect uses at most five attempts with exponential 1-second delay capped at 30 seconds
+and at most 20% jitter. Error/event detail is capped at 512 characters and excludes usernames, key
+labels, paths, targets, payload bytes, and source error chains.
+
+V1 sets no application-level channel idle timeout so long-idle database/debug clients remain alive.
+Channels close on peer EOF, SSH loss, Stop, scope switch, exit, or cap enforcement. SSH keepalive is
+30 seconds with three unanswered probes before transport-loss/reconnect handling.
+
+Actual app shutdown uses one idempotent coordinator fed by main `WindowEvent::CloseRequested` and
+Tauri `RunEvent::ExitRequested`. It prevents close/exit, rejects new forwarding commands, disposes
+SSH manager and existing Browser Debug cleanup under one 5-second deadline, force-closes handles/
+aborts leftovers, then exits. `RunEvent::Exit` is last-chance non-async fallback. Webview reload does
+not close the main window and therefore does not dispose native forwards.
+`createUpdaterArtifacts` is packaging metadata, not runtime updater support. V1 registers no updater
+plugin/capability, in-app update/restart control, or Tauri restart/relaunch call. Enabling one is
+blocked until it enters the same disposal coordinator and packaged tests prove old listeners close
+before relaunch on Windows, macOS, and Linux.
+
+Loopback binding prevents LAN exposure but is not isolation from other processes on the desktop.
+Any local process able to connect to the chosen port can use the transparent TCP forward. V1 makes
+this explicit in UI/docs; adding per-client authentication would change the forwarded protocol and
+is not part of generic TCP forwarding. Product owner must explicitly accept this before release;
+security must accept fixed remote-loopback target/trust/ACL. Automated build is distinct from
+hash-bound packaged runtime evidence owned by a release engineer. Windows/macOS/Linux evidence must
+show the listener works for a second local process before Stop and is unreachable after Stop, scope
+switch, and graceful app exit; missing/manual-pending evidence is not a release pass.
 
 ### pty/ (Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅)
 

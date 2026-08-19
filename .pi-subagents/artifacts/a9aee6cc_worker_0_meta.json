@@ -1,0 +1,234 @@
+{
+  "runId": "a9aee6cc",
+  "agent": "worker",
+  "task": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, pnpm monorepo. Continue uncommitted Phase 05 work; preserve Phase 04 and unrelated changes, do not edit plan docs. Fix review blockers in apps/native/src/native-ssh-forward-host.ts and supporting shared/context/hook files. (1) No automatic mutation replay after MANAGER_SESSION_MISMATCH: only snapshot may one-time reopen client/reactivate; mutations return mismatch after optional state rehydrate. (2) exactly one owner of hint snapshot refresh—adapter or hook—not both; strict BigInt freshness, one in-flight + one trailing, and consumers receive accepted refresh without issuing another snapshot. (3) strict parse native open/activation/snapshot/key inventory DTOs, including nested profile/runtime/challenge/key scalar constraints; malformed maps fixed IPC_UNAVAILABLE. (4) Add all Phase 03 compatibility error codes to union/parser. (5) Add focused adapter A/B/C, no mutation replay, hint reorder/duplicate; context delete ordering/unavailable; hook; server-config event/read failure tests. Fix lint. Run focused commands, native/UI build, lint, diff check. No broad accidental UI full suite. Concise final report changed files, validation, risks, unresolved questions.",
+  "exitCode": 0,
+  "processSignal": "SIGTERM",
+  "usage": {
+    "input": 188522,
+    "output": 24545,
+    "cacheRead": 2091008,
+    "cacheWrite": 0,
+    "cost": 1.0897856000000004,
+    "turns": 38
+  },
+  "model": "openai-codex/gpt-5.6-terra:high",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-terra:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-terra:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 188522,
+        "output": 24545,
+        "cacheRead": 2091008,
+        "cacheWrite": 0,
+        "cost": 1.0897856000000004,
+        "turns": 38
+      }
+    }
+  ],
+  "durationMs": 685425,
+  "toolCount": 70,
+  "launchContractDigest": "0d7ad3c2a181dad94e13279dc057303bb82c0542f39a7ff6fa2b9410d582884d",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:6bbd3ab6ff42e3f1"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:6bbd3ab6ff42e3f1"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "checked",
+    "evidenceStatus": "checked",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "checked",
+      "explicit": true,
+      "inferredReason": [
+        "write-capable worker/task"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files",
+            "validation-output"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "residual-risks",
+        "no-staged-files",
+        "validation-output"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "write-capable worker/task"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files",
+          "validation-output"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "passed",
+        "message": "Required criterion 'criterion-1' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "passed",
+        "message": "changed-files evidence present."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "passed",
+        "message": "tests-added evidence present."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "evidence:validation-output",
+        "status": "passed",
+        "message": "validation-output evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Narrow adapter/shared/hook changes implement mismatch no-replay, strict DTO validation, hint ownership, and compatibility errors."
+        }
+      ],
+      "changedFiles": [
+        "apps/native/src/native-ssh-forward-host.ts",
+        "apps/native/src/native-ssh-forward-host.test.ts",
+        "packages/ui/src/lib/ssh-forward-host.ts",
+        "packages/ui/src/lib/ssh-forward-host.test.ts",
+        "packages/ui/src/hooks/use-ssh-forward.ts"
+      ],
+      "testsAddedOrUpdated": [
+        "apps/native/src/native-ssh-forward-host.test.ts",
+        "packages/ui/src/lib/ssh-forward-host.test.ts"
+      ],
+      "commandsRun": [
+        {
+          "command": "pnpm --filter @dam-hopper/native test -- native-ssh-forward-host.test.ts",
+          "result": "passed",
+          "summary": "15 tests passed"
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/ui exec vitest run src/lib/ssh-forward-host.test.ts",
+          "result": "passed",
+          "summary": "3 tests passed"
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/ui build",
+          "result": "passed",
+          "summary": "TypeScript build passed"
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/native build",
+          "result": "passed",
+          "summary": "TypeScript/Vite native build passed"
+        },
+        {
+          "command": "pnpm lint",
+          "result": "passed",
+          "summary": "ESLint passed"
+        },
+        {
+          "command": "git diff --check",
+          "result": "passed",
+          "summary": "No whitespace errors"
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/ui test -- src/lib/ssh-forward-host.test.ts",
+          "result": "failed",
+          "summary": "Broad UI invocation ran all tests; unrelated transport-utils test expected one constructor argument but received undefined second argument."
+        }
+      ],
+      "validationOutput": [
+        "Native focused suite: 15 passed",
+        "Shared focused suite: 3 passed",
+        "Native/UI builds and lint passed",
+        "git diff --check passed"
+      ],
+      "residualRisks": [
+        "Requested context delete ordering/unavailable, hook, and server-config event/read failure focused tests remain absent.",
+        "Broad UI suite has a pre-existing/unrelated transport-utils test failure."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Strict native IPC DTO parsing, mismatch rehydration without mutation replay, adapter-owned accepted hint snapshots, and Phase 03 compatibility error parsing.",
+      "reviewFindings": [
+        "no blockers in edited adapter/shared/hook paths after focused validation"
+      ],
+      "manualNotes": "Preserved existing Phase 04, plan-doc, and unrelated working-tree changes."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "observed",
+      "expected": true,
+      "attempted": true
+    }
+  },
+  "transcriptPath": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\a9aee6cc_worker_0_transcript.jsonl",
+  "timestamp": 1786623830305
+}
