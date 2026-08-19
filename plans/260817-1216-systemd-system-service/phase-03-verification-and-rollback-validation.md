@@ -10,9 +10,10 @@
 ## Overview
 
 - Date: 2026-08-17
+- Last updated: 2026-08-19
 - Description: validate the future asset without privilege, then provide administrator acceptance
 - Priority: P2
-- Implementation status: non-privileged validation complete; administrator evidence pending
+- Implementation status: repository implementation and non-privileged validation complete; administrator evidence pending
 - Review status: host acceptance pending; repository implementation review approved
 - Effort: 1.5h
 
@@ -70,11 +71,15 @@ not-installed status.
 ## Todo list
 
 - [x] Non-privileged unit/static checks pass
-- [ ] Scope and secret scan pass
+- [x] Scope and secret scan pass
 - [ ] Administrator install evidence returned
 - [ ] UID/network/auth/journal/restart/SIGTERM checks pass
 - [ ] Rollback preserves user state
-- [ ] Documentation status matches evidence
+- [x] Documentation status matches evidence
+
+Tracking decision: Phase 03 remains **Pending administrator evidence**. Administrator installation,
+runtime, restart/journald/effective-UID, and rollback checks are all **NOT RUN**; this phase is not
+accepted or complete.
 
 ## Success Criteria
 

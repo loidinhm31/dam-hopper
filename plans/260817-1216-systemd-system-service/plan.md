@@ -7,6 +7,7 @@ effort: 4.5h
 branch: feat/systemd-system-service
 tags: [infra, backend, security]
 created: 2026-08-17
+updated: 2026-08-19
 ---
 
 # DamHopper systemd System Service
@@ -51,7 +52,7 @@ still uninstalled and this parent plan remains in progress.
 
 ## Phases
 
-Overall progress: 67% (implementation Phases 01-02 complete; administrator validation pending)
+Overall progress: 67% (repository implementation and non-privileged verification complete; administrator validation pending)
 
 | # | Phase | Status | Effort | Progress |
 | --- | --- | --- | --- | --- |
@@ -66,6 +67,16 @@ Overall progress: 67% (implementation Phases 01-02 complete; administrator valid
 - Administrator actions remain outside repository automation.
 - Phase 03 cannot complete until an administrator returns installation, runtime, and rollback
   evidence; no production installation is claimed by this repository work.
+
+## Tracking update — 2026-08-19
+
+- Repository-side implementation: complete.
+- Non-privileged verification/tester rerun: complete and passing; see
+  [Phase 03 verification results](./reports/03-verification-results.md).
+- Administrator installation, runtime, restart/journald/effective-UID, and rollback evidence:
+  **NOT RUN**.
+- Parent plan remains **in-progress**; Phase 03 remains **Pending administrator evidence**.
+- Production phase is not marked Done, and no installation is claimed.
 
 ## Resolved deployment choice
 
