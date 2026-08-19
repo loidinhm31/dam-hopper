@@ -46,7 +46,7 @@ const invalidRule: SshForwardRule = {
 };
 
 describe("SshForwardRuleDialog", () => {
-  it("keeps the remote target loopback-only and explains explicit connection gating", () => {
+  it("keeps the remote target loopback-only and explains deferred listener start", () => {
     const markup = renderToStaticMarkup(
       <SshForwardRuleDialog
         open
@@ -59,7 +59,7 @@ describe("SshForwardRuleDialog", () => {
       />,
     );
     expect(markup).toContain("127.0.0.1");
-    expect(markup).toContain("Established before the rule can enable");
+    expect(markup).toContain("Connect establishes SSH before");
     expect(markup).toContain("No credential prompt opens from a rule toggle");
     expect(markup).toContain('id="ssh-rule-name"');
     expect(markup).toContain('id="ssh-rule-local-port"');

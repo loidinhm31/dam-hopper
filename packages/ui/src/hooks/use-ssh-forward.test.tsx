@@ -206,6 +206,64 @@ describe("useSshForward", () => {
     expect(snapshotCall).toHaveBeenCalledOnce();
   });
 
+  it("preserves a connect timeout through its deferred runtime refresh", async () => {
+    let listener!: (event: SshForwardHostEvent) => void;
+    let rejectConnect!: (error: unknown) => void;
+    const refreshed = { ...snapshot };
+    const snapshotCall = vi
+      .fn<() => Promise<SshForwardSnapshot>>()
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce(refreshed);
+    const connect = vi.fn(
+      () =>
+        new Promise<SshForwardSnapshot>((_resolve, reject) => {
+          rejectConnect = reject;
+        }),
+    );
+    const host = {
+      snapshot: snapshotCall,
+      subscribe: vi.fn((next: (event: SshForwardHostEvent) => void) => {
+        listener = next;
+        return () => {};
+      }),
+      connect,
+    } as unknown as SshForwardHost;
+    await renderHarness(host);
+    await act(async () => {});
+
+    const pending = latest!.connect("connection", counter("1"));
+    await act(async () => {});
+    await act(async () =>
+      listener({
+        type: "changed",
+        hint: {
+          desktopInstanceId: context.desktopInstanceId,
+          managerSessionId: context.managerSessionId,
+          clientEpoch: context.clientEpoch,
+          activationToken: snapshot.activationToken,
+          scopeId: snapshot.scopeId,
+          scopeGeneration: snapshot.scopeGeneration,
+          connectionsRevision: snapshot.connectionsRevision,
+          rulesRevision: snapshot.rulesRevision,
+          profilesRevision: snapshot.profilesRevision,
+          trustRevision: snapshot.trustRevision,
+          reason: "runtimeChanged",
+        },
+      }),
+    );
+    rejectConnect({
+      code: "SSH_CONNECT_TIMEOUT",
+      message: "The SSH connection timed out.",
+      retryable: true,
+    });
+    await expect(act(async () => pending)).rejects.toMatchObject({
+      code: "SSH_CONNECT_TIMEOUT",
+    });
+    await act(async () => {});
+    expect(snapshotCall).toHaveBeenCalledTimes(2);
+    expect(latest!.error?.code).toBe("SSH_CONNECT_TIMEOUT");
+  });
+
   it("uses the v2 rule toggle without loading or replaying credentials", async () => {
     const setRuleEnabled = vi.fn().mockResolvedValue(snapshot);
     const listKeys = vi.fn();

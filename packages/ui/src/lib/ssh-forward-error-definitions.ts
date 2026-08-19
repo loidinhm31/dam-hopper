@@ -111,7 +111,7 @@ export const FIXED_SSH_FORWARD_ERRORS: Record<
     retryable: true,
   },
   CONNECTION_REQUIRED: {
-    message: "Establish the SSH connection before enabling a forward.",
+    message: "Connect the parent SSH connection to start this forward.",
     retryable: false,
   },
   CONNECTION_LIMIT: {
@@ -159,7 +159,8 @@ export const FIXED_SSH_FORWARD_ERRORS: Record<
     retryable: false,
   },
   AGENT_UNAVAILABLE: {
-    message: "Start the OS SSH agent and load an identity before retrying.",
+    message:
+      "Enter the SSH username and password, or load a local SSH identity, before retrying.",
     retryable: false,
   },
   HOST_KEY_APPROVAL_REQUIRED: {

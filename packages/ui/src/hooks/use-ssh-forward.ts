@@ -93,6 +93,7 @@ export function useSshForward() {
   const [snapshot, setSnapshot] = useState<SshForwardSnapshot | null>(null);
   const [error, setError] = useState<SshForwardError | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const preserveConnectTimeoutRef = useRef(false);
   const snapshotRef = useRef<SshForwardSnapshot | null>(null);
   const pendingActionRef = useRef<string | null>(null);
   const pendingIdentityRef = useRef<MutationIdentity | null>(null);
@@ -209,7 +210,7 @@ export function useSshForward() {
       )
         return null;
       const committed = commitSnapshot(next, true);
-      if (committed) setError(null);
+      if (committed && !preserveConnectTimeoutRef.current) setError(null);
       return committed ? next : null;
     } catch (nextError) {
       const parsed = toSshForwardError(nextError);
@@ -262,6 +263,7 @@ export function useSshForward() {
           pendingActionRef.current = action;
           pendingIdentityRef.current = identity;
           setPendingAction(action);
+          preserveConnectTimeoutRef.current = false;
           setError(null);
           const result = await operation();
           const next = acceptSnapshot(result);
@@ -277,6 +279,8 @@ export function useSshForward() {
             REFRESHABLE_CONFLICT_CODES.has(parsed.code)
           )
             trailing.current = true;
+          preserveConnectTimeoutRef.current =
+            parsed.code === "SSH_CONNECT_TIMEOUT";
           if (isMutationIdentityCurrent(identity)) setError(parsed);
           throw parsed;
         } finally {
@@ -555,6 +559,7 @@ export function useSshForward() {
     if (!host) {
       snapshotRef.current = null;
       setSnapshot(null);
+      preserveConnectTimeoutRef.current = false;
       setError(null);
       return;
     }
@@ -602,7 +607,7 @@ export function useSshForward() {
           wireCounterToBigInt(hint.trustRevision)
       ) {
         commitSnapshot(hinted, false);
-        setError(null);
+        if (!preserveConnectTimeoutRef.current) setError(null);
         return;
       }
       void refresh();

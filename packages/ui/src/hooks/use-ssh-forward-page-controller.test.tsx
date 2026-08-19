@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SshConnectionProfile,
+  SshForwardRule,
   SshForwardSnapshot,
 } from "@/lib/ssh-forward-host.js";
 import { useSshForwardPageController } from "./use-ssh-forward-page-controller.js";
@@ -40,6 +41,19 @@ const connection: SshConnectionProfile = {
   auth: { mode: "agent" },
   createdAt: "2026-08-10T12:34:56.789Z" as never,
   updatedAt: "2026-08-10T12:34:56.789Z" as never,
+};
+const rule: SshForwardRule = {
+  id: "33333333-3333-4333-8333-333333333333",
+  scopeId: connection.scopeId,
+  connectionProfileId: connection.id,
+  name: "metrics",
+  localPort: 15432,
+  targetHost: "127.0.0.1",
+  targetPort: 5432,
+  desiredEnabled: false,
+  reconnect: { enabled: true, maxAttempts: 5 },
+  createdAt: connection.createdAt,
+  updatedAt: connection.updatedAt,
 };
 
 function snapshot(
@@ -203,5 +217,45 @@ describe("useSshForwardPageController", () => {
     await act(async () => {});
     expect(latest!.connectionFormOpen).toBe(false);
     expect(latest!.notice).toBeNull();
+  });
+
+  it("allows child rule mutations while the SSH connection is disconnected", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    function Harness() {
+      const controller = useSshForwardPageController();
+      React.useEffect(() => {
+        latest = controller;
+      }, [controller]);
+      return null;
+    }
+    await act(async () => root?.render(<Harness />));
+
+    act(() => latest!.openNewRule(connection));
+    expect(latest!.ruleFormOpen).toBe(true);
+
+    act(() => latest!.openEditRule(connection, rule));
+    expect(latest!.ruleFormOpen).toBe(true);
+    expect(latest!.ruleFormExisting?.id).toBe(rule.id);
+
+    act(() =>
+      latest!.requestDeleteRule(connection, { ...rule, desiredEnabled: true }),
+    );
+    expect(latest!.confirmation?.kind).toBe("deleteRule");
+
+    const setRuleEnabled = mocks.forwarding.value!.setRuleEnabled as ReturnType<
+      typeof vi.fn
+    >;
+    await act(async () => {
+      latest!.setRuleEnabled(connection, rule, true);
+    });
+    expect(setRuleEnabled).toHaveBeenCalledWith(
+      connection.id,
+      "1",
+      rule.id,
+      "0",
+      true,
+    );
   });
 });

@@ -163,7 +163,7 @@ impl SshForwardErrorCode {
                 true,
             ),
             ConnectionRequired => (
-                "Establish the SSH connection before enabling a forward.",
+                "Connect the parent SSH connection to start this forward.",
                 false,
             ),
             ConnectionLimit => ("The active connection limit has been reached.", true),
@@ -192,7 +192,7 @@ impl SshForwardErrorCode {
             ),
             KeyPassphraseInvalid => ("The passphrase did not unlock the selected SSH key.", false),
             AgentUnavailable => (
-                "Start the OS SSH agent and load an identity before retrying.",
+                "Enter the SSH username and password, or load a local SSH identity, before retrying.",
                 false,
             ),
             HostKeyApprovalRequired => (
