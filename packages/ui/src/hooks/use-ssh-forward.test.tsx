@@ -113,7 +113,7 @@ describe("useSshForward", () => {
       .mockResolvedValueOnce(snapshot)
       .mockResolvedValueOnce(refreshed);
     const subscribe = vi.fn(() => () => {});
-    const updateProfile = vi.fn().mockRejectedValue({
+    const updateConnection = vi.fn().mockRejectedValue({
       code: "PROFILES_REVISION_CONFLICT",
       message: "stale",
       retryable: true,
@@ -121,13 +121,13 @@ describe("useSshForward", () => {
     const host = {
       snapshot: snapshotCall,
       subscribe,
-      updateProfile,
+      updateConnection,
     } as unknown as SshForwardHost;
     await renderHarness(host);
     await act(async () => {});
     await expect(
       act(async () =>
-        latest!.updateProfile("profile", counter("1"), {} as never),
+        latest!.updateConnection("connection", counter("1"), {} as never),
       ),
     ).rejects.toMatchObject({ code: "PROFILES_REVISION_CONFLICT" });
     expect(snapshotCall).toHaveBeenCalledTimes(2);
@@ -181,7 +181,7 @@ describe("useSshForward", () => {
       .mockResolvedValueOnce(snapshot)
       .mockResolvedValueOnce(refreshed);
     const subscribe = vi.fn(() => () => {});
-    const start = vi.fn(
+    const connect = vi.fn(
       () =>
         new Promise<SshForwardSnapshot>((resolve) => {
           resolveStart = resolve;
@@ -190,13 +190,13 @@ describe("useSshForward", () => {
     const host = {
       snapshot: snapshotCall,
       subscribe,
-      start,
+      connect,
     } as unknown as SshForwardHost;
     await renderHarness(host);
     await act(async () => {});
     snapshotCall.mockClear();
 
-    const lifecycle = latest!.start("profile", counter("0"));
+    const lifecycle = latest!.connect("connection", counter("0"));
     await act(async () => latest!.refresh());
     expect(snapshotCall).not.toHaveBeenCalled();
 
@@ -204,5 +204,163 @@ describe("useSshForward", () => {
     await act(async () => lifecycle);
     await act(async () => {});
     expect(snapshotCall).toHaveBeenCalledOnce();
+  });
+
+  it("uses the v2 rule toggle without loading or replaying credentials", async () => {
+    const setRuleEnabled = vi.fn().mockResolvedValue(snapshot);
+    const listKeys = vi.fn();
+    const loadPassword = vi.fn();
+    const loadKey = vi.fn();
+    const subscribe = vi.fn(() => () => {});
+    const host = {
+      snapshot: vi
+        .fn<() => Promise<SshForwardSnapshot>>()
+        .mockResolvedValue(snapshot),
+      subscribe,
+      setRuleEnabled,
+      listKeys,
+      loadPassword,
+      loadKey,
+    } as unknown as SshForwardHost;
+    await renderHarness(host);
+    await act(async () => {});
+    await act(async () =>
+      latest!.setRuleEnabled(
+        "connection",
+        counter("3"),
+        "rule",
+        counter("4"),
+        true,
+      ),
+    );
+    expect(setRuleEnabled).toHaveBeenCalledWith(
+      "connection",
+      counter("3"),
+      "rule",
+      counter("4"),
+      true,
+    );
+    expect(listKeys).not.toHaveBeenCalled();
+    expect(loadPassword).not.toHaveBeenCalled();
+    expect(loadKey).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent native mutations", async () => {
+    const updated = { ...snapshot, connectionsRevision: counter("2") };
+    let resolveFirst!: (value: SshForwardSnapshot) => void;
+    const updateConnection = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<SshForwardSnapshot>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(updated);
+    const host = {
+      snapshot: vi
+        .fn<() => Promise<SshForwardSnapshot>>()
+        .mockResolvedValue(snapshot),
+      subscribe: vi.fn(() => () => {}),
+      updateConnection,
+    } as unknown as SshForwardHost;
+    await renderHarness(host);
+    await act(async () => {});
+
+    const first = latest!.updateConnection(
+      "connection",
+      counter("1"),
+      {} as never,
+    );
+    const second = latest!.updateConnection(
+      "connection",
+      counter("1"),
+      {} as never,
+    );
+    await act(async () => {});
+    expect(updateConnection).toHaveBeenCalledTimes(1);
+
+    resolveFirst(updated);
+    await act(async () => first);
+    await act(async () => second);
+    expect(updateConnection).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not replace a newer snapshot with a stale mutation result", async () => {
+    const stale = { ...snapshot, connectionsRevision: counter("0") };
+    const updateConnection = vi.fn().mockResolvedValue(stale);
+    const host = {
+      snapshot: vi
+        .fn<() => Promise<SshForwardSnapshot>>()
+        .mockResolvedValue(snapshot),
+      subscribe: vi.fn(() => () => {}),
+      updateConnection,
+    } as unknown as SshForwardHost;
+    await renderHarness(host);
+    await act(async () => {});
+
+    await act(async () =>
+      latest!.updateConnection("connection", counter("1"), {} as never),
+    );
+    await act(async () => {});
+    expect(latest!.snapshot?.connectionsRevision).toBe(
+      snapshot.connectionsRevision,
+    );
+  });
+
+  it("does not publish a stale mutation error after the scope generation changes", async () => {
+    let listener!: (event: SshForwardHostEvent) => void;
+    let rejectConnect!: (error: unknown) => void;
+    const connect = vi.fn(
+      () =>
+        new Promise<SshForwardSnapshot>((_resolve, reject) => {
+          rejectConnect = reject;
+        }),
+    );
+    const host = {
+      snapshot: vi
+        .fn<() => Promise<SshForwardSnapshot>>()
+        .mockResolvedValue(snapshot),
+      subscribe: vi.fn((next: (event: SshForwardHostEvent) => void) => {
+        listener = next;
+        return () => {};
+      }),
+      connect,
+    } as unknown as SshForwardHost;
+    await renderHarness(host);
+    await act(async () => {});
+
+    const pending = latest!.connect("connection", counter("1"));
+    await act(async () => {});
+    expect(connect).toHaveBeenCalledOnce();
+    const nextSnapshot = { ...snapshot, scopeGeneration: counter("2") };
+    await act(async () =>
+      listener({
+        type: "changed",
+        hint: {
+          desktopInstanceId: context.desktopInstanceId,
+          managerSessionId: context.managerSessionId,
+          clientEpoch: context.clientEpoch,
+          activationToken: snapshot.activationToken,
+          scopeId: snapshot.scopeId,
+          scopeGeneration: nextSnapshot.scopeGeneration,
+          connectionsRevision: snapshot.connectionsRevision,
+          rulesRevision: snapshot.rulesRevision,
+          profilesRevision: snapshot.profilesRevision,
+          trustRevision: snapshot.trustRevision,
+          reason: "runtimeChanged",
+        },
+        snapshot: nextSnapshot,
+      }),
+    );
+    rejectConnect({
+      code: "AUTH_FAILED",
+      message: "stale authentication failure",
+      retryable: false,
+    });
+    await expect(act(async () => pending)).rejects.toMatchObject({
+      code: "AUTH_FAILED",
+    });
+    expect(latest!.error).toBeNull();
   });
 });

@@ -164,17 +164,17 @@ export const FIXED_SSH_FORWARD_ERRORS: Record<
   },
   HOST_KEY_APPROVAL_REQUIRED: {
     message:
-      "Verify and approve the SSH host fingerprint before starting again.",
+      "Verify and approve the SSH host fingerprint before connecting again.",
     retryable: false,
   },
   HOST_KEY_CHANGED: {
     message:
-      "SSH host identity changed. Connection blocked; use stopped-app trust repair.",
+      "SSH host identity changed. Connection blocked before credentials are sent; use stopped-app trust repair.",
     retryable: false,
   },
   HOST_KEY_ALGORITHM_CHANGED: {
     message:
-      "SSH host-key algorithm changed. Connection blocked; use stopped-app trust repair.",
+      "SSH host-key algorithm changed. Connection blocked before credentials are sent; use stopped-app trust repair.",
     retryable: false,
   },
   HOST_KEY_ALGORITHM_UNSUPPORTED: {
@@ -182,12 +182,13 @@ export const FIXED_SSH_FORWARD_ERRORS: Record<
     retryable: false,
   },
   HOST_KEY_CHALLENGE_NOT_FOUND: {
-    message: "The host-key approval request is no longer current; start again.",
+    message:
+      "The host-key approval request is no longer current; connect again.",
     retryable: true,
   },
   HOST_KEY_CHALLENGE_EXPIRED: {
     message:
-      "The host-key approval expired; start again to request a new fingerprint.",
+      "The host-key approval expired; connect again to request a new fingerprint.",
     retryable: true,
   },
   SSH_CONNECT_TIMEOUT: {
@@ -256,7 +257,8 @@ export const FIXED_SSH_FORWARD_ERRORS: Record<
     retryable: true,
   },
   TARGET_NOT_ALLOWED: {
-    message: "V1 forwards only to remote 127.0.0.1.",
+    message:
+      "This forwarding contract only permits remote 127.0.0.1 loopback targets.",
     retryable: false,
   },
   SHUTDOWN_TIMEOUT: {
