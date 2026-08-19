@@ -89,6 +89,7 @@ pub(crate) enum SshTransportError {
     Agent(CredentialError),
     ChannelOpen,
     ChannelOpenTimeout,
+    ChannelOpenTransport(russh::Error),
     TargetNotAllowed,
     SessionClosed,
     ShutdownTimeout,
@@ -109,6 +110,7 @@ impl fmt::Display for SshTransportError {
             Self::Agent(error) => return write!(formatter, "{error}"),
             Self::ChannelOpen => "channel_open_failed",
             Self::ChannelOpenTimeout => "channel_open_timeout",
+            Self::ChannelOpenTransport(_) => "channel_open_transport_failed",
             Self::TargetNotAllowed => "target_not_allowed",
             Self::SessionClosed => "session_closed",
             Self::ShutdownTimeout => "shutdown_timeout",
@@ -174,10 +176,18 @@ impl SshTransportError {
             Self::Agent(CredentialError::InvalidInventory) => SshForwardErrorCode::KeyUnsafe,
             Self::ChannelOpen => SshForwardErrorCode::TargetConnectFailed,
             Self::ChannelOpenTimeout => SshForwardErrorCode::ChannelOpenTimeout,
+            Self::ChannelOpenTransport(_) => SshForwardErrorCode::ConnectionNotEstablished,
             Self::TargetNotAllowed => SshForwardErrorCode::TargetNotAllowed,
             Self::SessionClosed => SshForwardErrorCode::ConnectionNotEstablished,
             Self::ShutdownTimeout => SshForwardErrorCode::ShutdownTimeout,
         }
+    }
+
+    pub(crate) fn is_parent_transport_loss(&self) -> bool {
+        matches!(
+            self,
+            Self::SessionClosed | Self::Russh(_) | Self::ChannelOpenTransport(_)
+        )
     }
 }
 
@@ -467,7 +477,10 @@ impl SshSession {
         )
         .await
         .map_err(|_| SshTransportError::ChannelOpenTimeout)?
-        .map_err(|_| SshTransportError::ChannelOpen)
+        .map_err(|error| match error {
+            russh::Error::ChannelOpenFailure(_) => SshTransportError::ChannelOpen,
+            error => SshTransportError::ChannelOpenTransport(error),
+        })
     }
 
     pub(crate) async fn send_keepalive(&self) -> Result<(), SshTransportError> {
@@ -648,5 +661,15 @@ mod tests {
             !SshTransportError::Credential(SshForwardErrorCode::CredentialVaultUnavailable)
                 .is_terminal_auth()
         );
+    }
+
+    #[test]
+    fn channel_open_transport_failures_reconnect_but_target_failures_do_not() {
+        assert!(
+            SshTransportError::ChannelOpenTransport(russh::Error::Disconnect)
+                .is_parent_transport_loss()
+        );
+        assert!(!SshTransportError::ChannelOpen.is_parent_transport_loss());
+        assert!(!SshTransportError::ChannelOpenTimeout.is_parent_transport_loss());
     }
 }

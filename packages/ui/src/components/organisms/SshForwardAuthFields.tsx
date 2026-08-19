@@ -1,21 +1,19 @@
-import type { ChangeEvent } from "react";
 import { KeyRound } from "lucide-react";
 import { inputClass } from "@/components/atoms/Button.js";
-import { Switch } from "@/components/atoms/Switch.js";
 import { SshForwardProfileField } from "@/components/organisms/SshForwardProfileField.js";
-import type { KeyInventory, SshForwardError } from "@/lib/ssh-forward-host.js";
+import type { KeyInventory } from "@/lib/ssh-forward-host.js";
 import type {
-  SshForwardProfileDraft,
-  SshForwardProfileErrors,
+  SshConnectionProfileDraft,
+  SshConnectionProfileErrors,
 } from "@/lib/ssh-forward-form.js";
 
 interface Props {
-  draft: SshForwardProfileDraft;
-  errors: SshForwardProfileErrors;
+  draft: SshConnectionProfileDraft;
+  errors: SshConnectionProfileErrors;
   keys: KeyInventory["keys"] | null;
-  keyError: SshForwardError | null;
+  keyError: string | null;
   onUpdate: (
-    field: keyof SshForwardProfileDraft,
+    field: keyof SshConnectionProfileDraft,
     value: string | boolean,
   ) => void;
 }
@@ -28,14 +26,10 @@ export function SshForwardAuthFields({
   onUpdate,
 }: Props) {
   const localKeys = keys?.filter((key) => key.source === "local");
-  const input =
-    (field: keyof SshForwardProfileDraft) =>
-    (event: ChangeEvent<HTMLInputElement>) =>
-      onUpdate(field, event.target.value);
   return (
     <fieldset className="grid gap-3 rounded border border-[var(--color-border)] p-3 sm:grid-cols-2">
       <legend className="px-1 text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
-        Authentication and reconnect
+        Authentication
       </legend>
       <SshForwardProfileField label="Authentication">
         <select
@@ -44,7 +38,7 @@ export function SshForwardAuthFields({
           onChange={(event) =>
             onUpdate(
               "authMode",
-              event.target.value as SshForwardProfileDraft["authMode"],
+              event.target.value as SshConnectionProfileDraft["authMode"],
             )
           }
         >
@@ -53,12 +47,26 @@ export function SshForwardAuthFields({
         </select>
       </SshForwardProfileField>
       {draft.authMode === "key" ? (
-          <SshForwardProfileField label="Local SSH key" error={errors.keyId}>
+        <SshForwardProfileField
+          label="Local SSH key"
+          error={errors.keyId}
+          errorId="ssh-forward-key-id-error"
+        >
           <select
+            id="ssh-forward-key-id"
             className={inputClass}
             value={draft.keyId}
             onChange={(event) => onUpdate("keyId", event.target.value)}
             disabled={!keys && !keyError}
+            aria-invalid={Boolean(errors.keyId || keyError) || undefined}
+            aria-describedby={
+              [
+                errors.keyId ? "ssh-forward-key-id-error" : null,
+                keyError ? "ssh-forward-key-inventory-error" : null,
+              ]
+                .filter(Boolean)
+                .join(" ") || undefined
+            }
           >
             <option value="">
               {!keys && !keyError ? "Loading local keys…" : "Select a key"}
@@ -70,8 +78,13 @@ export function SshForwardAuthFields({
             ))}
           </select>
           {keyError ? (
-            <p className="mt-1 text-[11px] text-[var(--color-danger)]">
-              {keyError.message}
+            <p
+              id="ssh-forward-key-inventory-error"
+              role="alert"
+              aria-live="assertive"
+              className="mt-1 text-[11px] text-[var(--color-danger)]"
+            >
+              {keyError}
             </p>
           ) : null}
           {localKeys && localKeys.length === 0 ? (
@@ -88,38 +101,10 @@ export function SshForwardAuthFields({
           key selection.
         </div>
       )}
-      <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-        <Switch
-          checked={draft.autoStart}
-          onCheckedChange={(value) => onUpdate("autoStart", value)}
-          ariaLabel="Auto-start forward"
-        />{" "}
-        Auto-start when this server scope activates
-      </label>
-      <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-        <Switch
-          checked={draft.reconnectEnabled}
-          onCheckedChange={(value) => onUpdate("reconnectEnabled", value)}
-          ariaLabel="Enable reconnect"
-        />{" "}
-        Reconnect on SSH loss
-      </label>
-      {draft.reconnectEnabled ? (
-        <SshForwardProfileField
-          label="Maximum reconnect attempts"
-          error={errors.reconnectMaxAttempts}
-        >
-          <input
-            className={inputClass}
-            type="text"
-            inputMode="numeric"
-            maxLength={1}
-            value={draft.reconnectMaxAttempts}
-            onChange={input("reconnectMaxAttempts")}
-            aria-invalid={Boolean(errors.reconnectMaxAttempts)}
-          />
-        </SshForwardProfileField>
-      ) : null}
+      <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/50 p-2 text-xs text-[var(--color-text-muted)] sm:col-span-2">
+        Credentials are never part of this profile. Connect explicitly after
+        saving; any password or passphrase stays in memory until that attempt.
+      </div>
     </fieldset>
   );
 }
