@@ -1268,8 +1268,9 @@ Key invariants:
 **Integration in shared UI and host bootstraps:**
 
 - `DamHopperApp` calls `migrateToProfiles()` at startup to convert legacy config
-- Browser host initializes `WsTransport(getServerUrl(), activeProfile.id)`
+- Browser host initializes `WsTransport(activeProfile.url, activeProfile.id)` when a valid active profile exists; a packaged same-origin build uses `WsTransport(getServerUrl())` when migration leaves no profile.
 - Native host initializes `WsTransport(getNativeServerUrl(), activeProfile.id)` when an active profile exists, otherwise installs `IdleTransport`
+- Packaged same-origin builds ignore stale cross-origin profile/localStorage URLs and fall back to the serving origin; profile selection remains available when an explicit profile is needed.
 - Sidebar triggers profile switcher dialog and the setup flow remains profile-driven in both hosts
 
 **Data Persistence:**
@@ -2089,6 +2090,20 @@ Server bootstrap:
 This section records design invariants and the repository unit asset. No systemd
 unit is installed or started by repository automation; administrator acceptance is
 still required.
+
+### Phase 03 repository verification (2026-08-19)
+
+Non-privileged repository checks pass for the unit invariants, isolated systemd
+syntax verification, changed-file scope, whitespace, credential-pattern, and
+secret-filename scans. The direct checkout verifier reports the expected missing
+`/opt/dam-hopper/bin/dam-hopper-server`; the staged verifier uses only a temporary
+placeholder executable and does not represent an installed service.
+
+Administrator evidence remains not-run: installed ownership and modes, effective
+UID, enablement, loopback listener, health/auth responses, journald output,
+restart behavior, graceful PTY disposal, and marker-guarded rollback. Until a
+qualified administrator returns redacted host evidence, this architecture stays
+planned/uninstalled.
 
 - An administrator owns and manages the system unit at
   `/etc/systemd/system/dam-hopper.service`, but the service process always runs
