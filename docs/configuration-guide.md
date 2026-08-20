@@ -598,28 +598,32 @@ cargo build --release
   --host 127.0.0.1
 ```
 
-### Nohup Background Server
+### Linux systemd production service
 
-Build, install under `~/.config/dam-hopper/`, and restart:
+Use the guarded Linux production workflow to build, install, and start the
+systemd-owned service:
 
 ```bash
-pnpm build:server
-pnpm server:restart
+pnpm linux:production -- build
+pnpm linux:production -- install --staging /tmp/dam-hopper-production-stage.XXXXXX
+pnpm linux:production -- start
 ```
 
-Edit `~/.config/dam-hopper/server.conf` to set:
+The selected source file controls the user-owned runtime configuration. The
+runner generates the production safety overrides and owns the installed unit;
+do not edit installed assets or start a second nohup process against the same
+databases.
 
-- `DAM_HOPPER_CONFIG`
-- `DAM_HOPPER_CORS_ORIGINS` (comma-separated exact browser origins, optional)
-- `DAM_HOPPER_HOST`
-- `DAM_HOPPER_PORT`
-- `DAM_HOPPER_WORKSPACE` (legacy directory-discovery override, optional)
+Common source settings include `DAM_HOPPER_CONFIG`,
+`DAM_HOPPER_CORS_ORIGINS` (comma-separated exact browser origins, optional),
+`DAM_HOPPER_HOST`, `DAM_HOPPER_PORT`, and `DAM_HOPPER_WORKSPACE` (legacy
+directory-discovery override, optional).
 
-Runtime files:
+Production ownership and runtime state:
 
-- Binary: `~/.config/dam-hopper/bin/dam-hopper-server`
-- Log: `~/.config/dam-hopper/output.log`
-- PID: `~/.config/dam-hopper/server.pid`
+- Installed assets: `/opt/dam-hopper/`
+- Unit: `/etc/systemd/system/dam-hopper.service`
+- User runtime: `~/.config/dam-hopper/`
 
 ## Browser origin and transport
 

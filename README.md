@@ -39,28 +39,32 @@ cd .. && pnpm install && pnpm build
 # Direct/legacy default: http://127.0.0.1:4800 — token printed to terminal
 ```
 
-### Linux nohup background server
+### Linux systemd production service
 
-For day-to-day Linux use, build the server locally, copy it under `~/.config/dam-hopper/`, and run it with `nohup`:
-
-```bash
-pnpm build:server
-pnpm server:restart
-```
-
-This installs the binary at `~/.config/dam-hopper/bin/dam-hopper-server`, reads config from `~/.config/dam-hopper/server.conf`, writes logs to `~/.config/dam-hopper/output.log`, and tracks the process in `~/.config/dam-hopper/server.pid`.
-
-Manage it with:
+Linux production ownership is systemd on `127.0.0.1:4801`; the service runs as
+`loidinh` and is the only supported production owner. The guarded reset is an
+administrator-approved operation that must receive a user-owned dotenv source
+outside the runtime purge target:
 
 ```bash
-pnpm server:status
-pnpm server:stop
-pnpm server:start
-pnpm server:restart
-tail -f ~/.config/dam-hopper/output.log
+pnpm linux:reset -- --env-file /secure/path/production-settings
 ```
 
-See [Linux Nohup Setup](./docs/linux-nohup.md) for host/port, MongoDB, Tailscale, and update details.
+Build and stage without privilege, then install and start as separate explicit
+operations. Capture the `staging_dir` printed by `build`:
+
+```bash
+pnpm linux:production -- build
+pnpm linux:production -- install --staging /tmp/dam-hopper-production-stage.XXXXXX
+pnpm linux:production -- status
+pnpm linux:production -- start
+```
+
+`install` never starts or rebuilds. `start` validates the installed marker,
+private runtime environment files, unit contract, ownership, ports, processes,
+and database holders before starting. Use `rollback --dry-run` first; an actual
+rollback requires the marker-backed confirmation and preserves user runtime
+state. See [Linux systemd setup](./docs/linux-systemd.md).
 
 ## Configuration
 
