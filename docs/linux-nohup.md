@@ -1,10 +1,14 @@
-# Linux Nohup Setup
+# Linux Nohup Setup (legacy, unsupported)
 
-Use this setup to keep all DamHopper runtime files under `~/.config/dam-hopper/` and run the server with `nohup`.
+The nohup launcher is retained only as rollback history. It is not a supported
+production owner, its package aliases are retired, and it must never run at the
+same time as `dam-hopper.service` or open the same SQLite files. Use the guarded
+[Linux systemd workflow](./linux-systemd.md) for current production operation.
 
 ## Install And Start
 
-Build the server:
+Do not use this path for a new install. Historical commands are preserved below
+for administrators restoring an old, separately approved deployment:
 
 ```bash
 pnpm build:server
@@ -13,7 +17,7 @@ pnpm build:server
 Copy the binary to `~/.config/dam-hopper/bin/` and restart the background process:
 
 ```bash
-pnpm server:restart
+deploy/run-linux-nohup.sh restart --bin server/target/release/dam-hopper-server
 ```
 
 Equivalent direct command:
@@ -50,32 +54,29 @@ MONGODB_URI="mongodb://localhost:27017"
 MONGODB_DATABASE="dam_hopper"
 ```
 
-Restart after changes:
+Restart after changes only during an approved legacy recovery:
 
 ```bash
-pnpm server:restart
+deploy/run-linux-nohup.sh restart --bin server/target/release/dam-hopper-server
 ```
 
-Authenticated HTTP binds may use `0.0.0.0` without a TLS-proxy assertion. Only do so when the host is protected by a trusted network, firewall, or Tailscale: cleartext exposes Bearer tokens, cookies, ticket URLs, terminal/file/git actions, and media bytes to interception and modification. Use HTTPS or a trusted encrypted network when that risk is unacceptable. Cross-origin media uses an authenticated actor/session-bound ticket because `SameSite=Lax` cookies are not sent cross-site.
+Authenticated HTTP binds may use `0.0.0.0` only for a separately approved legacy recovery. The supported systemd unit is loopback-only on `127.0.0.1:4801`.
 
 ## Operate
 
-```bash
-pnpm server:status
-pnpm server:start
-pnpm server:stop
-pnpm server:restart
-tail -f ~/.config/dam-hopper/output.log
-```
+The legacy status/start/stop commands are intentionally not available through
+the package aliases. Inspect and stop any old process manually only as part of
+an administrator-approved ownership handoff.
 
 ## Update
 
 ```bash
-pnpm build:server
-pnpm server:restart
+deploy/run-linux-nohup.sh restart --bin server/target/release/dam-hopper-server
 ```
 
-The restart command copies the newly built binary into `~/.config/dam-hopper/bin/`, stops the old process using the pid file, and starts the new process with `nohup`.
+The direct legacy command is intentionally outside the supported runner and has
+no concurrency guarantee; do not invoke it while the systemd service is
+enabled or active.
 
 ## Host Resource Monitoring Release and Rollback
 
@@ -153,6 +154,8 @@ remediation capability.
 ## Uninstall
 
 ```bash
-pnpm server:stop
-rm -rf ~/.config/dam-hopper/bin ~/.config/dam-hopper/server.pid ~/.config/dam-hopper/output.log
+deploy/run-linux-nohup.sh stop
 ```
+
+Do not recursively remove the runtime tree as part of legacy recovery; the
+guarded reset owns the exact purge boundary.

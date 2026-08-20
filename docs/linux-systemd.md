@@ -1,6 +1,43 @@
 # Linux systemd system service
 
-Status: repository asset and administrator handoff. Repository-side Phase 03 verification was recorded on 2026-08-19; administrator installation, runtime, and rollback acceptance remains pending. This repository does not install or start a system unit automatically.
+Status: repository asset plus guarded administrator workflow. Repository-side
+build/stage/fixture checks pass, and the unprivileged production runner build
+has completed its staging gates; administrator installation, runtime, and
+rollback acceptance remains pending. No command in this document performs a
+live reset or production mutation by itself.
+
+## Supported production runner
+
+Run every command from the exact checkout as `loidinh`. Complete the guarded
+reset first when taking ownership of an existing host. It authenticates sudo
+interactively, purges only the canonical local runtime tree after typed
+confirmation, and recreates the private ordered environment files. Never place
+the selected source inside that purge target or display its contents.
+
+```bash
+pnpm linux:reset -- --env-file /secure/path/production-settings
+```
+
+Build is unprivileged and emits a unique retained staging directory. Install
+consumes only that verified directory, enables the unit, and deliberately does
+not start it. Start validates installed hashes, ownership, ordered environment
+files, systemd identity, loopback ports, processes, and SQLite holders without
+rebuilding.
+
+```bash
+pnpm linux:production -- build
+pnpm linux:production -- install --staging /tmp/dam-hopper-production-stage.XXXXXX
+pnpm linux:production -- status
+pnpm linux:production -- start
+pnpm linux:production -- rollback --dry-run
+```
+
+An actual rollback requires `--confirm` plus the exact interactive confirmation
+shown by the runner. It removes only marker-backed `/opt` assets and the unit;
+the user runtime tree, repositories, containers, and external MongoDB remain
+outside its scope. Phase 03 still requires explicit operator acceptance for
+health/authentication, same-origin UI, journal redaction, PTY shutdown, and any
+live Mongo smoke.
 
 ## Deployment decision
 
@@ -15,7 +52,7 @@ The service process is always `loidinh`. The system manager owns the unit and de
 [`deploy/systemd/dam-hopper.service`](../deploy/systemd/dam-hopper.service) is intentionally small:
 
 - `User=loidinh` and `Group=loidinh`; the server never runs as root.
-- Direct `ExecStart` with an absolute binary, config, host, and port; no shell, wrapper, PID file, environment file, sudo, or privileged helper.
+- Direct `ExecStart` with an absolute binary, config, host, and port; no shell, wrapper, PID file, sudo, or privileged helper. Ordered user environment files are explicit and mandatory.
 - `HOME`, `XDG_CONFIG_HOME`, `WorkingDirectory`, and `DAM_HOPPER_WEB_DIR` are explicit.
 - `127.0.0.1:4801` is explicit. `RUST_ENV=production` makes the existing no-auth guard fail closed if a home `.env` attempts to set `DAM_HOPPER_NO_AUTH`; the unit has no `--no-auth` flag.
 - `Restart=on-failure` with a short delay and journald stdout/stderr.
@@ -37,8 +74,7 @@ test -x server/target/release/dam-hopper-server
 test -f apps/web/dist/index.html
 ```
 
-In a repository checkout the unit's absolute binary under `/opt` is normally not installed yet, so `systemd-analyze verify` may report that missing executable; the unit text is still syntax-checked, and the administrator reruns the command after installing the staged binary.
-The exact isolated temporary-root setup uses `/usr/bin/true` only as a verifier placeholder and is recorded in the [verification report](../plans/260817-1216-systemd-system-service/reports/03-verification-results.md); it does not touch `/opt`, `/etc`, or host systemd state.
+In a repository checkout the unit's absolute binary under `/opt` is normally not installed yet, so direct `systemd-analyze verify` may report that missing executable. The runner's isolated temporary-root setup resolves a system `true` executable only as a verifier placeholder; it does not touch `/opt`, `/etc`, or host systemd state. The administrator reruns verification against the installed asset during the guarded install.
 
 For a browser development run, keep the UI proxy on the isolated service port:
 
@@ -774,12 +810,13 @@ Restoring the legacy nohup launch is optional and requires a separate administra
 
 ## Phase 03 verification status
 
-Repository evidence recorded on 2026-08-19 is limited to non-privileged inspection:
+Repository evidence recorded on 2026-08-20 is non-privileged and does not establish live ownership:
 
 - PASS — unit invariants match the planned identity, paths, loopback port, production auth guard, journald, restart, and SIGTERM fields.
 - PASS — `systemd-analyze verify` succeeds in an isolated verifier root containing a placeholder executable; the direct checkout invocation reports only the expected absent `/opt/dam-hopper/bin/dam-hopper-server`.
-- PASS — `pnpm build:server`, `pnpm build`, `pnpm --filter @dam-hopper/ui test`, `pnpm test`, and `pnpm lint` completed with zero failures; the UI suite covered 173 files and 1,109 tests, and PTY disposal/shutdown coverage passed in the backend suite.
-- PASS — changed-file scope, whitespace, runtime forbidden-pattern, credential-pattern, and secret-filename scans.
+- PASS — the runner's full build/stage path completed the backend tests, UI tests (173 files and 1,109 tests), UI type checking, lint, release server build, same-origin production web build, artifact checks, and isolated unit verification.
+- PASS — Phase 01/02 fixture assertions, Bash syntax, JSON parsing, whitespace, and scoped forbidden-pattern checks.
+- CAVEAT — the native Tauri signing prerequisite is unavailable in this environment; the runner recognized the exact known error and continued through its explicit documented fallback gates.
 - NOT RUN — administrator installation, root-owned asset/mode checks, effective UID, active listener, authenticated health checks, journald, restart, and rollback preservation.
 
 The complete command ledger and evidence boundaries are in [`03-verification-results.md`](../plans/260817-1216-systemd-system-service/reports/03-verification-results.md). Repository evidence does not establish that a systemd unit is installed or that it owns the live runtime.
@@ -797,4 +834,5 @@ Administrator onboarding requires:
 - a safe isolated state for restart-failure testing; and
 - a retained host evidence record with tokens and response bodies redacted.
 
-Until that evidence is returned, architecture remains planned/uninstalled.
+Until that evidence is returned, the repository implementation is ready for
+the administrator handoff but the production unit remains unverified here.
