@@ -1,5 +1,7 @@
 # Terminal QA report — systemd system service
 
+> Historical QA report from the superseded systemd planning sequence. Current acceptance status is maintained by the [successor revalidation plan](../260820-0912-revalidation-build-run-service/plan.md).
+
 Date: 2026-08-19. Mode: read-only repository validation. Includes the final
 rerun after development-port and handoff hardening fixes.
 

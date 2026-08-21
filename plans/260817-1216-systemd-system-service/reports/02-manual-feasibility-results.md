@@ -1,5 +1,7 @@
 # Phase 01 Manual Feasibility Results
 
+> Historical report from the superseded systemd planning sequence. Current acceptance status is maintained by the [successor revalidation plan](../../260820-0912-revalidation-build-run-service/plan.md).
+
 - Date: 2026-08-17 (UTC)
 - Evidence status: PASS — authoritative corrected rerun
 - Phase delivery status: pending review at capture time

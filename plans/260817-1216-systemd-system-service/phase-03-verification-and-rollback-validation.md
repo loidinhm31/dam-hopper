@@ -1,11 +1,13 @@
 # Phase 03: Verification and Rollback Validation
 
+> Historical document from the superseded systemd planning sequence. Current acceptance status is maintained by the [successor revalidation plan](../260820-0912-revalidation-build-run-service/plan.md).
+
 ## Context links
 
 - [Parent plan](./plan.md)
 - [Phase 01 gate](./phase-01-isolated-port-4801-feasibility-gate.md)
 - [Phase 02 design](./phase-02-service-asset-and-administrator-handoff.md)
-- [Planned architecture](../../docs/system-architecture.md#proposedplanned-systemd-system-service-repository-asset-not-installed)
+- [Historical architecture context](../../docs/system-architecture.md#systemd-service-guarded-linux-workflow-and-bounded-host-acceptance)
 
 ## Overview
 
@@ -13,8 +15,8 @@
 - Last updated: 2026-08-19
 - Description: validate the future asset without privilege, then provide administrator acceptance
 - Priority: P2
-- Implementation status: repository implementation and non-privileged validation complete; administrator evidence pending
-- Review status: host acceptance pending; repository implementation review approved
+- Implementation status: superseded by the successor revalidation plan, which records administrator evidence
+- Review status: superseded; current review is tracked by the successor plan
 - Effort: 1.5h
 
 ## Key Insights
@@ -23,8 +25,8 @@
   system-manager runtime state.
 - Administrator evidence must distinguish asset creation from successful host installation.
 - Rollback must protect user-owned config, token, sessions DB, telemetry DB, and collector state.
-- Independent release validation and final code review approved the repository changes; no
-  systemd service was installed or controlled in this checkout.
+- Independent release validation and final code review approved the repository changes. Current
+  administrator evidence is recorded in the successor revalidation plan and report.
 
 ## Requirements
 
@@ -77,9 +79,9 @@ not-installed status.
 - [ ] Rollback preserves user state
 - [x] Documentation status matches evidence
 
-Tracking decision: Phase 03 remains **Pending administrator evidence**. Administrator installation,
-runtime, restart/journald/effective-UID, and rollback checks are all **NOT RUN**; this phase is not
-accepted or complete.
+Tracking decision: This historical Phase 03 is **superseded**. Administrator installation,
+runtime, restart/journald/effective-UID, and rollback checks are accepted in the successor
+revalidation plan.
 
 ## Success Criteria
 
@@ -103,8 +105,7 @@ accepted or complete.
 
 ## Next steps
 
-- If all evidence passes, mark plan complete and update architecture to the exact delivered state.
-- If admin evidence is unavailable, hand off artifacts as uninstalled and keep plan pending.
+- Use the successor revalidation plan for any further acceptance or release decision.
 
 ## Unresolved Questions
 

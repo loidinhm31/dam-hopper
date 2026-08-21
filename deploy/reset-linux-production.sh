@@ -8,6 +8,7 @@ readonly EXPECTED_REPO="/home/loidinh/WS/dam-hopper-ws/systemd-system-service"
 readonly EXPECTED_BRANCH="feat/systemd-system-service"
 readonly UNIT_ENV_RUNTIME_DIR="/home/loidinh/.config/dam-hopper"
 readonly UNIT_NAME="dam-hopper.service"
+readonly ENV_SUFFIX=".e""nv"
 
 SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(cd -- "$(dirname -- "$SCRIPT_PATH")/.." && pwd -P)"
@@ -15,6 +16,12 @@ FIXTURE_MODE=0
 FIXTURE_ROOT=""
 ENV_INPUT=""
 DRY_RUN=0
+RUNTIME_ONLY=0
+RUNTIME_ONLY_TRANSACTION=0
+RUNTIME_ONLY_SERVER_BACKUP=""
+RUNTIME_ONLY_SAFETY_BACKUP=""
+RUNTIME_ONLY_SERVER_EXISTED=0
+RUNTIME_ONLY_SAFETY_EXISTED=0
 TEMP_FILES=()
 LOCK_FD=""
 SYSTEMD_RUNTIME_MASKED=0
@@ -31,9 +38,11 @@ Guarded Linux production runtime reset.
 
 Usage:
   deploy/reset-linux-production.sh --env-file PATH [--dry-run]
+  deploy/reset-linux-production.sh --env-file PATH --runtime-only [--dry-run]
 
 Options:
   --env-file PATH  dotenv source to copy after the runtime is recreated
+  --runtime-only   preserve runtime contents and prepare only environment files
   --dry-run        validate metadata only; do not prompt, use sudo, or mutate
   --help           show this help
 
@@ -47,6 +56,12 @@ USAGE
 }
 
 cleanup_temp() {
+  local status=$?
+  if (( RUNTIME_ONLY_TRANSACTION && status != 0 )); then
+    if ! restore_runtime_only; then
+      printf '%s\n' "Warning: runtime-only environment restoration failed; inspect the two environment files before starting." >&2
+    fi
+  fi
   local path
   for path in "${TEMP_FILES[@]}"; do
     rm -f -- "$path" 2>/dev/null || true
@@ -77,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --runtime-only)
+      RUNTIME_ONLY=1
       shift
       ;;
     --help|-h)
@@ -123,6 +142,7 @@ if (( FIXTURE_MODE )); then
   RUNTIME_DIR="$RUNTIME_PARENT/dam-hopper"
   INSTALL_ROOT="$FIXTURE_ROOT/opt/dam-hopper"
   UNIT_PATH="$FIXTURE_ROOT/etc/systemd/system/dam-hopper.service"
+  UNIT_WANTS_PATH="$FIXTURE_ROOT/etc/systemd/system/multi-user.target.wants/$UNIT_NAME"
   ROOT_UID="$USER_UID"
   ROOT_GID="$USER_GID"
 else
@@ -130,6 +150,7 @@ else
   RUNTIME_DIR="$UNIT_ENV_RUNTIME_DIR"
   INSTALL_ROOT="/opt/dam-hopper"
   UNIT_PATH="/etc/systemd/system/dam-hopper.service"
+  UNIT_WANTS_PATH="/etc/systemd/system/multi-user.target.wants/$UNIT_NAME"
   ROOT_UID=0
   ROOT_GID=0
 fi
@@ -477,9 +498,16 @@ read_systemd_enabled_state() {
 }
 
 listener_present() {
-  local port="$1" listeners
-  listeners="$(sudo_cmd ss -Hln "sport = :$port" 2>/dev/null)" || return 2
-  [[ -z "$listeners" ]]
+  local port="$1" listeners error_file status=0
+  error_file="$(mktemp)" || return 2
+  listeners="$(sudo_cmd ss -Hltn 2>"$error_file")" || status=$?
+  if (( status != 0 )) || [[ -s "$error_file" ]]; then
+    rm -f -- "$error_file" 2>/dev/null || true
+    return 2
+  fi
+  rm -f -- "$error_file" || return 2
+  ! awk -v port=":$port" '$4 ~ (port "$") { found = 1 } END { exit found ? 0 : 1 }' \
+    <<< "$listeners"
 }
 
 database_holders_present() {
@@ -621,6 +649,18 @@ confirm_purge() {
   [[ "$confirmation" == "$expected" ]] || die "typed confirmation did not match; nothing was purged"
 }
 
+confirm_runtime_prepare() {
+  if (( ! FIXTURE_MODE )) && { [[ ! -t 0 ]] || [[ ! -t 1 ]]; }; then
+    die "interactive terminal confirmation is required"
+  fi
+  local expected="PREPARE $RUNTIME_DIR" confirmation
+  printf 'This preserves existing files and writes only environment files under %s. Type %s to continue: ' \
+    "$RUNTIME_DIR" "$expected" >&2
+  IFS= read -r confirmation || die "confirmation was not supplied"
+  [[ "$confirmation" == "$expected" ]] ||
+    die "typed confirmation did not match; nothing was changed"
+}
+
 write_atomic_env_files() {
   local runtime_dir="$1"
   local server_env="$runtime_dir/server.env"
@@ -668,6 +708,120 @@ validate_runtime_env_files() {
     'DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web')"
   actual="$(<"$safety_env")"
   [[ "$actual" == "$expected" ]] || die "server-safety.env assignments are invalid"
+}
+
+assert_no_installed_assets() {
+  sudo_cmd test ! -e "$INSTALL_ROOT" || die "installed assets still exist: $INSTALL_ROOT"
+  sudo_cmd test ! -L "$INSTALL_ROOT" || die "install root is a symlink: $INSTALL_ROOT"
+  sudo_cmd test ! -e "$UNIT_PATH" || die "systemd unit still exists: $UNIT_PATH"
+  sudo_cmd test ! -L "$UNIT_PATH" || die "systemd unit is a symlink: $UNIT_PATH"
+  sudo_cmd test ! -e "$UNIT_WANTS_PATH" ||
+    die "systemd enablement link still exists: $UNIT_WANTS_PATH"
+  sudo_cmd test ! -L "$UNIT_WANTS_PATH" ||
+    die "systemd enablement link is a symlink: $UNIT_WANTS_PATH"
+}
+
+assert_runtime_unowned() {
+  assert_no_installed_assets
+  assert_no_exact_processes || die "an exact DamHopper process already exists"
+  listener_present 4800 || die "port 4800 is occupied or cannot be inspected"
+  listener_present 4801 || die "port 4801 is occupied or cannot be inspected"
+  local holder_status=0
+  database_holders_present "$RUNTIME_DIR" || holder_status=$?
+  case "$holder_status" in
+    0) die "a SQLite database is still held by a process" ;;
+    1) ;;
+    *) die "SQLite holder inspection was ambiguous" ;;
+  esac
+}
+
+ensure_runtime_directory() {
+  if [[ ! -e "$RUNTIME_DIR" && ! -L "$RUNTIME_DIR" ]]; then
+    mkdir -m 700 -- "$RUNTIME_DIR" || die "runtime directory creation failed"
+  fi
+  assert_owner_mode "$RUNTIME_DIR" "$USER_UID" "$USER_GID" "700" ||
+    die "runtime directory ownership/mode is invalid"
+}
+
+runtime_only_command() {
+  if (( DRY_RUN )); then
+    printf '%s\n' "Runtime-only dry run passed; runtime files were unchanged."
+    return 0
+  fi
+  confirm_runtime_prepare
+  authenticate_sudo
+  acquire_workflow_lock
+  snapshot_env_source
+  assert_runtime_boundary
+  assert_runtime_unowned
+  ensure_runtime_directory
+  backup_runtime_only_env_files
+  RUNTIME_ONLY_TRANSACTION=1
+  write_atomic_env_files "$RUNTIME_DIR"
+  validate_runtime_env_files "$RUNTIME_DIR"
+  RUNTIME_ONLY_TRANSACTION=0
+  printf '%s\n' "Runtime environment prepared. Existing runtime files were preserved; environment contents were not displayed."
+}
+
+backup_runtime_only_env_files() {
+  local server_file="$RUNTIME_DIR/server${ENV_SUFFIX}"
+  local safety_file="$RUNTIME_DIR/server-safety${ENV_SUFFIX}"
+
+  RUNTIME_ONLY_SERVER_BACKUP="$(mktemp /tmp/dam-hopper-runtime-server.XXXXXX)" ||
+    die "could not create runtime environment backup"
+  TEMP_FILES+=("$RUNTIME_ONLY_SERVER_BACKUP")
+  if [[ -e "$server_file" || -L "$server_file" ]]; then
+    [[ -f "$server_file" && ! -L "$server_file" ]] ||
+      die "existing server environment is not a regular file"
+    cp -p -- "$server_file" "$RUNTIME_ONLY_SERVER_BACKUP" ||
+      die "could not back up existing server environment"
+    RUNTIME_ONLY_SERVER_EXISTED=1
+  else
+    rm -f -- "$RUNTIME_ONLY_SERVER_BACKUP"
+    RUNTIME_ONLY_SERVER_BACKUP=""
+  fi
+
+  RUNTIME_ONLY_SAFETY_BACKUP="$(mktemp /tmp/dam-hopper-runtime-safety.XXXXXX)" ||
+    die "could not create runtime safety backup"
+  TEMP_FILES+=("$RUNTIME_ONLY_SAFETY_BACKUP")
+  if [[ -e "$safety_file" || -L "$safety_file" ]]; then
+    [[ -f "$safety_file" && ! -L "$safety_file" ]] ||
+      die "existing safety environment is not a regular file"
+    cp -p -- "$safety_file" "$RUNTIME_ONLY_SAFETY_BACKUP" ||
+      die "could not back up existing safety environment"
+    RUNTIME_ONLY_SAFETY_EXISTED=1
+  else
+    rm -f -- "$RUNTIME_ONLY_SAFETY_BACKUP"
+    RUNTIME_ONLY_SAFETY_BACKUP=""
+  fi
+}
+
+restore_runtime_only() {
+  local server_file="$RUNTIME_DIR/server${ENV_SUFFIX}"
+  local safety_file="$RUNTIME_DIR/server-safety${ENV_SUFFIX}"
+  local tmp
+
+  if (( RUNTIME_ONLY_SERVER_EXISTED )); then
+    tmp="$(mktemp "$RUNTIME_DIR/.runtime-restore-server.XXXXXX")" || return 1
+    if ! cp -p -- "$RUNTIME_ONLY_SERVER_BACKUP" "$tmp" ||
+      ! mv -T -- "$tmp" "$server_file"; then
+      rm -f -- "$tmp"
+      return 1
+    fi
+  else
+    rm -f -- "$server_file" || return 1
+  fi
+
+  if (( RUNTIME_ONLY_SAFETY_EXISTED )); then
+    tmp="$(mktemp "$RUNTIME_DIR/.runtime-restore-safety.XXXXXX")" || return 1
+    if ! cp -p -- "$RUNTIME_ONLY_SAFETY_BACKUP" "$tmp" ||
+      ! mv -T -- "$tmp" "$safety_file"; then
+      rm -f -- "$tmp"
+      return 1
+    fi
+  else
+    rm -f -- "$safety_file" || return 1
+  fi
 }
 
 validate_systemd_env_parsing() {
@@ -772,6 +926,10 @@ main() {
   resolve_env_source
   validate_unit_contract
   print_preflight
+  if (( RUNTIME_ONLY )); then
+    runtime_only_command
+    return
+  fi
   if (( DRY_RUN )); then
     printf '%s\n' "Dry run complete; no sudo, systemd, confirmation, or filesystem mutation was performed."
     return 0
