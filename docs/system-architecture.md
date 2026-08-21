@@ -2085,11 +2085,15 @@ Server bootstrap:
 - Router registration (ide_explorer routes conditional)
 - Port binding + graceful shutdown
 
-## PROPOSED/PLANNED: systemd system service (repository asset; not installed)
+## SYSTEMD SERVICE: guarded Linux workflow and bounded host acceptance
 
-This section records design invariants and the repository unit asset. No systemd
-unit is installed or started by repository automation; administrator acceptance is
-still required.
+This section records design invariants, the repository unit asset, and the
+operator-run Linux reset/build workflow. The service process never runs as root;
+the core administrator acceptance run passed on 2026-08-21, including the
+protected-route, active-PTY/SIGTERM, and bounded journal checks. Only the
+optional external MongoDB smoke remains unrun. The workflow is not an
+unattended installer and never embeds credentials or performs non-interactive
+elevation.
 
 ### Phase 03 repository verification (2026-08-19)
 
@@ -2099,11 +2103,14 @@ secret-filename scans. The direct checkout verifier reports the expected missing
 `/opt/dam-hopper/bin/dam-hopper-server`; the staged verifier uses only a temporary
 placeholder executable and does not represent an installed service.
 
-Administrator evidence remains not-run: installed ownership and modes, effective
-UID, enablement, loopback listener, health/auth responses, journald output,
-restart behavior, graceful PTY disposal, and marker-guarded rollback. Until a
-qualified administrator returns redacted host evidence, this architecture stays
-planned/uninstalled.
+Repository validation remains separate from administrator acceptance. The
+2026-08-20 read-only host revalidation was superseded by a 2026-08-21 guarded
+run: the staged install and active unit ran as `loidinh`, exposed only
+`127.0.0.1:4801`, served `GET /api/health` and the SPA, rejected unauthenticated
+`GET /api/usage/health`, accepted an authenticated protected-route request,
+passed restart with a new PID, exercised active-PTY/SIGTERM cleanup, passed
+bounded journal lifecycle/redaction checks, and rolled back without removing
+user runtime state. Only the optional MongoDB smoke was not run.
 
 - An administrator owns and manages the system unit at
   `/etc/systemd/system/dam-hopper.service`, but the service process always runs
@@ -2115,8 +2122,8 @@ planned/uninstalled.
   `/home/loidinh`, and same-process web assets
   `DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web`. The repository asset and
   administrator handoff are in `deploy/systemd/dam-hopper.service` and
-  `docs/linux-systemd.md`; the administrator still has to build/install the web
-  directory.
+  `docs/linux-systemd.md`; the operator workflow builds and installs the web
+  directory as a verified staged asset.
 - The service bind is `127.0.0.1:4801`. Authentication stays enabled:
   the unit sets `RUST_ENV=production`, contains neither `--no-auth` nor
   `DAM_HOPPER_NO_AUTH`, and fails closed if a home `.env` attempts to enable no-auth.
@@ -2135,9 +2142,31 @@ planned/uninstalled.
   nohup service on `4800` remains outside this deployment and must not be
   touched by repository validation. The two launch methods must never
   concurrently open or reuse the live service databases.
-- Neither the server nor repository scripts invoke sudo, embed a privileged
-  helper, or perform installation. Administrative ownership changes, unit
-  installation, reload, enable/start, and rollback remain a documented handoff.
+- The server never invokes sudo or performs installation. The explicit operator
+  scripts may invoke exact sudo commands for stop/disable, ownership checks,
+  install, enable/start, and rollback after an interactive administrator
+  authentication; they must abort if elevation is unavailable, never embed a
+  privileged helper or password, and never run the service as root.
+- The reset command first verifies process, listener, database, symlink, and
+  marker identity. Its normal cleanup retains ambiguous or unverified residue
+  for guarded inspection. The quick-verification purge is a separate confirmed operation limited to local
+  DamHopper state; project repositories, unrelated Docker containers, and
+  external MongoDB data remain outside its target set.
+- The production runner requires the focused systemd-service build/test/lint/unit
+  gate before installation; native/Tauri desktop packaging is outside this gate.
+  After systemd reports active, start waits up to 10 seconds for the loopback
+  listener and fails closed if `ss` errors or emits diagnostics. The build records
+  the canonical verified staging path in a private mode-600 runtime file, and
+  automatic install fails closed for missing, malformed, stale, or ambiguous
+  records. The staged-tree credential scan reads byte streams, so binary
+  artifacts are covered as well as text files. A caller-selected dotenv file may
+  be copied verbatim to the
+  user-owned `/home/loidinh/.config/dam-hopper/server.env` with mode `0600` for
+  quick verification only; it is never copied into `/opt`, unit text, manifests,
+  or web assets. The unit loads a generated `server-safety.env` second so its
+  production environment, no-auth=false, HOME/XDG, and web-path assignments
+  override the broad quick-check file. Explicit CLI host/port remain authoritative.
+  Start revalidates both files and installed hashes but does not rebuild.
 - First install refuses existing exact unit/binary/web targets and parent
   `/opt/dam-hopper`/`bin` symlinks, creates a unique verified staging directory,
   and records a root-owned nonce/hash/file-inventory manifest before staged
