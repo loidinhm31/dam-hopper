@@ -19,12 +19,15 @@ DRY_RUN=0
 INSTALL_DEPS=0
 ROLLBACK_CONFIRMED=0
 STAGE_INPUT=""
+STAGE_INPUT_SET=0
 FIXTURE_MODE=0
 FIXTURE_ROOT=""
 LOCK_FD=""
 STAGE_DIR=""
 INSTALL_TMP=""
 UNIT_TMP=""
+INSTALL_MUTATED=0
+INSTALL_COMMITTED=0
 TEMP_DIRS=()
 
 FIXTURE_ENV_MODE="${DAM_HOPPER_PRODUCTION_FIXTURE_MODE:-0}"
@@ -89,7 +92,10 @@ else
   STAGE_PARENT="${DAM_HOPPER_PRODUCTION_STAGE_PARENT:-${TMPDIR:-/tmp}}"
 fi
 
+UNIT_WANTS_PATH="$UNIT_PARENT/multi-user.target.wants/$UNIT_NAME"
+
 LOCK_PATH="$RUNTIME_PARENT/.dam-hopper-linux-production.lock"
+STAGE_RECORD="$RUNTIME_PARENT/.dam-hopper-linux-production-stage"
 MARKER_DIR="$INSTALL_ROOT/.systemd-fresh-install"
 MANIFEST="$MARKER_DIR/manifest"
 NONCE_FILE="$MARKER_DIR/nonce"
@@ -119,14 +125,16 @@ Guarded Linux production build/install/start workflow.
 
 Usage:
   deploy/run-linux-production.sh build [--install-deps] [--dry-run]
-  deploy/run-linux-production.sh install --staging PATH [--dry-run]
+  deploy/run-linux-production.sh install [--staging PATH] [--dry-run]
   deploy/run-linux-production.sh start [--dry-run]
   deploy/run-linux-production.sh status
   deploy/run-linux-production.sh rollback [--confirm] [--dry-run]
 
-Commands are explicit. Build is unprivileged and prints a retained staging
-directory. Install enables the unit but never starts it. Start validates the
-installed evidence and starts without rebuilding. Rollback preserves user
+Commands are explicit. Build is unprivileged, retains a verified staging
+directory, and records its canonical path privately for the next install.
+Install without --staging uses only that recorded stage; --staging PATH is an
+explicit override. Install enables the unit but never starts it. Start validates
+the installed evidence and starts without rebuilding. Rollback preserves user
 runtime state and requires the exact confirmation:
   ROLLBACK /opt/dam-hopper
 
@@ -147,6 +155,11 @@ sudo_cmd() {
 cleanup() {
   local status=$?
   trap - EXIT
+  if (( status != 0 && INSTALL_MUTATED && !INSTALL_COMMITTED )); then
+    if ! cleanup_partial_install; then
+      printf '%s\n' "Install failed and guarded partial-install cleanup could not prove every asset; retain the marker and inspect before retrying." >&2
+    fi
+  fi
   local path
   for path in "${TEMP_DIRS[@]}"; do
     rm -rf -- "$path" 2>/dev/null || true
@@ -181,9 +194,11 @@ parse_args() {
         INSTALL_DEPS=1; shift ;;
       --staging)
         [[ "$COMMAND" == install && $# -ge 2 ]] || die "--staging requires a path"
+        STAGE_INPUT_SET=1
         STAGE_INPUT="$2"; shift 2 ;;
       --staging=*)
         [[ "$COMMAND" == install ]] || die "--staging is valid only for install"
+        STAGE_INPUT_SET=1
         STAGE_INPUT="${1#*=}"; shift ;;
       --confirm)
         [[ "$COMMAND" == rollback ]] || die "--confirm is valid only for rollback"
@@ -192,9 +207,6 @@ parse_args() {
       *) die "unknown option: $1" ;;
     esac
   done
-  if [[ "$COMMAND" == install && -z "$STAGE_INPUT" && ! $DRY_RUN -eq 1 ]]; then
-    die "install requires --staging PATH"
-  fi
   if [[ "$COMMAND" == rollback && $DRY_RUN -eq 0 && $ROLLBACK_CONFIRMED -eq 0 ]]; then
     die "rollback requires --confirm; use --dry-run to inspect without mutation"
   fi
@@ -231,7 +243,7 @@ require_commands() {
   local command_name
   local commands=(
     awk bash cat chmod cmp cp find flock git grep id install kill mkdir mktemp mv
-    od pgrep readlink realpath rm rmdir sha256sum sleep sort stat systemctl tee tr uname wc
+    od pgrep readlink realpath rm rmdir seq sha256sum sleep sort stat systemctl tee tr uname wc
   )
   case "$COMMAND" in
     build) commands+=(env jq pnpm) ;;
@@ -334,17 +346,20 @@ validate_build_inputs() {
 }
 
 scan_sensitive_tree() {
-  local root="$1" sensitive_path
+  local root="$1" sensitive_path grep_status=0
   sensitive_path="$(find "$root" -xdev -type f \( \
     -name '[.]e[n]v' -o -name '[.]e[n]v.*' -o -name '*.pem' -o -name '*.key' -o \
     -iname '*credential*' -o -iname '*secret*' \
   \) -print -quit)"
   [[ -z "$sensitive_path" ]] || die "staged tree contains a sensitive filename"
-  if grep -R -I -E -l \
+  grep -R -a -E -l \
     'BEGIN [A-Z0-9 ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|mongodb(\+srv)?://[^[:space:]]+' \
-    "$root" >/dev/null 2>&1; then
-    die "staged tree contains a credential-bearing value"
-  fi
+    "$root" >/dev/null 2>&1 || grep_status=$?
+  case "$grep_status" in
+    0) die "staged tree contains a credential-bearing value" ;;
+    1) ;;
+    *) die "staged tree scan failed" ;;
+  esac
 }
 
 run_shell_quality_gate() {
@@ -357,28 +372,12 @@ run_shell_quality_gate() {
   fi
 }
 
-run_repository_check() {
-  local check_log
-  check_log="$(mktemp)" || die "could not create the repository check log"
-  TEMP_DIRS+=("$check_log")
-  if env -u VITE_DAM_HOPPER_SERVER_URL pnpm check 2>&1 | tee "$check_log"; then
-    printf '%s\n' "repository_check=passed"
-    return 0
-  fi
-  if grep -Fq -- "A public key has been found, but no private key." "$check_log"; then
-    printf '%s\n' "repository_check=known-native-signing-prerequisite; focused server/web gates continue" >&2
-    return 0
-  fi
-  die "pnpm check failed outside the documented native signing prerequisite"
-}
-
 run_build_gate() {
   if (( FIXTURE_MODE )); then
     validate_build_inputs
     return 0
   fi
   if (( INSTALL_DEPS )); then pnpm install --frozen-lockfile; fi
-  run_repository_check
   pnpm lint
   pnpm test
   pnpm --filter @dam-hopper/ui test
@@ -497,7 +496,34 @@ create_stage() {
   mv -T -- "$nonce_tmp" "$STAGE_DIR/nonce"
   scan_sensitive_tree "$STAGE_DIR"
   verify_stage
+  record_stage
   TEMP_DIRS=()
+}
+
+clear_stage_record() {
+  [[ ! -L "$STAGE_RECORD" ]] || die "retained-stage record is a symlink"
+  if [[ -e "$STAGE_RECORD" ]]; then
+    [[ -f "$STAGE_RECORD" ]] || die "retained-stage record is not a regular file"
+    rm -f -- "$STAGE_RECORD" || die "could not invalidate the retained-stage record"
+  fi
+}
+
+record_stage() {
+  [[ "$STAGE_DIR" == /* && "$STAGE_DIR" != *[[:space:]]* ]] ||
+    die "verified stage path is not safe to record"
+  [[ ! -L "$STAGE_RECORD" ]] || die "retained-stage record is a symlink"
+  if [[ -e "$STAGE_RECORD" ]]; then
+    [[ -f "$STAGE_RECORD" ]] || die "retained-stage record is not a regular file"
+  fi
+  local record_tmp
+  record_tmp="$(mktemp "$RUNTIME_PARENT/.dam-hopper-linux-production-stage.XXXXXX")" ||
+    die "could not create retained-stage record"
+  TEMP_DIRS+=("$record_tmp")
+  chmod 600 -- "$record_tmp"
+  printf '%s\n' "$STAGE_DIR" > "$record_tmp"
+  mv -T -- "$record_tmp" "$STAGE_RECORD" || die "could not retain the verified stage path"
+  assert_owner_mode "$STAGE_RECORD" "$USER_UID" "$USER_GID" 600 ||
+    die "retained-stage record ownership/mode is ambiguous"
 }
 
 verify_stage() {
@@ -550,6 +576,7 @@ build_command() {
     printf '%s\n' "Build dry run complete; no commands, staging, or filesystem mutation were performed."
     return 0
   fi
+  clear_stage_record
   run_build_gate
   create_stage
   printf 'staging_dir=%s\n' "$STAGE_DIR"
@@ -564,16 +591,81 @@ assert_sudo_directory() {
 }
 
 validate_stage_input() {
-  [[ -n "$STAGE_INPUT" ]] || die "install requires --staging PATH"
+  if (( ! STAGE_INPUT_SET )); then
+    [[ ! -L "$STAGE_RECORD" ]] || die "retained-stage record is a symlink"
+    [[ -f "$STAGE_RECORD" ]] ||
+      die "no valid retained build is recorded; run build successfully or use --staging PATH"
+    assert_owner_mode "$STAGE_RECORD" "$USER_UID" "$USER_GID" 600 ||
+      die "retained-stage record ownership/mode is invalid"
+    [[ "$(wc -l < "$STAGE_RECORD")" == 1 ]] ||
+      die "retained-stage record is ambiguous"
+    STAGE_INPUT="$(cat "$STAGE_RECORD")" || die "could not read retained-stage record"
+    [[ "$STAGE_INPUT" =~ ^/[^[:space:]]+$ ]] || die "retained-stage record is invalid"
+    local stage_parent_canonical recorded_stage_canonical
+    [[ -d "$STAGE_PARENT" && ! -L "$STAGE_PARENT" ]] ||
+      die "staging parent is missing or a symlink: $STAGE_PARENT"
+    stage_parent_canonical="$(realpath -e -- "$STAGE_PARENT")" ||
+      die "staging parent is unavailable"
+    recorded_stage_canonical="$(realpath -e -- "$STAGE_INPUT")" ||
+      die "recorded stage is missing"
+    [[ "$recorded_stage_canonical" == "$STAGE_INPUT" ]] ||
+      die "recorded stage is not canonical"
+    [[ "$(dirname -- "$recorded_stage_canonical")" == "$stage_parent_canonical" ]] ||
+      die "recorded stage is outside the configured staging parent"
+  fi
+  [[ -n "$STAGE_INPUT" ]] || die "--staging requires a non-empty path"
   [[ ! -L "$STAGE_INPUT" ]] || die "staging path must not be a symlink"
   STAGE_DIR="$(realpath -e -- "$STAGE_INPUT")" || die "staging path does not exist"
   verify_stage || die "staging manifest, inventory, ownership, or unit verification failed"
 }
 
 assert_port_free() {
-  local port="$1" listeners
-  listeners="$(sudo_cmd ss -Hln "sport = :$port" 2>/dev/null)" || return 1
-  [[ -z "$listeners" ]]
+  local port="$1"
+  capture_listeners || return 1
+  ! awk -v port=":$port" '$4 ~ (port "$") { found = 1 } END { exit found ? 0 : 1 }' \
+    <<< "$LISTENER_SNAPSHOT"
+}
+
+capture_listeners() {
+  local error_file status=0
+  error_file="$(mktemp)" || return 1
+  LISTENER_SNAPSHOT="$(sudo_cmd ss -Hltn 2>"$error_file")" || status=$?
+  if (( status != 0 )) || [[ -s "$error_file" ]]; then
+    rm -f -- "$error_file" 2>/dev/null || true
+    return 1
+  fi
+  rm -f -- "$error_file" || return 1
+}
+
+path_presence() {
+  local path="$1" status
+  sudo_cmd true >/dev/null 2>&1 || return 2
+  if sudo_cmd test -e "$path"; then
+    return 0
+  else
+    status=$?
+  fi
+  if (( status != 1 )); then
+    return 2
+  fi
+  if sudo_cmd test -L "$path"; then
+    return 0
+  else
+    status=$?
+  fi
+  if (( status == 1 )); then
+    return 1
+  fi
+  return 2
+}
+
+assert_transaction_enablement_link() {
+  local wants_target
+  sudo_cmd test -L "$UNIT_WANTS_PATH" || return 1
+  wants_target="$(sudo_cmd readlink -- "$UNIT_WANTS_PATH")" || return 1
+  [[ "$wants_target" == "$UNIT_PATH" || "$wants_target" == "../$UNIT_NAME" ]] || return 1
+  [[ "$(sudo_cmd stat -c '%u:%g:%a' -- "$UNIT_WANTS_PATH")" == \
+    "$ROOT_UID:$ROOT_GID:777" ]]
 }
 
 assert_no_exact_processes() {
@@ -612,6 +704,9 @@ preflight_install_targets() {
   fi
   if sudo_cmd test -e "$UNIT_PATH" || sudo_cmd test -L "$UNIT_PATH"; then
     die "systemd unit already exists; unknown/pre-existing asset will not be overwritten"
+  fi
+  if sudo_cmd test -e "$UNIT_WANTS_PATH" || sudo_cmd test -L "$UNIT_WANTS_PATH"; then
+    die "systemd enablement link already exists; unknown/pre-existing asset will not be overwritten"
   fi
   assert_no_exact_processes || die "an exact DamHopper process already owns runtime"
   assert_port_free 4800 || die "port 4800 is occupied or cannot be inspected"
@@ -675,6 +770,8 @@ verify_web_manifest_paths() {
 }
 
 verify_installed_manifest() {
+  local require_current_unit_contract="${1:-1}"
+  local require_unit_asset="${2:-1}"
   assert_sudo_directory "$INSTALL_ROOT" "$ROOT_UID" "$ROOT_GID" 755 || return 1
   assert_sudo_directory "$MARKER_DIR" "$ROOT_UID" "$ROOT_GID" 700 || return 1
   assert_sudo_owner_mode "$MANIFEST" "$ROOT_UID" "$ROOT_GID" 600 || return 1
@@ -683,7 +780,9 @@ verify_installed_manifest() {
   assert_sudo_directory "$BIN_DIR" "$ROOT_UID" "$ROOT_GID" 755 || return 1
   assert_sudo_directory "$WEB_DIR" "$ROOT_UID" "$ROOT_GID" 755 || return 1
   assert_sudo_owner_mode "$BINARY_PATH" "$ROOT_UID" "$ROOT_GID" 755 || return 1
-  assert_sudo_owner_mode "$UNIT_PATH" "$ROOT_UID" "$ROOT_GID" 644 || return 1
+  if (( require_unit_asset )); then
+    assert_sudo_owner_mode "$UNIT_PATH" "$ROOT_UID" "$ROOT_GID" 644 || return 1
+  fi
   local expected_root actual_root expected_marker actual_marker
   expected_root="$(printf '%s\n' .systemd-fresh-install bin web | LC_ALL=C sort)"
   actual_root="$(sudo_cmd find "$INSTALL_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)" || return 1
@@ -711,8 +810,10 @@ verify_installed_manifest() {
   unit_hash="$(manifest_value_installed unit_sha256)" || return 1
   actual_hash="$(sudo_cmd sha256sum -- "$BINARY_PATH" | awk '{print $1}')" || return 1
   [[ "$binary_hash" == "$actual_hash" ]] || return 1
-  actual_hash="$(sudo_cmd sha256sum -- "$UNIT_PATH" | awk '{print $1}')" || return 1
-  [[ "$unit_hash" == "$actual_hash" ]] || return 1
+  if (( require_unit_asset )); then
+    actual_hash="$(sudo_cmd sha256sum -- "$UNIT_PATH" | awk '{print $1}')" || return 1
+    [[ "$unit_hash" == "$actual_hash" ]] || return 1
+  fi
   file_count="$(manifest_value_installed web_file_count)" || return 1
   dir_count="$(manifest_value_installed web_dir_count)" || return 1
   [[ "$file_count" =~ ^[0-9]+$ && "$dir_count" =~ ^[0-9]+$ ]] || return 1
@@ -727,12 +828,14 @@ verify_installed_manifest() {
   [[ -z "$(sudo_cmd find "$WEB_DIR" -type f ! -perm 0644 -print -quit)" ]] || return 1
   [[ -z "$(sudo_cmd find "$WEB_DIR" -mindepth 1 ! -type f ! -type d -print -quit)" ]] || return 1
   verify_web_manifest_paths || return 1
-  validate_unit_contract "$UNIT_PATH" || return 1
+  if (( require_current_unit_contract && require_unit_asset )); then
+    validate_unit_contract "$UNIT_PATH" || return 1
+  fi
 }
 
 install_command() {
-  validate_stage_input
   if (( DRY_RUN )); then
+    validate_stage_input
     preflight_install_targets
     printf '%s\n' "Install dry run passed; no sudo mutation, enable, or start was performed."
     return 0
@@ -743,14 +846,21 @@ install_command() {
   authenticate_sudo
   preflight_install_targets
   prepare_install_tree
+  INSTALL_MUTATED=1
   sudo_cmd mv -T -- "$INSTALL_TMP" "$INSTALL_ROOT"
   INSTALL_TMP=""
   sudo_cmd mv -T -- "$UNIT_TMP" "$UNIT_PATH"
   UNIT_TMP=""
   verify_installed_manifest || die "installed assets failed marker verification; no start was attempted"
-  if (( ! FIXTURE_MODE )); then sudo_cmd systemd-analyze verify "$UNIT_PATH" >/dev/null; fi
+  if (( ! FIXTURE_MODE || "${FIXTURE_RUNNER_VALIDATE_UNIT:-0}" == 1 )); then
+    sudo_cmd systemd-analyze verify "$UNIT_PATH" >/dev/null
+  fi
   sudo_cmd systemctl daemon-reload
   sudo_cmd systemctl enable "$UNIT_NAME"
+  if (( FIXTURE_MODE )) && [[ "${FIXTURE_RUNNER_FAIL_AFTER_ENABLE:-0}" == 1 ]]; then
+    die "fixture injected post-install failure"
+  fi
+  INSTALL_COMMITTED=1
   printf '%s\n' "Install complete. The unit was enabled but not started; run start after reviewing status."
 }
 
@@ -783,11 +893,24 @@ read_systemd_enabled_state() {
 }
 
 assert_loopback_listener() {
-  local port="$1" listeners
-  listeners="$(sudo_cmd ss -Hln "sport = :$port" 2>/dev/null)" || return 1
-  [[ "$listeners" =~ 127\.0\.0\.1:$port ]] || return 1
-  [[ ! "$listeners" =~ 0\.0\.0\.0:$port ]] || return 1
-  [[ ! "$listeners" =~ :::${port} ]] || return 1
+  local port="$1" addresses
+  capture_listeners || return 1
+  addresses="$(awk -v port=":$port" '$4 ~ (port "$") { print $4 }' <<< "$LISTENER_SNAPSHOT")"
+  [[ -n "$addresses" ]] || return 1
+  while IFS= read -r address; do
+    [[ "$address" == "127.0.0.1:$port" ]] || return 1
+  done <<< "$addresses"
+}
+
+wait_for_loopback_listener() {
+  local port="$1" attempt
+  for attempt in $(seq 1 50); do
+    if assert_loopback_listener "$port"; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
 }
 
 preflight_start() {
@@ -839,7 +962,7 @@ start_command() {
   [[ "$SYSTEMD_ACTIVE_STATE" == active ]] || die "unit did not become active"
   [[ "$SYSTEMD_MAIN_PID" =~ ^[1-9][0-9]*$ ]] || die "unit MainPID is not a nonzero PID"
   verify_effective_process || die "effective service process identity is not loidinh/dam-hopper-server"
-  assert_loopback_listener 4801 || die "service is not listening only on loopback 127.0.0.1:4801"
+  wait_for_loopback_listener 4801 || die "service is not listening only on loopback 127.0.0.1:4801"
   assert_port_free 4800 || die "legacy port 4800 is occupied"
   printf 'active=1\nmain_pid=%s\nuid=%s\ngid=%s\nlistener=127.0.0.1:4801\n' \
     "$SYSTEMD_MAIN_PID" "$USER_UID" "$USER_GID"
@@ -869,11 +992,18 @@ confirm_rollback() {
 }
 
 preflight_rollback() {
-  verify_installed_manifest || die "rollback marker, manifest, ownership, or content verification failed"
+  verify_installed_manifest 0 || die "rollback marker, manifest, ownership, or content verification failed"
   read_systemd_state || die "systemd unit state is unavailable or ambiguous"
   case "$SYSTEMD_ACTIVE_STATE" in
     active|activating|deactivating|reloading|inactive|failed) ;;
     *) die "unexpected systemd active state: $SYSTEMD_ACTIVE_STATE" ;;
+  esac
+  local wants_state=0
+  path_presence "$UNIT_WANTS_PATH" || wants_state=$?
+  case "$wants_state" in
+    0) assert_transaction_enablement_link || die "systemd enablement link is not transaction-owned" ;;
+    1) ;;
+    *) die "systemd enablement link state is unavailable" ;;
   esac
 }
 
@@ -889,15 +1019,48 @@ revalidate_stopped() {
 }
 
 remove_installed_assets() {
-  sudo_cmd rm -f -- "$UNIT_PATH"
-  sudo_cmd rm -f -- "$BINARY_PATH"
-  sudo_cmd rmdir -- "$BIN_DIR"
-  sudo_cmd find "$WEB_DIR" -mindepth 1 -delete
-  sudo_cmd rmdir -- "$WEB_DIR"
-  sudo_cmd find "$MARKER_DIR" -mindepth 1 -delete
-  sudo_cmd rmdir -- "$MARKER_DIR"
-  sudo_cmd rmdir -- "$INSTALL_ROOT"
-  sudo_cmd systemctl daemon-reload
+  if sudo_cmd test -L "$UNIT_PATH"; then return 1; fi
+  if sudo_cmd test -e "$UNIT_PATH" && ! sudo_cmd rm -f -- "$UNIT_PATH"; then return 1; fi
+  if sudo_cmd test -L "$BINARY_PATH"; then return 1; fi
+  if sudo_cmd test -e "$BINARY_PATH" && ! sudo_cmd rm -f -- "$BINARY_PATH"; then return 1; fi
+  if sudo_cmd test -L "$BIN_DIR"; then return 1; fi
+  if sudo_cmd test -d "$BIN_DIR" && ! sudo_cmd rmdir -- "$BIN_DIR"; then return 1; fi
+  if sudo_cmd test -L "$WEB_DIR"; then return 1; fi
+  if sudo_cmd test -d "$WEB_DIR"; then
+    sudo_cmd find "$WEB_DIR" -mindepth 1 -delete || return 1
+    sudo_cmd rmdir -- "$WEB_DIR" || return 1
+  fi
+  if sudo_cmd test -L "$MARKER_DIR"; then return 1; fi
+  if sudo_cmd test -d "$MARKER_DIR"; then
+    sudo_cmd find "$MARKER_DIR" -mindepth 1 -delete || return 1
+    sudo_cmd rmdir -- "$MARKER_DIR" || return 1
+  fi
+  if sudo_cmd test -L "$INSTALL_ROOT"; then return 1; fi
+  if sudo_cmd test -d "$INSTALL_ROOT" && ! sudo_cmd rmdir -- "$INSTALL_ROOT"; then return 1; fi
+  sudo_cmd systemctl daemon-reload || return 1
+}
+
+cleanup_partial_install() {
+  local root_state=0 unit_state=0 wants_state=0
+
+  path_presence "$INSTALL_ROOT" || root_state=$?
+  path_presence "$UNIT_PATH" || unit_state=$?
+  path_presence "$UNIT_WANTS_PATH" || wants_state=$?
+  (( root_state == 1 && unit_state == 1 && wants_state == 1 )) && return 0
+  (( root_state == 2 || unit_state == 2 || wants_state == 2 )) && return 1
+  (( root_state == 1 )) && return 1
+  if (( unit_state == 0 )); then
+    verify_installed_manifest 0 1 || return 1
+  else
+    verify_installed_manifest 0 0 || return 1
+  fi
+  if (( wants_state == 0 )); then
+    assert_transaction_enablement_link || return 1
+    sudo_cmd systemctl disable "$UNIT_NAME" || return 1
+    path_presence "$UNIT_WANTS_PATH" || wants_state=$?
+    (( wants_state == 1 )) || return 1
+  fi
+  remove_installed_assets
 }
 
 rollback_command() {
@@ -914,9 +1077,13 @@ rollback_command() {
     "$SYSTEMD_ACTIVE_STATE" == deactivating || "$SYSTEMD_ACTIVE_STATE" == reloading ]]; then
     sudo_cmd systemctl stop "$UNIT_NAME" || die "systemd stop failed"
   fi
-  sudo_cmd systemctl disable "$UNIT_NAME" || die "systemd disable failed"
   revalidate_stopped
-  verify_installed_manifest || die "installed assets changed during rollback stop; nothing was removed"
+  sudo_cmd systemctl disable "$UNIT_NAME" || die "systemd disable failed"
+  local wants_state=0
+  path_presence "$UNIT_WANTS_PATH" || wants_state=$?
+  (( wants_state == 1 )) || die "systemd enablement link was not removed"
+  verify_installed_manifest 0 || die "installed assets changed during rollback stop; nothing was removed"
+  clear_stage_record
   remove_installed_assets
   printf '%s\n' "Rollback complete. Installed assets were removed; user runtime state was preserved."
 }

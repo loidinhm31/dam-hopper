@@ -1,10 +1,12 @@
 # Linux systemd system service
 
 Status: repository asset plus guarded administrator workflow. Repository-side
-build/stage/fixture checks pass, and the unprivileged production runner build
-has completed its staging gates; administrator installation, runtime, and
-rollback acceptance remains pending. No command in this document performs a
-live reset or production mutation by itself.
+build/stage/fixture checks pass, and the focused systemd production runner has
+completed build, install, start, HTTP, restart, authenticated protected-route,
+active-PTY/SIGTERM, bounded journal, and marker-backed rollback acceptance on
+2026-08-21. Only the optional external MongoDB smoke remains explicitly not
+run. No command in this document performs a live reset or production mutation
+by itself.
 
 ## Supported production runner
 
@@ -18,26 +20,54 @@ the selected source inside that purge target or display its contents.
 pnpm linux:reset -- --env-file /secure/path/production-settings
 ```
 
-Build is unprivileged and emits a unique retained staging directory. Install
-consumes only that verified directory, enables the unit, and deliberately does
-not start it. Start validates installed hashes, ownership, ordered environment
-files, systemd identity, loopback ports, processes, and SQLite holders without
-rebuilding.
+Operator note: use `pnpm linux:reset -- --runtime-only --env-file /secure/path/production-settings`
+only after the marker-backed installed assets and `dam-hopper.service` have
+already been removed. This recovery path preserves the existing runtime/config
+files, rewrites only the two ordered environment files, still requires the
+exact `PREPARE` confirmation, and does not perform the build, install, or start
+steps. The selected source must be a private user-owned mode-600 file, and its
+values must never be pasted or displayed.
+
+Build is unprivileged, emits a unique retained staging directory, and records
+its canonical path in a private automatic-stage record (a mode-600 file under
+the runtime parent). Install without `--staging` uses only that recorded stage
+and re-runs the complete stage validation; a missing, malformed, stale, or
+ambiguous record fails closed.
+`--staging PATH` remains an explicit override. Install reloads systemd, enables
+the unit, and deliberately does not start it. Start validates installed hashes,
+ownership, ordered environment files, systemd identity, loopback ports,
+processes, and SQLite holders without rebuilding. After systemd reports the unit
+active, the runner waits up to 10 seconds for `127.0.0.1:4801`; `ss` errors or
+diagnostic output fail closed instead of being treated as a free/valid listener
+state. The staged-tree credential scan reads files as byte streams, so binary
+artifacts are covered as well as text files.
 
 ```bash
 pnpm linux:production -- build
-pnpm linux:production -- install --staging /tmp/dam-hopper-production-stage.XXXXXX
+pnpm linux:production -- install
 pnpm linux:production -- status
 pnpm linux:production -- start
 pnpm linux:production -- rollback --dry-run
 ```
 
+Use `install --staging /absolute/path` only when deliberately overriding the
+last successful build record. Do not search `/tmp` for a stage or copy a path
+from unrelated build output; the runner refuses missing, invalid, or ambiguous
+automatic-stage state.
+
+Rollback clears the private automatic-stage record, so a rolled-back build
+cannot be reinstalled accidentally through the automatic path. Its temporary
+stage directory remains usable only with an explicit `--staging PATH` override
+until normal temporary-directory cleanup.
+
 An actual rollback requires `--confirm` plus the exact interactive confirmation
 shown by the runner. It removes only marker-backed `/opt` assets and the unit;
 the user runtime tree, repositories, containers, and external MongoDB remain
-outside its scope. Phase 03 still requires explicit operator acceptance for
-health/authentication, same-origin UI, journal redaction, PTY shutdown, and any
-live Mongo smoke.
+outside its scope. The Phase 03 run recorded PASS for installed identity,
+loopback binding, the authentication boundary, authenticated protected-route
+access, same-origin SPA serving, restart, active-PTY/SIGTERM cleanup, bounded
+journal checks, and marker-backed rollback. It records NOT RUN only for the
+optional external MongoDB smoke; see the redacted [acceptance report](../plans/reports/qa-260821-0142-linux-production-runner.md).
 
 ## Deployment decision
 
@@ -100,13 +130,24 @@ Before an administrator installs the unit, independently confirm all of the foll
 4. The existing nohup launch is stopped for the planned cutover, and no process still owns the live SQLite files. A different port does not make shared SQLite ownership safe.
 5. `127.0.0.1:4801` is free. Do not start a second server if the intended ownership checks fail.
 
-The installation block below is the first-install handoff and performs this guarded preflight. It refuses to overwrite an existing unit, binary, web directory, or fresh-install marker; if any exact target exists, stop and make an administrator-owned backup/restore plan before changing it.
+The supported production runner performs this guarded preflight. It refuses to
+overwrite an existing unit, binary, web directory, or fresh-install marker; if
+any exact target exists, stop and make an administrator-owned backup/restore
+plan before changing it.
 
 Do not interpret a free `4801` listener as permission to leave the legacy process running: the administrator must complete the planned database ownership handoff first.
 
-## Administrator installation and start
+## Historical manual installer (unsupported reference)
 
-These commands require an authenticated administrator. They are a handoff, not repository automation. Do not run them non-interactively and do not substitute broad recursive paths.
+> Do not execute the commands in this section. It is retained only as an
+> archival record of the pre-runner handoff. The supported path is the guarded
+> `pnpm linux:production -- install` followed by separate
+> `status` and `start` commands shown above; the runner owns locking, staged
+> manifest verification, non-root identity checks, and rollback boundaries.
+
+The archived commands below are not a supported handoff. Do not run them
+non-interactively, and do not substitute broad recursive paths; use the runner
+commands above instead.
 
 Install only the exact administrator-owned assets:
 
@@ -502,15 +543,16 @@ curl -sS -o /dev/null -w 'health=%{http_code}\n' \
   http://127.0.0.1:4801/api/health
 curl -sS -o /dev/null -w 'unauthenticated_projects=%{http_code}\n' \
   http://127.0.0.1:4801/api/projects
-# Read the token as the service user; supply the bearer header on stdin so the
-# token is not placed in curl's argv.
-TOKEN="$(sudo -u loidinh cat /home/loidinh/.config/dam-hopper/server-token)"
+# Obtain AUTH_JWT from the approved login flow without printing it. The
+# server-token file is the JWT signing secret, not itself a bearer token.
+# Supply the header on stdin so the JWT is not placed in curl's argv.
+IFS= read -r AUTH_JWT
 curl -sS -o /dev/null -w 'authenticated_projects=%{http_code}\n' \
   -H @- \
   http://127.0.0.1:4801/api/projects <<EOF
-Authorization: Bearer ${TOKEN}
+Authorization: Bearer ${AUTH_JWT}
 EOF
-unset TOKEN
+unset AUTH_JWT
 sudo journalctl -u dam-hopper.service --no-pager -n 50
 ```
 
@@ -534,7 +576,12 @@ Repeat the stop check once with a disposable active terminal session running a l
 
 Test `Restart=on-failure` only with an isolated copy of the config and databases. Do not inject a forced failure into the live service merely to collect restart evidence; a controlled crash test must not risk SQLite corruption or a second owner.
 
-## Rollback
+## Historical manual rollback (unsupported reference)
+
+> Do not execute the commands in this section. The supported rollback path is
+> `pnpm linux:production -- rollback --confirm`, after its dry run and exact
+> interactive confirmation. This block is retained only as an archival record
+> of the pre-runner handoff.
 
 Rollback below is safe only for an installation that passed the first-install absence checks and created the verified ownership manifest under `/opt/dam-hopper/.systemd-fresh-install`. Do not run it when the marker or any manifest entry is absent/mismatched: that means this handoff did not establish ownership of the targets, and removal could destroy a prior deployment. For an upgrade or pre-existing target, restore the administrator backup/manifest instead.
 
@@ -814,16 +861,23 @@ Repository evidence recorded on 2026-08-20 is non-privileged and does not establ
 
 - PASS — unit invariants match the planned identity, paths, loopback port, production auth guard, journald, restart, and SIGTERM fields.
 - PASS — `systemd-analyze verify` succeeds in an isolated verifier root containing a placeholder executable; the direct checkout invocation reports only the expected absent `/opt/dam-hopper/bin/dam-hopper-server`.
-- PASS — the runner's full build/stage path completed the backend tests, UI tests (173 files and 1,109 tests), UI type checking, lint, release server build, same-origin production web build, artifact checks, and isolated unit verification.
+- PASS — the runner's focused systemd-service build/stage path completed the backend tests, UI tests (173 files and 1,109 tests), UI type checking, lint, release server build, same-origin production web build, artifact checks, and isolated unit verification; native/Tauri packaging is outside this gate.
 - PASS — Phase 01/02 fixture assertions, Bash syntax, JSON parsing, whitespace, and scoped forbidden-pattern checks.
-- CAVEAT — the native Tauri signing prerequisite is unavailable in this environment; the runner recognized the exact known error and continued through its explicit documented fallback gates.
-- NOT RUN — administrator installation, root-owned asset/mode checks, effective UID, active listener, authenticated health checks, journald, restart, and rollback preservation.
+- CAVEAT — native desktop packaging is outside the systemd service build gate.
+- PASS — 2026-08-21 administrator run installed the marker-backed assets without starting, started the unit as `loidinh` on loopback `127.0.0.1:4801`, served public health JSON and the same-origin SPA, rejected unauthenticated protected health with `401`, accepted a signed protected-route request with `200`, passed a restart with a new PID, exercised active-PTY/SIGTERM cleanup, passed bounded journald checks, and completed marker-backed rollback.
+- PASS — final rollback checks found no installed assets, no unit, no 4800/4801 listener, and preserved the user runtime directory and ordered environment files with `700`/`600` metadata; the environment copy matched without displaying its contents.
+- NOT RUN — optional external MongoDB smoke.
 
-The complete command ledger and evidence boundaries are in [`03-verification-results.md`](../plans/260817-1216-systemd-system-service/reports/03-verification-results.md). Repository evidence does not establish that a systemd unit is installed or that it owns the live runtime.
+The complete redacted command ledger and evidence boundaries are in the [2026-08-21 acceptance report](../plans/reports/qa-260821-0142-linux-production-runner.md). The host is intentionally rolled back after acceptance, so no systemd unit is currently installed.
 
 ## Evidence boundaries and onboarding
 
 Developer evidence can cover unit text, `systemd-analyze verify`, release/UI builds, the PTY disposal test, an isolated `4801` smoke run, and a Vite browser smoke run. It cannot prove root-owned installed assets, system-manager enablement, journald collection, or the effective UID of an installed unit.
+
+The bounded journal acceptance check is available as
+`bash scripts/phase-03-journal-check.sh`; it stores journal data only in a
+temporary file, prints status flags, and exits nonzero if any required check is
+unavailable or fails.
 
 Administrator onboarding requires:
 
@@ -834,5 +888,5 @@ Administrator onboarding requires:
 - a safe isolated state for restart-failure testing; and
 - a retained host evidence record with tokens and response bodies redacted.
 
-Until that evidence is returned, the repository implementation is ready for
-the administrator handoff but the production unit remains unverified here.
+The requested administrator handoff is verified for this run. Only the optional
+external MongoDB smoke remains outside this sign-off.
