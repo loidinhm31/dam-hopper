@@ -1,10 +1,12 @@
 # Phase 01: Isolated Port-4801 Feasibility Gate
 
+> Historical document from the superseded systemd planning sequence. Current acceptance status is maintained by the [successor revalidation plan](../260820-0912-revalidation-build-run-service/plan.md).
+
 ## Context links
 
 - [Parent plan](./plan.md)
 - [Advisor brief](./reports/01-advisor-decision-brief.md)
-- [Planned architecture](../../docs/system-architecture.md#proposedplanned-systemd-system-service-repository-asset-not-installed)
+- [Historical architecture context](../../docs/system-architecture.md#systemd-service-guarded-linux-workflow-and-bounded-host-acceptance)
 - Evidence: `server/src/main.rs`, `server/src/state.rs`, `server/src/api/router.rs`
 
 ## Overview

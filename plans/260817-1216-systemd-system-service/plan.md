@@ -1,7 +1,7 @@
 ---
 title: "DamHopper systemd system service"
 description: "Plan an admin-installed system service that always runs DamHopper as loidinh on isolated loopback port 4801."
-status: in-progress
+status: superseded
 priority: P2
 effort: 4.5h
 branch: feat/systemd-system-service
@@ -26,9 +26,9 @@ user-bus evidence; nohup remains rollback only.
 
 ## Handoff status
 
-Phase 01 is complete. Phase 02 implementation and independent review are complete. Administrator
-installation, runtime, and rollback evidence remains pending, so the production systemd service is
-still uninstalled and this parent plan remains in progress.
+Phase 01 is complete. Phase 02 implementation and independent review are complete. This plan is
+superseded by `plans/260820-0912-revalidation-build-run-service/`, which records the administrator
+installation, runtime, and rollback evidence for the delivered workflow.
 
 ## Preflight Contract
 
@@ -58,25 +58,24 @@ Overall progress: 67% (repository implementation and non-privileged verification
 | --- | --- | --- | --- | --- |
 | 01 | [Isolated port-4801 feasibility gate](./phase-01-isolated-port-4801-feasibility-gate.md) | Done | 1h | 100% |
 | 02 | [Service asset and administrator handoff](./phase-02-service-asset-and-administrator-handoff.md) | Done | 2h | 100% |
-| 03 | [Verification and rollback validation](./phase-03-verification-and-rollback-validation.md) | Pending administrator evidence | 1.5h | 0% accepted |
+| 03 | [Verification and rollback validation](./phase-03-verification-and-rollback-validation.md) | Superseded by successor plan | 1.5h | 100% accepted in successor |
 
 ## Dependencies
 
 - Phase 01 must pass before Phase 02 starts.
 - Phase 02 asset/docs must exist before Phase 03 static and administrator checks.
 - Administrator actions remain outside repository automation.
-- Phase 03 cannot complete until an administrator returns installation, runtime, and rollback
-  evidence; no production installation is claimed by this repository work.
+- Phase 03 evidence is maintained by the successor revalidation plan; this historical plan is not
+  the source of current production acceptance status.
 
 ## Tracking update — 2026-08-19
 
 - Repository-side implementation: complete.
 - Non-privileged verification/tester rerun: complete and passing; see
   [Phase 03 verification results](./reports/03-verification-results.md).
-- Administrator installation, runtime, restart/journald/effective-UID, and rollback evidence:
-  **NOT RUN**.
-- Parent plan remains **in-progress**; Phase 03 remains **Pending administrator evidence**.
-- Production phase is not marked Done, and no installation is claimed.
+- Administrator installation, runtime, restart/journald/effective-UID, and rollback evidence are
+  recorded in the successor revalidation plan.
+- This parent plan is **superseded**; its Phase 03 is not a second acceptance ledger.
 
 ## Resolved deployment choice
 

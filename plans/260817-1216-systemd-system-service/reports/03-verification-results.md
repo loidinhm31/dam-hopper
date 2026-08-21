@@ -1,5 +1,7 @@
 # Phase 03 Verification Results
 
+> Historical report from the superseded systemd planning sequence. Current acceptance status is maintained by the [successor revalidation plan](../../260820-0912-revalidation-build-run-service/plan.md).
+
 - Date: 2026-08-19
 - Evidence status: repository checks and test gate recorded; administrator acceptance pending
 - Execution boundary: non-privileged checkout validation only
