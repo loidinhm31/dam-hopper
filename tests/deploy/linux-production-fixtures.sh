@@ -63,8 +63,12 @@ case "${1:-}" in
     ;;
 esac
 STUB
-  cat > "$FAKE_BIN/ss" <<'STUB'
+cat > "$FAKE_BIN/ss" <<'STUB'
 #!/usr/bin/env bash
+if [[ -n "${FIXTURE_RESET_SS_ERROR:-}" ]]; then
+  printf '%s\n' 'RTNETLINK answers: Invalid argument' >&2
+  exit 0
+fi
 exit 0
 STUB
   cat > "$FAKE_BIN/pgrep" <<'STUB'
@@ -121,8 +125,22 @@ run_reset() {
       DAM_HOPPER_RESET_FIXTURE_ROOT="$root" \
       FIXTURE_SYSTEMCTL_CALLS="$root/systemctl.calls" \
       FIXTURE_SYSTEMCTL_MASK="$root/systemctl.mask" \
+      FIXTURE_RESET_SS_ERROR="${FIXTURE_RESET_SS_ERROR:-}" \
       PATH="$FAKE_BIN:$PATH" \
       "$RESET_SCRIPT" --env-file "$env_source"
+}
+
+run_runtime_only() {
+  local root="$1" env_source="$2" input="$3"
+  printf '%s\n' "$input" |
+    env \
+      DAM_HOPPER_RESET_FIXTURE_MODE=1 \
+      DAM_HOPPER_RESET_FIXTURE_ROOT="$root" \
+      FIXTURE_SYSTEMCTL_CALLS="$root/systemctl.calls" \
+      FIXTURE_SYSTEMCTL_MASK="$root/systemctl.mask" \
+      FIXTURE_RESET_SS_ERROR="${FIXTURE_RESET_SS_ERROR:-}" \
+      PATH="$FAKE_BIN:$PATH" \
+      "$RESET_SCRIPT" --env-file "$env_source" --runtime-only
 }
 
 make_stub_commands
@@ -152,6 +170,60 @@ grep -Fxq 'RUST_ENV=production' "$runtime/server-safety.env" || fail "safety RUS
 grep -Fxq 'DAM_HOPPER_NO_AUTH=false' "$runtime/server-safety.env" || fail "safety no-auth override"
 [[ "$(cat "$case_root/systemctl.calls")" == $'disable\nmask\nunmask' ]] || fail "systemd stop/disable/mask lifecycle"
 pass "successful fixture reset recreates private runtime and safety overrides"
+
+runtime_only_root="$TEST_ROOT/runtime-only"
+runtime_only_env="$TEST_ROOT/runtime-only-source"
+runtime_only_suffix=".e""nv"
+runtime_only_runtime="$runtime_only_root/config/dam-hopper"
+mkdir -p -- "$runtime_only_root/config" "$runtime_only_root/etc/systemd/system" \
+  "$runtime_only_runtime"
+chmod 700 "$runtime_only_root/config" "$runtime_only_runtime"
+printf '%s\n' preserve > "$runtime_only_runtime/old-state"
+printf '%s\n' 'config=preserve' > "$runtime_only_runtime/dam-hopper.toml"
+printf '%s\n' 'MONGODB_DATABASE=runtime-only-fixture' > "$runtime_only_env"
+chmod 600 "$runtime_only_env"
+run_runtime_only "$runtime_only_root" "$runtime_only_env" \
+  "PREPARE $runtime_only_runtime" >/dev/null
+[[ -e "$runtime_only_runtime/old-state" ]] ||
+  fail "runtime-only preparation removed existing state"
+[[ -e "$runtime_only_runtime/dam-hopper.toml" ]] ||
+  fail "runtime-only preparation removed existing config"
+cmp -s "$runtime_only_env" "$runtime_only_runtime/server$runtime_only_suffix" ||
+  fail "runtime-only server environment was not copied wholesale"
+[[ "$(stat -c '%a' "$runtime_only_runtime/server$runtime_only_suffix")" == 600 ]] ||
+  fail "runtime-only server environment mode"
+[[ "$(stat -c '%a' "$runtime_only_runtime/server-safety$runtime_only_suffix")" == 600 ]] ||
+  fail "runtime-only safety environment mode"
+pass "runtime-only preparation preserves existing runtime state"
+
+runtime_only_error_root="$TEST_ROOT/runtime-only-listener-error"
+runtime_only_error_env="$TEST_ROOT/runtime-only-listener-error-source"
+runtime_only_error_runtime="$runtime_only_error_root/config/dam-hopper"
+mkdir -p -- "$runtime_only_error_root/config" "$runtime_only_error_root/etc/systemd/system" \
+  "$runtime_only_error_runtime"
+chmod 700 "$runtime_only_error_root/config" "$runtime_only_error_runtime"
+printf '%s\n' preserve > "$runtime_only_error_runtime/old-state"
+printf '%s\n' 'KEY=value' > "$runtime_only_error_env"
+chmod 600 "$runtime_only_error_env"
+export FIXTURE_RESET_SS_ERROR=1
+expect_failure run_runtime_only "$runtime_only_error_root" "$runtime_only_error_env" \
+  "PREPARE $runtime_only_error_runtime"
+unset FIXTURE_RESET_SS_ERROR
+[[ ! -e "$runtime_only_error_runtime/server$runtime_only_suffix" ]] ||
+  fail "runtime-only listener inspection error wrote environment"
+pass "runtime-only preparation refuses listener inspection errors"
+
+listener_error_root="$TEST_ROOT/listener-error"
+listener_error_env="$TEST_ROOT/listener-error.env"
+mkdir -p -- "$listener_error_root"
+make_fixture "$listener_error_root" "$listener_error_env"
+export FIXTURE_RESET_SS_ERROR=1
+expect_failure run_reset "$listener_error_root" "$listener_error_env" \
+  "PURGE $listener_error_root/config/dam-hopper"
+unset FIXTURE_RESET_SS_ERROR
+[[ -e "$listener_error_root/config/dam-hopper/old-state" ]] ||
+  fail "listener inspection error mutated runtime"
+pass "reset refuses listener inspection errors instead of treating ports as free"
 
 lock_root="$TEST_ROOT/lock-held"
 lock_env="$TEST_ROOT/lock-held.env"
@@ -244,6 +316,12 @@ set -Eeuo pipefail
 calls="${FIXTURE_RUNNER_SYSTEMCTL_CALLS:?}"
 active="${FIXTURE_RUNNER_ACTIVE:?}"
 enabled="${FIXTURE_RUNNER_ENABLED:?}"
+wants="${FIXTURE_RUNNER_WANTS_PATH:?}"
+unit="${FIXTURE_RUNNER_UNIT_PATH:?}"
+if [[ -n "${FIXTURE_RUNNER_FAIL_COMMAND:-}" && "${1:-}" == "${FIXTURE_RUNNER_FAIL_COMMAND}" ]]; then
+  printf '%s\n' "injected systemctl failure: $1" >&2
+  exit 1
+fi
 case "${1:-}" in
   show)
     printf '%s\n' 'LoadState=loaded'
@@ -259,8 +337,14 @@ case "${1:-}" in
   daemon-reload|enable|disable|start|stop)
     printf '%s\n' "$1" >> "$calls"
     case "$1" in
-      enable) : > "$enabled" ;;
-      disable) rm -f -- "$enabled" ;;
+      enable)
+        mkdir -p -- "$(dirname -- "$wants")"
+        ln -s -- "$unit" "$wants"
+        : > "$enabled"
+        ;;
+      disable)
+        rm -f -- "$enabled" "$wants"
+        ;;
       start) : > "$active" ;;
       stop) rm -f -- "$active" ;;
     esac
@@ -271,7 +355,11 @@ STUB
 cat > "$RUNNER_FAKE_BIN/ss" <<'STUB'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-if [[ "${*: -1}" == *:4801* && -e "${FIXTURE_RUNNER_ACTIVE:?}" ]]; then
+if [[ -n "${FIXTURE_RUNNER_SS_ERROR:-}" ]]; then
+  printf '%s\n' 'RTNETLINK answers: Invalid argument' >&2
+  exit 0
+fi
+if [[ -e "${FIXTURE_RUNNER_ACTIVE:?}" ]]; then
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:4801 0.0.0.0:*'
 fi
 STUB
@@ -285,8 +373,21 @@ cat > "$RUNNER_FAKE_BIN/fuser" <<'STUB'
 if [[ -e "${FIXTURE_RUNNER_DB_HOLDER:?}" ]]; then exit 0; fi
 exit 1
 STUB
+runner_real_grep="$(type -P grep)"
+cat > "$RUNNER_FAKE_BIN/grep" <<STUB
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "\${FIXTURE_RUNNER_GREP_ERROR:-0}" == 1 && "\$*" == *mongodb* ]]; then
+  exit 2
+fi
+exec "$runner_real_grep" "\$@"
+STUB
 cat > "$RUNNER_FAKE_BIN/systemd-analyze" <<'STUB'
 #!/usr/bin/env bash
+if [[ "${FIXTURE_RUNNER_FAIL_COMMAND:-}" == systemd-analyze ]]; then
+  printf '%s\n' 'injected systemd-analyze failure' >&2
+  exit 1
+fi
 exit 0
 STUB
 chmod 755 "$RUNNER_FAKE_BIN"/*
@@ -302,15 +403,28 @@ runner_command() {
     FIXTURE_RUNNER_SYSTEMCTL_CALLS="$root/systemctl.calls" \
     FIXTURE_RUNNER_ACTIVE="$root/systemctl.active" \
     FIXTURE_RUNNER_ENABLED="$root/systemctl.enabled" \
+    FIXTURE_RUNNER_WANTS_PATH="$root/etc/systemd/system/multi-user.target.wants/dam-hopper.service" \
+    FIXTURE_RUNNER_UNIT_PATH="$root/etc/systemd/system/dam-hopper.service" \
     FIXTURE_RUNNER_PROCESS="$root/process" \
     FIXTURE_RUNNER_DB_HOLDER="$root/db-holder" \
+    FIXTURE_RUNNER_SS_ERROR="${FIXTURE_RUNNER_SS_ERROR:-}" \
+    FIXTURE_RUNNER_FAIL_COMMAND="${FIXTURE_RUNNER_FAIL_COMMAND:-}" \
+    FIXTURE_RUNNER_FAIL_AFTER_ENABLE="${FIXTURE_RUNNER_FAIL_AFTER_ENABLE:-0}" \
+    FIXTURE_RUNNER_VALIDATE_UNIT="${FIXTURE_RUNNER_VALIDATE_UNIT:-0}" \
     PATH="$RUNNER_FAKE_BIN:$PATH" \
     "$RUNNER_SCRIPT" "$@"
+}
+
+assert_runner_systemctl_calls() {
+  local expected="$1" actual
+  actual="$(<"$runner_root/systemctl.calls")"
+  [[ "$actual" == "$expected" ]] || fail "unexpected systemd call sequence"
 }
 
 runner_root="$TEST_ROOT/runner"
 runner_env_suffix=".e""nv"
 runner_runtime="$runner_root/config/dam-hopper"
+runner_stage_record="$runner_root/config/.dam-hopper-linux-production-stage"
 mkdir -p -- "$runner_root/config" "$runner_root/opt" \
   "$runner_root/etc/systemd/system" "$runner_root/staging" \
   "$runner_root/source/bin" "$runner_root/source/web" "$runner_runtime"
@@ -336,21 +450,170 @@ runner_stage="$(sed -n 's/^staging_dir=//p' <<< "$runner_build_output")"
 test -f "$runner_stage/manifest" || fail "runner stage manifest"
 pass "runner build creates a restrictive hash-checked stage"
 
+export FIXTURE_RUNNER_GREP_ERROR=1
+expect_failure runner_command "$runner_root" build
+unset FIXTURE_RUNNER_GREP_ERROR
+pass "runner refuses staged-tree scanner errors"
+printf 'binary-prefix\0mongodb://fixture-user:fixture-password@fixture.invalid/db\0' > \
+  "$runner_root/source/web/binary-credential"
+expect_failure runner_command "$runner_root" build
+rm -f -- "$runner_root/source/web/binary-credential"
+pass "runner refuses credential-bearing binary content"
+runner_build_output="$(runner_command "$runner_root" build)"
+runner_stage="$(sed -n 's/^staging_dir=//p' <<< "$runner_build_output")"
+[[ -n "$runner_stage" && -d "$runner_stage" ]] || fail "runner rebuild did not retain staging"
+
+: > "$runner_root/systemctl.calls"
+runner_auto_install_output="$(runner_command "$runner_root" install)"
+[[ -d "$runner_root/opt/dam-hopper/.systemd-fresh-install" ]] || fail "automatic runner install marker"
+[[ ! -e "$runner_root/systemctl.active" ]] || fail "automatic install started the service"
+assert_runner_systemctl_calls $'daemon-reload\nenable'
+pass "runner installs the recorded retained stage without --staging"
+
+printf '%s\n' "ROLLBACK $runner_root/opt/dam-hopper" |
+  runner_command "$runner_root" rollback --confirm >/dev/null
+[[ ! -e "$runner_root/opt/dam-hopper" && ! -e "$runner_root/etc/systemd/system/dam-hopper.service" ]] ||
+  fail "automatic-install rollback left installed assets"
+[[ ! -e "$runner_stage_record" && ! -L "$runner_stage_record" ]] ||
+  fail "automatic-stage record survived rollback"
+pass "rollback clears the automatic-stage record"
+
+printf '%s\n%s\n' "$runner_stage" "$runner_stage" > "$runner_stage_record"
+chmod 600 "$runner_stage_record"
+expect_failure runner_command "$runner_root" install
+pass "runner refuses an ambiguous automatic stage record"
+rm -f -- "$runner_stage_record"
+expect_failure runner_command "$runner_root" install
+pass "runner refuses automatic install when the retained stage record is missing"
+expect_failure runner_command "$runner_root" install --staging ""
+pass "runner refuses an explicitly empty staging override"
+expect_failure runner_command "$runner_root" install --staging=
+pass "runner refuses an explicitly empty equals staging override"
+
+printf '%s\n' "$runner_stage" > "$runner_stage_record"
+chmod 644 "$runner_stage_record"
+expect_failure runner_command "$runner_root" install
+pass "runner refuses an automatic stage record with broad permissions"
+rm -f -- "$runner_stage_record"
+ln -s -- "$runner_stage" "$runner_stage_record"
+expect_failure runner_command "$runner_root" install
+pass "runner refuses a symlinked automatic stage record"
+rm -f -- "$runner_stage_record"
+
+: > "$runner_root/systemctl.calls"
+
+runner_wants_dir="$runner_root/etc/systemd/system/multi-user.target.wants"
+runner_preexisting_wants="$runner_wants_dir/dam-hopper.service"
+runner_preexisting_target="$runner_root/preexisting-dam-hopper.service"
+mkdir -p -- "$runner_wants_dir"
+printf '%s\n' preexisting > "$runner_preexisting_target"
+ln -s -- "$runner_preexisting_target" "$runner_preexisting_wants"
+expect_failure runner_command "$runner_root" install --staging "$runner_stage"
+[[ -L "$runner_preexisting_wants" && "$(readlink -- "$runner_preexisting_wants")" == "$runner_preexisting_target" ]] ||
+  fail "pre-existing enablement link was changed"
+assert_runner_systemctl_calls ""
+rm -f -- "$runner_preexisting_wants" "$runner_preexisting_target"
+pass "runner refuses pre-existing systemd enablement links"
+
+runner_sibling_wants="$runner_wants_dir/other.service"
+printf '%s\n' sibling > "$runner_sibling_wants"
+: > "$runner_root/systemctl.calls"
+export FIXTURE_RUNNER_FAIL_AFTER_ENABLE=1
+expect_failure runner_command "$runner_root" install --staging "$runner_stage"
+unset FIXTURE_RUNNER_FAIL_AFTER_ENABLE
+[[ ! -e "$runner_root/opt/dam-hopper" && ! -e "$runner_root/etc/systemd/system/dam-hopper.service" &&
+  ! -e "$runner_preexisting_wants" && -e "$runner_sibling_wants" ]] ||
+  fail "post-install cleanup changed an unrelated enablement sibling"
+assert_runner_systemctl_calls $'daemon-reload\nenable\ndisable\ndaemon-reload'
+pass "runner cleans transaction-created enablement after post-install failure"
+
+: > "$runner_root/systemctl.calls"
+export FIXTURE_RUNNER_FAIL_AFTER_ENABLE=1
+export FIXTURE_RUNNER_FAIL_COMMAND=disable
+expect_failure runner_command "$runner_root" install --staging "$runner_stage"
+unset FIXTURE_RUNNER_FAIL_AFTER_ENABLE
+unset FIXTURE_RUNNER_FAIL_COMMAND
+[[ -e "$runner_root/opt/dam-hopper" && -e "$runner_root/etc/systemd/system/dam-hopper.service" &&
+  -L "$runner_preexisting_wants" && -e "$runner_sibling_wants" ]] ||
+  fail "disable failure did not retain partial install evidence"
+assert_runner_systemctl_calls $'daemon-reload\nenable'
+rm -f -- "$runner_preexisting_wants" "$runner_sibling_wants"
+rm -rf -- "$runner_root/opt/dam-hopper" "$runner_root/etc/systemd/system/dam-hopper.service"
+pass "runner retains partial assets when enablement disable fails"
+
+: > "$runner_root/systemctl.calls"
+export FIXTURE_RUNNER_FAIL_COMMAND=systemd-analyze
+export FIXTURE_RUNNER_VALIDATE_UNIT=1
+expect_failure runner_command "$runner_root" install --staging "$runner_stage"
+unset FIXTURE_RUNNER_FAIL_COMMAND
+unset FIXTURE_RUNNER_VALIDATE_UNIT
+[[ ! -e "$runner_root/opt/dam-hopper" && ! -e "$runner_root/etc/systemd/system/dam-hopper.service" ]] ||
+  fail "systemd verification failure left partial install assets: $(find "$runner_root/opt" "$runner_root/etc/systemd/system" -mindepth 1 -maxdepth 4 -print 2>/dev/null | sort)"
+assert_runner_systemctl_calls $'daemon-reload'
+pass "runner cleans a partial install after systemd verification failure"
+
+: > "$runner_root/systemctl.calls"
+export FIXTURE_RUNNER_FAIL_COMMAND=enable
+expect_failure runner_command "$runner_root" install --staging "$runner_stage"
+unset FIXTURE_RUNNER_FAIL_COMMAND
+[[ ! -e "$runner_root/opt/dam-hopper" && ! -e "$runner_root/etc/systemd/system/dam-hopper.service" ]] ||
+  fail "enable failure left partial install assets: $(find "$runner_root/opt" "$runner_root/etc/systemd/system" -mindepth 1 -maxdepth 4 -print 2>/dev/null | sort)"
+assert_runner_systemctl_calls $'daemon-reload\ndaemon-reload'
+pass "runner cleans a partial install after enable failure"
+
+: > "$runner_root/systemctl.calls"
 runner_install_output="$(runner_command "$runner_root" install --staging "$runner_stage")"
 [[ -d "$runner_root/opt/dam-hopper/.systemd-fresh-install" ]] || fail "runner install marker"
 [[ ! -e "$runner_root/systemctl.active" ]] || fail "install started the service"
-grep -Fxq daemon-reload "$runner_root/systemctl.calls" || fail "install daemon-reload"
-grep -Fxq enable "$runner_root/systemctl.calls" || fail "install enable"
+assert_runner_systemctl_calls $'daemon-reload\nenable'
 ! grep -Fxq start "$runner_root/systemctl.calls" || fail "install start call"
 pass "runner install verifies assets, enables, and does not start"
 
 runner_status_output="$(runner_command "$runner_root" status)"
 grep -Fxq 'installed=valid' <<< "$runner_status_output" || fail "runner status"
 grep -Fxq 'enabled=enabled' <<< "$runner_status_output" || fail "runner enabled status"
+
+legacy_unit="$TEST_ROOT/legacy-dam-hopper.service"
+current_unit="$TEST_ROOT/current-dam-hopper.service"
+cp -- "$runner_root/etc/systemd/system/dam-hopper.service" "$current_unit"
+sed '/^EnvironmentFile=/d' "$current_unit" > "$legacy_unit"
+cp -- "$legacy_unit" "$runner_root/etc/systemd/system/dam-hopper.service"
+legacy_unit_hash="$(sha256sum "$legacy_unit" | cut -d' ' -f1)"
+sed -i "s/^unit_sha256=.*/unit_sha256=$legacy_unit_hash/" \
+  "$runner_root/opt/dam-hopper/.systemd-fresh-install/manifest"
+expect_failure runner_command "$runner_root" status
+runner_command "$runner_root" rollback --dry-run >/dev/null
+cp -- "$current_unit" "$runner_root/etc/systemd/system/dam-hopper.service"
+current_unit_hash="$(sha256sum "$current_unit" | cut -d' ' -f1)"
+sed -i "s/^unit_sha256=.*/unit_sha256=$current_unit_hash/" \
+  "$runner_root/opt/dam-hopper/.systemd-fresh-install/manifest"
+pass "rollback accepts marker-backed legacy unit while start/status enforce current contract"
+
+export FIXTURE_RUNNER_SS_ERROR=1
+expect_failure runner_command "$runner_root" start --dry-run
+unset FIXTURE_RUNNER_SS_ERROR
+pass "runner refuses listener inspection errors instead of treating them as free ports"
+: > "$runner_root/systemctl.calls"
 runner_command "$runner_root" start >/dev/null
 [[ -e "$runner_root/systemctl.active" ]] || fail "runner start call"
-grep -Fxq start "$runner_root/systemctl.calls" || fail "runner start was not recorded"
+assert_runner_systemctl_calls start
 pass "runner start validates installed evidence and loopback listener"
+
+runner_foreign_target="$runner_root/foreign-dam-hopper.service"
+printf '%s\n' foreign > "$runner_foreign_target"
+rm -f -- "$runner_wants_dir/dam-hopper.service"
+ln -s -- "$runner_foreign_target" "$runner_wants_dir/dam-hopper.service"
+if printf '%s\n' "ROLLBACK $runner_root/opt/dam-hopper" |
+  runner_command "$runner_root" rollback --confirm >/dev/null 2>&1; then
+  fail "rollback accepted a foreign enablement link"
+fi
+[[ -L "$runner_wants_dir/dam-hopper.service" ]] || fail "rollback removed a foreign enablement link"
+[[ "$(readlink -- "$runner_wants_dir/dam-hopper.service")" == "$runner_foreign_target" ]] ||
+  fail "rollback changed a foreign enablement link"
+rm -f -- "$runner_wants_dir/dam-hopper.service"
+ln -s -- "$runner_root/etc/systemd/system/dam-hopper.service" \
+  "$runner_wants_dir/dam-hopper.service"
+pass "rollback refuses a foreign enablement link"
 
 runner_runtime_sentinel="$runner_runtime/runtime-sentinel"
 printf '%s\n' preserve > "$runner_runtime_sentinel"
@@ -361,6 +624,9 @@ printf '%s\n' "ROLLBACK $runner_root/opt/dam-hopper" |
 [[ ! -e "$runner_root/opt/dam-hopper" && ! -e "$runner_root/etc/systemd/system/dam-hopper.service" ]] ||
   fail "rollback left installed assets"
 [[ -e "$runner_runtime_sentinel" ]] || fail "rollback removed user runtime state"
+[[ ! -e "$runner_wants_dir/dam-hopper.service" && ! -L "$runner_wants_dir/dam-hopper.service" ]] ||
+  fail "rollback left the enablement link"
+assert_runner_systemctl_calls $'start\nstop\ndisable\ndaemon-reload'
 pass "runner rollback is marker-backed and preserves user runtime"
 
 runner_drift_output="$(runner_command "$runner_root" build)"
@@ -370,8 +636,79 @@ expect_failure runner_command "$runner_root" install --staging "$runner_drift_st
 [[ ! -e "$runner_root/opt/dam-hopper" ]] || fail "drifted stage was installed"
 pass "runner refuses staged artifact drift"
 
+JOURNAL_CHECK_SCRIPT="$REPO_ROOT/scripts/phase-03-journal-check.sh"
+journal_fixture_root="$TEST_ROOT/journal-check"
+journal_fake_bin="$journal_fixture_root/bin"
+journal_source="$journal_fixture_root/journal.txt"
+journal_token_file="$journal_fixture_root/token"
+mkdir -p -- "$journal_fake_bin"
+cat > "$journal_fake_bin/sudo" <<'STUB'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${1:-}" == -v ]]; then
+  exit 0
+fi
+exec "$@"
+STUB
+cat > "$journal_fake_bin/journalctl" <<'STUB'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${FIXTURE_JOURNAL_RC:-0}" != 0 ]]; then
+  exit "$FIXTURE_JOURNAL_RC"
+fi
+cat "${FIXTURE_JOURNAL_SOURCE:?}"
+STUB
+journal_real_rg="$(type -P rg)" || fail "rg is unavailable for journal fixtures"
+cat > "$journal_fake_bin/rg" <<STUB
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "\${FIXTURE_RG_ERROR:-0}" == 1 && "\$*" == *mongodb* ]]; then
+  exit 2
+fi
+exec "$journal_real_rg" "\$@"
+STUB
+chmod 755 "$journal_fake_bin"/*
+printf '%s\n' 'fixture-token' > "$journal_token_file"
+chmod 600 "$journal_token_file"
+printf '%s\n' 'Disposing all PTY sessions' 'Server shutdown complete' > "$journal_source"
+journal_check_env=(
+  PATH="$journal_fake_bin:$PATH"
+  PHASE03_JOURNAL_TOKEN_PATH="$journal_token_file"
+  FIXTURE_JOURNAL_SOURCE="$journal_source"
+)
+journal_check_output="$(env "${journal_check_env[@]}" bash "$JOURNAL_CHECK_SCRIPT")" ||
+  fail "journal helper rejected a passing fixture"
+grep -Fxq 'journal_read=1' <<< "$journal_check_output" || fail "journal helper read flag"
+grep -Fxq 'journal_dispose=1' <<< "$journal_check_output" || fail "journal helper dispose flag"
+grep -Fxq 'journal_shutdown=1' <<< "$journal_check_output" || fail "journal helper shutdown flag"
+grep -Fxq 'journal_secret_scan=1' <<< "$journal_check_output" || fail "journal helper secret flag"
+pass "journal helper passes clean bounded fixture"
+
+printf '%s\n' 'startup only' > "$journal_source"
+expect_failure env "${journal_check_env[@]}" bash "$JOURNAL_CHECK_SCRIPT"
+pass "journal helper rejects missing lifecycle markers"
+
+printf '%s\n' 'Disposing all PTY sessions' 'Server shutdown complete' > "$journal_source"
+export FIXTURE_JOURNAL_RC=1
+expect_failure env "${journal_check_env[@]}" bash "$JOURNAL_CHECK_SCRIPT"
+unset FIXTURE_JOURNAL_RC
+pass "journal helper rejects journal read failures"
+
+expect_failure env \
+  PATH="$journal_fake_bin:$PATH" \
+  PHASE03_JOURNAL_TOKEN_PATH="$journal_fixture_root/missing-token" \
+  FIXTURE_JOURNAL_SOURCE="$journal_source" \
+  bash "$JOURNAL_CHECK_SCRIPT"
+pass "journal helper rejects unavailable token inspection"
+
+export FIXTURE_RG_ERROR=1
+expect_failure env "${journal_check_env[@]}" bash "$JOURNAL_CHECK_SCRIPT"
+unset FIXTURE_RG_ERROR
+pass "journal helper rejects scanner errors"
+
 test -x "$RESET_SCRIPT" || fail "reset script is not executable"
 test -x "$RUNNER_SCRIPT" || fail "production runner is not executable"
+test -x "$JOURNAL_CHECK_SCRIPT" || fail "journal helper is not executable"
 pnpm linux:production -- --help >/dev/null
 pnpm linux:reset -- --help >/dev/null
 pass "Linux package aliases forward help arguments to executable scripts"
