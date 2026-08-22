@@ -22,6 +22,15 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
+### Linux Systemd Server-Only Production Runner (2026-08-22)
+
+- **Completed**: production build/stage/install verification now packages only
+  the Rust server binary and systemd unit. UI build/test/typecheck and web asset
+  installation were removed from this service gate; guarded legacy rollback
+  remains available. Validation passed: backend test suite, release server
+  build, Bash syntax checks, and Linux deployment fixtures.
+  [Plan](../plans/260820-0912-revalidation-build-run-service/plan.md).
+
 ### Terminal Font Size and Shortcuts (2026-08-16)
 
 - **Phase 01 — [COMPLETED 2026-08-16]**: persisted terminal font size and editable increase/decrease shortcuts, live xterm refit/PTY geometry updates, accessible Settings controls, and regression coverage delivered. Validation: 1,079 UI tests, 124 Chromium tests, UI build/lint, and 74 Rust config tests passed. [Plan](../plans/260816-1356-terminal-font-size-shortcuts/plan.md).

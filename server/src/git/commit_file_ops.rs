@@ -601,7 +601,10 @@ pub async fn revert_commit(project_path: &Path, hash: &str) -> Result<GitActionR
         return Ok(blocked);
     }
 
-    match cli_fallback::run_git(&["revert", hash], project_path).await {
+    // The API does not provide an interactive commit-message editor. Keep the
+    // operation non-interactive so tests and headless/server callers cannot
+    // inherit a terminal and stop inside `git commit -e`.
+    match cli_fallback::run_git(&["revert", "--no-edit", hash], project_path).await {
         Ok(_) => Ok(GitActionResult {
             ok: true,
             message: Some(format!("Reverted commit {hash}")),

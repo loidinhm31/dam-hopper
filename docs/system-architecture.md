@@ -57,9 +57,10 @@
 ```
 
 The overview names both launch modes for context. The systemd deployment uses
-only `127.0.0.1:4801`; the existing `4800` nohup service is a legacy launch
-outside this deployment and is not touched by its installer, validation, or
-rollback.
+`0.0.0.0:4801` for Tailscale access; the host firewall and Tailscale ACLs must
+restrict that wildcard listener. The existing `4800` nohup service is a legacy
+launch outside this deployment and is not touched by its installer, validation,
+or rollback.
 
 ### Host resource monitoring and remediation (planned)
 
@@ -2105,12 +2106,15 @@ placeholder executable and does not represent an installed service.
 
 Repository validation remains separate from administrator acceptance. The
 2026-08-20 read-only host revalidation was superseded by a 2026-08-21 guarded
-run: the staged install and active unit ran as `loidinh`, exposed only
-`127.0.0.1:4801`, served `GET /api/health` and the SPA, rejected unauthenticated
+run: the legacy staged install and active pre-wildcard unit ran as `loidinh`, exposed
+only `127.0.0.1:4801`, served `GET /api/health` and the legacy SPA, rejected unauthenticated
 `GET /api/usage/health`, accepted an authenticated protected-route request,
 passed restart with a new PID, exercised active-PTY/SIGTERM cleanup, passed
 bounded journal lifecycle/redaction checks, and rolled back without removing
 user runtime state. Only the optional MongoDB smoke was not run.
+
+That acceptance record predates the wildcard-bind change below; it does not
+prove Tailscale reachability or firewall/ACL isolation for the current unit.
 
 - An administrator owns and manages the system unit at
   `/etc/systemd/system/dam-hopper.service`, but the service process always runs
@@ -2118,13 +2122,12 @@ user runtime state. Only the optional MongoDB smoke was not run.
 - Runtime identity and paths are explicit: `HOME=/home/loidinh`,
   `XDG_CONFIG_HOME=/home/loidinh/.config`,
   `--config /home/loidinh/.config/dam-hopper/dam-hopper.toml`,
-  binary `/opt/dam-hopper/bin/dam-hopper-server`, working directory
-  `/home/loidinh`, and same-process web assets
-  `DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web`. The repository asset and
-  administrator handoff are in `deploy/systemd/dam-hopper.service` and
-  `docs/linux-systemd.md`; the operator workflow builds and installs the web
-  directory as a verified staged asset.
-- The service bind is `127.0.0.1:4801`. Authentication stays enabled:
+  binary `/opt/dam-hopper/bin/dam-hopper-server`, and working directory
+  `/home/loidinh`. The current repository asset and administrator handoff are
+  in `deploy/systemd/dam-hopper.service` and `docs/linux-systemd.md`; the
+  operator workflow builds and installs only the server binary and unit.
+- The service bind is `0.0.0.0:4801` for Tailscale access. The wildcard bind
+  must be restricted by the host firewall and Tailscale ACLs. Authentication stays enabled:
   the unit sets `RUST_ENV=production`, contains neither `--no-auth` nor
   `DAM_HOPPER_NO_AUTH`, and fails closed if a home `.env` attempts to enable no-auth.
 - The unit uses `Restart=on-failure`, sends normal `SIGTERM`, and the server
@@ -2152,9 +2155,10 @@ user runtime state. Only the optional MongoDB smoke was not run.
   for guarded inspection. The quick-verification purge is a separate confirmed operation limited to local
   DamHopper state; project repositories, unrelated Docker containers, and
   external MongoDB data remain outside its target set.
-- The production runner requires the focused systemd-service build/test/lint/unit
-  gate before installation; native/Tauri desktop packaging is outside this gate.
-  After systemd reports active, start waits up to 10 seconds for the loopback
+- The production runner requires the focused systemd-service backend test/release
+  build/unit gate before installation; browser UI and native/Tauri packaging are
+  outside this gate.
+  After systemd reports active, start waits up to 10 seconds for the configured
   listener and fails closed if `ss` errors or emits diagnostics. The build records
   the canonical verified staging path in a private mode-600 runtime file, and
   automatic install fails closed for missing, malformed, stale, or ambiguous
@@ -2162,23 +2166,28 @@ user runtime state. Only the optional MongoDB smoke was not run.
   artifacts are covered as well as text files. A caller-selected dotenv file may
   be copied verbatim to the
   user-owned `/home/loidinh/.config/dam-hopper/server.env` with mode `0600` for
-  quick verification only; it is never copied into `/opt`, unit text, manifests,
-  or web assets. The unit loads a generated `server-safety.env` second so its
-  production environment, no-auth=false, HOME/XDG, and web-path assignments
-  override the broad quick-check file. Explicit CLI host/port remain authoritative.
+  quick verification only; it is never copied into `/opt`, unit text, or
+  manifests. The unit loads a generated `server-safety.env` second so its
+  production environment, no-auth=false, and HOME/XDG assignments override the
+  broad quick-check file. Explicit CLI host/port remain authoritative.
   Start revalidates both files and installed hashes but does not rebuild.
-- First install refuses existing exact unit/binary/web targets and parent
-  `/opt/dam-hopper`/`bin` symlinks, creates a unique verified staging directory,
-  and records a root-owned nonce/hash/file-inventory manifest before staged
+- First install refuses existing exact unit/binary targets and parent
+  `/opt/dam-hopper`/`bin` symlinks, creates a unique verified server-only staging
+  directory, and records a root-owned nonce/hash manifest before staged
   moves. Its fail-closed cleanup removes only paths still matching that manifest
   and retains the marker when verification/cleanup is incomplete; the installed
   `bin` directory is traversable by `loidinh`. Rollback verifies the manifest,
   re-checks systemd inactive/MainPID/4801 ownership after stopping, rejects
   symlinks, and removes only manifest-backed assets. An upgrade or pre-existing
   target requires an administrator backup/restore plan.
-- The packaged web build is same-origin by construction: Vite rejects a production
-  backend override, and runtime profile/localStorage resolution ignores stale
-  cross-origin endpoints so the browser falls back to the serving origin on `4801`.
+- A format-2 stage inventory is exact: `bin/dam-hopper-server`,
+  `dam-hopper.service`, `manifest`, and `nonce`. The manifest contains only
+  `format`, `nonce`, `binary_sha256`, and `unit_sha256`; browser assets and web
+  inventory are deliberately absent. Reset/rollback may still recognize the
+  older format-1 web-bearing marker solely to clean up a legacy installation.
+- The systemd package does not contain a browser build. Separate browser hosts
+  must use an exact backend CORS origin and connect to the authenticated API and
+  WebSocket endpoints on `4801`.
 - Rollback stops/disables the unit and reloads systemd. Restoring the prior launch
   method is optional and remains a separate administrator decision after confirming
   a single process owns the port and live SQLite files.

@@ -4,6 +4,9 @@ The nohup launcher is retained only as rollback history. It is not a supported
 production owner, its package aliases are retired, and it must never run at the
 same time as `dam-hopper.service` or open the same SQLite files. Use the guarded
 [Linux systemd workflow](./linux-systemd.md) for current production operation.
+The current systemd workflow is backend-only; browser assets are a separate
+deployment concern. The legacy/container notes below may still describe a
+same-process web directory, but they do not change the systemd package.
 
 ## Install And Start
 
@@ -60,7 +63,9 @@ Restart after changes only during an approved legacy recovery:
 deploy/run-linux-nohup.sh restart --bin server/target/release/dam-hopper-server
 ```
 
-Authenticated HTTP binds may use `0.0.0.0` only for a separately approved legacy recovery. The supported systemd unit is loopback-only on `127.0.0.1:4801`.
+The legacy nohup service remains a separately approved recovery path on `4800`.
+The supported systemd unit uses `0.0.0.0:4801` for Tailscale access; restrict
+both wildcard binds with the host firewall and Tailscale ACLs.
 
 ## Operate
 

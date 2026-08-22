@@ -1,17 +1,24 @@
 # Linux systemd system service
 
-Status: repository asset plus guarded administrator workflow. Repository-side
-build/stage/fixture checks pass, and the focused systemd production runner has
-completed build, install, start, HTTP, restart, authenticated protected-route,
-active-PTY/SIGTERM, bounded journal, and marker-backed rollback acceptance on
-2026-08-21. Only the optional external MongoDB smoke remains explicitly not
-run. No command in this document performs a live reset or production mutation
-by itself.
+Status: repository asset plus guarded administrator workflow. The supported
+systemd package is backend-only: it builds and installs the Rust server binary
+and unit, while any browser UI is built and hosted separately. New stages use
+marker format 2; format-1 web-bearing installs remain accepted only for guarded
+reset/rollback cleanup. No command in this document performs a live reset or
+production mutation by itself.
+
+If installation stops on a stale safety assignment and no managed service
+assets remain, run `pnpm linux:reset -- --runtime-only`. It preserves the
+existing server environment file, rewrites the current safety assignments, and
+requires typing `PREPARE /home/loidinh/.config/dam-hopper` before install is
+retried.
 
 ## Supported production runner
 
-Run every command from the exact checkout as `loidinh`. Complete the guarded
-reset first when taking ownership of an existing host. It authenticates sudo
+Run every command from any checkout of this repository as `loidinh`; the scripts
+resolve their repository root from their own location and accept any named
+branch or detached commit. Complete the guarded reset first when taking
+ownership of an existing host. It authenticates sudo
 interactively, purges only the canonical local runtime tree after typed
 confirmation, and recreates the private ordered environment files. Never place
 the selected source inside that purge target or display its contents.
@@ -28,19 +35,26 @@ exact `PREPARE` confirmation, and does not perform the build, install, or start
 steps. The selected source must be a private user-owned mode-600 file, and its
 values must never be pasted or displayed.
 
-Build is unprivileged, emits a unique retained staging directory, and records
-its canonical path in a private automatic-stage record (a mode-600 file under
-the runtime parent). Install without `--staging` uses only that recorded stage
-and re-runs the complete stage validation; a missing, malformed, stale, or
-ambiguous record fails closed.
+Build is unprivileged, runs the backend test and release-build gate, emits a
+unique retained server-only staging directory, and records its canonical path
+in a private automatic-stage record (a mode-600 file under the runtime parent).
+Install without `--staging` uses only that recorded stage and re-runs the
+complete stage validation; a missing, malformed, stale, or ambiguous record
+fails closed. Retained format-1 stages containing web assets are not installable;
+build a fresh format-2 stage instead.
 `--staging PATH` remains an explicit override. Install reloads systemd, enables
 the unit, and deliberately does not start it. Start validates installed hashes,
-ownership, ordered environment files, systemd identity, loopback ports,
+ownership, ordered environment files, systemd identity, the configured listener,
 processes, and SQLite holders without rebuilding. After systemd reports the unit
-active, the runner waits up to 10 seconds for `127.0.0.1:4801`; `ss` errors or
+active, the runner waits up to 10 seconds for `0.0.0.0:4801`; `ss` errors or
 diagnostic output fail closed instead of being treated as a free/valid listener
 state. The staged-tree credential scan reads files as byte streams, so binary
 artifacts are covered as well as text files.
+
+A format-2 stage contains exactly `bin/dam-hopper-server`,
+`dam-hopper.service`, `manifest`, and `nonce`. Its manifest records only
+`format`, `nonce`, `binary_sha256`, and `unit_sha256`; it contains no browser
+asset directory or web inventory.
 
 ```bash
 pnpm linux:production -- build
@@ -63,17 +77,32 @@ until normal temporary-directory cleanup.
 An actual rollback requires `--confirm` plus the exact interactive confirmation
 shown by the runner. It removes only marker-backed `/opt` assets and the unit;
 the user runtime tree, repositories, containers, and external MongoDB remain
-outside its scope. The Phase 03 run recorded PASS for installed identity,
-loopback binding, the authentication boundary, authenticated protected-route
-access, same-origin SPA serving, restart, active-PTY/SIGTERM cleanup, bounded
-journal checks, and marker-backed rollback. It records NOT RUN only for the
-optional external MongoDB smoke; see the redacted [acceptance report](../plans/reports/qa-260821-0142-linux-production-runner.md).
+outside its scope. The historical Phase 03 run (before the wildcard-bind and
+server-only changes) recorded PASS for installed identity, loopback binding,
+the authentication boundary, authenticated protected-route access, same-origin
+SPA serving, restart, active-PTY/SIGTERM cleanup, bounded journal checks, and
+marker-backed rollback. That record is legacy format-1 evidence and does not
+validate the current backend-only package; see the redacted [acceptance report](../plans/reports/qa-260821-0142-linux-production-runner.md).
 
 ## Deployment decision
 
-The service uses the backend's same-origin SPA hosting. An administrator builds the web app and installs its generated files under `/opt/dam-hopper/web`; the Rust server serves those files and the API from one origin.
+The systemd service is an API/backend deployment. It installs only the Rust
+server binary and unit; it does not build or copy `apps/web` or `/opt/dam-hopper/web`.
+If a browser UI is needed, build and host it separately and configure an exact
+`DAM_HOPPER_CORS_ORIGINS` entry for that UI origin.
 
-The future production unit binds only `127.0.0.1:4801`. It does not bind, stop, or reconfigure the existing nohup service on `4800`. The current `4800` service and the new unit must never run concurrently against the same user-owned SQLite files: an administrator must perform an explicit, planned ownership handoff before starting the unit.
+The production unit binds `0.0.0.0:4801` so Tailscale clients can reach it. This
+is a wildcard IPv4 bind, not a Tailscale-only bind: the host firewall and
+Tailscale ACLs must restrict access to the intended tailnet, and production
+authentication remains enabled. It does not bind, stop, or reconfigure the
+existing nohup service on `4800`. The current `4800` service and the new unit
+must never run concurrently against the same user-owned SQLite files: an
+administrator must perform an explicit, planned ownership handoff before
+starting the unit.
+
+The acceptance record below predates this wildcard-bind change and therefore
+does not prove Tailscale reachability or firewall/ACL isolation. Repeat the
+administrator acceptance checks after installing this unit.
 
 The service process is always `loidinh`. The system manager owns the unit and deployment assets, while runtime configuration, token, OPAQUE setup, session database, telemetry database, project files, and other private state remain owned by `loidinh`.
 
@@ -83,8 +112,9 @@ The service process is always `loidinh`. The system manager owns the unit and de
 
 - `User=loidinh` and `Group=loidinh`; the server never runs as root.
 - Direct `ExecStart` with an absolute binary, config, host, and port; no shell, wrapper, PID file, sudo, or privileged helper. Ordered user environment files are explicit and mandatory.
-- `HOME`, `XDG_CONFIG_HOME`, `WorkingDirectory`, and `DAM_HOPPER_WEB_DIR` are explicit.
-- `127.0.0.1:4801` is explicit. `RUST_ENV=production` makes the existing no-auth guard fail closed if a home `.env` attempts to set `DAM_HOPPER_NO_AUTH`; the unit has no `--no-auth` flag.
+- `HOME`, `XDG_CONFIG_HOME`, and `WorkingDirectory` are explicit; no web asset
+  directory is part of the systemd install contract.
+- `0.0.0.0:4801` is explicit for Tailscale access. Restrict port `4801` with the host firewall and Tailscale ACLs; `RUST_ENV=production` makes the existing no-auth guard fail closed if a home `.env` attempts to set `DAM_HOPPER_NO_AUTH`; the unit has no `--no-auth` flag.
 - `Restart=on-failure` with a short delay and journald stdout/stderr.
 - Normal stops send `SIGTERM`; the server snapshots buffers, marks PTYs killed, terminates their process groups, joins PTY readers before persistence shutdown, and gets 20 seconds before systemd's bounded cgroup cleanup.
 - `UMask=0077` and `NoNewPrivileges=true` reduce accidental private-state exposure.
@@ -97,11 +127,9 @@ Run these steps as `loidinh` from the repository. They do not install a unit, us
 
 ```bash
 pnpm build:server
-pnpm build
 pnpm test
 systemd-analyze verify deploy/systemd/dam-hopper.service
 test -x server/target/release/dam-hopper-server
-test -f apps/web/dist/index.html
 ```
 
 In a repository checkout the unit's absolute binary under `/opt` is normally not installed yet, so direct `systemd-analyze verify` may report that missing executable. The runner's isolated temporary-root setup resolves a system `true` executable only as a verifier placeholder; it does not touch `/opt`, `/etc`, or host systemd state. The administrator reruns verification against the installed asset during the guarded install.
@@ -114,24 +142,21 @@ VITE_DAM_HOPPER_SERVER_URL=http://127.0.0.1:4801 pnpm dev -- --port 5173
 
 The development UI command is only a local browser host. It does not change the production unit or the live `4800` process.
 
-For the same-origin production build, do not set `VITE_DAM_HOPPER_SERVER_URL` in the shell or any Vite `.env*` file. The Vite config rejects that override in production so a stale `4800` target cannot be embedded accidentally:
-
-```bash
-env -u VITE_DAM_HOPPER_SERVER_URL pnpm build
-```
-
-At runtime, this packaged web build also ignores stale cross-origin active profiles and legacy URL storage. Reload the UI from the service origin after the cutover; it will use the page origin (`127.0.0.1:4801`) instead of reconnecting to the old `4800` endpoint.
+The production runner does not build or package the browser UI. If a separate
+UI host is deployed, configure its backend URL and add that exact origin to
+`DAM_HOPPER_CORS_ORIGINS`; the systemd service remains responsible only for the
+authenticated API and WebSocket endpoints on `4801`.
 
 Before an administrator installs the unit, independently confirm all of the following:
 
-1. The intended binary and web build are complete and contain no secrets or `.env` files.
+1. The intended server binary is complete and contains no secrets or `.env` files.
 2. `/home/loidinh/.config/dam-hopper/dam-hopper.toml` exists and is readable by `loidinh`.
 3. Existing token/OPAQUE state, session database, and telemetry database are user-owned and private (`0600` where applicable); the service may create missing secret files as `loidinh`.
 4. The existing nohup launch is stopped for the planned cutover, and no process still owns the live SQLite files. A different port does not make shared SQLite ownership safe.
-5. `127.0.0.1:4801` is free. Do not start a second server if the intended ownership checks fail.
+5. `0.0.0.0:4801` is free. Do not start a second server if the intended ownership checks fail.
 
 The supported production runner performs this guarded preflight. It refuses to
-overwrite an existing unit, binary, web directory, or fresh-install marker; if
+overwrite an existing unit, binary, or fresh-install marker; if
 any exact target exists, stop and make an administrator-owned backup/restore
 plan before changing it.
 
@@ -144,6 +169,10 @@ Do not interpret a free `4801` listener as permission to leave the legacy proces
 > `pnpm linux:production -- install` followed by separate
 > `status` and `start` commands shown above; the runner owns locking, staged
 > manifest verification, non-root identity checks, and rollback boundaries.
+
+The web-directory commands in this archival section describe legacy format-1
+installations only. They are not part of the current server-only systemd
+package.
 
 The archived commands below are not a supported handoff. Do not run them
 non-interactively, and do not substitute broad recursive paths; use the runner
@@ -559,7 +588,7 @@ sudo journalctl -u dam-hopper.service --no-pager -n 50
 Expected results:
 
 - `User=loidinh`, `euser=loidinh`, and a non-root main process.
-- The listener is exactly `127.0.0.1:4801`, not a wildcard address.
+- The listener is exactly `0.0.0.0:4801`; confirm the host firewall and Tailscale ACLs restrict access as intended.
 - Health is successful; the protected projects route rejects missing auth and accepts the valid token.
 - Journald contains lifecycle output without secrets, including `Disposing all PTY sessions` and `Server shutdown complete` after a normal stop.
 
@@ -859,12 +888,12 @@ Restoring the legacy nohup launch is optional and requires a separate administra
 
 Repository evidence recorded on 2026-08-20 is non-privileged and does not establish live ownership:
 
-- PASS — unit invariants match the planned identity, paths, loopback port, production auth guard, journald, restart, and SIGTERM fields.
+- PASS — historical unit invariants matched the planned identity, paths, loopback port, production auth guard, journald, restart, and SIGTERM fields.
 - PASS — `systemd-analyze verify` succeeds in an isolated verifier root containing a placeholder executable; the direct checkout invocation reports only the expected absent `/opt/dam-hopper/bin/dam-hopper-server`.
-- PASS — the runner's focused systemd-service build/stage path completed the backend tests, UI tests (173 files and 1,109 tests), UI type checking, lint, release server build, same-origin production web build, artifact checks, and isolated unit verification; native/Tauri packaging is outside this gate.
+- PASS — the runner's current focused systemd-service build/stage path covers backend tests, the release server build, server-only artifact checks, and isolated unit verification; browser UI tests/builds and native/Tauri packaging are outside this gate.
 - PASS — Phase 01/02 fixture assertions, Bash syntax, JSON parsing, whitespace, and scoped forbidden-pattern checks.
 - CAVEAT — native desktop packaging is outside the systemd service build gate.
-- PASS — 2026-08-21 administrator run installed the marker-backed assets without starting, started the unit as `loidinh` on loopback `127.0.0.1:4801`, served public health JSON and the same-origin SPA, rejected unauthenticated protected health with `401`, accepted a signed protected-route request with `200`, passed a restart with a new PID, exercised active-PTY/SIGTERM cleanup, passed bounded journald checks, and completed marker-backed rollback.
+- PASS — historical 2026-08-21 administrator run installed the marker-backed assets without starting, started the pre-wildcard unit as `loidinh` on loopback `127.0.0.1:4801`, served public health JSON and the same-origin SPA, rejected unauthenticated protected health with `401`, accepted a signed protected-route request with `200`, passed a restart with a new PID, exercised active-PTY/SIGTERM cleanup, passed bounded journald checks, and completed marker-backed rollback.
 - PASS — final rollback checks found no installed assets, no unit, no 4800/4801 listener, and preserved the user runtime directory and ordered environment files with `700`/`600` metadata; the environment copy matched without displaying its contents.
 - NOT RUN — optional external MongoDB smoke.
 
@@ -881,7 +910,7 @@ unavailable or fails.
 
 Administrator onboarding requires:
 
-- a built server binary and web assets;
+- a built server binary; any browser UI is a separately managed deployment;
 - an existing `loidinh` config and private runtime state;
 - an explicit maintenance window for the old `4800` ownership handoff;
 - an administrator account allowed to install `/opt` assets and `/etc/systemd/system/dam-hopper.service`;

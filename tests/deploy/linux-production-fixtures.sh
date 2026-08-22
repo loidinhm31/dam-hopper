@@ -88,33 +88,28 @@ make_fixture() {
   local runtime="$root/config/dam-hopper"
   local unit="$root/etc/systemd/system/dam-hopper.service"
   local marker="$install_root/.systemd-fresh-install"
-  local binary_hash unit_hash web_hash
+  local binary_hash unit_hash
 
-  mkdir -p -- "$root/config" "$root/etc/systemd/system" "$install_root/bin" "$install_root/web" "$marker" "$runtime"
+  mkdir -p -- "$root/config" "$root/etc/systemd/system" "$install_root/bin" "$marker" "$runtime"
   chmod 755 "$root/opt" "$install_root" "$root/etc" "$root/etc/systemd" "$root/etc/systemd/system"
   chmod 700 "$root/config" "$runtime" "$marker"
   cp -- "$REPO_ROOT/deploy/systemd/dam-hopper.service" "$unit"
   printf 'fixture binary\n' > "$install_root/bin/dam-hopper-server"
-  printf '<!doctype html>\n' > "$install_root/web/index.html"
-  chmod 755 "$install_root/bin" "$install_root/bin/dam-hopper-server" "$install_root/web"
-  chmod 644 "$unit" "$install_root/web/index.html"
+  chmod 755 "$install_root/bin" "$install_root/bin/dam-hopper-server"
+  chmod 644 "$unit"
   printf 'remove me\n' > "$runtime/old-state"
   printf '%s\n' 'MONGODB_URI=mongodb://fixture.invalid' 'MONGODB_DATABASE=dam_hopper' 'RUST_ENV=development' 'DAM_HOPPER_NO_AUTH=true' > "$env_source"
   chmod 600 "$env_source"
 
   binary_hash="$(sha256sum "$install_root/bin/dam-hopper-server" | awk '{print $1}')"
   unit_hash="$(sha256sum "$unit" | awk '{print $1}')"
-  web_hash="$(sha256sum "$install_root/web/index.html" | awk '{print $1}')"
-  printf '%s  ./index.html\n' "$web_hash" > "$marker/web.sha256"
   printf '%s\n' \
-    'format=1' \
+    'format=2' \
     'nonce=0123456789abcdef0123456789abcdef' \
     "binary_sha256=$binary_hash" \
-    "unit_sha256=$unit_hash" \
-    'web_file_count=1' \
-    'web_dir_count=1' > "$marker/manifest"
+    "unit_sha256=$unit_hash" > "$marker/manifest"
   printf '%s\n' '0123456789abcdef0123456789abcdef' > "$marker/nonce"
-  chmod 600 "$marker/manifest" "$marker/nonce" "$marker/web.sha256"
+  chmod 600 "$marker/manifest" "$marker/nonce"
 }
 
 run_reset() {
@@ -143,10 +138,25 @@ run_runtime_only() {
       "$RESET_SCRIPT" --env-file "$env_source" --runtime-only
 }
 
+run_runtime_only_existing_env() {
+  local root="$1" input="$2"
+  printf '%s\n' "$input" |
+    env \
+      DAM_HOPPER_RESET_FIXTURE_MODE=1 \
+      DAM_HOPPER_RESET_FIXTURE_ROOT="$root" \
+      FIXTURE_SYSTEMCTL_CALLS="$root/systemctl.calls" \
+      FIXTURE_SYSTEMCTL_MASK="$root/systemctl.mask" \
+      FIXTURE_RESET_SS_ERROR="${FIXTURE_RESET_SS_ERROR:-}" \
+      PATH="$FAKE_BIN:$PATH" \
+      "$RESET_SCRIPT" --runtime-only
+}
+
 make_stub_commands
 unit_lines="$(awk '/^EnvironmentFile=/{print}' "$REPO_ROOT/deploy/systemd/dam-hopper.service")"
 expected_unit_lines=$'EnvironmentFile=/home/loidinh/.config/dam-hopper/server.env\nEnvironmentFile=/home/loidinh/.config/dam-hopper/server-safety.env'
 [[ "$unit_lines" == "$expected_unit_lines" ]] || fail "systemd EnvironmentFile ordering"
+! grep -Fxq 'Environment=DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web' "$REPO_ROOT/deploy/systemd/dam-hopper.service" ||
+  fail "server-only systemd unit contains web directory assignment"
 pass "systemd EnvironmentFile ordering and mandatory paths"
 
 fixture_mode_env="$TEST_ROOT/fixture-mode.env"
@@ -168,6 +178,7 @@ cmp -s "$env_source" "$runtime/server.env" || fail "server.env was not copied wh
 [[ "$(stat -c '%a' "$runtime/server-safety.env")" == 600 ]] || fail "safety env mode"
 grep -Fxq 'RUST_ENV=production' "$runtime/server-safety.env" || fail "safety RUST_ENV"
 grep -Fxq 'DAM_HOPPER_NO_AUTH=false' "$runtime/server-safety.env" || fail "safety no-auth override"
+! grep -Fq 'DAM_HOPPER_WEB_DIR=' "$runtime/server-safety.env" || fail "server-only safety env contains web directory"
 [[ "$(cat "$case_root/systemctl.calls")" == $'disable\nmask\nunmask' ]] || fail "systemd stop/disable/mask lifecycle"
 pass "successful fixture reset recreates private runtime and safety overrides"
 
@@ -195,6 +206,24 @@ cmp -s "$runtime_only_env" "$runtime_only_runtime/server$runtime_only_suffix" ||
 [[ "$(stat -c '%a' "$runtime_only_runtime/server-safety$runtime_only_suffix")" == 600 ]] ||
   fail "runtime-only safety environment mode"
 pass "runtime-only preparation preserves existing runtime state"
+
+printf '%s\n' \
+  'RUST_ENV=production' \
+  'ENVIRONMENT=production' \
+  'DAM_HOPPER_NO_AUTH=false' \
+  'HOME=/home/loidinh' \
+  'XDG_CONFIG_HOME=/home/loidinh/.config' \
+  'DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web' \
+  > "$runtime_only_runtime/server-safety$runtime_only_suffix"
+chmod 600 "$runtime_only_runtime/server-safety$runtime_only_suffix"
+run_runtime_only_existing_env "$runtime_only_root" \
+  "PREPARE $runtime_only_runtime" >/dev/null
+cmp -s "$runtime_only_env" "$runtime_only_runtime/server$runtime_only_suffix" ||
+  fail "runtime-only existing environment was not preserved"
+! grep -Fxq 'DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web' \
+  "$runtime_only_runtime/server-safety$runtime_only_suffix" ||
+  fail "runtime-only existing environment retained the legacy web assignment"
+pass "runtime-only repair reuses the existing server environment and removes legacy safety assignments"
 
 runtime_only_error_root="$TEST_ROOT/runtime-only-listener-error"
 runtime_only_error_env="$TEST_ROOT/runtime-only-listener-error-source"
@@ -295,14 +324,37 @@ manifest_root="$TEST_ROOT/manifest-mismatch"
 manifest_env="$TEST_ROOT/manifest-mismatch.env"
 mkdir -p -- "$manifest_root"
 make_fixture "$manifest_root" "$manifest_env"
+mkdir -p -- "$manifest_root/opt/dam-hopper/web"
 printf '<!doctype html>\n' > "$manifest_root/opt/dam-hopper/web/other.html"
+chmod 755 "$manifest_root/opt/dam-hopper/web"
 chmod 644 "$manifest_root/opt/dam-hopper/web/other.html"
-index_hash="$(sha256sum "$manifest_root/opt/dam-hopper/web/index.html" | awk '{print $1}')"
-printf '%s  ./index.html\n%s  ./index.html\n' "$index_hash" "$index_hash" > "$manifest_root/opt/dam-hopper/.systemd-fresh-install/web.sha256"
-sed -i 's/^web_file_count=1$/web_file_count=2/' "$manifest_root/opt/dam-hopper/.systemd-fresh-install/manifest"
 expect_failure run_reset "$manifest_root" "$manifest_env" "PURGE $manifest_root/config/dam-hopper"
 [[ -e "$manifest_root/config/dam-hopper/old-state" ]] || fail "manifest mismatch mutated runtime"
-pass "manifest path-set mismatch is refused before purge"
+pass "server-only install rejects unmanaged web assets before purge"
+
+legacy_root="$TEST_ROOT/legacy-web"
+legacy_env="$TEST_ROOT/legacy-web.env"
+mkdir -p -- "$legacy_root"
+make_fixture "$legacy_root" "$legacy_env"
+legacy_install="$legacy_root/opt/dam-hopper"
+legacy_marker="$legacy_install/.systemd-fresh-install"
+mkdir -p -- "$legacy_install/web"
+printf '<!doctype html>\n' > "$legacy_install/web/index.html"
+chmod 755 "$legacy_install/web"
+chmod 644 "$legacy_install/web/index.html"
+legacy_web_hash="$(sha256sum "$legacy_install/web/index.html" | awk '{print $1}')"
+printf '%s  ./index.html\n' "$legacy_web_hash" > "$legacy_marker/web.sha256"
+printf '%s\n' \
+  'format=1' \
+  'nonce=0123456789abcdef0123456789abcdef' \
+  "binary_sha256=$(sha256sum "$legacy_install/bin/dam-hopper-server" | awk '{print $1}')" \
+  "unit_sha256=$(sha256sum "$legacy_root/etc/systemd/system/dam-hopper.service" | awk '{print $1}')" \
+  'web_file_count=1' \
+  'web_dir_count=1' > "$legacy_marker/manifest"
+chmod 600 "$legacy_marker/manifest" "$legacy_marker/web.sha256"
+run_reset "$legacy_root" "$legacy_env" "PURGE $legacy_root/config/dam-hopper" >/dev/null
+[[ ! -e "$legacy_root/config/dam-hopper/old-state" ]] || fail "legacy web install reset was not accepted"
+pass "legacy web-bearing install remains safely resettable"
 
 printf '%s\n' 'Phase 01 fixture tests passed.'
 
@@ -360,7 +412,7 @@ if [[ -n "${FIXTURE_RUNNER_SS_ERROR:-}" ]]; then
   exit 0
 fi
 if [[ -e "${FIXTURE_RUNNER_ACTIVE:?}" ]]; then
-  printf '%s\n' 'LISTEN 0 128 127.0.0.1:4801 0.0.0.0:*'
+  printf '%s\n' 'LISTEN 0 128 0.0.0.0:4801 0.0.0.0:*'
 fi
 STUB
 cat > "$RUNNER_FAKE_BIN/pgrep" <<'STUB'
@@ -427,19 +479,16 @@ runner_runtime="$runner_root/config/dam-hopper"
 runner_stage_record="$runner_root/config/.dam-hopper-linux-production-stage"
 mkdir -p -- "$runner_root/config" "$runner_root/opt" \
   "$runner_root/etc/systemd/system" "$runner_root/staging" \
-  "$runner_root/source/bin" "$runner_root/source/web" "$runner_runtime"
+  "$runner_root/source/bin" "$runner_runtime"
 chmod 700 "$runner_root/config" "$runner_runtime"
 chmod 755 "$runner_root/opt" "$runner_root/etc" "$runner_root/etc/systemd" \
-  "$runner_root/etc/systemd/system" "$runner_root/source" "$runner_root/source/bin" "$runner_root/source/web"
+  "$runner_root/etc/systemd/system" "$runner_root/source" "$runner_root/source/bin"
 printf '%s\n' 'fixture production binary' > "$runner_root/source/bin/dam-hopper-server"
 chmod 755 "$runner_root/source/bin/dam-hopper-server"
-printf '%s\n' '<!doctype html><title>fixture</title>' > "$runner_root/source/web/index.html"
-chmod 644 "$runner_root/source/web/index.html"
 printf '%s\n' 'MONGODB_DATABASE=fixture' > "$runner_runtime/server$runner_env_suffix"
 printf '%s\n' \
   'RUST_ENV=production' 'ENVIRONMENT=production' 'DAM_HOPPER_NO_AUTH=false' \
-  'HOME=/home/loidinh' 'XDG_CONFIG_HOME=/home/loidinh/.config' \
-  'DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web' > "$runner_runtime/server-safety$runner_env_suffix"
+  'HOME=/home/loidinh' 'XDG_CONFIG_HOME=/home/loidinh/.config' > "$runner_runtime/server-safety$runner_env_suffix"
 chmod 600 "$runner_runtime/server$runner_env_suffix" "$runner_runtime/server-safety$runner_env_suffix"
 : > "$runner_root/systemctl.calls"
 
@@ -448,17 +497,38 @@ runner_stage="$(sed -n 's/^staging_dir=//p' <<< "$runner_build_output")"
 [[ -n "$runner_stage" && -d "$runner_stage" ]] || fail "runner build did not retain staging"
 [[ "$(stat -c '%a' "$runner_stage")" == 700 ]] || fail "runner stage mode"
 test -f "$runner_stage/manifest" || fail "runner stage manifest"
+[[ "$(find "$runner_stage" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)" == $'bin\ndam-hopper.service\nmanifest\nnonce' ]] ||
+  fail "runner stage contains unexpected UI or metadata assets"
+grep -Fxq 'format=2' "$runner_stage/manifest" || fail "runner stage marker format"
 pass "runner build creates a restrictive hash-checked stage"
+expect_failure runner_command "$runner_root" build --install-deps
+pass "runner rejects the removed dependency-install option"
 
 export FIXTURE_RUNNER_GREP_ERROR=1
 expect_failure runner_command "$runner_root" build
 unset FIXTURE_RUNNER_GREP_ERROR
 pass "runner refuses staged-tree scanner errors"
 printf 'binary-prefix\0mongodb://fixture-user:fixture-password@fixture.invalid/db\0' > \
-  "$runner_root/source/web/binary-credential"
+  "$runner_root/source/bin/dam-hopper-server"
 expect_failure runner_command "$runner_root" build
-rm -f -- "$runner_root/source/web/binary-credential"
+printf '%s\n' 'fixture production binary' > "$runner_root/source/bin/dam-hopper-server"
+chmod 755 "$runner_root/source/bin/dam-hopper-server"
 pass "runner refuses credential-bearing binary content"
+printf '%s\n' '-----BEGIN OPENSSH PRIVATE KEY-----' > \
+  "$runner_root/source/bin/dam-hopper-server"
+runner_command "$runner_root" build >/dev/null
+printf '%s\n' 'fixture production binary' > "$runner_root/source/bin/dam-hopper-server"
+chmod 755 "$runner_root/source/bin/dam-hopper-server"
+pass "runner permits private-key header markers without key material"
+printf '%s\n' \
+  '-----BEGIN OPENSSH PRIVATE KEY-----' \
+  '0123456789012345678901234567890123456789' \
+  '-----END OPENSSH PRIVATE KEY-----' > \
+  "$runner_root/source/bin/dam-hopper-server"
+expect_failure runner_command "$runner_root" build
+printf '%s\n' 'fixture production binary' > "$runner_root/source/bin/dam-hopper-server"
+chmod 755 "$runner_root/source/bin/dam-hopper-server"
+pass "runner refuses embedded private-key material"
 runner_build_output="$(runner_command "$runner_root" build)"
 runner_stage="$(sed -n 's/^staging_dir=//p' <<< "$runner_build_output")"
 [[ -n "$runner_stage" && -d "$runner_stage" ]] || fail "runner rebuild did not retain staging"
@@ -466,6 +536,7 @@ runner_stage="$(sed -n 's/^staging_dir=//p' <<< "$runner_build_output")"
 : > "$runner_root/systemctl.calls"
 runner_auto_install_output="$(runner_command "$runner_root" install)"
 [[ -d "$runner_root/opt/dam-hopper/.systemd-fresh-install" ]] || fail "automatic runner install marker"
+[[ ! -e "$runner_root/opt/dam-hopper/web" ]] || fail "server-only install copied web assets"
 [[ ! -e "$runner_root/systemctl.active" ]] || fail "automatic install started the service"
 assert_runner_systemctl_calls $'daemon-reload\nenable'
 pass "runner installs the recorded retained stage without --staging"
@@ -477,6 +548,47 @@ printf '%s\n' "ROLLBACK $runner_root/opt/dam-hopper" |
 [[ ! -e "$runner_stage_record" && ! -L "$runner_stage_record" ]] ||
   fail "automatic-stage record survived rollback"
 pass "rollback clears the automatic-stage record"
+
+legacy_runner_root="$TEST_ROOT/runner-legacy"
+legacy_runner_runtime="$legacy_runner_root/config/dam-hopper"
+mkdir -p -- "$legacy_runner_root/config" "$legacy_runner_root/opt" \
+  "$legacy_runner_root/etc/systemd/system" "$legacy_runner_root/staging" \
+  "$legacy_runner_root/source/bin" "$legacy_runner_runtime"
+chmod 700 "$legacy_runner_root/config" "$legacy_runner_runtime"
+chmod 755 "$legacy_runner_root/opt" "$legacy_runner_root/etc" "$legacy_runner_root/etc/systemd" \
+  "$legacy_runner_root/etc/systemd/system" "$legacy_runner_root/source" "$legacy_runner_root/source/bin"
+cp -- "$runner_root/source/bin/dam-hopper-server" "$legacy_runner_root/source/bin/dam-hopper-server"
+printf '%s\n' 'MONGODB_DATABASE=fixture' > "$legacy_runner_runtime/server$runner_env_suffix"
+printf '%s\n' \
+  'RUST_ENV=production' 'ENVIRONMENT=production' 'DAM_HOPPER_NO_AUTH=false' \
+  'HOME=/home/loidinh' 'XDG_CONFIG_HOME=/home/loidinh/.config' > "$legacy_runner_runtime/server-safety$runner_env_suffix"
+chmod 600 "$legacy_runner_runtime/server$runner_env_suffix" "$legacy_runner_runtime/server-safety$runner_env_suffix"
+: > "$legacy_runner_root/systemctl.calls"
+legacy_runner_build_output="$(runner_command "$legacy_runner_root" build)"
+legacy_runner_stage="$(sed -n 's/^staging_dir=//p' <<< "$legacy_runner_build_output")"
+runner_command "$legacy_runner_root" install --staging "$legacy_runner_stage" >/dev/null
+legacy_runner_install="$legacy_runner_root/opt/dam-hopper"
+legacy_runner_marker="$legacy_runner_install/.systemd-fresh-install"
+mkdir -p -- "$legacy_runner_install/web"
+printf '%s\n' '<!doctype html>' > "$legacy_runner_install/web/index.html"
+chmod 755 "$legacy_runner_install/web"
+chmod 644 "$legacy_runner_install/web/index.html"
+legacy_runner_web_hash="$(sha256sum "$legacy_runner_install/web/index.html" | awk '{print $1}')"
+printf '%s  ./index.html\n' "$legacy_runner_web_hash" > "$legacy_runner_marker/web.sha256"
+printf '%s\n' \
+  'format=1' \
+  "nonce=$(cat "$legacy_runner_marker/nonce")" \
+  "binary_sha256=$(sha256sum "$legacy_runner_install/bin/dam-hopper-server" | awk '{print $1}')" \
+  "unit_sha256=$(sha256sum "$legacy_runner_root/etc/systemd/system/dam-hopper.service" | awk '{print $1}')" \
+  'web_file_count=1' \
+  'web_dir_count=1' > "$legacy_runner_marker/manifest"
+chmod 600 "$legacy_runner_marker/manifest" "$legacy_runner_marker/web.sha256"
+expect_failure runner_command "$legacy_runner_root" status
+runner_command "$legacy_runner_root" rollback --dry-run >/dev/null
+printf '%s\n' "ROLLBACK $legacy_runner_install" |
+  runner_command "$legacy_runner_root" rollback --confirm >/dev/null
+[[ ! -e "$legacy_runner_install" ]] || fail "legacy runner rollback left web-bearing assets"
+pass "legacy runner install remains rollback-compatible"
 
 printf '%s\n%s\n' "$runner_stage" "$runner_stage" > "$runner_stage_record"
 chmod 600 "$runner_stage_record"
@@ -564,6 +676,9 @@ pass "runner cleans a partial install after enable failure"
 : > "$runner_root/systemctl.calls"
 runner_install_output="$(runner_command "$runner_root" install --staging "$runner_stage")"
 [[ -d "$runner_root/opt/dam-hopper/.systemd-fresh-install" ]] || fail "runner install marker"
+[[ ! -e "$runner_root/opt/dam-hopper/web" ]] || fail "runner install copied web assets"
+[[ "$(find "$runner_root/opt/dam-hopper/.systemd-fresh-install" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)" == $'manifest\nnonce' ]] ||
+  fail "runner install marker contains web metadata"
 [[ ! -e "$runner_root/systemctl.active" ]] || fail "install started the service"
 assert_runner_systemctl_calls $'daemon-reload\nenable'
 ! grep -Fxq start "$runner_root/systemctl.calls" || fail "install start call"
@@ -597,7 +712,7 @@ pass "runner refuses listener inspection errors instead of treating them as free
 runner_command "$runner_root" start >/dev/null
 [[ -e "$runner_root/systemctl.active" ]] || fail "runner start call"
 assert_runner_systemctl_calls start
-pass "runner start validates installed evidence and loopback listener"
+pass "runner start validates installed evidence and wildcard listener"
 
 runner_foreign_target="$runner_root/foreign-dam-hopper.service"
 printf '%s\n' foreign > "$runner_foreign_target"
