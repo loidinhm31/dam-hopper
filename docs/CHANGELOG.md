@@ -25,7 +25,7 @@
 
 ## 2026-07-30
 
-- **Native embedded browser controller (Phase 03).** Added the Tauri desktop child-WebView controller, build-time bridge injection, loopback/HTTPS tunnel navigation policy, bounded native relay validation, profile-isolated browser storage, lifecycle/geometry commands, and fail-closed popup, download, redirect, external-scheme, and permission handling. Windows WebView2 is the verified implementation target; Linux remains build-only and macOS is deferred. [See plan](../plans/260728-1313-tauri-native-embedded-browser/plan.md).
+- **Native embedded browser controller (Phase 03).** Added the Tauri desktop child-WebView controller, build-time bridge injection, loopback/HTTPS tunnel navigation policy, bounded native relay validation, profile-isolated browser storage, lifecycle/geometry commands, and fail-closed popup, download, redirect, external-scheme, and permission handling. Windows WebView2 is the verified implementation target; Linux now has a WebKitGTK relay implementation but remains runtime-unverified, and macOS is deferred. [See plan](../plans/260728-1313-tauri-native-embedded-browser/plan.md).
 
 ## 2026-08-01
 

@@ -21,4 +21,26 @@ describe("clipBrowserDebugViewportFrame", () => {
       ),
     ).toBeNull();
   });
+
+  it("clips a viewport to a nested stage as well as the window", () => {
+    expect(
+      clipBrowserDebugViewportFrame(
+        { top: 20, left: 10, width: 500, height: 400 },
+        800,
+        600,
+        { top: 50, left: 40, width: 200, height: 160 },
+      ),
+    ).toEqual({ top: 50, left: 40, width: 200, height: 160 });
+  });
+
+  it("returns null when the viewport misses the nested stage", () => {
+    expect(
+      clipBrowserDebugViewportFrame(
+        { top: 20, left: 10, width: 20, height: 20 },
+        800,
+        600,
+        { top: 50, left: 40, width: 200, height: 160 },
+      ),
+    ).toBeNull();
+  });
 });

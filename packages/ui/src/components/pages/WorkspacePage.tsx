@@ -101,6 +101,16 @@ import { resolveRevealActiveFileOutcome } from "@/lib/reveal-active-file.js";
 import { resolveSearchMatchTarget } from "@/lib/search-replace-next.js";
 import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
 import {
+  BROWSER_DEBUG_VIEWPORT_MAX_HEIGHT,
+  enterBrowserDebugViewportCustomMode,
+  loadBrowserDebugViewport,
+  saveBrowserDebugViewport,
+  setBrowserDebugViewportMode,
+  stepBrowserDebugViewport,
+  updateBrowserDebugViewportSize,
+  type BrowserDebugViewportState,
+} from "@/lib/browser-debug-viewport.js";
+import {
   subscribeToRegistry,
   subscribeToRegistryChanges,
   terminalRegistry,
@@ -367,8 +377,26 @@ export default function WorkspacePage() {
     getTerminalRegistrySnapshot,
   );
   const browserViewportRef = useRef<HTMLDivElement>(null);
+  const browserViewportStageRef = useRef<HTMLDivElement>(null);
   const browserKeepAliveRef = useRef<BrowserDebugKeepAliveHandle>(null);
-  const [browserViewportVersion, setBrowserViewportVersion] = useState(0);
+  const browserViewportPlatform =
+    browserDebugHost.environment.platform ??
+    (typeof document === "undefined"
+      ? undefined
+      : document.documentElement.dataset.appPlatform) ??
+    (browserDebugHost.environment.kind === "web" ? "web" : undefined);
+  const [browserViewportState, setBrowserViewportState] = useState(() =>
+    loadBrowserDebugViewport(browserViewportPlatform),
+  );
+  const [browserViewportReadyVersion, setBrowserViewportReadyVersion] =
+    useState(0);
+  const browserViewportVersion =
+    browserViewportReadyVersion +
+    (browserViewportState.mode === "custom"
+      ? browserViewportState.customSize.width *
+          (BROWSER_DEBUG_VIEWPORT_MAX_HEIGHT + 1) +
+        browserViewportState.customSize.height
+      : 0);
   const [
     terminalFilePanelEditorFocusSignal,
     setTerminalFilePanelEditorFocusSignal,
@@ -696,8 +724,44 @@ export default function WorkspacePage() {
   }, []);
 
   const notifyBrowserViewportChanged = useCallback(() => {
-    setBrowserViewportVersion((version) => version + 1);
+    setBrowserViewportReadyVersion((version) => version + 1);
   }, []);
+
+  const setBrowserViewportMode = useCallback(
+    (mode: BrowserDebugViewportState["mode"]) => {
+      setBrowserViewportState((current) =>
+        mode === "custom"
+          ? enterBrowserDebugViewportCustomMode(
+              current,
+              browserViewportRef.current?.getBoundingClientRect() ?? null,
+            )
+          : setBrowserDebugViewportMode(current, mode),
+      );
+    },
+    [],
+  );
+
+  const setBrowserViewportSize = useCallback(
+    (size: { width: number; height: number }) => {
+      setBrowserViewportState((current) =>
+        updateBrowserDebugViewportSize(current, size),
+      );
+    },
+    [],
+  );
+
+  const stepBrowserViewport = useCallback(
+    (direction: "increase" | "decrease") => {
+      setBrowserViewportState((current) =>
+        stepBrowserDebugViewport(current, direction),
+      );
+    },
+    [],
+  );
+
+  useEffect(() => {
+    saveBrowserDebugViewport(browserViewportState, browserViewportPlatform);
+  }, [browserViewportPlatform, browserViewportState]);
 
   const toggleEmbeddedBrowser = useCallback(() => {
     setBrowserOpen((current) => !current);
@@ -1077,7 +1141,12 @@ export default function WorkspacePage() {
         }
         onReloadPage={() => window.location.reload()}
         viewportRef={browserViewportRef}
+        viewportStageRef={browserViewportStageRef}
         onViewportReady={notifyBrowserViewportChanged}
+        viewportState={browserViewportState}
+        onViewportModeChange={setBrowserViewportMode}
+        onViewportSizeChange={setBrowserViewportSize}
+        onViewportStep={stepBrowserViewport}
         selection={browserDebug.selection}
         error={browserDebug.error}
         loading={browserDebug.bridgeStatus === "loading"}
@@ -1130,11 +1199,15 @@ export default function WorkspacePage() {
       activeBrowserTerminalTarget,
       browserDebug,
       browserDebugHost.environment,
+      browserViewportState,
       browserTerminalTargets,
       discardBrowserTerminalArtifact,
       insertBrowserTerminalReference,
       notifyBrowserViewportChanged,
       prepareBrowserTerminalArtifact,
+      setBrowserViewportMode,
+      setBrowserViewportSize,
+      stepBrowserViewport,
     ],
   );
 
@@ -2059,6 +2132,7 @@ export default function WorkspacePage() {
         ref={browserKeepAliveRef}
         browser={browserDebug}
         viewportRef={browserViewportRef}
+        viewportStageRef={browserViewportStageRef}
         viewportVersion={browserViewportVersion}
         isViewportVisible={isBrowserViewportVisible}
       />

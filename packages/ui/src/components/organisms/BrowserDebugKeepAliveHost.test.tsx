@@ -228,6 +228,75 @@ describe("BrowserDebugKeepAliveHost", () => {
     expect(overlay?.style.pointerEvents).toBe("none");
   });
 
+  it("keeps native bounds at the requested size while remeasuring stage visibility", async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    const viewport = document.createElement("div");
+    const stage = document.createElement("div");
+    document.body.append(stage, viewport);
+    const viewportRef = { current: viewport };
+    const viewportStageRef = { current: stage };
+    const native = nativeHost();
+    const browser = controller();
+    let viewportRect = { top: 20, left: 10, width: 500, height: 400 };
+
+    Object.defineProperty(viewport, "getBoundingClientRect", {
+      value: () => viewportRect,
+    });
+    Object.defineProperty(stage, "getBoundingClientRect", {
+      value: () => ({ top: 50, left: 40, width: 200, height: 160 }),
+    });
+
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(
+        <BrowserDebugHostProvider
+          host={native.host}
+          environment={{ kind: "native", platform: "android" }}
+        >
+          <BrowserDebugKeepAliveHost
+            browser={browser}
+            viewportRef={viewportRef}
+            viewportStageRef={viewportStageRef}
+            viewportVersion={0}
+            isViewportVisible
+          />
+        </BrowserDebugHostProvider>,
+      );
+    });
+
+    expect(native.host.setViewport).toHaveBeenLastCalledWith({
+      top: 20,
+      left: 10,
+      width: 500,
+      height: 400,
+    });
+
+    viewportRect = { top: 60, left: 20, width: 500, height: 400 };
+    await act(async () => {
+      stage.dispatchEvent(new Event("scroll"));
+    });
+
+    expect(native.host.setViewport).toHaveBeenLastCalledWith({
+      top: 60,
+      left: 20,
+      width: 500,
+      height: 400,
+    });
+
+    viewportRect = { top: -120, left: -30, width: 500, height: 400 };
+    await act(async () => {
+      stage.dispatchEvent(new Event("scroll"));
+    });
+
+    expect(native.host.setViewport).toHaveBeenLastCalledWith({
+      top: -120,
+      left: -30,
+      width: 500,
+      height: 400,
+    });
+  });
+
   it("accepts generation zero after the native host instance is replaced", async () => {
     container = document.createElement("div");
     document.body.appendChild(container);

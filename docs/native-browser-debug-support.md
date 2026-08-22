@@ -10,13 +10,21 @@ fallback and rollback path.
 
 | Capability                                                 | Windows v1                       | Linux artifact                | macOS    |
 | ---------------------------------------------------------- | -------------------------------- | ----------------------------- | -------- |
-| Child-WebView lifecycle and geometry                       | Verified on WebView2             | Build-only, unverified        | Deferred |
-| Document-start bridge in top and same-origin nested frames | Verified on WebView2             | Build-only, unverified        | Deferred |
-| Relay security negatives                                   | Runtime evidence plus unit tests | Unit tests only               | Deferred |
+| Child-WebView lifecycle and geometry                       | Verified on WebView2             | Implemented; runtime unverified | Deferred |
+| Document-start bridge in top and same-origin nested frames | Verified on WebView2             | Implemented; runtime unverified | Deferred |
+| Relay security negatives                                   | Runtime evidence plus unit tests | Unit tests plus Linux build   | Deferred |
 | Packaged application                                       | Required smoke gate              | `.deb`/`.rpm` build gate only | Deferred |
 
-Only Windows carries a v1 support claim. A successful Linux compile or package
-does not imply WebKitGTK runtime support.
+Only Windows carries a v1 runtime support claim. Linux has a WebKitGTK relay
+implementation and keeps viewport rendering/resizing available even if the
+relay cannot be installed, but a successful compile or package does not imply
+runtime verification on every desktop distribution.
+
+Viewport controls are available in both native app shells and ordinary web
+hosting. Android uses the stable iframe adapter inside the native shell because
+Tauri's child-WebView commands are desktop-only, so the same persisted
+responsive/custom controls remain available without claiming a native child
+WebView there. Keyboard shortcuts are not used for viewport resizing.
 
 ## Windows gate
 
@@ -52,10 +60,10 @@ native application assets.
 ## Linux and macOS
 
 Linux CI builds the desktop application and `.deb`/`.rpm` artifacts with the
-WebKitGTK development packages from the workflow. Runtime behavior remains
-unverified, and the UI labels the native host experimental. AppImage support
-and Linux engine verification need a later plan. macOS is intentionally absent
-from v1 packaging and support claims.
+WebKitGTK development packages from the workflow. The native child and relay
+are implemented, but runtime behavior remains unverified on the supported
+distribution matrix. AppImage support and Linux runtime verification need a
+later plan. macOS is intentionally absent from v1 packaging and support claims.
 
 ## Rollback
 

@@ -212,6 +212,7 @@ describe("native browser debug host adapter", () => {
       platform: "linux",
       experimental: true,
     });
+    expect(getNativeBrowserDebugEnvironment("macos").experimental).toBe(true);
     expect(getNativeBrowserDebugEnvironment("windows").experimental).toBe(
       false,
     );
@@ -238,16 +239,18 @@ describe("native browser debug host adapter", () => {
 
   it("replays a validated ready relay that arrives before create resolves", async () => {
     let relayListener: ((event: { payload: unknown }) => void) | undefined;
-    let resolveCreate: ((state: {
-      label: string;
-      profileId: string;
-      sessionId: string;
-      committedUrl: string;
-      committedOrigin: string;
-      generation: number;
-      visible: boolean;
-      relayInstalled: boolean;
-    }) => void) | undefined;
+    let resolveCreate:
+      | ((state: {
+          label: string;
+          profileId: string;
+          sessionId: string;
+          committedUrl: string;
+          committedOrigin: string;
+          generation: number;
+          visible: boolean;
+          relayInstalled: boolean;
+        }) => void)
+      | undefined;
 
     listen.mockImplementation(async (event, listener) => {
       if (event === "browser-debug:relay") relayListener = listener;
@@ -323,6 +326,52 @@ describe("native browser debug host adapter", () => {
         generation: 1,
       }),
     );
+    host.dispose();
+  });
+
+  it("keeps the child alive when only the native relay is unavailable", async () => {
+    listen.mockResolvedValue(() => undefined);
+    invoke.mockImplementation((command: string) => {
+      if (command === "browser_debug_create") {
+        return Promise.resolve({
+          label: "browser-debug",
+          profileId,
+          sessionId,
+          committedUrl: target.url,
+          committedOrigin: target.origin,
+          generation: 0,
+          visible: true,
+          relayInstalled: false,
+        });
+      }
+      return Promise.resolve();
+    });
+
+    const host = new NativeBrowserDebugHost();
+    const events: unknown[] = [];
+    host.subscribe((event) => events.push(event));
+    host.setTarget(target);
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "browser_debug_set_bounds",
+        expect.objectContaining({
+          bounds: { top: 0, left: 0, width: 0, height: 0 },
+        }),
+      ),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "status",
+        status: "unsupported",
+        message: expect.stringContaining("viewport rendering and resizing"),
+      }),
+    );
+    expect(
+      invoke.mock.calls.filter(
+        ([command]) => command === "browser_debug_destroy",
+      ),
+    ).toHaveLength(1);
     host.dispose();
   });
 });

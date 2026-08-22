@@ -7,6 +7,7 @@ import {
   Maximize2,
   Minimize2,
   MousePointer2,
+  Plus,
   RefreshCw,
   X,
 } from "lucide-react";
@@ -20,6 +21,7 @@ import {
 import { BrowserDebugSelectionPreview } from "./BrowserDebugSelectionPreview.js";
 import { BrowserDebugTerminalHandoff } from "./BrowserDebugTerminalHandoff.js";
 import { BrowserDebugConsole } from "./BrowserDebugConsole.js";
+import { BrowserDebugViewportControls } from "./BrowserDebugViewportControls.js";
 import type {
   BrowserTerminalTarget,
   PreparedBrowserTerminalArtifact,
@@ -27,6 +29,12 @@ import type {
 import type { BrowserExtensionPresence } from "@/hooks/use-browser-extension-presence.js";
 import type { BrowserConsoleEntry } from "@/hooks/use-browser-debug.js";
 import type { BrowserDebugHostEnvironment } from "@/contexts/BrowserDebugHostContext.js";
+import {
+  BROWSER_DEBUG_VIEWPORT_MAX_HEIGHT,
+  BROWSER_DEBUG_VIEWPORT_MAX_WIDTH,
+  BROWSER_DEBUG_VIEWPORT_RESIZE_STEP,
+  type BrowserDebugViewportState,
+} from "@/lib/browser-debug-viewport.js";
 
 export type BrowserBridgeStatus =
   | "idle"
@@ -40,7 +48,12 @@ interface BrowserDebugPanelProps {
   url: string;
   bridgeStatus: BrowserBridgeStatus;
   viewportRef?: RefObject<HTMLDivElement | null>;
+  viewportStageRef?: RefObject<HTMLDivElement | null>;
   onViewportReady?: () => void;
+  viewportState?: BrowserDebugViewportState;
+  onViewportModeChange?: (mode: BrowserDebugViewportState["mode"]) => void;
+  onViewportSizeChange?: (size: { width: number; height: number }) => void;
+  onViewportStep?: (direction: "increase" | "decrease") => void;
   selection?: BrowserSelectionV1 | null;
   error?: string | null;
   loading?: boolean;
@@ -169,7 +182,12 @@ export function BrowserDebugPanel({
   url,
   bridgeStatus,
   viewportRef,
+  viewportStageRef,
   onViewportReady,
+  viewportState,
+  onViewportModeChange,
+  onViewportSizeChange,
+  onViewportStep,
   selection,
   error,
   loading = false,
@@ -215,6 +233,14 @@ export function BrowserDebugPanel({
   }, [onStopPicker, pickerActive]);
 
   useEffect(() => onStopCapture, [onStopCapture]);
+
+  const showViewportControls =
+    viewportState !== undefined &&
+    onViewportModeChange !== undefined &&
+    onViewportSizeChange !== undefined &&
+    onViewportStep !== undefined;
+  const customViewport =
+    showViewportControls && viewportState?.mode === "custom";
 
   return (
     <section
@@ -293,6 +319,28 @@ export function BrowserDebugPanel({
         >
           <span>Go</span>
         </Button>
+        {customViewport &&
+          viewportState?.mode === "custom" &&
+          onViewportStep && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 shrink-0 px-0"
+              aria-label={`Increase viewport size by ${BROWSER_DEBUG_VIEWPORT_RESIZE_STEP} CSS pixels`}
+              title={`Increase viewport size by ${BROWSER_DEBUG_VIEWPORT_RESIZE_STEP} CSS pixels`}
+              data-testid="browser-debug-manual-viewport-step"
+              disabled={
+                viewportState.customSize.width ===
+                  BROWSER_DEBUG_VIEWPORT_MAX_WIDTH &&
+                viewportState.customSize.height ===
+                  BROWSER_DEBUG_VIEWPORT_MAX_HEIGHT
+              }
+              onClick={() => onViewportStep("increase")}
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            </Button>
+          )}
         {onToggleMaximize && (
           <button
             type="button"
@@ -377,15 +425,54 @@ export function BrowserDebugPanel({
       {bridgeStatus === "unsupported" && hostEnvironment.kind === "native" && (
         <p className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-[var(--color-text-muted)]">
           {hostEnvironment.experimental
-            ? "Native Browser Debug is experimental on this platform. The child WebView compiled, but its relay engine is not verified yet."
-            : "Native Browser Debug is unavailable in this runtime. DOM selection and manual image attachment remain available when supported."}
+            ? "Native Browser Debug is experimental on this platform. The child WebView is available, but its bridge relay is not verified yet."
+            : "Native Browser Debug is unavailable in this runtime. The viewport remains available for responsive sizing; picker and navigation require the native relay."}
         </p>
       )}
+      {showViewportControls &&
+        viewportState &&
+        onViewportModeChange &&
+        onViewportSizeChange &&
+        onViewportStep && (
+          <BrowserDebugViewportControls
+            state={viewportState}
+            onModeChange={onViewportModeChange}
+            onSizeChange={onViewportSizeChange}
+            onStep={onViewportStep}
+          />
+        )}
       <div
-        ref={viewportRef}
-        className="min-h-0 flex-1 bg-[var(--color-surface-2)]"
-        data-testid="browser-debug-viewport"
-      />
+        ref={viewportStageRef}
+        className="min-h-0 min-w-0 flex-1 overflow-auto bg-[var(--color-surface-2)]"
+        data-testid="browser-debug-viewport-stage"
+      >
+        <div
+          className={
+            customViewport
+              ? "flex min-h-full min-w-full items-start justify-center p-4"
+              : "h-full w-full"
+          }
+        >
+          <div
+            ref={viewportRef}
+            className={
+              customViewport
+                ? "m-auto shrink-0 bg-[var(--color-background)] shadow-lg"
+                : "h-full min-h-0 w-full bg-[var(--color-surface-2)]"
+            }
+            data-testid="browser-debug-viewport"
+            data-viewport-mode={customViewport ? "custom" : "responsive"}
+            style={
+              customViewport && viewportState
+                ? {
+                    width: `${viewportState.customSize.width}px`,
+                    height: `${viewportState.customSize.height}px`,
+                  }
+                : undefined
+            }
+          />
+        </div>
+      </div>
       <BrowserDebugConsole
         entries={consoleEntries}
         onClear={onClearConsole ?? (() => {})}

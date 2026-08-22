@@ -228,9 +228,8 @@ impl BrowserDebugController {
         let relay_result = match platform::install_relay(&child, relay_callback) {
             Ok(result) => result,
             Err(error) => {
-                let _ = child.close();
-                self.clear_state();
-                return Err(format!("install browser-debug relay: {error}"));
+                eprintln!("browser-debug relay unavailable: {error}");
+                PlatformRelayResult::Unsupported
             }
         };
         {
@@ -336,7 +335,7 @@ impl BrowserDebugController {
         raw: &str,
     ) -> Result<(), &'static str> {
         let message = protocol::parse_relay(raw)?;
-        let data = {
+        let (profile_id, generation, origin) = {
             let state = self.state.lock().expect("browser debug state lock");
             let active = state.active.as_ref().ok_or("no_active_child")?;
             if active.session_id != session_id {
@@ -359,20 +358,26 @@ impl BrowserDebugController {
             if source_origin != active.committed_origin || message.origin != source_origin {
                 return Err("origin_mismatch");
             }
-            if data_is_navigation_to_unapproved_origin(&message.payload, &active.policy) {
+            if message.kind == "browser-bridge-event"
+                && data_is_navigation_to_unapproved_origin(&message.payload, &active.policy)
+            {
                 return Err("navigation_origin_rejected");
             }
-            message.payload
-        };
-        let event = AcceptedRelay {
-            label: CHILD_LABEL,
-            profile_id: self.snapshot().profile_id,
-            session_id: session_id.to_string(),
-            generation: self.snapshot().generation,
-            origin: self.snapshot().committed_origin,
-            data,
+            (
+                active.profile_id.clone(),
+                active.generation,
+                active.committed_origin.clone(),
+            )
         };
         let main = self.main_window().map_err(|_| "main_window_missing")?;
+        let event = AcceptedRelay {
+            label: CHILD_LABEL,
+            profile_id,
+            session_id: session_id.to_string(),
+            generation,
+            origin,
+            data: message.payload,
+        };
         main.emit(RELAY_EVENT, event)
             .map_err(|_| "relay_emit_failed")
     }
@@ -579,7 +584,12 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn validate_bounds(bounds: &BrowserDebugBounds) -> Result<(), String> {
-    for value in [bounds.top, bounds.left, bounds.width, bounds.height] {
+    for value in [bounds.top, bounds.left] {
+        if !value.is_finite() || !(-1_000_000.0..=1_000_000.0).contains(&value) {
+            return Err("browser bounds are outside the allowed range".into());
+        }
+    }
+    for value in [bounds.width, bounds.height] {
         if !value.is_finite() || !(0.0..=1_000_000.0).contains(&value) {
             return Err("browser bounds are outside the allowed range".into());
         }
@@ -740,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn bounds_are_rejected_when_negative_or_non_finite() {
+    fn bounds_allow_negative_positions_but_reject_invalid_dimensions() {
         assert!(validate_bounds(&BrowserDebugBounds {
             width: 1.0,
             height: 1.0,
@@ -748,12 +758,22 @@ mod tests {
         })
         .is_ok());
         assert!(validate_bounds(&BrowserDebugBounds {
+            top: -1.0,
+            ..Default::default()
+        })
+        .is_ok());
+        assert!(validate_bounds(&BrowserDebugBounds {
             left: -1.0,
+            ..Default::default()
+        })
+        .is_ok());
+        assert!(validate_bounds(&BrowserDebugBounds {
+            width: -1.0,
             ..Default::default()
         })
         .is_err());
         assert!(validate_bounds(&BrowserDebugBounds {
-            width: f64::NAN,
+            top: f64::NAN,
             ..Default::default()
         })
         .is_err());
@@ -762,6 +782,14 @@ mod tests {
     #[test]
     fn native_bridge_does_not_mirror_console_events_over_tauri_ipc() {
         assert_eq!(NATIVE_BRIDGE_CAPABILITIES, ["navigation"]);
+    }
+
+    #[test]
+    fn bootstrap_does_not_install_viewport_shortcuts_in_the_child() {
+        let script = bridge_bootstrap_script();
+        assert!(!script.contains("browser-debug-viewport-step"));
+        assert!(!script.contains("event.code === 'Equal'"));
+        assert!(!script.contains("event.code === 'Minus'"));
     }
 
     #[test]

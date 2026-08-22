@@ -13,7 +13,7 @@ import {
   applyBrowserDebugHostEvent,
   type BrowserDebugHostEvent,
 } from "@/lib/browser-debug-host.js";
-import { getBrowserDebugViewportFrame } from "@/lib/browser-debug-keep-alive.js";
+import { getBrowserDebugViewportGeometry } from "@/lib/browser-debug-keep-alive.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
 import {
   BrowserDebugIframeHost,
@@ -23,6 +23,7 @@ import {
 export interface BrowserDebugKeepAliveHostProps {
   browser: BrowserDebugController;
   viewportRef: RefObject<HTMLDivElement | null>;
+  viewportStageRef?: RefObject<HTMLDivElement | null>;
   viewportVersion: number;
   isViewportVisible: boolean;
 }
@@ -39,6 +40,7 @@ export const BrowserDebugKeepAliveHost = forwardRef<
   BrowserDebugKeepAliveHostProps
 >(function BrowserDebugKeepAliveHost(props, ref) {
   const { host: suppliedHost } = useBrowserDebugHost();
+  const { browser } = props;
   const iframeRef = useRef<BrowserDebugIframeHostHandle>(null);
   const generationRef = useRef<number | null>(null);
   const onHostEvent = useCallback(
@@ -49,9 +51,9 @@ export const BrowserDebugKeepAliveHost = forwardRef<
       );
       if (!generation.accepted) return;
       generationRef.current = generation.generation;
-      applyBrowserDebugHostEvent(props.browser, event);
+      applyBrowserDebugHostEvent(browser, event);
     },
-    [props.browser],
+    [browser],
   );
 
   useLayoutEffect(() => {
@@ -72,11 +74,15 @@ export const BrowserDebugKeepAliveHost = forwardRef<
   useLayoutEffect(() => {
     if (!suppliedHost) return;
     const viewport = props.viewportRef.current;
+    const stage = props.viewportStageRef?.current;
     const updateFrame = () => {
-      const frame = props.isViewportVisible
-        ? getBrowserDebugViewportFrame(props.viewportRef.current)
+      const geometry = props.isViewportVisible
+        ? getBrowserDebugViewportGeometry(
+            props.viewportRef.current,
+            props.viewportStageRef?.current,
+          )
         : null;
-      suppliedHost.setViewport(frame);
+      suppliedHost.setViewport(geometry?.visibleFrame ? geometry.frame : null);
     };
     updateFrame();
     const observer =
@@ -84,10 +90,13 @@ export const BrowserDebugKeepAliveHost = forwardRef<
         ? null
         : new ResizeObserver(updateFrame);
     if (viewport) observer?.observe(viewport);
+    if (stage) observer?.observe(stage);
+    stage?.addEventListener("scroll", updateFrame);
     window.addEventListener("resize", updateFrame);
     window.addEventListener("scroll", updateFrame, true);
     return () => {
       observer?.disconnect();
+      stage?.removeEventListener("scroll", updateFrame);
       window.removeEventListener("resize", updateFrame);
       window.removeEventListener("scroll", updateFrame, true);
       suppliedHost.setViewport(null);
@@ -95,6 +104,7 @@ export const BrowserDebugKeepAliveHost = forwardRef<
   }, [
     props.isViewportVisible,
     props.viewportRef,
+    props.viewportStageRef,
     props.viewportVersion,
     suppliedHost,
   ]);
@@ -121,7 +131,11 @@ export const BrowserDebugKeepAliveHost = forwardRef<
   return (
     <BrowserDebugIframeHost
       ref={iframeRef}
-      {...props}
+      browser={props.browser}
+      viewportRef={props.viewportRef}
+      viewportStageRef={props.viewportStageRef}
+      viewportVersion={props.viewportVersion}
+      isViewportVisible={props.isViewportVisible}
       onHostEvent={onHostEvent}
     />
   );
