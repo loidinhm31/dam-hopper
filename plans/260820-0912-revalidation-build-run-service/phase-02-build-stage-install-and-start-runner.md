@@ -27,20 +27,21 @@
 
 - One executable production runner with explicit subcommands and no implicit action.
 - Build is unprivileged; install/start/rollback request exact authenticated sudo operations.
-- Build creates unique restrictive staging plus hashes and complete file inventory.
+- Build creates unique restrictive server-only staging plus binary/unit hashes.
 - Install consumes verified staging only, refuses unknown existing assets, and does not start.
 - Start validates installed marker/unit/assets/env/ownership and clean single-owner state.
 - Retire supported `server:*` nohup package aliases; do not run two SQLite owners.
 
 ## Architecture
 
-`run-linux-production.sh build` runs the focused systemd-service server/web/test/
-unit gate (native/Tauri packaging is excluded) and emits a staging manifest.
-`install` validates and installs root-owned binary/web/unit/marker, reloads
-systemd, and enables without starting. `start` validates installed hashes,
-runtime files, service identity, and clean ports/databases before starting, then
-waits up to 10 seconds for the loopback listener; socket inspection fails closed
-if `ss` errors or emits diagnostics. `status` is read-only. `rollback` is
+`run-linux-production.sh build` runs the backend test/release and systemd-unit
+gate (native/Tauri packaging and the separately hosted UI are excluded) and
+emits a server-only staging manifest. `install` validates and installs
+root-owned binary/unit/marker, reloads systemd, and enables without starting.
+`start` validates installed hashes, runtime files, service identity, and clean
+ports/databases before starting, then waits up to 10 seconds for the configured
+`0.0.0.0:4801` listener; socket inspection fails closed if `ss` errors or emits
+diagnostics. `status` is read-only. `rollback` is
 marker-backed and never removes user runtime state.
 
 ## Related code files
@@ -58,11 +59,10 @@ marker-backed and never removes user runtime state.
 
 1. Implement explicit `build`, `install`, `start`, `status`, and `rollback` dispatch,
    exact paths, lock/concurrency guard, cleanup traps, and dry-run/refusal behavior.
-2. Build gate: release server build, production web build with backend override unset,
-   Rust/integration and relevant UI tests, lint, Bash syntax/shell lint,
+2. Build gate: backend tests, release server build, Bash syntax/shell lint,
    JSON/package checks, secret-sentinel scans, executable checks, and expected diff.
-3. Stage binary/web/unit in a unique `0700` directory; record hashes, modes, file and
-   directory counts. Verify unit through an isolated-root/placeholder strategy.
+3. Stage binary/unit in a unique `0700` directory; record hashes and modes.
+   Verify unit through an isolated-root/placeholder strategy.
 4. Install only matching staged assets with root ownership/modes; write marker and
    manifest atomically, daemon-reload, enable, then post-install verify. Do not start.
 5. Start only after installed manifest, ordered env files, effective unit, ports,
@@ -84,9 +84,9 @@ marker-backed and never removes user runtime state.
 
 - PASS — Phase 01/02 fixture tests cover build staging, no-start install,
   start, drift refusal, aliases, and marker-backed rollback behavior.
-- PASS — the unprivileged runner build completed repository checks, artifact
-  checks, restrictive staging, manifest/hash verification, and isolated unit
-  verification. No install was attempted.
+- PASS — the unprivileged runner build completed backend checks, restrictive
+  server-only staging, manifest/hash verification, and isolated unit
+  verification. No UI build or install was attempted.
 - PASS — direct review fixed temporary-file cleanup and strict installed
   manifest-schema validation; the reviewed implementation was approved.
 - CAVEAT — `shellcheck` is not installed in this environment; Bash syntax
@@ -99,9 +99,10 @@ marker-backed and never removes user runtime state.
 ## Success Criteria
 
 - Build failure prevents install; install never starts; start never rebuilds.
-- Server executable/web/unit hashes and ownership match the manifest.
+- Server executable/unit hashes and ownership match the manifest.
 - Effective unit retains non-root identity, direct ExecStart, production auth,
-  loopback 4801, journald, restart/SIGTERM, and hardening fields.
+  the configured `0.0.0.0:4801` listener, journald, restart/SIGTERM, and
+  hardening fields.
 - No supported package command invokes unsafe nohup ownership.
 
 ## Risk Assessment

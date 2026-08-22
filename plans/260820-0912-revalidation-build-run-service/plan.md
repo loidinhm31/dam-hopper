@@ -1,10 +1,10 @@
 ---
 title: "Revalidated Linux production runner"
-description: "Replace the manual Linux handoff with guarded reset, build, systemd install/start, and quick MongoDB dotenv verification workflows."
+description: "Replace the manual Linux handoff with guarded reset, server-only build, systemd install/start, and quick MongoDB dotenv verification workflows."
 status: completed
 priority: P2
 effort: 8h
-branch: feat/systemd-system-service
+branch: feat/systemd-system-service-linux
 tags: [infra, backend, database, security]
 created: 2026-08-20
 ---
@@ -15,15 +15,17 @@ created: 2026-08-20
 
 This plan supersedes `plans/260820-0252-linux-build-run-service/`. Phases 01
 and 02 are implemented and have current repository-side evidence. Phase 03
-core acceptance is complete: the host was installed, started, exercised,
-restarted, authenticated against a protected route, tested with an active PTY,
-and rolled back in an authenticated operator session. The report records the
-optional external-database check as NOT RUN.
+core acceptance is complete for the historical pre-server-only, pre-wildcard
+unit: the host was installed, started, exercised, restarted, authenticated
+against a protected route, tested with an active PTY, and rolled back in an
+authenticated operator session. The report records the optional
+external-database check as NOT RUN.
 
 ## Decisions
 
 - Systemd is the only supported production owner; retire nohup package aliases.
-- Service remains `User=loidinh`, production-auth, same-origin, loopback `4801`.
+- Service remains `User=loidinh`, production-auth, and binds `0.0.0.0:4801` for
+  Tailscale access; browser UI hosting is separate from the systemd package.
 - Quick purge targets only canonical `~/.config/dam-hopper`; repositories,
   workspace/project `.dam-hopper`, external MongoDB, and unrelated containers
   are excluded.
@@ -55,16 +57,18 @@ marker-backed rollback; the bounded results are in the acceptance report.
 
 - PASS — Bash syntax, JSON parsing, whitespace checks, unit verification, and
   the Phase 01/02 fixture harness.
-- PASS — focused lint, UI tests (173 files and 1,109 tests), UI type checking,
-  backend tests, release server build, and same-origin production web build.
+- PASS — backend tests, release server build, shell syntax/fixture validation,
+  and server-only staging/manifest verification.
 - PASS — the real unprivileged production runner build retained a restrictive
   staging directory and completed its artifact, manifest, and isolated unit
   verification gates.
-- CAVEAT — native desktop packaging is outside the systemd service build gate;
-  the production runner now executes only the focused server/web/systemd gates.
-- PASS — the live operator run installed without starting, started as `loidinh`
-  on loopback `127.0.0.1:4801`, passed public/protected HTTP boundary and SPA
-  checks, passed restart with a new PID, and completed marker-backed rollback.
+- CAVEAT — native desktop packaging and the separately hosted UI are outside
+  the systemd service build gate; the production runner packages only the
+  server binary and systemd unit.
+- PASS — the historical live operator run installed without starting, started as
+  `loidinh` on loopback `127.0.0.1:4801`, passed public/protected HTTP boundary
+  and SPA checks, passed restart with a new PID, and completed marker-backed
+  rollback. It predates the current wildcard-bind and server-only package.
 - PASS — authenticated `GET /api/projects` returned `200` while the
   unauthenticated request returned `401`; an active disposable PTY was created,
   then SIGTERM left no listener, server process, or PTY child; bounded journald
