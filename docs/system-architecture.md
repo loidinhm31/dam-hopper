@@ -683,6 +683,18 @@ flowchart LR
 
 - `WorkspacePage` registers Browser beside existing tool definitions for IDE,
   terminal, and compact layouts without creating another PTY lifecycle.
+- Native and web hosts expose `Responsive` and `Custom` Browser Debug viewport
+  controls. Custom width and height are whole CSS-pixel values bounded to
+  160–4096; the top-bar `+` probe and symmetric stepper buttons change both
+  dimensions by 16px. Keyboard shortcuts are intentionally not part of this
+  feature. The state is browser-local and platform-scoped. These controls do
+  not resize the main window; main-window resizing is a separate native shell
+  concern.
+- A custom viewport stage may overflow and scroll. The native adapter and
+  fallback iframe share a host path that remeasures the viewport and stage,
+  preserves the complete requested frame for native bounds and clips only the
+  visible intersection for the fallback iframe; stage scroll and resize
+  changes trigger remeasurement.
 - One `BrowserDebugKeepAliveHost` owns the iframe for the lifetime of
   `WorkspacePage`. The host keeps the iframe in one fixed overlay and moves
   that overlay off-screen when no Browser viewport is active; viewport
@@ -750,9 +762,12 @@ permissions to `core:default`.
 **Native browser-debug controller (Phase 03):**
 
 - `apps/native/src-tauri/src/browser_debug/` owns one stable-label `browser-debug` child WebView, its serialized lifecycle, geometry, visibility, navigation generation, nonce/request state, and main-window-only commands.
+- Custom viewport geometry is supplied by the shared UI through the existing
+  host lifecycle contract; it does not resize the Tauri main window. Web uses
+  the iframe adapter, while desktop native uses the child WebView adapter.
 - Target navigation is parsed and restricted to HTTP loopback or explicitly supplied HTTPS tunnel origins. Credentials, unsafe schemes, popups, downloads, external redirects, and Windows WebView2 permission requests fail closed.
 - The existing built browser bridge is embedded by `build.rs` and injected at document start. The native relay accepts only bounded, schema-validated events matching the child label, committed origin, generation, nonce, and issued request ID.
-- Child cookies, cache, and page storage use a profile-scoped hashed directory under application data. Clearing a profile destroys the active child before removing only that profile’s directory. Linux is build-only until a real engine verification pass; macOS remains deferred.
+- Child cookies, cache, and page storage use a profile-scoped hashed directory under application data. Clearing a profile destroys the active child before removing only that profile’s directory. Linux has a WebKitGTK child/relay implementation but remains runtime-unverified until a real engine verification pass; macOS remains deferred.
 
 ### persistence/ (Phase 04)
 
@@ -2848,13 +2863,5 @@ Refactored `IdeShell.tsx` into a flexible, extensible "Tool Window" system.
 - **Terminal floating-panel layering:** In terminal mode, Files and tool overlays use a shared base `z-index` of `20`; activating one raises it to `25`. Global Browser/debug overlays remain above this layer.
 - **Bottom panel maximize toggle:** The bottom tool panel header exposes an IntelliJ-style maximize/restore button (session-only state, not persisted). Maximizing hides the top area (explorer/editor/right panels via `display:none`) and stretches the bottom panel to fill the workspace body; activity bars stay visible. Closing the maximized bottom tool resets the state. Implemented as sibling-only CSS class flips so the terminal keep-alive element is never remounted (no PTY duplication); layout decisions live in the pure `resolveBottomPanelLayout` helper. Maximizing also unselects active top tools on both sides; reselecting a top tool from the activity bar (or a reveal-active-file request) restores the normal layout. State transitions live in the pure `resolveMaximizeToggle` / `resolveTopToolToggle` helpers.
 
-**Native Browser Debug (Windows v1; Linux experimental):** The Tauri host
-keeps the existing Browser tool contract and selects a host adapter at the
-edge. Windows creates a labeled child WebView, injects the shared bridge at
-document start, and relays only bounded, versioned events through the native
-controller. Navigation is restricted to loopback or server-reported HTTPS
-tunnel origins; popups, downloads, and permissions are denied. The child uses
-per-server profile storage and is destroyed on target/profile changes and main
-window shutdown. Linux builds use the same controller but remain explicitly
-unverified at runtime; setting
+**Native Browser Debug (Windows v1; Linux implementation pending runtime verification):** The Tauri host keeps the existing Browser tool contract and selects a host adapter at the edge. Windows creates a labeled child WebView, injects the shared bridge at document start, and relays only bounded, versioned events through the native controller. Linux uses the equivalent WebKitGTK message hook. Navigation is restricted to loopback or server-reported HTTPS tunnel origins; popups, downloads, and permissions are denied. The child uses per-server profile storage and is destroyed on target/profile changes and main window shutdown. Linux remains explicitly unverified at runtime; setting
 `VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG=0` selects the existing web iframe host.

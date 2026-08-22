@@ -354,6 +354,18 @@ capture state on navigation-generation changes, and uses profile-scoped storage.
 The extension setup below applies only to the web/browser host; native clients
 use the embedded bridge asset.
 
+Both native and web hosts expose `Responsive` and `Custom` viewport controls.
+Custom width and height are whole CSS-pixel values bounded to 160–4096. The
+top-bar `+` probe and the symmetric stepper buttons change both dimensions by
+16px, with state persisted in browser-local storage under a platform-scoped
+key. Keyboard shortcuts are intentionally not part of this feature. A custom
+stage may overflow and scroll; the native child and fallback iframe both use
+stage-aware remeasurement. The native child receives the complete requested
+viewport rectangle so responsive layout keeps the selected width and height;
+only the fallback iframe is clipped to the visible stage intersection. This
+does not resize the main window; main-window resizing is a separate native
+shell concern.
+
 #### Browser Debug extension
 
 The target application does not install a bridge. Every DamHopper web `dev` or

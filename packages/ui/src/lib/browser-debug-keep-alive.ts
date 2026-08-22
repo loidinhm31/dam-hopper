@@ -11,16 +11,35 @@ export function createBrowserDebugId(): string | null {
 import type { BrowserDebugHostViewport } from "./browser-debug-host.js";
 
 export type BrowserDebugViewportFrame = BrowserDebugHostViewport;
+export type BrowserDebugViewportClip = BrowserDebugHostViewport;
+
+export interface BrowserDebugViewportGeometry {
+  /** The complete emulated viewport rectangle used for layout and hosting. */
+  frame: BrowserDebugViewportFrame;
+  /** The portion currently visible inside the browser viewport and stage. */
+  visibleFrame: BrowserDebugViewportFrame | null;
+}
 
 export function clipBrowserDebugViewportFrame(
   frame: BrowserDebugViewportFrame,
   viewportWidth: number,
   viewportHeight: number,
+  clip?: BrowserDebugViewportClip | null,
 ): BrowserDebugViewportFrame | null {
-  const left = Math.max(0, frame.left);
-  const top = Math.max(0, frame.top);
-  const right = Math.min(viewportWidth, frame.left + frame.width);
-  const bottom = Math.min(viewportHeight, frame.top + frame.height);
+  const clipLeft = Math.max(0, clip?.left ?? 0);
+  const clipTop = Math.max(0, clip?.top ?? 0);
+  const clipRight = Math.min(
+    viewportWidth,
+    clip ? clip.left + clip.width : viewportWidth,
+  );
+  const clipBottom = Math.min(
+    viewportHeight,
+    clip ? clip.top + clip.height : viewportHeight,
+  );
+  const left = Math.max(clipLeft, frame.left);
+  const top = Math.max(clipTop, frame.top);
+  const right = Math.min(clipRight, frame.left + frame.width);
+  const bottom = Math.min(clipBottom, frame.top + frame.height);
   if (right <= left || bottom <= top) return null;
   return {
     top,
@@ -37,12 +56,33 @@ export function clipBrowserDebugViewportFrame(
  */
 export function getBrowserDebugViewportFrame(
   viewport: Element | null,
+  clipElement?: Element | null,
 ): BrowserDebugViewportFrame | null {
+  return (
+    getBrowserDebugViewportGeometry(viewport, clipElement)?.visibleFrame ?? null
+  );
+}
+
+/**
+ * Resolve both the requested viewport and its visible intersection. Native
+ * child WebViews need the complete frame to preserve responsive layout; the
+ * visible frame is only a rendering/visibility concern for DOM hosts.
+ */
+export function getBrowserDebugViewportGeometry(
+  viewport: Element | null,
+  clipElement?: Element | null,
+): BrowserDebugViewportGeometry | null {
   if (!viewport) return null;
   const { top, left, width, height } = viewport.getBoundingClientRect();
-  return clipBrowserDebugViewportFrame(
-    { top, left, width, height },
-    window.innerWidth,
-    window.innerHeight,
-  );
+  const clipRect = clipElement?.getBoundingClientRect();
+  const frame = { top, left, width, height };
+  return {
+    frame,
+    visibleFrame: clipBrowserDebugViewportFrame(
+      frame,
+      window.innerWidth,
+      window.innerHeight,
+      clipRect,
+    ),
+  };
 }

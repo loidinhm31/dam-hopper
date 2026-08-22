@@ -56,8 +56,8 @@ interface NativeRelayRejectedEvent {
 function boundsOrZero(viewport: BrowserDebugHostViewport | null) {
   if (!viewport) return { top: 0, left: 0, width: 0, height: 0 };
   return {
-    top: Math.max(0, viewport.top),
-    left: Math.max(0, viewport.left),
+    top: Math.min(1_000_000, Math.max(-1_000_000, viewport.top)),
+    left: Math.min(1_000_000, Math.max(-1_000_000, viewport.left)),
     width: Math.max(0, viewport.width),
     height: Math.max(0, viewport.height),
   };
@@ -215,17 +215,14 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
         this.state = state;
         this.flushPendingRelays();
         if (!state.relayInstalled) {
-          await invoke<void>("browser_debug_destroy").catch(() => {});
-          this.state = null;
           this.emit({
             type: "status",
             status: "unsupported",
             message:
-              "The native Browser Debug child compiled, but this platform's relay engine is experimental and unverified.",
+              "The native Browser Debug child is available for viewport rendering and resizing, but its bridge relay is unavailable on this platform.",
             code: "bridge-unavailable",
             generation,
           });
-          return;
         }
         await this.applyViewport(operation);
       } catch (error) {

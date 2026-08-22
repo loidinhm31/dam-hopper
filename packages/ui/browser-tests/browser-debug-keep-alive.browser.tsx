@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserDebugKeepAliveHost } from "@/components/organisms/BrowserDebugKeepAliveHost.js";
 import { BrowserDebugPanel } from "@/components/organisms/BrowserDebugPanel.js";
 import type { BrowserDebugController } from "@/hooks/use-browser-debug.js";
-import { getBrowserDebugViewportFrame } from "@/lib/browser-debug-keep-alive.js";
+import {
+  getBrowserDebugViewportFrame,
+  getBrowserDebugViewportGeometry,
+} from "@/lib/browser-debug-keep-alive.js";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -25,7 +28,10 @@ describe("browser debug keep-alive in Chromium", () => {
     await new Promise<void>((resolve) =>
       frame.addEventListener("load", () => resolve(), { once: true }),
     );
-    frame.contentDocument?.body.setAttribute("data-keep-alive-probe", "loaded-once");
+    frame.contentDocument?.body.setAttribute(
+      "data-keep-alive-probe",
+      "loaded-once",
+    );
 
     Object.defineProperty(viewport, "getBoundingClientRect", {
       value: () => new DOMRect(10, 20, 640, 480),
@@ -36,17 +42,32 @@ describe("browser debug keep-alive in Chromium", () => {
       width: Math.min(640, window.innerWidth - 10),
       height: Math.min(480, window.innerHeight - 20),
     });
+
+    const stage = document.createElement("div");
+    Object.defineProperty(stage, "getBoundingClientRect", {
+      value: () => new DOMRect(40, 50, 300, 200),
+    });
+    expect(getBrowserDebugViewportFrame(viewport, stage)).toEqual({
+      top: 50,
+      left: 40,
+      width: 300,
+      height: 200,
+    });
+    expect(getBrowserDebugViewportGeometry(viewport, stage)).toEqual({
+      frame: { top: 20, left: 10, width: 640, height: 480 },
+      visibleFrame: { top: 50, left: 40, width: 300, height: 200 },
+    });
     expect(parking.querySelector("iframe")).toBe(frame);
-    expect(frame.contentDocument?.body.getAttribute("data-keep-alive-probe")).toBe(
-      "loaded-once",
-    );
+    expect(
+      frame.contentDocument?.body.getAttribute("data-keep-alive-probe"),
+    ).toBe("loaded-once");
     expect(loadCount).toBe(1);
 
     expect(getBrowserDebugViewportFrame(null)).toBeNull();
     expect(parking.querySelector("iframe")).toBe(frame);
-    expect(frame.contentDocument?.body.getAttribute("data-keep-alive-probe")).toBe(
-      "loaded-once",
-    );
+    expect(
+      frame.contentDocument?.body.getAttribute("data-keep-alive-probe"),
+    ).toBe("loaded-once");
     expect(loadCount).toBe(1);
   });
 

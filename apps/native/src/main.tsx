@@ -2,7 +2,12 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { configureLogger, resolveLogLevel } from "@dam-hopper/shared/logger";
-import { BrowserDebugHostProvider, DamHopperApp, SshForwardHostProvider, SshForwardScopeBridge } from "@dam-hopper/ui";
+import {
+  BrowserDebugHostProvider,
+  DamHopperApp,
+  SshForwardHostProvider,
+  SshForwardScopeBridge,
+} from "@dam-hopper/ui";
 import "@dam-hopper/ui/styles";
 
 import { initTransport } from "@dam-hopper/ui/api/transport";
@@ -114,22 +119,34 @@ const queryClient = new QueryClient({
 });
 
 const nativeSshForwardHost = createNativeSshForwardHost(
-  typeof __DAM_HOPPER_TAURI_PLATFORM__ === "string" ? __DAM_HOPPER_TAURI_PLATFORM__ : "unknown",
+  typeof __DAM_HOPPER_TAURI_PLATFORM__ === "string"
+    ? __DAM_HOPPER_TAURI_PLATFORM__
+    : "unknown",
 );
 const nativeSshForwardEnvironment = {
-  kind: nativeSshForwardHost ? ("nativeDesktop" as const) : ("nativeMobile" as const),
-  platform: typeof __DAM_HOPPER_TAURI_PLATFORM__ === "string" ? __DAM_HOPPER_TAURI_PLATFORM__ : "unknown",
+  kind: nativeSshForwardHost
+    ? ("nativeDesktop" as const)
+    : ("nativeMobile" as const),
+  platform:
+    typeof __DAM_HOPPER_TAURI_PLATFORM__ === "string"
+      ? __DAM_HOPPER_TAURI_PLATFORM__
+      : "unknown",
 };
 const nativeBrowserDebugEnabled = isNativeBrowserDebugEnabled(
   viteEnv?.VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG,
 );
-const nativeBrowserDebugHost = nativeBrowserDebugEnabled
-  ? new NativeBrowserDebugHost()
-  : null;
-const nativeBrowserDebugEnvironment = getNativeBrowserDebugEnvironment(
+const nativePlatform =
   typeof __DAM_HOPPER_TAURI_PLATFORM__ === "string"
     ? __DAM_HOPPER_TAURI_PLATFORM__
-    : "unknown",
+    : "unknown";
+const nativeBrowserDebugHost =
+  nativeBrowserDebugEnabled &&
+  nativePlatform !== "android" &&
+  nativePlatform !== "ios"
+    ? new NativeBrowserDebugHost()
+    : null;
+const nativeBrowserDebugEnvironment = getNativeBrowserDebugEnvironment(
+  nativePlatform,
   nativeBrowserDebugEnabled,
 );
 window.addEventListener(
@@ -144,9 +161,15 @@ window.addEventListener(
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <SshForwardHostProvider host={nativeSshForwardHost} environment={nativeSshForwardEnvironment}>
+    <SshForwardHostProvider
+      host={nativeSshForwardHost}
+      environment={nativeSshForwardEnvironment}
+    >
       <SshForwardScopeBridge>
-        <BrowserDebugHostProvider host={nativeBrowserDebugHost} environment={nativeBrowserDebugEnvironment}>
+        <BrowserDebugHostProvider
+          host={nativeBrowserDebugHost}
+          environment={nativeBrowserDebugEnvironment}
+        >
           <DamHopperApp />
         </BrowserDebugHostProvider>
       </SshForwardScopeBridge>
