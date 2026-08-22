@@ -13,6 +13,12 @@ use std::sync::Arc;
 #[cfg(desktop)]
 use tauri::{Manager, WindowEvent};
 
+#[cfg(desktop)]
+#[tauri::command]
+fn open_debug_console(window: tauri::WebviewWindow) {
+    window.open_devtools();
+}
+
 #[cfg(windows)]
 fn handle_main_close_requested<Prevent, Trigger>(prevent_close: Prevent, trigger: Trigger)
 where
@@ -84,6 +90,7 @@ pub fn run() {
 
     #[cfg(windows)]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        open_debug_console,
         browser_debug::controller::browser_debug_create,
         browser_debug::controller::browser_debug_navigate,
         browser_debug::controller::browser_debug_command,
@@ -113,6 +120,7 @@ pub fn run() {
 
     #[cfg(all(desktop, not(windows)))]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        open_debug_console,
         browser_debug::controller::browser_debug_create,
         browser_debug::controller::browser_debug_navigate,
         browser_debug::controller::browser_debug_command,
