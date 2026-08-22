@@ -29,6 +29,7 @@ interface MarkdownHostProps {
   tier: FileTier;
   mime?: string;
   viewState?: unknown;
+  readOnly?: boolean;
   onChange: (value: string) => void;
   onSave: () => void;
   onViewStateChange: (vs: unknown) => void;
@@ -56,6 +57,7 @@ export function MarkdownHost({
   tier,
   mime,
   viewState,
+  readOnly,
   onChange,
   onSave,
   onViewStateChange,
@@ -111,6 +113,7 @@ export function MarkdownHost({
                 tier={tier}
                 mime={mime}
                 viewState={viewState}
+                readOnly={readOnly}
                 onChange={onChange}
                 onSave={onSave}
                 onViewStateChange={onViewStateChange}
