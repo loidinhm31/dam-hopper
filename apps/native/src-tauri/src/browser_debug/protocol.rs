@@ -53,10 +53,10 @@ pub fn parse_relay(raw: &str) -> Result<RelayMessage, &'static str> {
     {
         return Err("payload_too_large");
     }
-    if kind != "browser-bridge-event" {
-        return Err("invalid_kind");
+    match kind.as_str() {
+        "browser-bridge-event" => validate_bridge_event(&payload, &nonce, &request_id)?,
+        _ => return Err("invalid_kind"),
     }
-    validate_bridge_event(&payload, &nonce, &request_id)?;
     Ok(RelayMessage {
         label,
         generation,

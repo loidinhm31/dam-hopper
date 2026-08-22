@@ -133,6 +133,39 @@ describe("BrowserDebugPanel", () => {
     expect(markup).not.toContain("Browser Debug extension required");
   });
 
+  it("shows bounded custom viewport controls for web and native hosts", () => {
+    for (const hostEnvironment of [
+      { kind: "web" as const },
+      { kind: "native" as const, platform: "android" },
+    ]) {
+      const markup = renderPanel({
+        hostEnvironment,
+        viewportState: {
+          mode: "custom",
+          customSize: { width: 390, height: 844 },
+        },
+        onViewportModeChange: vi.fn(),
+        onViewportSizeChange: vi.fn(),
+        onViewportStep: vi.fn(),
+      });
+
+      expect(markup).toContain('data-testid="browser-debug-viewport-controls"');
+      expect(markup).toContain('value="390"');
+      expect(markup).toContain('value="844"');
+      expect(markup).toContain(
+        'aria-label="Increase viewport size by 16 CSS pixels"',
+      );
+      expect(markup).toContain(
+        'data-testid="browser-debug-manual-viewport-step"',
+      );
+      expect(markup).toContain(
+        'aria-label="Decrease viewport size by 16 CSS pixels"',
+      );
+      expect(markup).toContain('data-viewport-mode="custom"');
+      expect(markup).toContain('style="width:390px;height:844px"');
+    }
+  });
+
   it("does not show Chromium extension instructions for a native host", () => {
     const markup = renderPanel({
       bridgeStatus: "unsupported",

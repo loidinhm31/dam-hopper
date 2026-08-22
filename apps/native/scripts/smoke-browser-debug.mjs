@@ -118,7 +118,7 @@ if (mode === "--validate-evidence") {
 } else if (mode === "--runtime") {
   if (process.platform !== "win32") {
     console.log(
-      "native-browser-debug smoke: runtime gate is Windows-only; build-only status remains unverified",
+      "native-browser-debug smoke: runtime evidence gate is Windows-only; Linux WebKitGTK runtime verification remains pending",
     );
   } else {
     const version = webView2Version();
@@ -147,7 +147,7 @@ if (mode === "--validate-evidence") {
       "native-browser-debug smoke: fixture, bridge asset, and app output checks PASS",
     );
     console.log(
-      "native-browser-debug smoke: Linux result is build-only and unverified at runtime",
+      "native-browser-debug smoke: Linux WebKitGTK relay is compiled; packaged runtime verification remains pending",
     );
   }
 } else {

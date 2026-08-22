@@ -15,7 +15,8 @@ import {
 import type { BrowserDebugController } from "@/hooks/use-browser-debug.js";
 import {
   createBrowserDebugId,
-  getBrowserDebugViewportFrame,
+  getBrowserDebugViewportGeometry,
+  type BrowserDebugViewportGeometry,
   type BrowserDebugViewportFrame,
 } from "@/lib/browser-debug-keep-alive.js";
 import {
@@ -32,6 +33,7 @@ import { parseTrustedBrowserBridgeEvent } from "@/lib/browser-debug-protocol.js"
 export interface BrowserDebugIframeHostProps {
   browser: BrowserDebugController;
   viewportRef: RefObject<HTMLDivElement | null>;
+  viewportStageRef?: RefObject<HTMLDivElement | null>;
   viewportVersion: number;
   isViewportVisible: boolean;
   onHostEvent?: (event: BrowserDebugHostEvent) => void;
@@ -56,12 +58,19 @@ export const BrowserDebugIframeHost = forwardRef<
   BrowserDebugIframeHostHandle,
   BrowserDebugIframeHostProps
 >(function BrowserDebugIframeHost(
-  { browser, viewportRef, viewportVersion, isViewportVisible, onHostEvent },
+  {
+    browser,
+    viewportRef,
+    viewportStageRef,
+    viewportVersion,
+    isViewportVisible,
+    onHostEvent,
+  },
   ref,
 ) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [viewportFrame, setViewportFrame] =
-    useState<BrowserDebugViewportFrame | null>(null);
+  const [viewportGeometry, setViewportGeometry] =
+    useState<BrowserDebugViewportGeometry | null>(null);
   const [hostTarget, setHostTarget] = useState<
     BrowserDebugTarget | null | undefined
   >(undefined);
@@ -314,30 +323,59 @@ export const BrowserDebugIframeHost = forwardRef<
   useLayoutEffect(() => {
     if (!isViewportVisible) return;
     const viewport = viewportRef.current;
-    const updateFrame = () =>
-      setViewportFrame(getBrowserDebugViewportFrame(viewport));
-    updateFrame();
-    if (!viewport) return;
+    const stage = viewportStageRef?.current;
+    const updateGeometry = () =>
+      setViewportGeometry(
+        getBrowserDebugViewportGeometry(viewportRef.current, stage),
+      );
+    updateGeometry();
+    if (!viewport && !stage) return;
     const observer =
       typeof ResizeObserver === "undefined"
         ? null
-        : new ResizeObserver(updateFrame);
-    observer?.observe(viewport);
-    window.addEventListener("resize", updateFrame);
-    window.addEventListener("scroll", updateFrame, true);
+        : new ResizeObserver(updateGeometry);
+    if (viewport) observer?.observe(viewport);
+    if (stage) observer?.observe(stage);
+    stage?.addEventListener("scroll", updateGeometry);
+    window.addEventListener("resize", updateGeometry);
+    window.addEventListener("scroll", updateGeometry, true);
     return () => {
       observer?.disconnect();
-      window.removeEventListener("resize", updateFrame);
-      window.removeEventListener("scroll", updateFrame, true);
+      stage?.removeEventListener("scroll", updateGeometry);
+      window.removeEventListener("resize", updateGeometry);
+      window.removeEventListener("scroll", updateGeometry, true);
     };
-  }, [browser.target, isViewportVisible, viewportRef, viewportVersion]);
+  }, [
+    browser.target,
+    isViewportVisible,
+    viewportRef,
+    viewportStageRef,
+    viewportVersion,
+  ]);
 
   const effectiveViewportFrame =
     hostViewport === undefined
       ? isViewportVisible
-        ? viewportFrame
+        ? (viewportGeometry?.visibleFrame ?? null)
         : null
       : hostViewport;
+  const effectiveContentFrame: BrowserDebugViewportFrame | null =
+    hostViewport === undefined
+      ? isViewportVisible
+        ? (viewportGeometry?.frame ?? null)
+        : null
+      : hostViewport;
+  const iframeStyle =
+    effectiveViewportFrame && effectiveContentFrame
+      ? {
+          position: "absolute" as const,
+          top: effectiveContentFrame.top - effectiveViewportFrame.top,
+          left: effectiveContentFrame.left - effectiveViewportFrame.left,
+          width: effectiveContentFrame.width,
+          height: effectiveContentFrame.height,
+          display: "block",
+        }
+      : undefined;
 
   return (
     <div
@@ -357,7 +395,8 @@ export const BrowserDebugIframeHost = forwardRef<
       <iframe
         ref={iframeRef}
         title="Browser debug target"
-        className="h-full w-full border-0"
+        className="border-0"
+        style={iframeStyle}
         referrerPolicy="no-referrer"
         onLoad={sendConnect}
       />
