@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import { configureLogger, resolveLogLevel } from "@dam-hopper/shared/logger";
 import { BrowserDebugHostProvider, DamHopperApp, SshForwardHostProvider, SshForwardScopeBridge } from "@dam-hopper/ui";
 import "@dam-hopper/ui/styles";
@@ -51,6 +52,32 @@ function syncNativePlatform(): void {
   };
 }
 
+function installNativeDebugConsoleShortcut(): () => void {
+  const platform = __DAM_HOPPER_TAURI_PLATFORM__ || "";
+  if (!platform || platform === "android" || platform === "ios") {
+    return () => {};
+  }
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (
+      event.repeat ||
+      event.code !== "F12" ||
+      !event.shiftKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.metaKey
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    void invoke<void>("open_debug_console").catch(() => {});
+  };
+
+  window.addEventListener("keydown", onKeyDown, true);
+  return () => window.removeEventListener("keydown", onKeyDown, true);
+}
+
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, unknown> })
   .env;
 
@@ -64,6 +91,7 @@ configureLogger({
 });
 initializeClientDiagnostics();
 syncNativePlatform();
+const disposeNativeDebugConsoleShortcut = installNativeDebugConsoleShortcut();
 
 const serverUrl = getNativeServerUrl();
 if (serverUrl) {
@@ -106,7 +134,11 @@ const nativeBrowserDebugEnvironment = getNativeBrowserDebugEnvironment(
 );
 window.addEventListener(
   "beforeunload",
-  () => { nativeBrowserDebugHost?.dispose(); nativeSshForwardHost?.dispose(); },
+  () => {
+    disposeNativeDebugConsoleShortcut();
+    nativeBrowserDebugHost?.dispose();
+    nativeSshForwardHost?.dispose();
+  },
   { once: true },
 );
 
