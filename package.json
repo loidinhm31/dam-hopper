@@ -23,6 +23,7 @@
     "lint": "eslint apps/ packages/",
     "format": "prettier --write .",
     "test": "cd server && cargo test",
+    "test:all": "scripts/run-all-tests.sh",
     "test:run": "cd server && cargo test",
     "check": "pnpm build && pnpm build:native && pnpm lint && cd server && cargo test"
   },

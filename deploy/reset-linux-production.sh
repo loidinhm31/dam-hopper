@@ -4,8 +4,6 @@ umask 077
 
 readonly EXPECTED_USER="loidinh"
 readonly EXPECTED_HOME="/home/loidinh"
-readonly EXPECTED_REPO="/home/loidinh/WS/dam-hopper-ws/systemd-system-service"
-readonly EXPECTED_BRANCH="feat/systemd-system-service"
 readonly UNIT_ENV_RUNTIME_DIR="/home/loidinh/.config/dam-hopper"
 readonly UNIT_NAME="dam-hopper.service"
 readonly ENV_SUFFIX=".e""nv"
@@ -14,6 +12,7 @@ SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(cd -- "$(dirname -- "$SCRIPT_PATH")/.." && pwd -P)"
 FIXTURE_MODE=0
 FIXTURE_ROOT=""
+CURRENT_BRANCH=""
 ENV_INPUT=""
 DRY_RUN=0
 RUNTIME_ONLY=0
@@ -39,6 +38,7 @@ Guarded Linux production runtime reset.
 Usage:
   deploy/reset-linux-production.sh --env-file PATH [--dry-run]
   deploy/reset-linux-production.sh --env-file PATH --runtime-only [--dry-run]
+  deploy/reset-linux-production.sh --runtime-only [--env-file PATH] [--dry-run]
 
 Options:
   --env-file PATH  dotenv source to copy after the runtime is recreated
@@ -48,6 +48,11 @@ Options:
 
 The normal path requires an interactive terminal and the exact confirmation:
   PURGE /home/loidinh/.config/dam-hopper
+
+For a runtime-only migration with no installed service assets, omit
+--env-file to preserve the existing server environment file and regenerate the
+current safety assignments. It requires the exact confirmation:
+  PREPARE /home/loidinh/.config/dam-hopper
 
 Fixture mode is test-only and requires both:
   DAM_HOPPER_RESET_FIXTURE_MODE=1
@@ -159,9 +164,11 @@ MARKER_DIR="$INSTALL_ROOT/.systemd-fresh-install"
 LOCK_PATH="$RUNTIME_PARENT/.dam-hopper-reset.lock"
 MANIFEST="$MARKER_DIR/manifest"
 NONCE_FILE="$MARKER_DIR/nonce"
-WEB_MANIFEST="$MARKER_DIR/web.sha256"
+# Format-1 installs may still contain these web assets; they are validated only
+# for safe legacy cleanup. New server-only installs do not contain them.
+LEGACY_WEB_MANIFEST="$MARKER_DIR/web.sha256"
 BIN_DIR="$INSTALL_ROOT/bin"
-WEB_DIR="$INSTALL_ROOT/web"
+LEGACY_WEB_DIR="$INSTALL_ROOT/web"
 BINARY_PATH="$BIN_DIR/dam-hopper-server"
 UNIT_SOURCE="$REPO_ROOT/deploy/systemd/dam-hopper.service"
 PID_FILE="$RUNTIME_DIR/server.pid"
@@ -230,10 +237,13 @@ assert_identity() {
     [[ "${HOME:-}" == "$EXPECTED_HOME" ]] ||
       die "HOME must be $EXPECTED_HOME"
   fi
-  [[ "$REPO_ROOT" == "$EXPECTED_REPO" ]] ||
-    die "repository path must be $EXPECTED_REPO"
-  [[ "$(git -C "$REPO_ROOT" branch --show-current)" == "$EXPECTED_BRANCH" ]] ||
-    die "checkout must be on $EXPECTED_BRANCH"
+  local git_root
+  git_root="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null)" ||
+    die "deployment script must be inside a Git checkout"
+  [[ "$(realpath -e -- "$git_root")" == "$REPO_ROOT" ]] ||
+    die "deployment script Git root does not match its repository root"
+  CURRENT_BRANCH="$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)"
+  [[ -n "$CURRENT_BRANCH" ]] || CURRENT_BRANCH="(detached HEAD)"
 }
 
 assert_runtime_boundary() {
@@ -256,7 +266,10 @@ assert_runtime_boundary() {
 }
 
 resolve_env_source() {
-  [[ -n "$ENV_INPUT" ]] || die "--env-file is required"
+  if [[ -z "$ENV_INPUT" ]]; then
+    (( RUNTIME_ONLY )) || die "--env-file is required for a full runtime reset"
+    ENV_INPUT="$RUNTIME_DIR/server${ENV_SUFFIX}"
+  fi
   [[ ! -L "$ENV_INPUT" ]] || die "dotenv source must not be a symlink"
   ENV_SOURCE="$(realpath -e -- "$ENV_INPUT")" ||
     die "dotenv source does not exist: $ENV_INPUT"
@@ -264,7 +277,9 @@ resolve_env_source() {
     die "dotenv source must be a regular file"
   case "$ENV_SOURCE" in
     "$RUNTIME_DIR"|"$RUNTIME_DIR"/*)
-      die "dotenv source must be outside the purge target"
+      [[ "$RUNTIME_ONLY" -eq 1 &&
+        "$ENV_SOURCE" == "$RUNTIME_DIR/server${ENV_SUFFIX}" ]] ||
+        die "dotenv source must be outside the purge target"
       ;;
   esac
   [[ "$ENV_SOURCE" != "$LOCK_PATH" ]] ||
@@ -300,6 +315,8 @@ validate_unit_contract() {
   [[ "${environment_files[0]}" != EnvironmentFile=-* &&
     "${environment_files[1]}" != EnvironmentFile=-* ]] ||
     die "systemd environment files must be mandatory"
+  ! grep -Eq '(^|[[:space:]])(--no-auth|DAM_HOPPER_NO_AUTH=|DAM_HOPPER_WEB_DIR=)' "$UNIT_SOURCE" ||
+    die "systemd unit must not embed authentication or web-directory overrides"
 }
 
 acquire_workflow_lock() {
@@ -344,7 +361,7 @@ print_preflight() {
     runtime_meta="$(stat_meta "$RUNTIME_DIR")"
   fi
   printf '%s\n' "Read-only Linux production reset preflight"
-  printf 'repository=%s branch=%s user=%s\n' "$REPO_ROOT" "$EXPECTED_BRANCH" "$EXPECTED_USER"
+  printf 'repository=%s branch=%s user=%s\n' "$REPO_ROOT" "$CURRENT_BRANCH" "$EXPECTED_USER"
   printf 'dotenv-source=%s owner=%s:%s mode=%s bytes=%s\n' \
     "$ENV_SOURCE" "$SOURCE_UID" "$SOURCE_GID" "$SOURCE_MODE" "$SOURCE_BYTES"
   printf 'purge-target=%s state=%s metadata=%s\n' "$RUNTIME_DIR" "$runtime_state" "$runtime_meta"
@@ -380,7 +397,7 @@ manifest_value() {
 verify_web_manifest_paths() {
   local contents line relative entries=0 manifest_paths_file actual_paths_file
   local sorted_manifest_paths sorted_actual_paths
-  contents="$(sudo_cmd cat "$WEB_MANIFEST")" || return 1
+  contents="$(sudo_cmd cat "$LEGACY_WEB_MANIFEST")" || return 1
   manifest_paths_file="$(mktemp)" || return 1
   TEMP_FILES+=("$manifest_paths_file")
   : > "$manifest_paths_file"
@@ -396,7 +413,7 @@ verify_web_manifest_paths() {
   fi
   actual_paths_file="$(mktemp)" || return 1
   TEMP_FILES+=("$actual_paths_file")
-  (cd -- "$WEB_DIR" && sudo_cmd find . -type f -printf './%P\n') > "$actual_paths_file" || return 1
+  (cd -- "$LEGACY_WEB_DIR" && sudo_cmd find . -type f -printf './%P\n') > "$actual_paths_file" || return 1
   sorted_manifest_paths="$(LC_ALL=C sort -- "$manifest_paths_file")" || return 1
   sorted_actual_paths="$(LC_ALL=C sort -- "$actual_paths_file")" || return 1
   [[ "$sorted_manifest_paths" == "$sorted_actual_paths" ]] || return 1
@@ -410,33 +427,44 @@ verify_root_marker() {
   sudo_cmd test -d "$MARKER_DIR" || return 1
   assert_sudo_owner_mode "$MANIFEST" "$ROOT_UID" "$ROOT_GID" "600" || return 1
   assert_sudo_owner_mode "$NONCE_FILE" "$ROOT_UID" "$ROOT_GID" "600" || return 1
-  assert_sudo_owner_mode "$WEB_MANIFEST" "$ROOT_UID" "$ROOT_GID" "600" || return 1
   assert_sudo_owner_mode "$BIN_DIR" "$ROOT_UID" "$ROOT_GID" "755" || return 1
-  assert_sudo_owner_mode "$WEB_DIR" "$ROOT_UID" "$ROOT_GID" "755" || return 1
   assert_sudo_owner_mode "$BINARY_PATH" "$ROOT_UID" "$ROOT_GID" "755" || return 1
   assert_sudo_owner_mode "$UNIT_PATH" "$ROOT_UID" "$ROOT_GID" "644" || return 1
 
-  local expected_root actual_root expected_marker actual_marker
-  expected_root="$(printf '%s\n' .systemd-fresh-install bin web | LC_ALL=C sort)"
-  actual_root="$(sudo_cmd find "$INSTALL_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)" || return 1
-  [[ "$actual_root" == "$expected_root" ]] || return 1
-  expected_marker="$(printf '%s\n' manifest nonce web.sha256 | LC_ALL=C sort)"
-  actual_marker="$(sudo_cmd find "$MARKER_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)" || return 1
-  [[ "$actual_marker" == "$expected_marker" ]] || return 1
-  [[ "$(sudo_cmd find "$BIN_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n')" == "dam-hopper-server" ]] || return 1
-
   local keys expected_keys format nonce actual_nonce binary_hash unit_hash
+  local expected_root actual_root expected_marker actual_marker
   local web_file_count web_dir_count actual_web_files actual_web_dirs actual_hash
   local manifest_lines malformed_manifest_lines
   manifest_lines="$(sudo_cmd awk 'NF { count++ } END { print count + 0 }' "$MANIFEST")" || return 1
-  [[ "$manifest_lines" == "6" ]] || return 1
   malformed_manifest_lines="$(sudo_cmd awk 'NF && $0 !~ /^[A-Za-z0-9_]+=[^[:space:]]+$/ { print "invalid"; exit }' "$MANIFEST")" || return 1
   [[ -z "$malformed_manifest_lines" ]] || return 1
-  keys="$(sudo_cmd awk -F= '/^[A-Za-z0-9_]+=/{print $1}' "$MANIFEST" | LC_ALL=C sort)" || return 1
-  expected_keys="$(printf '%s\n' binary_sha256 format nonce unit_sha256 web_dir_count web_file_count | LC_ALL=C sort)"
-  [[ "$keys" == "$expected_keys" ]] || return 1
   format="$(manifest_value format)" || return 1
-  [[ "$format" == "1" ]] || return 1
+  case "$format" in
+    2)
+      [[ "$manifest_lines" == "4" ]] || return 1
+      expected_root="$(printf '%s\n' .systemd-fresh-install bin | LC_ALL=C sort)"
+      expected_marker="$(printf '%s\n' manifest nonce | LC_ALL=C sort)"
+      expected_keys="$(printf '%s\n' binary_sha256 format nonce unit_sha256 | LC_ALL=C sort)"
+      ;;
+    1)
+      [[ "$manifest_lines" == "6" ]] || return 1
+      expected_root="$(printf '%s\n' .systemd-fresh-install bin web | LC_ALL=C sort)"
+      expected_marker="$(printf '%s\n' manifest nonce web.sha256 | LC_ALL=C sort)"
+      expected_keys="$(printf '%s\n' binary_sha256 format nonce unit_sha256 web_dir_count web_file_count | LC_ALL=C sort)"
+      assert_sudo_owner_mode "$LEGACY_WEB_MANIFEST" "$ROOT_UID" "$ROOT_GID" "600" || return 1
+      assert_sudo_owner_mode "$LEGACY_WEB_DIR" "$ROOT_UID" "$ROOT_GID" "755" || return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  actual_root="$(sudo_cmd find "$INSTALL_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)" || return 1
+  [[ "$actual_root" == "$expected_root" ]] || return 1
+  actual_marker="$(sudo_cmd find "$MARKER_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)" || return 1
+  [[ "$actual_marker" == "$expected_marker" ]] || return 1
+  [[ "$(sudo_cmd find "$BIN_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n')" == "dam-hopper-server" ]] || return 1
+  keys="$(sudo_cmd awk -F= '/^[A-Za-z0-9_]+=/{print $1}' "$MANIFEST" | LC_ALL=C sort)" || return 1
+  [[ "$keys" == "$expected_keys" ]] || return 1
   nonce="$(manifest_value nonce)" || return 1
   [[ "$nonce" =~ ^[a-f0-9]{32}$ ]] || return 1
   actual_nonce="$(sudo_cmd cat "$NONCE_FILE")" || return 1
@@ -449,23 +477,25 @@ verify_root_marker() {
   actual_hash="$(sudo_cmd sha256sum -- "$UNIT_PATH" | awk '{print $1}')" || return 1
   [[ "$actual_hash" == "$unit_hash" ]] || return 1
 
-  web_file_count="$(manifest_value web_file_count)" || return 1
-  web_dir_count="$(manifest_value web_dir_count)" || return 1
-  [[ "$web_file_count" =~ ^[0-9]+$ && "$web_dir_count" =~ ^[0-9]+$ ]] || return 1
-  actual_web_files="$(sudo_cmd find "$WEB_DIR" -type f | wc -l)" || return 1
-  actual_web_dirs="$(sudo_cmd find "$WEB_DIR" -type d | wc -l)" || return 1
-  [[ "$actual_web_files" -eq "$web_file_count" && "$actual_web_dirs" -eq "$web_dir_count" ]] || return 1
-  [[ -z "$(sudo_cmd find "$WEB_DIR" -mindepth 1 ! -type f ! -type d -print -quit)" ]] || return 1
   [[ -z "$(sudo_cmd find "$INSTALL_ROOT" -type l -print -quit)" ]] || return 1
-  [[ -z "$(sudo_cmd find "$WEB_DIR" -type d ! -uid "$ROOT_UID" -print -quit)" ]] || return 1
-  [[ -z "$(sudo_cmd find "$WEB_DIR" -type d ! -gid "$ROOT_GID" -print -quit)" ]] || return 1
-  [[ -z "$(sudo_cmd find "$WEB_DIR" -type d ! -perm 0755 -print -quit)" ]] || return 1
-  [[ -z "$(sudo_cmd find "$WEB_DIR" -type f ! -uid "$ROOT_UID" -print -quit)" ]] || return 1
-  [[ -z "$(sudo_cmd find "$WEB_DIR" -type f ! -gid "$ROOT_GID" -print -quit)" ]] || return 1
-  [[ -z "$(sudo_cmd find "$WEB_DIR" -type f ! -perm 0644 -print -quit)" ]] || return 1
-  verify_web_manifest_paths || return 1
-  [[ "$WEB_MANIFEST_ENTRIES" -eq "$web_file_count" ]] || return 1
-  (cd "$WEB_DIR" && sudo_cmd sha256sum --check "$WEB_MANIFEST" >/dev/null) || return 1
+  if [[ "$format" == "1" ]]; then
+    web_file_count="$(manifest_value web_file_count)" || return 1
+    web_dir_count="$(manifest_value web_dir_count)" || return 1
+    [[ "$web_file_count" =~ ^[0-9]+$ && "$web_dir_count" =~ ^[0-9]+$ ]] || return 1
+    actual_web_files="$(sudo_cmd find "$LEGACY_WEB_DIR" -type f | wc -l)" || return 1
+    actual_web_dirs="$(sudo_cmd find "$LEGACY_WEB_DIR" -type d | wc -l)" || return 1
+    [[ "$actual_web_files" -eq "$web_file_count" && "$actual_web_dirs" -eq "$web_dir_count" ]] || return 1
+    [[ -z "$(sudo_cmd find "$LEGACY_WEB_DIR" -mindepth 1 ! -type f ! -type d -print -quit)" ]] || return 1
+    [[ -z "$(sudo_cmd find "$LEGACY_WEB_DIR" -type d ! -uid "$ROOT_UID" -print -quit)" ]] || return 1
+    [[ -z "$(sudo_cmd find "$LEGACY_WEB_DIR" -type d ! -gid "$ROOT_GID" -print -quit)" ]] || return 1
+    [[ -z "$(sudo_cmd find "$LEGACY_WEB_DIR" -type d ! -perm 0755 -print -quit)" ]] || return 1
+    [[ -z "$(sudo_cmd find "$LEGACY_WEB_DIR" -type f ! -uid "$ROOT_UID" -print -quit)" ]] || return 1
+    [[ -z "$(sudo_cmd find "$LEGACY_WEB_DIR" -type f ! -gid "$ROOT_GID" -print -quit)" ]] || return 1
+    [[ -z "$(sudo_cmd find "$LEGACY_WEB_DIR" -type f ! -perm 0644 -print -quit)" ]] || return 1
+    verify_web_manifest_paths || return 1
+    [[ "$WEB_MANIFEST_ENTRIES" -eq "$web_file_count" ]] || return 1
+    (cd "$LEGACY_WEB_DIR" && sudo_cmd sha256sum --check "$LEGACY_WEB_MANIFEST" >/dev/null) || return 1
+  fi
 }
 
 read_systemd_state() {
@@ -683,8 +713,7 @@ write_atomic_env_files() {
     'ENVIRONMENT=production' \
     'DAM_HOPPER_NO_AUTH=false' \
     'HOME=/home/loidinh' \
-    'XDG_CONFIG_HOME=/home/loidinh/.config' \
-    'DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web' > "$tmp"
+    'XDG_CONFIG_HOME=/home/loidinh/.config' > "$tmp"
   chmod 600 -- "$tmp" || die "could not set server-safety.env mode"
   mv -T -- "$tmp" "$safety_env" || die "could not install server-safety.env atomically"
 }
@@ -704,8 +733,7 @@ validate_runtime_env_files() {
     'ENVIRONMENT=production' \
     'DAM_HOPPER_NO_AUTH=false' \
     'HOME=/home/loidinh' \
-    'XDG_CONFIG_HOME=/home/loidinh/.config' \
-    'DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web')"
+    'XDG_CONFIG_HOME=/home/loidinh/.config')"
   actual="$(<"$safety_env")"
   [[ "$actual" == "$expected" ]] || die "server-safety.env assignments are invalid"
 }
