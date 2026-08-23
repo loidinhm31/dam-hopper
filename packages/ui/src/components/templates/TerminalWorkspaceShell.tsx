@@ -22,6 +22,7 @@ export function TerminalWorkspaceShell({
   terminalOverlayOpen,
   fleetContent,
   gitContent,
+  projectContent,
   portsContent,
   activatePanelRequest,
   workspaceMode,
@@ -34,6 +35,7 @@ export function TerminalWorkspaceShell({
   terminalOverlayOpen?: boolean;
   fleetContent: ReactNode;
   gitContent: ReactNode;
+  projectContent: ReactNode;
   portsContent?: ReactNode;
   activatePanelRequest?: TerminalWorkspacePanelRequest | null;
   workspaceMode: WorkspaceMode;
@@ -88,9 +90,11 @@ export function TerminalWorkspaceShell({
   const activePanel =
     activePanelId === "git"
       ? { label: "Git", content: gitContent }
-      : activePanelId === "ports"
-        ? { label: "Ports", content: portsContent }
-        : { label: "Fleet Terminal", content: fleetContent };
+      : activePanelId === "project"
+        ? { label: "Project", content: projectContent }
+        : activePanelId === "ports"
+          ? { label: "Ports", content: portsContent }
+          : { label: "Fleet Terminal", content: fleetContent };
 
   return (
     <div className="app-screen-height flex flex-col overflow-clip gradient-bg">

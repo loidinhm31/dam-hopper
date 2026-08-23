@@ -64,6 +64,13 @@ function FloatingPanelHarness() {
         </button>
         <button
           type="button"
+          data-testid="switch-project"
+          onClick={() => requestTool("project")}
+        >
+          Switch Project
+        </button>
+        <button
+          type="button"
           data-testid="switch-fleet"
           onClick={() => requestTool("terminals")}
         >
@@ -102,6 +109,11 @@ function FloatingPanelHarness() {
         gitContent={
           <button type="button" data-testid="git-content">
             Git content
+          </button>
+        }
+        projectContent={
+          <button type="button" data-testid="project-content">
+            Project content
           </button>
         }
         portsContent={
@@ -250,6 +262,14 @@ describe("terminal floating panels in Chromium", () => {
         ?.click(),
     );
     expect(panel("ports-content").textContent).toContain("Ports");
+    expect(getComputedStyle(panelRoot(testId("tool"))).zIndex).toBe("25");
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[data-testid=switch-project]")
+        ?.click(),
+    );
+    expect(panel("project-content").textContent).toContain("Project");
     expect(getComputedStyle(panelRoot(testId("tool"))).zIndex).toBe("25");
 
     await act(async () =>

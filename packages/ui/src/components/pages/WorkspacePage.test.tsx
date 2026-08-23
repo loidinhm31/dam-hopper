@@ -474,7 +474,9 @@ describe("WorkspacePage", () => {
     expect(terminalMarkup).toContain("Show files panel");
     expect(terminalMarkup).toContain("Git");
     expect(terminalMarkup).toContain("Ports");
+    expect(terminalMarkup).toContain("Project");
     expect(terminalMarkup).toContain("Fleet");
+    expect(lastTerminalWorkspaceShellProps?.projectContent).toBeDefined();
   });
 
   it("disables text-dependent terminal actions when Android Chrome input is suppressed", () => {
