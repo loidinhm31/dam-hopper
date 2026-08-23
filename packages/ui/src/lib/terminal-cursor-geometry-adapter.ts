@@ -7,10 +7,18 @@ export interface CursorGeometry {
   availableWidth: number;
 }
 
-type RectLike = Pick<DOMRect, "left" | "top" | "right" | "bottom" | "width" | "height">;
+type RectLike = Pick<
+  DOMRect,
+  "left" | "top" | "right" | "bottom" | "width" | "height"
+>;
+type HostSize = Pick<HTMLElement, "clientWidth" | "clientHeight">;
 
 function finiteRect(rect: RectLike): boolean {
-  return Object.values(rect).every(Number.isFinite) && rect.width > 0 && rect.height > 0;
+  return (
+    Object.values(rect).every(Number.isFinite) &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
 }
 
 function contains(host: RectLike, rect: RectLike): boolean {
@@ -64,20 +72,72 @@ export function geometryFromScreenGrid(
   }
   const cellWidth = screen.width / cols;
   const cellHeight = screen.height / rows;
-  if (!Number.isFinite(cellWidth) || !Number.isFinite(cellHeight) || cellWidth < 1 || cellHeight < 1) {
+  if (
+    !Number.isFinite(cellWidth) ||
+    !Number.isFinite(cellHeight) ||
+    cellWidth < 1 ||
+    cellHeight < 1
+  ) {
     return null;
   }
   // xterm's cursorX is the cell where the next grapheme will render.
   const right = screen.left + cursorX * cellWidth;
   const top = screen.top + cursorY * cellHeight;
   const availableWidth = host.right - right;
-  if (availableWidth <= 0 || top < host.top || top + cellHeight > host.bottom) return null;
+  if (availableWidth <= 0 || top < host.top || top + cellHeight > host.bottom)
+    return null;
   return {
     x: right - host.left,
     y: top - host.top,
     lineHeight: cellHeight,
     availableWidth,
   };
+}
+
+/**
+ * Convert rendered DOM deltas into the CSS-pixel space used by the host.
+ *
+ * CSS zoom changes getBoundingClientRect() without changing the host's layout
+ * client size. Measuring the two lets this adapter normalize geometry once,
+ * while keeping the suggestion component independent of zoom implementation.
+ */
+export function normalizeCursorGeometry(
+  geometry: CursorGeometry,
+  hostRect: RectLike,
+  hostSize: HostSize,
+): CursorGeometry | null {
+  if (
+    !finiteRect(hostRect) ||
+    !Number.isFinite(hostSize.clientWidth) ||
+    !Number.isFinite(hostSize.clientHeight) ||
+    hostSize.clientWidth <= 0 ||
+    hostSize.clientHeight <= 0
+  ) {
+    return null;
+  }
+
+  const scaleX = hostRect.width / hostSize.clientWidth;
+  const scaleY = hostRect.height / hostSize.clientHeight;
+  if (
+    !Number.isFinite(scaleX) ||
+    !Number.isFinite(scaleY) ||
+    scaleX <= 0 ||
+    scaleY <= 0
+  ) {
+    return null;
+  }
+
+  const normalized = {
+    x: geometry.x / scaleX,
+    y: geometry.y / scaleY,
+    lineHeight: geometry.lineHeight / scaleY,
+    availableWidth: geometry.availableWidth / scaleX,
+  };
+  return Object.values(normalized).every(Number.isFinite) &&
+    normalized.lineHeight > 0 &&
+    normalized.availableWidth > 0
+    ? normalized
+    : null;
 }
 
 /**
@@ -95,7 +155,10 @@ export class TerminalCursorGeometryAdapter {
     private readonly onGeometry: (geometry: CursorGeometry | null) => void,
   ) {
     const host = terminal.element;
-    if (!host) throw new Error("Terminal must be opened before measuring cursor geometry");
+    if (!host)
+      throw new Error(
+        "Terminal must be opened before measuring cursor geometry",
+      );
     this.host = host;
     this.resizeObserver = new ResizeObserver(() => this.invalidate());
     this.resizeObserver.observe(host);
@@ -148,11 +211,13 @@ export class TerminalCursorGeometryAdapter {
     const textareaRect = this.terminal.textarea?.getBoundingClientRect();
     if (textareaRect) {
       const textareaGeometry = geometryFromTextarea(hostRect, textareaRect);
-      if (textareaGeometry) return textareaGeometry;
+      if (textareaGeometry) {
+        return normalizeCursorGeometry(textareaGeometry, hostRect, this.host);
+      }
     }
     const screen = this.host.querySelector<HTMLElement>(".xterm-screen");
     if (!screen) return null;
-    return geometryFromScreenGrid(
+    const screenGeometry = geometryFromScreenGrid(
       hostRect,
       screen.getBoundingClientRect(),
       this.terminal.cols,
@@ -160,5 +225,8 @@ export class TerminalCursorGeometryAdapter {
       buffer.cursorX,
       buffer.cursorY,
     );
+    return screenGeometry
+      ? normalizeCursorGeometry(screenGeometry, hostRect, this.host)
+      : null;
   }
 }

@@ -72,6 +72,9 @@ const mocks = vi.hoisted(() => {
     handleReplay: vi.fn(),
     scheduleTerminalFit: vi.fn(),
     invalidateSuggestionGeometry: vi.fn(),
+    rendererActivations: [] as Array<{ dispose: ReturnType<typeof vi.fn> }>,
+    attachmentBySession: new Map<string, HTMLElement>(),
+    appZoomLevel: 100,
     settings: {
       terminalFontSize: 13,
       terminalWorkspaceShortcut: "Mod+Shift+Backquote",
@@ -178,14 +181,18 @@ vi.mock("@/lib/terminal-registry.js", () => {
       terminal: unknown,
       fitAddon: unknown,
       findController: unknown,
+      attachmentElement?: HTMLElement,
     ) => {
       const entry = {
         terminal,
         fitAddon,
         findController,
+        attachmentElement,
         invalidateSuggestionGeometry: mocks.invalidateSuggestionGeometry,
       };
       terminalRegistry.set(id, entry);
+      if (attachmentElement)
+        mocks.attachmentBySession.set(id, attachmentElement);
       mocks.terminalBySession.set(
         id,
         terminal as InstanceType<typeof mocks.FakeTerminal>,
@@ -196,6 +203,9 @@ vi.mock("@/lib/terminal-registry.js", () => {
     terminalRegistry,
   };
 });
+vi.mock("@/contexts/AppZoomContext.js", () => ({
+  useAppZoom: () => ({ level: mocks.appZoomLevel }),
+}));
 vi.mock("@/lib/terminal-find-controller.js", () => ({
   TerminalFindController: class {
     getSnapshot = () => ({
@@ -215,7 +225,11 @@ vi.mock("@/lib/terminal-fit-scheduler.js", () => ({
   scheduleTerminalFit: mocks.scheduleTerminalFit,
 }));
 vi.mock("@/lib/terminal-renderer.js", () => ({
-  activateTerminalWebglRenderer: () => ({ renderer: "dom", dispose: vi.fn() }),
+  activateTerminalWebglRenderer: () => {
+    const handle = { renderer: "webgl" as const, dispose: vi.fn() };
+    mocks.rendererActivations.push(handle);
+    return handle;
+  },
 }));
 vi.mock("@/lib/terminal-cursor-geometry-adapter.js", () => ({
   TerminalCursorGeometryAdapter: class {
@@ -313,6 +327,10 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     mocks.transportGeneration = 0;
     mocks.transportChangeListeners.clear();
     mocks.settings.terminalFontSize = 13;
+    mocks.rendererActivations.length = 0;
+    mocks.attachmentBySession.clear();
+    mocks.appZoomLevel = 100;
+    document.documentElement.style.zoom = "";
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -321,6 +339,7 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    document.documentElement.style.zoom = "";
   });
 
   it("queues live chunks until xterm completes retained replay", async () => {
@@ -602,6 +621,61 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     expect(mocks.scheduleTerminalFit).toHaveBeenCalledWith(expect.any(Object), {
       focus: false,
     });
+  });
+
+  it("reactivates WebGL for a terminal recreated by transport replacement", async () => {
+    await act(async () => {
+      root.render(
+        <TerminalPanel
+          sessionId="term-1"
+          project="web"
+          command="bash"
+          webglEnabled
+        />,
+      );
+    });
+    await vi.waitFor(() => expect(mocks.rendererActivations).toHaveLength(1));
+    const firstRenderer = mocks.rendererActivations[0];
+
+    await act(async () => mocks.bumpTransportGeneration());
+
+    await vi.waitFor(() => expect(mocks.rendererActivations).toHaveLength(2));
+    expect(firstRenderer.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the production boundary around xterm while app zoom changes", async () => {
+    mocks.appZoomLevel = 50;
+    document.documentElement.style.zoom = "50%";
+
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+    await vi.waitFor(() =>
+      expect(mocks.attachmentBySession.get("term-1")).toBeDefined(),
+    );
+
+    const terminal = mocks.terminal;
+    const boundary = mocks.attachmentBySession.get("term-1");
+    expect(terminal).toBeDefined();
+    expect(boundary).toBeDefined();
+    expect(boundary?.style.zoom).toBe("2");
+    expect(terminal?.options.fontSize).toBe(6.5);
+    expect(terminal?.element?.parentElement).toBe(boundary);
+
+    mocks.appZoomLevel = 80;
+    document.documentElement.style.zoom = "80%";
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+
+    expect(mocks.terminal).toBe(terminal);
+    expect(boundary?.style.zoom).toBe("1.25");
+    expect(terminal?.options.fontSize).toBeCloseTo(10.4);
+    expect(terminal?.element?.parentElement).toBe(boundary);
   });
 
   it("uses xterm's installed key handler without forwarding font shortcuts", async () => {

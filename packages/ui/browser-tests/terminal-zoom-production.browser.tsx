@@ -36,6 +36,30 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+function createTerminalBoundary(host: HTMLElement): {
+  boundary: HTMLDivElement;
+  terminalHost: HTMLDivElement;
+} {
+  const boundary = document.createElement("div");
+  boundary.style.cssText =
+    "position:absolute; inset:0; width:100%; height:100%; overflow:hidden;";
+  const terminalHost = document.createElement("div");
+  terminalHost.style.cssText = "position:relative; width:100%; height:100%;";
+  boundary.append(terminalHost);
+  host.append(boundary);
+  return { boundary, terminalHost };
+}
+
+function applyTerminalZoom(
+  terminal: Terminal,
+  boundary: HTMLElement,
+  zoom: number,
+): void {
+  document.documentElement.style.zoom = `${zoom * 100}%`;
+  boundary.style.zoom = String(1 / zoom);
+  terminal.options.fontSize = 13 * zoom;
+}
+
 describe("terminal zoom through the production split layout in Chromium", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -91,14 +115,15 @@ describe("terminal zoom through the production split layout in Chromium", () => 
     terminal = new Terminal({ cols: 80, rows: 16, fontSize: 13 });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
-    terminal.open(host!);
+    const { boundary, terminalHost } = createTerminalBoundary(host!);
+    terminal.open(terminalHost);
     await new Promise<void>((resolve) =>
       terminal?.write("TOP-LEFT\r\nsecond row", resolve),
     );
 
     const group = container.querySelector<HTMLElement>("[data-group]");
     const terminalPanel = container.querySelector<HTMLElement>(
-      '[data-panel]#pane-a > div',
+      "[data-panel]#pane-a > div",
     );
     const viewport = host!.querySelector<HTMLElement>(".xterm-viewport");
     expect(group).toBeDefined();
@@ -106,15 +131,16 @@ describe("terminal zoom through the production split layout in Chromium", () => 
     expect(viewport).toBeDefined();
     expect(getComputedStyle(group!).overflow).toBe("clip");
     expect(getComputedStyle(terminalPanel!).overflow).toBe("clip");
-    expect(["auto", "scroll"]).toContain(
-      getComputedStyle(viewport!).overflowY,
-    );
+    expect(["auto", "scroll"]).toContain(getComputedStyle(viewport!).overflowY);
 
     for (const zoom of [1.1, 0.5, 1.2]) {
-      document.documentElement.style.zoom = `${zoom * 100}%`;
+      applyTerminalZoom(terminal, boundary, zoom);
       fitAddon.fit();
       terminal.textarea?.focus();
-      terminal.textarea?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      terminal.textarea?.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+      });
       await nextFrame();
 
       const hostRect = host!.getBoundingClientRect();
@@ -129,6 +155,57 @@ describe("terminal zoom through the production split layout in Chromium", () => 
       expect(firstRowRect?.top).toBeCloseTo(hostRect.top, 1);
       expect(firstRowRect?.left).toBeCloseTo(hostRect.left, 1);
       expect(host!.textContent).toContain("TOP-LEFT");
+    }
+  });
+
+  it("keeps real xterm mouse selection aligned at non-100% zoom", async () => {
+    const line = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    terminal = new Terminal({ cols: 80, rows: 4, fontSize: 13 });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    const { boundary, terminalHost } = createTerminalBoundary(container);
+    terminal.open(terminalHost);
+    await new Promise<void>((resolve) => terminal?.write(line, resolve));
+
+    const screen =
+      terminal.element?.querySelector<HTMLElement>(".xterm-screen");
+    expect(screen).toBeDefined();
+
+    for (const zoom of [0.5, 0.8, 1, 1.2]) {
+      applyTerminalZoom(terminal, boundary, zoom);
+      fitAddon.fit();
+      await nextFrame();
+
+      const screenRect = screen!.getBoundingClientRect();
+      const cellWidth = screenRect.width / terminal.cols;
+      const cellHeight = screenRect.height / terminal.rows;
+      const startX = screenRect.left + cellWidth * 2.25;
+      const endX = screenRect.left + cellWidth * 7.75;
+      const y = screenRect.top + cellHeight * 0.5;
+      const dispatch = (
+        target: EventTarget,
+        type: string,
+        clientX: number,
+        buttons: number,
+      ) =>
+        target.dispatchEvent(
+          new MouseEvent(type, {
+            bubbles: true,
+            button: 0,
+            buttons,
+            clientX,
+            clientY: y,
+            detail: type === "mousedown" ? 1 : 0,
+            view: window,
+          }),
+        );
+
+      terminal.clearSelection();
+      dispatch(screen!, "mousedown", startX, 1);
+      dispatch(document, "mousemove", endX, 1);
+      dispatch(document, "mouseup", endX, 0);
+
+      expect(terminal.getSelection()).toBe("234567");
     }
   });
 });

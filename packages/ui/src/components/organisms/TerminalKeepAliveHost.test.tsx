@@ -16,6 +16,7 @@ const activityRegistrations = new Map<
   TerminalOutputActivityRegistration
 >();
 const mockPolicy = vi.hoisted(() => ({ enabled: false }));
+const mockZoom = vi.hoisted(() => ({ level: 100 }));
 
 vi.mock("@/components/organisms/TerminalPanel.js", () => ({
   TerminalPanel: (props: Record<string, unknown>) => {
@@ -41,6 +42,10 @@ vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
   }),
 }));
 
+vi.mock("@/contexts/AppZoomContext.js", () => ({
+  useAppZoom: () => ({ level: mockZoom.level }),
+}));
+
 import { TerminalKeepAliveHost } from "./TerminalKeepAliveHost.js";
 
 let root: Root | null = null;
@@ -53,6 +58,7 @@ afterEach(() => {
   renderedPanelProps.length = 0;
   activityRegistrations.clear();
   mockPolicy.enabled = false;
+  mockZoom.level = 100;
   delete document.documentElement.dataset.appHost;
   delete document.documentElement.dataset.appPlatform;
 });
@@ -195,6 +201,26 @@ describe("TerminalKeepAliveHost", () => {
         webglEnabled: false,
       }),
     );
+  });
+
+  it("disables WebGL whenever app zoom is not 100%", () => {
+    for (const level of [50, 80, 120]) {
+      renderedPanelProps.length = 0;
+      mockZoom.level = level;
+
+      renderToStaticMarkup(
+        <TerminalKeepAliveHost
+          mountedSessions={[
+            { sessionId: "zoomed", project: "web", command: "bash" },
+          ]}
+          webglEnabledSessionIds={new Set(["zoomed"])}
+        />,
+      );
+
+      expect(renderedPanelProps[0]).toEqual(
+        expect.objectContaining({ sessionId: "zoomed", webglEnabled: false }),
+      );
+    }
   });
 
   it("keeps hidden sessions isolated and disposes removed panels", () => {

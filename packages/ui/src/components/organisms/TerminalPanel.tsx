@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { SearchAddon } from "@xterm/addon-search";
@@ -56,6 +62,7 @@ import { useSettingsStore } from "@/stores/settings.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
 import { TerminalFindBar } from "@/components/atoms/TerminalFindBar.js";
 import { TerminalSuggestionGhost } from "@/components/atoms/TerminalSuggestionGhost.js";
@@ -122,6 +129,9 @@ const EMPTY_FIND_SNAPSHOT: TerminalFindSnapshot = {
   status: "empty",
 };
 
+const useClientLayoutEffect =
+  typeof window === "undefined" ? useEffect : useLayoutEffect;
+
 export function TerminalPanel({
   sessionId,
   project,
@@ -138,6 +148,7 @@ export function TerminalPanel({
   className,
 }: TerminalPanelProps) {
   const transportGeneration = useTransportGeneration();
+  const { level: appZoomLevel } = useAppZoom();
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
   const shouldSuppressNativeKeyboard =
@@ -145,6 +156,8 @@ export function TerminalPanel({
   const shouldSuppressTerminalFocus =
     shouldSuppressNativeKeyboard || suppressAutoFocus;
   const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
+  const appZoomFactor = appZoomLevel / 100;
+  const terminalDisplayFontSize = terminalFontSize * appZoomFactor;
   const containerRef = useRef<HTMLDivElement>(null);
   // Sanitize session ID: server only allows [a-zA-Z0-9:._-]
   const safeSessionId = sessionId.replace(/[^a-zA-Z0-9:._-]/g, "-");
@@ -220,16 +233,33 @@ export function TerminalPanel({
     const term = new Terminal({
       theme: DARK_THEME,
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-      fontSize: terminalFontSize,
+      fontSize: terminalDisplayFontSize,
       lineHeight: 1.4,
       scrollback: 5000,
       convertEol: true,
       allowProposedApi: true,
     });
 
+    // Keep a stable, imperatively owned boundary because PaneContainer moves
+    // terminal surfaces between hosts outside React's tree. Its reciprocal
+    // zoom cancels the document zoom for the xterm subtree only.
+    const terminalBoundary = document.createElement("div");
+    terminalBoundary.style.position = "absolute";
+    terminalBoundary.style.inset = "0";
+    terminalBoundary.style.width = "100%";
+    terminalBoundary.style.height = "100%";
+    terminalBoundary.style.overflow = "hidden";
+    terminalBoundary.style.zoom = String(1 / appZoomFactor);
+    const terminalHost = document.createElement("div");
+    terminalHost.style.position = "relative";
+    terminalHost.style.width = "100%";
+    terminalHost.style.height = "100%";
+    terminalBoundary.appendChild(terminalHost);
+    container.appendChild(terminalBoundary);
+
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-    term.open(container);
+    term.open(terminalHost);
 
     // Search state belongs to this terminal's lifecycle and never enters PTY
     // transport or React state as an xterm object.
@@ -289,6 +319,7 @@ export function TerminalPanel({
       term,
       fitAddon,
       findController,
+      terminalBoundary,
     );
     geometryAdapter = new TerminalCursorGeometryAdapter(
       term,
@@ -592,8 +623,7 @@ export function TerminalPanel({
             ),
           ),
       create: createSession,
-      shouldRetryAfterReplay: () =>
-        retryUnavailableAfterReplayRef.current,
+      shouldRetryAfterReplay: () => retryUnavailableAfterReplayRef.current,
       onTimeout: () => {
         logger.warn(
           "TerminalPanel",
@@ -715,23 +745,34 @@ export function TerminalPanel({
       rendererRef.current?.dispose();
       rendererRef.current = null;
       term.dispose();
+      terminalBoundary.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transportGeneration]);
 
-  useEffect(() => {
+  useClientLayoutEffect(() => {
     const term = termRef.current;
     const entry = terminalRegistry.get(safeSessionId);
-    if (!term || !entry || term.options.fontSize === terminalFontSize) return;
+    const attachmentElement = entry?.attachmentElement ?? term?.element;
+    if (!term || !attachmentElement || !entry) return;
 
-    term.options.fontSize = terminalFontSize;
+    const zoomFactor = appZoomLevel / 100;
+    const nextFontSize = terminalFontSize * zoomFactor;
+    const nextElementZoom = String(1 / zoomFactor);
+    const fontSizeChanged = term.options.fontSize !== nextFontSize;
+    const zoomChanged = attachmentElement.style.zoom !== nextElementZoom;
+    if (!fontSizeChanged && !zoomChanged) return;
+
+    attachmentElement.style.zoom = nextElementZoom;
+    if (fontSizeChanged) term.options.fontSize = nextFontSize;
     entry.invalidateSuggestionGeometry?.();
     scheduleTerminalFit(entry, { focus: false });
-  }, [safeSessionId, termElement, terminalFontSize]);
+  }, [safeSessionId, termElement, terminalFontSize, appZoomLevel]);
 
+  const shouldEnableWebgl = webglEnabled && appZoomLevel === 100;
   useEffect(() => {
     const term = termRef.current;
-    if (!term || !webglEnabled) {
+    if (!term || !termElement || !shouldEnableWebgl) {
       rendererRef.current?.dispose();
       rendererRef.current = null;
       return;
@@ -745,7 +786,7 @@ export function TerminalPanel({
       rendererRef.current?.dispose();
       rendererRef.current = null;
     };
-  }, [webglEnabled]);
+  }, [shouldEnableWebgl, termElement]);
 
   useEffect(() => {
     const controller = findControllerRef.current;
@@ -859,7 +900,7 @@ export function TerminalPanel({
           <TerminalSuggestionGhost
             suffix={ghostSuffix}
             position={cursorGeometry}
-            fontSize={terminalFontSize}
+            fontSize={terminalDisplayFontSize}
           />,
           termElement,
         )}
