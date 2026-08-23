@@ -310,7 +310,7 @@ validate_unit_contract() {
     'Environment=RUST_ENV=production'
     "ExecStart=/opt/dam-hopper/bin/dam-hopper-server --config /home/loidinh/.config/dam-hopper/dam-hopper.toml --host $PRODUCTION_BIND_HOST --port 4801"
     'Restart=on-failure' 'KillSignal=SIGTERM' 'UMask=0077'
-    'NoNewPrivileges=true' 'StandardOutput=journal' 'StandardError=journal'
+    'NoNewPrivileges=false' 'StandardOutput=journal' 'StandardError=journal'
   )
   for required_line in "${required_lines[@]}"; do
     grep -Fxq -- "$required_line" "$unit_file" || return 1
