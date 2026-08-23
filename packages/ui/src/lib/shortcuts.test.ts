@@ -27,6 +27,8 @@ function key(overrides: Partial<ShortcutKeyEvent>): ShortcutKeyEvent {
 describe("shortcuts", () => {
   it("parses and formats keyboard, wheel, and DoubleShift shortcuts", () => {
     expect(formatShortcut("mod+shift+f")).toBe("Mod+Shift+KeyF");
+    expect(formatShortcut("ctrl+shift+keyq")).toBe("Ctrl+Shift+KeyQ");
+    expect(formatShortcut("alt+digit7")).toBe("Alt+Digit7");
     expect(formatShortcut("mod+shift+backquote")).toBe("Mod+Shift+Backquote");
     expect(formatShortcut("alt+f1")).toBe("Alt+F1");
     expect(parseShortcut("Mod+Wheel")?.kind).toBe("wheel");

@@ -3,6 +3,7 @@ export const DEFAULT_SEARCH_TEXT_SHORTCUT = "Mod+Shift+KeyF";
 export const DEFAULT_SEARCH_FILENAME_SHORTCUT = DOUBLE_SHIFT_SHORTCUT;
 export const DEFAULT_TERMINAL_WORKSPACE_SHORTCUT = "Mod+Shift+Backquote";
 export const DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT = "Mod+Shift+KeyE";
+export const DEFAULT_PROJECT_PANEL_SHORTCUT = "Mod+Shift+KeyZ";
 export const DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT = "Alt+F1";
 export const DEFAULT_GIT_PANEL_SHORTCUT = "Mod+Shift+KeyG";
 export const DEFAULT_PORTS_PANEL_SHORTCUT = "Mod+Shift+KeyP";
@@ -227,6 +228,8 @@ function hasAnyModifier(parsed: ShortcutMods): boolean {
 function normalizeCode(code: string): string {
   if (/^[a-z]$/i.test(code)) return `Key${code.toUpperCase()}`;
   if (/^[0-9]$/.test(code)) return `Digit${code}`;
+  if (/^key[a-z]$/i.test(code)) return `Key${code.slice(3).toUpperCase()}`;
+  if (/^digit[0-9]$/i.test(code)) return `Digit${code.slice(5)}`;
   if (/^f\d{1,2}$/i.test(code)) return code.toUpperCase();
   if (code.toLowerCase() === "backquote") return "Backquote";
   if (code.toLowerCase() === "equal") return "Equal";

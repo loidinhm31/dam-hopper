@@ -40,6 +40,7 @@ function resetSettingsStore() {
     searchFilenameShortcut: "DoubleShift",
     terminalWorkspaceShortcut: "Mod+Shift+Backquote",
     terminalFilePanelShortcut: "Mod+Shift+KeyE",
+    projectPanelShortcut: "Mod+Shift+KeyZ",
     revealActiveFileShortcut: "Alt+F1",
     gitPanelShortcut: "Mod+Shift+KeyG",
     portsPanelShortcut: "Mod+Shift+KeyP",
@@ -98,6 +99,7 @@ describe("settings store terminal agent notification fields", () => {
     expect(state.hydrated).toBe(true);
     expect(state.systemFontSize).toBe(16);
     expect(state.terminalFontSize).toBe(13);
+    expect(state.projectPanelShortcut).toBe("Mod+Shift+KeyZ");
     expect(state.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
     expect(state.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
     expect(state.terminalCodexNotificationsEnabled).toBe(false);
@@ -167,6 +169,27 @@ describe("settings store terminal agent notification fields", () => {
     expect(updateUi).toHaveBeenCalledWith(
       expect.objectContaining({ terminalCommitStatusEnabled: true }),
     );
+  });
+
+  it("hydrates and persists the Project panel shortcut", async () => {
+    getGlobalConfig.mockResolvedValue({
+      ui: { projectPanelShortcut: "ctrl+shift+keyq" },
+    });
+    updateUi.mockResolvedValue({ updated: true });
+
+    await useSettingsStore.getState().hydrate();
+    expect(useSettingsStore.getState().projectPanelShortcut).toBe(
+      "Ctrl+Shift+KeyQ",
+    );
+
+    useSettingsStore
+      .getState()
+      .saveDebounced({ projectPanelShortcut: "Mod+Shift+KeyZ" });
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(updateUi).toHaveBeenCalledWith({
+      projectPanelShortcut: "Mod+Shift+KeyZ",
+    });
   });
 
   it("hydrates and persists the explorer language filter", async () => {

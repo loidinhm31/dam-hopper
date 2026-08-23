@@ -132,6 +132,7 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "searchFilenameShortcut" => "search_filename_shortcut",
             "terminalWorkspaceShortcut" => "terminal_workspace_shortcut",
             "terminalFilePanelShortcut" => "terminal_file_panel_shortcut",
+            "projectPanelShortcut" => "project_panel_shortcut",
             "revealActiveFileShortcut" => "reveal_active_file_shortcut",
             "gitPanelShortcut" => "git_panel_shortcut",
             "portsPanelShortcut" => "ports_panel_shortcut",

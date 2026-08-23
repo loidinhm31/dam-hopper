@@ -7,6 +7,7 @@ import {
   DEFAULT_FLEET_TERMINAL_SHORTCUT,
   DEFAULT_GIT_PANEL_SHORTCUT,
   DEFAULT_PORTS_PANEL_SHORTCUT,
+  DEFAULT_PROJECT_PANEL_SHORTCUT,
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
@@ -126,6 +127,7 @@ export function SettingsKeyboardShortcutsSection() {
     revealActiveFileShortcut,
     gitPanelShortcut,
     portsPanelShortcut,
+    projectPanelShortcut,
     fleetTerminalShortcut,
     saveDebounced,
   } = useSettingsStore();
@@ -257,6 +259,22 @@ export function SettingsKeyboardShortcutsSection() {
           defaultValue={DEFAULT_PORTS_PANEL_SHORTCUT}
           onChange={(shortcut) =>
             saveDebounced({ portsPanelShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Project panel"
+        description="Open or close the floating Project panel"
+      >
+        <ShortcutCapture
+          value={projectPanelShortcut}
+          defaultValue={DEFAULT_PROJECT_PANEL_SHORTCUT}
+          label="Project panel"
+          onChange={(shortcut) =>
+            saveDebounced({ projectPanelShortcut: shortcut })
           }
         />
       </SettingRow>
