@@ -24,9 +24,14 @@ const mocks = vi.hoisted(() => {
     element: HTMLElement | undefined;
     readonly writes: Array<{ data: string; callback?: () => void }> = [];
 
-    options = { disableStdin: false, fontSize: 13 };
-    constructor(options?: { fontSize?: number }) {
+    options: {
+      disableStdin: boolean;
+      fontSize: number;
+      convertEol?: boolean;
+    } = { disableStdin: false, fontSize: 13 };
+    constructor(options?: { fontSize?: number; convertEol?: boolean }) {
       this.options.fontSize = options?.fontSize ?? 13;
+      this.options.convertEol = options?.convertEol;
     }
     loadAddon = vi.fn();
     open = vi.fn((host: HTMLElement) => {
@@ -150,7 +155,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class extends mocks.FakeTerminal {
-    constructor(options?: { fontSize?: number }) {
+    constructor(options?: { fontSize?: number; convertEol?: boolean }) {
       super(options);
       mocks.terminal = this;
     }
@@ -385,6 +390,16 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
       recentOutput: true,
       streamReady: true,
     });
+  });
+
+  it("preserves newline semantics from the PTY", async () => {
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+
+    expect(mocks.terminal?.options.convertEol).toBe(false);
   });
 
   it("keeps hidden mounted panels isolated and clears them on host cleanup", async () => {
