@@ -331,10 +331,10 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 
 **Behavior:**
 
-- Renders the selected Files, Git, Ports, or Fleet Terminal panel as a floating overlay in terminal mode.
+- Renders the selected Files, Git, Project, Ports, or Fleet Terminal panel as a floating overlay in terminal mode. The Project panel reuses the same target-aware Project content as the IDE Project tool, including its Worktrees disclosure and project/worktree selection state.
 - The floating panel matches the Explorer interaction model: it can be dragged or resized within the terminal workspace.
 - Files and tool overlays share a base `z-index` of `20`; activating either panel raises it to `25`, while higher-priority global overlays such as Browser/debug capture remain above them.
-- Git, Ports, and Fleet controls are mutually exclusive. Browser is not a floating tool; it is rendered by the active terminal pane.
+- Git, Project, Ports, and Fleet controls are mutually exclusive. Re-selecting the active Project control closes the floating tool; selecting another control replaces it. Browser is not a floating tool; it is rendered by the active terminal pane.
 - Keeps the main terminal area full-height below the top nav.
 
 ### Browser Debug Tool
