@@ -126,7 +126,10 @@ export function AgentStorePage() {
           <>
             <div
               className="flex gap-4"
-              style={{ minHeight: 0, height: "clamp(360px, 45vh, 520px)" }}
+              style={{
+                minHeight: 0,
+                height: "clamp(360px, calc(var(--app-viewport-height) * 0.45), 520px)",
+              }}
             >
               <div className="w-64 shrink-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden flex flex-col">
                 <div className="px-3 py-2 border-b border-[var(--color-border)] shrink-0">
@@ -179,7 +182,9 @@ export function AgentStorePage() {
         {activeTab === "memory" && (
           <div
             className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 flex flex-col"
-            style={{ height: "clamp(400px, 60vh, 640px)" }}
+            style={{
+              height: "clamp(400px, calc(var(--app-viewport-height) * 0.6), 640px)",
+            }}
           >
             <Suspense fallback={AGENT_STORE_FALLBACK}>
               <MemoryEditor projects={projects} />

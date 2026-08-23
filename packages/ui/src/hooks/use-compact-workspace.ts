@@ -1,17 +1,25 @@
 import { useEffect, useState } from "react";
+import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import {
   readCompactWorkspaceMatch,
   subscribeToCompactWorkspace,
 } from "./compact-workspace-media-query.js";
 
 export function useCompactWorkspace() {
-  const [isCompactWorkspace, setIsCompactWorkspace] = useState(
-    readCompactWorkspaceMatch,
-  );
+  const { level: appZoomLevel } = useAppZoom();
+  const [, forceRefresh] = useState(0);
 
   useEffect(() => {
-    return subscribeToCompactWorkspace(setIsCompactWorkspace);
-  }, []);
+    return subscribeToCompactWorkspace(
+      () => forceRefresh((revision) => revision + 1),
+      undefined,
+      appZoomLevel,
+    );
+  }, [appZoomLevel]);
 
-  return isCompactWorkspace;
+  const currentCompactWorkspace = readCompactWorkspaceMatch(
+    undefined,
+    appZoomLevel,
+  );
+  return currentCompactWorkspace;
 }

@@ -31,9 +31,9 @@ export interface BottomPanelLayout {
   innerClassName: string;
 }
 
-const TOP_AREA_BASE = "flex-1 flex min-w-0 overflow-hidden";
+const TOP_AREA_BASE = "flex-1 flex min-w-0 min-h-0 overflow-clip";
 const BOTTOM_OUTER_BASE = "flex flex-col bg-[var(--color-surface)]";
-const INNER_BASE = "flex border-t border-[var(--color-border)] overflow-hidden";
+const INNER_BASE = "flex min-h-0 border-t border-[var(--color-border)] overflow-clip";
 
 /**
  * Resolve the bottom panel layout for the given maximize state.

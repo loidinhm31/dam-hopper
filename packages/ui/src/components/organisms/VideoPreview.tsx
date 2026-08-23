@@ -345,7 +345,7 @@ export function VideoPreview({
             playsInline
             crossOrigin="use-credentials"
             aria-label={`Video preview: ${fileName}`}
-            className="max-h-[min(70vh,720px)] w-full max-w-full object-contain"
+            className="max-h-[min(calc(var(--app-viewport-height)*0.7),720px)] w-full max-w-full object-contain"
             onLoadStart={() => {
               if (acceptsMediaEvent()) setMediaState("loading");
             }}

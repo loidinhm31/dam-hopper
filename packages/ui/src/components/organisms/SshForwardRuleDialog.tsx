@@ -88,7 +88,7 @@ export function SshForwardRuleDialog({
     >
       <div
         ref={dialogRef}
-        className="dialog-viewport-fit relative max-h-[calc(100vh-1.5rem)] w-full max-w-xl overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-xl"
+        className="dialog-viewport-fit relative max-h-[calc(var(--app-viewport-height)_-_1.5rem)] w-full max-w-xl overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-xl"
         role="dialog"
         aria-modal="true"
         aria-labelledby="ssh-rule-title"

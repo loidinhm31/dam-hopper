@@ -145,7 +145,7 @@ export function MultiTerminalDisplay({
   }
 
   return (
-    <div className="relative h-full flex flex-col">
+    <div className="relative h-full min-h-0 flex flex-col">
       {renderTerminals && (
         <TerminalKeepAliveHost
           mountedSessions={mountedSessions}
@@ -162,7 +162,7 @@ export function MultiTerminalDisplay({
       {/* Visible split layout */}
       <div
         data-testid="multi-terminal-display-surface"
-        className="relative min-h-0 flex-1 overflow-hidden"
+        className="relative min-h-0 flex-1 overflow-clip"
       >
         <SplitLayout
           root={layout.root}

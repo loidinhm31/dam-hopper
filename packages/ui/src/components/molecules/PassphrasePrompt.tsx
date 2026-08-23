@@ -196,7 +196,7 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
           position: relative;
           width: 100%;
           max-width: 420px;
-          max-height: calc(100dvh - 32px);
+          max-height: calc(var(--app-viewport-height) - 32px);
           overflow: auto;
           background: var(--color-surface, #1a1a2e);
           border: 1px solid var(--color-border, rgba(255,255,255,0.1));

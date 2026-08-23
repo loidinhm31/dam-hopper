@@ -113,7 +113,7 @@ export function ImportDialog({ onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-[520px] max-h-[80vh] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col shadow-xl">
+      <div className="w-[520px] max-h-[calc(var(--app-viewport-height)*0.8)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] shrink-0">
           <p className="text-sm font-semibold text-[var(--color-text)]">

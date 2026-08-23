@@ -263,7 +263,7 @@ export function ImagePreview({
             alt={`Image preview: ${fileName}`}
             decoding="async"
             crossOrigin="use-credentials"
-            className="max-h-[min(70vh,720px)] max-w-full object-contain"
+            className="max-h-[min(calc(var(--app-viewport-height)*0.7),720px)] max-w-full object-contain"
             onLoad={() => {
               if (acceptsImageEvent()) setImageState("ready");
             }}

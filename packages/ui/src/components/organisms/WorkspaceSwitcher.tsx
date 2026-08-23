@@ -141,7 +141,9 @@ export function WorkspaceSwitcher({
         <div
           className={cn(
             "absolute top-full mt-1 z-[80] rounded-sm glass-card-blur shadow-xl overflow-hidden",
-            isCompact ? "left-0 w-[min(20rem,calc(100vw-1rem))]" : "left-0 right-0",
+            isCompact
+              ? "left-0 w-[min(20rem,calc(var(--app-viewport-width)_-_1rem))]"
+              : "left-0 right-0",
           )}
         >
           {/* Known workspaces */}

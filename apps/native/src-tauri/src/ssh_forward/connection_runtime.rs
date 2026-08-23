@@ -1354,14 +1354,6 @@ impl ConnectionRegistry {
         }))
     }
 
-    pub(crate) fn profile_or_rule_is_active(&self, scope_id: &str, id: &str) -> bool {
-        self.entries.values().any(|entry| {
-            entry.profile.scope_id == scope_id
-                && entry.state != SshConnectionState::Disconnected
-                && (entry.profile.id == id || entry.children.contains_key(id))
-        })
-    }
-
     pub(crate) fn connection_keys(&self) -> Vec<(String, WireCounter, Arc<Mutex<()>>)> {
         let mut keys = self
             .entries
@@ -1701,30 +1693,6 @@ mod tests {
             .unwrap();
         assert_eq!(registry.state(id), Some(SshConnectionState::Authenticating));
         assert!(!Arc::ptr_eq(&old.cancellation, &current.cancellation));
-    }
-
-    #[test]
-    fn profile_or_rule_activity_covers_v2_registry_entries() {
-        let mut registry = ConnectionRegistry::new();
-        let connection_id = "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96";
-        let rule_id = "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0";
-        registry
-            .reserve_connection(connection(connection_id), WireCounter::ZERO)
-            .unwrap();
-        registry
-            .entries
-            .get_mut(connection_id)
-            .unwrap()
-            .children
-            .insert(
-                rule_id.into(),
-                ForwardChild::new(rule(rule_id, connection_id, 15432), WireCounter::ZERO),
-            );
-        assert!(registry.profile_or_rule_is_active(SCOPE, connection_id));
-        assert!(registry.profile_or_rule_is_active(SCOPE, rule_id));
-        assert!(!registry.profile_or_rule_is_active(SCOPE_2, rule_id));
-        registry.entries.get_mut(connection_id).unwrap().state = SshConnectionState::Disconnected;
-        assert!(!registry.profile_or_rule_is_active(SCOPE, rule_id));
     }
 
     #[test]

@@ -74,6 +74,22 @@ describe("terminal fit scheduler", () => {
     expect(terminal.terminal.focus).toHaveBeenCalledOnce();
   });
 
+  it("refreshes rendered rows without focusing when requested", () => {
+    const terminal = {
+      fitAddon: { fit: vi.fn() },
+      terminal: {
+        rows: 24,
+        refresh: vi.fn(),
+        focus: vi.fn(),
+      },
+    } satisfies TerminalFitTarget;
+
+    fitTerminalNow(terminal, { refresh: true });
+
+    expect(terminal.terminal.refresh).toHaveBeenCalledWith(0, 23);
+    expect(terminal.terminal.focus).not.toHaveBeenCalled();
+  });
+
   it("schedules each target in fit-all", () => {
     const frames = animationFrameFixture();
     const first = target();

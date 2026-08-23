@@ -12,6 +12,7 @@ import {
   type MobilePanelTriggerPosition,
   type MobileSafeAreaInsets,
 } from "@/lib/mobile-panel-trigger-position.js";
+import { getAppZoomFactor } from "@/lib/app-zoom.js";
 
 interface TriggerDragState extends MobilePanelTriggerPosition {
   pointerId: number;
@@ -19,6 +20,7 @@ interface TriggerDragState extends MobilePanelTriggerPosition {
   startY: number;
   width: number;
   height: number;
+  zoom: number;
   isDragging: boolean;
 }
 
@@ -38,6 +40,24 @@ interface UseMobilePanelTriggerDragReturn {
 }
 
 const TRIGGER_DRAG_THRESHOLD = 6;
+
+function logicalViewportSize(): { width: number; height: number } {
+  const zoom = getAppZoomFactor();
+  return {
+    width: window.innerWidth / zoom,
+    height: window.innerHeight / zoom,
+  };
+}
+
+function logicalTriggerRect(trigger: HTMLElement, zoom: number) {
+  const rect = trigger.getBoundingClientRect();
+  return {
+    left: rect.left / zoom,
+    top: rect.top / zoom,
+    width: rect.width / zoom,
+    height: rect.height / zoom,
+  };
+}
 
 export function useMobilePanelTriggerDrag({
   onDragStart,
@@ -60,12 +80,13 @@ export function useMobilePanelTriggerDrag({
     setTriggerPosition((current) => {
       const trigger = triggerRef.current;
       if (!current || !trigger) return current;
-      const { width, height } = trigger.getBoundingClientRect();
+      const zoom = getAppZoomFactor();
+      const { width, height } = logicalTriggerRect(trigger, zoom);
       return clampMobilePanelTriggerPosition(
         current,
         { width, height },
         avoidTerminalAccessory,
-        { width: window.innerWidth, height: window.innerHeight },
+        logicalViewportSize(),
         (safeAreaRef.current ??= resolveMobileSafeAreaInsets()),
       );
     });
@@ -77,12 +98,13 @@ export function useMobilePanelTriggerDrag({
       setTriggerPosition((current) => {
         const trigger = triggerRef.current;
         if (!current || !trigger) return current;
-        const { width, height } = trigger.getBoundingClientRect();
+        const zoom = getAppZoomFactor();
+        const { width, height } = logicalTriggerRect(trigger, zoom);
         return clampMobilePanelTriggerPosition(
           current,
           { width, height },
           avoidTerminalAccessoryRef.current,
-          { width: window.innerWidth, height: window.innerHeight },
+          logicalViewportSize(),
           (safeAreaRef.current ??= resolveMobileSafeAreaInsets()),
         );
       });
@@ -107,17 +129,21 @@ export function useMobilePanelTriggerDrag({
   ): void => {
     if (event.button !== 0 || !event.isPrimary) return;
 
-    const { left, top, width, height } =
-      event.currentTarget.getBoundingClientRect();
+    const zoom = getAppZoomFactor();
+    const { left, top, width, height } = logicalTriggerRect(
+      event.currentTarget,
+      zoom,
+    );
     suppressClickRef.current = false;
     dragRef.current = {
       pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
+      startX: event.clientX / zoom,
+      startY: event.clientY / zoom,
       left,
       top,
       width,
       height,
+      zoom,
       isDragging: false,
     };
     try {
@@ -133,8 +159,8 @@ export function useMobilePanelTriggerDrag({
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
 
-    const deltaX = event.clientX - drag.startX;
-    const deltaY = event.clientY - drag.startY;
+    const deltaX = event.clientX / drag.zoom - drag.startX;
+    const deltaY = event.clientY / drag.zoom - drag.startY;
     if (
       !drag.isDragging &&
       Math.hypot(deltaX, deltaY) < TRIGGER_DRAG_THRESHOLD
@@ -161,7 +187,7 @@ export function useMobilePanelTriggerDrag({
         { left: drag.left + deltaX, top: drag.top + deltaY },
         drag,
         avoidTerminalAccessoryRef.current,
-        { width: window.innerWidth, height: window.innerHeight },
+        logicalViewportSize(),
         (safeAreaRef.current ??= resolveMobileSafeAreaInsets()),
       ),
     );

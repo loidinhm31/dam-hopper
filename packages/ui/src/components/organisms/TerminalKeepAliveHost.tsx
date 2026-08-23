@@ -1,5 +1,8 @@
+import { useEffect } from "react";
+import { isNativeWindowsHost } from "@/api/server-config.js";
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { subscribeToTerminalAppZoomChanges } from "@/lib/terminal-zoom-invalidation.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
@@ -26,10 +29,13 @@ export function TerminalKeepAliveHost({
 }: TerminalKeepAliveHostProps) {
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
+  const disableWebgl = isNativeWindowsHost();
   const shouldSuppressNativeKeyboard =
     isAndroidChromeNativeInputSuppressed || suppressNativeKeyboard;
   const shouldSuppressTerminalFocus =
     shouldSuppressNativeKeyboard || suppressAutoFocus;
+
+  useEffect(() => subscribeToTerminalAppZoomChanges(), []);
 
   return (
     <div
@@ -70,7 +76,8 @@ export function TerminalKeepAliveHost({
             suppressNativeKeyboard={shouldSuppressNativeKeyboard}
             terminalOrder={terminalOrder}
             webglEnabled={
-              webglEnabledSessionIds?.has(session.sessionId) ?? false
+              !disableWebgl &&
+              (webglEnabledSessionIds?.has(session.sessionId) ?? false)
             }
           />
         );

@@ -9,6 +9,7 @@ export function createBrowserDebugId(): string | null {
 }
 
 import type { BrowserDebugHostViewport } from "./browser-debug-host.js";
+import { getAppZoomFactor } from "./app-zoom.js";
 
 export type BrowserDebugViewportFrame = BrowserDebugHostViewport;
 export type BrowserDebugViewportClip = BrowserDebugHostViewport;
@@ -73,16 +74,30 @@ export function getBrowserDebugViewportGeometry(
   clipElement?: Element | null,
 ): BrowserDebugViewportGeometry | null {
   if (!viewport) return null;
-  const { top, left, width, height } = viewport.getBoundingClientRect();
+  const zoom = getAppZoomFactor();
+  const rect = viewport.getBoundingClientRect();
   const clipRect = clipElement?.getBoundingClientRect();
-  const frame = { top, left, width, height };
+  const frame = {
+    top: rect.top / zoom,
+    left: rect.left / zoom,
+    width: rect.width / zoom,
+    height: rect.height / zoom,
+  };
+  const logicalClipRect = clipRect
+    ? {
+        top: clipRect.top / zoom,
+        left: clipRect.left / zoom,
+        width: clipRect.width / zoom,
+        height: clipRect.height / zoom,
+      }
+    : undefined;
   return {
     frame,
     visibleFrame: clipBrowserDebugViewportFrame(
       frame,
-      window.innerWidth,
-      window.innerHeight,
-      clipRect,
+      window.innerWidth / zoom,
+      window.innerHeight / zoom,
+      logicalClipRect,
     ),
   };
 }

@@ -278,7 +278,7 @@ export const PaneContainer = memo(function PaneContainer({
     <div
       ref={containerRef}
       data-testid="terminal-pane-output-host"
-      className="flex-1 min-h-0 overflow-hidden relative bg-[var(--color-background)]"
+      className="flex-1 min-h-0 overflow-clip relative bg-[var(--color-background)]"
       onClick={() => {
         layout.setFocusedPaneId(node.id);
         if (node.activeSessionId) {
@@ -368,9 +368,15 @@ export const PaneContainer = memo(function PaneContainer({
         <Group
           orientation="horizontal"
           className="min-h-0 flex-1"
+          style={{ overflow: "clip" }}
           data-testid="terminal-browser-split"
         >
-          <Panel id={`${node.id}:terminal`} defaultSize={60} minSize={30}>
+          <Panel
+            id={`${node.id}:terminal`}
+            defaultSize={60}
+            minSize={30}
+            style={{ overflow: "clip" }}
+          >
             {terminalPane}
           </Panel>
           <Separator className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize" />

@@ -93,7 +93,7 @@ export function TerminalWorkspaceShell({
         : { label: "Fleet Terminal", content: fleetContent };
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden gradient-bg">
+    <div className="app-screen-height flex flex-col overflow-clip gradient-bg">
       <TopNav
         collapsed={collapsed}
         onToggle={toggle}
@@ -107,8 +107,8 @@ export function TerminalWorkspaceShell({
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-clip">
+        <main className="relative flex min-w-0 flex-1 flex-col overflow-clip">
           {terminalContent}
           {terminalOverlayContent?.({
             zIndex: resolveTerminalFloatingPanelZIndex(frontPanelId, "files"),

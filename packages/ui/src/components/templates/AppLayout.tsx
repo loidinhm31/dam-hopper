@@ -12,7 +12,7 @@ export function AppLayout({ children, title, actions }: Props) {
   const { collapsed, toggle } = useSidebarCollapse();
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden gradient-bg">
+    <div className="app-screen-height flex flex-col overflow-hidden gradient-bg">
       <TopNav collapsed={collapsed} onToggle={toggle} />
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Sub-header bar */}
