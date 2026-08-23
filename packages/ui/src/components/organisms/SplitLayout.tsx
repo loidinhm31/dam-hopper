@@ -116,8 +116,14 @@ function LayoutTree({
       orientation={node.direction}
       onLayoutChanged={handleResize}
       className="h-full"
+      style={{ overflow: "clip" }}
     >
-      <Panel id={node.children[0].id} defaultSize={node.sizes[0]} minSize={10}>
+      <Panel
+        id={node.children[0].id}
+        defaultSize={node.sizes[0]}
+        minSize={10}
+        style={{ overflow: "clip" }}
+      >
         <LayoutTree
           node={node.children[0]}
           layout={layout}
@@ -137,7 +143,12 @@ function LayoutTree({
         />
       </Panel>
       <Separator className="bg-[var(--color-border)] hover:bg-[var(--color-primary)] transition-colors data-[orientation=vertical]:w-px data-[orientation=vertical]:cursor-col-resize data-[orientation=horizontal]:h-px data-[orientation=horizontal]:cursor-row-resize" />
-      <Panel id={node.children[1].id} defaultSize={node.sizes[1]} minSize={10}>
+      <Panel
+        id={node.children[1].id}
+        defaultSize={node.sizes[1]}
+        minSize={10}
+        style={{ overflow: "clip" }}
+      >
         <LayoutTree
           node={node.children[1]}
           layout={layout}
@@ -285,7 +296,7 @@ export function SplitLayout({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className="h-full overflow-hidden">
+      <div className="h-full overflow-clip">
         <LayoutTree
           node={root}
           layout={layout}

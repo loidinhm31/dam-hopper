@@ -171,7 +171,7 @@ export function ActiveTerminalRuntimeDisplay({
 
   if (isCompactWorkspace) {
     return (
-      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--color-background)]">
+      <div className="flex h-full min-h-0 flex-col overflow-clip bg-[var(--color-background)]">
         <div className="safe-area-inline flex h-12 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)]/95 px-3 backdrop-blur-md">
           <button
             type="button"
@@ -211,7 +211,7 @@ export function ActiveTerminalRuntimeDisplay({
         </main>
 
         <Dialog open={runtimeSheetOpen} onOpenChange={setRuntimeSheetOpen}>
-          <DialogContent className="safe-area-inline safe-area-bottom fixed inset-x-0 bottom-0 top-auto left-0 z-50 max-h-[75dvh] w-full max-w-none translate-x-0 translate-y-0 gap-0 rounded-t-2xl border-x-0 border-b-0 p-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:rounded-t-2xl">
+          <DialogContent className="safe-area-inline safe-area-bottom fixed inset-x-0 bottom-0 top-auto left-0 z-50 max-h-[calc(var(--app-viewport-height)*0.75)] w-full max-w-none translate-x-0 translate-y-0 gap-0 rounded-t-2xl border-x-0 border-b-0 p-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:rounded-t-2xl">
             <DialogHeader className="border-b border-[var(--color-border)] px-4 py-3 text-left">
               <DialogTitle className="text-sm">Runtime</DialogTitle>
               <DialogDescription className="text-xs">
@@ -220,7 +220,7 @@ export function ActiveTerminalRuntimeDisplay({
             </DialogHeader>
             <TerminalRuntimeNavigator
               activeSessionId={activeSessionId}
-              className="max-h-[calc(75dvh-5rem)] w-full border-r-0"
+              className="max-h-[calc(var(--app-viewport-height)*0.75_-_5rem)] w-full border-r-0"
               disableReorder
               groups={groups}
               onCloseSession={onCloseSession}
@@ -245,7 +245,7 @@ export function ActiveTerminalRuntimeDisplay({
   return (
     <div
       className={cn(
-        "flex h-full min-h-0 overflow-hidden bg-[var(--color-background)]",
+        "flex h-full min-h-0 overflow-clip bg-[var(--color-background)]",
         isResizingNavigator && "select-none",
       )}
     >
@@ -288,9 +288,15 @@ export function ActiveTerminalRuntimeDisplay({
             <Group
               orientation="horizontal"
               className="h-full"
+              style={{ overflow: "clip" }}
               data-testid="terminal-browser-split"
             >
-              <Panel id="runtime-terminal" defaultSize={60} minSize={30}>
+              <Panel
+                id="runtime-terminal"
+                defaultSize={60}
+                minSize={30}
+                style={{ overflow: "clip" }}
+              >
                 <TerminalRuntimeOutput
                   activeSessionId={activeSessionId}
                   mountedSessions={mountedSessions}

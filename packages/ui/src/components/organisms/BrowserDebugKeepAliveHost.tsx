@@ -14,6 +14,7 @@ import {
   type BrowserDebugHostEvent,
 } from "@/lib/browser-debug-host.js";
 import { getBrowserDebugViewportGeometry } from "@/lib/browser-debug-keep-alive.js";
+import { APP_ZOOM_CHANGE_EVENT } from "@/lib/app-zoom.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
 import {
   BrowserDebugIframeHost,
@@ -94,11 +95,13 @@ export const BrowserDebugKeepAliveHost = forwardRef<
     stage?.addEventListener("scroll", updateFrame);
     window.addEventListener("resize", updateFrame);
     window.addEventListener("scroll", updateFrame, true);
+    window.addEventListener(APP_ZOOM_CHANGE_EVENT, updateFrame);
     return () => {
       observer?.disconnect();
       stage?.removeEventListener("scroll", updateFrame);
       window.removeEventListener("resize", updateFrame);
       window.removeEventListener("scroll", updateFrame, true);
+      window.removeEventListener(APP_ZOOM_CHANGE_EVENT, updateFrame);
       suppliedHost.setViewport(null);
     };
   }, [

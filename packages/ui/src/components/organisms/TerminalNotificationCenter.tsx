@@ -97,7 +97,7 @@ export function TerminalNotificationCenter() {
           role="dialog"
           tabIndex={-1}
           aria-label="Terminal notifications"
-          className="glass-card-blur fixed left-1/2 top-[calc(var(--top-nav-height)+0.75rem)] z-[75] flex max-h-[min(32rem,calc(100dvh-var(--top-nav-height)-var(--safe-area-bottom)-1.5rem))] w-[min(24rem,calc(100vw-1rem-var(--safe-area-left)-var(--safe-area-right)))] -translate-x-1/2 flex-col overflow-hidden rounded-md border border-[var(--color-border)] shadow-2xl outline-none sm:absolute sm:left-auto sm:right-0 sm:top-9 sm:w-96 sm:translate-x-0"
+          className="glass-card-blur fixed left-1/2 top-[calc(var(--top-nav-height)_+_0.75rem)] z-[75] flex max-h-[min(32rem,calc(var(--app-viewport-height)_-_var(--top-nav-height)_-_var(--safe-area-bottom)_-_1.5rem))] w-[min(24rem,calc(var(--app-viewport-width)_-_1rem_-_var(--safe-area-left)_-_var(--safe-area-right)))] -translate-x-1/2 flex-col overflow-hidden rounded-md border border-[var(--color-border)] shadow-2xl outline-none sm:absolute sm:left-auto sm:right-0 sm:top-9 sm:w-96 sm:translate-x-0"
         >
           <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-3 py-2.5">
             <div>

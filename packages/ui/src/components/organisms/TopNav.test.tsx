@@ -112,6 +112,8 @@ describe("TopNav", () => {
     expect(markup).toContain("safe-area-top");
     expect(markup).toContain("min-h-12");
     expect(markup).toContain('data-testid="top-nav-desktop-notifications"');
+    expect(markup).toContain('data-testid="top-nav-app-zoom-controls"');
+    expect(markup).toContain('data-testid="top-nav-app-zoom-level"');
     expect(markup).not.toContain('data-testid="top-nav-compact-notifications"');
     expect(
       markup.match(/data-testid="terminal-notification-center"/g),
@@ -128,6 +130,19 @@ describe("TopNav", () => {
     expect(markup).toContain("project");
     expect(markup).toContain('data-testid="git-branch-control"');
     expect(markup).toContain('data-connection-collapsed="true"');
+  });
+
+  it("places shared app zoom controls beside the menu", () => {
+    const markup = renderToStaticMarkup(
+      <TopNav collapsed={false} onToggle={() => {}} />,
+    );
+
+    expect(markup).toContain('data-testid="top-nav-app-zoom-controls"');
+    expect(markup).toContain('data-testid="top-nav-app-zoom-decrease"');
+    expect(markup).toContain('data-testid="top-nav-app-zoom-increase"');
+    expect(markup.indexOf('title="Show menu"')).toBeLessThan(
+      markup.indexOf('data-testid="top-nav-app-zoom-controls"'),
+    );
   });
 
   it("renders a wrapped mobile nav grid when compact mode is expanded", () => {

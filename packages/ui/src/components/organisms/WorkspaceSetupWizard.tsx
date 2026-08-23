@@ -149,7 +149,7 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
         </div>
 
         {/* Card */}
-        <div className="glass-card flex max-h-[calc(100dvh-10rem)] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] shadow-2xl">
+        <div className="glass-card flex max-h-[calc(var(--app-viewport-height)_-_10rem)] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] shadow-2xl">
           {/* Step Content */}
           <div className="min-h-0 overflow-y-auto p-4 sm:p-6">
             {step === "path" && (

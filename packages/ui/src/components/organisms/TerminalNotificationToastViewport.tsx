@@ -84,7 +84,7 @@ export function TerminalNotificationToastViewport() {
       aria-live="polite"
       aria-atomic="false"
       aria-relevant="additions"
-      className="pointer-events-none fixed right-[calc(var(--safe-area-right)+0.75rem)] top-[calc(var(--top-nav-height)+0.75rem)] z-[45] flex max-h-[calc(100dvh-var(--top-nav-height)-var(--safe-area-bottom)-1.5rem)] w-[min(22rem,calc(100vw-1.5rem-var(--safe-area-left)-var(--safe-area-right)))] flex-col gap-2 overflow-y-auto"
+      className="pointer-events-none fixed right-[calc(var(--safe-area-right)_+_0.75rem)] top-[calc(var(--top-nav-height)_+_0.75rem)] z-[45] flex max-h-[calc(var(--app-viewport-height)_-_var(--top-nav-height)_-_var(--safe-area-bottom)_-_1.5rem)] w-[min(22rem,calc(var(--app-viewport-width)_-_1.5rem_-_var(--safe-area-left)_-_var(--safe-area-right)))] flex-col gap-2 overflow-y-auto"
     >
       {visibleToasts.map(({ id, event }) => (
         <div key={id} className="pointer-events-auto">

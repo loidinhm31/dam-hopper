@@ -85,7 +85,7 @@ function TerminalHistoryListContent({
   return (
     <DialogContent
         aria-describedby="terminal-history-description"
-        className="max-h-[min(42rem,calc(100dvh-2rem))] max-w-3xl gap-3 overflow-y-auto p-4 font-mono text-sm"
+        className="max-h-[min(42rem,calc(var(--app-viewport-height)_-_2rem))] max-w-3xl gap-3 overflow-y-auto p-4 font-mono text-sm"
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           queryRef.current?.focus();

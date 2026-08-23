@@ -53,6 +53,8 @@ afterEach(() => {
   renderedPanelProps.length = 0;
   activityRegistrations.clear();
   mockPolicy.enabled = false;
+  delete document.documentElement.dataset.appHost;
+  delete document.documentElement.dataset.appPlatform;
 });
 
 describe("TerminalKeepAliveHost", () => {
@@ -172,6 +174,27 @@ describe("TerminalKeepAliveHost", () => {
         webglEnabled: true,
       }),
     ]);
+  });
+
+  it("disables WebGL for the native Windows WebView2 host", () => {
+    document.documentElement.dataset.appHost = "native";
+    document.documentElement.dataset.appPlatform = "windows";
+
+    renderToStaticMarkup(
+      <TerminalKeepAliveHost
+        mountedSessions={[
+          { sessionId: "visible", project: "web", command: "bash" },
+        ]}
+        webglEnabledSessionIds={new Set(["visible"])}
+      />,
+    );
+
+    expect(renderedPanelProps[0]).toEqual(
+      expect.objectContaining({
+        sessionId: "visible",
+        webglEnabled: false,
+      }),
+    );
   });
 
   it("keeps hidden sessions isolated and disposes removed panels", () => {
