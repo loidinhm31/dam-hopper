@@ -236,7 +236,10 @@ export function TerminalPanel({
       fontSize: terminalDisplayFontSize,
       lineHeight: 1.4,
       scrollback: 5000,
-      convertEol: true,
+      // PTY output already carries terminal newline semantics. Converting LF
+      // to CRLF breaks alternate-screen TUIs that use bare LF with
+      // cursor-relative redraws (for example, Antigravity's agy picker).
+      convertEol: false,
       allowProposedApi: true,
     });
 
