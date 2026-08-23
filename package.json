@@ -11,7 +11,7 @@
     "build": "pnpm --filter @dam-hopper/web build",
     "build:extension": "pnpm --filter @dam-hopper/browser-extension build",
     "build:native": "pnpm --filter @dam-hopper/native tauri:build",
-    "dev": "VITE_DAM_HOPPER_SERVER_URL=http://127.0.0.1:4801 pnpm --filter @dam-hopper/web dev --host 127.0.0.1",
+    "dev": "pnpm --filter @dam-hopper/web dev --host 0.0.0.0",
     "dev:native": "pnpm --filter @dam-hopper/native tauri:dev",
     "dev:server:no-auth": "cd server && cargo run -- --host 127.0.0.1 --port 4801 --no-auth",
     "dev:server": "cd server && RUST_LOG=debug cargo run -- --host 127.0.0.1 --port 4801",
