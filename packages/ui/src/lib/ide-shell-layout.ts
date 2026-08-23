@@ -33,7 +33,8 @@ export interface BottomPanelLayout {
 
 const TOP_AREA_BASE = "flex-1 flex min-w-0 min-h-0 overflow-clip";
 const BOTTOM_OUTER_BASE = "flex flex-col bg-[var(--color-surface)]";
-const INNER_BASE = "flex min-h-0 border-t border-[var(--color-border)] overflow-clip";
+const INNER_BASE =
+  "flex min-h-0 border-t border-[var(--color-border)] overflow-clip";
 
 /**
  * Resolve the bottom panel layout for the given maximize state.
@@ -129,7 +130,7 @@ export function resolveTopToolToggle({
   };
 }
 
-export type TerminalPanelToolId = "git" | "ports" | "terminals";
+export type TerminalPanelToolId = "git" | "ports" | "project" | "terminals";
 
 export interface TerminalPanelShortcutInput {
   targetId: TerminalPanelToolId;
@@ -155,6 +156,15 @@ export function resolveTerminalPanelShortcut({
   activeRightTopId,
   bottomMaximized,
 }: TerminalPanelShortcutInput): TerminalPanelShortcutOutcome {
+  if (targetId === "project") {
+    const isActive = activeRightTopId === "project-info";
+    return {
+      nextActiveLeftBottomId: activeLeftBottomId,
+      nextActiveRightTopId: isActive ? null : "project-info",
+      nextBottomMaximized: bottomMaximized,
+    };
+  }
+
   if (targetId === "terminals") {
     const isActive = activeRightTopId === targetId;
     return {

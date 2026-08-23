@@ -786,10 +786,10 @@ export default function WorkspacePage() {
       }
       const request: ActivateToolRequest = {
         nonce,
-        toolId: targetId === "terminals" ? "terminals" : targetId,
+        toolId: targetId === "project" ? "project-info" : targetId,
         exclusiveTarget: targetId,
       };
-      if (targetId === "terminals") {
+      if (targetId === "terminals" || targetId === "project") {
         setIdeRightTopToolRequest(request);
       } else {
         setIdeBottomToolRequest(request);
@@ -1289,6 +1289,7 @@ export default function WorkspacePage() {
                 {[
                   { id: "git", label: "Git" },
                   { id: "ports", label: "Ports" },
+                  { id: "project", label: "Project" },
                   { id: "terminals", label: "Fleet" },
                 ].map(({ id, label }) => (
                   <button
@@ -1709,6 +1710,29 @@ export default function WorkspacePage() {
     [projectName, projectTarget],
   );
 
+  const projectContent = useMemo(
+    () =>
+      projectName ? (
+        <div
+          data-testid="workspace-project-info-panel"
+          className="flex h-full min-h-0 flex-col"
+        >
+          <Suspense fallback={<PanelFallback label="Loading project…" />}>
+            <ProjectInfoPanel
+              projectName={projectName}
+              target={projectTarget}
+              onLaunchCommand={(cmd) => handleLaunchTerminal(projectName, cmd)}
+            />
+          </Suspense>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+          Select a project to inspect
+        </div>
+      ),
+    [handleLaunchTerminal, projectName, projectTarget],
+  );
+
   const leftTools = useMemo<ToolWindowDef[]>(
     () => [
       {
@@ -1842,26 +1866,7 @@ export default function WorkspacePage() {
         label: "Project",
         icon: Folder,
         defaultActive: true,
-        content: projectName ? (
-          <div
-            data-testid="workspace-project-info-panel"
-            className="flex h-full min-h-0 flex-col"
-          >
-            <Suspense fallback={<PanelFallback label="Loading project…" />}>
-              <ProjectInfoPanel
-                projectName={projectName}
-                target={projectTarget}
-                onLaunchCommand={(cmd) =>
-                  handleLaunchTerminal(projectName, cmd)
-                }
-              />
-            </Suspense>
-          </div>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-            Select a project to inspect
-          </div>
-        ),
+        content: projectContent,
       },
       {
         id: "terminals",
@@ -1870,7 +1875,7 @@ export default function WorkspacePage() {
         content: fleetContent,
       },
     ],
-    [fleetContent, handleLaunchTerminal, projectName, projectTarget],
+    [fleetContent, projectContent],
   );
 
   const compactGitSurface = useMemo<MobileWorkspaceSurface>(
@@ -2160,6 +2165,7 @@ export default function WorkspacePage() {
           terminalOverlayOpen={terminalFilePanelOpen}
           fleetContent={fleetContent}
           gitContent={terminalGitContent}
+          projectContent={projectContent}
           portsContent={portsContent}
           activatePanelRequest={terminalWorkspacePanelRequest}
           workspaceMode={workspaceMode}

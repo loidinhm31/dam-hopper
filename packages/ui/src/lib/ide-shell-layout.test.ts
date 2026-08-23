@@ -222,4 +222,19 @@ describe("resolveTerminalPanelShortcut", () => {
       nextBottomMaximized: false,
     });
   });
+
+  it("toggles Project in the right tool without disturbing the bottom panel", () => {
+    expect(
+      resolveTerminalPanelShortcut({
+        targetId: "project",
+        activeLeftBottomId: "ports",
+        activeRightTopId: "terminals",
+        bottomMaximized: true,
+      }),
+    ).toEqual({
+      nextActiveLeftBottomId: "ports",
+      nextActiveRightTopId: "project-info",
+      nextBottomMaximized: true,
+    });
+  });
 });

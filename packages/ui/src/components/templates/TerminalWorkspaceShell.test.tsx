@@ -35,6 +35,7 @@ describe("resolveTerminalWorkspacePanelActivation", () => {
   it.each([
     { activePanelId: "ports", targetId: "git" },
     { activePanelId: "git", targetId: "ports" },
+    { activePanelId: "git", targetId: "project" },
     { activePanelId: "ports", targetId: "terminals" },
   ] as const)(
     "opens $targetId and replaces the active terminal workspace panel",
@@ -45,7 +46,7 @@ describe("resolveTerminalWorkspacePanelActivation", () => {
     },
   );
 
-  it.each(["git", "ports", "terminals"] as const)(
+  it.each(["git", "ports", "project", "terminals"] as const)(
     "closes %s when its active target is selected again",
     (targetId) => {
       expect(
