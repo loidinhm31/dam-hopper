@@ -48,6 +48,7 @@ import { useEditorStore } from "@/stores/editor.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useBrowserDebug } from "@/hooks/use-browser-debug.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
@@ -110,6 +111,7 @@ import {
   updateBrowserDebugViewportSize,
   type BrowserDebugViewportState,
 } from "@/lib/browser-debug-viewport.js";
+import { getBrowserDebugViewportGeometry } from "@/lib/browser-debug-keep-alive.js";
 import {
   subscribeToRegistry,
   subscribeToRegistryChanges,
@@ -370,6 +372,7 @@ export default function WorkspacePage() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
   const browserDebugHost = useBrowserDebugHost();
+  const { level: appZoomLevel } = useAppZoom();
   const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
     subscribeToRegistryChanges,
@@ -392,6 +395,7 @@ export default function WorkspacePage() {
     useState(0);
   const browserViewportVersion =
     browserViewportReadyVersion +
+    appZoomLevel * 1_000_000 +
     (browserViewportState.mode === "custom"
       ? browserViewportState.customSize.width *
           (BROWSER_DEBUG_VIEWPORT_MAX_HEIGHT + 1) +
@@ -733,7 +737,8 @@ export default function WorkspacePage() {
         mode === "custom"
           ? enterBrowserDebugViewportCustomMode(
               current,
-              browserViewportRef.current?.getBoundingClientRect() ?? null,
+              getBrowserDebugViewportGeometry(browserViewportRef.current)
+                ?.frame ?? null,
             )
           : setBrowserDebugViewportMode(current, mode),
       );
@@ -1169,7 +1174,10 @@ export default function WorkspacePage() {
         captureMessage={browserDebug.captureMessage}
         manualImageName={browserDebug.manualImageName}
         onStartCapture={() => {
-          const frame = browserViewportRef.current?.getBoundingClientRect();
+          const frame = getBrowserDebugViewportGeometry(
+            browserViewportRef.current,
+            browserViewportStageRef.current,
+          )?.frame;
           void browserDebug.startCapture(
             frame
               ? {
@@ -2195,7 +2203,7 @@ export default function WorkspacePage() {
       {/* Floating search dialog */}
       {searchOpen && projectName && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center px-3 pt-[max(8vh,var(--safe-area-top))] sm:px-4"
+          className="fixed inset-0 z-50 flex items-start justify-center px-3 pt-[max(calc(var(--app-viewport-height)*0.08),var(--safe-area-top))] sm:px-4"
           onClick={closeSearch}
         >
           {/* Backdrop */}
@@ -2203,7 +2211,7 @@ export default function WorkspacePage() {
 
           {/* Dialog */}
           <div
-            className="dialog-viewport-fit relative z-10 flex h-[min(70vh,42rem)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
+            className="dialog-viewport-fit relative z-10 flex h-[min(calc(var(--app-viewport-height)*0.7),42rem)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <Suspense fallback={<PanelFallback label="Loading search…" />}>

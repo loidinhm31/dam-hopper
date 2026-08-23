@@ -29,6 +29,7 @@ import {
 } from "@/lib/browser-debug-host.js";
 import type { BrowserDebugTarget } from "@/lib/browser-debug-origin.js";
 import { parseTrustedBrowserBridgeEvent } from "@/lib/browser-debug-protocol.js";
+import { APP_ZOOM_CHANGE_EVENT } from "@/lib/app-zoom.js";
 
 export interface BrowserDebugIframeHostProps {
   browser: BrowserDebugController;
@@ -339,11 +340,13 @@ export const BrowserDebugIframeHost = forwardRef<
     stage?.addEventListener("scroll", updateGeometry);
     window.addEventListener("resize", updateGeometry);
     window.addEventListener("scroll", updateGeometry, true);
+    window.addEventListener(APP_ZOOM_CHANGE_EVENT, updateGeometry);
     return () => {
       observer?.disconnect();
       stage?.removeEventListener("scroll", updateGeometry);
       window.removeEventListener("resize", updateGeometry);
       window.removeEventListener("scroll", updateGeometry, true);
+      window.removeEventListener(APP_ZOOM_CHANGE_EVENT, updateGeometry);
     };
   }, [
     browser.target,

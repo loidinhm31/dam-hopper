@@ -177,7 +177,7 @@ export function HostResourcePopover() {
           aria-modal="true"
           tabIndex={-1}
           aria-labelledby={`${panelId}-title`}
-          className="fixed left-1/2 top-[calc(var(--top-nav-height)+0.75rem)] z-[75] flex max-h-[min(38rem,calc(100dvh-var(--top-nav-height)-var(--safe-area-bottom)-1.5rem))] w-[min(26rem,calc(100vw-1rem-var(--safe-area-left)-var(--safe-area-right)))] -translate-x-1/2 flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl outline-none sm:absolute sm:left-auto sm:right-0 sm:top-12 sm:w-[26rem] sm:max-h-[min(48rem,calc(100dvh-var(--top-nav-height)-var(--safe-area-bottom)-0.5rem))] sm:translate-x-0"
+          className="fixed left-1/2 top-[calc(var(--top-nav-height)_+_0.75rem)] z-[75] flex max-h-[min(38rem,calc(var(--app-viewport-height)_-_var(--top-nav-height)_-_var(--safe-area-bottom)_-_1.5rem))] w-[min(26rem,calc(var(--app-viewport-width)_-_1rem_-_var(--safe-area-left)_-_var(--safe-area-right)))] -translate-x-1/2 flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl outline-none sm:absolute sm:left-auto sm:right-0 sm:top-12 sm:w-[26rem] sm:max-h-[min(48rem,calc(var(--app-viewport-height)_-_var(--top-nav-height)_-_var(--safe-area-bottom)_-_0.5rem))] sm:translate-x-0"
         >
           <header className="flex items-start justify-between gap-3 border-b border-[var(--color-border)] px-3 py-2.5">
             <div className="min-w-0">

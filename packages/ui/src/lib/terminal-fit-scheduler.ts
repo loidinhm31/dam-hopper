@@ -2,24 +2,32 @@ import { logger } from "@dam-hopper/shared/logger";
 
 export interface TerminalFitTarget {
   fitAddon: { fit: () => void };
-  terminal: { focus: () => void };
+  terminal: {
+    focus: () => void;
+    rows?: number;
+    refresh?: (start: number, end: number) => void;
+  };
 }
 
 interface ScheduledFit {
   frameId: number;
   focus: boolean;
+  refresh: boolean;
 }
 
 const scheduledFits = new Map<TerminalFitTarget, ScheduledFit>();
 
 export function fitTerminalNow(
   target: TerminalFitTarget | undefined,
-  options: { focus?: boolean } = {},
+  options: { focus?: boolean; refresh?: boolean } = {},
 ): void {
   if (!target) return;
 
   try {
     target.fitAddon.fit();
+    if (options.refresh && target.terminal.refresh) {
+      target.terminal.refresh(0, Math.max(0, (target.terminal.rows ?? 1) - 1));
+    }
     if (options.focus) target.terminal.focus();
   } catch {
     logger.debug("TerminalFitScheduler", "skipped disposed terminal");
@@ -28,30 +36,35 @@ export function fitTerminalNow(
 
 export function scheduleTerminalFit(
   target: TerminalFitTarget | undefined,
-  options: { focus?: boolean } = {},
+  options: { focus?: boolean; refresh?: boolean } = {},
 ): void {
   if (!target) return;
 
   const existing = scheduledFits.get(target);
   if (existing) {
     if ("focus" in options) existing.focus = options.focus === true;
+    if (options.refresh) existing.refresh = true;
     return;
   }
 
   const scheduled: ScheduledFit = {
     frameId: 0,
     focus: options.focus ?? false,
+    refresh: options.refresh ?? false,
   };
   scheduled.frameId = requestAnimationFrame(() => {
     scheduledFits.delete(target);
-    fitTerminalNow(target, { focus: scheduled.focus });
+    fitTerminalNow(target, {
+      focus: scheduled.focus,
+      refresh: scheduled.refresh,
+    });
   });
   scheduledFits.set(target, scheduled);
 }
 
 export function fitAllTerminals(
   targets: Iterable<TerminalFitTarget>,
-  options: { focus?: boolean } = {},
+  options: { focus?: boolean; refresh?: boolean } = {},
 ): void {
   for (const target of targets) scheduleTerminalFit(target, options);
 }

@@ -29,6 +29,7 @@ import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialo
 import { WorkspaceSetupWizard } from "@/components/organisms/WorkspaceSetupWizard.js";
 import { TerminalNotificationToastViewport } from "@/components/organisms/TerminalNotificationToastViewport.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
+import { AppZoomProvider } from "@/contexts/AppZoomContext.js";
 import { AndroidChromeInputPolicyProvider } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { useSshForwardHost } from "@/contexts/SshForwardHostContext.js";
 import { AndroidChromeKeyboardNotice } from "@/components/organisms/AndroidChromeKeyboardNotice.js";
@@ -52,6 +53,16 @@ export {
   useBrowserDebugHost,
   type BrowserDebugHostEnvironment,
 } from "@/contexts/BrowserDebugHostContext.js";
+export {
+  AppZoomProvider,
+  useAppZoom,
+  type AppZoomContextValue,
+} from "@/contexts/AppZoomContext.js";
+export type {
+  AppZoomDirection,
+  AppZoomLevel,
+  AppZoomStorage,
+} from "@/lib/app-zoom.js";
 
 function syncFontSizeCssVar(fontSize: number): void {
   document.documentElement.style.setProperty(
@@ -93,7 +104,7 @@ const SshForwardingPage = lazy(() =>
 );
 
 const LOADING_FALLBACK = (
-  <div className="h-screen flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+  <div className="app-screen-height flex items-center justify-center text-xs text-[var(--color-text-muted)]">
     Loading…
   </div>
 );
@@ -186,7 +197,7 @@ function ServerProfileGuard({ children }: { children: React.ReactNode }) {
 
   if (needsSetup) {
     return (
-      <div className="h-screen w-screen bg-[var(--color-surface)] relative">
+      <div className="app-screen-height w-full bg-[var(--color-surface)] relative">
         <ServerSettingsDialog
           open={true}
           onClose={() => {}}
@@ -301,7 +312,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
   if (isError || !data?.authenticated) {
     return (
-      <div className="h-screen w-screen bg-[var(--color-surface)] relative">
+      <div className="app-screen-height w-full bg-[var(--color-surface)] relative">
         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-2 text-xs text-red-400">
           {error instanceof Error ? error.message : "Connection failed"}
         </div>
@@ -335,7 +346,7 @@ function WorkspaceGuard({ children }: { children: React.ReactNode }) {
   // Show error if workspace status check failed
   if (isError) {
     return (
-      <div className="h-screen flex flex-col items-center justify-center gap-4">
+      <div className="app-screen-height flex flex-col items-center justify-center gap-4">
         <div className="text-sm text-red-400">
           {error instanceof Error
             ? error.message
@@ -413,106 +424,108 @@ export function DamHopperApp() {
   }, [activeProfileConnectionKey, activeProfileId, activeProfileUrl, qc]);
 
   return (
-    <EncryptProvider>
-      <AndroidChromeInputPolicyProvider>
-        <BrowserRouter basename={routerBasename}>
-          <AndroidChromeKeyboardNotice />
-          <GlobalShortcuts />
-          <GlobalTerminalFontSizeShortcuts />
-          <TerminalNotificationToastViewport />
-          <RouteDiagnostics />
-          <PassphrasePrompt />
-          <ServerProfileGuard>
-            <AuthGuard>
-              <WorkspaceGuard>
-                <Routes>
-                  <Route
-                    path="/"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <DashboardPage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/workspace"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <WorkspacePage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  {/* Backward-compat redirects — preserve search params for deep-links */}
-                  <Route
-                    path="/terminals"
-                    element={<LegacyRedirect to="/workspace" />}
-                  />
-                  <Route
-                    path="/ide"
-                    element={<LegacyRedirect to="/workspace" />}
-                  />
-                  <Route
-                    path="/git"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <GitPage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/settings"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <SettingsPage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/agent-store"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <AgentStorePage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/usage"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <UsagePage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  {sshForwardAvailable ? (
+    <AppZoomProvider>
+      <EncryptProvider>
+        <AndroidChromeInputPolicyProvider>
+          <BrowserRouter basename={routerBasename}>
+            <AndroidChromeKeyboardNotice />
+            <GlobalShortcuts />
+            <GlobalTerminalFontSizeShortcuts />
+            <TerminalNotificationToastViewport />
+            <RouteDiagnostics />
+            <PassphrasePrompt />
+            <ServerProfileGuard>
+              <AuthGuard>
+                <WorkspaceGuard>
+                  <Routes>
                     <Route
-                      path="/ssh-forwarding"
+                      path="/"
                       element={
                         <ErrorBoundary>
                           <Suspense fallback={LOADING_FALLBACK}>
-                            <SshForwardingPage />
+                            <DashboardPage />
                           </Suspense>
                         </ErrorBoundary>
                       }
                     />
-                  ) : null}
-                </Routes>
-              </WorkspaceGuard>
-            </AuthGuard>
-          </ServerProfileGuard>
-        </BrowserRouter>
-      </AndroidChromeInputPolicyProvider>
-    </EncryptProvider>
+                    <Route
+                      path="/workspace"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <WorkspacePage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    {/* Backward-compat redirects — preserve search params for deep-links */}
+                    <Route
+                      path="/terminals"
+                      element={<LegacyRedirect to="/workspace" />}
+                    />
+                    <Route
+                      path="/ide"
+                      element={<LegacyRedirect to="/workspace" />}
+                    />
+                    <Route
+                      path="/git"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <GitPage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/settings"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <SettingsPage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/agent-store"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <AgentStorePage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/usage"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <UsagePage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    {sshForwardAvailable ? (
+                      <Route
+                        path="/ssh-forwarding"
+                        element={
+                          <ErrorBoundary>
+                            <Suspense fallback={LOADING_FALLBACK}>
+                              <SshForwardingPage />
+                            </Suspense>
+                          </ErrorBoundary>
+                        }
+                      />
+                    ) : null}
+                  </Routes>
+                </WorkspaceGuard>
+              </AuthGuard>
+            </ServerProfileGuard>
+          </BrowserRouter>
+        </AndroidChromeInputPolicyProvider>
+      </EncryptProvider>
+    </AppZoomProvider>
   );
 }

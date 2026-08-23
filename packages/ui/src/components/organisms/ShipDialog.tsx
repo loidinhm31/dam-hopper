@@ -59,7 +59,7 @@ export function ShipDialog({ item, projects, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="w-[480px] max-h-[80vh] flex flex-col rounded-lg glass-card border border-[var(--color-border)] shadow-xl">
+      <div className="w-[480px] max-h-[calc(var(--app-viewport-height)*0.8)] flex flex-col rounded-lg glass-card border border-[var(--color-border)] shadow-xl">
         {/* Header */}
         <div className="px-5 py-4 border-b border-[var(--color-border)]">
           <h2 className="text-sm font-semibold text-[var(--color-text)]">

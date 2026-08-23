@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
 import { TerminalCursorGeometryAdapter } from "@/lib/terminal-cursor-geometry-adapter.js";
 import "@xterm/xterm/css/xterm.css";
 
@@ -57,7 +58,10 @@ function nextFrame(): Promise<void> {
 describe("TerminalCursorGeometryAdapter in Chromium", () => {
   const hosts: HTMLElement[] = [];
 
-  afterEach(() => hosts.splice(0).forEach((host) => host.remove()));
+  afterEach(() => {
+    hosts.splice(0).forEach((host) => host.remove());
+    document.documentElement.style.zoom = "";
+  });
 
   it("coalesces geometry work and hides after host detachment", async () => {
     const host = document.createElement("div");
@@ -114,6 +118,39 @@ describe("TerminalCursorGeometryAdapter in Chromium", () => {
       expect.objectContaining({ x: expect.any(Number), availableWidth: expect.any(Number) }),
     );
     adapter.dispose();
+    terminal.dispose();
+  });
+
+  it("keeps a zoomed terminal pinned to the host top-left corner", async () => {
+    const host = document.createElement("div");
+    host.style.cssText =
+      "width: 600px; height: 240px; position: fixed; left: 0; top: 0; overflow: clip;";
+    document.body.append(host);
+    hosts.push(host);
+
+    const terminal = new Terminal({ cols: 80, rows: 16, fontSize: 13 });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(host);
+    await new Promise<void>((resolve) =>
+      terminal.write("TOP-LEFT\r\nsecond row", resolve),
+    );
+
+    for (const zoom of [1.1, 0.5, 1.2]) {
+      document.documentElement.style.zoom = `${zoom * 100}%`;
+      fitAddon.fit();
+      terminal.textarea?.focus();
+      terminal.textarea?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      await nextFrame();
+
+      const hostRect = host.getBoundingClientRect();
+      const terminalRect = terminal.element?.getBoundingClientRect();
+      expect(host.scrollTop).toBe(0);
+      expect(host.scrollLeft).toBe(0);
+      expect(terminalRect?.top).toBeCloseTo(hostRect.top, 1);
+      expect(terminalRect?.left).toBeCloseTo(hostRect.left, 1);
+    }
+
     terminal.dispose();
   });
 });

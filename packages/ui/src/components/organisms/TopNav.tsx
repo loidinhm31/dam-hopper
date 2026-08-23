@@ -6,6 +6,8 @@ import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialo
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
 import { TopNavBrand } from "@/components/molecules/TopNavBrand.js";
 import { TopNavMenuButton } from "@/components/atoms/TopNavMenuButton.js";
+import { TopNavAppZoomControls } from "@/components/atoms/TopNavAppZoomControls.js";
+import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { TopNavRouteMenu } from "@/components/organisms/TopNavRouteMenu.js";
 import { TopNavUtilityStrip } from "@/components/organisms/TopNavUtilityStrip.js";
 import { TopNavProjectToolbar } from "@/components/organisms/TopNavProjectToolbar.js";
@@ -21,6 +23,7 @@ import {
   type ServerProfile,
 } from "@/api/server-config.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
+import { getAppZoomFactor } from "@/lib/app-zoom.js";
 
 interface TopNavProps {
   collapsed?: boolean;
@@ -37,6 +40,7 @@ export function TopNav({
   onWorkspaceModeChange,
   workspaceModeShortcutLabel,
 }: TopNavProps) {
+  const { level: appZoomLevel } = useAppZoom();
   const headerRef = useRef<HTMLElement>(null);
   const { status } = useIpc();
   const { activeProject } = useWorkspaceStore();
@@ -101,7 +105,7 @@ export function TopNav({
       if (height) {
         document.documentElement.style.setProperty(
           "--top-nav-height",
-          `${height}px`,
+          `${height / getAppZoomFactor()}px`,
         );
       }
     };
@@ -116,7 +120,7 @@ export function TopNav({
       window.removeEventListener("resize", updateHeight);
       document.documentElement.style.removeProperty("--top-nav-height");
     };
-  }, [compactMobileMenuOpen, isCompactWorkspace]);
+  }, [appZoomLevel, compactMobileMenuOpen, isCompactWorkspace]);
 
   return (
     <header
@@ -153,6 +157,7 @@ export function TopNav({
             <TopNavBrand />
             <div className="flex shrink-0 items-center gap-1">
               <TopNavMenuButton collapsed={collapsed} onToggle={onToggle} />
+              <TopNavAppZoomControls />
               {isCompactWorkspace && (
                 <div data-testid="top-nav-compact-notifications">
                   <TerminalNotificationCenter />

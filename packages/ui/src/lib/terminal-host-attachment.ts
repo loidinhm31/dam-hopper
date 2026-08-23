@@ -30,6 +30,11 @@ export function attachTerminalsToHost({
   suppressTerminalFocus = false,
   resolveTerminal = getTerminal,
 }: AttachTerminalsToHostOptions): void {
+  // The host only clips the terminal surface; it must never retain an
+  // ancestor scroll offset after browser focus/zoom adjustment.
+  host.scrollLeft = 0;
+  host.scrollTop = 0;
+
   for (const sessionId of sessionIds) {
     const entry = resolveTerminal(sessionId);
     const element = entry?.terminal.element;

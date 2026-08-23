@@ -25,7 +25,7 @@ export function ToolPanel({
     <div
       style={style}
       className={cn(
-        "shrink-0 flex flex-col bg-[var(--color-surface)] overflow-hidden w-full",
+        "shrink-0 flex min-h-0 flex-col bg-[var(--color-surface)] overflow-clip w-full",
         className,
       )}
     >
@@ -57,7 +57,7 @@ export function ToolPanel({
           </button>
         </div>
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden">{tool.content}</div>
+      <div className="flex-1 min-h-0 overflow-clip">{tool.content}</div>
     </div>
   );
 }

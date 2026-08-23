@@ -62,6 +62,9 @@
 @layer base {
   :root {
     --app-font-size: 14px;
+    --app-zoom: 1;
+    --app-viewport-width: calc(100vw / var(--app-zoom));
+    --app-viewport-height: calc(100dvh / var(--app-zoom));
     --safe-area-top: env(safe-area-inset-top, 0px);
     --safe-area-right: env(safe-area-inset-right, 0px);
     --safe-area-bottom: env(safe-area-inset-bottom, 0px);
@@ -94,16 +97,16 @@
     font-family: var(--font-mono);
     font-size: var(--app-font-size, 14px);
     line-height: 1.5;
-    min-height: 100vh;
-    min-height: 100dvh;
+    min-height: calc(100vh / var(--app-zoom, 1));
+    min-height: var(--app-viewport-height);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 }
 
 .app-screen-height {
-  height: 100vh;
-  height: 100dvh;
+  height: calc(100vh / var(--app-zoom, 1));
+  height: var(--app-viewport-height);
 }
 
 .xterm {
@@ -175,10 +178,14 @@
 .dialog-viewport-fit {
   max-width: min(
     42rem,
-    calc(100vw - 1rem - var(--safe-area-left) - var(--safe-area-right))
+    calc(
+      var(--app-viewport-width) - 1rem - var(--safe-area-left) -
+        var(--safe-area-right)
+    )
   );
   max-height: calc(
-    100dvh - 1rem - var(--safe-area-top) - var(--safe-area-bottom)
+    var(--app-viewport-height) - 1rem - var(--safe-area-top) -
+      var(--safe-area-bottom)
   );
 }
 
@@ -188,7 +195,7 @@
     transform: translateY(0);
   }
   100% {
-    transform: translateY(100vh);
+    transform: translateY(var(--app-viewport-height));
   }
 }
 @keyframes glow {

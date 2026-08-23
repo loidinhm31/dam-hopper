@@ -58,7 +58,7 @@ export function MobileWorkspaceShell({
 
   if (!hasSurfaces) {
     return (
-      <div className="app-screen-height safe-area-bottom flex flex-col overflow-hidden gradient-bg">
+      <div className="app-screen-height safe-area-bottom flex flex-col overflow-clip gradient-bg">
         <TopNav
           collapsed={collapsed}
           onToggle={toggle}
@@ -79,11 +79,11 @@ export function MobileWorkspaceShell({
   const resolvedActiveSurfaceId = activeSurface.id;
   const triggerBottomClass =
     workspaceMode === "terminal"
-      ? "bottom-[max(var(--safe-area-bottom),min(25rem,calc(100dvh-var(--top-nav-height)-3.5rem)))]"
+      ? "bottom-[max(var(--safe-area-bottom),min(25rem,calc(var(--app-viewport-height)_-_var(--top-nav-height)_-_3.5rem)))]"
       : "bottom-[calc(var(--safe-area-bottom)+1rem)]";
 
   return (
-    <div className="app-screen-height safe-area-bottom flex flex-col overflow-hidden gradient-bg">
+    <div className="app-screen-height safe-area-bottom flex flex-col overflow-clip gradient-bg">
       <TopNav
         collapsed={collapsed}
         onToggle={toggle}
@@ -106,7 +106,7 @@ export function MobileWorkspaceShell({
         </div>
       )}
 
-      <main className="relative flex-1 overflow-hidden">
+      <main className="relative flex-1 min-h-0 overflow-clip">
         {surfaces.map((surface) => {
           const isActive = surface.id === resolvedActiveSurfaceId;
           return (
@@ -155,7 +155,7 @@ export function MobileWorkspaceShell({
               : {}),
           }}
           className={cn(
-            "fixed left-[calc(var(--safe-area-left)+0.75rem)] z-[40] h-11 w-auto min-w-20 max-w-[calc(100vw-2rem)] cursor-grab touch-none select-none gap-1 border-[var(--color-primary)]/40 bg-[var(--color-surface)]/95 px-1.5 text-[10px] shadow-lg backdrop-blur-md active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] motion-reduce:transition-none",
+            "fixed left-[calc(var(--safe-area-left)_+_0.75rem)] z-[40] h-11 w-auto min-w-20 max-w-[calc(var(--app-viewport-width)_-_2rem)] cursor-grab touch-none select-none gap-1 border-[var(--color-primary)]/40 bg-[var(--color-surface)]/95 px-1.5 text-[10px] shadow-lg backdrop-blur-md active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] motion-reduce:transition-none",
             isTriggerDragging && "cursor-grabbing",
             triggerBottomClass,
           )}
@@ -178,7 +178,7 @@ export function MobileWorkspaceShell({
           side="top"
           align="start"
           sideOffset={8}
-          className="z-40 max-h-[calc(100dvh-var(--top-nav-height)-var(--safe-area-bottom)-6rem)] w-[min(16rem,calc(100vw-2rem-var(--safe-area-left)-var(--safe-area-right)))] motion-reduce:animate-none"
+          className="z-40 max-h-[calc(var(--app-viewport-height)_-_var(--top-nav-height)_-_var(--safe-area-bottom)_-_6rem)] w-[min(16rem,calc(var(--app-viewport-width)_-_2rem_-_var(--safe-area-left)_-_var(--safe-area-right)))] motion-reduce:animate-none"
         >
           {surfaces.map(({ id, label, icon: Icon }) => (
             <SelectItem

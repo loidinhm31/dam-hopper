@@ -132,4 +132,28 @@ describe("attachTerminalsToHost", () => {
     expect(entry.terminal.element).toBe(element);
     expect(entry.findController).toBe(controller);
   });
+
+  it("resets host scroll offsets before fitting the active terminal", () => {
+    animationFrameFixture();
+    const events: string[] = [];
+    const element = elementFixture(events);
+    const entry = entryFixture(events, element);
+    const host = {
+      scrollLeft: 24,
+      scrollTop: 18,
+      appendChild: (child: HTMLElement) => {
+        Object.defineProperty(child, "parentElement", { value: host });
+      },
+    } as unknown as HTMLElement;
+
+    attachTerminalsToHost({
+      host,
+      sessionIds: ["active"],
+      activeSessionId: "active",
+      resolveTerminal: () => entry,
+    });
+
+    expect(host.scrollLeft).toBe(0);
+    expect(host.scrollTop).toBe(0);
+  });
 });

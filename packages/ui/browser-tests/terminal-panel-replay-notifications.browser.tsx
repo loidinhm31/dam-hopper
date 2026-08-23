@@ -211,6 +211,7 @@ vi.mock("@/lib/terminal-find-controller.js", () => ({
 }));
 vi.mock("@/lib/terminal-fit-scheduler.js", () => ({
   cancelScheduledTerminalFit: vi.fn(),
+  fitAllTerminals: vi.fn(),
   scheduleTerminalFit: mocks.scheduleTerminalFit,
 }));
 vi.mock("@/lib/terminal-renderer.js", () => ({
