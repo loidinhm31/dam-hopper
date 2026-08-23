@@ -707,6 +707,7 @@ export default function WorkspacePage() {
   const terminalFilePanelShortcut = useSettingsStore(
     (s) => s.terminalFilePanelShortcut,
   );
+  const projectPanelShortcut = useSettingsStore((s) => s.projectPanelShortcut);
   const gitPanelShortcut = useSettingsStore((s) => s.gitPanelShortcut);
   const portsPanelShortcut = useSettingsStore((s) => s.portsPanelShortcut);
   const fleetTerminalShortcut = useSettingsStore(
@@ -843,6 +844,15 @@ export default function WorkspacePage() {
     if (workspaceMode !== "terminal" || isCompactWorkspace) return;
     toggleTerminalFilePanel();
   });
+  useEffect(
+    () =>
+      addKeyboardShortcutListener(
+        window,
+        () => projectPanelShortcut,
+        () => activateTerminalPanelShortcut("project"),
+      ),
+    [activateTerminalPanelShortcut, projectPanelShortcut],
+  );
   useEffect(
     () =>
       addKeyboardShortcutListener(

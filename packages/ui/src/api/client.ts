@@ -843,6 +843,7 @@ export interface UiConfig {
   searchFilenameShortcut: string;
   terminalWorkspaceShortcut: string;
   terminalFilePanelShortcut: string;
+  projectPanelShortcut: string;
   revealActiveFileShortcut: string;
   gitPanelShortcut: string;
   portsPanelShortcut: string;

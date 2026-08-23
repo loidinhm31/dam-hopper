@@ -1274,6 +1274,7 @@ fn ui_config_defaults() {
     assert_eq!(ui.search_filename_shortcut, "DoubleShift");
     assert_eq!(ui.terminal_workspace_shortcut, "Mod+Shift+Backquote");
     assert_eq!(ui.terminal_file_panel_shortcut, "Mod+Shift+KeyE");
+    assert_eq!(ui.project_panel_shortcut, "Mod+Shift+KeyZ");
     assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
     assert_eq!(ui.git_panel_shortcut, "Mod+Shift+KeyG");
     assert_eq!(ui.ports_panel_shortcut, "Mod+Shift+KeyP");
@@ -1318,6 +1319,7 @@ fn ui_config_serde_roundtrip() {
             search_filename_shortcut: "Ctrl+KeyP".to_string(),
             terminal_workspace_shortcut: "Ctrl+Shift+Backquote".to_string(),
             terminal_file_panel_shortcut: "Ctrl+Shift+KeyE".to_string(),
+            project_panel_shortcut: "Ctrl+Shift+KeyZ".to_string(),
             reveal_active_file_shortcut: "Alt+F1".to_string(),
             git_panel_shortcut: "Ctrl+Shift+KeyG".to_string(),
             ports_panel_shortcut: "Ctrl+Shift+KeyP".to_string(),
@@ -1416,6 +1418,7 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
     assert_eq!(ui.terminal_file_panel_shortcut, "Ctrl+Shift+KeyE");
+    assert_eq!(ui.project_panel_shortcut, "Ctrl+Shift+KeyZ");
     assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
     assert_eq!(ui.git_panel_shortcut, "Ctrl+Shift+KeyG");
     assert_eq!(ui.ports_panel_shortcut, "Ctrl+Shift+KeyP");
@@ -1463,6 +1466,7 @@ search_text_shortcut = "Ctrl+Shift+KeyF"
 search_filename_shortcut = "Ctrl+KeyP"
 terminal_workspace_shortcut = "Ctrl+Shift+Backquote"
 terminal_file_panel_shortcut = "Ctrl+Shift+KeyE"
+project_panel_shortcut = "Ctrl+Shift+KeyZ"
 reveal_active_file_shortcut = "Alt+F1"
 git_panel_shortcut = "Ctrl+Shift+KeyG"
 ports_panel_shortcut = "Ctrl+Shift+KeyP"
@@ -1480,6 +1484,7 @@ mobile_custom_keyboard_row_gap = 6
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
     assert_eq!(ui.terminal_file_panel_shortcut, "Ctrl+Shift+KeyE");
+    assert_eq!(ui.project_panel_shortcut, "Ctrl+Shift+KeyZ");
     assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
     assert_eq!(ui.git_panel_shortcut, "Ctrl+Shift+KeyG");
     assert_eq!(ui.ports_panel_shortcut, "Ctrl+Shift+KeyP");

@@ -18,6 +18,7 @@ import {
   DEFAULT_FLEET_TERMINAL_SHORTCUT,
   DEFAULT_GIT_PANEL_SHORTCUT,
   DEFAULT_PORTS_PANEL_SHORTCUT,
+  DEFAULT_PROJECT_PANEL_SHORTCUT,
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
@@ -78,6 +79,7 @@ interface PersistedSettingsState {
   searchFilenameShortcut: string;
   terminalWorkspaceShortcut: string;
   terminalFilePanelShortcut: string;
+  projectPanelShortcut: string;
   revealActiveFileShortcut: string;
   gitPanelShortcut: string;
   portsPanelShortcut: string;
@@ -129,6 +131,7 @@ function pickPersistedSettings(
     searchFilenameShortcut: state.searchFilenameShortcut,
     terminalWorkspaceShortcut: state.terminalWorkspaceShortcut,
     terminalFilePanelShortcut: state.terminalFilePanelShortcut,
+    projectPanelShortcut: state.projectPanelShortcut,
     revealActiveFileShortcut: state.revealActiveFileShortcut,
     gitPanelShortcut: state.gitPanelShortcut,
     portsPanelShortcut: state.portsPanelShortcut,
@@ -184,6 +187,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   searchFilenameShortcut: DEFAULT_SEARCH_FILENAME_SHORTCUT,
   terminalWorkspaceShortcut: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   terminalFilePanelShortcut: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
+  projectPanelShortcut: DEFAULT_PROJECT_PANEL_SHORTCUT,
   revealActiveFileShortcut: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   gitPanelShortcut: DEFAULT_GIT_PANEL_SHORTCUT,
   portsPanelShortcut: DEFAULT_PORTS_PANEL_SHORTCUT,
@@ -224,6 +228,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         searchFilenameShortcut: ui.searchFilenameShortcut,
         terminalWorkspaceShortcut: ui.terminalWorkspaceShortcut,
         terminalFilePanelShortcut: ui.terminalFilePanelShortcut,
+        projectPanelShortcut: ui.projectPanelShortcut,
         revealActiveFileShortcut: ui.revealActiveFileShortcut,
         gitPanelShortcut: ui.gitPanelShortcut,
         portsPanelShortcut: ui.portsPanelShortcut,
@@ -291,6 +296,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.terminalWorkspaceShortcut = partial.terminalWorkspaceShortcut;
     if (partial.terminalFilePanelShortcut !== undefined)
       clamped.terminalFilePanelShortcut = partial.terminalFilePanelShortcut;
+    if (partial.projectPanelShortcut !== undefined)
+      clamped.projectPanelShortcut = partial.projectPanelShortcut;
     if (partial.revealActiveFileShortcut !== undefined)
       clamped.revealActiveFileShortcut = partial.revealActiveFileShortcut;
     if (partial.gitPanelShortcut !== undefined)

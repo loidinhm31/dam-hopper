@@ -5,6 +5,7 @@ import {
   DEFAULT_FLEET_TERMINAL_SHORTCUT,
   DEFAULT_GIT_PANEL_SHORTCUT,
   DEFAULT_PORTS_PANEL_SHORTCUT,
+  DEFAULT_PROJECT_PANEL_SHORTCUT,
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
@@ -46,6 +47,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   searchFilenameShortcut: DEFAULT_SEARCH_FILENAME_SHORTCUT,
   terminalWorkspaceShortcut: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   terminalFilePanelShortcut: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
+  projectPanelShortcut: DEFAULT_PROJECT_PANEL_SHORTCUT,
   revealActiveFileShortcut: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   gitPanelShortcut: DEFAULT_GIT_PANEL_SHORTCUT,
   portsPanelShortcut: DEFAULT_PORTS_PANEL_SHORTCUT,
@@ -145,6 +147,9 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     terminalFilePanelShortcut: formatShortcut(
       ui?.terminalFilePanelShortcut ??
         DEFAULT_UI_CONFIG.terminalFilePanelShortcut,
+    ),
+    projectPanelShortcut: formatShortcut(
+      ui?.projectPanelShortcut ?? DEFAULT_UI_CONFIG.projectPanelShortcut,
     ),
     revealActiveFileShortcut: formatShortcut(
       ui?.revealActiveFileShortcut ??

@@ -307,11 +307,11 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 - `IdeShell` keeps the mode contract optional, so existing callers without mode props render unchanged.
 - Uses `terminalWorkspaceShortcut` from UI config for the global mode toggle.
 - Default binding is `Mod+Shift+Backquote`.
-- Uses `gitPanelShortcut`, `portsPanelShortcut`, and `fleetTerminalShortcut` for
-  keyboard access to the Git, Ports, and Fleet Terminal tools in IDE and Terminal
-  modes. Defaults are
-  `Mod+Shift+KeyG`, `Mod+Shift+KeyP`, and `Mod+Shift+KeyM`.
-- Those three shortcuts toggle their target and keep the target group exclusive;
+- Uses `gitPanelShortcut`, `projectPanelShortcut`, `portsPanelShortcut`, and
+  `fleetTerminalShortcut` for keyboard access to the Git, Project, Ports, and
+  Fleet Terminal tools in IDE and Terminal modes. Defaults are
+  `Mod+Shift+KeyG`, `Mod+Shift+KeyZ`, `Mod+Shift+KeyP`, and `Mod+Shift+KeyM`.
+- Those four shortcuts toggle their target and keep the target group exclusive;
   xterm custom key handlers suppress the bindings before PTY input.
 - In terminal mode, `WorkspacePage` renders a full-height terminal workspace below the top nav.
 - The same terminal manager state is reused across mode switches, so PTY lifecycle is not duplicated.

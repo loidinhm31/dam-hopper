@@ -19,6 +19,7 @@ const settingsStore = {
   revealActiveFileShortcut: "alt+f1",
   gitPanelShortcut: "ctrl+shift+g",
   portsPanelShortcut: "ctrl+shift+p",
+  projectPanelShortcut: "mod+shift+b",
   fleetTerminalShortcut: "ctrl+shift+m",
   saveDebounced,
 };
@@ -33,6 +34,8 @@ describe("SettingsKeyboardShortcutsSection", () => {
     expect(markup).toContain("Reveal the active editor file in Explorer");
     expect(markup).toContain("Git panel");
     expect(markup).toContain("Ports panel");
+    expect(markup).toContain("Project panel");
+    expect(markup).toContain("Open or close the floating Project panel");
     expect(markup).toContain("Fleet Terminal");
     expect(markup).toContain("Increase terminal font size");
     expect(markup).toContain("Decrease terminal font size");

@@ -8,6 +8,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.searchFilenameShortcut).toBe("DoubleShift");
     expect(ui.terminalWorkspaceShortcut).toBe("Mod+Shift+Backquote");
     expect(ui.terminalFilePanelShortcut).toBe("Mod+Shift+KeyE");
+    expect(ui.projectPanelShortcut).toBe("Mod+Shift+KeyZ");
     expect(ui.revealActiveFileShortcut).toBe("Alt+F1");
     expect(ui.gitPanelShortcut).toBe("Mod+Shift+KeyG");
     expect(ui.portsPanelShortcut).toBe("Mod+Shift+KeyP");
@@ -45,6 +46,7 @@ describe("withUiConfigDefaults", () => {
       searchFilenameShortcut: "doubleShift",
       terminalWorkspaceShortcut: "ctrl+shift+backquote",
       terminalFilePanelShortcut: "ctrl+shift+e",
+      projectPanelShortcut: "ctrl+shift+b",
       revealActiveFileShortcut: "alt+f1",
       gitPanelShortcut: "ctrl+shift+g",
       portsPanelShortcut: "ctrl+shift+p",
@@ -74,6 +76,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.searchFilenameShortcut).toBe("DoubleShift");
     expect(ui.terminalWorkspaceShortcut).toBe("Ctrl+Shift+Backquote");
     expect(ui.terminalFilePanelShortcut).toBe("Ctrl+Shift+KeyE");
+    expect(ui.projectPanelShortcut).toBe("Ctrl+Shift+KeyB");
     expect(ui.revealActiveFileShortcut).toBe("Alt+F1");
     expect(ui.gitPanelShortcut).toBe("Ctrl+Shift+KeyG");
     expect(ui.portsPanelShortcut).toBe("Ctrl+Shift+KeyP");
