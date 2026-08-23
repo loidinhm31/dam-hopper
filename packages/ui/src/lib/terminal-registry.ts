@@ -11,6 +11,7 @@ export interface TerminalEntry {
   terminal: Terminal;
   fitAddon: FitAddon;
   findController: TerminalFindController;
+  attachmentElement?: HTMLElement;
   baseKeyEventHandler?: (event: KeyboardEvent) => boolean;
   invalidateSuggestionGeometry?: () => void;
 }
@@ -33,8 +34,9 @@ export function registerTerminal(
   terminal: Terminal,
   fitAddon: FitAddon,
   findController: TerminalFindController,
+  attachmentElement?: HTMLElement,
 ): TerminalEntry {
-  const entry = { terminal, fitAddon, findController };
+  const entry = { terminal, fitAddon, findController, attachmentElement };
   terminalRegistry.set(id, entry);
   // Notify subscribers that a new terminal is ready
   notifyRegistryChange(id);

@@ -3,10 +3,7 @@ import {
   fitTerminalNow,
   scheduleTerminalFit,
 } from "@/lib/terminal-fit-scheduler.js";
-import {
-  getTerminal,
-  type TerminalEntry,
-} from "@/lib/terminal-registry.js";
+import { getTerminal, type TerminalEntry } from "@/lib/terminal-registry.js";
 
 interface AttachTerminalsToHostOptions {
   host: HTMLElement;
@@ -37,7 +34,7 @@ export function attachTerminalsToHost({
 
   for (const sessionId of sessionIds) {
     const entry = resolveTerminal(sessionId);
-    const element = entry?.terminal.element;
+    const element = entry?.attachmentElement ?? entry?.terminal.element;
     if (!entry || !element) continue;
 
     const isActive = sessionId === activeSessionId;

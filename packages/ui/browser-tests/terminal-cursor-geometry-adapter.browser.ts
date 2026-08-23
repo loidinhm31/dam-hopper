@@ -4,7 +4,12 @@ import { FitAddon } from "@xterm/addon-fit";
 import { TerminalCursorGeometryAdapter } from "@/lib/terminal-cursor-geometry-adapter.js";
 import "@xterm/xterm/css/xterm.css";
 
-function rect(left: number, top: number, width: number, height: number): DOMRect {
+function rect(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+): DOMRect {
   return new DOMRect(left, top, width, height);
 }
 
@@ -66,6 +71,10 @@ describe("TerminalCursorGeometryAdapter in Chromium", () => {
   it("coalesces geometry work and hides after host detachment", async () => {
     const host = document.createElement("div");
     host.getBoundingClientRect = () => rect(0, 0, 200, 100);
+    Object.defineProperties(host, {
+      clientWidth: { value: 200 },
+      clientHeight: { value: 100 },
+    });
     const screen = document.createElement("div");
     screen.className = "xterm-screen";
     screen.getBoundingClientRect = () => rect(0, 0, 200, 100);
@@ -96,9 +105,34 @@ describe("TerminalCursorGeometryAdapter in Chromium", () => {
     adapter.dispose();
   });
 
+  it("normalizes rendered geometry when the host is CSS-scaled", async () => {
+    const host = document.createElement("div");
+    host.style.cssText = "width: 200px; height: 100px; position: fixed;";
+    host.getBoundingClientRect = () => rect(0, 0, 100, 50);
+    const screen = document.createElement("div");
+    screen.className = "xterm-screen";
+    screen.getBoundingClientRect = () => rect(0, 0, 100, 50);
+    host.append(screen);
+    document.body.append(host);
+    hosts.push(host);
+
+    const geometries: Array<{ x: number; y: number } | null> = [];
+    const adapter = new TerminalCursorGeometryAdapter(
+      terminalFixture(host),
+      (geometry) => geometries.push(geometry),
+    );
+    await nextFrame();
+
+    expect(geometries.at(-1)).toEqual(
+      expect.objectContaining({ x: 10, y: 20 }),
+    );
+    adapter.dispose();
+  });
+
   it("measures a live xterm screen grid when its helper textarea is off-host", async () => {
     const host = document.createElement("div");
-    host.style.cssText = "width: 400px; height: 160px; position: fixed; left: 0; top: 0;";
+    host.style.cssText =
+      "width: 400px; height: 160px; position: fixed; left: 0; top: 0;";
     document.body.append(host);
     hosts.push(host);
     const terminal = new Terminal({ cols: 40, rows: 8, fontSize: 13 });
@@ -115,7 +149,10 @@ describe("TerminalCursorGeometryAdapter in Chromium", () => {
     await nextFrame();
 
     expect(geometries.at(-1)).toEqual(
-      expect.objectContaining({ x: expect.any(Number), availableWidth: expect.any(Number) }),
+      expect.objectContaining({
+        x: expect.any(Number),
+        availableWidth: expect.any(Number),
+      }),
     );
     adapter.dispose();
     terminal.dispose();
@@ -140,7 +177,10 @@ describe("TerminalCursorGeometryAdapter in Chromium", () => {
       document.documentElement.style.zoom = `${zoom * 100}%`;
       fitAddon.fit();
       terminal.textarea?.focus();
-      terminal.textarea?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      terminal.textarea?.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+      });
       await nextFrame();
 
       const hostRect = host.getBoundingClientRect();
@@ -151,6 +191,54 @@ describe("TerminalCursorGeometryAdapter in Chromium", () => {
       expect(terminalRect?.left).toBeCloseTo(hostRect.left, 1);
     }
 
+    terminal.dispose();
+  });
+
+  it("keeps cursor geometry in the zoom-neutral xterm host space", async () => {
+    const host = document.createElement("div");
+    host.style.cssText =
+      "width: 600px; height: 240px; position: fixed; left: 0; top: 0; overflow: clip;";
+    document.body.append(host);
+    hosts.push(host);
+
+    const terminal = new Terminal({ cols: 80, rows: 16, fontSize: 13 });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    const boundary = document.createElement("div");
+    boundary.style.cssText =
+      "position:absolute; inset:0; width:100%; height:100%; overflow:hidden;";
+    const terminalHost = document.createElement("div");
+    terminalHost.style.cssText = "position:relative; width:100%; height:100%;";
+    boundary.append(terminalHost);
+    host.append(boundary);
+    terminal.open(terminalHost);
+    await new Promise<void>((resolve) => terminal.write("git", resolve));
+    terminal.textarea!.getBoundingClientRect = () => rect(-100, -100, 10, 20);
+
+    const geometries: Array<{ x: number; y: number } | null> = [];
+    const adapter = new TerminalCursorGeometryAdapter(terminal, (geometry) => {
+      geometries.push(geometry);
+    });
+
+    for (const zoom of [0.5, 0.8, 1.2]) {
+      document.documentElement.style.zoom = `${zoom * 100}%`;
+      boundary.style.zoom = String(1 / zoom);
+      terminal.options.fontSize = 13 * zoom;
+      fitAddon.fit();
+      await nextFrame();
+
+      const hostRect = host.getBoundingClientRect();
+      const screenRect = host
+        .querySelector<HTMLElement>(".xterm-screen")!
+        .getBoundingClientRect();
+      const expectedCellWidth = screenRect.width / terminal.cols;
+      expect(geometries.at(-1)?.x).toBeCloseTo(expectedCellWidth * 3, 1);
+      expect(geometries.at(-1)?.y).toBeCloseTo(0, 1);
+      expect(hostRect.width).toBeGreaterThan(0);
+      expect(hostRect.height).toBeGreaterThan(0);
+    }
+
+    adapter.dispose();
     terminal.dispose();
   });
 });

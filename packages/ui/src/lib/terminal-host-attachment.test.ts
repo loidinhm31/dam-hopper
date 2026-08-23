@@ -9,7 +9,9 @@ function animationFrameFixture() {
     return callbacks.length;
   });
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
-  return { flush: () => callbacks.splice(0).forEach((callback) => callback(0)) };
+  return {
+    flush: () => callbacks.splice(0).forEach((callback) => callback(0)),
+  };
 }
 
 function elementFixture(events: string[]) {
@@ -28,7 +30,11 @@ function elementFixture(events: string[]) {
   return { style, parentElement: null } as unknown as HTMLElement;
 }
 
-function entryFixture(events: string[], element: HTMLElement): TerminalEntry {
+function entryFixture(
+  events: string[],
+  element: HTMLElement,
+  attachmentElement?: HTMLElement,
+): TerminalEntry {
   return {
     fitAddon: { fit: () => events.push("fit") },
     findController: { close: () => events.push("close-find") },
@@ -36,6 +42,7 @@ function entryFixture(events: string[], element: HTMLElement): TerminalEntry {
       element,
       focus: () => events.push("focus"),
     },
+    attachmentElement,
     invalidateSuggestionGeometry: () => events.push("invalidate-geometry"),
   } as unknown as TerminalEntry;
 }
@@ -155,5 +162,32 @@ describe("attachTerminalsToHost", () => {
 
     expect(host.scrollLeft).toBe(0);
     expect(host.scrollTop).toBe(0);
+  });
+
+  it("reparents the terminal attachment boundary instead of the xterm element", () => {
+    animationFrameFixture();
+    const events: string[] = [];
+    const terminalElement = elementFixture(events);
+    const attachmentElement = elementFixture(events);
+    const entry = entryFixture(events, terminalElement, attachmentElement);
+    const host = {
+      appendChild: (child: HTMLElement) => {
+        events.push(
+          child === attachmentElement ? "append-boundary" : "append-xterm",
+        );
+        Object.defineProperty(child, "parentElement", { value: host });
+      },
+    } as unknown as HTMLElement;
+
+    attachTerminalsToHost({
+      host,
+      sessionIds: ["active"],
+      activeSessionId: "active",
+      resolveTerminal: () => entry,
+    });
+
+    expect(events).toContain("append-boundary");
+    expect(events).not.toContain("append-xterm");
+    expect(entry.terminal.element).toBe(terminalElement);
   });
 });
