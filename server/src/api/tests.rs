@@ -3173,6 +3173,31 @@ async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
 }
 
 #[tokio::test]
+async fn update_global_ui_at_path_persists_project_panel_shortcut_in_snake_case() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "projectPanelShortcut": "Mod+Shift+KeyZ",
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written.contains("project_panel_shortcut = \"Mod+Shift+KeyZ\""));
+    assert!(!written.contains("projectPanelShortcut"));
+
+    let ui = state.global_config.read().await.ui.clone().unwrap();
+    assert_eq!(ui.project_panel_shortcut, "Mod+Shift+KeyZ");
+}
+
+#[tokio::test]
 async fn update_global_ui_at_path_persists_and_clears_host_resource_pinned_mount() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);

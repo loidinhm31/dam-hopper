@@ -291,6 +291,7 @@ The global UI config includes terminal workspace/panel shortcuts, inline termina
 | -------------------------------------------- | ------ | --------------------- | ------------------------------------------------------------------------------------------ |
 | terminal_workspace_shortcut                  | string | `Mod+Shift+Backquote` | Global IDE/terminal mode toggle shortcut                                                   |
 | git_panel_shortcut                           | string | `Mod+Shift+KeyG`      | Toggle the Git panel in IDE or Terminal mode                                               |
+| project_panel_shortcut                       | string | `Mod+Shift+KeyZ`      | Toggle the Project panel in IDE or Terminal mode                                           |
 | ports_panel_shortcut                         | string | `Mod+Shift+KeyP`      | Toggle the Ports panel in IDE or Terminal mode                                             |
 | fleet_terminal_shortcut                      | string | `Mod+Shift+KeyM`      | Toggle the Fleet Terminal panel in IDE or Terminal mode                                    |
 | terminal_suggestions_enabled                 | bool   | `true`                | Kill switch for automatic suggestions and lifecycle-driven history writes                  |
@@ -310,6 +311,7 @@ Example:
 [ui]
 terminal_workspace_shortcut = "Mod+Shift+Backquote"
 git_panel_shortcut = "Mod+Shift+KeyG"
+project_panel_shortcut = "Mod+Shift+KeyZ"
 ports_panel_shortcut = "Mod+Shift+KeyP"
 fleet_terminal_shortcut = "Mod+Shift+KeyM"
 terminal_suggestions_enabled = true
@@ -336,7 +338,7 @@ The API exposes these UI fields in `camelCase` (for example, `terminalCodexNotif
 
 Only updates to `terminalCodexNotificationsEnabled` synchronize `~/.codex/config.toml`. Toast, browser-popup, sound, volume, and pattern updates persist only to DamHopper's global UI config. Browser notification permission is browser-managed and runtime-only: only the explicit **Request permission** action can request it; toggling or saving a browser-popup preference never requests, revokes, or persists it. **Play sound** previews the selected synthesized in-app pattern and volume only; it does not create a browser popup or request permission.
 
-Shortcuts are normalized by the client config layer and can be captured/reset from Settings > Appearance > Keyboard Shortcuts. Git, Ports, and Fleet Terminal shortcuts toggle their target in both IDE and Terminal modes; opening one closes the other two target panels.
+Shortcuts are normalized by the client config layer and can be captured/reset from Settings > Appearance > Keyboard Shortcuts. Git, Project, Ports, and Fleet Terminal shortcuts toggle their target in both IDE and Terminal modes; opening one closes the other target panels. The Project shortcut defaults to `Mod+Shift+KeyZ`.
 
 #### Inline terminal suggestions
 

@@ -446,6 +446,9 @@ fn default_terminal_workspace_shortcut() -> String {
 fn default_terminal_file_panel_shortcut() -> String {
     "Mod+Shift+KeyE".to_string()
 }
+fn default_project_panel_shortcut() -> String {
+    "Mod+Shift+KeyZ".to_string()
+}
 fn default_reveal_active_file_shortcut() -> String {
     "Alt+F1".to_string()
 }
@@ -541,6 +544,11 @@ pub struct UiConfig {
         alias = "terminal_file_panel_shortcut"
     )]
     pub terminal_file_panel_shortcut: String,
+    #[serde(
+        default = "default_project_panel_shortcut",
+        alias = "project_panel_shortcut"
+    )]
+    pub project_panel_shortcut: String,
     #[serde(
         default = "default_reveal_active_file_shortcut",
         alias = "reveal_active_file_shortcut"
@@ -698,6 +706,7 @@ impl Default for UiConfig {
             search_filename_shortcut: default_search_filename_shortcut(),
             terminal_workspace_shortcut: default_terminal_workspace_shortcut(),
             terminal_file_panel_shortcut: default_terminal_file_panel_shortcut(),
+            project_panel_shortcut: default_project_panel_shortcut(),
             reveal_active_file_shortcut: default_reveal_active_file_shortcut(),
             git_panel_shortcut: default_git_panel_shortcut(),
             ports_panel_shortcut: default_ports_panel_shortcut(),

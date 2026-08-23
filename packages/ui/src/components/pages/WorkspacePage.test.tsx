@@ -235,6 +235,7 @@ const settingsStore = {
   searchFilenameShortcut: "mod+p",
   terminalWorkspaceShortcut: "mod+`",
   terminalFilePanelShortcut: "mod+shift+e",
+  projectPanelShortcut: "mod+shift+b",
   revealActiveFileShortcut: "alt+f1",
   terminalAutoSwitchProjectEnabled: true,
 };

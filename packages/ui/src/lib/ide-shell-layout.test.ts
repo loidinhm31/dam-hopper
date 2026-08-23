@@ -237,4 +237,19 @@ describe("resolveTerminalPanelShortcut", () => {
       nextBottomMaximized: true,
     });
   });
+
+  it("closes an already-active Project tool without disturbing the bottom panel", () => {
+    expect(
+      resolveTerminalPanelShortcut({
+        targetId: "project",
+        activeLeftBottomId: "ports",
+        activeRightTopId: "project-info",
+        bottomMaximized: true,
+      }),
+    ).toEqual({
+      nextActiveLeftBottomId: "ports",
+      nextActiveRightTopId: null,
+      nextBottomMaximized: true,
+    });
+  });
 });
