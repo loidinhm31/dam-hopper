@@ -80,7 +80,8 @@ pub fn run_trust_repair(arguments: &[String]) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init());
 
     #[cfg(desktop)]
     let controller = Arc::new(browser_debug::controller::BrowserDebugController::default());
