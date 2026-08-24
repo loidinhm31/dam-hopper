@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-notification": "2.3.3",
     "@dam-hopper/shared": "workspace:*",
     "@dam-hopper/ui": "workspace:*",
     "@tanstack/react-query": "^5.67.0",
