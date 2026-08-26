@@ -8,8 +8,12 @@ import {
   type ReactNode,
 } from "react";
 import {
+  getExistingNativeScopeId,
+  getNativeScopeIds,
   getActiveProfileId,
+  completeNativeScopeDeletion,
   readServerProfiles,
+  retireNativeScopeId,
   subscribeToProfileChanges,
 } from "@/api/server-config.js";
 import type { SshForwardHost } from "@/lib/ssh-forward-host.js";
@@ -91,34 +95,50 @@ export function SshForwardScopeBridge({ children }: { children: ReactNode }) {
     const knownScopes = () => {
       const result = readServerProfiles();
       return result.status === "available"
-        ? {
-            status: "available" as const,
-            ids: result.profiles.map((profile) => profile.id),
-          }
+        ? getNativeScopeIds(result.profiles.map((profile) => profile.id))
         : result;
     };
+    type KnownScopes = ReturnType<typeof knownScopes>;
     let activation: Promise<void> = Promise.resolve();
     let openClient: Promise<
       Awaited<ReturnType<SshForwardHost["openClient"]>>
     > | null = null;
-    const ensureOpenClient = () => {
-      if (!openClient) {
-        openClient = host.openClient(knownScopes()).catch((error) => {
-          openClient = null;
+    const ensureOpenClient = (
+      refresh = false,
+      scopes?: KnownScopes,
+    ) => {
+      if (refresh || !openClient) {
+        const nextOpenClient = host.openClient(scopes ?? knownScopes());
+        let guardedOpenClient!: typeof nextOpenClient;
+        guardedOpenClient = nextOpenClient.catch((error) => {
+          if (openClient === guardedOpenClient) openClient = null;
           throw error;
         });
+        openClient = guardedOpenClient;
       }
       return openClient;
     };
     const fail = (error: unknown) => {
       if (!disposed) setInitialization({ host, readiness: "failed", error });
     };
-    const activate = (scopeId = getActiveProfileId()) => {
+    const activate = (
+      scopeId = getActiveProfileId(),
+      refreshKnownScopes = false,
+    ) => {
       const sequence = ++activationSequence;
       if (!disposed)
         setInitialization({ host, readiness: "initializing", error: null });
-      const next = ensureOpenClient()
-        .then(() => host.activateScope(scopeId))
+      const previousActivation = activation;
+      const next = previousActivation
+        .catch(() => {})
+        .then(() => ensureOpenClient(refreshKnownScopes))
+        .then(() => {
+          const nativeScopeId =
+            scopeId === null ? null : getExistingNativeScopeId(scopeId);
+          if (scopeId !== null && nativeScopeId === null)
+            throw new Error("Native scope identity unavailable");
+          return host.activateScope(nativeScopeId);
+        })
         .then((result) => {
           if (!disposed && sequence === activationSequence) {
             activeScopeId = result.scopeId;
@@ -132,21 +152,48 @@ export function SshForwardScopeBridge({ children }: { children: ReactNode }) {
       activation = next;
       return next;
     };
-    retryRef.current = () => activate();
+    retryRef.current = () => activate(undefined, true);
     void activate().catch(() => {});
     const unsubscribe = subscribeToProfileChanges((event) => {
       if (disposed) return;
       if (event.type === "activeChanged")
         void activate(event.activeProfileId).catch(() => {});
+      if (event.type === "profileListChanged")
+        void activate(undefined, true).catch(() => {});
       if (event.type === "deleted") {
         void (async () => {
+          const profilesBeforeRetirement = readServerProfiles();
+          if (profilesBeforeRetirement.status !== "available") return;
+          if (
+            profilesBeforeRetirement.profiles.some(
+              (profile) => profile.id === event.deletedProfileId,
+            )
+          )
+            return;
+          const nativeDeletedScopeId = retireNativeScopeId(
+            event.deletedProfileId,
+          );
+          if (!nativeDeletedScopeId) return;
           await activation.catch(() => {});
-          if (activeScopeId === event.deletedProfileId) await activate();
-          if (!disposed && event.knownProfileIds.status === "available")
-            await host.purgeScope(
-              event.deletedProfileId,
-              event.knownProfileIds,
+          const currentProfiles = readServerProfiles();
+          if (currentProfiles.status !== "available") return;
+          const currentKnownScopes = getNativeScopeIds(
+            currentProfiles.profiles.map((profile) => profile.id),
+          );
+          if (currentKnownScopes.status !== "available") return;
+          await ensureOpenClient(false, currentKnownScopes);
+          if (activeScopeId === nativeDeletedScopeId) await activate();
+          if (!disposed) {
+            const purgeResult = await host.purgeScope(
+              nativeDeletedScopeId,
+              currentKnownScopes,
             );
+            if (purgeResult.purged)
+              completeNativeScopeDeletion(
+                event.deletedProfileId,
+                nativeDeletedScopeId,
+              );
+          }
         })().catch(() => {});
       }
     });
