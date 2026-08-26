@@ -145,6 +145,18 @@ describe("native ssh forwarding host", () => {
       { input: { context, activationToken: "11", scopeId } },
     ]);
   });
+  it("rejects non-UUID scope IDs before sending them to Rust", async () => {
+    invoke.mockResolvedValueOnce(opened);
+    const host = createNativeSshForwardHost("windows")!;
+
+    await host.openClient({ status: "available", ids: [] });
+    await expect(
+      host.activateScope("phase5-runtime-profile"),
+    ).rejects.toMatchObject({
+      code: "IPC_UNAVAILABLE",
+    });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
   it("rejects superseded A after B and C without publishing A's scope", async () => {
     let resolveA!: (value: typeof activation) => void;
     const scopeB = "55555555-5555-4555-8555-555555555555";

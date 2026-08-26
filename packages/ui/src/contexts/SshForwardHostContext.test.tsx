@@ -12,16 +12,64 @@ import { useSshForward } from "@/hooks/use-ssh-forward.js";
 import type { SshForwardHost } from "@/lib/ssh-forward-host.js";
 import type { ServerProfileChange } from "@/api/server-config.js";
 
-const { profileChanges, activeProfileId } = vi.hoisted(() => ({
+const {
+  profileChanges,
+  activeProfileId,
+  profileIds,
+  nativeScopeAliases,
+  retireNativeScopeId,
+  completeNativeScopeDeletion,
+} = vi.hoisted(() => ({
   profileChanges: new Set<(event: ServerProfileChange) => void>(),
-  activeProfileId: { value: "33333333-3333-4333-8333-333333333333" },
+  activeProfileId: {
+    value: "33333333-3333-4333-8333-333333333333" as string | null,
+  },
+  profileIds: {
+    value: ["33333333-3333-4333-8333-333333333333"],
+  },
+  nativeScopeAliases: new Map<string, string>(),
+  retireNativeScopeId: vi.fn((profileId: string) => {
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(profileId))
+      return profileId;
+    const nativeScopeId = nativeScopeAliases.get(profileId) ?? null;
+    if (nativeScopeId) nativeScopeAliases.delete(profileId);
+    return nativeScopeId;
+  }),
+  completeNativeScopeDeletion: vi.fn(
+    (profileId: string, nativeScopeId: string) => {
+      if (nativeScopeAliases.get(profileId) === nativeScopeId)
+        nativeScopeAliases.delete(profileId);
+      return true;
+    },
+  ),
 }));
 vi.mock("@/api/server-config.js", () => ({
   getActiveProfileId: () => activeProfileId.value,
+  getExistingNativeScopeId: (profileId: string) =>
+    nativeScopeAliases.get(profileId) ??
+    (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      profileId,
+    )
+      ? profileId
+      : null),
+  getNativeScopeIds: (ids: readonly string[]) => ({
+    status: "available" as const,
+    ids: ids.map((id) => {
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))
+        return id;
+      const existing = nativeScopeAliases.get(id);
+      if (existing) return existing;
+      const nativeId = `aaaaaaaa-aaaa-4aaa-8aaa-${String(nativeScopeAliases.size + 1).padStart(12, "0")}`;
+      nativeScopeAliases.set(id, nativeId);
+      return nativeId;
+    }),
+  }),
   readServerProfiles: () => ({
     status: "available",
-    profiles: [{ id: "33333333-3333-4333-8333-333333333333" }],
+    profiles: profileIds.value.map((id) => ({ id })),
   }),
+  retireNativeScopeId,
+  completeNativeScopeDeletion,
   subscribeToProfileChanges: (
     listener: (event: ServerProfileChange) => void,
   ) => {
@@ -47,7 +95,10 @@ const host = (): SshForwardHost => ({
   loadKey: vi.fn(),
   loadPassword: vi.fn(),
   approveHost: vi.fn(),
-  purgeScope: vi.fn().mockResolvedValue({}),
+  purgeScope: vi.fn().mockResolvedValue({
+    purged: true,
+    scopeId: "33333333-3333-4333-8333-333333333333",
+  }),
   subscribe: vi.fn(() => () => {}),
   dispose: vi.fn(),
 });
@@ -65,6 +116,10 @@ afterEach(() => {
   root = null;
   profileChanges.clear();
   activeProfileId.value = "33333333-3333-4333-8333-333333333333";
+  profileIds.value = ["33333333-3333-4333-8333-333333333333"];
+  nativeScopeAliases.clear();
+  retireNativeScopeId.mockClear();
+  completeNativeScopeDeletion.mockClear();
 });
 
 describe("SshForwardScopeBridge", () => {
@@ -130,6 +185,65 @@ describe("SshForwardScopeBridge", () => {
     expect(container.textContent).toBe("ready:ready");
   });
 
+  it("refreshes native known scopes when the profile list changes", async () => {
+    const firstProfileId = "33333333-3333-4333-8333-333333333333";
+    const secondProfileId = "44444444-4444-4444-8444-444444444444";
+    profileIds.value = [firstProfileId];
+    activeProfileId.value = firstProfileId;
+    const value = host();
+    const container = document.createElement("div");
+    root = createRoot(container);
+
+    await act(async () =>
+      root?.render(
+        <SshForwardHostProvider
+          host={value}
+          environment={{ kind: "nativeDesktop" }}
+        >
+          <SshForwardScopeBridge>ok</SshForwardScopeBridge>
+        </SshForwardHostProvider>,
+      ),
+    );
+    await act(async () => {});
+    profileIds.value = [firstProfileId, secondProfileId];
+    await act(async () => {
+      for (const listener of profileChanges)
+        listener({ type: "profileListChanged" });
+    });
+    await act(async () => {});
+
+    expect(value.openClient).toHaveBeenNthCalledWith(2, {
+      status: "available",
+      ids: [firstProfileId, secondProfileId],
+    });
+    expect(value.activateScope).toHaveBeenLastCalledWith(firstProfileId);
+  });
+
+  it("does not reopen the native client for token/data changes", async () => {
+    const value = host();
+    const container = document.createElement("div");
+    root = createRoot(container);
+
+    await act(async () =>
+      root?.render(
+        <SshForwardHostProvider
+          host={value}
+          environment={{ kind: "nativeDesktop" }}
+        >
+          <SshForwardScopeBridge>ok</SshForwardScopeBridge>
+        </SshForwardHostProvider>,
+      ),
+    );
+    await act(async () => {});
+
+    await act(async () => {
+      for (const listener of profileChanges) listener({ type: "dataChanged" });
+    });
+    await act(async () => {});
+
+    expect(value.openClient).toHaveBeenCalledTimes(1);
+  });
+
   it("reopens the native client after an initialization failure", async () => {
     const value = host();
     const retryRef: { current: (() => Promise<void>) | null } = {
@@ -180,6 +294,194 @@ describe("SshForwardScopeBridge", () => {
     expect(container.textContent).toBe("ready");
   });
 
+  it("translates legacy profile IDs at the native scope boundary", async () => {
+    const legacyId = "phase5-runtime-profile";
+    const nativeId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    profileIds.value = [legacyId];
+    activeProfileId.value = legacyId;
+    nativeScopeAliases.set(legacyId, nativeId);
+    const value = host();
+    vi.mocked(value.activateScope).mockResolvedValue({
+      scopeId: nativeId,
+    } as never);
+    const container = document.createElement("div");
+    root = createRoot(container);
+
+    await act(async () =>
+      root?.render(
+        <SshForwardHostProvider
+          host={value}
+          environment={{ kind: "nativeDesktop" }}
+        >
+          <SshForwardScopeBridge>ok</SshForwardScopeBridge>
+        </SshForwardHostProvider>,
+      ),
+    );
+    await act(async () => {});
+
+    expect(value.openClient).toHaveBeenCalledWith({
+      status: "available",
+      ids: [nativeId],
+    });
+    expect(value.activateScope).toHaveBeenCalledWith(nativeId);
+
+    activeProfileId.value = null;
+    profileIds.value = [];
+    await act(async () => {
+      for (const listener of profileChanges)
+        listener({
+          type: "deleted",
+          deletedProfileId: legacyId,
+          knownProfileIds: { status: "available", ids: [] },
+        });
+    });
+
+    expect(value.purgeScope).toHaveBeenCalledWith(nativeId, {
+      status: "available",
+      ids: [],
+    });
+    expect(completeNativeScopeDeletion).toHaveBeenCalledWith(
+      legacyId,
+      nativeId,
+    );
+  });
+
+  it("retains a legacy deletion tombstone when native purge is incomplete", async () => {
+    const legacyId = "phase5-runtime-profile";
+    const nativeId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    profileIds.value = [legacyId];
+    activeProfileId.value = legacyId;
+    nativeScopeAliases.set(legacyId, nativeId);
+    const value = host();
+    vi.mocked(value.activateScope).mockResolvedValue({ scopeId: nativeId } as never);
+    vi.mocked(value.purgeScope).mockResolvedValue({
+      purged: false,
+      scopeId: nativeId,
+    });
+    const container = document.createElement("div");
+    root = createRoot(container);
+
+    await act(async () =>
+      root?.render(
+        <SshForwardHostProvider
+          host={value}
+          environment={{ kind: "nativeDesktop" }}
+        >
+          <SshForwardScopeBridge>ok</SshForwardScopeBridge>
+        </SshForwardHostProvider>,
+      ),
+    );
+    await act(async () => {});
+    activeProfileId.value = null;
+    profileIds.value = [];
+    await act(async () => {
+      for (const listener of profileChanges)
+        listener({
+          type: "deleted",
+          deletedProfileId: legacyId,
+          knownProfileIds: { status: "available", ids: [] },
+        });
+    });
+
+    expect(value.purgeScope).toHaveBeenCalledWith(nativeId, {
+      status: "available",
+      ids: [],
+    });
+    expect(completeNativeScopeDeletion).not.toHaveBeenCalled();
+  });
+
+  it("does not invent a native scope ID when a deleted alias is missing", async () => {
+    const legacyId = "phase5-runtime-profile";
+    profileIds.value = ["33333333-3333-4333-8333-333333333333"];
+    activeProfileId.value = "33333333-3333-4333-8333-333333333333";
+    const value = host();
+    const container = document.createElement("div");
+    root = createRoot(container);
+
+    await act(async () =>
+      root?.render(
+        <SshForwardHostProvider
+          host={value}
+          environment={{ kind: "nativeDesktop" }}
+        >
+          <SshForwardScopeBridge>ok</SshForwardScopeBridge>
+        </SshForwardHostProvider>,
+      ),
+    );
+    await act(async () => {});
+    activeProfileId.value = null;
+    profileIds.value = [];
+    await act(async () => {
+      for (const listener of profileChanges)
+        listener({
+          type: "deleted",
+          deletedProfileId: legacyId,
+          knownProfileIds: { status: "available", ids: [] },
+        });
+    });
+
+    expect(value.purgeScope).not.toHaveBeenCalled();
+  });
+
+  it("does not purge a recreated legacy profile from a stale deletion event", async () => {
+    const legacyId = "phase5-runtime-profile";
+    const originalId = "33333333-3333-4333-8333-333333333333";
+    const oldNativeId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const recreatedNativeId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    profileIds.value = [originalId];
+    activeProfileId.value = originalId;
+    nativeScopeAliases.set(legacyId, oldNativeId);
+    const value = host();
+    const purge = deferred<{ scopeId: string; purged: boolean }>();
+    vi.mocked(value.purgeScope).mockReturnValue(purge.promise);
+    const container = document.createElement("div");
+    root = createRoot(container);
+
+    await act(async () =>
+      root?.render(
+        <SshForwardHostProvider
+          host={value}
+          environment={{ kind: "nativeDesktop" }}
+        >
+          <SshForwardScopeBridge>ok</SshForwardScopeBridge>
+        </SshForwardHostProvider>,
+      ),
+    );
+    await act(async () => {});
+
+    profileIds.value = [];
+    activeProfileId.value = null;
+    await act(async () => {
+      for (const listener of profileChanges)
+        listener({
+          type: "deleted",
+          deletedProfileId: legacyId,
+          knownProfileIds: { status: "available", ids: [] },
+        });
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(value.purgeScope).toHaveBeenCalledWith(oldNativeId, {
+      status: "available",
+      ids: [],
+    });
+    profileIds.value = [legacyId];
+    nativeScopeAliases.set(legacyId, recreatedNativeId);
+    purge.resolve({ scopeId: oldNativeId, purged: true });
+    await act(async () => {
+      await purge.promise;
+    });
+
+    expect(completeNativeScopeDeletion).toHaveBeenCalledWith(
+      legacyId,
+      oldNativeId,
+    );
+    expect(nativeScopeAliases.get(legacyId)).toBe(recreatedNativeId);
+  });
+
   it("deactivates an active deletion before purging with known scopes", async () => {
     const value = host();
     const container = document.createElement("div");
@@ -196,6 +498,7 @@ describe("SshForwardScopeBridge", () => {
     );
     await act(async () => {});
     activeProfileId.value = null;
+    profileIds.value = [];
     await act(async () => {
       for (const listener of profileChanges)
         listener({
