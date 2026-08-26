@@ -12,6 +12,10 @@ const KEY_TOKEN = "damhopper_auth_token";
 const KEY_USERNAME = "damhopper_auth_username";
 const KEY_PROFILES = "damhopper_server_profiles";
 const KEY_ACTIVE_PROFILE = "damhopper_active_profile_id";
+const KEY_NATIVE_SCOPE_IDS = "damhopper_native_scope_ids";
+const KEY_NATIVE_SCOPE_TOMBSTONES = "damhopper_native_scope_tombstones";
+const UUID_V4 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PROFILE_CHANGED_EVENT = "damhopper:profile-changed";
 let profileChangeVersion = 0;
 
@@ -20,6 +24,8 @@ export type KnownServerProfiles =
   | { status: "unavailable" };
 export type ServerProfileChange =
   | { type: "activeChanged"; activeProfileId: string | null }
+  | { type: "profileListChanged" }
+  | { type: "dataChanged" }
   | {
       type: "deleted";
       deletedProfileId: string;
@@ -338,7 +344,192 @@ export function buildAuthHeaders(profileId?: string): Record<string, string> {
 
 /** Generate UUID v4 */
 function uuid(): string {
-  return crypto.randomUUID();
+  const value = crypto.randomUUID();
+  if (!isUuidV4(value)) throw new Error("UUID v4 generation unavailable");
+  return value;
+}
+
+function isUuidV4(value: unknown): value is string {
+  return typeof value === "string" && UUID_V4.test(value);
+}
+
+type NativeScopeIds =
+  | { status: "available"; ids: string[] }
+  | { status: "unavailable" };
+
+function readNativeScopeAliases(): Record<string, string> | null {
+  let stored: string | null;
+  try {
+    stored = localStorage.getItem(KEY_NATIVE_SCOPE_IDS);
+  } catch {
+    return null;
+  }
+  if (stored === null) return Object.create(null) as Record<string, string>;
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return null;
+    const aliases: Record<string, string> = Object.create(null);
+    const nativeScopeIds = new Set<string>();
+    for (const [profileId, nativeScopeId] of Object.entries(parsed)) {
+      if (
+        !profileId ||
+        !isUuidV4(nativeScopeId) ||
+        nativeScopeIds.has(nativeScopeId)
+      )
+        return null;
+      aliases[profileId] = nativeScopeId;
+      nativeScopeIds.add(nativeScopeId);
+    }
+    return aliases;
+  } catch {
+    return null;
+  }
+}
+
+function readNativeScopeTombstones(): Record<string, string[]> | null {
+  let stored: string | null;
+  try {
+    stored = localStorage.getItem(KEY_NATIVE_SCOPE_TOMBSTONES);
+  } catch {
+    return null;
+  }
+  if (stored === null)
+    return Object.create(null) as Record<string, string[]>;
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return null;
+    const tombstones: Record<string, string[]> = Object.create(null);
+    const nativeScopeIds = new Set<string>();
+    for (const [profileId, nativeScopeIdsForProfile] of Object.entries(parsed)) {
+      if (
+        !profileId ||
+        !Array.isArray(nativeScopeIdsForProfile) ||
+        nativeScopeIdsForProfile.length === 0 ||
+        nativeScopeIdsForProfile.some(
+          (nativeScopeId) =>
+            !isUuidV4(nativeScopeId) || nativeScopeIds.has(nativeScopeId),
+        )
+      )
+        return null;
+      tombstones[profileId] = [...nativeScopeIdsForProfile];
+      for (const nativeScopeId of nativeScopeIdsForProfile)
+        nativeScopeIds.add(nativeScopeId);
+    }
+    return tombstones;
+  } catch {
+    return null;
+  }
+}
+
+function persistNativeScopeAliases(aliases: Record<string, string>): void {
+  if (!writeLocalStorage(KEY_NATIVE_SCOPE_IDS, JSON.stringify(aliases)))
+    throw new Error("Native scope identity storage unavailable");
+}
+
+function persistNativeScopeTombstones(
+  tombstones: Record<string, string[]>,
+): boolean {
+  return writeLocalStorage(
+    KEY_NATIVE_SCOPE_TOMBSTONES,
+    JSON.stringify(tombstones),
+  );
+}
+
+/** Resolve a server profile ID to the UUID required by the native scope store. */
+export function getNativeScopeId(profileId: null): null;
+export function getNativeScopeId(profileId: string): string;
+export function getNativeScopeId(profileId: string | null): string | null;
+export function getNativeScopeId(profileId: string | null): string | null {
+  if (profileId === null || isUuidV4(profileId)) return profileId;
+  const aliases = readNativeScopeAliases();
+  if (!aliases) throw new Error("Native scope identity storage unavailable");
+  const tombstones = readNativeScopeTombstones();
+  if (!tombstones) throw new Error("Native scope identity storage unavailable");
+  const existing = aliases[profileId];
+  const retired = tombstones[profileId] ?? [];
+  if (existing && !retired.includes(existing)) return existing;
+  const nativeScopeId = uuid();
+  aliases[profileId] = nativeScopeId;
+  persistNativeScopeAliases(aliases);
+  return nativeScopeId;
+}
+
+/** Resolve an existing alias without creating one during deletion/retry flows. */
+export function getExistingNativeScopeId(profileId: string): string | null {
+  if (isUuidV4(profileId)) return profileId;
+  const aliases = readNativeScopeAliases();
+  const tombstones = readNativeScopeTombstones();
+  if (!aliases || !tombstones) return null;
+  const nativeScopeId = aliases[profileId];
+  return nativeScopeId && !(tombstones[profileId] ?? []).includes(nativeScopeId)
+    ? nativeScopeId
+    : null;
+}
+
+/** Reserve a deleted legacy scope so a recreated profile receives a new identity. */
+export function retireNativeScopeId(profileId: string): string | null {
+  if (isUuidV4(profileId)) return profileId;
+  const aliases = readNativeScopeAliases();
+  const tombstones = readNativeScopeTombstones();
+  if (!aliases || !tombstones) return null;
+  const nativeScopeId = aliases[profileId];
+  if (!nativeScopeId) return null;
+  const retired = tombstones[profileId] ?? [];
+  if (!retired.includes(nativeScopeId)) {
+    tombstones[profileId] = [...retired, nativeScopeId];
+    if (!persistNativeScopeTombstones(tombstones)) return null;
+  }
+  delete aliases[profileId];
+  writeLocalStorage(KEY_NATIVE_SCOPE_IDS, JSON.stringify(aliases));
+  return nativeScopeId;
+}
+
+/** Complete a retired-scope purge without deleting a newer recreated alias. */
+export function completeNativeScopeDeletion(
+  profileId: string,
+  nativeScopeId: string,
+): boolean {
+  if (isUuidV4(profileId)) return true;
+  const aliases = readNativeScopeAliases();
+  const tombstones = readNativeScopeTombstones();
+  if (!aliases || !tombstones) return false;
+  const retired = tombstones[profileId] ?? [];
+  const remaining = retired.filter((id) => id !== nativeScopeId);
+  if (remaining.length > 0) tombstones[profileId] = remaining;
+  else delete tombstones[profileId];
+  if (aliases[profileId] === nativeScopeId) delete aliases[profileId];
+  const aliasesWritten = writeLocalStorage(
+    KEY_NATIVE_SCOPE_IDS,
+    JSON.stringify(aliases),
+  );
+  const tombstonesWritten = persistNativeScopeTombstones(tombstones);
+  return aliasesWritten && tombstonesWritten;
+}
+
+/** Resolve a complete profile ID list, failing closed if storage cannot persist aliases. */
+export function getNativeScopeIds(
+  profileIds: readonly string[],
+): NativeScopeIds {
+  try {
+    const ids = profileIds.map((profileId) => getNativeScopeId(profileId));
+    if (new Set(ids).size !== ids.length)
+      throw new Error("Duplicate native scope identity");
+    return { status: "available", ids };
+  } catch {
+    return { status: "unavailable" };
+  }
+}
+
+/** Remove a legacy alias only after its native scope has been purged. */
+export function removeNativeScopeId(profileId: string): boolean {
+  if (isUuidV4(profileId)) return true;
+  const aliases = readNativeScopeAliases();
+  if (!aliases) return false;
+  if (!(profileId in aliases)) return true;
+  delete aliases[profileId];
+  return writeLocalStorage(KEY_NATIVE_SCOPE_IDS, JSON.stringify(aliases));
 }
 
 /** Reads profiles without confusing unavailable storage with an empty list. */
@@ -387,10 +578,19 @@ function isServerProfile(value: unknown): value is ServerProfile {
 /** Save all profiles to localStorage */
 export function saveProfiles(profiles: ServerProfile[]): boolean {
   try {
+    const previousProfiles = readServerProfiles();
     const serialized = JSON.stringify(profiles);
     localStorage.setItem(KEY_PROFILES, serialized);
     if (localStorage.getItem(KEY_PROFILES) !== serialized) return false;
-    notifyProfileChange();
+    const profileIdsChanged =
+      previousProfiles.status !== "available" ||
+      previousProfiles.profiles.length !== profiles.length ||
+      previousProfiles.profiles.some(
+        (profile) => !profiles.some((nextProfile) => nextProfile.id === profile.id),
+      );
+    notifyProfileChange({
+      type: profileIdsChanged ? "profileListChanged" : "dataChanged",
+    });
     return true;
   } catch {
     return false;
@@ -616,8 +816,16 @@ export function migrateToProfiles(): void {
 
 function notifyProfileChange(event?: ServerProfileChange): void {
   profileChangeVersion += 1;
-  if (event) for (const listener of profileChangeListeners) listener(event);
-  if (typeof window !== "undefined") window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
+  if (event) {
+    for (const listener of profileChangeListeners) listener(event);
+    return;
+  }
+  if (typeof window !== "undefined")
+    window.dispatchEvent(
+      new CustomEvent<ServerProfileChange>(PROFILE_CHANGED_EVENT, {
+        detail: { type: "dataChanged" },
+      }),
+    );
 }
 
 /** Monotonic revision for active profile, profile metadata, and token changes. */
@@ -630,16 +838,23 @@ export function subscribeToProfileChanges(callback: (event: ServerProfileChange)
   if (typeof window === "undefined") return () => {};
 
   profileChangeListeners.add(callback);
-  const onProfileChange = () => callback({ type: "activeChanged", activeProfileId: getActiveProfileId() });
+  const onProfileChange = (event: Event) => {
+    const detail = (event as CustomEvent<ServerProfileChange>).detail;
+    callback(detail ?? { type: "dataChanged" });
+  };
   const onStorage = (event: StorageEvent) => {
-    if (
-      event.key === KEY_ACTIVE_PROFILE ||
-      event.key === KEY_PROFILES ||
+    if (event.key === KEY_ACTIVE_PROFILE) {
+      profileChangeVersion += 1;
+      callback({ type: "activeChanged", activeProfileId: getActiveProfileId() });
+    } else if (event.key === KEY_PROFILES) {
+      profileChangeVersion += 1;
+      callback({ type: "profileListChanged" });
+    } else if (
       event.key === KEY_TOKEN ||
       event.key?.startsWith(`${KEY_TOKEN}_`)
     ) {
       profileChangeVersion += 1;
-      callback({ type: "activeChanged", activeProfileId: getActiveProfileId() });
+      callback({ type: "dataChanged" });
     }
   };
   window.addEventListener(PROFILE_CHANGED_EVENT, onProfileChange);
