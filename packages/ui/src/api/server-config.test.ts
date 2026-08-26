@@ -3,8 +3,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getActiveProfile,
+  getActiveProfileId,
   getAuthToken,
+  getExistingNativeScopeId,
   getProfiles,
+  getNativeScopeId,
+  getNativeScopeIds,
+  completeNativeScopeDeletion,
   clearAuthToken,
   deleteProfile,
   getServerUrl,
@@ -17,6 +22,8 @@ import {
   setServerUrl,
   shouldClearAuthTokenForUrlChange,
   readServerProfiles,
+  removeNativeScopeId,
+  retireNativeScopeId,
   subscribeToProfileChanges,
 } from "./server-config.js";
 
@@ -42,7 +49,9 @@ describe("server profile migration", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", mockStorage());
     vi.stubGlobal("sessionStorage", mockStorage());
-    vi.stubGlobal("crypto", { randomUUID: () => "profile-id" });
+    vi.stubGlobal("crypto", {
+      randomUUID: () => "11111111-1111-4111-8111-111111111111",
+    });
     vi.stubGlobal("location", {
       protocol: "http:",
       host: "127.0.0.1:4800",
@@ -63,7 +72,7 @@ describe("server profile migration", () => {
 
     expect(getProfiles()).toEqual([
       {
-        id: "profile-id",
+        id: "11111111-1111-4111-8111-111111111111",
         name: "Default Server",
         url: "http://localhost:4800",
         authType: "basic",
@@ -71,7 +80,87 @@ describe("server profile migration", () => {
         createdAt: expect.any(Number),
       },
     ]);
-    expect(getActiveProfile()?.id).toBe("profile-id");
+    expect(getActiveProfile()?.id).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("aliases legacy profile IDs for native scopes without rewriting profile data", () => {
+    const legacyId = "phase5-runtime-profile";
+    const profile = {
+      id: legacyId,
+      name: "Legacy Server",
+      url: "http://legacy.test",
+      authType: "basic" as const,
+      createdAt: 1,
+    };
+    saveProfiles([profile]);
+    setActiveProfile(legacyId);
+    setAuthToken("legacy-token", legacyId);
+    const persistedProfiles = localStorage.getItem("damhopper_server_profiles");
+
+    const nativeScopeId = getNativeScopeId(legacyId);
+
+    expect(nativeScopeId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(getNativeScopeId(legacyId)).toBe(nativeScopeId);
+    expect(getNativeScopeIds([legacyId])).toEqual({
+      status: "available",
+      ids: [nativeScopeId],
+    });
+    expect(getNativeScopeId(nativeScopeId)).toBe(nativeScopeId);
+    expect(localStorage.getItem("damhopper_server_profiles")).toBe(
+      persistedProfiles,
+    );
+    expect(getActiveProfileId()).toBe(legacyId);
+    expect(getAuthToken(legacyId)).toBe("legacy-token");
+
+    expect(retireNativeScopeId(legacyId)).toBe(nativeScopeId);
+    expect(getExistingNativeScopeId(legacyId)).toBeNull();
+    expect(completeNativeScopeDeletion(legacyId, nativeScopeId)).toBe(true);
+
+    expect(removeNativeScopeId(legacyId)).toBe(true);
+    expect(localStorage.getItem("damhopper_native_scope_ids")).toBe("{}");
+  });
+
+  it("keeps UUID profile IDs as native scope IDs", () => {
+    const profileId = "22222222-2222-4222-8222-222222222222";
+
+    expect(getNativeScopeId(profileId)).toBe(profileId);
+    expect(localStorage.getItem("damhopper_native_scope_ids")).toBeNull();
+  });
+
+  it("fails closed when native scope aliases are malformed", () => {
+    localStorage.setItem("damhopper_native_scope_ids", "not-json");
+
+    expect(() => getNativeScopeId("legacy-profile")).toThrow(
+      "Native scope identity storage unavailable",
+    );
+    expect(getExistingNativeScopeId("legacy-profile")).toBeNull();
+    expect(getNativeScopeIds(["legacy-profile"])).toEqual({
+      status: "unavailable",
+    });
+    expect(removeNativeScopeId("legacy-profile")).toBe(false);
+  });
+
+  it("gives a recreated legacy profile a new native identity", () => {
+    const firstNativeId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const secondNativeId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    vi.stubGlobal("crypto", {
+      randomUUID: vi
+        .fn()
+        .mockReturnValueOnce(firstNativeId)
+        .mockReturnValueOnce(secondNativeId),
+    });
+
+    expect(getNativeScopeId("legacy-profile")).toBe(firstNativeId);
+    expect(retireNativeScopeId("legacy-profile")).toBe(firstNativeId);
+    expect(getExistingNativeScopeId("legacy-profile")).toBeNull();
+    expect(getNativeScopeId("legacy-profile")).toBe(secondNativeId);
+
+    expect(
+      completeNativeScopeDeletion("legacy-profile", firstNativeId),
+    ).toBe(true);
+    expect(getNativeScopeId("legacy-profile")).toBe(secondNativeId);
   });
 
   it("hides separate-origin active profiles from unsupported native hosts", () => {
@@ -297,14 +386,27 @@ describe("server profile migration", () => {
     expect(readServerProfiles()).toEqual({ status: "unavailable" });
   });
 
-  it("emits typed active and deleted events only after delete commits", () => {
+  it("emits distinct profile-list, active, and deleted events after delete commits", () => {
     const events: unknown[] = [];
     const unsubscribe = subscribeToProfileChanges((event) => events.push(event));
     const profile = { id: "profile-a", name: "A", url: "http://a.test", authType: "basic" as const, createdAt: 1 };
     saveProfiles([profile]);
+    expect(events).toContainEqual({ type: "profileListChanged" });
     setActiveProfile(profile.id);
+    expect(events).toContainEqual({ type: "activeChanged", activeProfileId: profile.id });
     expect(deleteProfile(profile.id)).toBe(true);
     expect(events).toContainEqual({ type: "deleted", deletedProfileId: profile.id, knownProfileIds: { status: "available", ids: [] } });
+    unsubscribe();
+  });
+
+  it("emits data changes without presenting them as active-profile changes", () => {
+    const events: unknown[] = [];
+    const unsubscribe = subscribeToProfileChanges((event) => events.push(event));
+
+    setAuthToken("token", "profile-a");
+
+    expect(events.at(-1)).toEqual({ type: "dataChanged" });
+    expect(events).not.toContainEqual({ type: "activeChanged", activeProfileId: null });
     unsubscribe();
   });
 
