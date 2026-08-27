@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils.js";
+import { MarkdownCode, MarkdownPre } from "./MarkdownCodeBlock.js";
 
 interface MarkdownPreviewProps {
   content: string;
@@ -11,7 +12,7 @@ export function MarkdownPreview({ content, className }: MarkdownPreviewProps) {
   return (
     <div
       className={cn(
-        "overflow-auto p-4 text-sm text-[var(--color-text)] bg-[var(--color-surface)] leading-relaxed",
+        "min-w-0 min-h-0 overflow-auto p-4 text-sm text-[var(--color-text)] bg-[var(--color-surface)] leading-relaxed",
         className,
       )}
     >
@@ -96,33 +97,8 @@ export function MarkdownPreview({ content, className }: MarkdownPreviewProps) {
               {children}
             </blockquote>
           ),
-          code: ({ className: codeClass, children, ...props }) => {
-            const isBlock = !!codeClass;
-            if (isBlock) {
-              const lang = codeClass?.replace("language-", "") ?? "";
-              return (
-                <div className="relative mb-3">
-                  {lang && (
-                    <span className="absolute top-2 right-3 text-[10px] text-[var(--color-text-muted)] font-mono uppercase tracking-wider">
-                      {lang}
-                    </span>
-                  )}
-                  <pre className="overflow-x-auto rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] p-4 text-xs font-mono text-[var(--color-text)]">
-                    <code {...props}>{children}</code>
-                  </pre>
-                </div>
-              );
-            }
-            return (
-              <code
-                className="px-1.5 py-0.5 rounded text-xs font-mono bg-[var(--color-surface-2)] text-[var(--color-primary)] border border-[var(--color-border)]"
-                {...props}
-              >
-                {children}
-              </code>
-            );
-          },
-          pre: ({ children }) => <>{children}</>,
+          code: MarkdownCode,
+          pre: MarkdownPre,
           table: ({ children }) => (
             <div className="overflow-x-auto mb-3">
               <table className="w-full border-collapse text-xs">
