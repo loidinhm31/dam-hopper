@@ -5,6 +5,7 @@ import {
   getActiveProfile,
   getActiveProfileId,
   getAuthToken,
+  createProfile,
   getExistingNativeScopeId,
   getProfiles,
   getNativeScopeId,
@@ -81,6 +82,24 @@ describe("server profile migration", () => {
       },
     ]);
     expect(getActiveProfile()?.id).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("creates a profile when randomUUID is unavailable", () => {
+    const getRandomValues = vi.fn((bytes: Uint8Array) => {
+      bytes.set(Uint8Array.from({ length: 16 }, (_, index) => index));
+      return bytes;
+    });
+    vi.stubGlobal("crypto", { getRandomValues });
+
+    const profile = createProfile({
+      name: "LAN Server",
+      url: "http://192.168.1.10:4800",
+      authType: "none",
+    });
+
+    expect(getRandomValues).toHaveBeenCalledOnce();
+    expect(profile.id).toBe("00010203-0405-4607-8809-0a0b0c0d0e0f");
+    expect(getProfiles()).toEqual([profile]);
   });
 
   it("aliases legacy profile IDs for native scopes without rewriting profile data", () => {
