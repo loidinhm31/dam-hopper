@@ -93,3 +93,13 @@ fn retained_managed_handle_blocks_a_name_swap() {
     assert!(fs::rename(&managed, &moved).is_err());
     assert!(open_relative(&managed_handle, "meta", false).is_ok());
 }
+
+#[test]
+fn root_open_creates_missing_root_directory() {
+    let fixture = Fixture::new();
+    let missing_managed = fixture.root.join("missing-managed");
+    assert!(!missing_managed.exists());
+    let handle = open_root(&missing_managed).unwrap();
+    assert!(missing_managed.is_dir());
+    assert!(open_relative(&handle, "meta", false).is_err());
+}

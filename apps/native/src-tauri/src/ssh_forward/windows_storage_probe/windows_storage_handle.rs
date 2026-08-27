@@ -212,7 +212,7 @@ pub(crate) fn open_root_directory(parent: &OwnedHandle, name: &str) -> io::Resul
             | FILE_ADD_SUBDIRECTORY
             | FILE_GENERIC_WRITE
             | SYNCHRONIZE,
-        FILE_OPEN,
+        FILE_OPEN_IF,
         false,
         SHARES,
     )
