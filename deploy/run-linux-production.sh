@@ -296,7 +296,7 @@ validate_unit_contract() {
   [[ -f "$unit_file" && ! -L "$unit_file" ]] || return 1
   local expected_first="EnvironmentFile=/home/loidinh/.config/dam-hopper/server${ENV_SUFFIX}"
   local expected_second="EnvironmentFile=/home/loidinh/.config/dam-hopper/${SAFETY_ENV_NAME}"
-  mapfile -t environment_files < <(awk '/^EnvironmentFile=/{print}' "$unit_file")
+  mapfile -t environment_files < <(awk '/^EnvironmentFile=/{sub(/\r$/, ""); print}' "$unit_file")
   [[ "${#environment_files[@]}" -eq 2 ]] || return 1
   [[ "${environment_files[0]}" == "$expected_first" ]] || return 1
   [[ "${environment_files[1]}" == "$expected_second" ]] || return 1
@@ -313,7 +313,10 @@ validate_unit_contract() {
     'NoNewPrivileges=false' 'StandardOutput=journal' 'StandardError=journal'
   )
   for required_line in "${required_lines[@]}"; do
-    grep -Fxq -- "$required_line" "$unit_file" || return 1
+    awk -v expected="$required_line" '
+      { sub(/\r$/, ""); if ($0 == expected) found = 1 }
+      END { exit found ? 0 : 1 }
+    ' "$unit_file" || return 1
   done
   ! grep -Eq '(^|[[:space:]])(--no-auth|DAM_HOPPER_NO_AUTH=|DAM_HOPPER_WEB_DIR=)' "$unit_file"
 }
@@ -336,10 +339,14 @@ validate_runtime_contract() {
   [[ "$actual_safety" == "$expected_safety" ]] || die "safety environment assignments are invalid"
 }
 
+validate_unit_source() {
+  validate_unit_contract "$UNIT_SOURCE" || die "repository systemd unit contract is invalid"
+}
+
 validate_build_inputs() {
   [[ -f "$BUILD_BINARY" && ! -L "$BUILD_BINARY" && -x "$BUILD_BINARY" ]] ||
     die "release server binary is missing or not executable: $BUILD_BINARY"
-  validate_unit_contract "$UNIT_SOURCE" || die "repository systemd unit contract is invalid"
+  validate_unit_source
 }
 
 scan_sensitive_tree() {
@@ -573,10 +580,12 @@ verify_stage() {
   [[ "$actual_root" == "$expected_root" ]] || return 1
   assert_owner_mode "$STAGE_DIR/bin" "$USER_UID" "$USER_GID" 755 || return 1
   assert_owner_mode "$STAGE_DIR/bin/dam-hopper-server" "$USER_UID" "$USER_GID" 755 || return 1
+  [[ -f "$STAGE_DIR/dam-hopper.service" && ! -L "$STAGE_DIR/dam-hopper.service" ]] || return 1
   assert_owner_mode "$STAGE_DIR/dam-hopper.service" "$USER_UID" "$USER_GID" 644 || return 1
   assert_owner_mode "$STAGE_DIR/manifest" "$USER_UID" "$USER_GID" 600 || return 1
   assert_owner_mode "$STAGE_DIR/nonce" "$USER_UID" "$USER_GID" 600 || return 1
   [[ -z "$(find "$STAGE_DIR" -xdev -type l -print -quit)" ]] || return 1
+  validate_unit_contract "$STAGE_DIR/dam-hopper.service" || return 1
   validate_manifest_format "$STAGE_DIR/manifest" stage || return 1
   [[ "$(<"$STAGE_DIR/nonce")" == "$(local_manifest_value "$STAGE_DIR/manifest" nonce)" ]] || return 1
   local actual_binary_hash actual_unit_hash
@@ -584,7 +593,6 @@ verify_stage() {
   actual_unit_hash="$(sha256sum -- "$STAGE_DIR/dam-hopper.service" | awk '{print $1}')"
   [[ "$actual_binary_hash" == "$(local_manifest_value "$STAGE_DIR/manifest" binary_sha256)" ]] || return 1
   [[ "$actual_unit_hash" == "$(local_manifest_value "$STAGE_DIR/manifest" unit_sha256)" ]] || return 1
-  validate_unit_contract "$STAGE_DIR/dam-hopper.service" || return 1
   scan_sensitive_tree "$STAGE_DIR"
   verify_isolated_unit
 }
@@ -592,7 +600,7 @@ verify_stage() {
 build_command() {
   acquire_workflow_lock
   if (( DRY_RUN )); then
-    validate_unit_contract "$UNIT_SOURCE" || die "repository systemd unit contract is invalid"
+    validate_unit_source
     printf '%s\n' "Build dry run complete; no commands, staging, or filesystem mutation were performed."
     return 0
   fi

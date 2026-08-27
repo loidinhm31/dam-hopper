@@ -305,7 +305,7 @@ validate_unit_contract() {
     die "repository systemd unit is missing or a symlink"
   local expected_first="EnvironmentFile=$UNIT_ENV_RUNTIME_DIR/server.env"
   local expected_second="EnvironmentFile=$UNIT_ENV_RUNTIME_DIR/server-safety.env"
-  mapfile -t environment_files < <(awk '/^EnvironmentFile=/{print}' "$UNIT_SOURCE")
+  mapfile -t environment_files < <(awk '/^EnvironmentFile=/{sub(/\r$/, ""); print}' "$UNIT_SOURCE")
   [[ "${#environment_files[@]}" -eq 2 ]] ||
     die "systemd unit must contain exactly two mandatory EnvironmentFile entries"
   [[ "${environment_files[0]}" == "$expected_first" ]] ||
