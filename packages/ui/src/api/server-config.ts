@@ -7,6 +7,8 @@
  * Priority for URL: localStorage → VITE_DAM_HOPPER_SERVER_URL env → same-origin fallback
  */
 
+import { generateUUID } from "@/lib/utils.js";
+
 const KEY_URL = "damhopper_server_url";
 const KEY_TOKEN = "damhopper_auth_token";
 const KEY_USERNAME = "damhopper_auth_username";
@@ -344,7 +346,7 @@ export function buildAuthHeaders(profileId?: string): Record<string, string> {
 
 /** Generate UUID v4 */
 function uuid(): string {
-  const value = crypto.randomUUID();
+  const value = generateUUID();
   if (!isUuidV4(value)) throw new Error("UUID v4 generation unavailable");
   return value;
 }
