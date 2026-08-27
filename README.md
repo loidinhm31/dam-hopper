@@ -41,7 +41,7 @@ cd .. && pnpm install && pnpm build
 
 ### Linux systemd production service
 
-Linux production ownership is systemd on `127.0.0.1:4801`; the service runs as
+Linux production ownership is systemd on `0.0.0.0:4801`; the service runs as
 `loidinh` and is the only supported production owner. The guarded reset is an
 administrator-approved operation that must receive a user-owned dotenv source
 outside the runtime purge target:
@@ -60,9 +60,10 @@ pnpm linux:production -- status
 pnpm linux:production -- start
 ```
 
-`install` never starts or rebuilds. `start` validates the installed marker,
-private runtime environment files, unit contract, ownership, ports, processes,
-and database holders before starting. Use `rollback --dry-run` first; an actual
+`install` never starts or rebuilds; it validates unit policy and syntax before
+enabling. `start` validates the installed marker and private runtime environment
+files, then checks ownership, ports, processes, and database holders before
+starting. Use `rollback --dry-run` first; an actual
 rollback requires the marker-backed confirmation and preserves user runtime
 state. See [Linux systemd setup](./docs/linux-systemd.md).
 
