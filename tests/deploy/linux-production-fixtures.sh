@@ -152,12 +152,12 @@ run_runtime_only_existing_env() {
 }
 
 make_stub_commands
-unit_lines="$(awk '/^EnvironmentFile=/{print}' "$REPO_ROOT/deploy/systemd/dam-hopper.service")"
+unit_lines="$(awk '/^EnvironmentFile=/{sub(/\r$/, ""); print}' "$REPO_ROOT/deploy/systemd/dam-hopper.service")"
 expected_unit_lines=$'EnvironmentFile=/home/loidinh/.config/dam-hopper/server.env\nEnvironmentFile=/home/loidinh/.config/dam-hopper/server-safety.env'
 [[ "$unit_lines" == "$expected_unit_lines" ]] || fail "systemd EnvironmentFile ordering"
 ! grep -Fxq 'Environment=DAM_HOPPER_WEB_DIR=/opt/dam-hopper/web' "$REPO_ROOT/deploy/systemd/dam-hopper.service" ||
   fail "server-only systemd unit contains web directory assignment"
-pass "systemd EnvironmentFile ordering and mandatory paths"
+pass "systemd EnvironmentFile ordering and server-only unit paths"
 
 fixture_mode_env="$TEST_ROOT/fixture-mode.env"
 printf 'KEY=value\n' > "$fixture_mode_env"
@@ -702,7 +702,7 @@ cp -- "$current_unit" "$runner_root/etc/systemd/system/dam-hopper.service"
 current_unit_hash="$(sha256sum "$current_unit" | cut -d' ' -f1)"
 sed -i "s/^unit_sha256=.*/unit_sha256=$current_unit_hash/" \
   "$runner_root/opt/dam-hopper/.systemd-fresh-install/manifest"
-pass "rollback accepts marker-backed legacy unit while start/status enforce current contract"
+pass "rollback accepts marker-backed legacy unit while start/status enforce current policy"
 
 export FIXTURE_RUNNER_SS_ERROR=1
 expect_failure runner_command "$runner_root" start --dry-run

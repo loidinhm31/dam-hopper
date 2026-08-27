@@ -1,5 +1,12 @@
 *.sh text eol=lf
 
+.gitattributes whitespace=cr-at-eol
+
+# These documentation files use CRLF; keep Git whitespace checks from treating
+# their intentional line endings as trailing-space errors.
+docs/linux-systemd.md whitespace=cr-at-eol
+docs/system-architecture.md whitespace=cr-at-eol
+
 # These existing UI modules use CRLF; keep Git whitespace checks from treating
 # their intentional line endings as trailing-space errors.
 packages/ui/src/components/organisms/TerminalTreeView.tsx whitespace=cr-at-eol

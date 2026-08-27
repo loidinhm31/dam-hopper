@@ -2177,8 +2177,8 @@ prove Tailscale reachability or firewall/ACL isolation for the current unit.
   DamHopper state; project repositories, unrelated Docker containers, and
   external MongoDB data remain outside its target set.
 - The production runner requires the focused systemd-service backend test/release
-  build/unit gate before installation; browser UI and native/Tauri packaging are
-  outside this gate.
+  build, unit policy, and systemd syntax gates before installation; browser UI and
+  native/Tauri packaging are outside this gate.
   After systemd reports active, start waits up to 10 seconds for the configured
   listener and fails closed if `ss` errors or emits diagnostics. The build records
   the canonical verified staging path in a private mode-600 runtime file, and

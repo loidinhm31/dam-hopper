@@ -42,10 +42,11 @@ Install without `--staging` uses only that recorded stage and re-runs the
 complete stage validation; a missing, malformed, stale, or ambiguous record
 fails closed. Retained format-1 stages containing web assets are not installable;
 build a fresh format-2 stage instead.
-`--staging PATH` remains an explicit override. Install reloads systemd, enables
-the unit, and deliberately does not start it. Start validates installed hashes,
-ownership, ordered environment files, systemd identity, the configured listener,
-processes, and SQLite holders without rebuilding. After systemd reports the unit
+`--staging PATH` remains an explicit override. Install validates unit policy and
+syntax, reloads systemd, enables the unit, and deliberately does not start it.
+Start validates installed hashes, unit policy, ownership, runtime environment
+files, systemd identity, the configured listener, processes, and SQLite holders
+without rebuilding. After systemd reports the unit
 active, the runner waits up to 10 seconds for `0.0.0.0:4801`; `ss` errors or
 diagnostic output fail closed instead of being treated as a free/valid listener
 state. The staged-tree credential scan reads files as byte streams, so binary
