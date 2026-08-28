@@ -22,6 +22,34 @@ const SAFE_AREA_BOTTOM = "max(0.75rem, var(--safe-area-bottom, 0px))";
 const ACCESSORY_RAIL_RESERVATION = "6.25rem";
 const ACCESSORY_RAIL_GAP = "0.5rem";
 
+function blurFocusedTerminalInput(): void {
+  const activeElement = document.activeElement;
+  if (
+    activeElement instanceof HTMLElement &&
+    activeElement.matches(".xterm-helper-textarea")
+  ) {
+    activeElement.blur();
+  }
+}
+
+function preventPointerFocus(event: {
+  preventDefault: () => void;
+  stopPropagation: () => void;
+}): void {
+  // Cancel pointer focus + host bubbling before a coarse-pointer tap can reach
+  // the xterm textarea or the clickable terminal host (Android IME).
+  event.preventDefault();
+  event.stopPropagation();
+  blurFocusedTerminalInput();
+}
+
+function stopTouchPropagation(event: { stopPropagation: () => void }): void {
+  // React delegates touchstart as passive in Chromium, so only propagation is
+  // reliable here; pointerdown owns native focus cancellation.
+  event.stopPropagation();
+  blurFocusedTerminalInput();
+}
+
 export function TerminalScrollButtons({
   sessionId,
   className,
@@ -82,7 +110,8 @@ export function TerminalScrollButtons({
     >
       <button
         type="button"
-        onMouseDown={(event) => event.preventDefault()}
+        onPointerDown={preventPointerFocus}
+        onTouchStart={stopTouchPropagation}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -113,7 +142,8 @@ export function TerminalScrollButtons({
         >
           <button
             type="button"
-            onMouseDown={(event) => event.preventDefault()}
+            onPointerDown={preventPointerFocus}
+            onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
                 terminalRegistry.get(sessionId)?.terminal.scrollToTop(),
@@ -127,7 +157,8 @@ export function TerminalScrollButtons({
           </button>
           <button
             type="button"
-            onMouseDown={(event) => event.preventDefault()}
+            onPointerDown={preventPointerFocus}
+            onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
                 terminalRegistry
@@ -143,7 +174,8 @@ export function TerminalScrollButtons({
           </button>
           <button
             type="button"
-            onMouseDown={(event) => event.preventDefault()}
+            onPointerDown={preventPointerFocus}
+            onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
                 terminalRegistry
@@ -159,7 +191,8 @@ export function TerminalScrollButtons({
           </button>
           <button
             type="button"
-            onMouseDown={(event) => event.preventDefault()}
+            onPointerDown={preventPointerFocus}
+            onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
                 terminalRegistry.get(sessionId)?.terminal.scrollToBottom(),
