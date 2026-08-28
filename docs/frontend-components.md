@@ -425,6 +425,15 @@ extension runs.
   gap, when scrolling is enabled and reclaims that lane when it is disabled; its
   outer wrapper is pointer-inert so empty overlay space does not steal xterm,
   pane, or docking events.
+- The scroll rail toggle opens a four-action group for jumping to the top or
+  bottom and moving by the configured terminal scroll step. Escape or a
+  pointerdown outside the controls closes the group, and the trigger maintains
+  its `aria-expanded`/`aria-controls` linkage.
+- Pointerdown cancellation and touchstart propagation guards cover the toggle
+  and all four actions: they prevent pointer focus and host bubbling, blur a
+  focused `.xterm-helper-textarea`, and preserve click and keyboard activation.
+  Coarse-pointer taps therefore do not hand focus back to xterm and reopen the
+  Android IME.
 - Expanded special keys and custom/native Type input stay in the existing local
   component state and continue writing through the active session's authenticated
   terminal transport. The native Type input remains focusable; control presses

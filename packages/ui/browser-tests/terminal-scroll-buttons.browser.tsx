@@ -1,6 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { page, userEvent } from "vitest/browser";
 import { TerminalScrollButtons } from "@/components/organisms/TerminalScrollButtons.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import "@/index.css";
@@ -18,12 +19,16 @@ describe("Terminal scroll buttons in Chromium", () => {
   let scrollToBottom: ReturnType<typeof vi.fn>;
   let scrollLines: ReturnType<typeof vi.fn>;
   let terminalHostClick: ReturnType<typeof vi.fn>;
+  let terminalHostPointerDown: ReturnType<typeof vi.fn>;
+  let terminalHostTouchStart: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     scrollToTop = vi.fn();
     scrollToBottom = vi.fn();
     scrollLines = vi.fn();
     terminalHostClick = vi.fn();
+    terminalHostPointerDown = vi.fn();
+    terminalHostTouchStart = vi.fn();
     terminalRegistry.set("session-1", {
       terminal: { scrollToTop, scrollToBottom, scrollLines },
       fitAddon: {} as never,
@@ -48,9 +53,28 @@ describe("Terminal scroll buttons in Chromium", () => {
   }
 
   async function render() {
+    const focusTerminalInput = () => {
+      container
+        .querySelector<HTMLTextAreaElement>('[data-testid="terminal-input"]')
+        ?.focus();
+    };
     await act(async () =>
       root.render(
-        <div onClick={terminalHostClick}>
+        <div
+          onClick={terminalHostClick}
+          onPointerDown={() => {
+            terminalHostPointerDown();
+            focusTerminalInput();
+          }}
+          onTouchStart={() => {
+            terminalHostTouchStart();
+            focusTerminalInput();
+          }}
+        >
+          <textarea
+            data-testid="terminal-input"
+            className="xterm-helper-textarea"
+          />
           <TerminalScrollButtons sessionId="session-1" />
         </div>,
       ),
@@ -104,29 +128,91 @@ describe("Terminal scroll buttons in Chromium", () => {
     expect(container.querySelector('[role="group"]')).toBeNull();
   });
 
-  it("keeps terminal focus during trigger and action mouse presses", async () => {
+  it("blurs xterm input during trusted pointer/touch control actions", async () => {
     await render();
-    const focusTarget = document.createElement("input");
-    document.body.append(focusTarget);
-    focusTarget.focus();
+    const terminalInput = container.querySelector<HTMLTextAreaElement>(
+      '[data-testid="terminal-input"]',
+    );
+    expect(terminalInput).not.toBeNull();
+    terminalInput?.focus();
 
-    const triggerPress = new MouseEvent("mousedown", {
+    await userEvent.click(
+      page.getByRole("button", { name: "Show terminal scroll buttons" }),
+    );
+    await expect
+      .element(
+        page.getByRole("button", { name: "Hide terminal scroll buttons" }),
+      )
+      .toBeVisible();
+    expect(document.activeElement).not.toBe(terminalInput);
+    expect(terminalHostPointerDown).not.toHaveBeenCalled();
+    expect(terminalHostClick).not.toHaveBeenCalled();
+
+    for (const label of [
+      "Jump to top",
+      "Scroll up 3 lines",
+      "Scroll down 3 lines",
+      "Jump to bottom",
+    ]) {
+      terminalInput?.focus();
+      await userEvent.click(page.getByRole("button", { name: label }));
+      expect(document.activeElement).not.toBe(terminalInput);
+    }
+    expect(scrollToTop).toHaveBeenCalledOnce();
+    expect(scrollLines).toHaveBeenNthCalledWith(1, -3);
+    expect(scrollLines).toHaveBeenNthCalledWith(2, 3);
+    expect(scrollToBottom).toHaveBeenCalledOnce();
+    expect(terminalHostPointerDown).not.toHaveBeenCalled();
+    expect(terminalHostTouchStart).not.toHaveBeenCalled();
+    expect(terminalHostClick).not.toHaveBeenCalled();
+
+    terminalInput?.focus();
+    const touchPress = new Event("touchstart", {
       bubbles: true,
       cancelable: true,
     });
-    button("Show terminal scroll buttons").dispatchEvent(triggerPress);
-    expect(triggerPress.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(focusTarget);
+    button("Scroll down 3 lines").dispatchEvent(touchPress);
+    expect(terminalHostTouchStart).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(terminalInput);
+  });
 
-    await act(async () => button("Show terminal scroll buttons").click());
-    const actionPress = new MouseEvent("mousedown", {
-      bubbles: true,
-      cancelable: true,
+  it("keeps keyboard activation and aria linkage intact", async () => {
+    await render();
+    const trigger = page.getByRole("button", {
+      name: "Show terminal scroll buttons",
     });
-    button("Scroll up 3 lines").dispatchEvent(actionPress);
-    expect(actionPress.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(focusTarget);
+    (trigger.element() as HTMLButtonElement).focus();
 
-    focusTarget.remove();
+    await userEvent.keyboard("{Enter}");
+    const openTrigger = page.getByRole("button", {
+      name: "Hide terminal scroll buttons",
+    });
+    const group = page.getByRole("group", { name: "Terminal scroll controls" });
+    await expect.element(openTrigger).toBeVisible();
+    await expect.element(group).toBeVisible();
+    const triggerElement = openTrigger.element() as HTMLButtonElement;
+    const groupElement = group.element() as HTMLElement;
+    expect(triggerElement.getAttribute("aria-expanded")).toBe("true");
+    expect(triggerElement.getAttribute("aria-controls")).toBe(groupElement.id);
+
+    await userEvent.keyboard(" ");
+    const closedTrigger = page.getByRole("button", {
+      name: "Show terminal scroll buttons",
+    });
+    await expect.element(closedTrigger).toBeVisible();
+    await expect.element(group).not.toBeInTheDocument();
+    expect(
+      (closedTrigger.element() as HTMLButtonElement).getAttribute(
+        "aria-expanded",
+      ),
+    ).toBe("false");
+
+    (closedTrigger.element() as HTMLButtonElement).focus();
+    await userEvent.keyboard("{Enter}");
+    const topButton = page.getByRole("button", { name: "Jump to top" });
+    (topButton.element() as HTMLButtonElement).focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
+    expect(scrollToTop).toHaveBeenCalledTimes(2);
   });
 });

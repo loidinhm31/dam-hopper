@@ -22,6 +22,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
+### Terminal Touch Keyboard and Smooth Scroll (2026-08-28)
+
+- **Phase 01 — [COMPLETED 2026-08-28 18:04:32 +07:00]**: coarse-pointer terminal scroll-control taps no longer trigger terminal focus or the soft keyboard; Phase 02 native smooth touch scroll remains pending. [Plan](../plans/260828-1430-terminal-touch-keyboard-and-smooth-scroll/plan.md).
+
 ### Linux Systemd Server-Only Production Runner (2026-08-22)
 
 - **Completed**: production build/stage/install verification now packages only
