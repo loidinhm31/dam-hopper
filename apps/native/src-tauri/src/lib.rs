@@ -80,8 +80,7 @@ pub fn run_trust_repair(arguments: &[String]) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init());
+    let builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
 
     #[cfg(desktop)]
     let controller = Arc::new(browser_debug::controller::BrowserDebugController::default());
@@ -96,6 +95,7 @@ pub fn run() {
         browser_debug::controller::browser_debug_navigate,
         browser_debug::controller::browser_debug_command,
         browser_debug::controller::browser_debug_set_bounds,
+        browser_debug::controller::browser_debug_set_zoom,
         browser_debug::controller::browser_debug_set_visible,
         browser_debug::controller::browser_debug_destroy,
         browser_debug::controller::browser_debug_clear_data,
@@ -126,6 +126,7 @@ pub fn run() {
         browser_debug::controller::browser_debug_navigate,
         browser_debug::controller::browser_debug_command,
         browser_debug::controller::browser_debug_set_bounds,
+        browser_debug::controller::browser_debug_set_zoom,
         browser_debug::controller::browser_debug_set_visible,
         browser_debug::controller::browser_debug_destroy,
         browser_debug::controller::browser_debug_clear_data,

@@ -56,6 +56,7 @@ function nativeHost() {
   const host: BrowserDebugHost = {
     setTarget: vi.fn(),
     setViewport: vi.fn(),
+    setZoom: vi.fn(),
     command: vi.fn(),
     subscribe: vi.fn((next) => {
       listener = next;
@@ -163,6 +164,7 @@ describe("BrowserDebugKeepAliveHost", () => {
     expect(browser.setSelection).toHaveBeenCalledWith(null);
     expect(browser.setPickerActive).toHaveBeenCalledWith(false);
     expect(browser.setError).toHaveBeenCalledWith(null);
+    expect(browser.setBridgeStatus).toHaveBeenCalledWith("loading");
   });
 
   it("keeps an uncooperative target visible after handshake timeout", async () => {
@@ -205,6 +207,53 @@ describe("BrowserDebugKeepAliveHost", () => {
     expect(browser.setError).toHaveBeenLastCalledWith(null);
   });
 
+  it("reconnects after an approved cross-origin target redirect", async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    const viewportRef = { current: null as HTMLDivElement | null };
+    root = createRoot(container);
+    const browser = controller();
+
+    await act(async () => {
+      root?.render(
+        <BrowserDebugKeepAliveHost
+          browser={browser}
+          viewportRef={viewportRef}
+          viewportVersion={0}
+          isViewportVisible
+        />,
+      );
+    });
+
+    const iframe = container.querySelector("iframe");
+    const source = iframe?.contentWindow;
+    expect(source).not.toBeNull();
+    const postMessage = vi.spyOn(source!, "postMessage");
+
+    await act(async () => {
+      iframe?.dispatchEvent(new Event("load"));
+    });
+
+    const command = postMessage.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(postMessage.mock.calls[0]?.[1]).toBe("*");
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            ...command,
+            type: "dam-hopper:bridge-ready",
+            capabilities: ["navigation"],
+          },
+          origin: "http://127.0.0.1:3001",
+          source,
+        }),
+      );
+    });
+
+    expect(browser.setBridgeStatus).toHaveBeenCalledWith("ready");
+    postMessage.mockRestore();
+  });
+
   it("hides the overlay while a compact Browser surface is inactive", async () => {
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -234,6 +283,7 @@ describe("BrowserDebugKeepAliveHost", () => {
     const viewport = document.createElement("div");
     const stage = document.createElement("div");
     document.body.append(stage, viewport);
+    document.documentElement.style.zoom = "80%";
     const viewportRef = { current: viewport };
     const viewportStageRef = { current: stage };
     const native = nativeHost();
@@ -264,6 +314,7 @@ describe("BrowserDebugKeepAliveHost", () => {
         </BrowserDebugHostProvider>,
       );
     });
+    expect(native.host.setZoom).toHaveBeenLastCalledWith(0.8);
 
     expect(native.host.setViewport).toHaveBeenLastCalledWith({
       top: 20,
@@ -295,6 +346,45 @@ describe("BrowserDebugKeepAliveHost", () => {
       width: 500,
       height: 400,
     });
+  });
+
+  it("recreates the native child when the server profile changes", async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    const viewportRef = { current: null as HTMLDivElement | null };
+    const browser = controller();
+    const native = nativeHost();
+    root = createRoot(container);
+
+    const render = (profileId: string) =>
+      root?.render(
+        <BrowserDebugHostProvider
+          host={native.host}
+          environment={{ kind: "native", platform: "windows" }}
+        >
+          <BrowserDebugKeepAliveHost
+            browser={browser}
+            profileId={profileId}
+            viewportRef={viewportRef}
+            viewportVersion={0}
+            isViewportVisible
+          />
+        </BrowserDebugHostProvider>,
+      );
+
+    await act(async () => render("profile-a"));
+    await act(async () => render("profile-b"));
+
+    expect(vi.mocked(native.host.setTarget).mock.calls).toEqual([
+      [browser.target],
+      [null],
+      [browser.target],
+    ]);
+    expect(browser.setBridgeStatus).toHaveBeenLastCalledWith("loading");
+    expect(browser.setBridgeCapabilities).toHaveBeenLastCalledWith([]);
+    expect(browser.setSelection).toHaveBeenLastCalledWith(null);
+    expect(browser.setPickerActive).toHaveBeenLastCalledWith(false);
+    expect(browser.setError).toHaveBeenLastCalledWith(null);
   });
 
   it("accepts generation zero after the native host instance is replaced", async () => {

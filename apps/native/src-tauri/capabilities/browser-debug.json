@@ -3,5 +3,6 @@
   "identifier": "browser-debug-main",
   "description": "Browser-debug controller commands are available only to the main application webview.",
   "windows": ["main"],
-  "permissions": []
+  "platforms": ["windows", "linux"],
+  "permissions": ["browser-debug"]
 }

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clipBrowserDebugViewportFrame,
+  getBrowserDebugNativeViewportFrame,
   getBrowserDebugViewportGeometry,
 } from "./browser-debug-keep-alive.js";
 
@@ -83,6 +84,38 @@ describe("clipBrowserDebugViewportFrame", () => {
     expect(getBrowserDebugViewportGeometry(viewport, stage)).toEqual({
       frame: { top: 40, left: 20, width: 320, height: 180 },
       visibleFrame: { top: 40, left: 20, width: 320, height: 180 },
+    });
+  });
+
+  it("keeps native child bounds in rendered window coordinates", () => {
+    document.documentElement.style.zoom = "80%";
+    const viewport = document.createElement("div");
+    const stage = document.createElement("div");
+    document.body.append(viewport, stage);
+    Object.defineProperty(viewport, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        top: 120,
+        left: 240,
+        width: 640,
+        height: 360,
+      }),
+    });
+    Object.defineProperty(stage, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        top: 0,
+        left: 0,
+        width: 1200,
+        height: 800,
+      }),
+    });
+
+    expect(getBrowserDebugNativeViewportFrame(viewport, stage)).toEqual({
+      top: 120,
+      left: 240,
+      width: 640,
+      height: 360,
     });
   });
 });

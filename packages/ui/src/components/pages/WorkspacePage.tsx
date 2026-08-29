@@ -52,6 +52,7 @@ import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useBrowserDebug } from "@/hooks/use-browser-debug.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
+import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
@@ -372,6 +373,7 @@ export default function WorkspacePage() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
   const browserDebugHost = useBrowserDebugHost();
+  const activeProfileId = useServerProfile()?.id ?? null;
   const { level: appZoomLevel } = useAppZoom();
   const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
@@ -2162,6 +2164,7 @@ export default function WorkspacePage() {
       <BrowserDebugKeepAliveHost
         ref={browserKeepAliveRef}
         browser={browserDebug}
+        profileId={activeProfileId}
         viewportRef={browserViewportRef}
         viewportStageRef={browserViewportStageRef}
         viewportVersion={browserViewportVersion}

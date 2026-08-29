@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isAllowedParentOrigin } from "./index.js";
 
 describe("isAllowedParentOrigin", () => {
-  it("accepts only exact configured parent origins", () => {
+  it("accepts exact configured origins and HTTP loopback origins", () => {
     const options = {
       allowedParentOrigins: ["https://damhopper.example.com"],
     } as const;
@@ -10,13 +10,17 @@ describe("isAllowedParentOrigin", () => {
     expect(
       isAllowedParentOrigin("https://damhopper.example.com", options),
     ).toBe(true);
-    expect(
-      isAllowedParentOrigin("https://evil.example.com", options),
-    ).toBe(false);
+    expect(isAllowedParentOrigin("https://evil.example.com", options)).toBe(
+      false,
+    );
     expect(
       isAllowedParentOrigin("https://damhopper.example.com:8443", options),
     ).toBe(false);
-    expect(isAllowedParentOrigin("http://localhost:5173", options)).toBe(false);
+    expect(isAllowedParentOrigin("http://localhost:4173", options)).toBe(true);
+    expect(isAllowedParentOrigin("http://127.0.0.1:1420", options)).toBe(true);
+    expect(isAllowedParentOrigin("https://localhost:4800", options)).toBe(
+      false,
+    );
   });
 
   it("keeps the default parent boundary limited to HTTP loopback", () => {
@@ -34,8 +38,6 @@ describe("isAllowedParentOrigin", () => {
     expect(
       isAllowedParentOrigin("https://damhopper.example.com", options),
     ).toBe(true);
-    expect(isAllowedParentOrigin("http://localhost:4800", options)).toBe(
-      false,
-    );
+    expect(isAllowedParentOrigin("http://localhost:4800", options)).toBe(false);
   });
 });

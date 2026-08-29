@@ -1,28 +1,28 @@
 # API Reference
 
-Base URL: `http://localhost:4800`
+Base URL depends on deployment: Docker/direct legacy defaults to `http://localhost:4800`; systemd production is backend-only on `http://localhost:4801` with the UI hosted separately.
 
 ## Authentication
 
-All requests require Bearer token in Authorization header:
+REST requests generally use a Bearer token:
 
 ```
 Authorization: Bearer {token}
 ```
 
+The server also accepts an HttpOnly SameSite=Strict authentication cookie. `GET
+/api/health` and authentication endpoints have public/flow-specific exceptions;
+consult each route group below rather than assuming every request is protected.
+
 Token stored at `~/.config/dam-hopper/server-token`.
 
 ### Dev Mode (--no-auth)
 
-The server supports a `--no-auth` authentication bypass mode for development (Phase 01). It may bind to the configured host, including `0.0.0.0`; use only on a trusted development network, never publicly or with sensitive data. When enabled:
-
-- All protected routes bypass authentication checks
-- The `/ws` terminal/event stream accepts connections without a token
-- Login endpoint returns dev tokens without credential verification
-- Status endpoint returns `dev_mode: true`
-- See [Phase 01: Server-Side Auth Bypass](../phase-01-server-auth-bypass/) for details
-
-**Safety**: This mode fails immediately if `MONGODB_URI` is set or `RUST_ENV=production` is detected.
+The server supports a `--no-auth` authentication bypass mode for development. It
+is unsafe on public networks and is rejected when MongoDB is configured or the
+runtime environment is production. Public health/auth flow behavior and WS
+origin/token policy still apply; do not infer response fields not shown by the
+handler.
 
 ### Auth Endpoints
 
@@ -541,7 +541,7 @@ info: Flushing session buffer on exit
 info: Persist worker stopped
 ```
 
-See [Phase 05: Persist Worker](../phase-05-persist-worker/) for detailed architecture and design rationale.
+The historical Phase 05 persistence design is retained in this document; its source plan is no longer present in this checkout.
 
 ## Git API
 

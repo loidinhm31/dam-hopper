@@ -82,8 +82,9 @@ outside its scope. The historical Phase 03 run (before the wildcard-bind and
 server-only changes) recorded PASS for installed identity, loopback binding,
 the authentication boundary, authenticated protected-route access, same-origin
 SPA serving, restart, active-PTY/SIGTERM cleanup, bounded journal checks, and
-marker-backed rollback. That record is legacy format-1 evidence and does not
-validate the current backend-only package; see the redacted [acceptance report](../plans/reports/qa-260821-0142-linux-production-runner.md).
+marker-backed rollback were covered by a legacy format-1 evidence record.
+That report is historical and its source file is no longer present; it does not
+validate the current backend-only package.
 
 ## Deployment decision
 
@@ -898,7 +899,7 @@ Repository evidence recorded on 2026-08-20 is non-privileged and does not establ
 - PASS — final rollback checks found no installed assets, no unit, no 4800/4801 listener, and preserved the user runtime directory and ordered environment files with `700`/`600` metadata; the environment copy matched without displaying its contents.
 - NOT RUN — optional external MongoDB smoke.
 
-The complete redacted command ledger and evidence boundaries are in the [2026-08-21 acceptance report](../plans/reports/qa-260821-0142-linux-production-runner.md). The host is intentionally rolled back after acceptance, so no systemd unit is currently installed.
+The complete command ledger and evidence boundaries were recorded in a historical acceptance report that is no longer present; no systemd unit is currently installed.
 
 ## Evidence boundaries and onboarding
 

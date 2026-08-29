@@ -951,3 +951,20 @@ policy, handshake/load-error UX, and CSP framing guidance.
 
 - [System Architecture](./system-architecture.md)
 - [Configuration Guide](./configuration-guide.md)
+
+- [Native Browser Debug Support](./native-browser-debug-support.md)
+
+## Shared design-system and embedding contract
+
+`packages/ui` is the reusable surface exported as the app, styles, and API/lib
+entry points. Hosts provide the transport and QueryClient bootstrap before
+mounting `DamHopperApp`. Provider order is AppZoom → Encrypt →
+AndroidChromeInputPolicy → Router, followed by guards, shortcuts, notifications,
+and diagnostics.
+
+Use semantic dark tokens from `index.css`, JetBrains Mono, safe-area/layout
+utilities, and Radix wrappers for interactive primitives. Preserve keyboard
+focus rings, live-region announcements, and 44px compact controls. `Encrypt`
+is per-project, memory-only OPAQUE session material; never persist passphrases
+or content. Browser Debug keeps one host alive across shell changes; native
+geometry uses raw rendered bounds and mirrored app zoom.
