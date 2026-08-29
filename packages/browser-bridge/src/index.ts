@@ -37,10 +37,10 @@ export function isAllowedParentOrigin(
   origin: string,
   options: BrowserBridgeOptions,
 ): boolean {
-  if (options.parentOrigin) return options.parentOrigin === origin;
-  if (options.allowedParentOrigins) {
-    return options.allowedParentOrigins.includes(origin);
+  if (options.parentOrigin !== undefined) {
+    return options.parentOrigin === origin;
   }
+  if (options.allowedParentOrigins?.includes(origin)) return true;
   try {
     const url = new URL(origin);
     return (

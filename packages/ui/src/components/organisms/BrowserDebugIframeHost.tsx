@@ -27,7 +27,10 @@ import {
   type BrowserDebugHostCommand,
   type BrowserDebugHostViewport,
 } from "@/lib/browser-debug-host.js";
-import type { BrowserDebugTarget } from "@/lib/browser-debug-origin.js";
+import {
+  isAllowedBrowserDebugNavigationOrigin,
+  type BrowserDebugTarget,
+} from "@/lib/browser-debug-origin.js";
 import { parseTrustedBrowserBridgeEvent } from "@/lib/browser-debug-protocol.js";
 import { APP_ZOOM_CHANGE_EVENT } from "@/lib/app-zoom.js";
 
@@ -37,6 +40,7 @@ export interface BrowserDebugIframeHostProps {
   viewportStageRef?: RefObject<HTMLDivElement | null>;
   viewportVersion: number;
   isViewportVisible: boolean;
+  profileId?: string | null;
   onHostEvent?: (event: BrowserDebugHostEvent) => void;
 }
 
@@ -65,6 +69,7 @@ export const BrowserDebugIframeHost = forwardRef<
     viewportStageRef,
     viewportVersion,
     isViewportVisible,
+    profileId,
     onHostEvent,
   },
   ref,
@@ -78,7 +83,7 @@ export const BrowserDebugIframeHost = forwardRef<
   const [hostViewport, setHostViewport] = useState<
     BrowserDebugHostViewport | null | undefined
   >(undefined);
-  const bridgeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bridgeTimeoutRef = useRef<number | undefined>(undefined);
   const generationRef = useRef(0);
   const destroyedRef = useRef(false);
   const listenersRef = useRef(
@@ -120,9 +125,9 @@ export const BrowserDebugIframeHost = forwardRef<
     generationRef.current += 1;
     browser.setSelection(null);
     browser.setPickerActive(false);
+    emitHostEvent({ type: "status", status: "loading" });
     browser.setBridgeCapabilities([]);
     browser.setError(null);
-
     const nonce = createBrowserDebugId();
     const requestId = createBrowserDebugId();
     if (!nonce || !requestId) {
@@ -145,10 +150,12 @@ export const BrowserDebugIframeHost = forwardRef<
       nonce,
       requestId,
     };
-    source.postMessage(command, target.origin);
-    emitHostEvent({ type: "status", status: "loading" });
-    if (bridgeTimeoutRef.current) clearTimeout(bridgeTimeoutRef.current);
-    bridgeTimeoutRef.current = setTimeout(() => {
+    // A redirect may change the final document origin before onLoad. The
+    // bridge validates the parent origin, while the host validates every
+    // response origin against the target navigation policy below.
+    source.postMessage(command, "*");
+    window.clearTimeout(bridgeTimeoutRef.current);
+    bridgeTimeoutRef.current = window.setTimeout(() => {
       if (trustRef.current?.nonce !== nonce) return;
       trustRef.current = null;
       emitHostEvent({
@@ -231,8 +238,8 @@ export const BrowserDebugIframeHost = forwardRef<
     if (destroyedRef.current) return;
     destroyedRef.current = true;
     trustRef.current = null;
-    if (bridgeTimeoutRef.current) clearTimeout(bridgeTimeoutRef.current);
-    bridgeTimeoutRef.current = null;
+    window.clearTimeout(bridgeTimeoutRef.current);
+    bridgeTimeoutRef.current = undefined;
     iframeRef.current?.removeAttribute("src");
     listenersRef.current.clear();
   }, []);
@@ -264,10 +271,20 @@ export const BrowserDebugIframeHost = forwardRef<
     const listener = (event: MessageEvent<unknown>) => {
       const trust = trustRef.current;
       if (!trust) return;
-      const message = parseTrustedBrowserBridgeEvent(event, trust);
+      const candidateTrust =
+        target &&
+        event.origin !== trust.origin &&
+        isAllowedBrowserDebugNavigationOrigin(event.origin, target)
+          ? { ...trust, origin: event.origin }
+          : trust;
+      const message = parseTrustedBrowserBridgeEvent(event, candidateTrust);
       if (!message) return;
+      if (candidateTrust !== trust) {
+        if (message.type !== "dam-hopper:bridge-ready") return;
+        trustRef.current = candidateTrust;
+      }
       if (message.type === "dam-hopper:bridge-ready") {
-        if (bridgeTimeoutRef.current) clearTimeout(bridgeTimeoutRef.current);
+        window.clearTimeout(bridgeTimeoutRef.current);
         emitHostEvent({
           type: "ready",
           capabilities: protocolCapabilities(message.capabilities ?? []),
@@ -298,7 +315,7 @@ export const BrowserDebugIframeHost = forwardRef<
     };
     window.addEventListener("message", listener);
     return () => window.removeEventListener("message", listener);
-  }, [emitHostEvent]);
+  }, [emitHostEvent, target]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -306,13 +323,11 @@ export const BrowserDebugIframeHost = forwardRef<
     destroyedRef.current = false;
     generationRef.current += 1;
     trustRef.current = null;
-    if (bridgeTimeoutRef.current) clearTimeout(bridgeTimeoutRef.current);
-    if (!target) {
-      iframe.removeAttribute("src");
-      return;
-    }
+    window.clearTimeout(bridgeTimeoutRef.current);
+    iframe.removeAttribute("src");
+    if (!target) return;
     iframe.src = target.url;
-  }, [target]);
+  }, [profileId, target]);
 
   useEffect(
     () => () => {
