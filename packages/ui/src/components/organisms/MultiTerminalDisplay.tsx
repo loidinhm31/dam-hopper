@@ -12,7 +12,7 @@ import {
 import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 
 export interface MountedSession {
@@ -26,7 +26,7 @@ export interface MountedSession {
 interface Props {
   activeSessionId: string | null;
   mountedSessions: MountedSession[];
-  openTabs: TabEntry[];
+  openTabs: DisplayTabEntry[];
   onSessionExit?: (sessionId: string) => void;
   onNewTerminal?: () => void;
   onSelectTab?: (sessionId: string) => void;

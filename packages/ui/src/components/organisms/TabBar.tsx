@@ -10,13 +10,14 @@ import {
   Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import {
   openTerminalDiagnosticsContextMenu,
   type TerminalDiagnosticsMenuHandler,
 } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { TerminalTabInsertionZone } from "@/components/organisms/TerminalTabInsertionZone.js";
 import { TerminalCommitStatusChip } from "@/components/organisms/TerminalCommitStatusChip.js";
+import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 
 export function splitActionToPaneDirection(action: "right" | "down") {
   return action === "right" ? "horizontal" : "vertical";
@@ -34,7 +35,7 @@ export interface DragItem {
 
 interface DraggableTabProps {
   paneId: string;
-  tab: TabEntry;
+  tab: DisplayTabEntry;
   isActive: boolean;
   onSelect: (sessionId: string) => void;
   onTogglePin?: (sessionId: string) => void;
@@ -93,7 +94,10 @@ export function DraggableTab({
           )
         }
       >
-        <span className="max-w-32 truncate block font-mono">{tab.label}</span>
+        <TerminalTitleText
+          title={tab.title}
+          className="max-w-32 flex-1 font-mono"
+        />
       </button>
 
       <button
@@ -146,7 +150,7 @@ export function DraggableTab({
 
 export interface TabBarProps {
   paneId: string;
-  paneTabs: TabEntry[];
+  paneTabs: DisplayTabEntry[];
   activeSessionId: string | null;
   activeProject?: string;
   terminalCommitStatusEnabled: boolean;

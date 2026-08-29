@@ -1,6 +1,7 @@
 import type { SessionInfo } from "@/api/client.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
+import { freeTerminalBaseLabel } from "@/lib/terminal-title.js";
 
 export interface ParsedTerminalSessionId {
   type: string;
@@ -49,7 +50,7 @@ export function isAdHocProjectTerminal(
   );
 }
 
-function sessionProject(session: SessionInfo) {
+export function sessionProject(session: SessionInfo): string {
   const parsed = parseTerminalSessionId(session.id);
   if (parsed.type === "free") return session.project ?? "";
   return session.project ?? parsed.project ?? "";
@@ -64,7 +65,7 @@ function sessionTabLabel(
 
   if (type === "free") {
     const n = freeTerminalIndexMap.get(session.id);
-    return `Terminal ${n ?? "?"}`;
+    return freeTerminalBaseLabel(n);
   }
 
   if (type === "terminal") {
@@ -85,12 +86,16 @@ function tabForSession(
   freeTerminalIndexMap: Map<string, number>,
   isPinned = false,
 ): TabEntry {
+  const isFree =
+    session.type === "free" || parseTerminalSessionId(session.id).type === "free";
+  const project = !isFree ? sessionProject(session) : undefined;
   return {
     sessionId: session.id,
     label: sessionTabLabel(session, freeTerminalIndexMap),
     session,
     isSaveable: isAdHocProjectTerminal(session.id, profileSessionIds),
     isPinned,
+    ...(project ? { project } : {}),
   };
 }
 
@@ -129,7 +134,6 @@ export function deriveTerminalAutoAttachState({
   const existingMountedIds = new Set(
     mountedSessions.map((session) => session.sessionId),
   );
-
   const nextOpenTabs = [
     ...openTabs
       .filter(
@@ -141,12 +145,21 @@ export function deriveTerminalAutoAttachState({
       .map((tab) => {
         const session = liveById.get(tab.sessionId);
         if (!session) return tab;
-        return {
+        const hydratedTab = {
           ...tab,
           ...tabForSession(session, profileSessionIds, freeTerminalIndexMap),
           // An explicit unpin wins, but a pre-snapshot tab can hydrate a stored pin.
           isPinned: tab.isPinned ?? pinnedSessionIds.has(session.id),
         };
+        const project = sessionProject(session);
+        const isFree =
+          session.type === "free" ||
+          parseTerminalSessionId(session.id).type === "free";
+        if (isFree || project.length === 0) {
+          const { project: _project, ...projectlessTab } = hydratedTab;
+          return projectlessTab;
+        }
+        return hydratedTab;
       }),
     ...liveSessions
       .filter((session) => !existingTabIds.has(session.id))
