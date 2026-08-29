@@ -35,18 +35,20 @@ export function MobileTerminalSpecialKeys({
     mobileCustomKeyboardRowGap,
   } = useSettingsStore();
   const keyHeight = Math.max(
-    34,
+    44,
     mobileCustomKeyboardFontSize + mobileCustomKeyboardPadding * 2,
   );
   const verticalPadding = Math.max(
-    2,
+    4,
     Math.round(mobileCustomKeyboardPadding / 2),
   );
 
   return (
     <div
-      className="grid grid-cols-4 gap-x-1 pb-2"
-      style={{ rowGap: mobileCustomKeyboardRowGap }}
+      role="group"
+      aria-label="Terminal keys"
+      className="grid grid-cols-4 gap-x-2 pb-2"
+      style={{ rowGap: Math.max(8, mobileCustomKeyboardRowGap) }}
     >
       {MOBILE_TERMINAL_KEYS.map((key) => {
         const Icon = KEY_ICONS[key.id];
@@ -57,6 +59,9 @@ export function MobileTerminalSpecialKeys({
             onPointerDown={(event) => {
               preventDefault(event);
               onPress(key.id);
+            }}
+            onClick={(event) => {
+              if (event.detail === 0) onPress(key.id);
             }}
             onKeyDown={(event) => {
               if (event.key !== "Enter" && event.key !== " ") return;
