@@ -23,6 +23,7 @@ export function MobileTerminalNativeKeyboardInput({
         spellCheck={false}
         enterKeyHint="enter"
         placeholder="Type for terminal"
+        aria-label="Type for terminal"
         onChange={onChange}
         onKeyDown={onKeyDown}
         className="h-10 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"

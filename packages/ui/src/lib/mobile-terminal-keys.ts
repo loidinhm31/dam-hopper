@@ -2,6 +2,7 @@ export type MobileTerminalKeyId =
   | "escape"
   | "tab"
   | "ctrl-c"
+  | "enter"
   | "page-up"
   | "page-down"
   | "up"
@@ -19,11 +20,12 @@ export const MOBILE_TERMINAL_KEYS: MobileTerminalKeyDefinition[] = [
   { id: "escape", label: "Esc", title: "Send Escape" },
   { id: "tab", label: "Tab", title: "Send Tab" },
   { id: "ctrl-c", label: "^C", title: "Send Ctrl+C" },
+  { id: "enter", label: "Enter", title: "Send Enter" },
   { id: "page-up", label: "PgUp", title: "Send Page Up" },
   { id: "page-down", label: "PgDn", title: "Send Page Down" },
   { id: "up", label: "Up", title: "Send Arrow Up" },
-  { id: "left", label: "Left", title: "Send Arrow Left" },
   { id: "down", label: "Down", title: "Send Arrow Down" },
+  { id: "left", label: "Left", title: "Send Arrow Left" },
   { id: "right", label: "Right", title: "Send Arrow Right" },
 ];
 
@@ -37,6 +39,8 @@ export function getMobileTerminalKeySequence(
       return "\t";
     case "ctrl-c":
       return "\x03";
+    case "enter":
+      return "\r";
     case "page-up":
       return "\x1b[5~";
     case "page-down":

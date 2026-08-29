@@ -17,8 +17,8 @@ interface TerminalScrollButtonsProps {
 }
 
 const controlClassName =
-  "flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-muted)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]";
-const SAFE_AREA_BOTTOM = "max(0.75rem, var(--safe-area-bottom, 0px))";
+  "flex h-11 w-11 items-center justify-center rounded-lg text-[var(--color-text-muted)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]";
+const SAFE_AREA_BOTTOM = "calc(3rem + var(--safe-area-bottom, 0px))";
 const ACCESSORY_RAIL_RESERVATION = "6.25rem";
 const ACCESSORY_RAIL_GAP = "0.5rem";
 
@@ -117,7 +117,7 @@ export function TerminalScrollButtons({
           event.stopPropagation();
           setIsOpen((open) => !open);
         }}
-        className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/90 text-[var(--color-text)] shadow-lg backdrop-blur-md transition-[background-color,box-shadow,transform] duration-150 hover:bg-[var(--color-surface-2)] hover:shadow-xl active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+        className="flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/90 text-[var(--color-text)] shadow-lg backdrop-blur-md transition-[background-color,box-shadow,transform] duration-150 hover:bg-[var(--color-surface-2)] hover:shadow-xl active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
         title={
           isOpen
             ? "Hide terminal scroll buttons"
@@ -138,7 +138,7 @@ export function TerminalScrollButtons({
           id={controlsId}
           role="group"
           aria-label="Terminal scroll controls"
-          className="flex flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/90 p-1 shadow-xl backdrop-blur-md"
+          className="flex flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/90 p-1 shadow-xl max-[28rem]:grid max-[28rem]:grid-cols-2 max-[28rem]:gap-1 [@media(max-height:28rem)]:grid [@media(max-height:28rem)]:grid-cols-2 [@media(max-height:28rem)]:gap-1"
         >
           <button
             type="button"

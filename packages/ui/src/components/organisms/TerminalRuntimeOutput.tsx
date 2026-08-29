@@ -141,13 +141,13 @@ export function TerminalRuntimeOutput({
             <p className="text-sm">Select a terminal to view output</p>
           </div>
         )}
-        {activeSessionId && terminalScrollButtonsEnabled && (
-          <TerminalScrollButtons
-            sessionId={activeSessionId}
-            reserveAccessoryRail={Boolean(activeSessionId)}
-          />
-        )}
       </div>
+      {activeSessionId && terminalScrollButtonsEnabled && (
+        <TerminalScrollButtons
+          sessionId={activeSessionId}
+          reserveAccessoryRail={Boolean(activeSessionId)}
+        />
+      )}
       {activeSessionId ? (
         <MobileTerminalAccessoryBar sessionId={activeSessionId} />
       ) : null}

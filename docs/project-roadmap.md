@@ -26,6 +26,14 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - **Phases 01–02 — [COMPLETED 2026-08-29 16:48:06 +07:00]**: terminal scroll controls no longer focus xterm input or open the soft keyboard; xterm v6 coarse-pointer touch scrolling uses buffered custom `scrollLines` handling with bounded fling, plus explicit `touch-action: none` and contained overscroll/momentum CSS. Validation: UI TypeScript build PASS; full UI Vitest 1347/1347; focused terminal browser regressions 10/10; Chromium mobile-emulation swipe moved the xterm scrollbar from 280px to 158px. Physical Android hardware validation remains a release follow-up. [Plan](../plans/260828-1430-terminal-touch-keyboard-and-smooth-scroll/plan.md).
 
+
+### Terminal Floating Controls UX (2026-08-29)
+
+- **Phase 01 — [COMPLETED 2026-08-29; final code review approved]**: responsive floating terminal controls now use a 48px plus safe-area-bottom baseline; the scroll rail reserves `6.25rem` plus gap and switches to compact two-column controls in short viewports. Expanded panels reserve a `6.875rem` trailing lane plus safe-right, stay max-height bounded, and contain horizontal scrolling.
+- Terminal Keys order is `Esc`, `Tab`, `Ctrl+C`, `Enter`, `PgUp`, `PgDn`, arrows; Enter sends CR to the active session. Custom Type is a five-row US 60%-style physical layout with Enter and Backspace on base/function layers. Keycaps adapt 24px–44px widths and 4px–8px gaps, maintain 44px minimum height, center/stretch rows, and contain narrow-width horizontal scrolling; Shift labels and modifier-aware ARIA are preserved. Compact shell avoids double bottom safe-area reservation.
+- Verification: focused UI units **4 files/24 tests passed**, UI TypeScript build passed, direct Chromium accessory browser checks **10/10 passed**, final scroll/pane browser checks **7/7 passed**. Physical Android/iOS validation remains a release follow-up; no failure is claimed.
+- [Plan](../plans/260829-1726-terminal-floating-controls-ux/plan.md).
+
 ### Linux Systemd Server-Only Production Runner (2026-08-22)
 
 - **Completed**: production build/stage/install verification now packages only
