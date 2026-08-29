@@ -2,7 +2,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
 import { TerminalRuntimeOutput } from "@/components/organisms/TerminalRuntimeOutput.js";
 
 import "@/index.css";
@@ -105,6 +104,32 @@ describe("mobile terminal accessory bar in Chromium", () => {
     expectInViewport(target);
     expect(target?.bottom).toBeLessThanOrEqual(window.innerHeight - clearance);
   }
+  function expectFloatingControlsAbovePanel(): void {
+    const panelRect = rect("mobile-terminal-accessory-panel");
+    const shellRect = rect("mobile-terminal-accessory-bar");
+    const scrollRect = buttonRect("Show terminal scroll buttons");
+    const keyRect =
+      buttonRect("Hide terminal keys") ?? buttonRect("Show terminal keys");
+    const keyboardRect =
+      buttonRect("Open mobile keyboard") ??
+      buttonRect("Open custom terminal keyboard");
+
+    expectInViewport(panelRect);
+    expectInViewport(shellRect);
+    expectInViewport(scrollRect);
+    if (window.matchMedia("(max-height: 28rem)").matches) {
+      expect(scrollRect?.bottom).toBeLessThanOrEqual((panelRect?.top ?? 0) - 4);
+      expect(keyRect?.bottom).toBeLessThanOrEqual((panelRect?.top ?? 0) - 4);
+      expect(keyboardRect?.bottom).toBeLessThanOrEqual(
+        (panelRect?.top ?? 0) - 4,
+      );
+      expect(scrollRect?.right).toBeLessThanOrEqual((shellRect?.left ?? 0) - 4);
+      return;
+    }
+    expect(keyRect?.bottom).toBeLessThanOrEqual((panelRect?.top ?? 0) - 8);
+    expect(keyboardRect?.bottom).toBeLessThanOrEqual((panelRect?.top ?? 0) - 8);
+    expect(scrollRect?.bottom).toBeLessThanOrEqual((shellRect?.top ?? 0) - 8);
+  }
 
   let container: HTMLDivElement;
   let root: Root;
@@ -195,6 +220,7 @@ describe("mobile terminal accessory bar in Chromium", () => {
     await expect(
       page.getByRole("group", { name: "Terminal keys" }),
     ).toBeVisible();
+    expectFloatingControlsAbovePanel();
     expect(
       Array.from(
         document
@@ -259,6 +285,7 @@ describe("mobile terminal accessory bar in Chromium", () => {
     expect(document.activeElement).toBe(
       document.querySelector('input[placeholder="Type for terminal"]'),
     );
+    expectFloatingControlsAbovePanel();
     expect(
       document
         .querySelector<HTMLElement>('[data-testid="terminal-surface"]')
@@ -286,15 +313,14 @@ describe("mobile terminal accessory bar in Chromium", () => {
       await expect(enterButton).toBeVisible();
       const enterElement = enterButton.element() as HTMLButtonElement;
       const enterRect = enterElement.getBoundingClientRect();
-      const triggerRect = buttonRect("Hide terminal keys");
       const hitTarget = document.elementFromPoint(
         enterRect.left + enterRect.width / 2,
         enterRect.top + enterRect.height / 2,
       );
 
-      expect(enterRect.right).toBeLessThanOrEqual(
-        (triggerRect?.left ?? window.innerWidth) - 1,
-      );
+      expectFloatingControlsAbovePanel();
+      expect(enterRect.left).toBeGreaterThanOrEqual(0);
+      expect(enterRect.right).toBeLessThanOrEqual(window.innerWidth);
       expect(hitTarget && enterElement.contains(hitTarget)).toBe(true);
       await userEvent.click(enterButton);
       expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\r");
@@ -433,6 +459,10 @@ describe("mobile terminal accessory bar in Chromium", () => {
       ),
     );
     expect(desktopRows).toHaveLength(5);
+    expect(document.querySelector('[data-key-id="up"]')).not.toBeNull();
+    expect(
+      document.querySelector('[aria-label="Show Function Layer"]'),
+    ).not.toBeNull();
     for (const row of desktopRows) {
       const rowRect = row.getBoundingClientRect();
       expect(rowRect.left).toBeCloseTo(desktopKeyboardRect.left, 0);
@@ -446,10 +476,27 @@ describe("mobile terminal accessory bar in Chromium", () => {
     expect(
       document.querySelector('input[placeholder="Type for terminal"]'),
     ).toBeNull();
+    const desktopLetter = document.querySelector<HTMLButtonElement>(
+      '[data-key-id="text-a"]',
+    );
+    expect(desktopLetter?.textContent).toBe("A");
+    const desktopCapsButton = page.getByRole("button", {
+      name: "Toggle Caps Lock",
+    });
+    await userEvent.click(desktopCapsButton);
+    await expect(desktopCapsButton).toHaveAttribute("aria-pressed", "true");
+    const desktopShiftButton = page
+      .getByRole("button", {
+        name: "Toggle Shift",
+      })
+      .first();
+    await userEvent.click(desktopShiftButton);
+    expect(desktopLetter?.textContent).toBe("a");
+    expect(desktopLetter?.getAttribute("aria-label")).toBe("Send a");
   });
 
-  it("scales the custom keyboard for compact coarse-pointer surfaces", async () => {
-    await page.viewport(375, 700);
+  it("uses a minimized custom keyboard on compact coarse surfaces", async () => {
+    await page.viewport(320, 420);
     mockSettings.mobileCustomKeyboardEnabled = true;
     mockViewport.compact = true;
     mockViewport.coarse = true;
@@ -461,23 +508,87 @@ describe("mobile terminal accessory bar in Chromium", () => {
 
     const customKeyboard = page.getByTestId("mobile-terminal-custom-keyboard");
     await expect(customKeyboard).toBeVisible();
-    await expect(customKeyboard).toHaveClass(/overflow-x-auto/);
-    const shiftButton = page
-      .getByRole("button", { name: "Toggle Shift" })
+    await expect(customKeyboard).toHaveClass(/overflow-x-hidden/);
+    const customKeyboardElement = customKeyboard.element() as HTMLElement;
+    const expectRowsFit = (expectedRows: number) => {
+      const customKeyboardRect = customKeyboardElement.getBoundingClientRect();
+      const keyboardRows = Array.from(
+        customKeyboardElement.querySelectorAll<HTMLElement>(
+          "[data-keyboard-row]",
+        ),
+      );
+      expect(keyboardRows).toHaveLength(expectedRows);
+      for (const row of keyboardRows) {
+        const rowRect = row.getBoundingClientRect();
+        expect(rowRect.left).toBeGreaterThanOrEqual(
+          customKeyboardRect.left - 1,
+        );
+        expect(rowRect.right).toBeLessThanOrEqual(customKeyboardRect.right + 1);
+      }
+      expect(customKeyboardElement.scrollWidth).toBeLessThanOrEqual(
+        customKeyboardElement.clientWidth + 1,
+      );
+    };
+
+    expectRowsFit(4);
+    const compactLetter = document.querySelector<HTMLButtonElement>(
+      '[data-key-id="text-a"]',
+    );
+    const compactCapsButton = page.getByRole("button", {
+      name: "Toggle Caps Lock",
+    });
+    await userEvent.click(compactCapsButton);
+    await expect(compactCapsButton).toHaveAttribute("aria-pressed", "true");
+    const compactShiftButton = page
+      .getByRole("button", {
+        name: "Toggle Shift",
+      })
       .first();
+    await userEvent.click(compactShiftButton);
+    expect(compactLetter?.textContent).toBe("a");
+    expect(compactLetter?.getAttribute("aria-label")).toBe("Send a");
+    await userEvent.click(compactShiftButton);
+    await userEvent.click(compactCapsButton);
+    expectFloatingControlsAbovePanel();
+    expect(document.querySelector('[data-key-id="text-1"]')).toBeNull();
+    expect(document.querySelector('[data-key-id="text-;"]')).toBeNull();
+    expect(document.querySelector('[data-key-id="up"]')).toBeNull();
+    expect(document.querySelector('[data-key-id="meta"]')).toBeNull();
+    expect(
+      document.querySelector('[aria-label="Show Function Layer"]'),
+    ).toBeNull();
+
+    await userEvent.click(page.getByRole("button", { name: "Show Symbols" }));
+    await expect(
+      page.getByRole("button", { name: "Show Letters" }),
+    ).toBeVisible();
+    expectRowsFit(3);
     const numberElement = document.querySelector<HTMLButtonElement>(
       '[data-key-id="text-1"]',
     );
     expect(numberElement).not.toBeNull();
-    const numberRect = numberElement!.getBoundingClientRect();
-    expect(numberRect.width).toBeGreaterThanOrEqual(24);
-    expect(numberRect.width).toBeLessThan(44);
-    expect(numberRect.height).toBeGreaterThanOrEqual(44);
     expect(numberElement!.textContent).toBe("1!");
+    expect(numberElement!.getBoundingClientRect().width).toBeGreaterThanOrEqual(
+      14,
+    );
+    expect(
+      numberElement!.getBoundingClientRect().height,
+    ).toBeGreaterThanOrEqual(44);
+    expect(document.querySelector('[data-key-id="text-;"]')).not.toBeNull();
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(
       window.innerWidth,
     );
     expect(document.body.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+    const panelElement = document.querySelector<HTMLElement>(
+      '[data-testid="mobile-terminal-accessory-panel"]',
+    );
+    expect(panelElement?.scrollWidth).toBeLessThanOrEqual(
+      (panelElement?.clientWidth ?? 0) + 1,
+    );
+
+    const shiftButton = page
+      .getByRole("button", { name: "Toggle Shift" })
+      .first();
     await userEvent.click(shiftButton);
     await expect(shiftButton).toHaveAttribute("aria-pressed", "true");
     expect(numberElement!.textContent).toBe("!");
@@ -488,16 +599,12 @@ describe("mobile terminal accessory bar in Chromium", () => {
     await act(async () => {
       numberElement!.click();
     });
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
     expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "!");
     await expect(shiftButton).toHaveAttribute("aria-pressed", "false");
     expect(numberElement!.textContent).toBe("1!");
     expect(numberElement!.getAttribute("aria-label")).toBe("Send 1");
-    const customEnter = page.getByRole("button", { name: "Send Enter" });
-    await expect(customEnter).toBeVisible();
-    mockTerminalWrite.mockClear();
-    await userEvent.click(customEnter);
-    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
-    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\r");
+
     const customBackspace = page.getByRole("button", {
       name: "Send Backspace",
     });
@@ -509,25 +616,24 @@ describe("mobile terminal accessory bar in Chromium", () => {
     expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
     expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\x7f");
 
+    const customEnter = page.getByRole("button", { name: "Send Enter" });
+    await expect(customEnter).toBeVisible();
+    mockTerminalWrite.mockClear();
+    await userEvent.click(customEnter);
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\r");
+
+    await userEvent.click(page.getByRole("button", { name: "Show Letters" }));
     await userEvent.click(
-      page.getByRole("button", { name: "Show Function Layer" }),
+      page.getByRole("button", { name: "Show terminal keys" }),
     );
     await expect(
-      page.getByRole("button", { name: "Send Enter" }),
+      page.getByRole("group", { name: "Terminal keys" }),
     ).toBeVisible();
-    const functionBackspace = page.getByRole("button", {
-      name: "Send Backspace",
-    });
-    await expect(functionBackspace).toBeVisible();
-    expect(functionBackspace.element().textContent).toBe("Backspace");
-    mockTerminalWrite.mockClear();
-    functionBackspace.element().click();
-    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
-    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\x7f");
-    mockTerminalWrite.mockClear();
-    await userEvent.click(functionBackspace);
-    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
-    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\x7f");
+    await expect(
+      page.getByRole("button", { name: "Send Arrow Up" }),
+    ).toBeVisible();
+    await expect(customKeyboard).toBeVisible();
   });
 
   it("keeps the physical custom keyboard reachable with the scroll rail open", async () => {
@@ -578,7 +684,11 @@ describe("mobile terminal accessory bar in Chromium", () => {
 
       expectInViewport(panelRect);
       expectInViewport(railRect);
-      expect(railRect?.bottom).toBeLessThanOrEqual((keyRect?.top ?? 0) - 8);
+      if (window.matchMedia("(max-height: 28rem)").matches) {
+        expect(railRect?.right).toBeLessThanOrEqual((keyRect?.left ?? 0) - 4);
+      } else {
+        expect(railRect?.bottom).toBeLessThanOrEqual((keyRect?.top ?? 0) - 8);
+      }
       expect(hitTarget && backspaceElement.contains(hitTarget)).toBe(true);
       await userEvent.click(backspaceButton);
       expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\x7f");
@@ -674,9 +784,15 @@ describe("mobile terminal accessory bar in Chromium", () => {
       expect(expandedRailRect.bottom).toBeLessThanOrEqual(
         expandedOutputRect?.bottom ?? window.innerHeight,
       );
-      expect(expandedRailRect.bottom).toBeLessThanOrEqual(
-        expandedKeyRect.top - 8,
-      );
+      if (window.matchMedia("(max-height: 28rem)").matches) {
+        expect(expandedRailRect.right).toBeLessThanOrEqual(
+          expandedKeyRect.left - 4,
+        );
+      } else {
+        expect(expandedRailRect.bottom).toBeLessThanOrEqual(
+          expandedKeyRect.top - 8,
+        );
+      }
       await userEvent.keyboard("{Escape}");
     }
 

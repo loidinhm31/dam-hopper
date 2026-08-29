@@ -9,7 +9,8 @@ import {
 import { cn } from "@/lib/utils.js";
 
 const SAFE_AREA_RIGHT = "max(0.75rem, var(--safe-area-right, 0px))";
-const SAFE_AREA_BOTTOM = "calc(3rem + var(--safe-area-bottom, 0px))";
+const SAFE_AREA_BOTTOM =
+  "var(--terminal-floating-bottom-offset, calc(3rem + var(--safe-area-bottom, 0px)))";
 
 interface TerminalFloatingControlShellProps {
   sessionId: string;
@@ -80,11 +81,14 @@ export function TerminalFloatingControlShell({
       data-session-id={sessionId}
       className={cn(
         "pointer-events-none absolute z-10 box-border flex max-w-full flex-col items-end rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/94 p-0.5 shadow-xl backdrop-blur-md",
+        isOpen
+          ? "[@media(max-height:28rem)]:[--terminal-floating-bottom-offset:0.5rem]"
+          : "",
         className,
       )}
       style={{
         right: SAFE_AREA_RIGHT,
-        bottom: SAFE_AREA_BOTTOM,
+        bottom: isOpen ? `calc(100% + ${SAFE_AREA_BOTTOM})` : SAFE_AREA_BOTTOM,
       }}
       onMouseDown={guardControlPointer}
       onPointerDown={guardControlPointer}

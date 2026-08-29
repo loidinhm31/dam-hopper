@@ -1,11 +1,15 @@
 import { type CSSProperties } from "react";
 import {
+  CUSTOM_MOBILE_TERMINAL_COMPACT_KEY_ROWS,
+  CUSTOM_MOBILE_TERMINAL_COMPACT_SYMBOL_ROWS,
   CUSTOM_MOBILE_TERMINAL_KEY_ROWS,
   CUSTOM_MOBILE_TERMINAL_SYMBOL_ROWS,
   getCustomMobileTerminalKeyAriaLabel,
   getCustomMobileTerminalKeyLabel,
   type CustomMobileTerminalKey,
 } from "@/lib/mobile-terminal-keyboard-layout.js";
+import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
+import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
 
@@ -37,9 +41,16 @@ export function MobileTerminalCustomKeyboard({
   isSymbolLayer,
   onPress,
 }: MobileTerminalCustomKeyboardProps) {
-  const rows = isSymbolLayer
-    ? CUSTOM_MOBILE_TERMINAL_SYMBOL_ROWS
-    : CUSTOM_MOBILE_TERMINAL_KEY_ROWS;
+  const isCompactWorkspace = useCompactWorkspace();
+  const isCoarsePointer = useCoarsePointer();
+  const isCompactMobile = isCompactWorkspace && isCoarsePointer;
+  const rows = isCompactMobile
+    ? isSymbolLayer
+      ? CUSTOM_MOBILE_TERMINAL_COMPACT_SYMBOL_ROWS
+      : CUSTOM_MOBILE_TERMINAL_COMPACT_KEY_ROWS
+    : isSymbolLayer
+      ? CUSTOM_MOBILE_TERMINAL_SYMBOL_ROWS
+      : CUSTOM_MOBILE_TERMINAL_KEY_ROWS;
   const {
     mobileCustomKeyboardFontSize,
     mobileCustomKeyboardPadding,
@@ -50,6 +61,7 @@ export function MobileTerminalCustomKeyboard({
     mobileCustomKeyboardFontSize + mobileCustomKeyboardPadding * 2,
   );
   const keyPadding = Math.max(8, mobileCustomKeyboardPadding);
+  const responsiveKeyPadding = `max(2px, min(${keyPadding}px, 1cqw))`;
   const rowGap = Math.max(8, mobileCustomKeyboardRowGap);
   const modifiers = {
     shift: isShiftActive,
@@ -58,7 +70,6 @@ export function MobileTerminalCustomKeyboard({
     alt: isAltActive,
     meta: isMetaActive,
   };
-
 
   const renderKey = (key: CustomMobileTerminalKey) => {
     const isActive =
@@ -70,7 +81,11 @@ export function MobileTerminalCustomKeyboard({
       (key.toggle === "symbols" && isSymbolLayer);
     const units = key.units ?? 1;
     const keyWidth = `calc(${KEY_UNIT} * ${units})`;
-    const label = getCustomMobileTerminalKeyLabel(key, isShiftActive);
+    const label = getCustomMobileTerminalKeyLabel(
+      key,
+      isShiftActive,
+      isCapsActive,
+    );
     const ariaLabel = getCustomMobileTerminalKeyAriaLabel(key, modifiers);
     return (
       <button
@@ -103,7 +118,7 @@ export function MobileTerminalCustomKeyboard({
           fontSize: mobileCustomKeyboardFontSize,
           minHeight: keyHeight,
           minWidth: keyWidth,
-          paddingInline: keyPadding,
+          paddingInline: responsiveKeyPadding,
           paddingBlock: Math.max(
             4,
             Math.round(mobileCustomKeyboardPadding / 2),
@@ -118,17 +133,17 @@ export function MobileTerminalCustomKeyboard({
   return (
     <div
       data-testid="mobile-terminal-custom-keyboard"
-      className="min-w-0 overflow-x-auto overscroll-x-contain"
+      className="min-w-0 overflow-x-hidden overscroll-x-contain"
       style={
         {
           containerType: "inline-size",
           "--mobile-terminal-key-unit":
-            "clamp(24px, calc((100cqw - 120px) / 16.25), 44px)",
+            "clamp(14px, calc((100cqw - 15 * var(--mobile-terminal-key-gap)) / 16.25), 44px)",
           "--mobile-terminal-key-gap": "clamp(4px, 0.625cqw, 8px)",
         } as CSSProperties
       }
     >
-      <div className="grid w-max min-w-full pb-2" style={{ rowGap }}>
+      <div className="grid w-full min-w-0 pb-2" style={{ rowGap }}>
         {rows.map((row, index) => {
           const regularKeys = row.filter((key) => key.cluster !== "arrows");
           const arrowKeyById = Object.fromEntries(
@@ -149,7 +164,7 @@ export function MobileTerminalCustomKeyboard({
             <div
               key={index}
               data-keyboard-row={index}
-              className="flex w-max min-w-full justify-center"
+              className="flex w-full min-w-0 justify-center"
               style={{ columnGap: KEY_GAP }}
             >
               {regularKeys.map(renderKey)}
