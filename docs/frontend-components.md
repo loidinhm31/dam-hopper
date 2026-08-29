@@ -471,6 +471,41 @@ extension runs.
 **Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect), session attachment, and in-app/native agent notification integration. Phase 1 adds the session-local find controller; TerminalPanel lifecycle wiring follows in Phase 2.
 
 **Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Wires xterm BEL and OSC 9/777/99 handlers into the shared agent-activity path so submitted command, output, user input, and exit signals can drive in-app and native browser notifications without any backend protocol change. During retained buffer replay, it keeps the OSC 9 delivery gate active through xterm's asynchronous write callback, then FIFO-flushes queued live data so historical alerts stay silent and subsequent live alerts are preserved. Attach recovery permits only one in-flight attach per panel, retries an alive session with capped exponential backoff, and creates a replacement only after a `terminal:listDetailed` check confirms the session is missing or dead. The terminal session cleanup path disposes signal handlers and timers; search controller cleanup is added with the Phase 2 lifecycle wiring.
+### Terminal touch scrolling and page-gesture containment
+
+`TerminalPanel` binds `bindTerminalTouchScroll` from
+`packages/ui/src/lib/terminal-touch-scroll.ts` after xterm v6 opens. xterm's
+scrollback is a custom buffer surface, so the helper translates vertical
+swipes into `terminal.scrollLines()` calls rather than relying on a native
+scroll container. It listens only when `(any-pointer: coarse)` matches, and
+uses capture-phase, passive `touchstart`, `touchmove`, `touchend`, and
+`touchcancel` handlers. Single-touch movement is accumulated by screen line
+height, flushed on animation frames, and a bounded decaying fling continues
+after release; multi-touch and helper-textarea/scrollbar touches are ignored
+or cancel the gesture.
+
+The xterm viewport and scrollable element use `touch-action: none` and
+`overscroll-behavior: contain` (with the `.xterm` root also contained). This
+keeps terminal swipes from panning the browser page or triggering pull-to-refresh.
+The binding returns an idempotent cleanup function that cancels pending move and
+inertia frames and removes all four listeners; `TerminalPanel` invokes it when
+the terminal effect is disposed.
+
+Focused unit coverage is in
+`packages/ui/src/lib/terminal-touch-scroll.test.ts`. Run it with:
+
+```bash
+pnpm --filter @dam-hopper/ui test -- src/lib/terminal-touch-scroll.test.ts
+```
+
+The scroll-button/browser integration surface is covered by
+`packages/ui/browser-tests/terminal-scroll-buttons.browser.tsx`; run the focused
+browser test with:
+
+```bash
+pnpm --filter @dam-hopper/ui test:browser -- browser-tests/terminal-scroll-buttons.browser.tsx
+```
+
 
 #### Inline terminal suggestions (Phase 04)
 

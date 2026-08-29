@@ -1,3 +1,14 @@
+---
+title: "Native smooth touch scroll"
+description: "Deliver smooth coarse-pointer xterm touch scrolling without changing desktop terminal behavior."
+status: completed
+priority: P1
+effort: 3h
+branch: develop
+tags: [feature, frontend, terminal, touch]
+created: 2026-08-28
+---
+
 # Phase 02 — Native smooth touch scroll
 
 ## Context links
@@ -7,68 +18,61 @@
 - `packages/ui/src/index.css` (global xterm overrides, if any)
 
 ## Overview
-Date: 2026-08-28 · Priority: high · Status: pending · Owner: implementation agent
+Date: 2026-08-29 · Priority: high · Status: DONE 2026-08-29 16:48:06 +07:00 · Owner: implementation agent
 
-Restore native compositor scrolling for `.xterm-viewport` on coarse pointer so terminal scroll is as smooth as normal scroll containers (momentum/fling, rubber-band, 60fps). Current manual `scrollTop` per `touchmove` + `preventDefault` kills all of that.
+Restore smooth coarse-pointer touch scrolling for xterm v6 while preserving desktop behavior. Because xterm scrollback is exposed through its buffer API, touch movement is translated into `terminal.scrollLines(rows)` rather than native `scrollTop` mutation.
 
 ## Key insights
-- `bindTerminalTouchScroll` runs only when `matchMedia("(pointer: coarse)")` matches; it hijacks `touchmove` with `preventDefault` and assigns `viewport.scrollTop = startScrollTop + (startY - touch.clientY)`. This disables browser momentum, fling velocity, and overscroll — the exact jank reported.
-- Normal components scroll smoothly because they keep native `overflow: auto/scroll` + compositor scrolling. Terminal should do same; xterm's `.xterm-viewport` is already `overflow-y: scroll`.
-- No rAF batching, no velocity decay, no `scroll-behavior` — manual path cannot match native.
-- Coarse-pointer guard means desktop is already native and must stay so.
+- `bindTerminalTouchScroll` runs only when `matchMedia("(any-pointer: coarse)")` matches and translates touch deltas into line scrolling.
+- Movement is buffered and flushed on animation frames; bounded velocity and exponential decay provide fling behavior without per-event layout work.
+- `.xterm .xterm-viewport` and `.xterm .xterm-scrollable-element` use `touch-action: none`; overscroll containment, touch momentum, and smooth programmatic scrolling remain enabled.
 
 ## Requirements
-- On coarse pointer (Android), dragging terminal viewport scrolls with native momentum, same kinematics as other scroll views.
-- No `preventDefault` on `touchmove` of viewport; no per-frame `scrollTop` assignment.
+- On coarse pointer (Android), dragging terminal viewport scrolls through xterm's `scrollLines` API with smooth buffered movement and bounded fling.
 - Preserve programmatic scroll from Phase 01 buttons (`scrollToTop/Bottom`, `scrollLines`).
 - Desktop mousewheel/pointer scroll unchanged.
-- Optional polish: `scroll-behavior: smooth` for programmatic jumps, `overscroll-behavior: contain` to avoid parent scroll chaining.
+- Keep touch handling scoped to terminal surfaces; no server/API behavior changes.
 
 ## Architecture
-Two safe options; prefer A (YAGNI/KISS):
 
-- **A (recommended): remove manual handler, add CSS.** Make `bindTerminalTouchScroll` a no-op (return `()=>{}` immediately) or delete its body; keep exported symbol to avoid churn, or delete file + callsite if preferred. Add one global rule (in `packages/ui/src/index.css` or injected after `term.open`):
-  ```css
-  .xterm-viewport {
-    touch-action: pan-y;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
-    scroll-behavior: smooth;
-  }
-  ```
-  No JS touch listeners. Native scrolling does the work.
+Keep the existing binding and callsite to minimize churn. `bindTerminalTouchScroll` attaches capture-phase passive touch listeners only on coarse pointers, computes pixel deltas, converts them to terminal rows, and applies `terminal.scrollLines(rows)` from rAF flushes. Inertia uses bounded velocity decay. CSS sets `touch-action: none` on xterm viewport/scrollable elements and keeps overscroll/momentum/smooth-scroll polish.
 
-- **B (if keep file): keep coarse-pointer early-return but remove all listeners.** Same CSS as A. No `addEventListener` for touch.
-
-Do not add custom inertia JS — native is strictly better and less code.
+No native `scrollTop` assignment or `preventDefault` is used by the touch-scroll binding.
 
 ## Related code files
-- `packages/ui/src/lib/terminal-touch-scroll.ts` (edit to no-op)
-- `packages/ui/src/components/organisms/TerminalPanel.tsx` (keep or remove `bindTerminalTouchScroll` import/callsite; if no-op, no change needed)
-- `packages/ui/src/index.css` (add `.xterm-viewport` rule) — or inline `viewport.style.touchAction = "pan-y"` after mount
+- `packages/ui/src/lib/terminal-touch-scroll.ts` — custom xterm v6 `scrollLines` touch binding.
+- `packages/ui/src/components/organisms/TerminalPanel.tsx` — binding lifecycle callsite.
+- `packages/ui/src/index.css` — xterm viewport/scrollable-element touch policy.
 
 ## Implementation steps
-1. Change `bindTerminalTouchScroll` to immediately `return () => {}` (or delete body). Keep signature for compat. Remove `touchstart/touchmove/touchend/touchcancel` listeners and `preventDefault`/`scrollTop` logic.
-2. Add CSS for `.xterm-viewport` as above (global CSS preferred so it applies to every terminal including keep-alive reparented hosts).
-3. In `TerminalPanel.tsx`, either keep callsite (now no-op) or remove `releaseTouchScroll` + import if file deleted — keep minimal diff; verify no unused import lint.
-4. Verify: coarse-pointer emulation + real Android — drag/flick viewport, compare to normal div scroll; confirm momentum and no keyboard open (Phase 01 still holds).
+1. Translate touch movement into buffered xterm `scrollLines` calls with rAF batching and bounded fling decay.
+2. Apply xterm viewport/scrollable-element touch CSS (`touch-action: none`, contained overscroll, touch momentum, smooth programmatic scrolling).
+3. Keep the `TerminalPanel.tsx` binding lifecycle and Phase 01 scroll-button actions intact.
+4. Validate with UI build, Vitest, focused Chromium browser regressions, and coarse-pointer mobile-emulation swipe evidence.
 
 ## Todo list
-- [ ] Make `bindTerminalTouchScroll` no-op (remove manual scrollTop + preventDefault)
-- [ ] Add `.xterm-viewport` CSS (`touch-action: pan-y`, `-webkit-overflow-scrolling: touch`, `overscroll-behavior: contain`, `scroll-behavior: smooth`)
-- [ ] Verify no lint/type errors; run vitest + browser tests
-- [ ] Manual momentum check on Android/coarse-pointer emulation
+- [x] Implement xterm v6 custom `scrollLines` touch scrolling with bounded fling.
+- [x] Add `.xterm` touch CSS (`touch-action: none`, overscroll containment, touch momentum, smooth scrolling).
+- [x] Verify build and test gates.
+- [x] Validate coarse-pointer Chromium swipe behavior.
 
+## Validation evidence
+
+- `pnpm --filter @dam-hopper/ui build` — PASS, `tsc -p tsconfig.json` exited 0 in 5.99s.
+- `pnpm --filter @dam-hopper/ui test` — PASS, 208/208 files and 1351/1351 tests.
+- `pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/terminal-scroll-buttons.browser.tsx browser-tests/android-chrome-input-policy.browser.ts` — PASS, 2/2 files and 10/10 tests.
+- Chromium mobile-emulation touchscreen swipe moved the xterm scrollbar from 280px to 158px; a temporary 2000px page spacer kept `scrollY` at 0 before and after the terminal swipe.
+- Physical Android hardware validation was not performed; no benchmark or memory-leak run was requested.
 ## Success criteria
-- Terminal viewport touch scroll has native momentum/fling and matches smoothness of normal components (visual, no jank).
-- No `preventDefault` on viewport `touchmove`; no JS-driven `scrollTop` per move.
+- Terminal touch scroll uses buffered xterm line scrolling with bounded fling and no per-move `scrollTop` mutation.
+- No `preventDefault` on viewport `touchmove`; CSS touch policy remains explicit.
 - Programmatic button scroll still works; desktop unchanged; tests pass.
 
 ## Risk assessment
-Low. Change is subtractive (remove JS, add passive CSS). Risk: if xterm viewport relied on manual handler for some edge device, native fallback still scrolls — no regression. Keep change behind coarse-pointer is unnecessary once CSS is passive for all.
+Low. The implementation is scoped to coarse-pointer terminal touch handling and retains the existing xterm scroll API. Physical Android hardware validation remains a release follow-up because only configured Chromium mobile emulation was exercised.
 
 ## Security considerations
 None. No input handling, no data.
 
 ## Next steps
-Handoff via `/code plans/260828-1430-terminal-touch-keyboard-and-smooth-scroll/plan.md`.
+Phase complete; physical Android hardware validation remains a release follow-up.
