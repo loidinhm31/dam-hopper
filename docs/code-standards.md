@@ -546,14 +546,13 @@ export function deleteProfile(id: string): void {
   // remove from list, clear active if deleted profile is active, persist
 }
 
-export function setActiveProfile(id: string): void {
-  /* localStorage.setItem(KEY_ACTIVE_PROFILE, id) */
+export function setActiveProfile(id: string): boolean {
+  /* returns whether the profile-scoped localStorage write succeeded */
 }
 
 // Persistence
-export function saveProfiles(profiles: ServerProfile[]): void {
-  // Wrapper around JSON.stringify + localStorage.setItem(KEY_PROFILES, ...)
-  // Always wrap in try/catch (localStorage may be unavailable)
+export function saveProfiles(profiles: ServerProfile[]): boolean {
+  // Wrapper around JSON.stringify + localStorage.setItem; failures are reported
 }
 
 // Backward Compatibility
@@ -648,7 +647,7 @@ packages/ui/src/
 
 `apps/web` owns browser bootstrapping only: `QueryClientProvider`, `initTransport(new WsTransport(getServerUrl()))`, DOM mount, and host Vite config.
 
-`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. Its browser transport accepts only same-origin profiles by policy; do not add backend sidecars, filesystem permissions, shell permissions, or opener/http plugins without a phase plan that justifies the native API surface. Separate web frontends use the backend's exact `DAM_HOPPER_CORS_ORIGINS` allowlist.
+`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. Native Browser Debug is Windows v1 after the WebView2 gate; Linux is runtime-unverified and macOS deferred. Android uses the iframe adapter. Windows supports approved cross-origin profiles; non-Windows native targets require same-origin profiles. Do not add backend sidecars, filesystem permissions, shell permissions, or opener/http plugins without a phase plan.
 
 Native startup must not depend on packaged webview same-origin fallback. Use the shared server profile flow, and keep the no-profile transport idle until the shared `ServerProfileGuard` prompts for an explicit profile.
 
@@ -746,7 +745,7 @@ pub async fn require_auth(
 - Multi-line trusted-network warning banner on startup
 - ERROR-level logging for visibility
 
-See [Phase 01 documentation](./phase-01-server-auth-bypass/index.md) for complete security considerations.
+The Phase 01 auth-bypass design is historical; the source plan is no longer present. Current auth and safety rules are maintained in [API Reference](./api-reference.md).
 
 ### JWT Pattern
 
@@ -889,3 +888,13 @@ Routes registered conditionally at router construction time.
 - A clean telemetry reset removes only `telemetry.db` and its `-wal`/`-shm` sidecars after shutdown.
   The separate `sessions.db` is protected and must remain intact; the two paths must not resolve to
   the same file.
+
+### Browser Debug host rules
+
+- Keep `BrowserDebugKeepAliveHost` alive across shell changes; target/profile changes reset bridge state and generation.
+- Native child geometry uses raw rendered bounds and mirrored app zoom. Validate source/origin/nonce/request identity and capability negotiation before commands.
+- The v1 relay exposes picker/navigation only; console forwarding is disabled. Popup/download/permission policies are explicit and platform-qualified.
+- The iframe bridge is semantic DOM/ARIA metadata only; never transmit HTML, forms, secrets, or page content.
+- Profile, editor, transport-generation, and Encrypt persistence boundaries are metadata-only, profile-scoped, or memory-only as described in source.
+
+See [Native Browser Debug Support](./native-browser-debug-support.md) and [Configuration Guide](./configuration-guide.md).

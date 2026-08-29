@@ -104,19 +104,7 @@ fn validate_bridge_event(value: &Value, nonce: &str, request_id: &str) -> Result
             require_exact_keys(object, &["version", "type", "nonce", "requestId", "url"])?;
             bounded_string(object.get("url"), MAX_URL_LENGTH).ok_or("invalid_url")?;
         }
-        "dam-hopper:console" => {
-            require_exact_keys(
-                object,
-                &["version", "type", "nonce", "requestId", "level", "message"],
-            )?;
-            if !matches!(
-                object.get("level").and_then(Value::as_str),
-                Some("debug") | Some("log") | Some("info") | Some("warn") | Some("error")
-            ) {
-                return Err("invalid_console_level");
-            }
-            bounded_string(object.get("message"), MAX_TEXT_LENGTH).ok_or("invalid_message")?;
-        }
+        "dam-hopper:console" => return Err("unsupported_event"),
         "dam-hopper:error" => {
             require_exact_keys(
                 object,
@@ -304,5 +292,16 @@ mod tests {
         let mut value: Value = serde_json::from_str(&valid_message()).unwrap();
         value["payload"]["capabilities"] = serde_json::json!(["navigation", "shell"]);
         assert_eq!(parse_relay(&value.to_string()), Err("invalid_capabilities"));
+
+        let mut value: Value = serde_json::from_str(&valid_message()).unwrap();
+        value["payload"] = serde_json::json!({
+            "version": 1,
+            "type": "dam-hopper:console",
+            "nonce": "nonce-123",
+            "requestId": "request-123",
+            "level": "warn",
+            "message": "ignored"
+        });
+        assert_eq!(parse_relay(&value.to_string()), Err("unsupported_event"));
     }
 }

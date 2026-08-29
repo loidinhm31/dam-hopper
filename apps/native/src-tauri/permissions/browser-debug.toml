@@ -1,0 +1,13 @@
+[[permission]]
+identifier = "browser-debug"
+description = "Allows the main desktop webview to control the native Browser Debug child."
+commands.allow = [
+  "browser_debug_create",
+  "browser_debug_navigate",
+  "browser_debug_command",
+  "browser_debug_set_bounds",
+  "browser_debug_set_zoom",
+  "browser_debug_set_visible",
+  "browser_debug_destroy",
+  "browser_debug_clear_data",
+]

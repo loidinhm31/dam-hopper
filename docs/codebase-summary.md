@@ -1,10 +1,10 @@
 # DamHopper Codebase Summary
 
-This document provides a high-level overview of the DamHopper codebase. For detailed phase documentation, see [phase-01-server-auth-bypass/](./phase-01-server-auth-bypass/).
+This document provides a high-level overview of the current repository. Historical phase records are retained where useful; phase labels and test counts below are not release guarantees unless explicitly dated.
 
 ## Project Overview
 
-**DamHopper** is a workspace management system for agent-based development. It combines a Rust backend server with split frontend hosts (`apps/web` for browser, `apps/native` for Tauri) that both reuse a shared React UI package (`packages/ui`) to provide an integrated environment for workspaces, agents, terminals, and file operations.
+**DamHopper** is a workspace management system for agent-based development. It combines a Rust backend server with split frontend hosts (`apps/web` for browser, `apps/native` for Tauri) that both reuse a shared React UI package (`packages/ui`) to provide an integrated environment for workspaces, agents, terminals, file operations, and optional Browser Debug.
 
 **Repository Structure**:
 
@@ -107,7 +107,7 @@ Infrastructure
 
 ### Backend
 
-- **Language**: Rust 1.79+
+- **Language**: Rust (deployment pins Rust 1.97.1)
 - **Runtime**: Tokio (async/await)
 - **Web Framework**: Axum 0.7
 - **WebSocket**: Tokio-TungsteniteWebSocket, tower-http
@@ -129,7 +129,15 @@ Infrastructure
 - **Drag & Drop**: @dnd-kit/core 6.3.1 (Phase 02: Drag-to-Split)
 - **Layout**: react-resizable-panels (resizable split panes)
 
-## Recent Phases
+## Current platform and deployment status
+
+- Browser Debug native child WebView is Windows v1 supported only after the WebView2 gate; Linux implementation/package builds are runtime-unverified, macOS is deferred, and Android uses the iframe adapter.
+- Native Browser Debug stores profile-scoped data under app data, validates generation/nonce/request identity, mirrors app zoom, and reports raw rendered bounds. Native relay v1 exposes picker/navigation; console forwarding is disabled.
+- Docker serves the built SPA from `/opt/dam-hopper/web` on port 4800. systemd production is backend-only on `0.0.0.0:4801`; legacy nohup is loopback `127.0.0.1:4800` and must remain separate.
+- Build-time origins for the extension are controlled by `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS`; changing them requires rebuilding and redistributing the extension. `VITE_DAM_HOPPER_LOG_LEVEL` controls web bootstrap logging.
+- Profile metadata and tokens are localStorage-scoped; editor persistence is metadata-only and Encrypt session material is memory-only. Transport rebind destroys the previous WS and advances a generation to reject stale responses.
+
+See [Native Browser Debug Support](./native-browser-debug-support.md), [Configuration Guide](./configuration-guide.md), and [Linux systemd](./linux-systemd.md).
 
 ### Phase 03: IntelliJ-Compatible Git Actions ✅ Complete
 
@@ -157,7 +165,7 @@ Infrastructure
 - **Feature**: `--no-auth` CLI flag for local dev mode
 - **Safety**: Production guards prevent unsafe configurations
 - **Tests**: Dev mode, normal mode regression, production safety
-- **Documentation**: [phase-01-server-auth-bypass/](./phase-01-server-auth-bypass/)
+- **Documentation**: Historical phase record referenced in this summary; source directory is no longer present.
 
 ### Phase 04: SQLite Session Persistence ✅ Complete
 
@@ -179,7 +187,7 @@ Infrastructure
 
 - **Status**: Advanced editor integration
 - **Features**: Syntax highlighting, multi-tab support, git integration
-- **Documentation**: [phase-04-monaco-editor.md](./phase-04-monaco-editor.md)
+- **Documentation**: Historical phase record; source file is no longer present in this checkout.
 
 ### Phase 04: PTY Restart Engine ✅ Complete
 
@@ -219,7 +227,7 @@ Infrastructure
   - TTL-based cleanup of expired buffers
 - **Integration**: Called after PtySessionManager creation in main.rs
 - **Tests**: 3 tests passing (skip filters, restore success)
-- **Documentation**: [Phase 06 documentation](./phase-06-startup-restore/index.md)
+- **Documentation**: Historical phase record; source directory is no longer present in this checkout.
 
 ## Critical Components
 
@@ -432,13 +440,13 @@ dam-hopper/
 | [api-reference.md](./api-reference.md)                         | HTTP endpoints, request/response schemas      |
 | [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
 | [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
-| [phase-01-server-auth-bypass/](./phase-01-server-auth-bypass/) | Dev mode authentication bypass implementation |
+| [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
+| [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
 | [ws-protocol-guide.md](./ws-protocol-guide.md)                 | WebSocket message types, terminal protocol    |
 | [project-roadmap.md](./project-roadmap.md)                     | Planned features and phases                   |
 
 ---
 
-**Last Updated**: August 11, 2026
-**Phase Status**: Codex OTel-only Usage refactor validated; native signing remains environment-dependent without `TAURI_SIGNING_PRIVATE_KEY`
-**Generated by**: Automated codebase compaction (Repomix) + manual documentation
-_For latest phase documentation, see [phase-01-server-auth-bypass/index.md](./phase-01-server-auth-bypass/index.md)_
+**Last Updated**: August 30, 2026
+**Phase Status**: Current support is tracked by feature and platform qualification; historical phase labels and evidence remain dated records.
+**Generated by**: Manual source-verified maintenance; a temporary Repomix refresh was attempted but blocked by the harness policy.
