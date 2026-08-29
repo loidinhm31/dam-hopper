@@ -108,7 +108,7 @@ describe("TerminalRuntimeOutput", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps scroll and keyboard controls in the same positioned host", () => {
+  it("keeps scroll and keyboard controls in the terminal surface", () => {
     const markup = renderToStaticMarkup(
       <TerminalRuntimeOutput
         activeSessionId="session-1"
@@ -151,7 +151,7 @@ describe("TerminalRuntimeOutput", () => {
     );
   });
 
-  it("reclaims the scroll lane when scroll controls are disabled", () => {
+  it("does not mount scroll controls when disabled", () => {
     mockViewport.compact = false;
     mockViewport.coarse = false;
     mockSettings.scrollButtonsEnabled = false;

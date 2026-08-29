@@ -29,6 +29,16 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **Safe Inline Terminal Suggestions**: supported local interactive zsh/fish/Bash sessions expose only a server-validated lifecycle to a fail-closed, per-terminal controller. Bash preserves prompt hooks, records normalized simple-command text from `BASH_COMMAND`, and abandons compound, multiline, substitution, and redirection syntax. Ghost acceptance writes a suffix only; unsupported shells, replay, alternate buffers, and coarse-pointer / native-keyboard-suppressed surfaces show no automatic UI. Command history stays browser-local with clear and disable controls.
 - **Shared Context Menus**: `packages/ui/src/components/ui/ContextMenu.tsx` wraps Radix Context Menu with body-only portal protection, one-open coordination, and capture-level scroll close. Phase 03 keeps the verification boundary in JSDOM wrapper and consumer tests, while Chromium browser coverage owns the real portal geometry and Arrow/Home/End focus behavior.
 - **Workspace Terminal Layout**: `WorkspacePage` switches between IDE and terminal modes, `TerminalWorkspaceShell` renders the full-height terminal workspace with a persisted Fleet Terminal rail, and `MultiTerminalDisplay` reuses the existing terminal manager state across layout changes.
+- **Floating Terminal Controls**: Each active terminal owns its host-local floating
+  controls. The 48px plus safe-area-bottom baseline anchors the controls; the
+  scroll rail reserves `6.25rem` plus an 8px gap and switches to a compact
+  two-column action group in short viewports. Terminal Keys keeps the order
+  Esc, Tab, Ctrl+C, Enter, PgUp, PgDn, and arrows. Custom Type uses a five-row
+  US 60%-style layout with modifier-aware labels and ARIA, 44px minimum
+  keycaps, responsive 24px–44px widths, and contained horizontal scrolling.
+  Expanded panels reserve a `6.875rem` trailing lane plus safe-right, stay
+  within a `dvh` max-height, and the terminal compact shell owns the bottom
+  safe-area inset without double reservation.
 - **Terminal Touch Scrolling**: `packages/ui/src/lib/terminal-touch-scroll.ts` adapts coarse/any-pointer touch swipes to xterm v6's custom `scrollLines` buffer surface, with animation-frame batching and bounded fling inertia. The xterm viewport/scrollable elements use `touch-action: none` and `overscroll-behavior: contain` to prevent browser page pan and pull-to-refresh; `TerminalPanel` cleanup cancels frames and removes passive listeners. Focused unit and browser coverage lives in `terminal-touch-scroll.test.ts` and `browser-tests/terminal-scroll-buttons.browser.tsx`.
 - **Git VCS Roots**: `WorkspaceGitPanel` now loads server-reported VCS roots, scopes branch/history queries by selected root, groups local changes by `rootId`, and blocks mixed-root commits in the UI.
 - **Browser Debug**: `BrowserDebugKeepAliveHost` preserves one iframe across workspace surfaces; the extension bridge accepts only exact origin/source/nonce/request matches and returns bounded DOM/ARIA metadata. Optional user-mediated browser capture or manual PNG/JPEG input remains local until explicit attach; the authenticated server artifact API stores capped JSON/PNG outside project roots for 10 minutes, exposes no read/list route, and inserts only generated paths into a live PTY without auto-submit.

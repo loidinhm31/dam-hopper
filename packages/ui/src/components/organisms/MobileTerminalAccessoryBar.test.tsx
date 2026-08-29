@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import {
+  act,
+  type ChangeEvent,
+  type KeyboardEvent,
+  type RefObject,
+} from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MobileTerminalAccessoryBar } from "./MobileTerminalAccessoryBar.js";
@@ -38,8 +43,22 @@ vi.mock("@/components/organisms/MobileTerminalCustomKeyboard.js", () => ({
 }));
 
 vi.mock("@/components/organisms/MobileTerminalNativeKeyboardInput.js", () => ({
-  MobileTerminalNativeKeyboardInput: () => (
-    <input data-testid="native-keyboard" />
+  MobileTerminalNativeKeyboardInput: ({
+    inputRef,
+    onChange,
+    onKeyDown,
+  }: {
+    inputRef: RefObject<HTMLInputElement | null>;
+    onChange: (event: ChangeEvent<HTMLInputElement>) => void;
+    onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  }) => (
+    <input
+      ref={inputRef}
+      data-testid="native-keyboard"
+      placeholder="Type for terminal"
+      onChange={onChange}
+      onKeyDown={onKeyDown}
+    />
   ),
 }));
 
@@ -49,9 +68,22 @@ vi.mock("@/components/organisms/MobileTerminalSpecialKeys.js", () => ({
   }: {
     onPress: (id: string) => void;
   }) => (
-    <button type="button" onClick={() => onPress("escape")}>
-      Special
-    </button>
+    <div>
+      <button
+        type="button"
+        aria-label="Send Escape"
+        onClick={() => onPress("escape")}
+      >
+        Escape
+      </button>
+      <button
+        type="button"
+        aria-label="Send Enter"
+        onClick={() => onPress("enter")}
+      >
+        Enter
+      </button>
+    </div>
   ),
 }));
 
@@ -126,7 +158,9 @@ describe("MobileTerminalAccessoryBar", () => {
 
     act(() => {
       container
-        .querySelector<HTMLButtonElement>('[aria-label="Open mobile keyboard"]')
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Open custom terminal keyboard"]',
+        )
         ?.click();
     });
 
@@ -142,7 +176,9 @@ describe("MobileTerminalAccessoryBar", () => {
 
     act(() => {
       container
-        .querySelector<HTMLButtonElement>('[aria-label="Open mobile keyboard"]')
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Open custom terminal keyboard"]',
+        )
         ?.click();
     });
 
@@ -173,15 +209,15 @@ describe("MobileTerminalAccessoryBar", () => {
       container.querySelector(
         "[data-testid=mobile-terminal-accessory-controls]",
       )?.className,
-    ).toContain("gap-0.5");
+    ).toContain("gap-1");
     expect(buttons[0]?.getAttribute("aria-label")).toBe("Show terminal keys");
     expect(buttons[0]?.getAttribute("aria-expanded")).toBe("false");
-    expect(buttons[0]?.className).toContain("h-10");
-    expect(buttons[0]?.className).toContain("w-10");
+    expect(buttons[0]?.className).toContain("h-11");
+    expect(buttons[0]?.className).toContain("w-11");
     expect(buttons[0]?.querySelector(".sr-only")?.textContent).toBe("Keys");
     expect(buttons[1]?.getAttribute("aria-expanded")).toBe("false");
-    expect(buttons[1]?.className).toContain("h-10");
-    expect(buttons[1]?.className).toContain("w-10");
+    expect(buttons[1]?.className).toContain("h-11");
+    expect(buttons[1]?.className).toContain("w-11");
     expect(buttons[1]?.querySelector(".sr-only")?.textContent).toBe("Kbd");
   });
 
@@ -218,10 +254,14 @@ describe("MobileTerminalAccessoryBar", () => {
     const keysButtonId = keysButton?.getAttribute("aria-controls");
     expect(keysButtonId).toBeTruthy();
     expect(document.getElementById(keysButtonId ?? "")).not.toBeNull();
-    const specialButton = container.querySelector<HTMLButtonElement>(
-      "button:not([aria-label])",
+    const escapeButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Send Escape"]',
     );
-    expect(specialButton?.textContent).toBe("Special");
+    const enterButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Send Enter"]',
+    );
+    expect(escapeButton).not.toBeNull();
+    expect(enterButton).not.toBeNull();
     expect(
       container
         .querySelector("[data-testid=mobile-terminal-accessory-bar]")
@@ -230,8 +270,10 @@ describe("MobileTerminalAccessoryBar", () => {
     expect(
       container.querySelector("[data-testid=mobile-terminal-accessory-panel]"),
     ).not.toBeNull();
-    await act(async () => specialButton?.click());
+    await act(async () => escapeButton?.click());
     expect(mockTerminalWrite).toHaveBeenCalledWith("session-1", "\x1b");
+    await act(async () => enterButton?.click());
+    expect(mockTerminalWrite).toHaveBeenCalledWith("session-1", "\r");
     expect(hostClick).not.toHaveBeenCalled();
 
     await act(async () =>
@@ -265,6 +307,36 @@ describe("MobileTerminalAccessoryBar", () => {
     expect(hostClick).not.toHaveBeenCalled();
 
     focusTarget.remove();
+  });
+  it("sends native Type Enter and Backspace to the active session", async () => {
+    renderBar();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Open mobile keyboard"]')
+        ?.click(),
+    );
+    const nativeInput = container.querySelector<HTMLInputElement>(
+      "[data-testid=native-keyboard]",
+    );
+    expect(nativeInput).not.toBeNull();
+
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => nativeInput?.dispatchEvent(enter));
+    expect(enter.defaultPrevented).toBe(true);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\r");
+
+    const backspace = new KeyboardEvent("keydown", {
+      key: "Backspace",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => nativeInput?.dispatchEvent(backspace));
+    expect(backspace.defaultPrevented).toBe(true);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\x7f");
   });
 
   it("dismisses expanded controls with Escape and restores trigger focus", async () => {
