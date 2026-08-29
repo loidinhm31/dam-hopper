@@ -56,9 +56,14 @@ export function MobileWorkspaceShell({
     avoidTerminalAccessory: workspaceMode === "terminal",
   });
 
+  const screenClassName = cn(
+    "app-screen-height flex flex-col overflow-clip gradient-bg",
+    workspaceMode !== "terminal" && "safe-area-bottom",
+  );
+
   if (!hasSurfaces) {
     return (
-      <div className="app-screen-height safe-area-bottom flex flex-col overflow-clip gradient-bg">
+      <div className={screenClassName}>
         <TopNav
           collapsed={collapsed}
           onToggle={toggle}
@@ -83,7 +88,7 @@ export function MobileWorkspaceShell({
       : "bottom-[calc(var(--safe-area-bottom)+1rem)]";
 
   return (
-    <div className="app-screen-height safe-area-bottom flex flex-col overflow-clip gradient-bg">
+    <div className={screenClassName}>
       <TopNav
         collapsed={collapsed}
         onToggle={toggle}

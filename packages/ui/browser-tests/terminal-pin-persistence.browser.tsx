@@ -31,7 +31,16 @@ function PinPersistenceFixture() {
     <DndContext>
       <DraggableTab
         paneId="pane-1"
-        tab={{ sessionId: SESSION_ID, label: "Terminal 1", isPinned }}
+        tab={{
+          sessionId: SESSION_ID,
+          label: "Terminal 1",
+          title: {
+            baseLabel: "Terminal 1",
+            ordinal: 1,
+            fullText: "Terminal 1 #1",
+          },
+          isPinned,
+        }}
         isActive
         onClose={() => undefined}
         onSelect={() => undefined}

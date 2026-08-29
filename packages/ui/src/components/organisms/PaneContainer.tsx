@@ -15,7 +15,7 @@ import {
 import type { PaneNode } from "@/types/terminal-layout.js";
 import type { UseTerminalLayoutResult } from "@/hooks/use-terminal-layout.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import { TabBar } from "@/components/organisms/TabBar.js";
 import { TerminalDockPreview } from "@/components/organisms/TerminalDockPreview.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
@@ -28,7 +28,7 @@ interface PaneContainerProps {
   node: PaneNode;
   layout: UseTerminalLayoutResult;
   mountedSessions: MountedSession[];
-  openTabs: TabEntry[];
+  openTabs: DisplayTabEntry[];
   onNewTerminal: () => void;
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
@@ -269,7 +269,7 @@ export const PaneContainer = memo(function PaneContainer({
   // ── derive tab entries for this pane ────────────────────────────────────
   const paneTabs = node.sessionIds
     .map((sid) => openTabs.find((t) => t.sessionId === sid))
-    .filter((t): t is TabEntry => t !== undefined);
+    .filter((t): t is DisplayTabEntry => t !== undefined);
 
   const hasSplit = layout.getPanes().length > 1;
   const isEmpty = paneTabs.length === 0;
@@ -329,7 +329,10 @@ export const PaneContainer = memo(function PaneContainer({
     <div className="relative flex h-full min-h-0 flex-col">
       {terminalHost}
       {node.activeSessionId && node.activeSessionId === activeSessionId ? (
-        <MobileTerminalAccessoryBar sessionId={node.activeSessionId} />
+        <MobileTerminalAccessoryBar
+          key={node.activeSessionId}
+          sessionId={node.activeSessionId}
+        />
       ) : null}
     </div>
   );
