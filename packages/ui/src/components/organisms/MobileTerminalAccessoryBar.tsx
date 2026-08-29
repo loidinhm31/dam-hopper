@@ -25,17 +25,18 @@ import { MobileTerminalSpecialKeys } from "@/components/organisms/MobileTerminal
 import { TerminalAccessoryControls } from "@/components/organisms/TerminalAccessoryControls.js";
 import { TerminalFloatingControlShell } from "@/components/organisms/TerminalFloatingControlShell.js";
 
-const FLOATING_CONTROL_LANE =
-  "calc(6.875rem + max(0.75rem, var(--safe-area-right, 0px)))";
+const PANEL_SAFE_AREA_RIGHT = "max(0.5rem, var(--safe-area-right, 0px))";
 const PANEL_MAX_HEIGHT =
   "min(20rem, calc(100dvh - 6rem - var(--safe-area-bottom, 0px)))";
 
 export function MobileTerminalAccessoryBar({
   sessionId,
   className,
+  onPanelOpenChange,
 }: {
   sessionId: string;
   className?: string;
+  onPanelOpenChange?: (isOpen: boolean) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
@@ -66,6 +67,10 @@ export function MobileTerminalAccessoryBar({
   useEffect(() => {
     if (shouldUseCustomKeyboard) keyboardInputRef.current?.blur();
   }, [shouldUseCustomKeyboard]);
+  useEffect(() => {
+    onPanelOpenChange?.(isExpanded || isKeyboardOpen);
+  }, [isExpanded, isKeyboardOpen, onPanelOpenChange]);
+
   const focusInvokingControl = useCallback(() => {
     requestAnimationFrame(() => {
       const button =
@@ -216,7 +221,7 @@ export function MobileTerminalAccessoryBar({
   );
 
   return (
-    <div className="w-full shrink-0">
+    <div className="relative w-full shrink-0">
       <TerminalFloatingControlShell
         sessionId={sessionId}
         className={className}
@@ -243,9 +248,9 @@ export function MobileTerminalAccessoryBar({
         <div
           ref={panelRef}
           data-testid="mobile-terminal-accessory-panel"
-          className="safe-area-inline safe-area-bottom pointer-events-auto flex min-h-0 min-w-0 flex-col gap-2 overflow-x-auto overflow-y-auto overscroll-contain border-t border-[var(--color-border)] bg-[var(--color-surface)]/96 p-1 pt-1 backdrop-blur-md"
+          className="safe-area-inline safe-area-bottom pointer-events-auto flex min-h-0 min-w-0 flex-col gap-2 overflow-x-hidden overflow-y-auto overscroll-contain border-t border-[var(--color-border)] bg-[var(--color-surface)]/96 p-1 pt-1 backdrop-blur-md"
           style={{
-            paddingRight: FLOATING_CONTROL_LANE,
+            paddingRight: PANEL_SAFE_AREA_RIGHT,
             maxHeight: PANEL_MAX_HEIGHT,
           }}
           onMouseDown={guardPanelPointer}

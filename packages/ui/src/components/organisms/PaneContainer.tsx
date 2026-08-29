@@ -329,7 +329,10 @@ export const PaneContainer = memo(function PaneContainer({
     <div className="relative flex h-full min-h-0 flex-col">
       {terminalHost}
       {node.activeSessionId && node.activeSessionId === activeSessionId ? (
-        <MobileTerminalAccessoryBar sessionId={node.activeSessionId} />
+        <MobileTerminalAccessoryBar
+          key={node.activeSessionId}
+          sessionId={node.activeSessionId}
+        />
       ) : null}
     </div>
   );
