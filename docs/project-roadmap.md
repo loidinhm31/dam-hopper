@@ -24,7 +24,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Terminal Touch Keyboard and Smooth Scroll (2026-08-28)
 
-- **Phase 01 — [COMPLETED 2026-08-28 18:04:32 +07:00]**: coarse-pointer terminal scroll-control taps no longer trigger terminal focus or the soft keyboard; Phase 02 native smooth touch scroll remains pending. [Plan](../plans/260828-1430-terminal-touch-keyboard-and-smooth-scroll/plan.md).
+- **Phases 01–02 — [COMPLETED 2026-08-29 16:48:06 +07:00]**: terminal scroll controls no longer focus xterm input or open the soft keyboard; xterm v6 coarse-pointer touch scrolling uses buffered custom `scrollLines` handling with bounded fling, plus explicit `touch-action: none` and contained overscroll/momentum CSS. Validation: UI TypeScript build PASS; full UI Vitest 1347/1347; focused terminal browser regressions 10/10; Chromium mobile-emulation swipe moved the xterm scrollbar from 280px to 158px. Physical Android hardware validation remains a release follow-up. [Plan](../plans/260828-1430-terminal-touch-keyboard-and-smooth-scroll/plan.md).
 
 ### Linux Systemd Server-Only Production Runner (2026-08-22)
 

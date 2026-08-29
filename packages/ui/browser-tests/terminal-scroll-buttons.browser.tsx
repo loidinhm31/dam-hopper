@@ -1,9 +1,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { TerminalScrollButtons } from "@/components/organisms/TerminalScrollButtons.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
+import { bindTerminalTouchScroll } from "@/lib/terminal-touch-scroll.js";
 import "@/index.css";
 
 vi.mock("@/stores/settings.js", () => ({
@@ -215,4 +217,110 @@ describe("Terminal scroll buttons in Chromium", () => {
     await userEvent.keyboard(" ");
     expect(scrollToTop).toHaveBeenCalledTimes(2);
   });
+
+  it("configures xterm's touch surfaces for scrolling", () => {
+    const host = document.createElement("div");
+    host.style.height = "160px";
+    host.style.width = "640px";
+    document.body.append(host);
+    let terminal: Terminal | null = null;
+
+    try {
+      terminal = new Terminal({ cols: 40, rows: 4, scrollback: 100 });
+      terminal.open(host);
+      const viewport = host.querySelector<HTMLElement>(".xterm-viewport");
+      const scrollable = host.querySelector<HTMLElement>(
+        ".xterm-scrollable-element",
+      );
+      expect(viewport).not.toBeNull();
+      expect(scrollable).not.toBeNull();
+
+      const styles = getComputedStyle(viewport as HTMLElement);
+      expect(styles.touchAction).toBe("none");
+      expect(styles.overscrollBehavior).toBe("contain");
+      expect(styles.scrollBehavior).toBe("smooth");
+
+      const scrollableStyles = getComputedStyle(scrollable as HTMLElement);
+      expect(scrollableStyles.touchAction).toBe("none");
+      expect(scrollableStyles.overscrollBehavior).toBe("contain");
+    } finally {
+      terminal?.dispose();
+      host.remove();
+    }
+  });
+
+  it("maps coarse touch swipes to xterm scroll without canceling touch", async () => {
+    const host = document.createElement("div");
+    host.style.height = "160px";
+    host.style.width = "640px";
+    document.body.append(host);
+    let terminal: Terminal | null = null;
+    let release: (() => void) | null = null;
+    let matchMedia: { mockRestore: () => void } | null = null;
+
+    try {
+      terminal = new Terminal({ cols: 40, rows: 4, scrollback: 100 });
+      terminal.open(host);
+      await new Promise<void>((resolve) => {
+        terminal?.write(
+          Array.from({ length: 200 }, (_, index) =>
+            "line " + index + "\r\n",
+          ).join(""),
+          resolve,
+        );
+      });
+      terminal.scrollToBottom();
+      const before = terminal.buffer.active.viewportY;
+      const surface = host.querySelector<HTMLElement>(".xterm-screen");
+      expect(surface).not.toBeNull();
+
+      matchMedia = vi
+        .spyOn(window, "matchMedia")
+        .mockReturnValue({ matches: true } as MediaQueryList);
+      release = bindTerminalTouchScroll(host, terminal);
+
+      surface?.dispatchEvent(createTouchEvent("touchstart", surface, 100));
+      const move = createTouchEvent("touchmove", surface, 160);
+      surface?.dispatchEvent(move);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      expect(terminal.buffer.active.viewportY).toBeLessThan(before);
+      expect(move.defaultPrevented).toBe(false);
+      surface?.dispatchEvent(createTouchEvent("touchend", surface, 160));
+      terminal.scrollToTop();
+      surface?.dispatchEvent(createTouchEvent("touchstart", surface, 100));
+      surface?.dispatchEvent(createTouchEvent("touchmove", surface, 160));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      expect(terminal.buffer.active.viewportY).toBe(0);
+      surface?.dispatchEvent(createTouchEvent("touchend", surface, 160));
+    } finally {
+      release?.();
+      matchMedia?.mockRestore();
+      terminal?.dispose();
+      host.remove();
+    }
+  });
 });
+
+function createTouchEvent(
+  type: "touchstart" | "touchmove" | "touchend",
+  target: EventTarget,
+  clientY: number,
+): TouchEvent {
+  const touch = new Touch({
+    identifier: 1,
+    target,
+    clientX: 100,
+    clientY,
+    screenX: 100,
+    screenY: clientY,
+  });
+  const activeTouches = type === "touchend" ? [] : [touch];
+  return new TouchEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    touches: activeTouches,
+    targetTouches: activeTouches,
+    changedTouches: [touch],
+  });
+}
