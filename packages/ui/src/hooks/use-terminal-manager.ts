@@ -24,6 +24,7 @@ import {
   deriveTerminalAutoAttachState,
   isAdHocProjectTerminal,
   parseTerminalSessionId,
+  sessionProject,
 } from "@/lib/terminal-auto-attach.js";
 import {
   createMountedSession,
@@ -41,7 +42,11 @@ import {
   syncTerminalProject,
 } from "@/lib/terminal-selection.js";
 import { rememberTerminalSessionIncarnation } from "@/lib/terminal-incarnation-state.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import {
+  applyTerminalTitleOrdinals,
+  freeTerminalBaseLabel,
+} from "@/lib/terminal-title.js";
+import type { TabEntry, DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TreeCommand, TreeProject } from "@/hooks/use-terminal-tree.js";
 import type { SessionInfo } from "@/api/client.js";
@@ -86,7 +91,7 @@ export interface TerminalManagerDerived {
   tree: TreeProject[];
   freeTerminals: SessionInfo[];
   isLoading: boolean;
-  tabsWithLiveSession: TabEntry[];
+  tabsWithLiveSession: DisplayTabEntry[];
   selectedId: string | null;
   sessionMap: Map<string, SessionInfo>;
   freeTerminalIndexMap: Map<string, number>;
@@ -221,7 +226,7 @@ export function findSessionMeta(
   const s = sessionMap.get(sessionId);
   return s
     ? {
-        project: s.project ?? "",
+        project: sessionProject(s),
         command: s.command,
         sessionType: s.type,
         cwd: s.cwd,
@@ -229,7 +234,6 @@ export function findSessionMeta(
       }
     : null;
 }
-
 function sameOpenTabs(a: TabEntry[], b: TabEntry[]) {
   return (
     a.length === b.length &&
@@ -239,6 +243,7 @@ function sameOpenTabs(a: TabEntry[], b: TabEntry[]) {
         other &&
         tab.sessionId === other.sessionId &&
         tab.label === other.label &&
+        tab.project === other.project &&
         tab.session === other.session &&
         tab.isSaveable === other.isSaveable &&
         tab.isPinned === other.isPinned
@@ -262,6 +267,36 @@ function sameMountedSessions(a: MountedSession[], b: MountedSession[]) {
       );
     })
   );
+}
+
+export function buildTerminalDisplayTabs(
+  openTabs: readonly TabEntry[],
+  sessionMap: Map<string, SessionInfo>,
+  profileSessionIds: Set<string>,
+  freeTerminalIndexMap: Map<string, number>,
+): DisplayTabEntry[] {
+  const baseTabs = openTabs.map((tab) => {
+    const { type } = parseTerminalSessionId(tab.sessionId);
+    const session = sessionMap.get(tab.sessionId) ?? tab.session;
+    const isFree = type === "free" || session?.type === "free";
+    const label = isFree
+      ? freeTerminalBaseLabel(freeTerminalIndexMap.get(tab.sessionId))
+      : tab.label;
+    const baseTab = {
+      ...tab,
+      label,
+      session,
+      isSaveable: isAdHocProjectTerminal(tab.sessionId, profileSessionIds),
+      isPinned: tab.isPinned,
+    };
+    if (isFree) {
+      const { project: _project, ...projectlessTab } = baseTab;
+      return projectlessTab;
+    }
+    const project = tab.project || (session ? sessionProject(session) : "");
+    return project ? { ...baseTab, project } : baseTab;
+  });
+  return applyTerminalTitleOrdinals(baseTabs);
 }
 
 export function useTerminalManager(
@@ -341,7 +376,7 @@ export function useTerminalManager(
     const { type, profile } = parseTerminalSessionId(sessionId);
     if (type === "free") {
       const n = freeTerminalIndexMap.get(sessionId);
-      return `Terminal ${n ?? "?"}`;
+      return freeTerminalBaseLabel(n);
     }
     if (type === "terminal") {
       if (profile && profile !== "_")
@@ -365,6 +400,12 @@ export function useTerminalManager(
     const isAdHoc = isAdHocProjectTerminal(sessionId, profileSessionIds);
     const sessionTargetPath =
       worktreePath ?? sessionMap.get(sessionId)?.worktreePath;
+    const currentSession = sessionMap.get(sessionId);
+    const { type } = parseTerminalSessionId(sessionId);
+    const projectMetadata =
+      type !== "free" && currentSession?.type !== "free" && project
+        ? { project }
+        : {};
 
     setOpenTabs((prev) => {
       if (prev.some((t) => t.sessionId === sessionId)) return prev;
@@ -374,8 +415,9 @@ export function useTerminalManager(
         {
           sessionId,
           label: tabLabel(sessionId, project, command),
-          session: sessionMap.get(sessionId),
+          session: currentSession,
           isSaveable: isAdHoc,
+          ...projectMetadata,
         },
       ];
     });
@@ -1246,19 +1288,12 @@ export function useTerminalManager(
     },
     [forgetPinnedTerminalIds, qc, sessionMap],
   );
-
-  const tabsWithLiveSession: TabEntry[] = openTabs.map((t) => {
-    const { type } = parseTerminalSessionId(t.sessionId);
-    const isAdHoc = isAdHocProjectTerminal(t.sessionId, profileSessionIds);
-    const label = type === "free" ? tabLabel(t.sessionId, "", "") : t.label;
-    return {
-      ...t,
-      label,
-      session: sessionMap.get(t.sessionId) ?? t.session,
-      isSaveable: isAdHoc,
-      isPinned: t.isPinned,
-    };
-  });
+  const tabsWithLiveSession = buildTerminalDisplayTabs(
+    openTabs,
+    sessionMap,
+    profileSessionIds,
+    freeTerminalIndexMap,
+  );
 
   const selectedId =
     selection?.type === "project"

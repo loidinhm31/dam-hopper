@@ -3,17 +3,20 @@ import { X, Save } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import type { SessionInfo } from "@/api/client.js";
-
+import type { WithOpenTerminalTitle } from "@/lib/terminal-title.js";
+import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 export interface TabEntry {
   sessionId: string;
   label: string;
+  /** Frontend-only project grouping context for terminal titles; never server identity. */
+  project?: string;
   /** Browser-tab UI state; never sent to the server. */
   isPinned?: boolean;
   session?: SessionInfo;
   /** Whether this terminal session can be saved as a new profile */
   isSaveable?: boolean;
 }
-
+export type DisplayTabEntry = WithOpenTerminalTitle<TabEntry>;
 interface SavePromptState {
   sessionId: string;
   name: string;
@@ -21,7 +24,7 @@ interface SavePromptState {
 }
 
 interface Props {
-  tabs: TabEntry[];
+  tabs: DisplayTabEntry[];
   activeTab: string | null;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
@@ -98,7 +101,15 @@ export function TerminalTabBar({
           return (
             <div
               key={tab.sessionId}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelectTab(tab.sessionId)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelectTab(tab.sessionId);
+                }
+              }}
               title={cwdTooltip}
               className={cn(
                 "group flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer shrink-0",
@@ -110,9 +121,13 @@ export function TerminalTabBar({
               )}
             >
               <TabStatusDot session={tab.session} />
-              <span className="truncate flex-1 font-mono">{tab.label}</span>
+              <TerminalTitleText
+                title={tab.title}
+                className="min-w-0 flex-1 font-mono"
+              />
               <button
                 type="button"
+                aria-label="Close terminal"
                 onClick={(e) => {
                   e.stopPropagation();
                   onCloseTab(tab.sessionId);

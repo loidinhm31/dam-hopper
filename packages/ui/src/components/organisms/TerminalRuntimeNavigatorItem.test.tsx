@@ -71,7 +71,9 @@ function getStatus(sessionId?: string): HTMLElement {
     expect(statuses).toHaveLength(1);
     return statuses[0]!;
   }
-  const sessionLabel = container.querySelector(`button[title="${sessionId}"]`);
+  const sessionLabel = container.querySelector(
+    `button[title="${sessionId}:bash"]`,
+  );
   expect(sessionLabel).not.toBeNull();
   const status = sessionLabel?.querySelector<HTMLElement>("span[title]");
   expect(status).not.toBeNull();
@@ -258,7 +260,7 @@ describe("TerminalRuntimeNavigatorItem", () => {
       onSelectSession,
     });
     const selectionButton = container.querySelector<HTMLButtonElement>(
-      'button[title="web"]',
+      'button[title="web:bash"]',
     );
     const leaf = selectionButton?.parentElement?.parentElement;
 
@@ -324,7 +326,7 @@ describe("TerminalRuntimeNavigatorItem", () => {
     const onOpenDiagnosticsMenu = vi.fn();
     renderItem(createSession(), { onOpenDiagnosticsMenu });
     const button = container.querySelector<HTMLButtonElement>(
-      'button[title="web"]',
+      'button[title="web:bash"]',
     )!;
 
     const event = new MouseEvent("contextmenu", {
@@ -356,7 +358,7 @@ describe("TerminalRuntimeNavigatorItem", () => {
       { onOpenDiagnosticsMenu },
     );
     const button = container.querySelector<HTMLButtonElement>(
-      'button[title="worker"]',
+      'button[title="worker:bash"]',
     )!;
 
     button.dispatchEvent(

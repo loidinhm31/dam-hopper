@@ -70,6 +70,14 @@ describe("deriveTerminalAutoAttachState", () => {
     expect(result.activeTab).toBe("free:abc");
   });
 
+  it("uses a readable pending label when the free index is unavailable", () => {
+    const result = derive({
+      sessions: [session("free:pending", { command: "", type: "free" })],
+    });
+
+    expect(result.openTabs[0]?.label).toBe("Terminal (starting…)");
+  });
+
   it("attaches live custom, build, and run terminals", () => {
     const result = derive({
       sessions: [
@@ -143,6 +151,72 @@ describe("deriveTerminalAutoAttachState", () => {
       label: "web:bash",
       isSaveable: true,
     });
+  });
+  it("propagates authoritative project metadata to hydrated tabs", () => {
+    const id = "terminal:parsed-project:_:100";
+    const result = derive({
+      sessions: [
+        session(id, {
+          project: "authoritative-project",
+          type: "terminal",
+        }),
+      ],
+    });
+
+    expect(result.openTabs[0]?.project).toBe("authoritative-project");
+  });
+
+  it("falls back to the parsed project when SessionInfo omits project", () => {
+    const id = "run:parsed-project";
+    const result = derive({
+      sessions: [session(id, { project: undefined, type: "run" })],
+    });
+
+    expect(result.openTabs[0]?.project).toBe("parsed-project");
+  });
+
+  it("keeps free tabs projectless even when SessionInfo has a project", () => {
+    const result = derive({
+      sessions: [
+        session("free:projected", {
+          project: "not-a-title-group",
+          type: "free",
+        }),
+      ],
+    });
+
+    expect(result.openTabs[0]?.project).toBeUndefined();
+  });
+  it("refreshes existing tab project metadata from a live session", () => {
+    const id = "custom:project-a:command";
+    const result = derive({
+      sessions: [
+        session(id, {
+          project: "project-b",
+          type: "custom",
+        }),
+      ],
+      openTabs: [{ sessionId: id, label: "stale", project: "project-a" }],
+    });
+
+    expect(result.openTabs[0]).toMatchObject({
+      sessionId: id,
+      project: "project-b",
+    });
+  });
+  it("clears stale project metadata when a live session is projectless", () => {
+    const id = "custom:project-a:command";
+    const result = derive({
+      sessions: [
+        session(id, {
+          project: "",
+          type: "custom",
+        }),
+      ],
+      openTabs: [{ sessionId: id, label: "stale", project: "project-a" }],
+    });
+
+    expect(result.openTabs[0]?.project).toBeUndefined();
   });
 
   it("ignores dead sessions", () => {

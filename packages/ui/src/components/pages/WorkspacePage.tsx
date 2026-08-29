@@ -473,7 +473,6 @@ export default function WorkspacePage() {
   );
   const {
     activeTab,
-    openTabs,
     mountedSessions,
     launchForm,
     freeTerminalSavePrompt,
@@ -516,7 +515,9 @@ export default function WorkspacePage() {
     const mountedById = new Map(
       mountedSessions.map((session) => [session.sessionId, session]),
     );
-    const tabsById = new Map(openTabs.map((tab) => [tab.sessionId, tab]));
+    const tabsById = new Map(
+      tabsWithLiveSession.map((tab) => [tab.sessionId, tab]),
+    );
     const sessionIds = new Set([...mountedById.keys(), ...tabsById.keys()]);
     return [...sessionIds].map((sessionId) => {
       const mounted = mountedById.get(sessionId);
@@ -524,15 +525,22 @@ export default function WorkspacePage() {
       return {
         sessionId,
         label:
-          tab?.label ??
-          (mounted ? `${mounted.project} · ${mounted.command}` : sessionId),
+          tab?.title.fullText ??
+          (mounted ? `${mounted.project} · ${mounted.command}` : "Terminal"),
+        ...(tab?.title ? { openTitle: tab.title } : {}),
         mounted: Boolean(mounted),
         registered: registeredTerminalIds.has(sessionId),
         alive: sessionMap.get(sessionId)?.alive,
         current: activeTab === sessionId,
       };
     });
-  }, [activeTab, mountedSessions, openTabs, registeredTerminalIds, sessionMap]);
+  }, [
+    activeTab,
+    mountedSessions,
+    registeredTerminalIds,
+    sessionMap,
+    tabsWithLiveSession,
+  ]);
 
   const activeBrowserTerminalTarget = useMemo(
     () =>
