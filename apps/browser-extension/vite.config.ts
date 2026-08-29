@@ -5,6 +5,9 @@ const defaultDevelopmentParentOrigins = [
   "http://127.0.0.1:5173",
   "http://localhost:4800",
   "http://127.0.0.1:4800",
+  "http://127.0.0.1:4173",
+  "http://localhost:4173",
+  "http://100.91.26.60:5173"
 ];
 
 const configuredParentOrigins = (

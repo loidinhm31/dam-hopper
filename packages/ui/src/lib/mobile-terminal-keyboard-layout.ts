@@ -117,6 +117,86 @@ export const CUSTOM_MOBILE_TERMINAL_KEY_ROWS: CustomMobileTerminalKey[][] = [
     sequenceKey("right", "→", "Send Arrow Right", "\x1b[C", 1, "arrows"),
   ],
 ];
+const SHIFTED_TEXT: Record<string, string> = {
+  "`": "~",
+  "1": "!",
+  "2": "@",
+  "3": "#",
+  "4": "$",
+  "5": "%",
+  "6": "^",
+  "7": "&",
+  "8": "*",
+  "9": "(",
+  "0": ")",
+  "-": "_",
+  "=": "+",
+  "[": "{",
+  "]": "}",
+  "\\": "|",
+  ";": ":",
+  "'": '"',
+  ",": "<",
+  ".": ">",
+  "/": "?",
+};
+export const CUSTOM_MOBILE_TERMINAL_COMPACT_KEY_ROWS: CustomMobileTerminalKey[][] =
+  [
+    Array.from("qwertyuiop", (value) => textKey(value, value.toUpperCase())),
+    [
+      toggleKey("caps-lock-compact", "caps", "Caps", "Toggle Caps Lock", 1.5),
+      ...Array.from("asdfghjkl", (value) =>
+        textKey(value, value.toUpperCase()),
+      ),
+    ],
+    [
+      toggleKey("shift-compact", "shift", "Shift", "Toggle Shift", 1.75),
+      ...Array.from("zxcvbnm", (value) => textKey(value, value.toUpperCase())),
+      sequenceKey("backspace", "Backspace", "Send Backspace", "\x7f", 2),
+    ],
+    [
+      sequenceKey("escape", "Esc", "Send Escape", "\x1b"),
+      sequenceKey("tab", "Tab", "Send Tab", "\t", 1.5),
+      toggleKey("ctrl-compact", "ctrl", "Ctrl", "Toggle Ctrl", 1.25),
+      toggleKey("alt-compact", "alt", "Alt", "Toggle Alt", 1.25),
+      sequenceKey("space", "Space", "Send Space", " ", 3),
+      sequenceKey("enter", "Enter", "Send Enter", "\r", 1.75),
+      toggleKey("symbols", "symbols", "123", "Show Symbols", 1.25),
+    ],
+  ];
+
+export const CUSTOM_MOBILE_TERMINAL_COMPACT_SYMBOL_ROWS: CustomMobileTerminalKey[][] =
+  [
+    [
+      toggleKey("symbols", "symbols", "ABC", "Show Letters", 1.25),
+      ...Array.from("1234567890", (value) =>
+        textKey(value, `${value}${SHIFTED_TEXT[value] ?? ""}`),
+      ),
+      sequenceKey("backspace", "Backspace", "Send Backspace", "\x7f", 2),
+    ],
+    [
+      textKey("`", "`~"),
+      textKey("-", "-_"),
+      textKey("=", "=+"),
+      textKey("[", "[{"),
+      textKey("]", "]}"),
+      textKey("\\", "\\|"),
+      textKey(";", ";:"),
+      textKey("'", "'\""),
+      textKey(",", ",<"),
+      textKey(".", ".>"),
+      textKey("/", "/?"),
+    ],
+    [
+      sequenceKey("escape", "Esc", "Send Escape", "\x1b"),
+      sequenceKey("tab", "Tab", "Send Tab", "\t", 1.5),
+      toggleKey("shift-compact", "shift", "Shift", "Toggle Shift", 1.75),
+      toggleKey("ctrl-compact", "ctrl", "Ctrl", "Toggle Ctrl", 1.25),
+      toggleKey("alt-compact", "alt", "Alt", "Toggle Alt", 1.25),
+      sequenceKey("space", "Space", "Send Space", " ", 3),
+      sequenceKey("enter", "Enter", "Send Enter", "\r", 1.75),
+    ],
+  ];
 
 export const CUSTOM_MOBILE_TERMINAL_SYMBOL_ROWS: CustomMobileTerminalKey[][] = [
   [
@@ -173,36 +253,13 @@ export const CUSTOM_MOBILE_TERMINAL_SYMBOL_ROWS: CustomMobileTerminalKey[][] = [
   ],
 ];
 
-const SHIFTED_TEXT: Record<string, string> = {
-  "`": "~",
-  "1": "!",
-  "2": "@",
-  "3": "#",
-  "4": "$",
-  "5": "%",
-  "6": "^",
-  "7": "&",
-  "8": "*",
-  "9": "(",
-  "0": ")",
-  "-": "_",
-  "=": "+",
-  "[": "{",
-  "]": "}",
-  "\\": "|",
-  ";": ":",
-  "'": '"',
-  ",": "<",
-  ".": ">",
-  "/": "?",
-};
 const ACCESSIBLE_SYMBOL_NAMES: Record<string, string> = {
   "`": "backtick",
   "~": "tilde",
   "!": "exclamation mark",
   "@": "at sign",
   "#": "hash",
-  "$": "dollar sign",
+  $: "dollar sign",
   "%": "percent",
   "^": "caret",
   "&": "ampersand",
@@ -210,7 +267,7 @@ const ACCESSIBLE_SYMBOL_NAMES: Record<string, string> = {
   "(": "left parenthesis",
   ")": "right parenthesis",
   "-": "hyphen",
-  "_": "underscore",
+  _: "underscore",
   "=": "equals",
   "+": "plus",
   "[": "left bracket",
@@ -234,9 +291,15 @@ const ACCESSIBLE_SYMBOL_NAMES: Record<string, string> = {
 export function getCustomMobileTerminalKeyLabel(
   key: CustomMobileTerminalKey,
   isShiftActive: boolean,
+  isCapsActive = false,
 ): string {
-  if (!isShiftActive || key.kind !== "text") return key.label;
-  return SHIFTED_TEXT[key.value ?? ""] ?? key.label;
+  if (key.kind !== "text") return key.label;
+  const value = key.value ?? "";
+  if (/^[a-z]$/.test(value) && isShiftActive && isCapsActive) {
+    return value.toLowerCase();
+  }
+  if (!isShiftActive) return key.label;
+  return SHIFTED_TEXT[value] ?? key.label;
 }
 
 export function getCustomMobileTerminalKeyAriaLabel(

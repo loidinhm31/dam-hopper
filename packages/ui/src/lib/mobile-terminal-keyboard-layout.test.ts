@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  CUSTOM_MOBILE_TERMINAL_COMPACT_KEY_ROWS,
+  CUSTOM_MOBILE_TERMINAL_COMPACT_SYMBOL_ROWS,
   CUSTOM_MOBILE_TERMINAL_KEY_ROWS,
   CUSTOM_MOBILE_TERMINAL_SYMBOL_ROWS,
   getCustomMobileTerminalKeyAriaLabel,
@@ -76,13 +78,75 @@ describe("mobile-terminal-keyboard-layout", () => {
     expect(findKey("up").cluster).toBe("arrows");
   });
 
-  it("shows shifted punctuation when Shift is active", () => {
+  it("provides a minimized alpha layout with a symbol sublayout", () => {
+    expect(
+      CUSTOM_MOBILE_TERMINAL_COMPACT_KEY_ROWS.map((row) =>
+        row.map((key) => key.label),
+      ),
+    ).toEqual([
+      ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+      ["Caps", "A", "S", "D", "F", "G", "H", "J", "K", "L"],
+      ["Shift", "Z", "X", "C", "V", "B", "N", "M", "Backspace"],
+      ["Esc", "Tab", "Ctrl", "Alt", "Space", "Enter", "123"],
+    ]);
+    expect(
+      CUSTOM_MOBILE_TERMINAL_COMPACT_SYMBOL_ROWS.map((row) =>
+        row.map((key) => key.label),
+      ),
+    ).toEqual([
+      [
+        "ABC",
+        "1!",
+        "2@",
+        "3#",
+        "4$",
+        "5%",
+        "6^",
+        "7&",
+        "8*",
+        "9(",
+        "0)",
+        "Backspace",
+      ],
+      ["`~", "-_", "=+", "[{", "]}", "\\|", ";:", "'\"", ",<", ".>", "/?"],
+      ["Esc", "Tab", "Shift", "Ctrl", "Alt", "Space", "Enter"],
+    ]);
+    const compactKeys = CUSTOM_MOBILE_TERMINAL_COMPACT_KEY_ROWS.flat();
+    expect(compactKeys.filter((key) => key.toggle === "ctrl")).toHaveLength(1);
+    expect(compactKeys.filter((key) => key.toggle === "shift")).toHaveLength(1);
+    expect(compactKeys.filter((key) => key.toggle === "alt")).toHaveLength(1);
+    expect(compactKeys.some((key) => key.toggle === "meta")).toBe(false);
+    expect(
+      compactKeys.some((key) =>
+        ["up", "down", "left", "right"].includes(key.id),
+      ),
+    ).toBe(false);
+    expect(
+      CUSTOM_MOBILE_TERMINAL_COMPACT_KEY_ROWS.at(-1)?.some(
+        (key) => key.id === "enter",
+      ),
+    ).toBe(true);
+    expect(compactKeys.some((key) => key.id === "text-1")).toBe(false);
+    expect(
+      CUSTOM_MOBILE_TERMINAL_COMPACT_SYMBOL_ROWS.flat().some(
+        (key) => key.id === "text-;",
+      ),
+    ).toBe(true);
+  });
+
+  it("shows shifted punctuation and caps state in labels", () => {
     expect(getCustomMobileTerminalKeyLabel(findKey("text-1"), false)).toBe(
       "1!",
     );
     expect(getCustomMobileTerminalKeyLabel(findKey("text-1"), true)).toBe("!");
     expect(getCustomMobileTerminalKeyLabel(findKey("text-["), true)).toBe("{");
     expect(getCustomMobileTerminalKeyLabel(findKey("text-a"), true)).toBe("A");
+    expect(
+      getCustomMobileTerminalKeyLabel(findKey("text-a"), false, true),
+    ).toBe("A");
+    expect(getCustomMobileTerminalKeyLabel(findKey("text-a"), true, true)).toBe(
+      "a",
+    );
     expect(
       getCustomMobileTerminalKeyAriaLabel(findKey("text-1"), {
         shift: false,

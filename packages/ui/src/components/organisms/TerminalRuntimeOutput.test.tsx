@@ -44,14 +44,17 @@ vi.mock("@/components/organisms/TerminalScrollButtons.js", () => ({
   TerminalScrollButtons: ({
     className,
     reserveAccessoryRail,
+    accessoryPanelOpen,
   }: {
     className?: string;
     reserveAccessoryRail?: boolean;
+    accessoryPanelOpen?: boolean;
   }) => (
     <div
       data-testid="terminal-scroll-buttons"
       data-class-name={className}
       data-reserve-accessory-rail={reserveAccessoryRail}
+      data-accessory-panel-open={accessoryPanelOpen}
     />
   ),
 }));
@@ -125,6 +128,37 @@ describe("TerminalRuntimeOutput", () => {
     expect(markup).toContain("bg-[var(--color-background)]");
     expect(markup).toContain("ring-inset");
     expect(markup).not.toContain("safe-area-inline");
+  });
+  it("resets accessory geometry when the active session changes", async () => {
+    const renderSurface = (activeSessionId: string | null) => (
+      <TerminalRuntimeOutput
+        activeSessionId={activeSessionId}
+        mountedSessions={[]}
+        renderTerminals={false}
+      />
+    );
+
+    await act(async () => root.render(renderSurface("session-1")));
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Show terminal keys"]')
+        ?.click();
+    });
+    expect(
+      container
+        .querySelector("[data-testid=terminal-scroll-buttons]")
+        ?.getAttribute("data-accessory-panel-open"),
+    ).toBe("true");
+
+    await act(async () => root.render(renderSurface("session-2")));
+    expect(
+      container
+        .querySelector("[data-testid=terminal-scroll-buttons]")
+        ?.getAttribute("data-accessory-panel-open"),
+    ).toBe("false");
+    expect(
+      container.querySelector('[aria-label="Hide terminal keys"]'),
+    ).toBeNull();
   });
 
   it("renders controls for desktop fine pointers without suppressing xterm input", () => {

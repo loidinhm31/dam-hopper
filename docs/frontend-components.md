@@ -447,13 +447,12 @@ extension runs.
   dismissal conventions as the scroll controls, with a raised lower-right
   anchor at `3rem + var(--safe-area-bottom, 0px)` (48px plus the safe-area
   inset) and the existing right safe-area handling.
-- TerminalScrollButtons keeps the outer lower-right rail in that same full-height
-  positioned surface and applies the same 48px bottom baseline before its
-  `6.25rem` accessory reservation and 8px gap. At short viewport heights, the
-  four-action group switches to a compact two-column layout so all controls stay
-  above the accessory triggers. The expanded panel reserves a wider trailing
-  trigger lane so horizontally scrolled custom keys remain outside the rail hit
-  area.
+- TerminalScrollButtons shares the terminal output footer's positioned
+  containing block. In the closed state it keeps the 48px bottom baseline,
+  `6.25rem` accessory reservation, and 8px gap. When an accessory panel opens,
+  the scroll trigger and Keys/Type shell lift above that in-flow panel; short
+  viewports switch the trigger and shell to adjacent horizontal lanes instead
+  of stacking them vertically.
 - The scroll rail toggle opens a four-action group for jumping to the top or
   bottom and moving by the configured terminal scroll step. Escape or a
   pointerdown outside the controls closes the group, and the trigger maintains
@@ -465,9 +464,13 @@ extension runs.
   Android IME.
 - Terminal Keys exposes `Esc`, `Tab`, `Ctrl+C` (shown as `^C`), `Enter`,
   `PgUp`, `PgDn`, `Up`, `Down`, `Left`, and `Right` in matching visual and
-  keyboard order. Custom Type uses a five-row US 60%-style physical layout
-  with `Enter` and `Backspace` on the base layer, plus a function layer with
-  the same terminal actions.
+  keyboard order.
+- Custom Type defaults to a five-row US 60%-style physical layout with the
+  existing arrow cluster, duplicate modifier keys, `Fn`, and `Win`. On compact
+  coarse-pointer surfaces it switches to a minimized alpha layout: one
+  `Shift`, `Ctrl`, and `Alt`, no arrow/`Fn`/`Win` keys, and `Enter` in the
+  navigation row. Terminal Keys continues to expose the removed arrow actions
+  and can remain open alongside Type.
 - Expanded special keys and custom/native Type input stay in the existing local
   component state and continue writing through the active session's
   authenticated terminal transport. The native Type input remains focusable;
@@ -481,37 +484,37 @@ extension runs.
 - The custom keyboard is selected when Android suppression is active or when
   `mobileCustomKeyboardEnabled` is enabled; otherwise Type uses the focusable
   native input, including on fine-pointer desktop surfaces.
-- Custom physical rows use 44px minimum height, responsive 24px-to-44px key
-  widths, and 4px-to-8px horizontal gaps. At the compact width floor the
-  five-row keyboard uses a contained horizontal scroll track because the full
-  physical row cannot fit a 320px viewport without making keycaps unusably
-  small; horizontal overflow never expands the terminal surface or page.
-  Separate Terminal Keys buttons and floating triggers remain 44px square.
-- Shift changes the visible number/punctuation key labels to the character that
-  will be sent. Each custom key's title and ARIA label also reflect the effective
-  modifier output: Ctrl letter chords are announced as `Ctrl+X`, and Alt/Meta
-  combinations include their active modifier prefix. Physical rows grow to fill
-  available width and stay centered; narrow surfaces retain a contained
-  horizontal scroll track.
- 
-- Expanded content remains in a full-width, trailing in-flow panel with
-  `overflow-x-auto overflow-y-auto`, a trailing lane of
-  `6.875rem + max(0.75rem, var(--safe-area-right, 0px))`, and
+- Every custom key keeps a 44px minimum height, responsive 14px-to-44px
+  width, 4px-to-8px horizontal gap, and accessible title/ARIA label. The full
+  layout remains five rows and uses the existing width-responsive 60% geometry.
+  The minimized layout keeps word characters on four alpha/navigation rows and
+  moves digits and punctuation to a three-row `123` sublayout. Its panel clips
+  horizontal overflow instead of creating a page or panel scroll track.
+- Shift changes the visible number/symbol labels to the character that will be
+  sent. Ctrl letter chords are announced as `Ctrl+X`; Alt/Meta combinations
+  include their active modifier prefix. Both layouts grow rows to fill the
+  available width and stay centered without horizontal scrolling.
+
+- Expanded content remains a full-width, trailing in-flow panel with
+  `overflow-x-hidden overflow-y-auto` and
   `max-height: min(20rem, calc(100dvh - 6rem - var(--safe-area-bottom, 0px)))`.
-  Safe-area padding accounts for viewport insets, while flex sizing keeps the
-  panel within the positioned host. The outer terminal surface stays fixed
-  while the flex output host yields available height without collapsing.
+  The Keys/Type shell moves above the panel when it opens. At short viewport
+  heights, Keys/Type and the scroll trigger use a horizontal lane so all three
+  44px controls remain reachable; an opened scroll rail occupies the adjacent
+  compact lane. Safe-area padding accounts for viewport insets, while flex
+  sizing keeps the panel within the positioned host. The outer terminal surface
+  stays fixed while the flex output host yields available height without
+  collapsing.
 - Terminal compact shells leave the bottom safe-area inset to the terminal
   accessory controls rather than reserving it again on the terminal root;
   non-terminal compact workspace modes retain root safe-area padding.
 
 **Verification/status:**
 
-- Focused UI unit coverage for the accessory controls passed: 24 tests across
-  four files.
+- Focused UI unit coverage for the accessory controls passed: 27 tests across
+  five files.
 - The `packages/ui` TypeScript build passed.
-- Direct Chromium accessory-browser coverage passed all 10 checks; final review
-  also observed all 7 scroll/pane browser checks passing.
+- Direct Chromium accessory-browser coverage passed all 10 checks.
 
 ### Resize Handle Hook
 
