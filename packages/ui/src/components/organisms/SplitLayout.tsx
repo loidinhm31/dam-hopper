@@ -24,15 +24,20 @@ import type { DragItem } from "@/components/organisms/TabBar.js";
 import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
+import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
+export function resolveDragOverlayTitle(tab: DisplayTabEntry | undefined) {
+  return { title: tab?.title, label: tab?.label ?? "Terminal" };
+}
+
 
 interface LayoutTreeProps {
   node: LayoutNode;
   layout: UseTerminalLayoutResult;
   mountedSessions: MountedSession[];
-  openTabs: TabEntry[];
+  openTabs: DisplayTabEntry[];
   onNewTerminal: () => void;
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
@@ -175,7 +180,7 @@ export interface SplitLayoutProps {
   root: LayoutNode;
   layout: UseTerminalLayoutResult;
   mountedSessions: MountedSession[];
-  openTabs: TabEntry[];
+  openTabs: DisplayTabEntry[];
   onNewTerminal: () => void;
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
@@ -240,8 +245,8 @@ export function SplitLayout({
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
 
-  // ── active drag state for DragOverlay label ──────────────────────────────
   const [activeDragMeta, setActiveDragMeta] = useState<{
+    title?: DisplayTabEntry["title"];
     label: string;
     sourcePaneLabel: string;
   } | null>(null);
@@ -254,8 +259,9 @@ export function SplitLayout({
         const paneIndex = layout
           .getPanes()
           .findIndex((pane) => pane.id === data.sourcePaneId);
+        const dragTitle = resolveDragOverlayTitle(tab);
         setActiveDragMeta({
-          label: tab?.label ?? data.sessionId,
+          ...dragTitle,
           sourcePaneLabel:
             paneIndex >= 0 ? `Pane ${paneIndex + 1}` : "Current Pane",
         });
@@ -319,7 +325,14 @@ export function SplitLayout({
       <DragOverlay dropAnimation={null}>
         {activeDragMeta !== null && (
           <div className="px-3 py-1.5 text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] shadow-lg opacity-90 pointer-events-none whitespace-nowrap">
-            <div className="font-mono">{activeDragMeta.label}</div>
+            {activeDragMeta.title ? (
+              <TerminalTitleText
+                title={activeDragMeta.title}
+                className="font-mono"
+              />
+            ) : (
+              <div className="font-mono">{activeDragMeta.label}</div>
+            )}
             <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-muted)]">
               {activeDragMeta.sourcePaneLabel} · Drop to dock terminal
             </div>
