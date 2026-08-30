@@ -28,6 +28,7 @@ export interface Transport {
       willRestart: boolean;
       restartIn?: number;
       restartCount?: number;
+      incarnation?: number;
     }) => void,
   ): () => void;
 

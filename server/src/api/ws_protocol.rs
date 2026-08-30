@@ -273,6 +273,9 @@ pub enum ServerMsg {
         /// Cumulative restart counter (present if willRestart=true after first restart).
         #[serde(rename = "restartCount", skip_serializing_if = "Option::is_none")]
         restart_count: Option<u32>,
+        /// Concrete PTY identity; clients reject exits from replaced sessions.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        incarnation: Option<u64>,
     },
 
     // Process restarted successfully
@@ -504,6 +507,7 @@ mod tests {
             will_restart: true,
             restart_in: Some(2000),
             restart_count: Some(3),
+            incarnation: Some(7),
         };
         let json_full = serde_json::to_value(&msg_full).unwrap();
         assert_eq!(json_full["kind"], "terminal:exit");
@@ -512,6 +516,7 @@ mod tests {
         assert_eq!(json_full["willRestart"], true);
         assert_eq!(json_full["restartIn"], 2000);
         assert_eq!(json_full["restartCount"], 3);
+        assert_eq!(json_full["incarnation"], 7);
 
         // Minimal payload (no restart)
         let msg_min = ServerMsg::TermExit {
@@ -520,6 +525,7 @@ mod tests {
             will_restart: false,
             restart_in: None,
             restart_count: None,
+            incarnation: None,
         };
         let json_min = serde_json::to_value(&msg_min).unwrap();
         assert_eq!(json_min["kind"], "terminal:exit");
@@ -528,6 +534,7 @@ mod tests {
         // Optional fields should not be present
         assert!(json_min.get("restartIn").is_none());
         assert!(json_min.get("restartCount").is_none());
+        assert!(json_min.get("incarnation").is_none());
     }
 
     #[test]

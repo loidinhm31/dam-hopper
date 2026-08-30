@@ -69,7 +69,10 @@ import { TerminalFindBar } from "@/components/atoms/TerminalFindBar.js";
 import { TerminalSuggestionGhost } from "@/components/atoms/TerminalSuggestionGhost.js";
 import { TerminalHistoryList } from "@/components/organisms/TerminalHistoryList.js";
 import { getHistory, searchHistory } from "@/lib/command-history.js";
-import { rememberTerminalSessionIncarnation } from "@/lib/terminal-incarnation-state.js";
+import {
+  latestTerminalSessionIncarnation,
+  rememberTerminalSessionIncarnation,
+} from "@/lib/terminal-incarnation-state.js";
 
 interface TerminalPanelProps {
   /** Unique session ID (e.g. "build:api-server", "run:api-server") */
@@ -485,13 +488,25 @@ export function TerminalPanel({
       });
     }
 
-    // 3. Clear observed activity on every PTY exit. The enhanced listener below
-    // owns the existing banner/restart behavior when the transport supports it.
-    unsubExit = transport.onTerminalExit(safeSessionId, () => {
-      resetActivityForUnavailableStream();
-    });
     unsubExitEnhanced =
       transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
+        const currentIncarnation = latestTerminalSessionIncarnation(safeSessionId);
+        if (
+          exitEvent.incarnation === undefined
+            ? currentIncarnation !== undefined
+            : currentIncarnation !== undefined &&
+              exitEvent.incarnation !== currentIncarnation
+        ) {
+          return;
+        }
+
+        if (exitEvent.incarnation !== undefined) {
+          rememberTerminalSessionIncarnation(
+            safeSessionId,
+            exitEvent.incarnation,
+          );
+        }
+
         const { exitCode, willRestart, restartIn } = exitEvent;
         restartRecoveryPending = willRestart;
         restartProbeGeneration += 1;
@@ -508,6 +523,11 @@ export function TerminalPanel({
         agentNotifications?.onTerminalExit({ willRestart });
         onExitRef.current?.(exitCode);
       }) ?? null;
+    if (!unsubExitEnhanced) {
+      unsubExit = transport.onTerminalExit(safeSessionId, () => {
+        resetActivityForUnavailableStream();
+      });
+    }
 
     // 4. Handle process restart event. Respawns reuse the session ID and do not
     // replay the retained buffer, so the confirmed replacement can reopen the
