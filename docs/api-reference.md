@@ -1180,6 +1180,8 @@ target, rejects cwd values outside it, and persists the canonical target in
 session metadata. `worktreePath` requires `project`; omitting it preserves
 configured-root or legacy project behavior.
 
+Platform behavior for free terminals differs only where the request omits `cwd`: Windows uses an existing user home directory, then the server's existing current directory; Unix retains the `HOME`-then-`/tmp` fallback. On Windows, an empty command or the exact `bash` selector starts the native interactive `cmd.exe` with no arguments. Other command strings run as `cmd.exe /C <command>`. Unix shell selection and command execution remain unchanged. Windows does not provide Unix shell lifecycle integration, so lifecycle-dependent suggestions and history remain unverified.
+
 Response: the created `SessionInfo`, including `worktreePath` when the session
 is target-scoped.
 
