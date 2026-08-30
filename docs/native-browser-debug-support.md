@@ -6,14 +6,18 @@ receive Tauri commands, filesystem access, shell access, opener access, or
 generic IPC capabilities. The existing web iframe adapter remains the
 fallback and rollback path.
 
+The native v1 relay advertises picker and navigation only. Console forwarding
+remains disabled until it has an isolated transport that cannot feed back into
+the WebView IPC channel.
+
 ## Support matrix
 
-| Capability                                                 | Windows v1                       | Linux artifact                | macOS    |
-| ---------------------------------------------------------- | -------------------------------- | ----------------------------- | -------- |
+| Capability                                                 | Windows v1                       | Linux artifact                  | macOS    |
+| ---------------------------------------------------------- | -------------------------------- | ------------------------------- | -------- |
 | Child-WebView lifecycle and geometry                       | Verified on WebView2             | Implemented; runtime unverified | Deferred |
 | Document-start bridge in top and same-origin nested frames | Verified on WebView2             | Implemented; runtime unverified | Deferred |
-| Relay security negatives                                   | Runtime evidence plus unit tests | Unit tests plus Linux build   | Deferred |
-| Packaged application                                       | Required smoke gate              | `.deb`/`.rpm` build gate only | Deferred |
+| Relay security negatives                                   | Runtime evidence plus unit tests | Unit tests plus Linux build     | Deferred |
+| Packaged application                                       | Required smoke gate              | `.deb`/`.rpm` build gate only   | Deferred |
 
 Only Windows carries a v1 runtime support claim. Linux has a WebKitGTK relay
 implementation and keeps viewport rendering/resizing available even if the
@@ -35,10 +39,14 @@ pnpm install --frozen-lockfile
 pnpm --filter @dam-hopper/native tauri:probe
 ```
 
-Record the WebView2 Evergreen Runtime version and verify lifecycle, geometry,
-document-start ordering, top/nested-frame relay, redirects, history/reload,
-console, picker, storage clear, teardown/recovery, malformed or stale relay
-messages, denied navigation/popup/download/permission flows, profile switch,
+Record the WebView2 Evergreen Runtime version and verify the release-gate
+checks enforced by `smoke-browser-debug.mjs`:
+`lifecycle`, `documentStartTopFrame`, `documentStartNestedFrame`,
+`relayAccepted`, `relayRejected`, `navigationPolicy`, `popupDenied`,
+`downloadDenied`, `profileIsolation`, and `rollback`. During the same manual
+gate, also exercise redirects, history/reload, native console rejection,
+picker, storage clear, teardown/recovery, malformed or stale relay messages,
+denied permission/client-certificate/password-manager flows, profile switch,
 server disconnect, and application shutdown. Store the result as JSON with
 `platform`, `webview2Version`, `commitSha`, `artifactSha256`, and the `checks`
 object, then run:
@@ -81,5 +89,7 @@ the native navigation policy.
   `packages/browser-bridge` output.
 - Confirm diagnostics do not contain page content, server tokens, cookies,
   storage, or raw relay payloads.
-- Keep popups, downloads, permissions, client certificates, and password
-  managers disabled in v1.
+- On Windows, keep popups, downloads, permissions, client certificates, and
+  password managers disabled through the explicit WebView2 deny hooks. Linux
+  has no runtime-verified equivalent permission policy yet and must not claim
+  those denials until its WebKitGTK policy hook is verified.

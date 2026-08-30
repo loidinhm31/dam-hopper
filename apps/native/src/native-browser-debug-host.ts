@@ -16,6 +16,9 @@ const RELAY_EVENT = "browser-debug:relay";
 const RELAY_REJECTED_EVENT = "browser-debug:relay-rejected";
 const CHILD_LABEL = "browser-debug";
 const MAX_PENDING_RELAYS = 8;
+const BRIDGE_HANDSHAKE_TIMEOUT_MS = 5_000;
+const DESTROY_RETRY_DELAY_MS = 100;
+const DISPOSE_DESTROY_ATTEMPTS = 3;
 
 const NATIVE_COMMANDS: Record<BrowserDebugHostCommand, string> = {
   "start-picker": "dam-hopper:start-picker",
@@ -69,12 +72,13 @@ export function bridgeEventToHostEvent(
   generation: number,
   profileId: string,
   sessionId: string,
+  expectedOrigin = target.origin,
 ): BrowserDebugHostEvent | null {
   if (
     relay.label !== CHILD_LABEL ||
     relay.profileId !== profileId ||
     relay.sessionId !== sessionId ||
-    relay.origin !== target.origin ||
+    relay.origin !== expectedOrigin ||
     !Number.isSafeInteger(relay.generation) ||
     relay.generation < 0
   ) {
@@ -91,8 +95,11 @@ export function bridgeEventToHostEvent(
         type: "ready",
         capabilities: [
           "picker",
-          ...(event.capabilities ?? []),
-        ] as BrowserDebugHostCapability[],
+          ...(event.capabilities ?? []).filter(
+            (capability): capability is "navigation" =>
+              capability === "navigation",
+          ),
+        ],
       };
       break;
     case "dam-hopper:selection":
@@ -102,12 +109,7 @@ export function bridgeEventToHostEvent(
       payload = { type: "navigation", url: event.url };
       break;
     case "dam-hopper:console":
-      payload = {
-        type: "console",
-        level: event.level,
-        message: event.message,
-      };
-      break;
+      return null;
     case "dam-hopper:error":
       payload = {
         type: "status",
@@ -126,6 +128,13 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
   private target: BrowserDebugTarget | null = null;
   private profileId: string | null = null;
   private viewport: BrowserDebugHostViewport | null = null;
+  private zoom = 1;
+  private lastAppliedZoom: number | null = null;
+  private pendingZoom: number | null = null;
+  private targetPending = false;
+  private bridgeTimeout: number | undefined;
+  private bridgeTimedOut = false;
+  private zoomRequest = 0;
   private state: NativeBrowserDebugState | null = null;
   private pendingRelays: NativeRelayEvent[] = [];
   private generation = 0;
@@ -148,41 +157,45 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
       target &&
       this.target?.url === target.url &&
       this.target.origin === target.origin &&
-      this.profileId === getActiveProfileId()
+      this.profileId === getActiveProfileId() &&
+      (this.state !== null || this.targetPending) &&
+      !this.bridgeTimedOut
     ) {
       return;
     }
 
+    this.clearBridgeTimeout();
+    this.bridgeTimedOut = false;
     const operation = ++this.operation;
     const generation = ++this.generation;
     const profileId = target ? getActiveProfileId() : null;
     this.target = target;
     this.profileId = profileId;
+    this.targetPending = target !== null;
     this.state = null;
+    this.lastAppliedZoom = null;
+    this.pendingZoom = null;
+    this.zoomRequest += 1;
     this.pendingRelays = [];
+    if (target) {
+      this.emit({ type: "status", status: "loading", generation });
+    }
     this.enqueue(async () => {
-      if (!(await this.ensureListeners())) return;
-      try {
-        await invoke<void>("browser_debug_destroy");
-      } catch (error) {
-        if (this.isCurrent(operation)) {
-          this.emit({
-            type: "status",
-            status: "error",
-            message: errorMessage(
-              error,
-              "Native Browser Debug could not close its previous child.",
-            ),
-            code: "bridge-unavailable",
-            generation,
-          });
-        }
+      const destroyed = await this.destroyNativeChild(operation);
+      if (!destroyed) {
+        if (this.isCurrent(operation)) this.targetPending = false;
         return;
       }
       if (!this.isCurrent(operation)) return;
       if (!target) return;
+      if (!(await this.ensureListeners())) {
+        if (this.isCurrent(operation)) this.targetPending = false;
+        return;
+      }
+      if (!this.isCurrent(operation)) return;
 
       if (!profileId) {
+        this.targetPending = false;
         this.emit({
           type: "status",
           status: "error",
@@ -193,8 +206,8 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
         return;
       }
 
-      this.emit({ type: "status", status: "loading", generation });
       try {
+        const createZoom = this.zoom;
         const state = await invoke<NativeBrowserDebugState>(
           "browser_debug_create",
           {
@@ -205,14 +218,34 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
                 target.source === "tunnel" ? [target.origin] : [],
               bounds: boundsOrZero(this.viewport),
               visible: this.viewport !== null,
+              zoom: createZoom,
             },
           },
         );
         if (!this.isCurrent(operation)) {
-          await invoke<void>("browser_debug_destroy").catch(() => {});
+          await this.destroyNativeChild(operation);
           return;
         }
         this.state = state;
+        this.targetPending = false;
+        const zoom = this.zoom;
+        if (zoom !== createZoom) {
+          const request = this.zoomRequest;
+          this.pendingZoom = zoom;
+          try {
+            await this.applyZoom(operation, zoom, request);
+          } catch {
+            // The create command already applied the initial zoom; queue a
+            // retry without turning a presentation sync into a startup error.
+            if (this.isCurrent(operation)) this.setZoom(this.zoom);
+          }
+        } else {
+          this.lastAppliedZoom = createZoom;
+          if (this.pendingZoom === createZoom) this.pendingZoom = null;
+        }
+        if (state.relayInstalled) {
+          this.armBridgeTimeout(operation, target);
+        }
         this.flushPendingRelays();
         if (!state.relayInstalled) {
           this.emit({
@@ -227,6 +260,7 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
         await this.applyViewport(operation);
       } catch (error) {
         if (!this.isCurrent(operation)) return;
+        this.targetPending = false;
         this.emit({
           type: "status",
           status: "error",
@@ -243,6 +277,7 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
     this.viewport = viewport;
     const operation = this.operation;
     if (!this.state || !this.target) return;
+    this.setZoom(this.zoom);
     this.enqueue(async () => {
       if (!this.isCurrent(operation)) return;
       try {
@@ -256,6 +291,32 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
           code: "bridge-unavailable",
           generation: this.generation,
         });
+      }
+    });
+  }
+  setZoom(scaleFactor: number): void {
+    if (this.disposed || !Number.isFinite(scaleFactor) || scaleFactor <= 0)
+      return;
+    this.zoom = scaleFactor;
+    if (this.lastAppliedZoom === scaleFactor && this.pendingZoom === null)
+      return;
+    if (this.pendingZoom === scaleFactor) return;
+    this.pendingZoom = scaleFactor;
+    const operation = this.operation;
+    const request = ++this.zoomRequest;
+    if (!this.state || !this.target) return;
+    this.enqueue(async () => {
+      if (
+        !this.isCurrent(operation) ||
+        request !== this.zoomRequest ||
+        this.zoom !== scaleFactor
+      )
+        return;
+      try {
+        await this.applyZoom(operation, scaleFactor, request);
+      } catch {
+        // Zoom is presentation-only; keep bridge status and retry on the next
+        // zoom or layout update instead of leaving the bridge in an error state.
       }
     });
   }
@@ -290,14 +351,101 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
   destroy(): void {
     const operation = ++this.operation;
     ++this.generation;
+    this.clearBridgeTimeout();
+    this.bridgeTimedOut = false;
     this.target = null;
     this.profileId = null;
     this.state = null;
+    this.lastAppliedZoom = null;
+    this.pendingZoom = null;
+    this.zoomRequest += 1;
+    this.targetPending = false;
     this.pendingRelays = [];
     this.enqueue(async () => {
       if (operation !== this.operation) return;
-      await invoke<void>("browser_debug_destroy").catch(() => {});
+      await this.destroyNativeChild(operation);
     });
+  }
+
+  private async destroyNativeChild(operation: number): Promise<boolean> {
+    let attempts = 0;
+    let lastError: unknown;
+    while (true) {
+      try {
+        await invoke<void>("browser_debug_destroy");
+        return true;
+      } catch (error) {
+        lastError = error;
+        attempts += 1;
+        if (attempts === 1 && this.isCurrent(operation) && !this.disposed) {
+          this.emit({
+            type: "status",
+            status: "error",
+            message: errorMessage(
+              error,
+              "Native Browser Debug could not close its previous child.",
+            ),
+            code: "bridge-unavailable",
+            generation: this.generation,
+          });
+        }
+      }
+      if (
+        operation !== this.operation ||
+        (this.disposed && attempts >= DISPOSE_DESTROY_ATTEMPTS)
+      )
+        break;
+      const retry = (
+        Promise as PromiseConstructor & {
+          withResolvers<T>(): {
+            promise: Promise<T>;
+            resolve(value?: T | PromiseLike<T>): void;
+          };
+        }
+      ).withResolvers<void>();
+      globalThis.setTimeout(retry.resolve, DESTROY_RETRY_DELAY_MS);
+      await retry.promise;
+    }
+    if (this.isCurrent(operation) && this.disposed) {
+      console.error(
+        errorMessage(
+          lastError,
+          "Native Browser Debug child cleanup did not complete.",
+        ),
+      );
+    }
+    return false;
+  }
+
+  private clearBridgeTimeout(): void {
+    globalThis.clearTimeout(this.bridgeTimeout);
+    this.bridgeTimeout = undefined;
+  }
+
+  private armBridgeTimeout(
+    operation: number,
+    target: BrowserDebugTarget,
+  ): void {
+    this.clearBridgeTimeout();
+    const generation = this.generation;
+    this.bridgeTimeout = globalThis.setTimeout(() => {
+      this.bridgeTimeout = undefined;
+      if (
+        !this.isCurrent(operation) ||
+        this.generation !== generation ||
+        !this.state ||
+        !this.target
+      )
+        return;
+      this.bridgeTimedOut = true;
+      this.emit({
+        type: "status",
+        status: "unsupported",
+        message: `No native Browser Debug response from ${target.url}. Verify the target is reachable and loads the Browser Debug bridge, then click Load address again.`,
+        code: "bridge-unavailable",
+        generation,
+      });
+    }, BRIDGE_HANDSHAKE_TIMEOUT_MS) as unknown as number;
   }
 
   private enqueue(task: () => Promise<void>): void {
@@ -318,6 +466,34 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
     await invoke<void>("browser_debug_set_visible", {
       visible: viewport !== null,
     });
+  }
+
+  private async applyZoom(
+    operation: number,
+    scaleFactor: number,
+    request?: number,
+  ): Promise<void> {
+    if (!this.state || !this.target || !this.isCurrent(operation)) return;
+    try {
+      await invoke<void>("browser_debug_set_zoom", {
+        zoom: scaleFactor,
+      });
+    } catch (error) {
+      if (
+        (request === undefined || request === this.zoomRequest) &&
+        this.pendingZoom === scaleFactor
+      ) {
+        this.pendingZoom = null;
+      }
+      throw error;
+    }
+    if (
+      !this.isCurrent(operation) ||
+      (request !== undefined && request !== this.zoomRequest)
+    )
+      return;
+    this.lastAppliedZoom = scaleFactor;
+    if (this.pendingZoom === scaleFactor) this.pendingZoom = null;
   }
 
   private async ensureListeners(): Promise<boolean> {
@@ -389,7 +565,8 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
       if (
         relay.label === CHILD_LABEL &&
         relay.profileId === this.profileId &&
-        relay.origin === target.origin
+        Number.isSafeInteger(relay.generation) &&
+        relay.generation >= 0
       ) {
         if (this.pendingRelays.length < MAX_PENDING_RELAYS)
           this.pendingRelays.push(relay);
@@ -402,21 +579,35 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
       relay.generation < state.generation
     )
       return;
-    if (relay.generation > state.generation) {
-      this.state = {
-        ...state,
-        generation: relay.generation,
-        committedOrigin: relay.origin,
-      };
-    }
+    const currentState =
+      relay.generation > state.generation
+        ? {
+            ...state,
+            generation: relay.generation,
+            committedOrigin: relay.origin,
+          }
+        : state;
     const event = bridgeEventToHostEvent(
       relay,
       target,
       this.generation,
-      state.profileId,
-      state.sessionId,
+      currentState.profileId,
+      currentState.sessionId,
+      currentState.committedOrigin,
     );
-    if (event) this.emit(event);
+    if (!event) return;
+    if (relay.generation > state.generation) {
+      this.state = {
+        ...currentState,
+        committedUrl:
+          event.type === "navigation" ? event.url : currentState.committedUrl,
+      };
+    }
+    if (event.type === "ready") {
+      this.clearBridgeTimeout();
+      this.bridgeTimedOut = false;
+    }
+    this.emit(event);
   }
 
   private flushPendingRelays(): void {
@@ -455,6 +646,12 @@ export function errorMessage(error: unknown, fallback: string): string {
 
 export function isNativeBrowserDebugEnabled(value: unknown): boolean {
   return value !== "0" && value !== "false";
+}
+
+export function isNativeBrowserDebugPlatformSupported(
+  platform: string,
+): boolean {
+  return platform === "windows" || platform === "linux";
 }
 
 export function getNativeBrowserDebugEnvironment(

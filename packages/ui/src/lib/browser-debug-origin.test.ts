@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveBrowserDebugTarget } from "./browser-debug-origin.js";
+import {
+  isAllowedBrowserDebugNavigationOrigin,
+  resolveBrowserDebugTarget,
+} from "./browser-debug-origin.js";
 import type { TunnelInfo } from "@/api/client.js";
 
 const readyTunnel: TunnelInfo = {
@@ -27,16 +30,23 @@ describe("resolveBrowserDebugTarget", () => {
 
   it("allows paths on a ready tunnel origin", () => {
     expect(
-      resolveBrowserDebugTarget("https://example.trycloudflare.com", [readyTunnel]),
+      resolveBrowserDebugTarget("https://example.trycloudflare.com", [
+        readyTunnel,
+      ]),
     ).toMatchObject({ source: "tunnel", origin: readyTunnel.url });
     expect(
-      resolveBrowserDebugTarget("https://example.trycloudflare.com/settings?tab=logs", [readyTunnel]),
+      resolveBrowserDebugTarget(
+        "https://example.trycloudflare.com/settings?tab=logs",
+        [readyTunnel],
+      ),
     ).toMatchObject({
       source: "tunnel",
       url: "https://example.trycloudflare.com/settings?tab=logs",
     });
     expect(
-      resolveBrowserDebugTarget("https://other.trycloudflare.com", [readyTunnel]),
+      resolveBrowserDebugTarget("https://other.trycloudflare.com", [
+        readyTunnel,
+      ]),
     ).toBeNull();
   });
 
@@ -58,7 +68,31 @@ describe("resolveBrowserDebugTarget", () => {
 
   it("rejects a target with the parent application origin", () => {
     expect(
-      resolveBrowserDebugTarget("http://localhost:3000", [], "http://localhost:3000"),
+      resolveBrowserDebugTarget(
+        "http://localhost:3000",
+        [],
+        "http://localhost:3000",
+      ),
     ).toBeNull();
+  });
+
+  it("allows only policy-approved redirect origins", () => {
+    const target = resolveBrowserDebugTarget(readyTunnel.url, [readyTunnel]);
+    expect(target).not.toBeNull();
+    expect(
+      isAllowedBrowserDebugNavigationOrigin(
+        "https://example.trycloudflare.com",
+        target!,
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedBrowserDebugNavigationOrigin("http://127.0.0.1:3001", target!),
+    ).toBe(true);
+    expect(
+      isAllowedBrowserDebugNavigationOrigin(
+        "https://other.example.test",
+        target!,
+      ),
+    ).toBe(false);
   });
 });

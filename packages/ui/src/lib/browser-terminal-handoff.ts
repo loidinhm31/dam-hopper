@@ -1,8 +1,9 @@
 import type { BrowserDebugArtifactResponse } from "@/api/client.js";
-
+import type { OpenTerminalTitle } from "@/lib/terminal-title.js";
 export interface BrowserTerminalTarget {
   sessionId: string;
   label: string;
+  openTitle?: OpenTerminalTitle;
   mounted: boolean;
   registered: boolean;
   alive: boolean | undefined;

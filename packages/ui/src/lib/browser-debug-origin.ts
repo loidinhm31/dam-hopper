@@ -17,7 +17,27 @@ function parseTargetUrl(value: string): URL | null {
 }
 
 function isLoopbackHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  return (
+    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]"
+  );
+}
+
+/** Returns whether a redirected target origin remains inside its host policy. */
+export function isAllowedBrowserDebugNavigationOrigin(
+  origin: string,
+  target: BrowserDebugTarget,
+): boolean {
+  if (origin === target.origin) return true;
+  try {
+    const url = new URL(origin);
+    return (
+      url.origin === origin &&
+      url.protocol === "http:" &&
+      isLoopbackHost(url.hostname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**

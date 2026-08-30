@@ -1,6 +1,7 @@
 import type { PortEntry } from "@/hooks/use-ports.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { OpenTerminalTitle } from "@/lib/terminal-title.js";
 
 export const FREE_RUNTIME_GROUP_ID = "__free__";
 export const FREE_RUNTIME_GROUP_NAME = "Free Terminals";
@@ -24,6 +25,7 @@ export interface RuntimeSessionItem {
   groupId: string;
   sessionId: string;
   label: string;
+  openTitle?: OpenTerminalTitle;
   project: string;
   command: string;
   cwd?: string;
@@ -64,7 +66,7 @@ export interface RuntimeTreeGroup {
 
 export interface RuntimeTreeInput {
   terminals: MountedSession[];
-  tabs: TabEntry[];
+  tabs: DisplayTabEntry[];
   ports: PortEntry[];
   projectOrder?: string[];
   runtimeGroupOrder?: string[];
@@ -105,7 +107,7 @@ function ensureGroup(groups: Map<string, MutableGroup>, id: string) {
 
 function fallbackTerminalLabel(terminal: MountedSession) {
   if (terminal.sessionId.startsWith("free:")) return "Free terminal";
-  return terminal.command.split(/[\s/\\]/).find(Boolean) ?? terminal.sessionId;
+  return terminal.command.split(/[\s/\\]/).find(Boolean) ?? "Terminal";
 }
 
 function toRuntimePort(port: PortEntry, project: string): RuntimePort {
@@ -204,6 +206,7 @@ export function buildRuntimeTree({
       groupId: id,
       sessionId: terminal.sessionId,
       label: tab?.label ?? fallbackTerminalLabel(terminal),
+      ...(tab?.title ? { openTitle: tab.title } : {}),
       project: terminal.project,
       command: terminal.command,
       cwd: terminal.cwd,

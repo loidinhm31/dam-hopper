@@ -438,34 +438,40 @@ fn normalized_database_path(path: &std::path::Path) -> Result<std::path::PathBuf
 }
 
 fn same_file_identity(left: &std::path::Path, right: &std::path::Path) -> Result<bool, String> {
-    let left_metadata = match std::fs::metadata(left) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(_) => return Err("unable to inspect database path".to_string()),
-    };
-    let right_metadata = match std::fs::metadata(right) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(_) => return Err("unable to inspect database path".to_string()),
-    };
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+
+        let left_metadata = match std::fs::metadata(left) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => return Err("unable to inspect database path".to_string()),
+        };
+        let right_metadata = match std::fs::metadata(right) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => return Err("unable to inspect database path".to_string()),
+        };
         return Ok(left_metadata.dev() == right_metadata.dev()
             && left_metadata.ino() == right_metadata.ino());
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        return Ok(
-            left_metadata.volume_serial_number() == right_metadata.volume_serial_number()
-                && left_metadata.file_index() == right_metadata.file_index(),
-        );
+        let left_identity = match crate::utils::fs::windows_file_identity(left) {
+            Ok(identity) => identity,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => return Err("unable to inspect database path".to_string()),
+        };
+        let right_identity = match crate::utils::fs::windows_file_identity(right) {
+            Ok(identity) => identity,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => return Err("unable to inspect database path".to_string()),
+        };
+        return Ok(left_identity == right_identity);
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (left_metadata, right_metadata);
+        let _ = (left, right);
         Ok(false)
     }
 }

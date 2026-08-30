@@ -93,11 +93,15 @@ const mountedSessions: MountedSession[] = [
   },
 ];
 
-const openTabs = mountedSessions.map((session) => ({
+const openTabs = mountedSessions.map((session, index) => ({
   sessionId: session.sessionId,
   label: `${session.project} shell`,
+  title: {
+    baseLabel: `${session.project} shell`,
+    ordinal: index + 1,
+    fullText: `${session.project} shell #${index + 1}`,
+  },
 }));
-
 function TerminalHeaderFixture() {
   const [splitSessionId, setSplitSessionId] = useState("session-alpha");
   const [runtimeSessionId, setRuntimeSessionId] = useState("session-alpha");

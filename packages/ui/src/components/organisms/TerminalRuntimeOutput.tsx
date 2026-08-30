@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
 import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
 import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveHost.js";
@@ -39,6 +39,10 @@ export function TerminalRuntimeOutput({
   onSelectActive,
 }: TerminalRuntimeOutputProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const [accessoryPanelState, setAccessoryPanelState] = useState<{
+    sessionId: string | null;
+    isOpen: boolean;
+  }>({ sessionId: null, isOpen: false });
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
   const isCompactWorkspace = useCompactWorkspace();
@@ -49,6 +53,21 @@ export function TerminalRuntimeOutput({
     !!activeSessionId &&
     (isAndroidChromeNativeInputSuppressed ||
       (isCompactWorkspace && isCoarsePointer));
+  const isAccessoryPanelOpen =
+    activeSessionId !== null &&
+    accessoryPanelState.sessionId === activeSessionId &&
+    accessoryPanelState.isOpen;
+  const handleAccessoryPanelOpenChange = useCallback(
+    (isOpen: boolean) => {
+      if (!activeSessionId) return;
+      setAccessoryPanelState((current) =>
+        current.sessionId === activeSessionId && current.isOpen === isOpen
+          ? current
+          : { sessionId: activeSessionId, isOpen },
+      );
+    },
+    [activeSessionId],
+  );
   const suppressTerminalNativeInput =
     isAndroidChromeNativeInputSuppressed ||
     (mobileInputPolicyApplies && mobileCustomKeyboardEnabled);
@@ -141,16 +160,27 @@ export function TerminalRuntimeOutput({
             <p className="text-sm">Select a terminal to view output</p>
           </div>
         )}
+      </div>
+      <div
+        className={
+          isAccessoryPanelOpen ? "relative w-full shrink-0" : "w-full shrink-0"
+        }
+      >
         {activeSessionId && terminalScrollButtonsEnabled && (
           <TerminalScrollButtons
             sessionId={activeSessionId}
             reserveAccessoryRail={Boolean(activeSessionId)}
+            accessoryPanelOpen={isAccessoryPanelOpen}
           />
         )}
+        {activeSessionId ? (
+          <MobileTerminalAccessoryBar
+            key={activeSessionId}
+            sessionId={activeSessionId}
+            onPanelOpenChange={handleAccessoryPanelOpenChange}
+          />
+        ) : null}
       </div>
-      {activeSessionId ? (
-        <MobileTerminalAccessoryBar sessionId={activeSessionId} />
-      ) : null}
     </div>
   );
 }
