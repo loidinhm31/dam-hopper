@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildRuntimeTree, reorderRuntimeIds } from "./terminal-runtime-tree.js";
 import type { PortEntry } from "@/hooks/use-ports.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 
 function terminal(
   sessionId: string,
@@ -12,8 +12,24 @@ function terminal(
   return { sessionId, project, command, cwd: `/repo/${project}` };
 }
 
-function tab(sessionId: string, label: string, startedAt: number): TabEntry {
-  return { sessionId, label, session: { id: sessionId, command: label, cwd: ".", type: "terminal", alive: true, startedAt } };
+function tab(
+  sessionId: string,
+  label: string,
+  startedAt: number,
+): DisplayTabEntry {
+  return {
+    sessionId,
+    label,
+    title: { baseLabel: label, ordinal: 1, fullText: `${label} #1` },
+    session: {
+      id: sessionId,
+      command: label,
+      cwd: ".",
+      type: "terminal",
+      alive: true,
+      startedAt,
+    },
+  };
 }
 
 function port(portNumber: number, overrides: Partial<PortEntry> = {}): PortEntry {
@@ -27,6 +43,31 @@ function port(portNumber: number, overrides: Partial<PortEntry> = {}): PortEntry
 }
 
 describe("buildRuntimeTree", () => {
+
+  it("carries structured open titles while mounted-only leaves stay readable", () => {
+    const groups = buildRuntimeTree({
+      terminals: [terminal("open", "web"), terminal("mounted-only", "web")],
+      tabs: [tab("open", "web:bash", 1)],
+      ports: [],
+    });
+    const items = groups[0]?.items ?? [];
+    const open = items.find(
+      (item) => item.kind === "session" && item.sessionId === "open",
+    );
+    const mountedOnly = items.find(
+      (item) => item.kind === "session" && item.sessionId === "mounted-only",
+    );
+    expect(open).toMatchObject({
+      label: "web:bash",
+      openTitle: {
+        baseLabel: "web:bash",
+        ordinal: 1,
+        fullText: "web:bash #1",
+      },
+    });
+    expect(mountedOnly).toMatchObject({ label: "bash" });
+    expect(mountedOnly).not.toHaveProperty("openTitle");
+  });
   it("propagates pin state to standalone and grouped Runtime leaves", () => {
     const groups = buildRuntimeTree({
       terminals: [

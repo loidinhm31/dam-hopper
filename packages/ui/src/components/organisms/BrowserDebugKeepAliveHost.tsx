@@ -13,8 +13,8 @@ import {
   applyBrowserDebugHostEvent,
   type BrowserDebugHostEvent,
 } from "@/lib/browser-debug-host.js";
-import { getBrowserDebugViewportGeometry } from "@/lib/browser-debug-keep-alive.js";
-import { APP_ZOOM_CHANGE_EVENT } from "@/lib/app-zoom.js";
+import { getBrowserDebugNativeViewportFrame } from "@/lib/browser-debug-keep-alive.js";
+import { APP_ZOOM_CHANGE_EVENT, getAppZoomFactor } from "@/lib/app-zoom.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
 import {
   BrowserDebugIframeHost,
@@ -27,14 +27,15 @@ export interface BrowserDebugKeepAliveHostProps {
   viewportStageRef?: RefObject<HTMLDivElement | null>;
   viewportVersion: number;
   isViewportVisible: boolean;
+  profileId?: string | null;
 }
 
 export type BrowserDebugKeepAliveHandle = BrowserDebugIframeHostHandle;
 
 /**
- * Shared controller adapter for the web host. The iframe lifecycle and trust
- * boundary live in BrowserDebugIframeHost; only normalized host events cross
- * this boundary into Browser state.
+ * Shared controller adapter for browser-debug hosts. Native hosts own their
+ * child lifecycle; the iframe lifecycle and trust boundary remain in the web
+ * fallback host.
  */
 export const BrowserDebugKeepAliveHost = forwardRef<
   BrowserDebugKeepAliveHandle,
@@ -42,6 +43,13 @@ export const BrowserDebugKeepAliveHost = forwardRef<
 >(function BrowserDebugKeepAliveHost(props, ref) {
   const { host: suppliedHost } = useBrowserDebugHost();
   const { browser } = props;
+  const {
+    setBridgeStatus,
+    setBridgeCapabilities,
+    setSelection,
+    setPickerActive,
+    setError,
+  } = browser;
   const iframeRef = useRef<BrowserDebugIframeHostHandle>(null);
   const generationRef = useRef<number | null>(null);
   const onHostEvent = useCallback(
@@ -63,9 +71,25 @@ export const BrowserDebugKeepAliveHost = forwardRef<
 
   useEffect(() => {
     if (!suppliedHost) return;
+    if (props.browser.target) {
+      setBridgeStatus("loading");
+      setBridgeCapabilities([]);
+      setSelection(null);
+      setPickerActive(false);
+      setError(null);
+    }
     suppliedHost.setTarget(props.browser.target);
     return () => suppliedHost.setTarget(null);
-  }, [props.browser.target, suppliedHost]);
+  }, [
+    props.browser.target,
+    props.profileId,
+    setBridgeStatus,
+    setBridgeCapabilities,
+    setSelection,
+    setPickerActive,
+    setError,
+    suppliedHost,
+  ]);
 
   useEffect(() => {
     if (!suppliedHost) return;
@@ -77,13 +101,14 @@ export const BrowserDebugKeepAliveHost = forwardRef<
     const viewport = props.viewportRef.current;
     const stage = props.viewportStageRef?.current;
     const updateFrame = () => {
-      const geometry = props.isViewportVisible
-        ? getBrowserDebugViewportGeometry(
+      suppliedHost.setZoom?.(getAppZoomFactor());
+      const frame = props.isViewportVisible
+        ? getBrowserDebugNativeViewportFrame(
             props.viewportRef.current,
             props.viewportStageRef?.current,
           )
         : null;
-      suppliedHost.setViewport(geometry?.visibleFrame ? geometry.frame : null);
+      suppliedHost.setViewport(frame);
     };
     updateFrame();
     const observer =
@@ -136,6 +161,7 @@ export const BrowserDebugKeepAliveHost = forwardRef<
       ref={iframeRef}
       browser={props.browser}
       viewportRef={props.viewportRef}
+      profileId={props.profileId}
       viewportStageRef={props.viewportStageRef}
       viewportVersion={props.viewportVersion}
       isViewportVisible={props.isViewportVisible}

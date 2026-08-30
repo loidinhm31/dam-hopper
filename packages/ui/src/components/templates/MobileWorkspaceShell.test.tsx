@@ -39,6 +39,9 @@ describe("MobileWorkspaceShell", () => {
       />,
     );
 
+    expect(markup).toMatch(
+      /<div class="app-screen-height flex flex-col overflow-clip gradient-bg">/,
+    );
     expect(markup).not.toContain("Terminal companion");
     expect(markup).toContain("Files panel");
     expect(markup).toContain("Terminal panel");
@@ -115,5 +118,21 @@ describe("MobileWorkspaceShell", () => {
     );
 
     expect(markup).toContain("Workspace surfaces unavailable");
+  });
+
+  it("keeps safe-area padding on non-terminal workspace modes", () => {
+    const markup = renderToStaticMarkup(
+      <MobileWorkspaceShell
+        surfaces={[]}
+        activeSurfaceId="ide"
+        onSurfaceChange={() => {}}
+        workspaceMode="ide"
+        onWorkspaceModeChange={() => {}}
+      />,
+    );
+
+    expect(markup).toMatch(
+      /<div class="app-screen-height flex flex-col overflow-clip gradient-bg safe-area-bottom">/,
+    );
   });
 });

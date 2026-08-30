@@ -103,9 +103,9 @@ function parseZoomFactor(value: string): number | null {
 /**
  * Return the CSS zoom factor applied to the shared document root.
  *
- * Geometry APIs expose values after CSS zoom has been applied. Consumers that
- * position a native child surface or a fixed overlay need the corresponding
- * logical CSS-pixel values instead.
+ * Geometry APIs expose values after CSS zoom has been applied. DOM overlays
+ * normalize those values back to logical CSS pixels; native child hosts use
+ * this factor as their page zoom while positioning in rendered coordinates.
  */
 export function getAppZoomFactor(): number {
   if (typeof document === "undefined") return 1;

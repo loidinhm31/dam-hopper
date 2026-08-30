@@ -49,3 +49,32 @@ fn write_with_mode(path: &Path, content: &str) -> Result<(), AppError> {
     std::fs::write(path, content)
         .map_err(|e| AppError::Config(format!("Cannot write {}: {}", path.display(), e)))
 }
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WindowsFileIdentity {
+    pub(crate) volume_serial: u32,
+    pub(crate) file_index: u64,
+}
+
+#[cfg(windows)]
+pub(crate) fn windows_file_identity(path: &Path) -> std::io::Result<WindowsFileIdentity> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+    };
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    let success = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
+    if success == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(WindowsFileIdentity {
+        volume_serial: info.dwVolumeSerialNumber,
+        file_index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    })
+}

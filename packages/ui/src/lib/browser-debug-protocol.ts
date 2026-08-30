@@ -5,7 +5,7 @@ import {
 import type { BrowserDebugHostMessage } from "./browser-debug-host.js";
 
 export interface BrowserBridgeTrust {
-  /** Exact target origin for this iframe load. */
+  /** Exact currently trusted target origin for this iframe load. */
   origin: string;
   /**
    * Exact, stable source evidence for this load. Web uses WindowProxy;

@@ -116,7 +116,13 @@
 .xterm .xterm-viewport {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
+  scroll-behavior: smooth;
+  touch-action: none;
+}
+
+.xterm .xterm-scrollable-element {
+  overscroll-behavior: contain;
+  touch-action: none;
 }
 
 .safe-area-inline {

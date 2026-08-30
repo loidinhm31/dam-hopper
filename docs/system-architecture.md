@@ -293,8 +293,8 @@ Notification scope remains xterm-only. DamHopper does not watch external termina
 ### inline terminal suggestions
 
 Automatic suggestions and history capture remain fail-closed until the server verifies
-a shell lifecycle for the current PTY incarnation. The server supports launch-only local
-interactive zsh, fish, and Bash adapters; every other command or shell remains unsupported.
+a shell lifecycle for the current PTY incarnation. On Unix, the server supports launch-only
+local interactive zsh, fish, and Bash adapters; every other command or shell remains unsupported.
 Terminal and outgoing PTY bytes are passive: the feature
 never infers command boundaries from Enter, output silence, replayed scrollback, or
 arbitrary input. Command history is browser-local and users can clear it or disable
@@ -653,6 +653,12 @@ deployed parent origins are compiled into the extension from
 iframe embedding through its browser policy; DamHopper does not bypass
 `X-Frame-Options` or restrictive CSP.
 
+The native desktop controller enforces the approved origin boundary before
+navigation and across redirects. The web iframe fallback can validate bridge
+messages but cannot inspect a cross-origin iframe's final URL after an
+external redirect. Such a redirect may remain visually rendered without
+trusted bridge access or page inspection and is not a supported preview.
+
 The web build packages the extension as
 `/browser-debug-extension/dam-hopper-browser-debug.zip`. When the Browser
 tool cannot complete the bridge handshake, it offers this download and directs
@@ -745,7 +751,8 @@ flowchart LR
 Tauri v2 native client that reuses the same `packages/ui` runtime as the web
 host. It is a remote client only: it does not embed the Rust server as a
 sidecar, does not rewrite PTY behavior in native code, and keeps Tauri
-permissions to `core:default`.
+permissions to `core:default` plus the scoped `browser-debug` permission
+granted to the `browser-debug-main` capability on the main window.
 
 **Frontend host:**
 
@@ -763,7 +770,7 @@ permissions to `core:default`.
 
 - `packages/ui` owns the host-independent `AppZoomProvider` and `useAppZoom` contract. `DamHopperApp` wraps its complete shared tree, so web and native hosts use the same behavior without host bootstrap or Tauri wiring.
 - `TopNav` exposes decrement/increment controls for the discrete `50%` through `120%` levels in `10%` steps. The validated level is best-effort persisted in local storage under `dam-hopper:app-zoom:v1` and defaults to `100%`.
-- The provider applies CSS `zoom` to `document.documentElement`, which includes normal app content and body-mounted portals. It changes internal presentation scale only; it does not change the OS/native window or the existing Browser Debug viewport model.
+- The provider applies CSS `zoom` to `document.documentElement`, which includes normal app content and body-mounted portals. It changes internal presentation scale only; it does not change the OS/native window or the Browser Debug viewport model. The native Browser Debug child mirrors this factor with WebView page zoom while using rendered DOM coordinates for its bounds, so selected target CSS dimensions remain stable.
 
 **Native browser-debug controller (Phase 03):**
 
@@ -771,7 +778,12 @@ permissions to `core:default`.
 - Custom viewport geometry is supplied by the shared UI through the existing
   host lifecycle contract; it does not resize the Tauri main window. Web uses
   the iframe adapter, while desktop native uses the child WebView adapter.
-- Target navigation is parsed and restricted to HTTP loopback or explicitly supplied HTTPS tunnel origins. Credentials, unsafe schemes, popups, downloads, external redirects, and Windows WebView2 permission requests fail closed.
+- Native desktop target navigation is parsed and restricted to HTTP loopback or
+  explicitly supplied HTTPS tunnel origins. Credentials, unsafe schemes, popups,
+  downloads, external redirects, and Windows WebView2 permission requests fail
+  closed. The web iframe fallback can reject untrusted bridge messages but
+  cannot observe a cross-origin external redirect; the redirected page may
+  remain visible without trusted control or inspection.
 - The existing built browser bridge is embedded by `build.rs` and injected at document start. The native relay accepts only bounded, schema-validated events matching the child label, committed origin, generation, nonce, and issued request ID.
 - Child cookies, cache, and page storage use a profile-scoped hashed directory under application data. Clearing a profile destroys the active child before removing only that profile’s directory. Linux has a WebKitGTK child/relay implementation but remains runtime-unverified until a real engine verification pass; macOS remains deferred.
 
@@ -1712,6 +1724,9 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
 - Map<id, DeadSession> tombstones (60s TTL; auto-evicted by cleanup task)
 - Set<id, String> killed tracks manually terminated sessions (used to prevent supervisor respawn race)
 - PTY child env is rebuilt from a safe baseline allowlist, then `TERM` and the resolved session env snapshot are applied before spawn
+- Initial creation and automatic respawn use one command-construction path. Unix shell selection, cwd, and arguments remain unchanged.
+- On Windows, an untargeted terminal with omitted cwd uses an existing user home, then the server current directory; it never uses `/tmp`. Empty or `bash` shell-selector requests launch interactive `cmd.exe` without Unix flags. Other command strings use `cmd.exe /C <command>`.
+- Shell integration is Unix-only. Windows `cmd.exe` sessions remain lifecycle-unverified and never receive Bash, zsh, or fish adapter arguments or nonce environment state.
 - `create()` fully idempotent: removes dead tombstone, inserts into killed set pre-spawn, removes post-spawn (TOCTOU guard)
 - `kill()` marks session dead + adds to killed set, retains 60s tombstone for reconnect
 - `remove()` immediately evicts session + adds to killed set (no restart on user kill)
@@ -2914,5 +2929,11 @@ Refactored `IdeShell.tsx` into a flexible, extensible "Tool Window" system.
 - **Terminal floating-panel layering:** In terminal mode, Files and tool overlays use a shared base `z-index` of `20`; activating one raises it to `25`. Global Browser/debug overlays remain above this layer.
 - **Bottom panel maximize toggle:** The bottom tool panel header exposes an IntelliJ-style maximize/restore button (session-only state, not persisted). Maximizing hides the top area (explorer/editor/right panels via `display:none`) and stretches the bottom panel to fill the workspace body; activity bars stay visible. Closing the maximized bottom tool resets the state. Implemented as sibling-only CSS class flips so the terminal keep-alive element is never remounted (no PTY duplication); layout decisions live in the pure `resolveBottomPanelLayout` helper. Maximizing also unselects active top tools on both sides; reselecting a top tool from the activity bar (or a reveal-active-file request) restores the normal layout. State transitions live in the pure `resolveMaximizeToggle` / `resolveTopToolToggle` helpers.
 
-**Native Browser Debug (Windows v1; Linux implementation pending runtime verification):** The Tauri host keeps the existing Browser tool contract and selects a host adapter at the edge. Windows creates a labeled child WebView, injects the shared bridge at document start, and relays only bounded, versioned events through the native controller. Linux uses the equivalent WebKitGTK message hook. Navigation is restricted to loopback or server-reported HTTPS tunnel origins; popups, downloads, and permissions are denied. The child uses per-server profile storage and is destroyed on target/profile changes and main window shutdown. Linux remains explicitly unverified at runtime; setting
+**Native Browser Debug (Windows v1; Linux implementation pending runtime verification):** The Tauri host keeps the existing Browser tool contract and selects a host adapter at the edge. Windows creates a labeled child WebView, injects the shared bridge at document start, and relays only bounded, versioned events through the native controller. Linux uses the equivalent WebKitGTK message hook. Navigation is restricted to loopback or server-reported HTTPS tunnel origins; popups, downloads, and permissions are denied by the Windows WebView2 policy hooks. Linux has no runtime-verified equivalent permission policy yet. The child uses per-server profile storage and is destroyed on target/profile changes and main window shutdown. Linux remains explicitly unverified at runtime; setting
 `VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG=0` selects the existing web iframe host.
+
+See the maintained platform gate and rollback procedure in
+[Native Browser Debug Support](./native-browser-debug-support.md). Deployment
+ownership is intentionally separate: Docker serves `/opt/dam-hopper/web` with
+the server on 4800, systemd runs backend-only on 4801, and legacy nohup is
+loopback-only on 4800.
