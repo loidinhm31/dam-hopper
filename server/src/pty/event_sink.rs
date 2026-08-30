@@ -38,6 +38,26 @@ pub trait EventSink: Send + Sync + 'static {
         restart_count: Option<u32>,
     );
 
+    /// Correlates an exit with a concrete PTY identity when one is available.
+    #[allow(clippy::too_many_arguments)]
+    fn send_terminal_exit_enhanced_with_incarnation(
+        &self,
+        session_id: &str,
+        exit_code: Option<i32>,
+        will_restart: bool,
+        restart_in_ms: Option<u64>,
+        restart_count: Option<u32>,
+        _incarnation: Option<u64>,
+    ) {
+        self.send_terminal_exit_enhanced(
+            session_id,
+            exit_code,
+            will_restart,
+            restart_in_ms,
+            restart_count,
+        );
+    }
+
     /// New event: process restarted successfully.
     fn send_process_restarted(
         &self,
@@ -201,6 +221,33 @@ impl EventSink for BroadcastEventSink {
         self.send_json(payload);
     }
 
+    fn send_terminal_exit_enhanced_with_incarnation(
+        &self,
+        session_id: &str,
+        exit_code: Option<i32>,
+        will_restart: bool,
+        restart_in_ms: Option<u64>,
+        restart_count: Option<u32>,
+        incarnation: Option<u64>,
+    ) {
+        let mut payload = json!({
+            "kind": "terminal:exit",
+            "id": session_id,
+            "exitCode": exit_code,
+            "willRestart": will_restart,
+        });
+        if let Some(ms) = restart_in_ms {
+            payload["restartIn"] = json!(ms);
+        }
+        if let Some(count) = restart_count {
+            payload["restartCount"] = json!(count);
+        }
+        if let Some(value) = incarnation {
+            payload["incarnation"] = json!(value);
+        }
+        self.send_json(payload);
+    }
+
     fn send_process_restarted(
         &self,
         session_id: &str,
@@ -252,5 +299,25 @@ mod tests {
         assert_eq!(event["kind"], "host:alertChanged");
         assert_eq!(event["payload"]["incidentId"], "host-incident-1");
         assert_eq!(event["payload"]["state"], "memoryPressure");
+    }
+
+    #[tokio::test]
+    async fn terminal_exit_includes_its_concrete_incarnation() {
+        let (sink, mut receiver) = BroadcastEventSink::new(1);
+
+        sink.send_terminal_exit_enhanced_with_incarnation(
+            "terminal-1",
+            Some(1),
+            false,
+            None,
+            None,
+            Some(7),
+        );
+
+        let event: serde_json::Value =
+            serde_json::from_str(&receiver.recv().await.unwrap()).unwrap();
+        assert_eq!(event["kind"], "terminal:exit");
+        assert_eq!(event["id"], "terminal-1");
+        assert_eq!(event["incarnation"], 7);
     }
 }
