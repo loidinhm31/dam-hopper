@@ -118,6 +118,11 @@ describe("splitActionToPaneDirection", () => {
           tab: {
             sessionId,
             label: "api:bash",
+            title: {
+              baseLabel: "api:bash",
+              ordinal: 1,
+              fullText: "api:bash #1",
+            },
             session: {
               id: sessionId,
               project: "api",
