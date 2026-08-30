@@ -293,8 +293,8 @@ Notification scope remains xterm-only. DamHopper does not watch external termina
 ### inline terminal suggestions
 
 Automatic suggestions and history capture remain fail-closed until the server verifies
-a shell lifecycle for the current PTY incarnation. The server supports launch-only local
-interactive zsh, fish, and Bash adapters; every other command or shell remains unsupported.
+a shell lifecycle for the current PTY incarnation. On Unix, the server supports launch-only
+local interactive zsh, fish, and Bash adapters; every other command or shell remains unsupported.
 Terminal and outgoing PTY bytes are passive: the feature
 never infers command boundaries from Enter, output silence, replayed scrollback, or
 arbitrary input. Command history is browser-local and users can clear it or disable
@@ -1724,6 +1724,9 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
 - Map<id, DeadSession> tombstones (60s TTL; auto-evicted by cleanup task)
 - Set<id, String> killed tracks manually terminated sessions (used to prevent supervisor respawn race)
 - PTY child env is rebuilt from a safe baseline allowlist, then `TERM` and the resolved session env snapshot are applied before spawn
+- Initial creation and automatic respawn use one command-construction path. Unix shell selection, cwd, and arguments remain unchanged.
+- On Windows, an untargeted terminal with omitted cwd uses an existing user home, then the server current directory; it never uses `/tmp`. Empty or `bash` shell-selector requests launch interactive `cmd.exe` without Unix flags. Other command strings use `cmd.exe /C <command>`.
+- Shell integration is Unix-only. Windows `cmd.exe` sessions remain lifecycle-unverified and never receive Bash, zsh, or fish adapter arguments or nonce environment state.
 - `create()` fully idempotent: removes dead tombstone, inserts into killed set pre-spawn, removes post-spawn (TOCTOU guard)
 - `kill()` marks session dead + adds to killed set, retains 60s tombstone for reconnect
 - `remove()` immediately evicts session + adds to killed set (no restart on user kill)

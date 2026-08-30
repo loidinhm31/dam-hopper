@@ -55,6 +55,15 @@ impl Shell {
     }
 }
 
+#[cfg(windows)]
+pub(super) fn interactive_shell_executable(
+    _command: &str,
+    _env: &HashMap<String, String>,
+) -> Option<String> {
+    None
+}
+
+#[cfg(not(windows))]
 pub(super) fn interactive_shell_executable(
     command: &str,
     env: &HashMap<String, String>,
@@ -413,6 +422,7 @@ mod tests {
         }));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn lifecycle_generations_are_monotonic() {
         let env = HashMap::from([("SHELL".into(), "/bin/zsh".into())]);
@@ -432,6 +442,7 @@ mod tests {
         assert!(second > first);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn selects_bash_for_default_and_explicit_interactive_sessions() {
         let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
@@ -446,11 +457,22 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn preserves_existing_shell_adapters() {
         for shell in ["zsh", "fish"] {
             let env = HashMap::from([("SHELL".into(), format!("/bin/{shell}"))]);
             assert!(ShellIntegration::prepare("", &env).is_some(), "{shell}");
+        }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_shell_integration_is_disabled() {
+        let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
+
+        for command in ["", "bash", "echo windows"] {
+            assert!(interactive_shell_executable(command, &env).is_none());
+            assert!(ShellIntegration::prepare(command, &env).is_none());
         }
     }
 }
