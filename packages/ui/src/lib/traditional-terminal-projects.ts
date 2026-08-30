@@ -3,22 +3,22 @@ import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
 export const FREE_TRADITIONAL_TERMINAL_GROUP_ID = "free-terminals";
 
-export interface TraditionalTerminalProjectGroup {
+export interface TraditionalTerminalProjectGroup<T extends TabEntry = TabEntry> {
   id: string;
   projectName: string | null;
   label: string;
-  terminalTabs: TabEntry[];
+  terminalTabs: T[];
   mountedSessions: MountedSession[];
 }
 
-export function buildTraditionalTerminalProjectGroups(
+export function buildTraditionalTerminalProjectGroups<T extends TabEntry>(
   mountedSessions: readonly MountedSession[],
-  terminalTabs: readonly TabEntry[],
-): TraditionalTerminalProjectGroup[] {
+  terminalTabs: readonly T[],
+): TraditionalTerminalProjectGroup<T>[] {
   const mountedBySessionId = new Map(
     mountedSessions.map((session) => [session.sessionId, session]),
   );
-  const groupsById = new Map<string, TraditionalTerminalProjectGroup>();
+  const groupsById = new Map<string, TraditionalTerminalProjectGroup<T>>();
 
   for (const tab of terminalTabs) {
     const mounted = mountedBySessionId.get(tab.sessionId);
