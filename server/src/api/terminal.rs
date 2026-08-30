@@ -150,8 +150,9 @@ async fn resolve_terminal_cwd(
     requested_cwd: Option<String>,
 ) -> Result<String, ApiError> {
     let Some(target) = target else {
-        return Ok(requested_cwd
-            .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())));
+        return requested_cwd
+            .map(Ok)
+            .unwrap_or_else(default_untargeted_terminal_cwd);
     };
 
     let sandbox = state
@@ -205,6 +206,24 @@ async fn resolve_terminal_cwd(
     }
 
     Ok(cwd.to_string_lossy().into_owned())
+}
+
+#[cfg(not(windows))]
+fn default_untargeted_terminal_cwd() -> Result<String, ApiError> {
+    Ok(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
+}
+
+#[cfg(windows)]
+fn default_untargeted_terminal_cwd() -> Result<String, ApiError> {
+    dirs::home_dir()
+        .filter(|path| path.is_dir())
+        .or_else(|| std::env::current_dir().ok().filter(|path| path.is_dir()))
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok_or_else(|| {
+            ApiError::from_app(AppError::PtyError(
+                "Unable to resolve a valid Windows terminal cwd".into(),
+            ))
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -343,8 +362,17 @@ fn load_project_env_file(
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::{target_path_is_within, target_path_relative};
+    use super::{default_untargeted_terminal_cwd, target_path_is_within, target_path_relative};
     use std::path::Path;
+
+    #[test]
+    fn windows_default_terminal_cwd_is_an_existing_directory() {
+        let cwd = default_untargeted_terminal_cwd()
+            .unwrap_or_else(|error| panic!("Windows cwd fallback: {}", error.0));
+
+        assert!(Path::new(&cwd).is_dir());
+        assert_ne!(cwd, "/tmp");
+    }
 
     #[cfg(windows)]
     #[test]
