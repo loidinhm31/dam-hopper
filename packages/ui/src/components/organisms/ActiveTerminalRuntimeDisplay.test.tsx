@@ -5,7 +5,7 @@ import {
   RuntimeActiveSessionTitle,
 } from "./ActiveTerminalRuntimeDisplay.js";
 import type { MountedSession } from "./MultiTerminalDisplay.js";
-import type { TabEntry } from "./TerminalTabBar.js";
+import type { DisplayTabEntry } from "./TerminalTabBar.js";
 import type { PortEntry } from "@/hooks/use-ports.js";
 
 let mockCompactWorkspace = false;
@@ -60,10 +60,11 @@ const mountedSessions: MountedSession[] = [
   },
 ];
 
-const openTabs: TabEntry[] = [
+const openTabs: DisplayTabEntry[] = [
   {
     sessionId: "session-1",
     label: "bash",
+    title: { baseLabel: "bash", ordinal: 1, fullText: "bash #1" },
   },
 ];
 
