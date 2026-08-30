@@ -52,6 +52,7 @@ import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useBrowserDebug } from "@/hooks/use-browser-debug.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
+import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
@@ -181,9 +182,7 @@ const TerminalTreeView = lazy(() =>
 );
 const TraditionalTerminalProjectsDisplay = lazy(() =>
   import("@/components/organisms/TraditionalTerminalProjectsDisplay.js").then(
-    (m) => ({
-      default: m.TraditionalTerminalProjectsDisplay,
-    }),
+    (m) => ({ default: m.TraditionalTerminalProjectsDisplay }),
   ),
 );
 const ActiveTerminalRuntimeDisplay = lazy(() =>
@@ -376,6 +375,7 @@ export default function WorkspacePage() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
   const browserDebugHost = useBrowserDebugHost();
+  const activeProfileId = useServerProfile()?.id ?? null;
   const { level: appZoomLevel } = useAppZoom();
   const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
@@ -477,7 +477,6 @@ export default function WorkspacePage() {
   );
   const {
     activeTab,
-    openTabs,
     mountedSessions,
     launchForm,
     freeTerminalSavePrompt,
@@ -532,7 +531,7 @@ export default function WorkspacePage() {
     const mountedById = new Map(
       mountedSessions.map((session) => [session.sessionId, session]),
     );
-    const tabsById = new Map(openTabs.map((tab) => [tab.sessionId, tab]));
+    const tabsById = new Map(terminalTabs.map((tab) => [tab.sessionId, tab]));
     const sessionIds = new Set([...mountedById.keys(), ...tabsById.keys()]);
     return [...sessionIds].map((sessionId) => {
       const mounted = mountedById.get(sessionId);
@@ -540,16 +539,17 @@ export default function WorkspacePage() {
       return {
         sessionId,
         label:
+          tab?.title?.fullText ??
           tab?.label ??
-          (mounted ? `${mounted.project} · ${mounted.command}` : sessionId),
+          (mounted ? `${mounted.project} · ${mounted.command}` : "Terminal"),
+        ...(tab?.title ? { openTitle: tab.title } : {}),
         mounted: Boolean(mounted),
         registered: registeredTerminalIds.has(sessionId),
         alive: sessionMap.get(sessionId)?.alive,
         current: activeTab === sessionId,
       };
     });
-  }, [activeTab, mountedSessions, openTabs, registeredTerminalIds, sessionMap]);
-
+  }, [activeTab, mountedSessions, registeredTerminalIds, sessionMap, terminalTabs]);
   const activeBrowserTerminalTarget = useMemo(
     () =>
       browserTerminalTargets.find(
@@ -2190,6 +2190,7 @@ export default function WorkspacePage() {
       <BrowserDebugKeepAliveHost
         ref={browserKeepAliveRef}
         browser={browserDebug}
+        profileId={activeProfileId}
         viewportRef={browserViewportRef}
         viewportStageRef={browserViewportStageRef}
         viewportVersion={browserViewportVersion}

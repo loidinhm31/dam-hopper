@@ -375,7 +375,7 @@ export function TerminalPanel({
     terminalEntry.invalidateSuggestionGeometry = () =>
       geometryAdapter?.invalidate();
     onTerminalReady?.(safeSessionId);
-    releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null);
+    releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null, term);
 
     const transport = getTransport();
     agentNotifications = attachTerminalAgentNotifications({

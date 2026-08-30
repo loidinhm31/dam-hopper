@@ -11,7 +11,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { TerminalActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
+import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import {
   openTerminalDiagnosticsContextMenu,
   type TerminalDiagnosticsMenuHandler,
@@ -35,7 +36,7 @@ export interface DragItem {
 
 interface DraggableTabProps {
   paneId: string;
-  tab: TabEntry;
+  tab: DisplayTabEntry;
   isActive: boolean;
   onSelect: (sessionId: string) => void;
   onTogglePin?: (sessionId: string) => void;
@@ -98,7 +99,10 @@ export function DraggableTab({
           sessionId={tab.sessionId}
           alive={tab.session?.alive}
         />
-        <span className="max-w-32 truncate block font-mono">{tab.label}</span>
+        <TerminalTitleText
+          title={tab.title}
+          className="max-w-32 flex-1 font-mono"
+        />
       </button>
 
       <button
@@ -151,7 +155,7 @@ export function DraggableTab({
 
 export interface TabBarProps {
   paneId: string;
-  paneTabs: TabEntry[];
+  paneTabs: DisplayTabEntry[];
   activeSessionId: string | null;
   activeProject?: string;
   terminalCommitStatusEnabled: boolean;
