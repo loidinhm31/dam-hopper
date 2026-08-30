@@ -795,12 +795,34 @@ impl EventSink for IncarnationEventSink {
         restart_count: Option<u32>,
     ) {
         self.with_current(|sink| {
-            sink.send_terminal_exit_enhanced(
+            sink.send_terminal_exit_enhanced_with_incarnation(
                 session_id,
                 exit_code,
                 will_restart,
                 restart_in_ms,
                 restart_count,
+                Some(self.incarnation),
+            )
+        });
+    }
+
+    fn send_terminal_exit_enhanced_with_incarnation(
+        &self,
+        session_id: &str,
+        exit_code: Option<i32>,
+        will_restart: bool,
+        restart_in_ms: Option<u64>,
+        restart_count: Option<u32>,
+        _incarnation: Option<u64>,
+    ) {
+        self.with_current(|sink| {
+            sink.send_terminal_exit_enhanced_with_incarnation(
+                session_id,
+                exit_code,
+                will_restart,
+                restart_in_ms,
+                restart_count,
+                Some(self.incarnation),
             )
         });
     }

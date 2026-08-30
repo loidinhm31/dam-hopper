@@ -1235,6 +1235,7 @@ export class WsTransport implements Transport {
         willRestart: boolean;
         restartIn?: number;
         restartCount?: number;
+        incarnation?: number;
       }) => void
     >
   >();
@@ -1602,6 +1603,7 @@ export class WsTransport implements Transport {
         willRestart?: boolean;
         restartIn?: number;
         restartCount?: number;
+        incarnation?: unknown;
         previousExitCode?: number | null;
         lifecycle?: unknown;
         generation?: unknown;
@@ -1684,6 +1686,11 @@ export class WsTransport implements Transport {
                   willRestart: msg.willRestart ?? false,
                   restartIn: msg.restartIn,
                   restartCount: msg.restartCount,
+                  incarnation:
+                    Number.isSafeInteger(msg.incarnation) &&
+                    (msg.incarnation as number) >= 0
+                      ? (msg.incarnation as number)
+                      : undefined,
                 }),
               );
             }
@@ -2172,6 +2179,7 @@ export class WsTransport implements Transport {
       willRestart: boolean;
       restartIn?: number;
       restartCount?: number;
+      incarnation?: number;
     }) => void,
   ): () => void {
     if (!this.exitEnhancedListeners.has(id))
