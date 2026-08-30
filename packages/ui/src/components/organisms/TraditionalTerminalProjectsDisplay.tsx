@@ -13,7 +13,7 @@ import {
 } from "@/components/organisms/MultiTerminalDisplay.js";
 import { TraditionalTerminalProjectsNavigator } from "@/components/organisms/TraditionalTerminalProjectsNavigator.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
 import { useTraditionalTerminalProjectSelection } from "@/hooks/use-traditional-terminal-project-selection.js";
@@ -23,7 +23,6 @@ import {
   traditionalTerminalProjectPanelId,
   traditionalTerminalProjectTabId,
 } from "@/lib/traditional-terminal-projects.js";
-import { applyTerminalTitleOrdinals } from "@/lib/terminal-title.js";
 import { cn } from "@/lib/utils.js";
 
 const TRADITIONAL_PROJECTS_NAVIGATOR_WIDTH_KEY =
@@ -32,7 +31,7 @@ const TRADITIONAL_PROJECTS_NAVIGATOR_WIDTH_KEY =
 export interface TraditionalTerminalProjectsDisplayProps {
   activeSessionId: string | null;
   mountedSessions: MountedSession[];
-  terminalTabs: TabEntry[];
+  terminalTabs: DisplayTabEntry[];
   currentProjectName: string | null;
   currentProjectRevision: number;
   layoutRevision?: number;
@@ -93,11 +92,6 @@ export function TraditionalTerminalProjectsDisplay({
     onSelectTab,
   });
   const { selectedGroup, activeSessionForGroup } = selection;
-  const selectedGroupTerminalTabs = useMemo(
-    () =>
-      selectedGroup ? applyTerminalTitleOrdinals(selectedGroup.terminalTabs) : [],
-    [selectedGroup],
-  );
   const selectedGroupProjectName = selectedGroup?.projectName ?? null;
   const activeSessionGroup = activeSessionId
     ? groups.find((group) =>
@@ -164,7 +158,7 @@ export function TraditionalTerminalProjectsDisplay({
         key={selectedGroup.id}
         activeSessionId={activeSessionForGroup}
         mountedSessions={selectedGroup.mountedSessions}
-        openTabs={selectedGroupTerminalTabs}
+        openTabs={selectedGroup.terminalTabs}
         layoutStorageKey={traditionalTerminalLayoutStorageKey(selectedGroup.id)}
         terminalCommitStatusEnabled={false}
         layoutRevision={layoutRevision}
