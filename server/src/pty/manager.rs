@@ -752,7 +752,16 @@ impl EventSink for IncarnationEventSink {
     }
 
     fn send_terminal_exit(&self, session_id: &str, exit_code: Option<i32>) {
-        self.with_current(|sink| sink.send_terminal_exit(session_id, exit_code));
+        self.with_current(|sink| {
+            sink.send_terminal_exit_enhanced_with_incarnation(
+                session_id,
+                exit_code,
+                false,
+                None,
+                None,
+                Some(self.incarnation),
+            )
+        });
     }
 
     fn send_terminal_changed(&self) {
