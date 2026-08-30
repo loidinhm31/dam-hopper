@@ -23,6 +23,7 @@ import {
   traditionalTerminalProjectPanelId,
   traditionalTerminalProjectTabId,
 } from "@/lib/traditional-terminal-projects.js";
+import { applyTerminalTitleOrdinals } from "@/lib/terminal-title.js";
 import { cn } from "@/lib/utils.js";
 
 const TRADITIONAL_PROJECTS_NAVIGATOR_WIDTH_KEY =
@@ -92,6 +93,11 @@ export function TraditionalTerminalProjectsDisplay({
     onSelectTab,
   });
   const { selectedGroup, activeSessionForGroup } = selection;
+  const selectedGroupTerminalTabs = useMemo(
+    () =>
+      selectedGroup ? applyTerminalTitleOrdinals(selectedGroup.terminalTabs) : [],
+    [selectedGroup],
+  );
   const selectedGroupProjectName = selectedGroup?.projectName ?? null;
   const activeSessionGroup = activeSessionId
     ? groups.find((group) =>
@@ -158,7 +164,7 @@ export function TraditionalTerminalProjectsDisplay({
         key={selectedGroup.id}
         activeSessionId={activeSessionForGroup}
         mountedSessions={selectedGroup.mountedSessions}
-        openTabs={selectedGroup.terminalTabs}
+        openTabs={selectedGroupTerminalTabs}
         layoutStorageKey={traditionalTerminalLayoutStorageKey(selectedGroup.id)}
         terminalCommitStatusEnabled={false}
         layoutRevision={layoutRevision}

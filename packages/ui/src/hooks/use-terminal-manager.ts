@@ -48,7 +48,7 @@ import {
   freeTerminalBaseLabel,
 } from "@/lib/terminal-title.js";
 import type { TabEntry, DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
-import type { MountedSession from "@/components/organisms/MultiTerminalDisplay.js";
+import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TreeCommand, TreeProject } from "@/hooks/use-terminal-tree.js";
 import type { SessionInfo } from "@/api/client.js";
 import type { SetURLSearchParams } from "react-router-dom";
