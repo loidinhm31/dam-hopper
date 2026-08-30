@@ -114,6 +114,13 @@ export function deriveTerminalAutoAttachState({
           if (tab.session?.alive !== true) return tab;
           return { ...tab, session: { ...tab.session, alive: false } };
         }
+        if (
+          stoppedSessionIds.has(session.id) &&
+          session.alive &&
+          tab.session?.alive === false
+        ) {
+          return tab;
+        }
         const effectiveSession = stoppedSessionIds.has(session.id) && session.alive
           ? { ...session, alive: false }
           : session;
