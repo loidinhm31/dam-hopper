@@ -76,6 +76,28 @@ describe("buildTerminalDisplayTabs", () => {
     expect(tab?.project).toBe("authoritative");
   });
 
+  it("prefers explicit tab project metadata over hydrated session metadata", () => {
+    const id = "terminal:pending-project:_:1";
+    const session: SessionInfo = {
+      id,
+      project: "stale-session-project",
+      command: "bash",
+      cwd: "/repo",
+      type: "terminal",
+      alive: true,
+      startedAt: 1,
+    };
+    const [tab] = buildTerminalDisplayTabs(
+      [{ sessionId: id, label: "pending:bash", project: "explicit-project" }],
+      new Map([[id, session]]),
+      profileSessionIds,
+      new Map(),
+    );
+
+    expect(tab?.project).toBe("explicit-project");
+    expect(tab?.title.fullText).toBe("pending:bash #1");
+  });
+
   it("keeps free tabs in the shared projectless group", () => {
     const tabs = buildTerminalDisplayTabs(
       [
