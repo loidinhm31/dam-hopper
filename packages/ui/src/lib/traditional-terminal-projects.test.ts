@@ -5,6 +5,7 @@ import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import {
   FREE_TRADITIONAL_TERMINAL_GROUP_ID,
   buildTraditionalTerminalProjectGroups,
+  firstRemainingTraditionalTerminalId,
   traditionalTerminalLayoutStorageKey,
 } from "./traditional-terminal-projects.js";
 
@@ -131,6 +132,28 @@ describe("buildTraditionalTerminalProjectGroups", () => {
       alphaTitle,
       betaTitle,
     ]);
+  });
+});
+
+describe("firstRemainingTraditionalTerminalId", () => {
+  it("selects the first remaining terminal in the closed tab's project", () => {
+    const terminalTabs = [
+      tab("alpha:one", "alpha", true),
+      tab("alpha:two", "alpha", true),
+      tab("alpha:three", "alpha", true),
+    ];
+    const [group] = buildTraditionalTerminalProjectGroups(
+      terminalTabs.map((entry) => mounted(entry.sessionId, "alpha")),
+      terminalTabs,
+    );
+
+    expect(group).toBeDefined();
+    expect(firstRemainingTraditionalTerminalId(group!, "alpha:two")).toBe(
+      "alpha:one",
+    );
+    expect(firstRemainingTraditionalTerminalId(group!, "alpha:three")).toBe(
+      "alpha:one",
+    );
   });
 });
 

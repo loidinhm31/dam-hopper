@@ -19,6 +19,7 @@ import { useResizeHandle } from "@/hooks/use-resize-handle.js";
 import { useTraditionalTerminalProjectSelection } from "@/hooks/use-traditional-terminal-project-selection.js";
 import {
   buildTraditionalTerminalProjectGroups,
+  firstRemainingTraditionalTerminalId,
   traditionalTerminalLayoutStorageKey,
   traditionalTerminalProjectPanelId,
   traditionalTerminalProjectTabId,
@@ -41,7 +42,10 @@ export interface TraditionalTerminalProjectsDisplayProps {
   onNewFreeTerminal?: () => void;
   onSelectTab?: (sessionId: string) => void;
   onToggleTabPin?: (sessionId: string) => void;
-  onCloseTab?: (sessionId: string) => void;
+  onCloseTab?: (
+    sessionId: string,
+    preferredFallbackSessionId?: string,
+  ) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onVisibleSessionIdsChange?: (sessionIds: ReadonlySet<string>) => void;
   browserOpen?: boolean;
@@ -141,6 +145,17 @@ export function TraditionalTerminalProjectsDisplay({
     if (group) rememberNewTerminalTarget(group.projectName);
     selection.handleSelectTab(sessionId);
   }
+  function handleCloseTerminalTab(sessionId: string) {
+    const group = groups.find((candidate) =>
+      candidate.terminalTabs.some((tab) => tab.sessionId === sessionId),
+    );
+    onCloseTab?.(
+      sessionId,
+      group
+        ? firstRemainingTraditionalTerminalId(group, sessionId)
+        : undefined,
+    );
+  }
 
   function handleNewTerminal() {
     const targetProjectName = newTerminalProjectTarget;
@@ -167,7 +182,7 @@ export function TraditionalTerminalProjectsDisplay({
         onNewTerminal={handleNewTerminal}
         onSelectTab={handleSelectTab}
         onToggleTabPin={onToggleTabPin}
-        onCloseTab={onCloseTab}
+        onCloseTab={handleCloseTerminalTab}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         onVisibleSessionIdsChange={onVisibleSessionIdsChange}
         browserOpen={browserOpen}
