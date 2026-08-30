@@ -30,6 +30,7 @@ function derive({
   ignoredSessionIds,
   pendingSessionIds,
   pinnedSessionIds,
+  stoppedSessionIds,
 }: {
   sessions: SessionInfo[];
   openTabs?: TabEntry[];
@@ -40,6 +41,7 @@ function derive({
   ignoredSessionIds?: Set<string>;
   pendingSessionIds?: Set<string>;
   pinnedSessionIds?: Set<string>;
+  stoppedSessionIds?: ReadonlySet<string>;
 }) {
   return deriveTerminalAutoAttachState({
     sessions,
@@ -51,6 +53,7 @@ function derive({
     ignoredSessionIds,
     pendingSessionIds,
     pinnedSessionIds,
+    stoppedSessionIds,
   });
 }
 
@@ -152,6 +155,7 @@ describe("deriveTerminalAutoAttachState", () => {
       isSaveable: true,
     });
   });
+
   it("propagates authoritative project metadata to hydrated tabs", () => {
     const id = "terminal:parsed-project:_:100";
     const result = derive({
@@ -234,14 +238,21 @@ describe("deriveTerminalAutoAttachState", () => {
     ]);
   });
 
-  it("keeps an already open terminal visible after it exits", () => {
+  it("keeps and hydrates an already open terminal after it exits", () => {
+    const deadSession = session("custom:web:test", {
+      project: "web",
+      command: "pnpm test",
+      type: "custom",
+      alive: false,
+      exitCode: 17,
+    });
     const result = derive({
-      sessions: [],
+      sessions: [deadSession],
       openTabs: [
         {
-          sessionId: "custom:web:test",
+          sessionId: deadSession.id,
           label: "web:test",
-          session: session("custom:web:test", {
+          session: session(deadSession.id, {
             project: "web",
             command: "pnpm test",
             type: "custom",
@@ -250,22 +261,130 @@ describe("deriveTerminalAutoAttachState", () => {
       ],
       mountedSessions: [
         {
-          sessionId: "custom:web:test",
+          sessionId: deadSession.id,
           project: "web",
           command: "pnpm test",
           cwd: "/repo/web",
         },
       ],
-      activeTab: "custom:web:test",
+      activeTab: deadSession.id,
     });
 
-    expect(result.openTabs.map((tab) => tab.sessionId)).toEqual([
-      "custom:web:test",
+    expect(result.openTabs).toMatchObject([
+      {
+        sessionId: deadSession.id,
+        session: { alive: false, exitCode: 17 },
+      },
     ]);
-    expect(result.mountedSessions.map((mounted) => mounted.sessionId)).toEqual([
-      "custom:web:test",
+    expect(result.mountedSessions).toEqual([
+      {
+        sessionId: deadSession.id,
+        project: "web",
+        command: "pnpm test",
+        cwd: "/repo",
+        worktreePath: undefined,
+      },
     ]);
-    expect(result.activeTab).toBe("custom:web:test");
+    expect(result.activeTab).toBe(deadSession.id);
+
+    const closed = derive({
+      sessions: [deadSession],
+      openTabs: result.openTabs,
+      mountedSessions: result.mountedSessions,
+      activeTab: result.activeTab,
+      ignoredSessionIds: new Set([deadSession.id]),
+    });
+
+    expect(closed.openTabs).toEqual([]);
+    expect(closed.mountedSessions).toEqual([]);
+    expect(closed.activeTab).toBeNull();
+  });
+  it("keeps an exited tab stopped while its session snapshot is stale", () => {
+    const staleSession = session("custom:web:test", {
+      project: "web",
+      type: "custom",
+      alive: true,
+    });
+    const result = derive({
+      sessions: [staleSession],
+      openTabs: [
+        {
+          sessionId: staleSession.id,
+          label: "web:test",
+          session: staleSession,
+        },
+      ],
+      mountedSessions: [
+        {
+          sessionId: staleSession.id,
+          project: "web",
+          command: staleSession.command,
+          cwd: staleSession.cwd,
+        },
+      ],
+      activeTab: staleSession.id,
+      stoppedSessionIds: new Set([staleSession.id]),
+    });
+
+    expect(result.openTabs[0]?.session).toMatchObject({ alive: false });
+    expect(result.activeTab).toBe(staleSession.id);
+    const stable = derive({
+      sessions: [staleSession],
+      openTabs: result.openTabs,
+      mountedSessions: result.mountedSessions,
+      activeTab: result.activeTab,
+      stoppedSessionIds: new Set([staleSession.id]),
+    });
+    expect(stable.openTabs[0]?.session).toBe(result.openTabs[0]?.session);
+  });
+  it("marks a retained tab stopped when its session disappears", () => {
+    const staleSession = session("custom:web:test", {
+      project: "web",
+      type: "custom",
+      alive: true,
+    });
+    const result = derive({
+      sessions: [],
+      openTabs: [
+        {
+          sessionId: staleSession.id,
+          label: "web:test",
+          session: staleSession,
+        },
+      ],
+      mountedSessions: [
+        {
+          sessionId: staleSession.id,
+          project: "web",
+          command: staleSession.command,
+          cwd: staleSession.cwd,
+        },
+      ],
+      activeTab: staleSession.id,
+    });
+
+    expect(result.openTabs[0]?.session).toMatchObject({ alive: false });
+    expect(result.activeTab).toBe(staleSession.id);
+    expect(result.mountedSessions).toEqual([
+      {
+        sessionId: staleSession.id,
+        project: "web",
+        command: staleSession.command,
+        cwd: staleSession.cwd,
+      },
+    ]);
+
+    const closed = derive({
+      sessions: [],
+      openTabs: result.openTabs,
+      mountedSessions: result.mountedSessions,
+      activeTab: result.activeTab,
+      ignoredSessionIds: new Set([staleSession.id]),
+    });
+
+    expect(closed.openTabs).toEqual([]);
+    expect(closed.mountedSessions).toEqual([]);
+    expect(closed.activeTab).toBeNull();
   });
 
   it("does not resurrect explicitly ignored live sessions", () => {

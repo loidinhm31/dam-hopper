@@ -30,7 +30,7 @@ use crate::{
         event_sink::EventSink,
         output_control_parser::Utf8StreamDecoder,
         session::{DeadSession, LiveSession, RespawnOpts, SessionMeta, SessionType},
-        shell_integration::{interactive_shell_executable, ShellIntegration},
+        shell_integration::ShellIntegration,
         shell_lifecycle::{LifecycleEvent, LifecycleState, ShellLifecycle},
     },
     workspace_target::{
@@ -38,6 +38,9 @@ use crate::{
         WorkspaceTargetError, WorkspaceTargetResolver,
     },
 };
+
+#[cfg(not(windows))]
+use crate::pty::shell_integration::interactive_shell_executable;
 
 const DEAD_SESSION_TTL: Duration = Duration::from_secs(60);
 /// Validation regex equivalent: allow word chars, colons, dots, hyphens.
@@ -749,7 +752,16 @@ impl EventSink for IncarnationEventSink {
     }
 
     fn send_terminal_exit(&self, session_id: &str, exit_code: Option<i32>) {
-        self.with_current(|sink| sink.send_terminal_exit(session_id, exit_code));
+        self.with_current(|sink| {
+            sink.send_terminal_exit_enhanced_with_incarnation(
+                session_id,
+                exit_code,
+                false,
+                None,
+                None,
+                Some(self.incarnation),
+            )
+        });
     }
 
     fn send_terminal_changed(&self) {
@@ -792,12 +804,34 @@ impl EventSink for IncarnationEventSink {
         restart_count: Option<u32>,
     ) {
         self.with_current(|sink| {
-            sink.send_terminal_exit_enhanced(
+            sink.send_terminal_exit_enhanced_with_incarnation(
                 session_id,
                 exit_code,
                 will_restart,
                 restart_in_ms,
                 restart_count,
+                Some(self.incarnation),
+            )
+        });
+    }
+
+    fn send_terminal_exit_enhanced_with_incarnation(
+        &self,
+        session_id: &str,
+        exit_code: Option<i32>,
+        will_restart: bool,
+        restart_in_ms: Option<u64>,
+        restart_count: Option<u32>,
+        _incarnation: Option<u64>,
+    ) {
+        self.with_current(|sink| {
+            sink.send_terminal_exit_enhanced_with_incarnation(
+                session_id,
+                exit_code,
+                will_restart,
+                restart_in_ms,
+                restart_count,
+                Some(self.incarnation),
             )
         });
     }
@@ -1048,7 +1082,7 @@ impl PtySessionManager {
             })?;
 
         let integration = ShellIntegration::prepare(&opts.command, &opts.env);
-        let mut cmd = build_command(&opts);
+        let mut cmd = build_command(&opts.command, &opts.cwd, &opts.env);
         apply_child_env(&mut cmd, &opts.env);
         if let Some(integration) = &integration {
             integration.apply(&mut cmd);
@@ -3269,29 +3303,7 @@ async fn respawn_internal(
     };
 
     let integration = ShellIntegration::prepare(&opts.command, &opts.env);
-    let mut build_cmd = if cfg!(target_os = "windows") {
-        CommandBuilder::new("cmd.exe")
-    } else if opts.command == "bash" {
-        CommandBuilder::new(
-            interactive_shell_executable(&opts.command, &opts.env)
-                .expect("explicit bash must resolve to an executable"),
-        )
-    } else if opts.command.is_empty() {
-        let shell = opts
-            .env
-            .get("SHELL")
-            .filter(|s| s.starts_with('/'))
-            .cloned()
-            .unwrap_or_else(|| "/bin/bash".to_string());
-        CommandBuilder::new(&shell)
-    } else {
-        let mut c = CommandBuilder::new("/bin/sh");
-        c.arg("-c");
-        c.arg(&opts.command);
-        c
-    };
-
-    build_cmd.cwd(normalized_command_cwd(&opts.cwd));
+    let mut build_cmd = build_command(&opts.command, &opts.cwd, &opts.env);
     apply_child_env(&mut build_cmd, &opts.env);
     if let Some(integration) = &integration {
         integration.apply(&mut build_cmd);
@@ -3567,30 +3579,41 @@ fn normalized_command_cwd(path: &str) -> String {
     strip_unc_prefix(path)
 }
 
-fn build_command(opts: &PtyCreateOpts) -> CommandBuilder {
-    let is_interactive = opts.command.is_empty();
-
-    let (exe, args) = if cfg!(target_os = "windows") {
+fn build_command(command: &str, cwd: &str, env: &HashMap<String, String>) -> CommandBuilder {
+    #[cfg(windows)]
+    let _ = env;
+    #[cfg(windows)]
+    let (exe, args) = if command.is_empty() || command == "bash" {
         ("cmd.exe".to_string(), vec![])
-    } else if opts.command == "bash" {
-        (
-            interactive_shell_executable(&opts.command, &opts.env)
-                .expect("explicit bash must resolve to an executable"),
-            vec![],
-        )
-    } else if is_interactive {
-        let shell = opts
-            .env
-            .get("SHELL")
-            .filter(|s| s.starts_with('/'))
-            .cloned()
-            .unwrap_or_else(|| "/bin/bash".to_string());
-        (shell, vec![])
     } else {
         (
-            "/bin/sh".to_string(),
-            vec!["-c".to_string(), opts.command.clone()],
+            "cmd.exe".to_string(),
+            vec!["/C".to_string(), command.to_string()],
         )
+    };
+
+    #[cfg(not(windows))]
+    let (exe, args) = {
+        let is_interactive = command.is_empty();
+        if command == "bash" {
+            (
+                interactive_shell_executable(command, env)
+                    .expect("explicit bash must resolve to an executable"),
+                vec![],
+            )
+        } else if is_interactive {
+            let shell = env
+                .get("SHELL")
+                .filter(|s| s.starts_with('/'))
+                .cloned()
+                .unwrap_or_else(|| "/bin/bash".to_string());
+            (shell, vec![])
+        } else {
+            (
+                "/bin/sh".to_string(),
+                vec!["-c".to_string(), command.to_string()],
+            )
+        }
     };
 
     let mut cmd = CommandBuilder::new(&exe);
@@ -3598,7 +3621,7 @@ fn build_command(opts: &PtyCreateOpts) -> CommandBuilder {
         cmd.arg(arg);
     }
     // Strip UNC prefix to avoid CMD.EXE "UNC paths are not supported" error
-    let safe_cwd = normalized_command_cwd(&opts.cwd);
+    let safe_cwd = normalized_command_cwd(cwd);
     cmd.cwd(safe_cwd);
     cmd
 }
@@ -3636,7 +3659,25 @@ pub(crate) fn build_child_env_from_parent_snapshot(
 fn safe_baseline_env_from(parent_env: &HashMap<String, OsString>) -> Vec<(&'static str, OsString)> {
     SAFE_BASELINE_ENV_VARS
         .iter()
-        .filter_map(|key| parent_env.get(*key).cloned().map(|value| (*key, value)))
+        .filter_map(|key| {
+            #[cfg(windows)]
+            {
+                parent_env
+                    .get(*key)
+                    .cloned()
+                    .or_else(|| {
+                        parent_env
+                            .iter()
+                            .find(|(parent_key, _)| parent_key.eq_ignore_ascii_case(key))
+                            .map(|(_, value)| value.clone())
+                    })
+                    .map(|value| (*key, value))
+            }
+            #[cfg(not(windows))]
+            {
+                parent_env.get(*key).cloned().map(|value| (*key, value))
+            }
+        })
         .collect()
 }
 
@@ -3817,6 +3858,58 @@ mod strip_unc_prefix_tests {
 }
 
 #[cfg(test)]
+mod command_builder_tests {
+    use super::build_command;
+    use std::collections::HashMap;
+
+    fn argv(command: &portable_pty::CommandBuilder) -> Vec<String> {
+        command
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_build_command_uses_native_cmd() {
+        let cwd = r"\\?\C:\Users\test\path";
+        let env = HashMap::new();
+
+        for selector in ["", "bash"] {
+            let command = build_command(selector, cwd, &env);
+            assert_eq!(argv(&command), vec!["cmd.exe"]);
+            assert_eq!(
+                command.get_cwd().and_then(|path| path.to_str()),
+                Some(r"C:\Users\test\path")
+            );
+        }
+
+        let command = build_command("echo windows", cwd, &env);
+        assert_eq!(argv(&command), vec!["cmd.exe", "/C", "echo windows"]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_build_command_preserves_shell_argv() {
+        let cwd = "/tmp";
+        let bash_env = HashMap::from([("SHELL".to_string(), "/usr/bin/bash".to_string())]);
+        assert_eq!(
+            argv(&build_command("bash", cwd, &bash_env)),
+            vec!["/usr/bin/bash"]
+        );
+
+        let shell_env = HashMap::from([("SHELL".to_string(), "/bin/zsh".to_string())]);
+        assert_eq!(argv(&build_command("", cwd, &shell_env)), vec!["/bin/zsh"]);
+
+        assert_eq!(
+            argv(&build_command("echo windows", cwd, &HashMap::new())),
+            vec!["/bin/sh", "-c", "echo windows"]
+        );
+    }
+}
+
+#[cfg(test)]
 mod attach_snapshot_tests {
     use super::{attach_editing_generation, ShellLifecycle};
 
@@ -3838,6 +3931,22 @@ mod tests {
 
     fn terminal_shutdown() -> Arc<AtomicBool> {
         Arc::new(AtomicBool::new(true))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn child_env_builder_preserves_case_insensitive_windows_path() {
+        let parent_env =
+            HashMap::from([("Path".to_string(), OsString::from(r"C:\Windows\System32"))]);
+
+        let child_env = build_child_env_from_parent_snapshot(&parent_env, &HashMap::new())
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(
+            child_env.get("PATH"),
+            Some(&OsString::from(r"C:\Windows\System32"))
+        );
     }
 
     #[test]

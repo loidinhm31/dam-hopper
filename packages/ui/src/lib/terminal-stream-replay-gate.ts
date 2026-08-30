@@ -25,3 +25,13 @@ export function resetTerminalStreamReplayGateForAttach(
   gate.replayGeneration += 1;
   gate.queuedLiveData.length = 0;
 }
+
+export function markTerminalStreamReadyAfterRestart(
+  gate: TerminalStreamReplayGate,
+): void {
+  gate.hasAttachBufferBeenReceived = true;
+  gate.isReplayWriting = false;
+  gate.isLiveStreamReady = true;
+  gate.replayGeneration += 1;
+  gate.queuedLiveData.length = 0;
+}

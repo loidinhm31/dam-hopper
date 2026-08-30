@@ -63,6 +63,32 @@ export function getBrowserDebugViewportFrame(
     getBrowserDebugViewportGeometry(viewport, clipElement)?.visibleFrame ?? null
   );
 }
+/**
+ * Resolve the native child WebView frame in the rendered host window's
+ * coordinate space. Unlike a DOM iframe, a sibling native WebView is not
+ * affected by the document's CSS zoom, so its bounds must not be normalized
+ * back to unzoomed CSS pixels.
+ */
+export function getBrowserDebugNativeViewportFrame(
+  viewport: Element | null,
+  clipElement?: Element | null,
+): BrowserDebugViewportFrame | null {
+  if (!viewport) return null;
+  const rect = viewport.getBoundingClientRect();
+  const frame = {
+    top: rect.top,
+    left: rect.left,
+    width: rect.width,
+    height: rect.height,
+  };
+  const visibleFrame = clipBrowserDebugViewportFrame(
+    frame,
+    window.innerWidth,
+    window.innerHeight,
+    clipElement?.getBoundingClientRect(),
+  );
+  return visibleFrame ? frame : null;
+}
 
 /**
  * Resolve both the requested viewport and its visible intersection. Native

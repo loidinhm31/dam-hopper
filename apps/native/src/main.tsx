@@ -24,6 +24,7 @@ import { createNativeSshForwardHost } from "./native-ssh-forward-host";
 import {
   getNativeBrowserDebugEnvironment,
   isNativeBrowserDebugEnabled,
+  isNativeBrowserDebugPlatformSupported,
   NativeBrowserDebugHost,
 } from "./native-browser-debug-host";
 
@@ -139,15 +140,15 @@ const nativePlatform =
   typeof __DAM_HOPPER_TAURI_PLATFORM__ === "string"
     ? __DAM_HOPPER_TAURI_PLATFORM__
     : "unknown";
-const nativeBrowserDebugHost =
+const nativeBrowserDebugSupported =
   nativeBrowserDebugEnabled &&
-  nativePlatform !== "android" &&
-  nativePlatform !== "ios"
-    ? new NativeBrowserDebugHost()
-    : null;
+  isNativeBrowserDebugPlatformSupported(nativePlatform);
+const nativeBrowserDebugHost = nativeBrowserDebugSupported
+  ? new NativeBrowserDebugHost()
+  : null;
 const nativeBrowserDebugEnvironment = getNativeBrowserDebugEnvironment(
   nativePlatform,
-  nativeBrowserDebugEnabled,
+  nativeBrowserDebugSupported,
 );
 window.addEventListener(
   "beforeunload",

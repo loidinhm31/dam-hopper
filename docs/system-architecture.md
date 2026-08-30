@@ -293,8 +293,8 @@ Notification scope remains xterm-only. DamHopper does not watch external termina
 ### inline terminal suggestions
 
 Automatic suggestions and history capture remain fail-closed until the server verifies
-a shell lifecycle for the current PTY incarnation. The server supports launch-only local
-interactive zsh, fish, and Bash adapters; every other command or shell remains unsupported.
+a shell lifecycle for the current PTY incarnation. On Unix, the server supports launch-only
+local interactive zsh, fish, and Bash adapters; every other command or shell remains unsupported.
 Terminal and outgoing PTY bytes are passive: the feature
 never infers command boundaries from Enter, output silence, replayed scrollback, or
 arbitrary input. Command history is browser-local and users can clear it or disable
@@ -653,6 +653,12 @@ deployed parent origins are compiled into the extension from
 iframe embedding through its browser policy; DamHopper does not bypass
 `X-Frame-Options` or restrictive CSP.
 
+The native desktop controller enforces the approved origin boundary before
+navigation and across redirects. The web iframe fallback can validate bridge
+messages but cannot inspect a cross-origin iframe's final URL after an
+external redirect. Such a redirect may remain visually rendered without
+trusted bridge access or page inspection and is not a supported preview.
+
 The web build packages the extension as
 `/browser-debug-extension/dam-hopper-browser-debug.zip`. When the Browser
 tool cannot complete the bridge handshake, it offers this download and directs
@@ -745,7 +751,8 @@ flowchart LR
 Tauri v2 native client that reuses the same `packages/ui` runtime as the web
 host. It is a remote client only: it does not embed the Rust server as a
 sidecar, does not rewrite PTY behavior in native code, and keeps Tauri
-permissions to `core:default`.
+permissions to `core:default` plus the scoped `browser-debug` permission
+granted to the `browser-debug-main` capability on the main window.
 
 **Frontend host:**
 
@@ -763,7 +770,7 @@ permissions to `core:default`.
 
 - `packages/ui` owns the host-independent `AppZoomProvider` and `useAppZoom` contract. `DamHopperApp` wraps its complete shared tree, so web and native hosts use the same behavior without host bootstrap or Tauri wiring.
 - `TopNav` exposes decrement/increment controls for the discrete `50%` through `120%` levels in `10%` steps. The validated level is best-effort persisted in local storage under `dam-hopper:app-zoom:v1` and defaults to `100%`.
-- The provider applies CSS `zoom` to `document.documentElement`, which includes normal app content and body-mounted portals. It changes internal presentation scale only; it does not change the OS/native window or the existing Browser Debug viewport model.
+- The provider applies CSS `zoom` to `document.documentElement`, which includes normal app content and body-mounted portals. It changes internal presentation scale only; it does not change the OS/native window or the Browser Debug viewport model. The native Browser Debug child mirrors this factor with WebView page zoom while using rendered DOM coordinates for its bounds, so selected target CSS dimensions remain stable.
 
 **Native browser-debug controller (Phase 03):**
 
@@ -771,7 +778,12 @@ permissions to `core:default`.
 - Custom viewport geometry is supplied by the shared UI through the existing
   host lifecycle contract; it does not resize the Tauri main window. Web uses
   the iframe adapter, while desktop native uses the child WebView adapter.
-- Target navigation is parsed and restricted to HTTP loopback or explicitly supplied HTTPS tunnel origins. Credentials, unsafe schemes, popups, downloads, external redirects, and Windows WebView2 permission requests fail closed.
+- Native desktop target navigation is parsed and restricted to HTTP loopback or
+  explicitly supplied HTTPS tunnel origins. Credentials, unsafe schemes, popups,
+  downloads, external redirects, and Windows WebView2 permission requests fail
+  closed. The web iframe fallback can reject untrusted bridge messages but
+  cannot observe a cross-origin external redirect; the redirected page may
+  remain visible without trusted control or inspection.
 - The existing built browser bridge is embedded by `build.rs` and injected at document start. The native relay accepts only bounded, schema-validated events matching the child label, committed origin, generation, nonce, and issued request ID.
 - Child cookies, cache, and page storage use a profile-scoped hashed directory under application data. Clearing a profile destroys the active child before removing only that profile’s directory. Linux has a WebKitGTK child/relay implementation but remains runtime-unverified until a real engine verification pass; macOS remains deferred.
 
@@ -1712,6 +1724,9 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
 - Map<id, DeadSession> tombstones (60s TTL; auto-evicted by cleanup task)
 - Set<id, String> killed tracks manually terminated sessions (used to prevent supervisor respawn race)
 - PTY child env is rebuilt from a safe baseline allowlist, then `TERM` and the resolved session env snapshot are applied before spawn
+- Initial creation and automatic respawn use one command-construction path. Unix shell selection, cwd, and arguments remain unchanged.
+- On Windows, an untargeted terminal with omitted cwd uses an existing user home, then the server current directory; it never uses `/tmp`. Empty or `bash` shell-selector requests launch interactive `cmd.exe` without Unix flags. Other command strings use `cmd.exe /C <command>`.
+- Shell integration is Unix-only. Windows `cmd.exe` sessions remain lifecycle-unverified and never receive Bash, zsh, or fish adapter arguments or nonce environment state.
 - `create()` fully idempotent: removes dead tombstone, inserts into killed set pre-spawn, removes post-spawn (TOCTOU guard)
 - `kill()` marks session dead + adds to killed set, retains 60s tombstone for reconnect
 - `remove()` immediately evicts session + adds to killed set (no restart on user kill)
@@ -2609,11 +2624,15 @@ Attach/replay start, transport disconnect or replacement, terminal exit, and
 panel cleanup clear recent activity and reset stream readiness so stale green
 cannot survive a lifecycle boundary. Each mounted panel owns its registration;
 owner-checked callbacks make late output or readiness updates from a prior
-disconnect, exit, attach reset, replacement, or disposed panel no-ops. Fresh
-post-replay output may activate the row again. Store subscribers are notified
-only when the externally visible activity/stream state changes, not for every
-PTY chunk. Labels and tooltips distinguish receiving, quiet,
-connecting/disconnected/replaying, and stopped; color is never the only cue.
+disconnect, exit, attach reset, replacement, or disposed panel no-ops. A confirmed
+in-place `process:restarted` event, or a liveness-confirmed `terminal:changed`
+recovery probe, reopens the live gate for the replacement reader without replaying
+the retained buffer or counting the synthetic restart banner; fresh post-replay or
+post-restart output may activate the row again. Store subscribers are notified only
+when the externally visible activity/stream state changes, not for every PTY chunk.
+Per-terminal labels and tooltips distinguish receiving, quiet, unavailable, and
+stopped; the aggregated project item exposes receiving versus no recent terminal
+output. Color is never the only cue.
 
 Key invariants:
 
@@ -2624,6 +2643,47 @@ Key invariants:
 - Hidden kept-alive mounted terminals participate; unmounted/disposed panels do not.
 - Activity state is memory-only, bounded by mounted session lifecycle, and content-free.
 - The feature adds no SSE endpoint, server timer, persistence, or protocol field.
+
+### Unified terminal status for UI indicators
+
+The UI keeps process liveness, observed output activity, and shell lifecycle as
+separate state machines. The Traditional project item and per-terminal activity
+rows share the same output-status calculation; the project item aggregates that
+status across its terminal tabs:
+
+| Surface                      | Green condition                 | Non-green condition                                                   | Authoritative source               |
+| ---------------------------- | ------------------------------- | --------------------------------------------------------------------- | ---------------------------------- |
+| Traditional project item     | At least one tab is `receiving` | Every tab is `quiet`, `unavailable`, or `stopped`                     | Shared browser-local output status |
+| Per-terminal tab/runtime row | That terminal is `receiving`    | `quiet`, `unavailable`, or `stopped`                                  | Shared browser-local output status |
+| Process liveness             | `SessionInfo.alive === true`    | Backend PTY exited, was killed, or lost its target                    | `terminal:listDetailed`            |
+| Shell lifecycle              | Verified `editing` event        | Validated lifecycle transition, replay reset, restart, or termination | `terminal:lifecycle`               |
+
+The shared output status precedence is:
+
+1. `alive === false` → `stopped`.
+2. Stream unavailable or replaying → `unavailable`.
+3. Non-empty live output observed within 3,000 ms → `receiving`.
+4. Otherwise → `quiet`.
+
+The project indicator is green only when at least one tab resolves to
+`receiving`. This is a UI-only aggregation. Quiet or unavailable output does
+not mutate `SessionInfo.alive`; an idle but healthy shell remains alive, and a
+verified `editing` lifecycle remains editing while no output arrives.
+
+```text
+/ws terminal:output
+  -> browser-local activity store
+  -> shared terminal output status
+  -> per-terminal indicator
+  -> Traditional project aggregate (any receiving tab)
+
+terminal:listDetailed
+  -> SessionInfo.alive
+  -> stopped precedence in the shared status
+
+terminal:lifecycle
+  -> shell suggestion/lifecycle controller
+```
 
 **TerminalTreeView** (`packages/ui/src/components/organisms/TerminalTreeView.tsx`)
 
@@ -2869,5 +2929,11 @@ Refactored `IdeShell.tsx` into a flexible, extensible "Tool Window" system.
 - **Terminal floating-panel layering:** In terminal mode, Files and tool overlays use a shared base `z-index` of `20`; activating one raises it to `25`. Global Browser/debug overlays remain above this layer.
 - **Bottom panel maximize toggle:** The bottom tool panel header exposes an IntelliJ-style maximize/restore button (session-only state, not persisted). Maximizing hides the top area (explorer/editor/right panels via `display:none`) and stretches the bottom panel to fill the workspace body; activity bars stay visible. Closing the maximized bottom tool resets the state. Implemented as sibling-only CSS class flips so the terminal keep-alive element is never remounted (no PTY duplication); layout decisions live in the pure `resolveBottomPanelLayout` helper. Maximizing also unselects active top tools on both sides; reselecting a top tool from the activity bar (or a reveal-active-file request) restores the normal layout. State transitions live in the pure `resolveMaximizeToggle` / `resolveTopToolToggle` helpers.
 
-**Native Browser Debug (Windows v1; Linux implementation pending runtime verification):** The Tauri host keeps the existing Browser tool contract and selects a host adapter at the edge. Windows creates a labeled child WebView, injects the shared bridge at document start, and relays only bounded, versioned events through the native controller. Linux uses the equivalent WebKitGTK message hook. Navigation is restricted to loopback or server-reported HTTPS tunnel origins; popups, downloads, and permissions are denied. The child uses per-server profile storage and is destroyed on target/profile changes and main window shutdown. Linux remains explicitly unverified at runtime; setting
+**Native Browser Debug (Windows v1; Linux implementation pending runtime verification):** The Tauri host keeps the existing Browser tool contract and selects a host adapter at the edge. Windows creates a labeled child WebView, injects the shared bridge at document start, and relays only bounded, versioned events through the native controller. Linux uses the equivalent WebKitGTK message hook. Navigation is restricted to loopback or server-reported HTTPS tunnel origins; popups, downloads, and permissions are denied by the Windows WebView2 policy hooks. Linux has no runtime-verified equivalent permission policy yet. The child uses per-server profile storage and is destroyed on target/profile changes and main window shutdown. Linux remains explicitly unverified at runtime; setting
 `VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG=0` selects the existing web iframe host.
+
+See the maintained platform gate and rollback procedure in
+[Native Browser Debug Support](./native-browser-debug-support.md). Deployment
+ownership is intentionally separate: Docker serves `/opt/dam-hopper/web` with
+the server on 4800, systemd runs backend-only on 4801, and legacy nohup is
+loopback-only on 4800.

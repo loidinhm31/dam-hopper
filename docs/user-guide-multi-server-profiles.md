@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **Multi-Server Profiles** feature (Phase 2) stores server profiles locally. Browser API/media access is same-origin by default; a separate browser frontend must be added to the server's exact `DAM_HOPPER_CORS_ORIGINS` allowlist. Ticket issuance requires authentication, and media URLs remain short-lived actor/session-bound capabilities. Packaged native browser transport ignores separate-origin profiles until a native transport exists.
+The **Multi-Server Profiles** feature stores server profiles locally. Browser API/media access is same-origin by default; a separate browser frontend must be added to the server's exact `DAM_HOPPER_CORS_ORIGINS` allowlist. Ticket issuance requires authentication, and media URLs remain short-lived actor/session-bound capabilities. Windows native transport supports cross-origin profiles under the approved origin policy; non-Windows native transport requires same-origin targets.
 
 HTTP profiles are supported, but cleartext exposes Bearer tokens, cookies, ticket URLs, API actions, and media bytes to interception or modification; use HTTPS or a trusted encrypted network when needed.
 
@@ -43,7 +43,7 @@ You can then edit this profile or create new ones.
 1. **Click Profile Selector**: In the sidebar, click the active profile name or "Change Server"
 2. **Choose Profile**: Select from the list in **Server Connections** dialog
 3. **Confirm**: Profile becomes active immediately
-   - If switching from a different server, the page may reload to fetch fresh data
+   - Switching rebinds the transport without requiring a full browser reload; queries and push listeners are refreshed for the new profile.
 
 ### Host-resource status after a profile switch
 
@@ -184,7 +184,7 @@ Ordinary tabs share the active profile and profile-scoped token storage.
 
 ## API Reference (For Developers)
 
-All functions in `packages/ui/src/api/server-config.ts`:
+All functions in `packages/ui/src/api/server-config.ts` (return values may be boolean for mutation success/failure):
 
 ```typescript
 // Get all profiles

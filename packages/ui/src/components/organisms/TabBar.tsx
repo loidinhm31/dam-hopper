@@ -10,14 +10,15 @@ import {
   Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { TerminalActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
+import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import {
   openTerminalDiagnosticsContextMenu,
   type TerminalDiagnosticsMenuHandler,
 } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { TerminalTabInsertionZone } from "@/components/organisms/TerminalTabInsertionZone.js";
 import { TerminalCommitStatusChip } from "@/components/organisms/TerminalCommitStatusChip.js";
-import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 
 export function splitActionToPaneDirection(action: "right" | "down") {
   return action === "right" ? "horizontal" : "vertical";
@@ -84,7 +85,7 @@ export function DraggableTab({
       {/* Tab label / click to select */}
       <button
         type="button"
-        className="px-1.5 py-1.5 text-xs whitespace-nowrap"
+        className="flex items-center gap-1.5 px-1.5 py-1.5 text-xs whitespace-nowrap"
         onClick={() => onSelect(tab.sessionId)}
         onContextMenu={(event) =>
           openTerminalDiagnosticsContextMenu(
@@ -94,6 +95,10 @@ export function DraggableTab({
           )
         }
       >
+        <TerminalActivityIndicator
+          sessionId={tab.sessionId}
+          alive={tab.session?.alive}
+        />
         <TerminalTitleText
           title={tab.title}
           className="max-w-32 flex-1 font-mono"
@@ -250,7 +255,6 @@ export function TabBar({
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
-
       {terminalCommitStatusEnabled ? (
         <div className="flex min-w-0 max-w-[34rem] shrink">
           <TerminalCommitStatusChip

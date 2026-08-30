@@ -1,28 +1,28 @@
 # API Reference
 
-Base URL: `http://localhost:4800`
+Base URL depends on deployment: Docker/direct legacy defaults to `http://localhost:4800`; systemd production is backend-only on `http://localhost:4801` with the UI hosted separately.
 
 ## Authentication
 
-All requests require Bearer token in Authorization header:
+REST requests generally use a Bearer token:
 
 ```
 Authorization: Bearer {token}
 ```
 
+The server also accepts an HttpOnly SameSite=Strict authentication cookie. `GET
+/api/health` and authentication endpoints have public/flow-specific exceptions;
+consult each route group below rather than assuming every request is protected.
+
 Token stored at `~/.config/dam-hopper/server-token`.
 
 ### Dev Mode (--no-auth)
 
-The server supports a `--no-auth` authentication bypass mode for development (Phase 01). It may bind to the configured host, including `0.0.0.0`; use only on a trusted development network, never publicly or with sensitive data. When enabled:
-
-- All protected routes bypass authentication checks
-- The `/ws` terminal/event stream accepts connections without a token
-- Login endpoint returns dev tokens without credential verification
-- Status endpoint returns `dev_mode: true`
-- See [Phase 01: Server-Side Auth Bypass](../phase-01-server-auth-bypass/) for details
-
-**Safety**: This mode fails immediately if `MONGODB_URI` is set or `RUST_ENV=production` is detected.
+The server supports a `--no-auth` authentication bypass mode for development. It
+is unsafe on public networks and is rejected when MongoDB is configured or the
+runtime environment is production. Public health/auth flow behavior and WS
+origin/token policy still apply; do not infer response fields not shown by the
+handler.
 
 ### Auth Endpoints
 
@@ -541,7 +541,7 @@ info: Flushing session buffer on exit
 info: Persist worker stopped
 ```
 
-See [Phase 05: Persist Worker](../phase-05-persist-worker/) for detailed architecture and design rationale.
+The historical Phase 05 persistence design is retained in this document; its source plan is no longer present in this checkout.
 
 ## Git API
 
@@ -1078,10 +1078,15 @@ Callback receives:
   willRestart: boolean;
   restartIn?: number;       // milliseconds
   restartCount?: number;
+  incarnation?: number;    // nonnegative safe integer identifying the PTY incarnation
 }
 ```
 
 Returns unsubscribe function.
+
+The optional `incarnation` lets clients distinguish PTYs when a public session ID is
+reused: a client may reject a delayed exit event from an older incarnation. Older
+clients may ignore this field and continue handling exits by session ID.
 
 **onProcessRestarted?(id: string, cb: (restart: {...}) => void): () => void** (Optional, Phase 5+)
 Subscribe to process restart event.
@@ -1179,6 +1184,8 @@ available worktree for `project`, resolves relative `cwd` values beneath that
 target, rejects cwd values outside it, and persists the canonical target in
 session metadata. `worktreePath` requires `project`; omitting it preserves
 configured-root or legacy project behavior.
+
+Platform behavior for free terminals differs only where the request omits `cwd`: Windows uses an existing user home directory, then the server's existing current directory; Unix retains the `HOME`-then-`/tmp` fallback. On Windows, an empty command or the exact `bash` selector starts the native interactive `cmd.exe` with no arguments. Other command strings run as `cmd.exe /C <command>`. Unix shell selection and command execution remain unchanged. Windows does not provide Unix shell lifecycle integration, so lifecycle-dependent suggestions and history remain unverified.
 
 Response: the created `SessionInfo`, including `worktreePath` when the session
 is target-scoped.

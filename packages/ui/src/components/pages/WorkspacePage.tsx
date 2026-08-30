@@ -52,6 +52,7 @@ import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useBrowserDebug } from "@/hooks/use-browser-debug.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
+import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
@@ -73,6 +74,7 @@ import {
   type TerminalUsageMode,
 } from "@/lib/terminal-usage-mode.js";
 import { shouldRenderEmptyTerminalBrowserSurface } from "@/lib/terminal-browser-surface.js";
+import { buildTraditionalTerminalProjectGroups } from "@/lib/traditional-terminal-projects.js";
 import {
   loadTerminalFilePanelOpen,
   saveTerminalFilePanelOpen,
@@ -178,10 +180,10 @@ const TerminalTreeView = lazy(() =>
     default: m.TerminalTreeView,
   })),
 );
-const MultiTerminalDisplay = lazy(() =>
-  import("@/components/organisms/MultiTerminalDisplay.js").then((m) => ({
-    default: m.MultiTerminalDisplay,
-  })),
+const TraditionalTerminalProjectsDisplay = lazy(() =>
+  import("@/components/organisms/TraditionalTerminalProjectsDisplay.js").then(
+    (m) => ({ default: m.TraditionalTerminalProjectsDisplay }),
+  ),
 );
 const ActiveTerminalRuntimeDisplay = lazy(() =>
   import("@/components/organisms/ActiveTerminalRuntimeDisplay.js").then(
@@ -340,7 +342,8 @@ export function resolveOpenTunnelInBrowserReveal(
 
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { activeProject, setActiveProject } = useWorkspaceStore();
+  const { activeProject, activeProjectRevision, setActiveProject } =
+    useWorkspaceStore();
   const [workspaceMode, setWorkspaceModeState] =
     useState<WorkspaceMode>(loadWorkspaceMode);
   const [terminalUsageMode, setTerminalUsageModeState] =
@@ -372,6 +375,7 @@ export default function WorkspacePage() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
   const browserDebugHost = useBrowserDebugHost();
+  const activeProfileId = useServerProfile()?.id ?? null;
   const { level: appZoomLevel } = useAppZoom();
   const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
@@ -482,10 +486,22 @@ export default function WorkspacePage() {
     tree,
     freeTerminals,
     isLoading,
-    tabsWithLiveSession,
+    terminalTabs,
     selectedId,
     sessionMap,
   } = derived;
+  const hasTraditionalTerminalProjects = useMemo(
+    () =>
+      buildTraditionalTerminalProjectGroups(mountedSessions, terminalTabs)
+        .length > 0,
+    [mountedSessions, terminalTabs],
+  );
+  const activeTerminalProject = activeTab
+    ? (mountedSessions.find((session) => session.sessionId === activeTab)
+        ?.project ??
+      sessionMap.get(activeTab)?.project ??
+      null)
+    : null;
   const {
     handleSelectProject,
     handleSelectTerminal,
@@ -515,9 +531,7 @@ export default function WorkspacePage() {
     const mountedById = new Map(
       mountedSessions.map((session) => [session.sessionId, session]),
     );
-    const tabsById = new Map(
-      tabsWithLiveSession.map((tab) => [tab.sessionId, tab]),
-    );
+    const tabsById = new Map(terminalTabs.map((tab) => [tab.sessionId, tab]));
     const sessionIds = new Set([...mountedById.keys(), ...tabsById.keys()]);
     return [...sessionIds].map((sessionId) => {
       const mounted = mountedById.get(sessionId);
@@ -525,7 +539,8 @@ export default function WorkspacePage() {
       return {
         sessionId,
         label:
-          tab?.title.fullText ??
+          tab?.title?.fullText ??
+          tab?.label ??
           (mounted ? `${mounted.project} · ${mounted.command}` : "Terminal"),
         ...(tab?.title ? { openTitle: tab.title } : {}),
         mounted: Boolean(mounted),
@@ -534,14 +549,7 @@ export default function WorkspacePage() {
         current: activeTab === sessionId,
       };
     });
-  }, [
-    activeTab,
-    mountedSessions,
-    registeredTerminalIds,
-    sessionMap,
-    tabsWithLiveSession,
-  ]);
-
+  }, [activeTab, mountedSessions, registeredTerminalIds, sessionMap, terminalTabs]);
   const activeBrowserTerminalTarget = useMemo(
     () =>
       browserTerminalTargets.find(
@@ -1323,14 +1331,28 @@ export default function WorkspacePage() {
                 ))}
               </div>
             )}
-            <button
-              type="button"
-              onClick={handleOpenCurrentTerminal}
-              title="Open terminal"
-              className="rounded-sm p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
+            {(terminalUsageMode === "runtime" ||
+              !hasTraditionalTerminalProjects ||
+              (terminalUsageMode === "traditional" &&
+                projectName !== activeTerminalProject)) && (
+              <button
+                type="button"
+                aria-label={
+                  projectName
+                    ? `Open terminal in ${projectName}`
+                    : "Open terminal"
+                }
+                onClick={handleOpenCurrentTerminal}
+                title={
+                  projectName
+                    ? `Open terminal in ${projectName}`
+                    : "Open terminal"
+                }
+                className="rounded-sm p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -1479,7 +1501,7 @@ export default function WorkspacePage() {
             <Suspense fallback={null}>
               <TerminalKeepAliveHost
                 mountedSessions={mountedSessions}
-                openTabs={tabsWithLiveSession}
+                openTabs={terminalTabs}
                 onSessionExit={handleSessionExit}
                 onNewTerminal={handleOpenCurrentTerminal}
                 suppressAutoFocus
@@ -1494,7 +1516,7 @@ export default function WorkspacePage() {
               <ActiveTerminalRuntimeDisplay
                 activeSessionId={activeTab}
                 mountedSessions={mountedSessions}
-                openTabs={tabsWithLiveSession}
+                openTabs={terminalTabs}
                 currentProjectName={projectName}
                 layoutRevision={compactTerminalLayoutRevision}
                 renderTerminals={false}
@@ -1513,16 +1535,19 @@ export default function WorkspacePage() {
                 onCloseBrowser={closeEmbeddedBrowser}
               />
             </Suspense>
-          ) : mountedSessions.length > 0 ? (
+          ) : hasTraditionalTerminalProjects ? (
             <Suspense fallback={<PanelFallback label="Loading terminals…" />}>
-              <MultiTerminalDisplay
+              <TraditionalTerminalProjectsDisplay
                 activeSessionId={activeTab}
                 mountedSessions={mountedSessions}
-                openTabs={tabsWithLiveSession}
+                terminalTabs={terminalTabs}
+                currentProjectName={projectName}
+                currentProjectRevision={activeProjectRevision}
                 layoutRevision={compactTerminalLayoutRevision}
                 renderTerminals={false}
                 onSessionExit={handleSessionExit}
-                onNewTerminal={handleOpenCurrentTerminal}
+                onNewProjectTerminal={handleLaunchShell}
+                onNewFreeTerminal={handleAddFreeTerminal}
                 onSelectTab={handleSelectTab}
                 onToggleTabPin={handleToggleTabPin}
                 onCloseTab={handleCloseTab}
@@ -1610,8 +1635,9 @@ export default function WorkspacePage() {
       terminalUsageMode,
       setTerminalUsageMode,
       handleOpenCurrentTerminal,
-      tabsWithLiveSession,
+      terminalTabs,
       activeTab,
+      activeTerminalProject,
       compactTerminalLayoutRevision,
       handleSelectTab,
       handleToggleTabPin,
@@ -1623,12 +1649,14 @@ export default function WorkspacePage() {
       handleAddFreeTerminal,
       handleOpenTunnelInBrowser,
       projectName,
+      activeProjectRevision,
       handleLaunchShell,
       browserOpen,
       closeEmbeddedBrowser,
       terminalFilePanelOpen,
       workspaceMode,
       isCompactWorkspace,
+      hasTraditionalTerminalProjects,
       isAndroidChromeNativeInputSuppressed,
       activateTerminalPanelShortcut,
       toggleTerminalFilePanel,
@@ -2162,6 +2190,7 @@ export default function WorkspacePage() {
       <BrowserDebugKeepAliveHost
         ref={browserKeepAliveRef}
         browser={browserDebug}
+        profileId={activeProfileId}
         viewportRef={browserViewportRef}
         viewportStageRef={browserViewportStageRef}
         viewportVersion={browserViewportVersion}
