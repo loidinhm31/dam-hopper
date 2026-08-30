@@ -1,5 +1,5 @@
 // Layout data model for recursive binary-tree split panel layout.
-// Persisted in localStorage under key "dam-hopper:terminal-layout".
+// Persisted in localStorage under a project-scoped v2 key.
 
 export type SplitDirection = "horizontal" | "vertical";
 export type DockEdge = "top" | "bottom" | "left" | "right";

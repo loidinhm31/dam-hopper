@@ -28,30 +28,27 @@ import {
   updateSizesInTree,
 } from "@/lib/terminal-layout-tree.js";
 
-const STORAGE_KEY = "dam-hopper:terminal-layout";
-
 function defaultLayout(): LayoutNode {
   return newPaneNode();
 }
 
 /** Defensively parse layout from localStorage. Returns null on any invalid data. */
-function loadLayout(): LayoutNode | null {
+function loadLayout(storageKey: string): LayoutNode | null {
   try {
-    return loadPersistedLayout(localStorage.getItem(STORAGE_KEY));
+    return loadPersistedLayout(localStorage.getItem(storageKey));
   } catch {
     return null;
   }
 }
 
-function saveLayout(root: LayoutNode): void {
+function saveLayout(storageKey: string, root: LayoutNode): void {
   try {
     const layout: PersistedLayout = { version: 1, root };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
+    localStorage.setItem(storageKey, JSON.stringify(layout));
   } catch {
     // localStorage may be full or unavailable — silently continue
   }
 }
-
 
 // ─── hook ───────────────────────────────────────────────────────────────────
 
@@ -81,10 +78,10 @@ export interface UseTerminalLayoutResult {
   getFirstPaneId: () => string | null;
 }
 
-export function useTerminalLayout(): UseTerminalLayoutResult {
+export function useTerminalLayout(storageKey: string): UseTerminalLayoutResult {
   // ── Sync initialization: ensure root and focus use the SAME instance ────
   const [initialData] = useState(() => {
-    const r = loadLayout() ?? defaultLayout();
+    const r = loadLayout(storageKey) ?? defaultLayout();
     return {
       root: r,
       focus: collectPanes(r)[0]?.id ?? null,
@@ -113,83 +110,95 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
           newPane,
         ]);
         const next = replaceNode(prev, paneId, splitNode) ?? prev;
-        saveLayout(next);
+        saveLayout(storageKey, next);
         return next;
       });
       setFocusedPaneId(newPane.id);
       return newPane.id;
     },
-    [],
+    [storageKey],
   );
 
-  const closePaneFn = useCallback((paneId: string) => {
-    setRoot((prev) => {
-      const next = removePane(prev, paneId) ?? defaultLayout();
-      saveLayout(next);
-      return next;
-    });
-    setFocusedPaneId((prev) => (prev === paneId ? null : prev));
-  }, []);
+  const closePaneFn = useCallback(
+    (paneId: string) => {
+      setRoot((prev) => {
+        const next = removePane(prev, paneId) ?? defaultLayout();
+        saveLayout(storageKey, next);
+        return next;
+      });
+      setFocusedPaneId((prev) => (prev === paneId ? null : prev));
+    },
+    [storageKey],
+  );
 
   const updateSizesFn = useCallback(
     (nodeId: string, sizes: [number, number]) => {
       setRoot((prev) => {
         const next = updateSizesInTree(prev, nodeId, sizes);
-        saveLayout(next);
+        saveLayout(storageKey, next);
         return next;
       });
     },
-    [],
+    [storageKey],
   );
 
-  const addSession = useCallback((paneId: string, sessionId: string) => {
-    setRoot((prev) => {
-      const target = findPaneById(prev, paneId);
-      if (
-        target &&
-        target.sessionIds.includes(sessionId) &&
-        target.activeSessionId === sessionId
-      ) {
-        return prev;
-      }
-      const next = addSessionToPane(prev, paneId, sessionId);
-      if (next === prev) return prev;
-      saveLayout(next);
-      return next;
-    });
-  }, []);
+  const addSession = useCallback(
+    (paneId: string, sessionId: string) => {
+      setRoot((prev) => {
+        const target = findPaneById(prev, paneId);
+        if (
+          target &&
+          target.sessionIds.includes(sessionId) &&
+          target.activeSessionId === sessionId
+        ) {
+          return prev;
+        }
+        const next = addSessionToPane(prev, paneId, sessionId);
+        if (next === prev) return prev;
+        saveLayout(storageKey, next);
+        return next;
+      });
+    },
+    [storageKey],
+  );
 
-  const removeSession = useCallback((paneId: string, sessionId: string) => {
-    setRoot((prev) => {
-      const next = removeSessionFromPane(prev, paneId, sessionId);
-      if (next === prev) return prev;
-      saveLayout(next);
-      return next;
-    });
-  }, []);
+  const removeSession = useCallback(
+    (paneId: string, sessionId: string) => {
+      setRoot((prev) => {
+        const next = removeSessionFromPane(prev, paneId, sessionId);
+        if (next === prev) return prev;
+        saveLayout(storageKey, next);
+        return next;
+      });
+    },
+    [storageKey],
+  );
 
-  const setActiveSession = useCallback((paneId: string, sessionId: string) => {
-    setRoot((prev) => {
-      const target = findPaneById(prev, paneId);
-      if (target && target.activeSessionId === sessionId) {
-        return prev;
-      }
-      const next = setActivePaneSession(prev, paneId, sessionId);
-      if (next === prev) return prev;
-      saveLayout(next);
-      return next;
-    });
-  }, []);
+  const setActiveSession = useCallback(
+    (paneId: string, sessionId: string) => {
+      setRoot((prev) => {
+        const target = findPaneById(prev, paneId);
+        if (target && target.activeSessionId === sessionId) {
+          return prev;
+        }
+        const next = setActivePaneSession(prev, paneId, sessionId);
+        if (next === prev) return prev;
+        saveLayout(storageKey, next);
+        return next;
+      });
+    },
+    [storageKey],
+  );
 
   const moveTabToPane = useCallback(
     (sessionId: string, fromPaneId: string, toPaneId: string) => {
       setRoot((prev) => {
         const next = moveTabBetweenPanes(prev, sessionId, fromPaneId, toPaneId);
-        saveLayout(next);
+        saveLayout(storageKey, next);
         return next;
       });
     },
-    [],
+    [storageKey],
   );
 
   const dockSession = useCallback(
@@ -202,22 +211,25 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
       );
       if (!result.changed) return false;
       rootRef.current = result.root;
-      saveLayout(result.root);
+      saveLayout(storageKey, result.root);
       setRoot(result.root);
       setFocusedPaneId(result.focusedPaneId);
       return true;
     },
-    [],
+    [storageKey],
   );
 
-  const pruneSessions = useCallback((liveSessions: Set<string>) => {
-    setRoot((prev) => {
-      const pruned = pruneDeadSessions(prev, liveSessions);
-      const collapsed = pruneEmptySplits(pruned) ?? defaultLayout();
-      saveLayout(collapsed);
-      return collapsed;
-    });
-  }, []);
+  const pruneSessions = useCallback(
+    (liveSessions: Set<string>) => {
+      setRoot((prev) => {
+        const pruned = pruneDeadSessions(prev, liveSessions);
+        const collapsed = pruneEmptySplits(pruned) ?? defaultLayout();
+        saveLayout(storageKey, collapsed);
+        return collapsed;
+      });
+    },
+    [storageKey],
+  );
 
   const getPanes = useCallback((): PaneNode[] => {
     return collectPanes(rootRef.current);

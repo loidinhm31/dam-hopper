@@ -1,6 +1,7 @@
 import { useRef, useEffect } from "react";
 import { X, Save } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { TerminalActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import type { SessionInfo } from "@/api/client.js";
 
@@ -30,31 +31,6 @@ interface Props {
   onSavePromptChange?: (name: string) => void;
   onSavePromptSubmit?: () => void;
   onSavePromptCancel?: () => void;
-}
-
-function TabStatusDot({ session }: { session?: SessionInfo }) {
-  if (!session) {
-    return (
-      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-text-muted)]/30 shrink-0" />
-    );
-  }
-  if (session.alive) {
-    return (
-      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success)] status-glow-green shrink-0" />
-    );
-  }
-  if (
-    session.exitCode !== 0 &&
-    session.exitCode !== null &&
-    session.exitCode !== undefined
-  ) {
-    return (
-      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] status-glow-red shrink-0" />
-    );
-  }
-  return (
-    <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-warning)] status-glow-orange shrink-0" />
-  );
 }
 
 export function TerminalTabBar({
@@ -109,7 +85,10 @@ export function TerminalTabBar({
                   : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
               )}
             >
-              <TabStatusDot session={tab.session} />
+              <TerminalActivityIndicator
+                sessionId={tab.sessionId}
+                alive={tab.session?.alive}
+              />
               <span className="truncate flex-1 font-mono">{tab.label}</span>
               <button
                 type="button"

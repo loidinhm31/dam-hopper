@@ -12,9 +12,7 @@ import {
   useProjectTargetStore,
 } from "@/stores/project-target.js";
 import { generateUUID, sanitizeSessionSegment } from "@/lib/utils.js";
-import {
-  terminalProfileSessionId,
-} from "@/lib/terminal-target-identity.js";
+import { terminalProfileSessionId } from "@/lib/terminal-target-identity.js";
 import {
   getTerminalLaunchContext,
   getTerminalLaunchRequest,
@@ -40,7 +38,10 @@ import {
   selectTerminal,
   syncTerminalProject,
 } from "@/lib/terminal-selection.js";
-import { rememberTerminalSessionIncarnation } from "@/lib/terminal-incarnation-state.js";
+import {
+  latestTerminalSessionIncarnation,
+  rememberTerminalSessionIncarnation,
+} from "@/lib/terminal-incarnation-state.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TreeCommand, TreeProject } from "@/hooks/use-terminal-tree.js";
@@ -86,7 +87,7 @@ export interface TerminalManagerDerived {
   tree: TreeProject[];
   freeTerminals: SessionInfo[];
   isLoading: boolean;
-  tabsWithLiveSession: TabEntry[];
+  terminalTabs: TabEntry[];
   selectedId: string | null;
   sessionMap: Map<string, SessionInfo>;
   freeTerminalIndexMap: Map<string, number>;
@@ -141,6 +142,80 @@ export interface TerminalManagerActions {
 interface TerminalManagerOptions {
   terminalAutoSwitchProjectEnabled: boolean;
   setActiveProject: (project: string | null) => void;
+}
+export interface LocallyStoppedSessionMarker {
+  incarnation?: number;
+  startedAt?: number;
+}
+
+export function getLocallyStoppedSessionMarker(
+  sessionId: string,
+  sessionMap: ReadonlyMap<string, SessionInfo>,
+  openTabs: readonly TabEntry[],
+): LocallyStoppedSessionMarker | undefined {
+  const session =
+    sessionMap.get(sessionId) ??
+    openTabs.find((tab) => tab.sessionId === sessionId)?.session;
+  const incarnation =
+    session?.incarnation ?? latestTerminalSessionIncarnation(sessionId);
+  const startedAt = session?.startedAt;
+  if (incarnation === undefined && startedAt === undefined) return undefined;
+  return { incarnation, startedAt };
+}
+
+export function isSameSessionIdentity(
+  session: SessionInfo,
+  marker: LocallyStoppedSessionMarker,
+): boolean {
+  if (
+    marker.startedAt !== undefined &&
+    session.startedAt !== marker.startedAt
+  ) {
+    return false;
+  }
+  if (marker.incarnation !== undefined) {
+    if (
+      session.incarnation !== undefined &&
+      marker.incarnation !== session.incarnation
+    ) {
+      return false;
+    }
+    if (session.incarnation === undefined && marker.startedAt === undefined) {
+      return false;
+    }
+  }
+  return marker.startedAt !== undefined || marker.incarnation !== undefined;
+}
+
+export function getLocallyStoppedSessionIds(
+  markers: Map<string, LocallyStoppedSessionMarker>,
+  sessionMap: Map<string, SessionInfo>,
+): Set<string> {
+  const stoppedSessionIds = new Set<string>();
+  for (const [sessionId, marker] of markers) {
+    const session = sessionMap.get(sessionId);
+    if (!session || (session.alive && isSameSessionIdentity(session, marker))) {
+      stoppedSessionIds.add(sessionId);
+    } else {
+      markers.delete(sessionId);
+    }
+  }
+  return stoppedSessionIds;
+}
+
+export function applyLocalStoppedSession(
+  session: SessionInfo | undefined,
+  marker: LocallyStoppedSessionMarker | undefined,
+): SessionInfo | undefined {
+  if (
+    !session ||
+    !session.alive ||
+    !marker ||
+    !isSameSessionIdentity(session, marker)
+  ) {
+    return session;
+  }
+  return { ...session, alive: false };
 }
 
 const INVALID_PROFILE_NAME_RE = /[:]/;
@@ -293,6 +368,9 @@ export function useTerminalManager(
   const [initialPinnedTerminalIds] = useState(() => loadPinnedTerminalIds());
   const suppressedAutoAttachIdsRef = useRef<Set<string>>(new Set());
   const pendingAutoAttachIdsRef = useRef<Set<string>>(new Set());
+  const locallyStoppedSessionMarkersRef = useRef<
+    Map<string, LocallyStoppedSessionMarker>
+  >(new Map());
   const pinnedTerminalIdsRef = useRef(initialPinnedTerminalIds);
   const pinStateBySessionIdRef = useRef<Map<string, boolean>>(new Map());
 
@@ -360,6 +438,7 @@ export function useTerminalManager(
     worktreePath?: string,
   ) {
     suppressedAutoAttachIdsRef.current.delete(sessionId);
+    locallyStoppedSessionMarkersRef.current.delete(sessionId);
     pendingAutoAttachIdsRef.current.add(sessionId);
 
     const isAdHoc = isAdHocProjectTerminal(sessionId, profileSessionIds);
@@ -402,6 +481,7 @@ export function useTerminalManager(
     for (const sessionId of sessionIds) {
       pendingAutoAttachIdsRef.current.delete(sessionId);
       suppressedAutoAttachIdsRef.current.add(sessionId);
+      locallyStoppedSessionMarkersRef.current.delete(sessionId);
     }
     forgetPinnedTerminalIds(sessionIds);
 
@@ -475,6 +555,10 @@ export function useTerminalManager(
       }
     }
 
+    const stoppedSessionIds = getLocallyStoppedSessionIds(
+      locallyStoppedSessionMarkersRef.current,
+      sessionMap,
+    );
     const next = deriveTerminalAutoAttachState({
       sessions,
       openTabs,
@@ -487,6 +571,7 @@ export function useTerminalManager(
       pinnedSessionIds: hasTerminalSessionSnapshot
         ? pinnedTerminalIdsRef.current
         : new Set(),
+      stoppedSessionIds,
     });
     const attachedLiveSessionIds = new Set(
       next.openTabs.map((tab) => tab.sessionId),
@@ -1148,6 +1233,7 @@ export function useTerminalManager(
     if (!isTerminalTabClosable(openTabs, sessionId)) return;
     suppressedAutoAttachIdsRef.current.add(sessionId);
     pendingAutoAttachIdsRef.current.delete(sessionId);
+    locallyStoppedSessionMarkersRef.current.delete(sessionId);
     forgetPinnedTerminalIds([sessionId]);
     // Terminate the terminal session when the tab is closed
     handleKillTerminal(sessionId);
@@ -1234,31 +1320,50 @@ export function useTerminalManager(
   const handleSessionExit = useCallback(
     (sessionId: string) => {
       pendingAutoAttachIdsRef.current.delete(sessionId);
+      const marker = getLocallyStoppedSessionMarker(
+        sessionId,
+        sessionMap,
+        openTabs,
+      );
+      if (marker) {
+        locallyStoppedSessionMarkersRef.current.set(sessionId, marker);
+      } else {
+        locallyStoppedSessionMarkersRef.current.delete(sessionId);
+      }
       forgetPinnedTerminalIds([sessionId]);
       void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
       setOpenTabs((prev) =>
         prev.map((t) =>
-          t.sessionId === sessionId
-            ? { ...t, isPinned: false, session: sessionMap.get(sessionId) }
-            : t,
+          t.sessionId === sessionId ? { ...t, isPinned: false } : t,
         ),
       );
     },
-    [forgetPinnedTerminalIds, qc, sessionMap],
+    [forgetPinnedTerminalIds, openTabs, qc, sessionMap],
   );
 
-  const tabsWithLiveSession: TabEntry[] = openTabs.map((t) => {
-    const { type } = parseTerminalSessionId(t.sessionId);
-    const isAdHoc = isAdHocProjectTerminal(t.sessionId, profileSessionIds);
-    const label = type === "free" ? tabLabel(t.sessionId, "", "") : t.label;
-    return {
-      ...t,
-      label,
-      session: sessionMap.get(t.sessionId) ?? t.session,
-      isSaveable: isAdHoc,
-      isPinned: t.isPinned,
-    };
-  });
+  const terminalTabs = useMemo<TabEntry[]>(
+    () =>
+      openTabs.map((t) => {
+        const { type } = parseTerminalSessionId(t.sessionId);
+        const isAdHoc = isAdHocProjectTerminal(t.sessionId, profileSessionIds);
+        const label =
+          type === "free"
+            ? `Terminal ${freeTerminalIndexMap.get(t.sessionId) ?? "?"}`
+            : t.label;
+        const session = applyLocalStoppedSession(
+          sessionMap.get(t.sessionId) ?? t.session,
+          locallyStoppedSessionMarkersRef.current.get(t.sessionId),
+        );
+        return {
+          ...t,
+          label,
+          session,
+          isSaveable: isAdHoc,
+          isPinned: t.isPinned,
+        };
+      }),
+    [freeTerminalIndexMap, openTabs, profileSessionIds, sessionMap],
+  );
 
   const selectedId =
     selection?.type === "project"
@@ -1282,7 +1387,7 @@ export function useTerminalManager(
       tree,
       freeTerminals,
       isLoading,
-      tabsWithLiveSession,
+      terminalTabs,
       selectedId,
       sessionMap,
       freeTerminalIndexMap,
