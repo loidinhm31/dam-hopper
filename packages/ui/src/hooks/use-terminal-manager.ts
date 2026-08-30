@@ -28,7 +28,10 @@ import {
   createMountedSession,
   upsertMountedSession,
 } from "@/lib/terminal-mounted-sessions.js";
-import { isTerminalTabClosable } from "@/lib/terminal-tab-state.js";
+import {
+  isTerminalTabClosable,
+  resolveTerminalCloseFallback,
+} from "@/lib/terminal-tab-state.js";
 import {
   loadPinnedTerminalIds,
   retainPinnedTerminalIds,
@@ -113,7 +116,10 @@ export interface TerminalManagerActions {
   handleLaunchShell: (projectName: string) => void;
   handleSelectTab: (sessionId: string) => void;
   handleToggleTabPin: (sessionId: string) => void;
-  handleCloseTab: (sessionId: string) => void;
+  handleCloseTab: (
+    sessionId: string,
+    preferredFallbackSessionId?: string,
+  ) => void;
   handleKillTerminal: (sessionId: string) => void;
   handleRemoveFreeTerminal: (sessionId: string) => void;
   handleOpenFreeTerminalSavePrompt: (sessionId: string) => void;
@@ -1273,7 +1279,10 @@ export function useTerminalManager(
     });
   }
 
-  function handleCloseTab(sessionId: string) {
+  function handleCloseTab(
+    sessionId: string,
+    preferredFallbackSessionId?: string,
+  ) {
     if (!isTerminalTabClosable(openTabs, sessionId)) return;
     suppressedAutoAttachIdsRef.current.add(sessionId);
     pendingAutoAttachIdsRef.current.delete(sessionId);
@@ -1286,9 +1295,10 @@ export function useTerminalManager(
       const remaining = prev.filter((t) => t.sessionId !== sessionId);
       if (activeTab === sessionId) {
         setActiveTab(
-          remaining.length > 0
-            ? remaining[remaining.length - 1].sessionId
-            : null,
+          resolveTerminalCloseFallback(
+            remaining,
+            preferredFallbackSessionId,
+          ),
         );
       }
       return remaining;

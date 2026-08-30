@@ -2,6 +2,11 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Traditional Terminal Projects Panel Selection Fallback (2026-08-31)
+
+- **Bug fix — [COMPLETED 2026-08-31; review approved 8.5/10]**: Traditional mode now supplies a same-project fallback after closing an active terminal; Runtime global-last behavior remains unchanged.
+- Focused unit, browser, and build checks passed. Production-like callback integration coverage remains a required follow-up.
+
 ### Touch Long-Press Right-Click (2026-08-12)
 
 - **Phases 01–03 — [COMPLETED 2026-08-12; review approved 8.5/10]**: preserved Radix's single 700 ms touch/pen trigger contract and existing Explorer row/editor-tab menus; added focused hold, targeting, cancellation, nested-control, marker/suppression, mouse/keyboard, focus, portal, dismissal, and native-fallback deduplication coverage. Focused browser **17/17**, full UI unit **992/992**, and serial full browser **120/120** passed.
