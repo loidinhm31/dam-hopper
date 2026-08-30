@@ -27,6 +27,8 @@ interface Props {
   activeSessionId: string | null;
   mountedSessions: MountedSession[];
   openTabs: TabEntry[];
+  layoutStorageKey: string;
+  terminalCommitStatusEnabled?: boolean;
   onSessionExit?: (sessionId: string) => void;
   onNewTerminal?: () => void;
   onSelectTab?: (sessionId: string) => void;
@@ -45,6 +47,8 @@ export function MultiTerminalDisplay({
   activeSessionId,
   mountedSessions,
   openTabs,
+  layoutStorageKey,
+  terminalCommitStatusEnabled,
   onSessionExit,
   onNewTerminal,
   onSelectTab,
@@ -58,7 +62,7 @@ export function MultiTerminalDisplay({
   renderBrowserContent,
   onCloseBrowser,
 }: Props) {
-  const layout = useTerminalLayout();
+  const layout = useTerminalLayout(layoutStorageKey);
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
   const isCompactWorkspace = useCompactWorkspace();
@@ -92,8 +96,13 @@ export function MultiTerminalDisplay({
   // ── sync new sessions into the split layout ──────────────────────────────
   useEffect(() => {
     const currentIds = new Set(mountedSessions.map((s) => s.sessionId));
+    const layoutSessionIds = new Set(
+      collectPanes(layout.root).flatMap((pane) => pane.sessionIds),
+    );
     const newSessions = mountedSessions.filter(
-      (s) => !prevSessionIdsRef.current.has(s.sessionId),
+      (s) =>
+        !prevSessionIdsRef.current.has(s.sessionId) &&
+        !layoutSessionIds.has(s.sessionId),
     );
 
     for (const s of newSessions) {
@@ -168,6 +177,7 @@ export function MultiTerminalDisplay({
           root={layout.root}
           layout={layout}
           mountedSessions={mountedSessions}
+          terminalCommitStatusEnabled={terminalCommitStatusEnabled}
           openTabs={openTabs}
           onNewTerminal={onNewTerminal ?? (() => {})}
           onSessionExit={onSessionExit ?? (() => {})}

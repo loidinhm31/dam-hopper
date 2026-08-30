@@ -31,7 +31,11 @@ vi.mock("@/hooks/use-ports.js", () => ({
 vi.mock("@/hooks/use-resize-handle.js", () => ({
   useResizeHandle: () => ({
     width: 288,
-    handleProps: { onMouseDown: vi.fn() },
+    handleProps: {
+      onMouseDown: vi.fn(),
+      onKeyDown: vi.fn(),
+      tabIndex: 0,
+    },
     isDragging: false,
   }),
 }));
@@ -101,6 +105,8 @@ describe("ActiveTerminalRuntimeDisplay", () => {
 
     expect(markup).toContain("cursor-col-resize");
     expect(markup).toContain("Full-width terminal");
+    expect(markup).toContain('aria-label="Resize Runtime panel"');
+    expect(markup).toContain('tabindex="0"');
   });
 
   it("opens diagnostics for the compact runtime title session", () => {

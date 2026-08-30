@@ -6,6 +6,8 @@ interface UseResizeHandleOptions {
   max: number;
   defaultWidth: number;
   storageKey?: string;
+  /** When true, expose keyboard controls on the returned handle. */
+  keyboardResizeEnabled?: boolean;
   /** When true, dragging left increases width (right-side panels) */
   reversed?: boolean;
   onResizeEnd?: () => void;
@@ -15,6 +17,8 @@ interface UseResizeHandleReturn {
   width: number;
   handleProps: {
     onMouseDown: (e: React.MouseEvent) => void;
+    onKeyDown?: (e: React.KeyboardEvent<HTMLElement>) => void;
+    tabIndex?: 0;
   };
   isDragging: boolean;
 }
@@ -25,6 +29,7 @@ export function useResizeHandle({
   defaultWidth,
   storageKey,
   reversed = false,
+  keyboardResizeEnabled = false,
   onResizeEnd,
 }: UseResizeHandleOptions): UseResizeHandleReturn {
   const [width, setWidth] = useState<number>(() => {
@@ -81,6 +86,35 @@ export function useResizeHandle({
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   }
+  function onKeyDown(e: React.KeyboardEvent<HTMLElement>) {
+    const step = e.shiftKey ? 32 : 16;
+    let nextWidth: number;
+    if (e.key === "Home") {
+      nextWidth = min;
+    } else if (e.key === "End") {
+      nextWidth = max;
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      const delta = e.key === "ArrowRight" ? step : -step;
+      nextWidth = Math.min(
+        Math.max(width + (reversed ? -delta : delta), min),
+        max,
+      );
+    } else {
+      return;
+    }
+    e.preventDefault();
+    if (nextWidth === width) return;
+    setWidth(nextWidth);
+    if (storageKey) localStorage.setItem(storageKey, String(nextWidth));
+    onResizeEnd?.();
+  }
 
-  return { width, handleProps: { onMouseDown }, isDragging };
+  return {
+    width,
+    handleProps: {
+      onMouseDown,
+      ...(keyboardResizeEnabled ? { onKeyDown, tabIndex: 0 as const } : {}),
+    },
+    isDragging,
+  };
 }

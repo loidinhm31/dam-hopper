@@ -304,6 +304,7 @@ vi.mock("@/lib/command-history.js", () => ({
 }));
 vi.mock("@/lib/utils.js", () => ({
   cn: (...values: string[]) => values.join(" "),
+  generateUUID: () => "00000000-0000-4000-8000-000000000000",
 }));
 
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";

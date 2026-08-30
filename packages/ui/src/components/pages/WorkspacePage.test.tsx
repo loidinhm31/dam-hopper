@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkspacePage, {
@@ -15,7 +15,20 @@ import { useProjectTargetStore } from "@/stores/project-target.js";
 
 let mockWorkspaceMode: "ide" | "terminal" = "ide";
 let mockActiveProject: string | null = null;
+let mockActiveProjectRevision = 0;
 let mockProjects = [{ name: "demo-project" }];
+let mockActiveTerminalTab: string | null = null;
+let mockMountedSessions: Array<{
+  sessionId: string;
+  project: string;
+  command: string;
+}> = [];
+let mockTerminalTabs: Array<{
+  sessionId: string;
+  label: string;
+  session?: { alive?: boolean };
+}> = [];
+let mockSessionMap = new Map<string, { project: string; alive: boolean }>();
 let mockAndroidChromeSuppressed = false;
 let mockLaunchForm: {
   projectName: string;
@@ -51,6 +64,35 @@ function renderTerminalOverlayContent() {
       | undefined;
   expect(renderContent).toEqual(expect.any(Function));
   return renderContent!(terminalPanelControls);
+}
+
+type ButtonElement = ReactElement<{
+  "aria-label"?: string;
+  children?: ReactNode;
+  onClick?: () => void;
+}>;
+
+function findButtonByAriaLabel(
+  node: ReactNode,
+  label: string,
+): ButtonElement | null {
+  if (!isValidElement(node)) return null;
+
+  const element = node as ButtonElement;
+  if (element.type === "button" && element.props["aria-label"] === label) {
+    return element;
+  }
+
+  const children = element.props.children;
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      const match = findButtonByAriaLabel(child, label);
+      if (match) return match;
+    }
+    return null;
+  }
+
+  return findButtonByAriaLabel(children, label);
 }
 let lastTerminalManagerOptions: {
   terminalAutoSwitchProjectEnabled: boolean;
@@ -140,6 +182,7 @@ vi.mock("@/components/ui/Select.js", () => ({
 vi.mock("@/stores/workspace.js", () => ({
   useWorkspaceStore: () => ({
     activeProject: mockActiveProject,
+    activeProjectRevision: mockActiveProjectRevision,
     setActiveProject: mockSetActiveProject,
   }),
 }));
@@ -174,9 +217,9 @@ vi.mock("@/hooks/use-terminal-manager.js", () => ({
     lastTerminalManagerOptions = options;
     return {
       state: {
-        activeTab: null,
-        openTabs: [],
-        mountedSessions: [],
+        activeTab: mockActiveTerminalTab,
+        openTabs: mockTerminalTabs,
+        mountedSessions: mockMountedSessions,
         launchForm: mockLaunchForm,
         freeTerminalSavePrompt: mockFreeTerminalSavePrompt,
         selection: null,
@@ -185,9 +228,9 @@ vi.mock("@/hooks/use-terminal-manager.js", () => ({
         tree: [],
         freeTerminals: [],
         isLoading: false,
-        tabsWithLiveSession: [],
+        terminalTabs: mockTerminalTabs,
         selectedId: null,
-        sessionMap: new Map(),
+        sessionMap: mockSessionMap,
       },
       actions: terminalActions,
     };
@@ -278,7 +321,12 @@ describe("WorkspacePage", () => {
   beforeEach(() => {
     mockWorkspaceMode = "ide";
     mockActiveProject = null;
+    mockActiveProjectRevision = 0;
     mockProjects = [{ name: "demo-project" }];
+    mockActiveTerminalTab = null;
+    mockMountedSessions = [];
+    mockTerminalTabs = [];
+    mockSessionMap = new Map();
     mockAndroidChromeSuppressed = false;
     settingsStore.terminalAutoSwitchProjectEnabled = true;
     mockLaunchForm = null;
@@ -478,6 +526,49 @@ describe("WorkspacePage", () => {
     expect(terminalMarkup).toContain("Project");
     expect(terminalMarkup).toContain("Fleet");
     expect(lastTerminalWorkspaceShellProps?.projectContent).toBeDefined();
+  });
+
+  it("keeps the header launch action scoped to the selected project", () => {
+    stubMatchMedia(false);
+    mockWorkspaceMode = "terminal";
+    mockProjects = [{ name: "alpha" }, { name: "beta" }];
+    mockActiveProject = "beta";
+    mockActiveTerminalTab = "alpha-terminal";
+    mockMountedSessions = [
+      { sessionId: "alpha-terminal", project: "alpha", command: "bash" },
+    ];
+    mockTerminalTabs = [
+      { sessionId: "alpha-terminal", label: "alpha", session: { alive: true } },
+    ];
+    mockSessionMap = new Map([
+      ["alpha-terminal", { project: "alpha", alive: true }],
+    ]);
+
+    renderToStaticMarkup(<WorkspacePage />);
+    const terminalMarkup = renderToStaticMarkup(
+      <>{lastTerminalWorkspaceShellProps?.terminalContent as ReactNode}</>,
+    );
+
+    expect(terminalMarkup).toContain('aria-label="Open terminal in beta"');
+    expect(terminalMarkup).toContain('title="Open terminal in beta"');
+
+    const launchButton = findButtonByAriaLabel(
+      lastTerminalWorkspaceShellProps?.terminalContent as ReactNode,
+      "Open terminal in beta",
+    );
+    expect(launchButton).not.toBeNull();
+    terminalActions.handleLaunchShell.mockClear();
+    launchButton?.props.onClick?.();
+    expect(terminalActions.handleLaunchShell).toHaveBeenCalledWith("beta");
+
+    mockActiveProject = "alpha";
+    renderToStaticMarkup(<WorkspacePage />);
+    const sameProjectMarkup = renderToStaticMarkup(
+      <>{lastTerminalWorkspaceShellProps?.terminalContent as ReactNode}</>,
+    );
+    expect(sameProjectMarkup).not.toContain(
+      'aria-label="Open terminal in alpha"',
+    );
   });
 
   it("disables text-dependent terminal actions when Android Chrome input is suppressed", () => {

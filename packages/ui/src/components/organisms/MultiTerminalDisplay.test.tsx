@@ -10,21 +10,21 @@ const mockSplitProps = vi.hoisted(() => ({
   suppressTerminalFocus: undefined as boolean | undefined,
   activeSessionId: undefined as string | null | undefined,
 }));
+const mockCollectedPanes = vi.hoisted(() => [
+  {
+    id: "pane-1",
+    sessionIds: ["session-1", "session-2"],
+    activeSessionId: "session-1",
+  },
+]);
+
 const mockLayout = vi.hoisted(() => ({
+  storageKey: undefined as string | undefined,
   root: {},
   focusedPaneId: "pane-1",
   getFirstPaneId: () => "pane-1",
-  getPaneById: () => ({
-    id: "pane-1",
-    sessionIds: ["session-1", "session-2"],
-  }),
-  getPanes: () => [
-    {
-      id: "pane-1",
-      sessionIds: ["session-1", "session-2"],
-      activeSessionId: "session-1",
-    },
-  ],
+  getPaneById: () => mockCollectedPanes[0],
+  getPanes: () => mockCollectedPanes,
   addSessionToPane: vi.fn(),
   pruneSessions: vi.fn(),
   setActiveSession: vi.fn(),
@@ -54,14 +54,11 @@ vi.mock("@/components/organisms/SplitLayout.js", () => ({
   },
 }));
 vi.mock("@/hooks/use-terminal-layout.js", () => ({
-  collectPanes: () => [
-    {
-      id: "pane-1",
-      sessionIds: ["session-1", "session-2"],
-      activeSessionId: "session-1",
-    },
-  ],
-  useTerminalLayout: () => mockLayout,
+  collectPanes: () => mockCollectedPanes,
+  useTerminalLayout: (storageKey: string) => {
+    mockLayout.storageKey = storageKey;
+    return mockLayout;
+  },
 }));
 vi.mock("@/hooks/use-compact-workspace.js", () => ({
   useCompactWorkspace: () => false,
@@ -96,6 +93,16 @@ describe("MultiTerminalDisplay floating controls", () => {
     mockSettings.customKeyboard = true;
     mockSplitProps.suppressTerminalFocus = undefined;
     mockSplitProps.activeSessionId = undefined;
+    mockLayout.storageKey = undefined;
+    mockLayout.addSessionToPane.mockClear();
+    mockLayout.pruneSessions.mockClear();
+    mockLayout.setActiveSession.mockClear();
+    mockLayout.setFocusedPaneId.mockClear();
+    mockCollectedPanes.splice(0, mockCollectedPanes.length, {
+      id: "pane-1",
+      sessionIds: ["session-1", "session-2"],
+      activeSessionId: "session-1",
+    });
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -112,18 +119,50 @@ describe("MultiTerminalDisplay floating controls", () => {
     { sessionId: "session-2", project: "demo", command: "shell" },
   ];
 
-  function renderDisplay(activeSessionId: string | null): void {
+  function renderDisplay(
+    activeSessionId: string | null,
+    mountedSessions = sessions,
+  ): void {
     act(() => {
       root.render(
         <MultiTerminalDisplay
           activeSessionId={activeSessionId}
-          mountedSessions={sessions}
+          mountedSessions={mountedSessions}
           openTabs={[]}
+          layoutStorageKey="terminal-layout:test"
           renderTerminals={false}
         />,
       );
     });
   }
+  it("uses the scoped key and adds mounted sessions missing anywhere in the tree", () => {
+    mockCollectedPanes.splice(
+      0,
+      mockCollectedPanes.length,
+      {
+        id: "pane-1",
+        sessionIds: [],
+        activeSessionId: null,
+      },
+      {
+        id: "pane-2",
+        sessionIds: ["session-1"],
+        activeSessionId: "session-1",
+      },
+    );
+
+    renderDisplay("session-1");
+
+    expect(mockLayout.storageKey).toBe("terminal-layout:test");
+    expect(mockLayout.addSessionToPane).toHaveBeenCalledTimes(1);
+    expect(mockLayout.addSessionToPane).toHaveBeenCalledWith(
+      "pane-1",
+      "session-2",
+    );
+    expect(mockLayout.pruneSessions).toHaveBeenCalledWith(
+      new Set(["session-1", "session-2"]),
+    );
+  });
 
   it("mounts exactly one group and retargets it when the active split session changes", () => {
     renderDisplay("session-1");

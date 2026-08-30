@@ -123,7 +123,7 @@ export function SettingsAppearanceSection() {
 
       <SettingRow
         title="Show latest commit in terminal"
-        description="Show the active terminal project’s branch and latest commit in its header"
+        description="Show the active terminal project's branch and latest commit in the terminal header or project list"
       >
         <Switch
           checked={terminalCommitStatusEnabled}
