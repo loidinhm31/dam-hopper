@@ -373,7 +373,7 @@ export function buildTerminalDisplayTabs(
       const { project: _project, ...projectlessTab } = baseTab;
       return projectlessTab;
     }
-    const project = session ? sessionProject(session) : tab.project ?? "";
+    const project = tab.project ?? (session ? sessionProject(session) : "");
     return project ? { ...baseTab, project } : baseTab;
   });
   return applyTerminalTitleOrdinals(baseTabs);

@@ -7,7 +7,10 @@ import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { SessionInfo } from "@/api/client.js";
 
-import { deriveTerminalAutoAttachState } from "@/lib/terminal-auto-attach.js";
+import {
+  buildTerminalDisplayTabs,
+  deriveTerminalAutoAttachState,
+} from "@/lib/terminal-auto-attach.js";
 import {
   registerTerminalOutputActivity,
   type TerminalOutputActivityRegistration,
@@ -88,6 +91,16 @@ function TraditionalProjectsFixtureContent({
     initialMountedSessions,
   );
   const [newTerminalProject, setNewTerminalProject] = useState("none");
+  const displayTabs = buildTerminalDisplayTabs(
+    tabs,
+    new Map<string, SessionInfo>(
+      tabs.flatMap((tab) =>
+        tab.session ? [[tab.sessionId, tab.session]] : [],
+      ),
+    ),
+    new Set(),
+    new Map(),
+  );
   const alphaActivityRef = useRef<TerminalOutputActivityRegistration | null>(
     null,
   );
@@ -210,7 +223,7 @@ function TraditionalProjectsFixtureContent({
       <TraditionalTerminalProjectsDisplay
         activeSessionId={activeSessionId}
         mountedSessions={mountedSessions}
-        terminalTabs={tabs}
+        terminalTabs={displayTabs}
         currentProjectName={currentProjectName}
         currentProjectRevision={currentProjectRevision}
         renderTerminals={false}
