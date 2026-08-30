@@ -313,8 +313,9 @@ With restart metadata:
   "id": "uuid",
   "exitCode": 1,
   "willRestart": true,
-  "restartInMs": 2000,
-  "restartCount": 1
+  "restartIn": 2000,
+  "restartCount": 1,
+  "incarnation": 4
 }
 ```
 
@@ -322,10 +323,13 @@ With restart metadata:
 
 - `exitCode` — Process exit code (number)
 - `willRestart` — (optional) If true, process will restart after backoff
-- `restartInMs` — (optional) Milliseconds until restart attempt
+- `restartIn` — (optional) Milliseconds until restart attempt
 - `restartCount` — (optional) Cumulative restart counter
+- `incarnation` — (optional) Nonnegative safe integer identifying the PTY incarnation
 
-**Backward Compatibility:** Old clients receive functional event; new optional fields ignored if not understood.
+**Backward Compatibility:** Old clients may ignore the optional `incarnation` field and
+continue handling the event by its public session ID. When that ID is reused for a new
+PTY, clients that track incarnations may reject delayed events from an older incarnation.
 
 #### Process Restarted Event (Phase 5+)
 
