@@ -268,10 +268,35 @@ capability or stream failures without materializing image bytes.
 - Cleanup disposes xterm handlers, timers, and tracker state when the panel unmounts or the session is replaced.
 - In-app history is memory-only and capped at 50 records; toast IDs are capped at three. The master Codex setting is the OSC 9 capture gate and the only setting that synchronizes the Codex TUI. While it is enabled, disabling **In-app toast** still records the bell/history entry; **Browser popup** and **Notification sound** are independent delivery gates. Child choices remain saved but are disabled in the UI while the master is off.
 - `terminal-notification-sound.ts` reuses one Web Audio context to synthesize four fixed built-in in-app chimes: `default`, `soft`, `two-tone`, and `urgent`. `default` preserves the existing single-chime behavior for compatible saved configurations. Sound does not affect native browser popups and needs no audio assets or dependencies. Unsupported, SSR, autoplay-blocked, and audio-failure paths are silent no-ops; the persisted Sound switch, Sound style selector, and Volume slider control only this best-effort channel. **Play sound** previews the current style and volume from an explicit click; it neither creates a browser popup nor requests browser permission.
-- Terminal ordinals are the current 1-based open-list position and are display context only. Navigation never relies on a project name or ordinal. A target must be mounted and either explicitly alive or, only while liveness is unknown, already registered with xterm; explicitly dead, unmounted, and stale targets are safe no-ops.
+- Terminal notification context keeps `terminalOrder` as the global current 1-based `openTabs` position; this is separate from the per-project title ordinals documented below. Both are display context only. Navigation never relies on a project name or ordinal. A target must be mounted and either explicitly alive or, only while liveness is unknown, already registered with xterm; explicitly dead, unmounted, and stale targets are safe no-ops.
 - In compact coarse-pointer layouts with the mobile custom keyboard enabled, selection still reveals and refits the exact terminal but deliberately avoids forcing native xterm focus so the browser keyboard is not opened unexpectedly.
 - Settings live under `SettingsAppearanceSection` via the extracted `TerminalAgentNotificationSettings`, `TerminalNotificationSoundControls`, and `AgentCommandPatternEditor` UI. Browser permission is requested only by the explicit **Request permission** click; changing the Browser popup toggle or saving another preference never requests, revokes, or persists that browser-managed permission. The app surfaces `unsupported`, `not requested`, `granted`, and `denied` states.
 - Client diagnostics for this feature are recorded under scope `terminal-agent-notifications` and must not include raw terminal output, replay data, OSC payloads, or command arguments beyond the executable token; replay state may use metadata-only counts.
+
+## Terminal Title Ordinals
+
+Open terminal titles derive a current 1-based ordinal from the global `openTabs`
+order within each exact project group. Interleaved tabs from projects A and B
+therefore display `A #1`, `B #1`, `A #2`, `B #2`; the global array order itself
+never changes. The display projection is ephemeral: base `TabEntry.label` remains
+unsuffixed, while `DisplayTabEntry.title` carries
+`{ baseLabel, ordinal, fullText }`. `TerminalTitleText` renders the base in a
+shrinkable/truncating region and the `#N` suffix in a non-shrinking region,
+exposing `fullText` exactly once to assistive technology. Reordering, opening,
+closing, and hydrating tabs recalculate each project's sequence.
+
+Project grouping uses explicit frontend/session project metadata, never labels.
+Free or projectless tabs share one internal projectless group; their
+`Terminal X`/`Terminal (starting…)` labels are not grouping keys. Mounted-only
+runtime or browser-handoff entries are outside the open-title contract, so they
+retain readable unsuffixed fallbacks. Open browser targets carry both the
+structured title and its complete `fullText` label.
+
+Title ordinals are separate from notification context: `TerminalKeepAliveHost`
+continues to calculate `terminalOrder` as the tab's global 1-based `openTabs`
+position. `sessionId` remains the identity for keys, selection, close/pin/
+diagnostics, PTY attachment, notifications, and browser artifacts. No title or
+fallback exposes opaque session IDs or PTY incarnations.
 
 ## IDE Tool Window System
 
@@ -446,28 +471,79 @@ extension runs.
 
 **Behavior:**
 
-- Keys and Type are a host-local, absolute `z-10` overlay inside each positioned
-  terminal output host. The group uses the same translucent surface and dismissal
-  conventions as the scroll controls, with a safe-area-aware lower-right anchor.
-- TerminalScrollButtons keeps the outer lower-right rail. The keyboard group uses
-  the adjacent safe-area-aware lane, including the expanded rail width and an 8px
-  gap, when scrolling is enabled and reclaims that lane when it is disabled; its
-  outer wrapper is pointer-inert so empty overlay space does not steal xterm,
-  pane, or docking events.
+- Keys and Type are host-local, absolute `z-10` overlays within each positioned
+  terminal output surface. The group uses the same translucent surface and
+  dismissal conventions as the scroll controls, with a raised lower-right
+  anchor at `3rem + var(--safe-area-bottom, 0px)` (48px plus the safe-area
+  inset) and the existing right safe-area handling.
+- TerminalScrollButtons shares the terminal output footer's positioned
+  containing block. In the closed state it keeps the 48px bottom baseline,
+  `6.25rem` accessory reservation, and 8px gap. When an accessory panel opens,
+  the scroll trigger and Keys/Type shell lift above that in-flow panel; short
+  viewports switch the trigger and shell to adjacent horizontal lanes instead
+  of stacking them vertically.
+- The scroll rail toggle opens a four-action group for jumping to the top or
+  bottom and moving by the configured terminal scroll step. Escape or a
+  pointerdown outside the controls closes the group, and the trigger maintains
+  its `aria-expanded`/`aria-controls` linkage.
+- Pointerdown cancellation and touchstart propagation guards cover the toggle
+  and all four actions: they prevent pointer focus and host bubbling, blur a
+  focused `.xterm-helper-textarea`, and preserve click and keyboard activation.
+  Coarse-pointer taps therefore do not hand focus back to xterm and reopen the
+  Android IME.
+- Terminal Keys exposes `Esc`, `Tab`, `Ctrl+C` (shown as `^C`), `Enter`,
+  `PgUp`, `PgDn`, `Up`, `Down`, `Left`, and `Right` in matching visual and
+  keyboard order.
+- Custom Type defaults to a five-row US 60%-style physical layout with the
+  existing arrow cluster, duplicate modifier keys, `Fn`, and `Win`. On compact
+  coarse-pointer surfaces it switches to a minimized alpha layout: one
+  `Shift`, `Ctrl`, and `Alt`, no arrow/`Fn`/`Win` keys, and `Enter` in the
+  navigation row. Terminal Keys continues to expose the removed arrow actions
+  and can remain open alongside Type.
 - Expanded special keys and custom/native Type input stay in the existing local
-  component state and continue writing through the active session's authenticated
-  terminal transport. The native Type input remains focusable; control presses
-  prevent xterm focus and stop host propagation. Escape and outside pointer
-  dismissal close open panels and Escape restores the invoking trigger focus.
-- Rendering the group is independent from native-input suppression. Android policy
-  and the existing compact/coarse/custom-keyboard policy still control xterm/native
-  input behavior; showing desktop controls alone never suppresses xterm input.
-  The custom keyboard is selected only for Android suppression or compact/coarse
-  pointers with the setting enabled; fine-pointer desktop Type always uses the
-  focusable native input.
-- Expanded content is bounded by the host and visual viewport (`dvh`), safe-area
-  insets, and a 22rem width cap, so opening a panel does not add an in-flow row or
-  reduce the xterm host height.
+  component state and continue writing through the active session's
+  authenticated terminal transport. The native Type input remains focusable;
+  control presses prevent xterm focus and stop host propagation. Escape and
+  outside pointer dismissal close open panels and Escape restores the invoking
+  trigger focus.
+- Rendering the group is independent from native-input suppression. Android
+  policy and the existing compact/coarse/custom-keyboard policy still control
+  xterm/native input behavior; showing desktop controls alone never suppresses
+  xterm input.
+- The custom keyboard is selected when Android suppression is active or when
+  `mobileCustomKeyboardEnabled` is enabled; otherwise Type uses the focusable
+  native input, including on fine-pointer desktop surfaces.
+- Every custom key keeps a 44px minimum height, responsive 14px-to-44px
+  width, 4px-to-8px horizontal gap, and accessible title/ARIA label. The full
+  layout remains five rows and uses the existing width-responsive 60% geometry.
+  The minimized layout keeps word characters on four alpha/navigation rows and
+  moves digits and punctuation to a three-row `123` sublayout. Its panel clips
+  horizontal overflow instead of creating a page or panel scroll track.
+- Shift changes the visible number/symbol labels to the character that will be
+  sent. Ctrl letter chords are announced as `Ctrl+X`; Alt/Meta combinations
+  include their active modifier prefix. Both layouts grow rows to fill the
+  available width and stay centered without horizontal scrolling.
+
+- Expanded content remains a full-width, trailing in-flow panel with
+  `overflow-x-hidden overflow-y-auto` and
+  `max-height: min(20rem, calc(100dvh - 6rem - var(--safe-area-bottom, 0px)))`.
+  The Keys/Type shell moves above the panel when it opens. At short viewport
+  heights, Keys/Type and the scroll trigger use a horizontal lane so all three
+  44px controls remain reachable; an opened scroll rail occupies the adjacent
+  compact lane. Safe-area padding accounts for viewport insets, while flex
+  sizing keeps the panel within the positioned host. The outer terminal surface
+  stays fixed while the flex output host yields available height without
+  collapsing.
+- Terminal compact shells leave the bottom safe-area inset to the terminal
+  accessory controls rather than reserving it again on the terminal root;
+  non-terminal compact workspace modes retain root safe-area padding.
+
+**Verification/status:**
+
+- Focused UI unit coverage for the accessory controls passed: 27 tests across
+  five files.
+- The `packages/ui` TypeScript build passed.
+- Direct Chromium accessory-browser coverage passed all 10 checks.
 
 ### Resize Handle Hook
 
@@ -491,6 +567,41 @@ extension runs.
 **Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect), session attachment, and in-app/native agent notification integration. Phase 1 adds the session-local find controller; TerminalPanel lifecycle wiring follows in Phase 2.
 
 **Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Wires xterm BEL and OSC 9/777/99 handlers into the shared agent-activity path so submitted command, output, user input, and exit signals can drive in-app and native browser notifications without any backend protocol change. During retained buffer replay, it keeps the OSC 9 delivery gate active through xterm's asynchronous write callback, then FIFO-flushes queued live data so historical alerts stay silent and subsequent live alerts are preserved. Attach recovery permits only one in-flight attach per panel, retries an alive session with capped exponential backoff, and creates a replacement only after a `terminal:listDetailed` check confirms the session is missing or dead. The terminal session cleanup path disposes signal handlers and timers; search controller cleanup is added with the Phase 2 lifecycle wiring.
+
+### Terminal touch scrolling and page-gesture containment
+
+`TerminalPanel` binds `bindTerminalTouchScroll` from
+`packages/ui/src/lib/terminal-touch-scroll.ts` after xterm v6 opens. xterm's
+scrollback is a custom buffer surface, so the helper translates vertical
+swipes into `terminal.scrollLines()` calls rather than relying on a native
+scroll container. It listens only when `(any-pointer: coarse)` matches, and
+uses capture-phase, passive `touchstart`, `touchmove`, `touchend`, and
+`touchcancel` handlers. Single-touch movement is accumulated by screen line
+height, flushed on animation frames, and a bounded decaying fling continues
+after release; multi-touch and helper-textarea/scrollbar touches are ignored
+or cancel the gesture.
+
+The xterm viewport and scrollable element use `touch-action: none` and
+`overscroll-behavior: contain` (with the `.xterm` root also contained). This
+keeps terminal swipes from panning the browser page or triggering pull-to-refresh.
+The binding returns an idempotent cleanup function that cancels pending move and
+inertia frames and removes all four listeners; `TerminalPanel` invokes it when
+the terminal effect is disposed.
+
+Focused unit coverage is in
+`packages/ui/src/lib/terminal-touch-scroll.test.ts`. Run it with:
+
+```bash
+pnpm --filter @dam-hopper/ui test -- src/lib/terminal-touch-scroll.test.ts
+```
+
+The scroll-button/browser integration surface is covered by
+`packages/ui/browser-tests/terminal-scroll-buttons.browser.tsx`; run the focused
+browser test with:
+
+```bash
+pnpm --filter @dam-hopper/ui test:browser -- browser-tests/terminal-scroll-buttons.browser.tsx
+```
 
 #### Inline terminal suggestions (Phase 04)
 
@@ -869,3 +980,20 @@ policy, handshake/load-error UX, and CSP framing guidance.
 
 - [System Architecture](./system-architecture.md)
 - [Configuration Guide](./configuration-guide.md)
+
+- [Native Browser Debug Support](./native-browser-debug-support.md)
+
+## Shared design-system and embedding contract
+
+`packages/ui` is the reusable surface exported as the app, styles, and API/lib
+entry points. Hosts provide the transport and QueryClient bootstrap before
+mounting `DamHopperApp`. Provider order is AppZoom → Encrypt →
+AndroidChromeInputPolicy → Router, followed by guards, shortcuts, notifications,
+and diagnostics.
+
+Use semantic dark tokens from `index.css`, JetBrains Mono, safe-area/layout
+utilities, and Radix wrappers for interactive primitives. Preserve keyboard
+focus rings, live-region announcements, and 44px compact controls. `Encrypt`
+is per-project, memory-only OPAQUE session material; never persist passphrases
+or content. Browser Debug keeps one host alive across shell changes; native
+geometry uses raw rendered bounds and mirrored app zoom.

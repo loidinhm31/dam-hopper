@@ -11,6 +11,12 @@ pub enum PlatformRelayResult {
     Unsupported,
 }
 
+#[derive(Debug)]
+pub enum PlatformRelayError {
+    Unavailable(String),
+    Security(String),
+}
+
 /// Installs the narrow native message hook used by the injected bridge.
 ///
 /// The platform implementations attach a narrow second listener to Wry's
@@ -20,15 +26,17 @@ pub enum PlatformRelayResult {
 pub fn install_relay<R: Runtime>(
     webview: &Webview<R>,
     callback: RelayCallback,
-) -> Result<PlatformRelayResult, String> {
+) -> Result<PlatformRelayResult, PlatformRelayError> {
     use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PERMISSION_STATE_DENY;
     use webview2_com::{
         take_pwstr, PermissionRequestedEventHandler, WebMessageReceivedEventHandler,
     };
     use windows::core::PWSTR;
 
-    let error = Arc::new(std::sync::Mutex::new(None::<String>));
-    let error_for_hook = error.clone();
+    let relay_error = Arc::new(std::sync::Mutex::new(None::<String>));
+    let permission_error = Arc::new(std::sync::Mutex::new(None::<String>));
+    let relay_error_for_hook = relay_error.clone();
+    let permission_error_for_hook = permission_error.clone();
     let result = webview.with_webview(move |native| {
         let callback = callback.clone();
         let handler = WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
@@ -47,13 +55,15 @@ pub fn install_relay<R: Runtime>(
         let webview = match unsafe { controller.CoreWebView2() } {
             Ok(webview) => webview,
             Err(error) => {
-                *error_for_hook.lock().expect("relay error lock") = Some(error.to_string());
+                *permission_error_for_hook
+                    .lock()
+                    .expect("relay permission error lock") = Some(error.to_string());
                 return;
             }
         };
         let mut token = 0_i64;
         if let Err(error) = unsafe { webview.add_WebMessageReceived(&handler, &mut token) } {
-            *error_for_hook.lock().expect("relay error lock") = Some(error.to_string());
+            *relay_error_for_hook.lock().expect("relay error lock") = Some(error.to_string());
         }
         let permission_handler = PermissionRequestedEventHandler::create(Box::new(|_, args| {
             if let Some(args) = args {
@@ -65,12 +75,27 @@ pub fn install_relay<R: Runtime>(
         if let Err(error) =
             unsafe { webview.add_PermissionRequested(&permission_handler, &mut permission_token) }
         {
-            *error_for_hook.lock().expect("relay error lock") = Some(error.to_string());
+            *permission_error_for_hook
+                .lock()
+                .expect("relay permission error lock") = Some(error.to_string());
         }
     });
-    result.map_err(|error| error.to_string())?;
-    if let Some(error) = error.lock().expect("relay error lock").clone() {
-        return Err(format!("install WebView2 relay: {error}"));
+    if let Err(error) = result {
+        return Err(PlatformRelayError::Security(error.to_string()));
+    }
+    if let Some(error) = permission_error
+        .lock()
+        .expect("relay permission error lock")
+        .clone()
+    {
+        return Err(PlatformRelayError::Security(format!(
+            "install WebView2 permission policy: {error}"
+        )));
+    }
+    if let Some(error) = relay_error.lock().expect("relay error lock").clone() {
+        return Err(PlatformRelayError::Unavailable(format!(
+            "install WebView2 relay: {error}"
+        )));
     }
     Ok(PlatformRelayResult::Installed)
 }
@@ -79,7 +104,7 @@ pub fn install_relay<R: Runtime>(
 pub fn install_relay<R: Runtime>(
     webview: &Webview<R>,
     callback: RelayCallback,
-) -> Result<PlatformRelayResult, String> {
+) -> Result<PlatformRelayResult, PlatformRelayError> {
     use webkit2gtk::{UserContentManagerExt, WebViewExt};
 
     let error = Arc::new(std::sync::Mutex::new(None::<String>));
@@ -107,9 +132,13 @@ pub fn install_relay<R: Runtime>(
             }
         });
     });
-    result.map_err(|error| error.to_string())?;
+    if let Err(error) = result {
+        return Err(PlatformRelayError::Unavailable(error.to_string()));
+    }
     if let Some(error) = error.lock().expect("relay error lock").clone() {
-        return Err(format!("install WebKitGTK relay: {error}"));
+        return Err(PlatformRelayError::Unavailable(format!(
+            "install WebKitGTK relay: {error}"
+        )));
     }
     Ok(PlatformRelayResult::Installed)
 }
@@ -118,6 +147,6 @@ pub fn install_relay<R: Runtime>(
 pub fn install_relay<R: Runtime>(
     _webview: &Webview<R>,
     _callback: RelayCallback,
-) -> Result<PlatformRelayResult, String> {
+) -> Result<PlatformRelayResult, PlatformRelayError> {
     Ok(PlatformRelayResult::Unsupported)
 }

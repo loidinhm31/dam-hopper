@@ -2,6 +2,7 @@ import {
   browserTerminalTargetReason,
   type BrowserTerminalTarget,
 } from "@/lib/browser-terminal-handoff.js";
+import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 
 interface BrowserDebugTerminalTargetListProps {
   disabled: boolean;
@@ -33,7 +34,7 @@ export function BrowserDebugTerminalTargetList({
           return (
             <label
               key={candidate.sessionId}
-              className="flex min-h-11 items-center gap-2 rounded border border-[var(--color-border)] px-2 text-xs has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-[var(--color-ring)]"
+              className="flex min-w-0 min-h-11 items-center gap-2 rounded border border-[var(--color-border)] px-2 text-xs has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-[var(--color-ring)]"
             >
               <input
                 id={id}
@@ -45,15 +46,30 @@ export function BrowserDebugTerminalTargetList({
                 aria-describedby={`${id}-status`}
               />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[var(--color-text)]">
-                  {candidate.label}
-                  {candidate.current ? " · Current terminal" : ""}
+                <span className="block min-w-0">
+                  <span className="flex min-w-0 items-center">
+                    {candidate.openTitle ? (
+                      <TerminalTitleText
+                        title={candidate.openTitle}
+                        className="min-w-0 flex-1 text-[var(--color-text)]"
+                      />
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate text-[var(--color-text)]">
+                        {candidate.label}
+                      </span>
+                    )}
+                  </span>
+                  {candidate.current ? (
+                    <span className="block min-w-0 truncate text-[var(--color-text)]">
+                      {" · Current terminal"}
+                    </span>
+                  ) : null}
                 </span>
                 <span
                   id={`${id}-status`}
                   className="block truncate font-mono text-[10px] text-[var(--color-text-muted)]"
                 >
-                  {reason ?? candidate.sessionId}
+                  {reason ?? "Ready"}
                 </span>
               </span>
             </label>

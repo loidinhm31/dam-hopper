@@ -9,6 +9,7 @@ describe("mobile-terminal-keys", () => {
     expect(getMobileTerminalKeySequence("escape")).toBe("\x1b");
     expect(getMobileTerminalKeySequence("tab")).toBe("\t");
     expect(getMobileTerminalKeySequence("ctrl-c")).toBe("\x03");
+    expect(getMobileTerminalKeySequence("enter")).toBe("\r");
     expect(getMobileTerminalKeySequence("page-up")).toBe("\x1b[5~");
     expect(getMobileTerminalKeySequence("page-down")).toBe("\x1b[6~");
     expect(getMobileTerminalKeySequence("up")).toBe("\x1b[A");
@@ -16,17 +17,17 @@ describe("mobile-terminal-keys", () => {
     expect(getMobileTerminalKeySequence("left")).toBe("\x1b[D");
     expect(getMobileTerminalKeySequence("right")).toBe("\x1b[C");
   });
-
   it("exports a stable mobile keyboard layout", () => {
     expect(MOBILE_TERMINAL_KEYS.map((key) => key.id)).toEqual([
       "escape",
       "tab",
       "ctrl-c",
+      "enter",
       "page-up",
       "page-down",
       "up",
-      "left",
       "down",
+      "left",
       "right",
     ]);
   });

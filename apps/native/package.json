@@ -9,7 +9,7 @@
     "dev": "vite",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "pnpm --filter @dam-hopper/browser-bridge build && tauri dev",
     "tauri:build": "pnpm --filter @dam-hopper/browser-bridge build && tauri build --bundles deb,rpm",
     "tauri:build:windows": "pnpm --filter @dam-hopper/browser-bridge build && tauri build --bundles nsis --config src-tauri/tauri.windows.package.conf.json",
     "tauri:probe": "node scripts/smoke-browser-debug.mjs --runtime",

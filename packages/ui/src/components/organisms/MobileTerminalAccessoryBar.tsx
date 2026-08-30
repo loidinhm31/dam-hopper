@@ -25,18 +25,27 @@ import { MobileTerminalSpecialKeys } from "@/components/organisms/MobileTerminal
 import { TerminalAccessoryControls } from "@/components/organisms/TerminalAccessoryControls.js";
 import { TerminalFloatingControlShell } from "@/components/organisms/TerminalFloatingControlShell.js";
 
+const PANEL_SAFE_AREA_RIGHT = "max(0.5rem, var(--safe-area-right, 0px))";
+const PANEL_MAX_HEIGHT =
+  "min(20rem, calc(100dvh - 6rem - var(--safe-area-bottom, 0px)))";
+
 export function MobileTerminalAccessoryBar({
   sessionId,
   className,
+  onPanelOpenChange,
 }: {
   sessionId: string;
   className?: string;
+  onPanelOpenChange?: (isOpen: boolean) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const [isShiftActive, setIsShiftActive] = useState(false);
   const [isCtrlActive, setIsCtrlActive] = useState(false);
   const [isSymbolLayer, setIsSymbolLayer] = useState(false);
+  const [isCapsActive, setIsCapsActive] = useState(false);
+  const [isAltActive, setIsAltActive] = useState(false);
+  const [isMetaActive, setIsMetaActive] = useState(false);
   const keysButtonRef = useRef<HTMLButtonElement>(null);
   const keyboardButtonRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -51,13 +60,17 @@ export function MobileTerminalAccessoryBar({
   );
   const shouldUseCustomKeyboard =
     isAndroidChromeNativeInputSuppressed || mobileCustomKeyboardEnabled;
-  const keyboardButtonLabel = isAndroidChromeNativeInputSuppressed
+  const keyboardButtonLabel = shouldUseCustomKeyboard
     ? "Open custom terminal keyboard"
     : "Open mobile keyboard";
   const keyboardButtonText = shouldUseCustomKeyboard ? "Type" : "Kbd";
   useEffect(() => {
     if (shouldUseCustomKeyboard) keyboardInputRef.current?.blur();
   }, [shouldUseCustomKeyboard]);
+  useEffect(() => {
+    onPanelOpenChange?.(isExpanded || isKeyboardOpen);
+  }, [isExpanded, isKeyboardOpen, onPanelOpenChange]);
+
   const focusInvokingControl = useCallback(() => {
     requestAnimationFrame(() => {
       const button =
@@ -106,6 +119,9 @@ export function MobileTerminalAccessoryBar({
       if (key.kind === "toggle") {
         if (key.toggle === "shift") setIsShiftActive((current) => !current);
         if (key.toggle === "ctrl") setIsCtrlActive((current) => !current);
+        if (key.toggle === "caps") setIsCapsActive((current) => !current);
+        if (key.toggle === "alt") setIsAltActive((current) => !current);
+        if (key.toggle === "meta") setIsMetaActive((current) => !current);
         if (key.toggle === "symbols") setIsSymbolLayer((current) => !current);
         return;
       }
@@ -113,12 +129,24 @@ export function MobileTerminalAccessoryBar({
       const sequence = getCustomMobileTerminalKeySequence(key, {
         shift: isShiftActive,
         ctrl: isCtrlActive,
+        caps: isCapsActive,
+        alt: isAltActive,
+        meta: isMetaActive,
       });
       if (sequence) getTransport().terminalWrite(sessionId, sequence);
       if (isShiftActive && key.kind === "text") setIsShiftActive(false);
-      if (isCtrlActive) setIsCtrlActive(false);
+      if (isCtrlActive && key.kind === "text") setIsCtrlActive(false);
+      if (isAltActive && key.kind === "text") setIsAltActive(false);
+      if (isMetaActive && key.kind === "text") setIsMetaActive(false);
     },
-    [isCtrlActive, isShiftActive, sessionId],
+    [
+      isAltActive,
+      isCapsActive,
+      isCtrlActive,
+      isMetaActive,
+      isShiftActive,
+      sessionId,
+    ],
   );
 
   const handleKeyboardInput = useCallback(
@@ -160,6 +188,9 @@ export function MobileTerminalAccessoryBar({
     <MobileTerminalCustomKeyboard
       isShiftActive={isShiftActive}
       isCtrlActive={isCtrlActive}
+      isCapsActive={isCapsActive}
+      isAltActive={isAltActive}
+      isMetaActive={isMetaActive}
       isSymbolLayer={isSymbolLayer}
       onPress={handleCustomKeyPress}
     />
@@ -217,7 +248,11 @@ export function MobileTerminalAccessoryBar({
         <div
           ref={panelRef}
           data-testid="mobile-terminal-accessory-panel"
-          className="safe-area-inline safe-area-bottom pointer-events-auto flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto border-t border-[var(--color-border)] bg-[var(--color-surface)]/96 p-1 pt-1 backdrop-blur-md"
+          className="safe-area-inline safe-area-bottom pointer-events-auto flex min-h-0 min-w-0 flex-col gap-2 overflow-x-hidden overflow-y-auto overscroll-contain border-t border-[var(--color-border)] bg-[var(--color-surface)]/96 p-1 pt-1 backdrop-blur-md"
+          style={{
+            paddingRight: PANEL_SAFE_AREA_RIGHT,
+            maxHeight: PANEL_MAX_HEIGHT,
+          }}
           onMouseDown={guardPanelPointer}
           onPointerDown={guardPanelPointer}
           onClick={(event) => {

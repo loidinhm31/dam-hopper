@@ -134,10 +134,10 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 **Technical Constraints:**
 
-- Max read: 10MB per request (configurable)
+- Max read and upload limits are enforced by the server's bounded route policies; consult the API reference rather than treating historical 10 MB wording as universal.
 - MIME type detection via mime_guess crate
 - Async I/O via tokio::fs
-- Frontend file decoration data centralized in `packages/web/src/lib/file-decoration.ts`
+- Frontend file decoration data centralized in `packages/ui/src/lib/file-decoration.ts`
 
 **Phase 02+:** File watcher, create/delete/move ops (see Roadmap below)
 
@@ -170,19 +170,12 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 **Functional Requirements:**
 
-- Bearer token authentication (hex UUID)
-- Structured error responses
-- Same-origin browser/API deployment by default; separate browser clients require an exact CORS allowlist
-- Content negotiation for binary vs. text responses
-- Diagnostics export from Settings > Maintenance with canonical frontend snapshot payload and capped terminal tails
+- Support Bearer REST authentication plus HttpOnly SameSite=Strict cookie sessions and public health/auth exceptions.
+- Enforce exact HTTP(S) CORS origins; wildcard, path, query, duplicate, and userinfo entries are rejected.
+- Structured error responses and content negotiation for binary vs. text responses.
+- Diagnostics export from Settings > Maintenance with canonical frontend snapshot payload and capped terminal tails.
 
 **Acceptance Criteria:**
-
-- ✓ All routes protected by token validation
-- ✓ Constant-time comparison prevents timing attacks
-- ✓ Errors return JSON with status code
-- ✓ Binary files detected, not force-decoded as text
-- ✓ Export Diagnostics downloads `dam-hopper-diagnostics-{timestamp}.json`
 - ✓ Native image/video streams require an opaque ticket bound to an authenticated actor/session
 - ✓ Ticket clients require `session-cookie-v1` and a credentialed successful `HEAD` before native source/download exposure
 - ✓ Profile change/logout revokes the bounded media session before credential removal, including stale dialog profiles
@@ -197,8 +190,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Media uses an HTTP-compatible host-only `HttpOnly; SameSite=Lax; Path=/api/fs` cookie; auth remains `HttpOnly; SameSite=Strict`, and ticket/session auth is preserved
 - Separate browser clients use exact `DAM_HOPPER_CORS_ORIGINS` entries; wildcard CORS is forbidden
 - Cleartext HTTP permits interception or modification of Bearer/auth cookies, ticket URLs, actions, and media bytes
-- Current automated native-media evidence is installed Chromium 151 only: 116 browser tests, including 11 media-specific tests; real cross-site CHIPS, Edge, Tauri/WebView, Safari, and Firefox remain unqualified
-- Qualification also passed 1,018 UI tests and 691 Rust tests (one ignored performance test); build and lint were clean
+- Historical qualification record (Chromium 151, 116 browser tests including 11 media tests; 1,018 UI and 691 Rust tests) is retained for provenance only, not a current release guarantee.
 - Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process
 
 ### PR-007: Multi-Server Profile Management (Phase 2)
@@ -220,7 +212,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Active profile indicator in `Sidebar.tsx`
 - ✓ `migrateToProfiles()` called in `App.tsx` startup — converts legacy `damhopper_server_url` + `damhopper_auth_username` to "Default Server" profile
 - ✓ Profile switching without browser reload
-- ✓ Delete active profile clears active ID
+- ✓ Delete active profile selects the first remaining profile; active ID is cleared only when no profiles remain
 
 **Storage:**
 
@@ -250,6 +242,20 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Sensitive metadata is redacted before sink delivery unless local diagnostics explicitly disable it
 - ✓ Shared logger is used by the high-value UI surfaces noted above
 
+
+### PR-010: Browser Debug and Native Child WebView
+
+**Status:** Windows v1 runtime-supported behind `VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG`; Linux child/relay implementation exists but runtime and permission behavior are unverified; macOS is deferred; Android uses iframe fallback.
+
+**Requirements and acceptance boundary:**
+
+- Keep the native child WebView least-privileged, profile-scoped, and generation/nonce/request validated.
+- Expose raw rendered bounds and mirrored app zoom (50–120%) to the child; do not persist page content or transient bridge state.
+- Advertise only picker/navigation in native relay v1; console forwarding remains disabled.
+- Reject unauthorized popup/download/permission flows and retain the web iframe's cross-origin external-redirect visibility limitation.
+- Windows release evidence must pass the documented WebView2 gate; Linux build/package evidence is not runtime proof.
+
+See [Native Browser Debug Support](./native-browser-debug-support.md) for the platform matrix and rollback path.
 ### PR-009: Host Resource Monitoring (Current Delivery)
 
 **Status:** Phase 07 completed on 2026-08-10 with release-owner approval after local packaging, soak, and browser validation. Phase 02 host-resource restoration alerts completed on 2026-08-11: additive thermal/disk current alerts, mixed history, validated compatible push events, and per-target recovery are now delivered. The still-unobserved Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are owner-authorized deferred follow-up work, not passed gates. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.

@@ -112,8 +112,24 @@ describe("PaneContainer terminal accessory placement in Chromium", () => {
             layout={layout as never}
             mountedSessions={[]}
             openTabs={[
-              { sessionId: "session-1", label: "First shell" },
-              { sessionId: "session-2", label: "Second shell" },
+              {
+                sessionId: "session-1",
+                label: "First shell",
+                title: {
+                  baseLabel: "First shell",
+                  ordinal: 1,
+                  fullText: "First shell #1",
+                },
+              },
+              {
+                sessionId: "session-2",
+                label: "Second shell",
+                title: {
+                  baseLabel: "Second shell",
+                  ordinal: 2,
+                  fullText: "Second shell #2",
+                },
+              },
             ]}
             activeSessionId={activeSessionId}
             onNewTerminal={vi.fn()}

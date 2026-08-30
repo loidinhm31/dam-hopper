@@ -22,6 +22,25 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
+### Browser Debug and Native Child WebView (current status, 2026-08-30)
+
+- Windows v1 is supported only after the WebView2 runtime/evidence gate. The child is least-privileged, profile-scoped, generation/nonce/request validated, and reports raw rendered bounds while mirroring app zoom.
+- Linux child/relay code and CI artifacts exist, but runtime behavior and permission policy are unverified. macOS is deferred. Android/mobile uses the iframe adapter.
+- Native relay v1 advertises picker/navigation; console forwarding is disabled. Popup/download/permission boundaries remain enforced where verified.
+- See [Native Browser Debug Support](./native-browser-debug-support.md). Historical phase/test/performance counts elsewhere in this ledger are dated records, not current release guarantees.
+
+### Terminal Touch Keyboard and Smooth Scroll (2026-08-28)
+
+- **Phases 01–02 — [COMPLETED 2026-08-29 16:48:06 +07:00]**: terminal scroll controls no longer focus xterm input or open the soft keyboard; xterm v6 coarse-pointer touch scrolling uses buffered custom `scrollLines` handling with bounded fling, plus explicit `touch-action: none` and contained overscroll/momentum CSS. Validation: UI TypeScript build PASS; full UI Vitest 1347/1347; focused terminal browser regressions 10/10; Chromium mobile-emulation swipe moved the xterm scrollbar from 280px to 158px. Physical Android hardware validation remains a release follow-up. [Plan](../plans/260828-1430-terminal-touch-keyboard-and-smooth-scroll/plan.md).
+
+
+### Terminal Floating Controls UX (2026-08-29)
+
+- **Phase 01 — [COMPLETED 2026-08-29; final code review approved]**: responsive floating terminal controls now use a 48px plus safe-area-bottom baseline; the scroll rail reserves `6.25rem` plus gap and switches to compact two-column controls in short viewports. Expanded panels reserve a `6.875rem` trailing lane plus safe-right, stay max-height bounded, and contain horizontal scrolling.
+- Terminal Keys order is `Esc`, `Tab`, `Ctrl+C`, `Enter`, `PgUp`, `PgDn`, arrows; Enter sends CR to the active session. Custom Type is a five-row US 60%-style physical layout with Enter and Backspace on base/function layers. Keycaps adapt 24px–44px widths and 4px–8px gaps, maintain 44px minimum height, center/stretch rows, and contain narrow-width horizontal scrolling; Shift labels and modifier-aware ARIA are preserved. Compact shell avoids double bottom safe-area reservation.
+- Verification: focused UI units **4 files/24 tests passed**, UI TypeScript build passed, direct Chromium accessory browser checks **10/10 passed**, final scroll/pane browser checks **7/7 passed**. Physical Android/iOS validation remains a release follow-up; no failure is claimed.
+- [Plan](../plans/260829-1726-terminal-floating-controls-ux/plan.md).
+
 ### Linux Systemd Server-Only Production Runner (2026-08-22)
 
 - **Completed**: production build/stage/install verification now packages only
@@ -29,7 +48,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   installation were removed from this service gate; guarded legacy rollback
   remains available. Validation passed: backend test suite, release server
   build, Bash syntax checks, and Linux deployment fixtures.
-  [Plan](../plans/260820-0912-revalidation-build-run-service/plan.md).
+  Historical plan source unavailable for the completed server-only production-runner entry.
 
 ### Terminal Font Size and Shortcuts (2026-08-16)
 
@@ -84,13 +103,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Compact High-Contrast Host Resource Panel (2026-08-15)
 
-- **Phase 01 — [COMPLETED 2026-08-15 09:42:35 +07:00]**: presentation redesign and deterministic effective-status state completed per approved plan. Phase 02 responsive, accessibility, regression, and review validation remains pending. [Plan](../plans/260815-0605-ui-host-resource-panel/plan.md).
-- **Phase 02 — [COMPLETED 2026-08-15 11:15:14 +07:00]**: automated validation gates and headed-Xvfb smoke passed; regression, accessibility, responsive, and review validation closed. Actual browser-menu 200% zoom and the 100% visual state sweep remain manual/unavailable in this environment, so they remain residual follow-up risk. [Plan](../plans/260815-0605-ui-host-resource-panel/plan.md).
+- **Phase 01 — [COMPLETED 2026-08-15 09:42:35 +07:00]**: presentation redesign and deterministic effective-status state completed per approved plan. Phase 02 responsive, accessibility, regression, and review validation remains pending. Historical plan source unavailable.
+- **Phase 02 — [COMPLETED 2026-08-15 11:15:14 +07:00]**: automated validation gates and headed-Xvfb smoke passed; regression, accessibility, responsive, and review validation closed. Actual browser-menu 200% zoom and the 100% visual state sweep remain manual/unavailable in this environment, so they remain residual follow-up risk. Historical plan source unavailable.
 
 ### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
 
 - **Phases 01–03, 06 — [COMPLETED 2026-08-08–09]**: delivered the read-only monitoring threat model, bounded contracts/parsers, cached monitor/read APIs, sustained alerts, and in-app diagnosis. No host mutation is enabled.
-- **Phase 07 packaging, validation, rollout/rollback — [COMPLETED 2026-08-10 18:23 +07:00]**: release owner accepted completion after local Linux packaging/soak, bounded fixture, Docker, and Chromium evidence. The still-unobserved Windows CI result, intended-canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are explicitly deferred follow-up work, not passed gates. [Plan](../plans/260808-0236-host-resource-monitoring-remediation/plan.md).
+- **Phase 07 packaging, validation, rollout/rollback — [COMPLETED 2026-08-10 18:23 +07:00]**: release owner accepted completion after local Linux packaging/soak, bounded fixture, Docker, and Chromium evidence. The still-unobserved Windows CI result, intended-canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are explicitly deferred follow-up work, not passed gates. Historical plan source unavailable.
 - **Operational/security sign-offs remaining**: real-systemd-host caller/enrollment validation and security-owner acceptance of enrolled-server-compromise residual risk. Privileged helper/actions are not implemented or approved for rollout.
 
 ### Floating Terminal Key Controls (2026-08-06)
@@ -524,7 +543,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   - ✅ Validation passed: web build + web tests
 
 - **2026-05-15:** Completed File Extension Decorations Phase 01.
-  - ✅ Shared file decoration registry added in `packages/web/src/lib`
+  - ✅ Shared file decoration registry added in `packages/ui/src/lib`
   - ✅ MIME fallback compatibility kept in `mime-to-language.ts`
   - ✅ Unit coverage added for exact-name, extension, and fallback cases
 

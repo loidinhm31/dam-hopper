@@ -12,20 +12,29 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 ## Feature Guides
 
-- **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage and switch between multiple server connections
-- **[Frontend Components](./frontend-components.md)** — React component architecture, lifecycle UI (Phase 06+)
+- **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage profile-scoped server connections and storage
+- **[Frontend Components](./frontend-components.md)** — Shared React component architecture and host lifecycle
+- **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries
+- **[Worktree Operations](./worktree-operation.md)** — Target selection and safe worktree lifecycle
 
 ## Reference Documentation
 
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
-- **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format, events, Phase 5+ enhancements
+- **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
+- **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
 
-## Implementation Plans
+## Deployment
 
-- **[Terminal Enhancement Phase 06](../plans/20260415-terminal-enhancement/phase-06-frontend-lifecycle-ui.md)** — Status dots, restart badges, lifecycle banners (COMPLETE ✓)
-- **[Terminal Enhancement Test Plan](../plans/20260415-terminal-enhancement/phase-06-test-plan.md)** — Manual testing procedures
+- **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
+- **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
+- **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
+- Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
+
+Historical implementation plans are not indexed here; verify that a plan path
+exists before linking it from a new document.
+
 
 ## Key Sections
 
@@ -91,7 +100,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 ## Common Tasks
 
-### Start the Server
+1. Find the component in `packages/ui/src/components/` (the browser host is `apps/web`)
 
 ```bash
 cd server

@@ -45,10 +45,10 @@ pub(crate) fn directory_identity(path: &Path) -> Result<DirectoryIdentity, FsErr
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
+        let identity = crate::utils::fs::windows_file_identity(path).map_err(FsError::Io)?;
         return Ok(DirectoryIdentity {
-            volume_serial: metadata.volume_serial_number(),
-            file_index: metadata.file_index(),
+            volume_serial: Some(identity.volume_serial),
+            file_index: Some(identity.file_index),
         });
     }
     #[cfg(not(any(unix, windows)))]

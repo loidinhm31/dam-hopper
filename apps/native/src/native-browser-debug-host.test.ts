@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_BRIDGE_VERSION } from "@dam-hopper/browser-bridge";
 
 const { invoke, listen } = vi.hoisted(() => ({
@@ -17,6 +17,7 @@ import {
   errorMessage,
   getNativeBrowserDebugEnvironment,
   isNativeBrowserDebugEnabled,
+  isNativeBrowserDebugPlatformSupported,
   NativeBrowserDebugHost,
 } from "./native-browser-debug-host";
 
@@ -32,6 +33,10 @@ describe("native browser debug host adapter", () => {
   beforeEach(() => {
     invoke.mockReset();
     listen.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("normalizes a Rust-validated bridge-ready relay", () => {
@@ -58,9 +63,45 @@ describe("native browser debug host adapter", () => {
 
     expect(event).toEqual({
       type: "ready",
-      capabilities: ["picker", "navigation", "console"],
+      capabilities: ["picker", "navigation"],
       generation: 7,
     });
+  });
+
+  it("accepts relay events from the current approved redirect origin", () => {
+    const redirectedOrigin = "http://127.0.0.1:3000";
+    const relay = {
+      label: "browser-debug",
+      profileId,
+      sessionId,
+      generation: 2,
+      origin: redirectedOrigin,
+      data: {
+        version: BROWSER_BRIDGE_VERSION,
+        type: "dam-hopper:navigation",
+        nonce: "nonce",
+        requestId: "request",
+        url: `${redirectedOrigin}/login`,
+      },
+    };
+
+    expect(
+      bridgeEventToHostEvent(
+        relay,
+        target,
+        2,
+        profileId,
+        sessionId,
+        redirectedOrigin,
+      ),
+    ).toEqual({
+      type: "navigation",
+      url: `${redirectedOrigin}/login`,
+      generation: 2,
+    });
+    expect(
+      bridgeEventToHostEvent(relay, target, 2, profileId, sessionId),
+    ).toBeNull();
   });
 
   it("fails closed for a wrong label, origin, or malformed payload", () => {
@@ -108,7 +149,7 @@ describe("native browser debug host adapter", () => {
     ).toBeNull();
   });
 
-  it("normalizes selection and console events without exposing the envelope", () => {
+  it("normalizes selection and filters unsupported native console events", () => {
     const selection = {
       version: 1,
       tag: "button",
@@ -162,12 +203,7 @@ describe("native browser debug host adapter", () => {
     );
 
     expect(selectionEvent).toMatchObject({ type: "selection", selection });
-    expect(consoleEvent).toEqual({
-      type: "console",
-      level: "warn",
-      message: "slow",
-      generation: 1,
-    });
+    expect(consoleEvent).toBeNull();
   });
 
   it("rejects relays from another profile or child session", () => {
@@ -216,6 +252,10 @@ describe("native browser debug host adapter", () => {
     expect(getNativeBrowserDebugEnvironment("windows").experimental).toBe(
       false,
     );
+    expect(isNativeBrowserDebugPlatformSupported("windows")).toBe(true);
+    expect(isNativeBrowserDebugPlatformSupported("linux")).toBe(true);
+    expect(isNativeBrowserDebugPlatformSupported("macos")).toBe(false);
+    expect(isNativeBrowserDebugPlatformSupported("android")).toBe(false);
   });
 
   it("supports an explicit rollback flag while preserving the web adapter", () => {
@@ -237,31 +277,89 @@ describe("native browser debug host adapter", () => {
     );
   });
 
+  it("destroys the child even when relay listeners cannot start", async () => {
+    listen.mockRejectedValue(new Error("relay unavailable"));
+    invoke.mockResolvedValue(undefined);
+
+    const host = new NativeBrowserDebugHost();
+    host.setTarget(target);
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("browser_debug_destroy"),
+    );
+    expect(invoke).not.toHaveBeenCalledWith(
+      "browser_debug_create",
+      expect.anything(),
+    );
+    host.dispose();
+  });
+
+  it("retries child teardown before creating a replacement", async () => {
+    const state = {
+      label: "browser-debug",
+      profileId,
+      sessionId,
+      committedUrl: target.url,
+      committedOrigin: target.origin,
+      generation: 0,
+      visible: true,
+      relayInstalled: true,
+    } as const;
+    let destroyAttempts = 0;
+    listen.mockResolvedValue(() => undefined);
+    invoke.mockImplementation((command: string) => {
+      if (command === "browser_debug_destroy") {
+        destroyAttempts += 1;
+        return destroyAttempts === 1
+          ? Promise.reject(new Error("child still closing"))
+          : Promise.resolve();
+      }
+      return command === "browser_debug_create"
+        ? Promise.resolve(state)
+        : Promise.resolve();
+    });
+
+    const events: unknown[] = [];
+    const host = new NativeBrowserDebugHost();
+    host.subscribe((event) => events.push(event));
+    host.setTarget(target);
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "browser_debug_create",
+        expect.anything(),
+      ),
+    );
+    expect(destroyAttempts).toBe(2);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "status",
+        status: "error",
+        message: "child still closing",
+      }),
+    );
+    host.dispose();
+  });
+
   it("replays a validated ready relay that arrives before create resolves", async () => {
     let relayListener: ((event: { payload: unknown }) => void) | undefined;
-    let resolveCreate:
-      | ((state: {
-          label: string;
-          profileId: string;
-          sessionId: string;
-          committedUrl: string;
-          committedOrigin: string;
-          generation: number;
-          visible: boolean;
-          relayInstalled: boolean;
-        }) => void)
-      | undefined;
+    const create = Promise.withResolvers<{
+      label: string;
+      profileId: string;
+      sessionId: string;
+      committedUrl: string;
+      committedOrigin: string;
+      generation: number;
+      visible: boolean;
+      relayInstalled: boolean;
+    }>();
 
     listen.mockImplementation(async (event, listener) => {
       if (event === "browser-debug:relay") relayListener = listener;
       return () => undefined;
     });
     invoke.mockImplementation((command: string) => {
-      if (command === "browser_debug_create") {
-        return new Promise((resolve) => {
-          resolveCreate = resolve;
-        });
-      }
+      if (command === "browser_debug_create") return create.promise;
       return Promise.resolve();
     });
 
@@ -308,7 +406,7 @@ describe("native browser debug host adapter", () => {
         },
       },
     });
-    resolveCreate?.({
+    create.resolve({
       label: "browser-debug",
       profileId,
       sessionId,
@@ -329,6 +427,489 @@ describe("native browser debug host adapter", () => {
     host.dispose();
   });
 
+  it("applies the latest zoom after a pending child create", async () => {
+    const create = Promise.withResolvers<{
+      label: string;
+      profileId: string;
+      sessionId: string;
+      committedUrl: string;
+      committedOrigin: string;
+      generation: number;
+      visible: boolean;
+      relayInstalled: boolean;
+    }>();
+
+    listen.mockResolvedValue(() => undefined);
+    invoke.mockImplementation((command: string) => {
+      if (command === "browser_debug_create") return create.promise;
+      return Promise.resolve();
+    });
+
+    const host = new NativeBrowserDebugHost();
+    host.setZoom(0.8);
+    host.setTarget(target);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "browser_debug_create",
+        expect.objectContaining({
+          input: expect.objectContaining({ zoom: 0.8 }),
+        }),
+      ),
+    );
+    host.setZoom(1);
+    create.resolve({
+      label: "browser-debug",
+      profileId,
+      sessionId,
+      committedUrl: target.url,
+      committedOrigin: target.origin,
+      generation: 0,
+      visible: true,
+      relayInstalled: true,
+    });
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("browser_debug_set_zoom", {
+        zoom: 1,
+      }),
+    );
+    host.dispose();
+  });
+
+  it("retries a failed startup zoom sync", async () => {
+    const state = {
+      label: "browser-debug",
+      profileId,
+      sessionId,
+      committedUrl: target.url,
+      committedOrigin: target.origin,
+      generation: 0,
+      visible: true,
+      relayInstalled: true,
+    } as const;
+    const create = Promise.withResolvers<typeof state>();
+    let rejectFirstZoom = true;
+
+    listen.mockResolvedValue(() => undefined);
+    invoke.mockImplementation(
+      (command: string, payload?: { zoom?: number }) => {
+        if (command === "browser_debug_create") return create.promise;
+        if (
+          command === "browser_debug_set_zoom" &&
+          payload?.zoom === 1 &&
+          rejectFirstZoom
+        ) {
+          rejectFirstZoom = false;
+          return Promise.reject(new Error("zoom unavailable"));
+        }
+        return Promise.resolve();
+      },
+    );
+
+    const host = new NativeBrowserDebugHost();
+    host.setZoom(0.8);
+    host.setTarget(target);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "browser_debug_create",
+        expect.objectContaining({
+          input: expect.objectContaining({ zoom: 0.8 }),
+        }),
+      ),
+    );
+    host.setZoom(1);
+    create.resolve(state);
+
+    await vi.waitFor(() =>
+      expect(
+        invoke.mock.calls.filter(
+          ([command, payload]) =>
+            command === "browser_debug_set_zoom" && payload?.zoom === 1,
+        ),
+      ).toHaveLength(2),
+    );
+    host.dispose();
+  });
+
+  it("suppresses stale zoom startup errors after a newer request", async () => {
+    const state = {
+      label: "browser-debug",
+      profileId,
+      sessionId,
+      committedUrl: target.url,
+      committedOrigin: target.origin,
+      generation: 0,
+      visible: true,
+      relayInstalled: true,
+    } as const;
+    const create = Promise.withResolvers<typeof state>();
+    const initialZoom = Promise.withResolvers<void>();
+    let deferInitialZoom = true;
+    let relayListener: ((event: { payload: unknown }) => void) | undefined;
+
+    listen.mockImplementation(async (event, listener) => {
+      if (event === "browser-debug:relay") relayListener = listener;
+      return () => undefined;
+    });
+    invoke.mockImplementation(
+      (command: string, payload?: { zoom?: number }) => {
+        if (command === "browser_debug_create") return create.promise;
+        if (
+          command === "browser_debug_set_zoom" &&
+          payload?.zoom === 1 &&
+          deferInitialZoom
+        ) {
+          deferInitialZoom = false;
+          return initialZoom.promise;
+        }
+        return Promise.resolve();
+      },
+    );
+
+    const events: unknown[] = [];
+    const host = new NativeBrowserDebugHost();
+    host.subscribe((event) => events.push(event));
+    host.setZoom(0.8);
+    host.setTarget(target);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "browser_debug_create",
+        expect.objectContaining({
+          input: expect.objectContaining({ zoom: 0.8 }),
+        }),
+      ),
+    );
+
+    relayListener?.({
+      payload: {
+        label: "browser-debug",
+        profileId,
+        sessionId,
+        generation: 0,
+        origin: target.origin,
+        data: {
+          version: 1,
+          type: "dam-hopper:bridge-ready",
+          nonce: "nonce",
+          requestId: "request",
+          capabilities: ["navigation"],
+        },
+      },
+    });
+    host.setZoom(1);
+    create.resolve(state);
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("browser_debug_set_zoom", {
+        zoom: 1,
+      }),
+    );
+    host.setZoom(0.8);
+    initialZoom.reject(new Error("stale zoom unavailable"));
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("browser_debug_set_zoom", {
+        zoom: 0.8,
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(events).toContainEqual({
+        type: "ready",
+        capabilities: ["picker", "navigation"],
+        generation: 1,
+      }),
+    );
+    expect(events).not.toContainEqual(
+      expect.objectContaining({
+        type: "status",
+        status: "error",
+        message: "Native Browser Debug could not start.",
+      }),
+    );
+    host.dispose();
+  });
+
+  it("mirrors app zoom changes into the native child", async () => {
+    listen.mockResolvedValue(() => undefined);
+    invoke.mockImplementation((command: string) => {
+      if (command === "browser_debug_create") {
+        return Promise.resolve({
+          label: "browser-debug",
+          profileId,
+          sessionId,
+          committedUrl: target.url,
+          committedOrigin: target.origin,
+          generation: 0,
+          visible: true,
+          relayInstalled: true,
+        });
+      }
+      return Promise.resolve();
+    });
+
+    const host = new NativeBrowserDebugHost();
+    host.setTarget(target);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "browser_debug_create",
+        expect.objectContaining({
+          input: expect.objectContaining({ zoom: 1 }),
+        }),
+      ),
+    );
+
+    host.setZoom(0.8);
+    host.setZoom(0.8);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("browser_debug_set_zoom", {
+        zoom: 0.8,
+      }),
+    );
+    expect(
+      invoke.mock.calls.filter(
+        ([command, payload]) =>
+          command === "browser_debug_set_zoom" && payload?.zoom === 0.8,
+      ),
+    ).toHaveLength(1);
+    host.dispose();
+  });
+
+  it("retries a failed zoom IPC for the same factor", async () => {
+    listen.mockResolvedValue(() => undefined);
+    let rejectNextZoom = true;
+    invoke.mockImplementation(
+      (command: string, payload?: { zoom?: number }) => {
+        if (command === "browser_debug_create") {
+          return Promise.resolve({
+            label: "browser-debug",
+            profileId,
+            sessionId,
+            committedUrl: target.url,
+            committedOrigin: target.origin,
+            generation: 0,
+            visible: true,
+            relayInstalled: true,
+          });
+        }
+        if (
+          command === "browser_debug_set_zoom" &&
+          payload?.zoom === 0.8 &&
+          rejectNextZoom
+        ) {
+          rejectNextZoom = false;
+          return Promise.reject(new Error("zoom unavailable"));
+        }
+        return Promise.resolve();
+      },
+    );
+
+    const host = new NativeBrowserDebugHost();
+    host.setTarget(target);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "browser_debug_create",
+        expect.objectContaining({
+          input: expect.objectContaining({ zoom: 1 }),
+        }),
+      ),
+    );
+
+    host.setZoom(0.8);
+    await vi.waitFor(() =>
+      expect(
+        invoke.mock.calls.filter(
+          ([command, payload]) =>
+            command === "browser_debug_set_zoom" && payload?.zoom === 0.8,
+        ),
+      ).toHaveLength(1),
+    );
+    host.setZoom(0.8);
+    await vi.waitFor(() =>
+      expect(
+        invoke.mock.calls.filter(
+          ([command, payload]) =>
+            command === "browser_debug_set_zoom" && payload?.zoom === 0.8,
+        ),
+      ).toHaveLength(2),
+    );
+    host.dispose();
+  });
+
+  it("retries a failed child create for the same target", async () => {
+    const state = {
+      label: "browser-debug",
+      profileId,
+      sessionId,
+      committedUrl: target.url,
+      committedOrigin: target.origin,
+      generation: 0,
+      visible: true,
+      relayInstalled: true,
+    } as const;
+    let createAttempts = 0;
+
+    listen.mockResolvedValue(() => undefined);
+    invoke.mockImplementation((command: string) => {
+      if (command === "browser_debug_create") {
+        createAttempts += 1;
+        return createAttempts === 1
+          ? Promise.reject(new Error("child unavailable"))
+          : Promise.resolve(state);
+      }
+      return Promise.resolve();
+    });
+
+    const events: unknown[] = [];
+    const host = new NativeBrowserDebugHost();
+    host.subscribe((event) => events.push(event));
+    host.setTarget(target);
+    await vi.waitFor(() =>
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "status",
+          status: "error",
+        }),
+      ),
+    );
+
+    host.setTarget(target);
+    await vi.waitFor(() =>
+      expect(
+        invoke.mock.calls.filter(
+          ([command]) => command === "browser_debug_create",
+        ),
+      ).toHaveLength(2),
+    );
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("browser_debug_set_bounds", {
+        bounds: { top: 0, left: 0, width: 0, height: 0 },
+      }),
+    );
+    host.dispose();
+  });
+
+  it("reapplies the latest zoom after a stale request settles", async () => {
+    const state = {
+      label: "browser-debug",
+      profileId,
+      sessionId,
+      committedUrl: target.url,
+      committedOrigin: target.origin,
+      generation: 0,
+      visible: true,
+      relayInstalled: true,
+    } as const;
+    const create = Promise.withResolvers<typeof state>();
+    const zoom2 = Promise.withResolvers<void>();
+    let deferZoom2 = true;
+
+    listen.mockResolvedValue(() => undefined);
+    invoke.mockImplementation(
+      (command: string, payload?: { zoom?: number }) => {
+        if (command === "browser_debug_create") return create.promise;
+        if (
+          command === "browser_debug_set_zoom" &&
+          payload?.zoom === 2 &&
+          deferZoom2
+        ) {
+          deferZoom2 = false;
+          return zoom2.promise;
+        }
+        return Promise.resolve();
+      },
+    );
+
+    const host = new NativeBrowserDebugHost();
+    host.setTarget(target);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "browser_debug_create",
+        expect.objectContaining({
+          input: expect.objectContaining({ zoom: 1 }),
+        }),
+      ),
+    );
+    create.resolve(state);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("browser_debug_set_bounds", {
+        bounds: { top: 0, left: 0, width: 0, height: 0 },
+      }),
+    );
+
+    host.setZoom(2);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("browser_debug_set_zoom", {
+        zoom: 2,
+      }),
+    );
+    host.setZoom(1);
+    zoom2.resolve();
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("browser_debug_set_zoom", {
+        zoom: 1,
+      }),
+    );
+    expect(
+      invoke.mock.calls.filter(
+        ([command, payload]) =>
+          command === "browser_debug_set_zoom" && payload?.zoom === 1,
+      ),
+    ).toHaveLength(1);
+    host.dispose();
+  });
+
+  it("reports a handshake timeout and permits an explicit same-target retry", async () => {
+    vi.useFakeTimers();
+    const state = {
+      label: "browser-debug",
+      profileId,
+      sessionId,
+      committedUrl: target.url,
+      committedOrigin: target.origin,
+      generation: 0,
+      visible: true,
+      relayInstalled: true,
+    } as const;
+
+    listen.mockResolvedValue(() => undefined);
+    invoke.mockImplementation((command: string) =>
+      command === "browser_debug_create"
+        ? Promise.resolve(state)
+        : Promise.resolve(),
+    );
+
+    const events: unknown[] = [];
+    const host = new NativeBrowserDebugHost();
+    host.subscribe((event) => events.push(event));
+    host.setTarget(target);
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "browser_debug_set_bounds",
+        expect.objectContaining({
+          bounds: { top: 0, left: 0, width: 0, height: 0 },
+        }),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(events).toContainEqual({
+      type: "status",
+      status: "unsupported",
+      message: expect.stringContaining("No native Browser Debug response"),
+      code: "bridge-unavailable",
+      generation: 1,
+    });
+
+    host.setTarget({ ...target });
+    await vi.waitFor(() =>
+      expect(
+        invoke.mock.calls.filter(
+          ([command]) => command === "browser_debug_create",
+        ),
+      ).toHaveLength(2),
+    );
+    host.dispose();
+  });
   it("keeps the child alive when only the native relay is unavailable", async () => {
     listen.mockResolvedValue(() => undefined);
     invoke.mockImplementation((command: string) => {

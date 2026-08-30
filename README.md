@@ -10,12 +10,13 @@ A web-based app for managing multi-project development environments. Manage git 
 - **Interactive terminals** — Full PTY terminals (xterm.js + portable-pty) per command — color, interactivity, scrollback
 - **Git worktrees** — Create, list, and remove worktrees interactively
 - **Workspace switching** — Switch between multiple workspace configs without restarting
-- **Multi-server profiles** — Manage multiple server connections (local dev, staging, production) with instant switching via UI profile selector
+- **Multi-server profiles** — Profile-scoped URLs, credentials, and local metadata with native/web transport boundaries
+- **Browser Debug** — Web iframe fallback and optional native child WebView (Windows v1; Linux runtime-unverified)
 - **Agent store** — Distribute Claude/Gemini agent configs (skills, commands, hooks) across projects via symlinks
 
 ## Requirements
 
-- Rust 1.80+ (for server and Tauri native builds)
+- Rust 1.97.1+ (server and native build toolchain; verify the pinned toolchain used by deployment)
 - Node.js 20+ + pnpm 9+
 - Android Studio + Android SDK/NDK + `JAVA_HOME` / `ANDROID_HOME` / `NDK_HOME` (for Android builds only)
 
@@ -30,13 +31,13 @@ cd dam-hopper
 # Build Rust server
 cd server && cargo build --release
 
-# Build web app
+# Build web and extension assets; Docker copies the SPA to /opt/dam-hopper/web
 cd .. && pnpm install && pnpm build
 
-# Run (web dist is served by the Rust server)
+
+# Run the backend directly (default 0.0.0.0:4800)
 ./server/target/release/dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml
-# Or omit --config to use the default global registry path
-# Direct/legacy default: http://127.0.0.1:4800 — token printed to terminal
+# For systemd production, use the guarded workflow below: backend-only 0.0.0.0:4801
 ```
 
 ### Linux systemd production service
@@ -141,16 +142,12 @@ pnpm format
 
 The generated Android Studio project lives in `apps/native/src-tauri/gen/android`. Tauri now runs the native package's local `npm run dev` / `npm run build` hooks, so Android Studio and Gradle do not depend on a globally installed `pnpm`.
 
-## Repository Structure
-
-```
+```text
 server/        # Rust binary (Axum + Tokio) — all backend logic
-  src/
-    config/    # TOML parsing, workspace/project discovery
-    pty/       # portable-pty session manager
-    git/       # git2-based git operations
-    agent_store/ # symlink-based agent config distribution
-    api/       # Axum REST routes + WebSocket handler
+apps/
+  web/          # Thin Vite browser host
+  native/       # Tauri desktop/Android host
 packages/
-  web/         # @dam-hopper/web — React 19 SPA (Vite + Tailwind v4)
+  ui/           # Shared React UI and host adapter contract
+  browser-bridge/ # v1 iframe/native DOM bridge
 ```

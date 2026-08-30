@@ -542,12 +542,19 @@ path = "/tmp/test-workspace"
 
 ## Environment Variables
 
-| Var                    | Type   | Purpose                                                             |
-| ---------------------- | ------ | ------------------------------------------------------------------- |
-| `DAM_HOPPER_CONFIG`        | path   | Load an exact `dam-hopper.toml` registry file                       |
-| `DAM_HOPPER_WORKSPACE`     | path   | Override workspace path (takes priority over global config default) |
-| `DAM_HOPPER_CORS_ORIGINS`  | string | Comma-separated exact browser origins for credentialed CORS         |
-| `RUST_LOG`                 | string | Logging level (e.g., `dam_hopper=debug,axum=info`)                  |
+| Var                              | Type   | Purpose                                                             |
+| -------------------------------- | ------ | ------------------------------------------------------------------- |
+| `DAM_HOPPER_CONFIG`              | path   | Load an exact `dam-hopper.toml` registry file                       |
+| `DAM_HOPPER_WORKSPACE`            | path   | Override workspace path (legacy directory-discovery fallback)       |
+| `DAM_HOPPER_PORT`                 | number | Server listen port (direct/Docker default 4800; systemd sets 4801) |
+| `DAM_HOPPER_HOST`                 | string | Server bind address (direct default `0.0.0.0`)                      |
+| `DAM_HOPPER_CORS_ORIGINS`         | string | Comma-separated exact HTTP(S) origins for credentialed CORS         |
+| `VITE_DAM_HOPPER_LOG_LEVEL`       | string | Web bootstrap log level, embedded at build time                     |
+| `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` | string | Exact extension parent origins, embedded at build time |
+| `RUST_LOG`                        | string | Rust logging level (for example `dam_hopper=debug,axum=info`)       |
+`VITE_*` values require a web rebuild. Changing extension parent origins also
+requires downloading/reinstalling the newly generated ZIP. CORS values are
+runtime server configuration and must exactly match the browser origin.
 
 ## Authentication Token
 

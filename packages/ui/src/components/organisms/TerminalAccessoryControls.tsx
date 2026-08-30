@@ -27,10 +27,17 @@ export function TerminalAccessoryControls({
   keysPanelId,
   keyboardPanelId,
 }: TerminalAccessoryControlsProps) {
+  const isPanelOpen = isExpanded || isKeyboardOpen;
+
   return (
     <div
       data-testid="mobile-terminal-accessory-controls"
-      className="pointer-events-auto flex shrink-0 flex-col gap-0.5"
+      className={cn(
+        "pointer-events-auto flex shrink-0 gap-1",
+        isPanelOpen
+          ? "flex-col [@media(max-height:28rem)]:flex-row"
+          : "flex-col",
+      )}
     >
       <button
         ref={keysButtonRef}
@@ -41,7 +48,7 @@ export function TerminalAccessoryControls({
         aria-label={isExpanded ? "Hide terminal keys" : "Show terminal keys"}
         title={isExpanded ? "Hide terminal keys" : "Show terminal keys"}
         onClick={onToggleKeys}
-        className="inline-flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center rounded-lg border border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 p-0 text-[11px] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] active:bg-[var(--color-primary)]/20"
+        className="inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-lg border border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 p-0 text-[11px] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] active:bg-[var(--color-primary)]/20"
       >
         {isExpanded ? (
           <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -60,7 +67,7 @@ export function TerminalAccessoryControls({
         title={keyboardButtonLabel}
         aria-label={keyboardButtonLabel}
         className={cn(
-          "inline-flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center rounded-lg border p-0 text-[11px] font-semibold transition-colors hover:bg-[var(--color-surface-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]",
+          "inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-lg border p-0 text-[11px] font-semibold transition-colors hover:bg-[var(--color-surface-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]",
           isKeyboardOpen
             ? "border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 text-[var(--color-primary)]"
             : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)]",
