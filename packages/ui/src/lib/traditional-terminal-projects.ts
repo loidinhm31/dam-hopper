@@ -46,6 +46,15 @@ export function buildTraditionalTerminalProjectGroups<T extends TabEntry>(
   return [...groupsById.values()];
 }
 
+export function firstRemainingTraditionalTerminalId<T extends TabEntry>(
+  group: Pick<TraditionalTerminalProjectGroup<T>, "terminalTabs">,
+  closedSessionId: string,
+): string | undefined {
+  return group.terminalTabs.find(
+    (tab) => tab.sessionId !== closedSessionId,
+  )?.sessionId;
+}
+
 export function traditionalTerminalLayoutStorageKey(groupId: string): string {
   return `dam-hopper:terminal-layout:v2:${encodeURIComponent(groupId)}`;
 }
