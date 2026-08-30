@@ -9,7 +9,6 @@ export interface TraditionalTerminalProjectGroup {
   label: string;
   terminalTabs: TabEntry[];
   mountedSessions: MountedSession[];
-  hasRunningTerminal: boolean;
 }
 
 export function buildTraditionalTerminalProjectGroups(
@@ -37,16 +36,13 @@ export function buildTraditionalTerminalProjectGroups(
         label: projectName ?? "Free terminals",
         terminalTabs: [],
         mountedSessions: [],
-        hasRunningTerminal: false,
       };
       groupsById.set(id, group);
     }
 
     group.terminalTabs.push(tab);
     group.mountedSessions.push(mounted);
-    group.hasRunningTerminal ||= tab.session?.alive === true;
   }
-
   return [...groupsById.values()];
 }
 

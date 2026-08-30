@@ -37,7 +37,7 @@ function tab(
 }
 
 describe("buildTraditionalTerminalProjectGroups", () => {
-  it("groups open terminals in first-tab order and exposes aggregate status", () => {
+  it("groups open terminals in first-tab order", () => {
     const mountedSessions = [
       mounted("alpha:stopped", "alpha"),
       mounted("beta:stopped", "beta"),
@@ -69,18 +69,15 @@ describe("buildTraditionalTerminalProjectGroups", () => {
     ]);
     expect(groups[0]).toMatchObject({
       projectName: "alpha",
-      hasRunningTerminal: true,
       terminalTabs: [terminalTabs[0], terminalTabs[2]],
       mountedSessions: [mountedSessions[0], mountedSessions[2]],
     });
-    expect(groups[1]?.hasRunningTerminal).toBe(false);
-    expect(groups[2]?.hasRunningTerminal).toBe(false);
     expect(groups.flatMap((group) => group.terminalTabs)).not.toContain(
       terminalTabs[4],
     );
   });
 
-  it("keeps a project row when its final running tab stops", () => {
+  it("keeps a project row when its final tab stops", () => {
     const mountedSessions = [mounted("alpha:live", "alpha")];
     const stoppedTabs = [tab("alpha:live", "alpha", false)];
 
@@ -93,7 +90,6 @@ describe("buildTraditionalTerminalProjectGroups", () => {
     expect(groups[0]).toMatchObject({
       id: "project:alpha",
       label: "alpha",
-      hasRunningTerminal: false,
     });
   });
 

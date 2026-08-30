@@ -74,7 +74,6 @@ const group: TraditionalTerminalProjectGroup = {
   label: "demo",
   terminalTabs: [{ sessionId: "demo:1", label: "demo:1" }],
   mountedSessions: [{ sessionId: "demo:1", project: "demo", command: "bash" }],
-  hasRunningTerminal: true,
 };
 
 describe("TraditionalTerminalProjectsNavigator", () => {
