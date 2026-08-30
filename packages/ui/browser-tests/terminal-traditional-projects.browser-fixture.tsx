@@ -7,10 +7,8 @@ import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { SessionInfo } from "@/api/client.js";
 
-import {
-  buildTerminalDisplayTabs,
-  deriveTerminalAutoAttachState,
-} from "@/lib/terminal-auto-attach.js";
+import { buildTerminalDisplayTabs } from "@/hooks/use-terminal-manager.js";
+import { deriveTerminalAutoAttachState } from "@/lib/terminal-auto-attach.js";
 import {
   registerTerminalOutputActivity,
   type TerminalOutputActivityRegistration,
