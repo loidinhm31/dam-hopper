@@ -46,6 +46,7 @@ import {
 } from "@/lib/terminal-buffer-replay.js";
 import {
   createTerminalStreamReplayGate,
+  markTerminalStreamReadyAfterRestart,
   resetTerminalStreamReplayGateForAttach,
 } from "@/lib/terminal-stream-replay-gate.js";
 import { registerTerminalOutputActivity } from "@/lib/terminal-output-activity.js";
@@ -162,6 +163,13 @@ export function TerminalPanel({
   // Sanitize session ID: server only allows [a-zA-Z0-9:._-]
   const safeSessionId = sessionId.replace(/[^a-zA-Z0-9:._-]/g, "-");
   const sessionIdRef = useRef(safeSessionId);
+  // Keep the enhanced exit listener subscribed once while invoking the latest
+  // manager callback after session state changes.
+  const onExitRef = useRef(onExit);
+  useClientLayoutEffect(() => {
+    onExitRef.current = onExit;
+  }, [onExit]);
+
   const openedRef = useRef(false);
   const terminalOrderRef = useRef(terminalOrder);
   terminalOrderRef.current = terminalOrder;
@@ -296,6 +304,8 @@ export function TerminalPanel({
       outputActivity.setStreamReady(false);
     };
     let disposed = false;
+    let restartRecoveryPending = false;
+    let restartProbeGeneration = 0;
     let recordedSuppressedOutput = false;
     let lastServerOffset = 0;
 
@@ -304,6 +314,7 @@ export function TerminalPanel({
     let unsubExit: (() => void) | null = null;
     let unsubExitEnhanced: (() => void) | null = null;
     let unsubRestart: (() => void) | null = null;
+    let unsubTerminalChanged: (() => void) | null = null;
     let unsubBuffer: (() => void) | null = null;
     let unsubLifecycle: (() => void) | null = null;
     let unsubStatus: (() => void) | null = null;
@@ -313,6 +324,38 @@ export function TerminalPanel({
     let observer: ResizeObserver | null = null;
     let recoveryController: TerminalAttachRecoveryController | null = null;
     const retryUnavailableAfterReplayRef = { current: false };
+
+    const reopenLiveStreamAfterRestart = () => {
+      if (disposed) return;
+      restartRecoveryPending = false;
+      restartProbeGeneration += 1;
+      markTerminalStreamReadyAfterRestart(streamReplayGate);
+      outputActivity.setStreamReady(true);
+      agentNotifications?.setReplayActive(false);
+    };
+
+    const probeRestartReadiness = () => {
+      if (disposed || !restartRecoveryPending) return;
+      const probeGeneration = ++restartProbeGeneration;
+      void transport
+        .invoke<SessionInfo[]>("terminal:listDetailed")
+        .then((sessions) => {
+          if (
+            disposed ||
+            !restartRecoveryPending ||
+            probeGeneration !== restartProbeGeneration
+          )
+            return;
+          if (
+            sessions.some(
+              (session) => session.id === safeSessionId && session.alive,
+            )
+          ) {
+            reopenLiveStreamAfterRestart();
+          }
+        })
+        .catch(() => {});
+    };
     let releaseTouchScroll = () => {};
     let geometryAdapter: TerminalCursorGeometryAdapter | null = null;
 
@@ -391,6 +434,11 @@ export function TerminalPanel({
     // 2. Handle PTY buffer (response to terminal:attach)
     if (transport.onTerminalBuffer) {
       unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
+        // A delayed response from an attach that predates a confirmed restart,
+        // or any response during its restart gap, must not replace the new
+        // live stream with stale scrollback.
+        if (restartRecoveryPending || streamReplayGate.isLiveStreamReady)
+          return;
         recoveryController?.onBuffer();
         suggestionsRef.current.handleReplay();
         streamReplayGate.hasAttachBufferBeenReceived = true;
@@ -445,6 +493,8 @@ export function TerminalPanel({
     unsubExitEnhanced =
       transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
         const { exitCode, willRestart, restartIn } = exitEvent;
+        restartRecoveryPending = willRestart;
+        restartProbeGeneration += 1;
         resetActivityForUnavailableStream();
         const color = willRestart
           ? "\x1b[33m"
@@ -456,16 +506,26 @@ export function TerminalPanel({
           : `[Process exited with code ${exitCode ?? "?"}]`;
         term.write(`\r\n${color}${text}\x1b[0m\r\n`);
         agentNotifications?.onTerminalExit({ willRestart });
-        onExit?.(exitCode);
+        onExitRef.current?.(exitCode);
       }) ?? null;
 
-    // 4. Handle process restart event
+    // 4. Handle process restart event. Respawns reuse the session ID and do not
+    // replay the retained buffer, so the confirmed replacement can reopen the
+    // live gate without counting the synthetic restart banner as output.
     unsubRestart =
       transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
+        if (disposed) return;
+        reopenLiveStreamAfterRestart();
         suggestionsRef.current.handleReplay();
         const { restartCount } = restartEvent;
         term.write(`\x1b[33m[Process restarted (#${restartCount})]\x1b[0m\r\n`);
       }) ?? null;
+
+    // Older servers emit terminal:changed after a respawn without the dedicated
+    // process:restarted event. Probe liveness only while this panel expects one.
+    unsubTerminalChanged = transport.onEvent("terminal:changed", () => {
+      probeRestartReadiness();
+    });
 
     // 5. Forward user input → PTY stdin, with suggestion interception
     inputDisposable = term.onData((data) => {
@@ -665,7 +725,11 @@ export function TerminalPanel({
 
     if (transport.onStatusChange) {
       unsubStatus = transport.onStatusChange((status) => {
-        if (status !== "connected") resetActivityForUnavailableStream();
+        if (status !== "connected") {
+          restartRecoveryPending = false;
+          restartProbeGeneration += 1;
+          resetActivityForUnavailableStream();
+        }
         recoveryController?.onConnectionStatus(
           status as TerminalConnectionStatus,
           lastServerOffset,
@@ -722,6 +786,7 @@ export function TerminalPanel({
       unsubExit?.();
       unsubExitEnhanced?.();
       unsubRestart?.();
+      unsubTerminalChanged?.();
       unsubBuffer?.();
       unsubLifecycle?.();
       unsubStatus?.();
