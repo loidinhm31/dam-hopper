@@ -4,6 +4,20 @@ export interface TerminalOutputActivitySnapshot {
   readonly recentOutput: boolean;
   readonly streamReady: boolean;
 }
+export type TerminalOutputActivityStatus =
+  | "stopped"
+  | "unavailable"
+  | "receiving"
+  | "quiet";
+
+export function getTerminalOutputActivityStatus(
+  snapshot: TerminalOutputActivitySnapshot,
+  alive?: boolean,
+): TerminalOutputActivityStatus {
+  if (alive === false) return "stopped";
+  if (!snapshot.streamReady) return "unavailable";
+  return snapshot.recentOutput ? "receiving" : "quiet";
+}
 
 export interface TerminalOutputActivityRegistration {
   markOutput(): void;
@@ -28,6 +42,7 @@ interface SessionState {
 }
 
 const sessions = new Map<string, SessionState>();
+let activityRevision = 0;
 
 function getOrCreate(sessionId: string): SessionState {
   const existing = sessions.get(sessionId);
@@ -58,6 +73,7 @@ function setSnapshot(
     return;
   }
   state.snapshot = Object.freeze(snapshot);
+  activityRevision += 1;
   notify(state);
 }
 
@@ -136,6 +152,9 @@ export function getTerminalOutputActivitySnapshot(
 ): TerminalOutputActivitySnapshot {
   return sessions.get(sessionId)?.snapshot ?? EMPTY_SNAPSHOT;
 }
+export function getTerminalOutputActivityRevision(): number {
+  return activityRevision;
+}
 
 export function subscribeToTerminalOutputActivity(
   sessionId: string,
@@ -153,6 +172,15 @@ export function subscribeToTerminalOutputActivity(
       sessions.delete(sessionId);
     }
   };
+}
+export function subscribeToTerminalOutputActivitySessions(
+  sessionIds: readonly string[],
+  listener: Listener,
+): () => void {
+  const unsubscribers = [...new Set(sessionIds)].map((sessionId) =>
+    subscribeToTerminalOutputActivity(sessionId, listener),
+  );
+  return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
 }
 
 export function markTerminalOutput(sessionId: string): void {

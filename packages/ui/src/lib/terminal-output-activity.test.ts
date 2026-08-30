@@ -1,12 +1,63 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  TERMINAL_OUTPUT_ACTIVITY_WINDOW_MS,
+  getTerminalOutputActivityRevision,
   getTerminalOutputActivitySnapshot,
+  getTerminalOutputActivityStatus,
   registerTerminalOutputActivity,
   subscribeToTerminalOutputActivity,
+  subscribeToTerminalOutputActivitySessions,
+  TERMINAL_OUTPUT_ACTIVITY_WINDOW_MS,
 } from "./terminal-output-activity.js";
 
 describe("terminal output activity", () => {
+  it("derives the shared terminal status with liveness precedence", () => {
+    expect(
+      getTerminalOutputActivityStatus(
+        { recentOutput: true, streamReady: true },
+        false,
+      ),
+    ).toBe("stopped");
+    expect(
+      getTerminalOutputActivityStatus(
+        { recentOutput: false, streamReady: false },
+        true,
+      ),
+    ).toBe("unavailable");
+    expect(
+      getTerminalOutputActivityStatus(
+        { recentOutput: false, streamReady: true },
+        true,
+      ),
+    ).toBe("quiet");
+    expect(
+      getTerminalOutputActivityStatus(
+        { recentOutput: true, streamReady: true },
+        true,
+      ),
+    ).toBe("receiving");
+  });
+
+  it("notifies one listener for activity changes across session IDs", () => {
+    const first = registerTerminalOutputActivity("activity-group-a");
+    const second = registerTerminalOutputActivity("activity-group-b");
+    const listener = vi.fn();
+    const unsubscribe = subscribeToTerminalOutputActivitySessions(
+      ["activity-group-a", "activity-group-a", "activity-group-b"],
+      listener,
+    );
+
+    first.setStreamReady(true);
+    second.setStreamReady(true);
+    first.markOutput();
+
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(getTerminalOutputActivityRevision()).toBeGreaterThan(0);
+
+    unsubscribe();
+    first.dispose();
+    second.dispose();
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

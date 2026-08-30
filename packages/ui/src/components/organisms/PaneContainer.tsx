@@ -16,9 +16,9 @@ import type { PaneNode } from "@/types/terminal-layout.js";
 import type { UseTerminalLayoutResult } from "@/hooks/use-terminal-layout.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { TabBar } from "@/components/organisms/TabBar.js";
 import { TerminalDockPreview } from "@/components/organisms/TerminalDockPreview.js";
-import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
@@ -28,6 +28,7 @@ interface PaneContainerProps {
   node: PaneNode;
   layout: UseTerminalLayoutResult;
   mountedSessions: MountedSession[];
+  terminalCommitStatusEnabled?: boolean;
   openTabs: DisplayTabEntry[];
   onNewTerminal: () => void;
   onSessionExit: (sessionId: string) => void;
@@ -46,6 +47,7 @@ export const PaneContainer = memo(function PaneContainer({
   node,
   layout,
   mountedSessions,
+  terminalCommitStatusEnabled: terminalCommitStatusOverride,
   openTabs,
   onNewTerminal,
   onSelectTab,
@@ -64,9 +66,11 @@ export const PaneContainer = memo(function PaneContainer({
   const shouldSuppressTerminalFocus =
     isAndroidChromeNativeInputSuppressed || suppressTerminalFocus;
   const isFocused = layout.focusedPaneId === node.id;
-  const terminalCommitStatusEnabled = useSettingsStore(
+  const configuredTerminalCommitStatusEnabled = useSettingsStore(
     (state) => state.terminalCommitStatusEnabled,
   );
+  const terminalCommitStatusEnabled =
+    terminalCommitStatusOverride ?? configuredTerminalCommitStatusEnabled;
   const activeProject = mountedSessions.find(
     (session) => session.sessionId === node.activeSessionId,
   )?.project;
@@ -382,7 +386,10 @@ export const PaneContainer = memo(function PaneContainer({
           >
             {terminalPane}
           </Panel>
-          <Separator className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize" />
+          <Separator
+            aria-label="Resize terminal and browser panels"
+            className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize"
+          />
           <Panel id={`${node.id}:browser`} defaultSize={40} minSize={20}>
             <div className="h-full min-w-0 overflow-hidden">
               {renderBrowserContent?.(onCloseBrowser ?? (() => {}))}

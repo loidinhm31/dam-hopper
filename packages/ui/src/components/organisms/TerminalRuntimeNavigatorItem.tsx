@@ -9,12 +9,9 @@ import {
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
-import { useCallback, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils.js";
-import {
-  getTerminalOutputActivitySnapshot,
-  subscribeToTerminalOutputActivity,
-} from "@/lib/terminal-output-activity.js";
+import { TerminalActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
+import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import {
   openTerminalDiagnosticsContextMenu,
   type TerminalDiagnosticsMenuHandler,
@@ -24,7 +21,6 @@ import type {
   RuntimeSessionItem,
   RuntimeTreeItem,
 } from "@/lib/terminal-runtime-tree.js";
-import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import type { TunnelInfo } from "@/api/client.js";
 
 interface Props {
@@ -149,45 +145,6 @@ function RuntimeSessionLeaf({
   onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
   touchOptimized?: boolean;
 }) {
-  const subscribe = useCallback(
-    (listener: () => void) =>
-      subscribeToTerminalOutputActivity(session.sessionId, listener),
-    [session.sessionId],
-  );
-  const getSnapshot = useCallback(
-    () => getTerminalOutputActivitySnapshot(session.sessionId),
-    [session.sessionId],
-  );
-  const activitySnapshot = useSyncExternalStore(
-    subscribe,
-    getSnapshot,
-    getSnapshot,
-  );
-  const activityPresentation =
-    session.alive === false
-      ? {
-          label: "Stopped",
-          title: "Terminal stopped",
-          className: "bg-[var(--color-danger)]",
-        }
-      : !activitySnapshot.streamReady
-        ? {
-            label: "Output unavailable",
-            title: "Output stream unavailable",
-            className: "bg-[var(--color-text-muted)]",
-          }
-        : activitySnapshot.recentOutput
-          ? {
-              label: "Receiving output",
-              title: "Receiving output",
-              className: "bg-[var(--color-success)]",
-            }
-          : {
-              label: "Quiet",
-              title: "Quiet; no recent output observed",
-              className: "bg-[var(--color-warning)]",
-            };
-
   return (
     <div
       onClick={() => onSelectSession?.(session.sessionId)}
@@ -218,15 +175,10 @@ function RuntimeSessionLeaf({
             )
           }
         >
-          <span
-            aria-hidden="true"
-            className={cn(
-              "h-1.5 w-1.5 shrink-0 rounded-full",
-              activityPresentation.className,
-            )}
-            title={activityPresentation.title}
+          <TerminalActivityIndicator
+            sessionId={session.sessionId}
+            alive={session.alive}
           />
-          <span className="sr-only">{activityPresentation.label}</span>
           <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
           {session.openTitle ? (
             <TerminalTitleText

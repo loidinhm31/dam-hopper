@@ -20,15 +20,15 @@ import {
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { OpenTerminalTitle } from "@/lib/terminal-title.js";
+import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { usePorts } from "@/hooks/use-ports.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import { useRuntimeTreeOrdering } from "@/hooks/use-runtime-tree-ordering.js";
 import { buildRuntimeTree } from "@/lib/terminal-runtime-tree.js";
 import { cn } from "@/lib/utils.js";
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 
 const RUNTIME_NAVIGATOR_WIDTH_KEY = "dam-hopper:runtime-navigator-width";
 
@@ -156,6 +156,7 @@ export function ActiveTerminalRuntimeDisplay({
     max: 520,
     defaultWidth: 288,
     storageKey: RUNTIME_NAVIGATOR_WIDTH_KEY,
+    keyboardResizeEnabled: true,
   });
   const handleNewTerminal = () => {
     if (currentProjectName) onNewProjectTerminal?.(currentProjectName);
@@ -282,9 +283,22 @@ export function ActiveTerminalRuntimeDisplay({
       />
       <div
         {...navigatorResizeProps}
-        className="group relative w-1 shrink-0 cursor-col-resize hover:bg-[var(--color-primary)]/20"
+        role="separator"
+        aria-label="Resize Runtime panel"
+        aria-orientation="vertical"
+        aria-valuemin={220}
+        aria-valuemax={520}
+        aria-valuenow={navigatorWidth}
+        aria-valuetext={`${navigatorWidth} pixels`}
+        title="Resize Runtime panel"
+        className="group relative w-1 shrink-0 cursor-col-resize hover:bg-[var(--color-primary)]/20 focus-visible:bg-[var(--color-primary)]/20 focus-visible:outline-none"
       >
-        <div className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-[var(--color-primary)]/50 opacity-0 transition-opacity group-hover:opacity-100" />
+        <div
+          className={cn(
+            "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-[var(--color-primary)]/50 opacity-0 transition-opacity group-hover:opacity-100",
+            isResizingNavigator && "opacity-100",
+          )}
+        />
       </div>
       <main className="min-w-0 flex flex-1 flex-col">
         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3">
@@ -323,7 +337,10 @@ export function ActiveTerminalRuntimeDisplay({
                   onSelectActive={onSelectTab}
                 />
               </Panel>
-              <Separator className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize" />
+              <Separator
+                aria-label="Resize terminal and browser panels"
+                className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize"
+              />
               <Panel id="runtime-browser" defaultSize={40} minSize={20}>
                 <div className="h-full min-w-0 overflow-hidden">
                   {renderBrowserContent?.(onCloseBrowser ?? (() => {}))}
