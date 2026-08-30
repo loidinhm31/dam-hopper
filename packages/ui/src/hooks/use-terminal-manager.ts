@@ -22,6 +22,7 @@ import {
   deriveTerminalAutoAttachState,
   isAdHocProjectTerminal,
   parseTerminalSessionId,
+  sessionProject,
 } from "@/lib/terminal-auto-attach.js";
 import {
   createMountedSession,
@@ -42,8 +43,12 @@ import {
   latestTerminalSessionIncarnation,
   rememberTerminalSessionIncarnation,
 } from "@/lib/terminal-incarnation-state.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
-import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
+import {
+  applyTerminalTitleOrdinals,
+  freeTerminalBaseLabel,
+} from "@/lib/terminal-title.js";
+import type { TabEntry, DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { MountedSession from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TreeCommand, TreeProject } from "@/hooks/use-terminal-tree.js";
 import type { SessionInfo } from "@/api/client.js";
 import type { SetURLSearchParams } from "react-router-dom";
@@ -87,7 +92,7 @@ export interface TerminalManagerDerived {
   tree: TreeProject[];
   freeTerminals: SessionInfo[];
   isLoading: boolean;
-  terminalTabs: TabEntry[];
+  terminalTabs: DisplayTabEntry[];
   selectedId: string | null;
   sessionMap: Map<string, SessionInfo>;
   freeTerminalIndexMap: Map<string, number>;
@@ -296,7 +301,7 @@ export function findSessionMeta(
   const s = sessionMap.get(sessionId);
   return s
     ? {
-        project: s.project ?? "",
+        project: sessionProject(s),
         command: s.command,
         sessionType: s.type,
         cwd: s.cwd,
@@ -304,7 +309,6 @@ export function findSessionMeta(
       }
     : null;
 }
-
 function sameOpenTabs(a: TabEntry[], b: TabEntry[]) {
   return (
     a.length === b.length &&
@@ -314,6 +318,7 @@ function sameOpenTabs(a: TabEntry[], b: TabEntry[]) {
         other &&
         tab.sessionId === other.sessionId &&
         tab.label === other.label &&
+        tab.project === other.project &&
         tab.session === other.session &&
         tab.isSaveable === other.isSaveable &&
         tab.isPinned === other.isPinned
@@ -339,6 +344,40 @@ function sameMountedSessions(a: MountedSession[], b: MountedSession[]) {
   );
 }
 
+export function buildTerminalDisplayTabs(
+  openTabs: readonly TabEntry[],
+  sessionMap: Map<string, SessionInfo>,
+  profileSessionIds: Set<string>,
+  freeTerminalIndexMap: Map<string, number>,
+  stoppedSessionIds?: ReadonlySet<string>,
+): DisplayTabEntry[] {
+  const baseTabs = openTabs.map((tab) => {
+    const { type } = parseTerminalSessionId(tab.sessionId);
+    const hydrated = sessionMap.get(tab.sessionId) ?? tab.session;
+    const session =
+      stoppedSessionIds?.has(tab.sessionId) && hydrated?.alive
+        ? { ...hydrated, alive: false }
+        : hydrated;
+    const isFree = type === "free" || session?.type === "free";
+    const label = isFree
+      ? freeTerminalBaseLabel(freeTerminalIndexMap.get(tab.sessionId))
+      : tab.label;
+    const baseTab = {
+      ...tab,
+      label,
+      session,
+      isSaveable: isAdHocProjectTerminal(tab.sessionId, profileSessionIds),
+      isPinned: tab.isPinned,
+    };
+    if (isFree) {
+      const { project: _project, ...projectlessTab } = baseTab;
+      return projectlessTab;
+    }
+    const project = session ? sessionProject(session) : tab.project ?? "";
+    return project ? { ...baseTab, project } : baseTab;
+  });
+  return applyTerminalTitleOrdinals(baseTabs);
+}
 export function useTerminalManager(
   searchParams: URLSearchParams,
   setSearchParams: SetURLSearchParams,
@@ -438,12 +477,17 @@ export function useTerminalManager(
     worktreePath?: string,
   ) {
     suppressedAutoAttachIdsRef.current.delete(sessionId);
-    locallyStoppedSessionMarkersRef.current.delete(sessionId);
     pendingAutoAttachIdsRef.current.add(sessionId);
 
     const isAdHoc = isAdHocProjectTerminal(sessionId, profileSessionIds);
     const sessionTargetPath =
       worktreePath ?? sessionMap.get(sessionId)?.worktreePath;
+    const currentSession = sessionMap.get(sessionId);
+    const { type } = parseTerminalSessionId(sessionId);
+    const projectMetadata =
+      type !== "free" && currentSession?.type !== "free" && project
+        ? { project }
+        : {};
 
     setOpenTabs((prev) => {
       if (prev.some((t) => t.sessionId === sessionId)) return prev;
@@ -453,8 +497,9 @@ export function useTerminalManager(
         {
           sessionId,
           label: tabLabel(sessionId, project, command),
-          session: sessionMap.get(sessionId),
+          session: currentSession,
           isSaveable: isAdHoc,
+          ...projectMetadata,
         },
       ];
     });
@@ -481,7 +526,6 @@ export function useTerminalManager(
     for (const sessionId of sessionIds) {
       pendingAutoAttachIdsRef.current.delete(sessionId);
       suppressedAutoAttachIdsRef.current.add(sessionId);
-      locallyStoppedSessionMarkersRef.current.delete(sessionId);
     }
     forgetPinnedTerminalIds(sessionIds);
 
@@ -1341,27 +1385,18 @@ export function useTerminalManager(
     [forgetPinnedTerminalIds, openTabs, qc, sessionMap],
   );
 
-  const terminalTabs = useMemo<TabEntry[]>(
+  const terminalTabs = useMemo<DisplayTabEntry[]>(
     () =>
-      openTabs.map((t) => {
-        const { type } = parseTerminalSessionId(t.sessionId);
-        const isAdHoc = isAdHocProjectTerminal(t.sessionId, profileSessionIds);
-        const label =
-          type === "free"
-            ? `Terminal ${freeTerminalIndexMap.get(t.sessionId) ?? "?"}`
-            : t.label;
-        const session = applyLocalStoppedSession(
-          sessionMap.get(t.sessionId) ?? t.session,
-          locallyStoppedSessionMarkersRef.current.get(t.sessionId),
-        );
-        return {
-          ...t,
-          label,
-          session,
-          isSaveable: isAdHoc,
-          isPinned: t.isPinned,
-        };
-      }),
+      buildTerminalDisplayTabs(
+        openTabs,
+        sessionMap,
+        profileSessionIds,
+        freeTerminalIndexMap,
+        getLocallyStoppedSessionIds(
+          locallyStoppedSessionMarkersRef.current,
+          sessionMap,
+        ),
+      ),
     [freeTerminalIndexMap, openTabs, profileSessionIds, sessionMap],
   );
 

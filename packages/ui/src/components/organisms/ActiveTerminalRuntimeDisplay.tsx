@@ -18,10 +18,12 @@ import {
   DialogTitle,
 } from "@/components/ui/Dialog.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
-import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { OpenTerminalTitle } from "@/lib/terminal-title.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { usePorts } from "@/hooks/use-ports.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
+import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import { useRuntimeTreeOrdering } from "@/hooks/use-runtime-tree-ordering.js";
 import { buildRuntimeTree } from "@/lib/terminal-runtime-tree.js";
 import { cn } from "@/lib/utils.js";
@@ -33,7 +35,7 @@ const RUNTIME_NAVIGATOR_WIDTH_KEY = "dam-hopper:runtime-navigator-width";
 interface ActiveTerminalRuntimeDisplayProps {
   activeSessionId: string | null;
   mountedSessions: MountedSession[];
-  openTabs: TabEntry[];
+  openTabs: DisplayTabEntry[];
   currentProjectName?: string | null;
   layoutRevision?: number;
   renderTerminals?: boolean;
@@ -52,13 +54,15 @@ interface ActiveTerminalRuntimeDisplayProps {
 
 export function RuntimeActiveSessionTitle({
   activeSessionId,
+  activeSessionTitle,
   activeSessionLabel,
   activeProject,
   terminalCommitStatusEnabled = false,
   onOpenDiagnosticsMenu,
 }: {
   activeSessionId: string | null;
-  activeSessionLabel: string;
+  activeSessionTitle?: OpenTerminalTitle;
+  activeSessionLabel?: string;
   activeProject?: string;
   terminalCommitStatusEnabled?: boolean;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
@@ -75,9 +79,16 @@ export function RuntimeActiveSessionTitle({
         );
       }}
     >
-      <p className="truncate text-xs font-semibold text-[var(--color-text)]">
-        {activeSessionLabel}
-      </p>
+      {activeSessionTitle ? (
+        <TerminalTitleText
+          title={activeSessionTitle}
+          className="text-xs font-semibold"
+        />
+      ) : (
+        <p className="truncate text-xs font-semibold text-[var(--color-text)]">
+          {activeSessionLabel ?? "No terminal selected"}
+        </p>
+      )}
       <div className="flex min-w-0 items-center gap-1.5">
         <p className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
           Full-width terminal
@@ -154,6 +165,9 @@ export function ActiveTerminalRuntimeDisplay({
   const activeSession = mountedSessions.find(
     (session) => session.sessionId === activeSessionId,
   );
+  const activeOpenTab = openTabs.find(
+    (tab) => tab.sessionId === activeSessionId,
+  );
   const activeSessionLabel = activeSession
     ? `${activeSession.project}: ${activeSession.command}`
     : "No terminal selected";
@@ -184,6 +198,7 @@ export function ActiveTerminalRuntimeDisplay({
           </button>
           <RuntimeActiveSessionTitle
             activeSessionId={activeSessionId}
+            activeSessionTitle={activeOpenTab?.title}
             activeSessionLabel={activeSessionLabel}
             activeProject={activeSession?.project}
             terminalCommitStatusEnabled={terminalCommitStatusEnabled}
@@ -289,6 +304,7 @@ export function ActiveTerminalRuntimeDisplay({
         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3">
           <RuntimeActiveSessionTitle
             activeSessionId={activeSessionId}
+            activeSessionTitle={activeOpenTab?.title}
             activeSessionLabel={activeSessionLabel}
             onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           />

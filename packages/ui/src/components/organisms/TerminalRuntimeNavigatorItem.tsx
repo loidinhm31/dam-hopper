@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { TerminalActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
+import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import {
   openTerminalDiagnosticsContextMenu,
   type TerminalDiagnosticsMenuHandler,
@@ -160,11 +161,11 @@ function RuntimeSessionLeaf({
         <button
           type="button"
           aria-current={active ? "page" : undefined}
-          title={session.cwd ? `cwd: ${session.cwd}` : session.sessionId}
-          onClick={(event) => {
-            event.stopPropagation();
-            onSelectSession?.(session.sessionId);
-          }}
+          title={
+            session.cwd
+              ? `cwd: ${session.cwd}`
+              : session.openTitle?.fullText ?? session.label
+          }
           className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]/60"
           onContextMenu={(event) =>
             openTerminalDiagnosticsContextMenu(
@@ -179,7 +180,16 @@ function RuntimeSessionLeaf({
             alive={session.alive}
           />
           <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
-          <span className="min-w-0 truncate font-mono">{session.label}</span>
+          {session.openTitle ? (
+            <TerminalTitleText
+              title={session.openTitle}
+              className="min-w-0 flex-1 font-mono"
+            />
+          ) : (
+            <span className="min-w-0 flex-1 truncate font-mono">
+              {session.label}
+            </span>
+          )}
         </button>
         <button
           type="button"
@@ -197,6 +207,7 @@ function RuntimeSessionLeaf({
           onKeyDown={(event) => event.stopPropagation()}
           className={cn(
             "rounded-sm p-1 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]",
+            touchOptimized && "min-h-11 min-w-11",
             session.isPinned
               ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)]"
               : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
@@ -218,7 +229,10 @@ function RuntimeSessionLeaf({
               onCloseSession?.(session.sessionId);
             }}
             onKeyDown={(event) => event.stopPropagation()}
-            className="rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+            className={cn(
+              "rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]",
+              touchOptimized && "min-h-11 min-w-11",
+            )}
           >
             <X className="h-3 w-3" />
           </button>
