@@ -342,16 +342,16 @@ describe("Traditional terminal projects in Chromium", () => {
     const betaProjectTab = projectTabs[1];
     const projectIndicator = (tab: HTMLElement | undefined) =>
       tab?.querySelector<HTMLElement>('span[aria-hidden="true"]');
-    expect(alphaProjectTab?.textContent).toContain("Running terminals");
+    expect(alphaProjectTab?.textContent).toContain("Receiving terminal output");
     expect(projectIndicator(alphaProjectTab)?.getAttribute("title")).toBe(
-      "Running terminals",
+      "Receiving terminal output",
     );
     expect(projectIndicator(alphaProjectTab)?.className).toContain(
       "bg-[var(--color-success)]",
     );
-    expect(betaProjectTab?.textContent).toContain("No running terminals");
+    expect(betaProjectTab?.textContent).toContain("No recent terminal output");
     expect(projectIndicator(betaProjectTab)?.getAttribute("title")).toBe(
-      "No running terminals",
+      "No recent terminal output",
     );
     expect(projectIndicator(betaProjectTab)?.className).toContain(
       "bg-[var(--color-warning)]",
@@ -583,18 +583,22 @@ describe("Traditional terminal projects in Chromium", () => {
     const alphaProjectTab = document.querySelector<HTMLElement>(
       '[role="tab"][id$="%3Aalpha"]',
     );
-    expect(alphaProjectTab?.textContent).toContain("Running terminals");
+    expect(alphaProjectTab?.textContent).toContain("Receiving terminal output");
     const alphaIndicator = () =>
       alphaProjectTab?.querySelector<HTMLElement>('span[aria-hidden="true"]');
-    expect(alphaIndicator()?.getAttribute("title")).toBe("Running terminals");
+    expect(alphaIndicator()?.getAttribute("title")).toBe(
+      "Receiving terminal output",
+    );
     expect(alphaIndicator()?.className).toContain("bg-[var(--color-success)]");
 
     await userEvent.click(page.getByTestId("remove-alpha-session"));
 
     await vi.waitFor(() => {
-      expect(alphaProjectTab?.textContent).toContain("No running terminals");
+      expect(alphaProjectTab?.textContent).toContain(
+        "No recent terminal output",
+      );
       expect(alphaIndicator()?.getAttribute("title")).toBe(
-        "No running terminals",
+        "No recent terminal output",
       );
       expect(alphaIndicator()?.className).toContain(
         "bg-[var(--color-warning)]",
@@ -603,6 +607,27 @@ describe("Traditional terminal projects in Chromium", () => {
     await expect
       .element(page.getByText("alpha first", { exact: true }))
       .toBeVisible();
+  });
+  it("uses the same output status for the project item", async () => {
+    await page.viewport(1280, 700);
+    const alphaProjectTab = document.querySelector<HTMLElement>(
+      '[role="tab"][id$="%3Aalpha"]',
+    );
+    expect(alphaProjectTab?.textContent).toContain("Receiving terminal output");
+
+    await userEvent.click(page.getByTestId("set-alpha-output-quiet"));
+
+    await vi.waitFor(() => {
+      expect(
+        alphaProjectTab?.querySelector<HTMLElement>('span[aria-hidden="true"]'),
+      ).toMatchObject({
+        title: "No recent terminal output",
+      });
+      expect(
+        alphaProjectTab?.querySelector<HTMLElement>('span[aria-hidden="true"]')
+          ?.className,
+      ).toContain("bg-[var(--color-warning)]");
+    });
   });
 
   it("uses the compact Projects sheet and handles project tab lifecycle", async () => {
@@ -662,7 +687,7 @@ describe("Traditional terminal projects in Chromium", () => {
       expect(
         document.querySelector<HTMLElement>('[role="tab"][id$="%3Aalpha"]')
           ?.textContent,
-      ).toContain("Running terminals"),
+      ).toContain("Receiving terminal output"),
     );
     await expect
       .element(page.getByText("alpha first", { exact: true }))
@@ -690,7 +715,7 @@ describe("Traditional terminal projects in Chromium", () => {
     expect(
       document.querySelector<HTMLElement>('[role="tab"][id$="%3Aalpha"]')
         ?.textContent,
-    ).toContain("Running terminals");
+    ).toContain("Receiving terminal output");
     expect(
       document.querySelector('[data-testid="fixture-active-session"]')
         ?.textContent,

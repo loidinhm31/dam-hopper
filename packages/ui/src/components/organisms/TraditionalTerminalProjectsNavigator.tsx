@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { GitBranch, GitCommit, GitMerge, Plus } from "lucide-react";
 import { useProjectStatus, useWorktrees } from "@/api/queries.js";
-import { TerminalRunningIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
+import { TerminalProjectActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
 import {
   traditionalTerminalProjectPanelId,
   traditionalTerminalProjectTabId,
@@ -191,7 +191,7 @@ export function TraditionalTerminalProjectsNavigator({
                 touchOptimized && "min-h-12",
               )}
             >
-              <TerminalRunningIndicator running={group.hasRunningTerminal} />
+              <TerminalProjectActivityIndicator tabs={group.terminalTabs} />
               <span className="min-w-0 flex-1">
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="min-w-0 truncate font-mono">

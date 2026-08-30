@@ -173,10 +173,12 @@ handled fail-closed by hiding the metadata.
 
 Traditional mode groups open terminal tabs by their mounted session project and
 keeps stopped tabs in their project row until the user explicitly closes them. The
-project status dot is green only when at least one tab has a live `SessionInfo`; a
-project with only stopped tabs remains visible but is not marked running. The navigator
-and selected pane `+` normally target the selected terminal project (or create a free
-terminal for the synthetic Free terminals group). If the global workspace project
+project activity dot is green only when at least one grouped tab is receiving output
+in the shared browser-local activity state. Quiet, unavailable, and stopped tabs
+keep the project row visible but make it non-green; backend `SessionInfo.alive`
+remains the separate process-liveness value. The navigator and selected pane `+`
+normally target the selected terminal project (or create a free terminal for the
+synthetic Free terminals group). If the global workspace project
 changes while the active Traditional terminal remains in another project, those
 `+` actions target the newly selected workspace project; explicitly selecting a
 different terminal project updates the target again. The workspace header keeps its

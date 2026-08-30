@@ -1,4 +1,4 @@
-import { act, useState } from "react";
+import { act, useEffect, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { expect, vi } from "vitest";
 import { page } from "vitest/browser";
@@ -8,6 +8,10 @@ import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { SessionInfo } from "@/api/client.js";
 
 import { deriveTerminalAutoAttachState } from "@/lib/terminal-auto-attach.js";
+import {
+  registerTerminalOutputActivity,
+  type TerminalOutputActivityRegistration,
+} from "@/lib/terminal-output-activity.js";
 
 function session(id: string, project: string, alive: boolean): SessionInfo {
   return {
@@ -84,6 +88,19 @@ function TraditionalProjectsFixtureContent({
     initialMountedSessions,
   );
   const [newTerminalProject, setNewTerminalProject] = useState("none");
+  const alphaActivityRef = useRef<TerminalOutputActivityRegistration | null>(
+    null,
+  );
+  useEffect(() => {
+    const activity = registerTerminalOutputActivity("alpha-1");
+    activity.setStreamReady(true);
+    activity.markOutput();
+    alphaActivityRef.current = activity;
+    return () => {
+      alphaActivityRef.current = null;
+      activity.dispose();
+    };
+  }, []);
 
   function changeCurrentProject(projectName: string | null) {
     if (currentProjectName === projectName) return;
@@ -176,6 +193,16 @@ function TraditionalProjectsFixtureContent({
         }}
       >
         Remove alpha session
+      </button>
+      <button
+        type="button"
+        data-testid="set-alpha-output-quiet"
+        onClick={() => {
+          alphaActivityRef.current?.setStreamReady(false);
+          alphaActivityRef.current?.setStreamReady(true);
+        }}
+      >
+        Set alpha output quiet
       </button>
       <output data-testid="fixture-new-terminal-project">
         {newTerminalProject}
