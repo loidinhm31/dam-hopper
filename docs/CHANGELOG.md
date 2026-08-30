@@ -1,3 +1,11 @@
+# 2026-08-31
+
+- **Traditional terminal close selection fix.** Closing a Traditional terminal now
+  keeps the selected terminal within the same project instead of selecting one
+  from another project; Runtime behavior is preserved. Focused validation passed:
+  23 unit tests, 9 Traditional Chromium tests, and the UI TypeScript build.
+  Production-like callback integration coverage remains a follow-up.
+
 # 2026-08-30
 
 - **Browser Debug/native support documentation refresh.** Recorded the Windows
