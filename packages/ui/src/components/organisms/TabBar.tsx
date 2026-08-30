@@ -10,6 +10,7 @@ import {
   Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { TerminalActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import {
   openTerminalDiagnosticsContextMenu,
@@ -83,7 +84,7 @@ export function DraggableTab({
       {/* Tab label / click to select */}
       <button
         type="button"
-        className="px-1.5 py-1.5 text-xs whitespace-nowrap"
+        className="flex items-center gap-1.5 px-1.5 py-1.5 text-xs whitespace-nowrap"
         onClick={() => onSelect(tab.sessionId)}
         onContextMenu={(event) =>
           openTerminalDiagnosticsContextMenu(
@@ -93,6 +94,10 @@ export function DraggableTab({
           )
         }
       >
+        <TerminalActivityIndicator
+          sessionId={tab.sessionId}
+          alive={tab.session?.alive}
+        />
         <span className="max-w-32 truncate block font-mono">{tab.label}</span>
       </button>
 
@@ -246,7 +251,6 @@ export function TabBar({
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
-
       {terminalCommitStatusEnabled ? (
         <div className="flex min-w-0 max-w-[34rem] shrink">
           <TerminalCommitStatusChip

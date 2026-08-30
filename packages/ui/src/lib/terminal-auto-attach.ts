@@ -19,6 +19,7 @@ export interface TerminalAutoAttachInput {
   ignoredSessionIds?: Set<string>;
   pendingSessionIds?: Set<string>;
   pinnedSessionIds?: Set<string>;
+  stoppedSessionIds?: ReadonlySet<string>;
 }
 
 export interface TerminalAutoAttachState {
@@ -114,15 +115,22 @@ export function deriveTerminalAutoAttachState({
   ignoredSessionIds = new Set<string>(),
   pendingSessionIds = new Set<string>(),
   pinnedSessionIds = new Set<string>(),
+  stoppedSessionIds = new Set<string>(),
 }: TerminalAutoAttachInput): TerminalAutoAttachState {
   const liveSessions = sessions
     .filter(
       (session) =>
-        session.alive && session.id && !ignoredSessionIds.has(session.id),
+        session.alive &&
+        session.id &&
+        !ignoredSessionIds.has(session.id) &&
+        !stoppedSessionIds.has(session.id),
     )
     .sort((a, b) => a.startedAt - b.startedAt);
   const liveById = new Map(
     liveSessions.map((session) => [session.id, session]),
+  );
+  const sessionsById = new Map(
+    sessions.map((session) => [session.id, session]),
   );
   const knownSessionIds = new Set(sessions.map((session) => session.id));
   const existingTabIds = new Set(openTabs.map((tab) => tab.sessionId));
@@ -132,18 +140,31 @@ export function deriveTerminalAutoAttachState({
 
   const nextOpenTabs = [
     ...openTabs
-      .filter(
-        (tab) =>
-          liveById.has(tab.sessionId) ||
-          pendingSessionIds.has(tab.sessionId) ||
-          !knownSessionIds.has(tab.sessionId),
-      )
+      .filter((tab) => !ignoredSessionIds.has(tab.sessionId))
       .map((tab) => {
-        const session = liveById.get(tab.sessionId);
-        if (!session) return tab;
+        const session = sessionsById.get(tab.sessionId);
+        if (!session) {
+          if (tab.session?.alive !== true) return tab;
+          // The snapshot is authoritative for liveness; retain the tab without
+          // allowing an old live record to keep the project indicator green.
+          return {
+            ...tab,
+            session: { ...tab.session, alive: false },
+          };
+        }
+        const effectiveSession =
+          stoppedSessionIds.has(session.id) && session.alive
+            ? tab.session?.alive === false
+              ? tab.session
+              : { ...session, alive: false }
+            : session;
         return {
           ...tab,
-          ...tabForSession(session, profileSessionIds, freeTerminalIndexMap),
+          ...tabForSession(
+            effectiveSession,
+            profileSessionIds,
+            freeTerminalIndexMap,
+          ),
           // An explicit unpin wins, but a pre-snapshot tab can hydrate a stored pin.
           isPinned: tab.isPinned ?? pinnedSessionIds.has(session.id),
         };
@@ -164,16 +185,16 @@ export function deriveTerminalAutoAttachState({
     ...mountedSessions
       .filter(
         (mounted) =>
-          liveById.has(mounted.sessionId) ||
-          pendingSessionIds.has(mounted.sessionId) ||
-          !knownSessionIds.has(mounted.sessionId),
+          !ignoredSessionIds.has(mounted.sessionId) &&
+          (liveById.has(mounted.sessionId) ||
+            pendingSessionIds.has(mounted.sessionId) ||
+            !knownSessionIds.has(mounted.sessionId) ||
+            existingTabIds.has(mounted.sessionId)),
       )
-      .map((mounted) => ({
-        ...mounted,
-        ...(liveById.has(mounted.sessionId)
-          ? mountedForSession(liveById.get(mounted.sessionId)!)
-          : {}),
-      })),
+      .map((mounted) => {
+        const session = sessionsById.get(mounted.sessionId);
+        return session ? mountedForSession(session) : mounted;
+      }),
     ...liveSessions
       .filter((session) => !existingMountedIds.has(session.id))
       .map(mountedForSession),

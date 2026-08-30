@@ -187,7 +187,7 @@ vi.mock("@/hooks/use-terminal-manager.js", () => ({
       tree: [],
       freeTerminals: [],
       isLoading: false,
-      tabsWithLiveSession: [],
+      terminalTabs: [],
       selectedId: null,
       sessionMap: new Map([
         [
