@@ -3515,6 +3515,89 @@ fn test_project_config(workspace_dir: &std::path::Path) -> ProjectConfig {
         health_check_url: None,
     }
 }
+#[cfg(windows)]
+struct PtyCleanupGuard {
+    manager: PtySessionManager,
+    id: String,
+}
+
+#[cfg(windows)]
+impl PtyCleanupGuard {
+    fn new(manager: PtySessionManager, id: &str) -> Self {
+        Self {
+            manager,
+            id: id.to_owned(),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PtyCleanupGuard {
+    fn drop(&mut self) {
+        let _ = self.manager.remove(&self.id);
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn terminal_create_bash_without_cwd_uses_native_windows_shell() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let id = "windows-bash-default-cwd";
+    let _cleanup = PtyCleanupGuard::new(state.pty_manager.clone(), id);
+
+    let response = post_json(
+        state.clone(),
+        "/api/terminal",
+        serde_json::json!({
+            "id": id,
+            "command": "bash",
+            "cols": 80,
+            "rows": 24,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let raw = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let meta: crate::pty::SessionMeta = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(meta.id, id);
+    assert!(meta.alive);
+    assert!(Path::new(&meta.cwd).is_dir());
+    assert_ne!(meta.cwd, "/tmp");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn terminal_create_executes_windows_command_through_cmd_c() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let id = "windows-cmd-one-shot";
+    let _cleanup = PtyCleanupGuard::new(state.pty_manager.clone(), id);
+
+    let response = post_json(
+        state.clone(),
+        "/api/terminal",
+        serde_json::json!({
+            "id": id,
+            "command": "echo WINDOWS_CMD_C_OK",
+            "cwd": tmp.path().to_str().unwrap(),
+            "cols": 80,
+            "rows": 24,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert!(wait_for(Duration::from_secs(3), || {
+        state
+            .pty_manager
+            .get_buffer(id)
+            .is_ok_and(|buffer| buffer.contains("WINDOWS_CMD_C_OK"))
+    }));
+}
 
 #[tokio::test]
 async fn terminal_create_returns_meta_and_appears_in_list() {
