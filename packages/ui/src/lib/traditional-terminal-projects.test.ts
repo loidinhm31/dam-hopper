@@ -105,6 +105,33 @@ describe("buildTraditionalTerminalProjectGroups", () => {
       label: "alpha",
     });
   });
+
+  it("preserves global projectless title ordinals across mounted project groups", () => {
+    const alphaTitle = {
+      baseLabel: "Terminal 1",
+      ordinal: 1,
+      fullText: "Terminal 1 #1",
+    };
+    const betaTitle = {
+      baseLabel: "Terminal 2",
+      ordinal: 2,
+      fullText: "Terminal 2 #2",
+    };
+    const terminalTabs = [
+      { ...tab("free:alpha", undefined, true), title: alphaTitle },
+      { ...tab("free:beta", undefined, true), title: betaTitle },
+    ];
+
+    const groups = buildTraditionalTerminalProjectGroups(
+      [mounted("free:alpha", "alpha"), mounted("free:beta", "beta")],
+      terminalTabs,
+    );
+
+    expect(groups.map((group) => group.terminalTabs[0].title)).toEqual([
+      alphaTitle,
+      betaTitle,
+    ]);
+  });
 });
 
 describe("traditionalTerminalLayoutStorageKey", () => {

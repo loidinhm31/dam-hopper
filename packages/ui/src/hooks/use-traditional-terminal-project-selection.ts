@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TraditionalTerminalProjectGroup } from "@/lib/traditional-terminal-projects.js";
+import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
-interface Options {
-  groups: readonly TraditionalTerminalProjectGroup[];
+interface Options<T extends TabEntry> {
+  groups: readonly TraditionalTerminalProjectGroup<T>[];
   activeSessionId: string | null;
   onSelectTab?: (sessionId: string) => void;
 }
 
-export function useTraditionalTerminalProjectSelection({
+export function useTraditionalTerminalProjectSelection<T extends TabEntry>({
   groups,
   activeSessionId,
   onSelectTab,
-}: Options) {
+}: Options<T>) {
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [lastSelectedSessionByGroup, setLastSelectedSessionByGroup] = useState(
     () => new Map<string, string>(),
