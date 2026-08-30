@@ -2624,11 +2624,15 @@ Attach/replay start, transport disconnect or replacement, terminal exit, and
 panel cleanup clear recent activity and reset stream readiness so stale green
 cannot survive a lifecycle boundary. Each mounted panel owns its registration;
 owner-checked callbacks make late output or readiness updates from a prior
-disconnect, exit, attach reset, replacement, or disposed panel no-ops. Fresh
-post-replay output may activate the row again. Store subscribers are notified
-only when the externally visible activity/stream state changes, not for every
-PTY chunk. Labels and tooltips distinguish receiving, quiet,
-connecting/disconnected/replaying, and stopped; color is never the only cue.
+disconnect, exit, attach reset, replacement, or disposed panel no-ops. A confirmed
+in-place `process:restarted` event, or a liveness-confirmed `terminal:changed`
+recovery probe, reopens the live gate for the replacement reader without replaying
+the retained buffer or counting the synthetic restart banner; fresh post-replay or
+post-restart output may activate the row again. Store subscribers are notified only
+when the externally visible activity/stream state changes, not for every PTY chunk.
+Per-terminal labels and tooltips distinguish receiving, quiet, unavailable, and
+stopped; the aggregated project item exposes receiving versus no recent terminal
+output. Color is never the only cue.
 
 Key invariants:
 
@@ -2639,6 +2643,47 @@ Key invariants:
 - Hidden kept-alive mounted terminals participate; unmounted/disposed panels do not.
 - Activity state is memory-only, bounded by mounted session lifecycle, and content-free.
 - The feature adds no SSE endpoint, server timer, persistence, or protocol field.
+
+### Unified terminal status for UI indicators
+
+The UI keeps process liveness, observed output activity, and shell lifecycle as
+separate state machines. The Traditional project item and per-terminal activity
+rows share the same output-status calculation; the project item aggregates that
+status across its terminal tabs:
+
+| Surface                      | Green condition                 | Non-green condition                                                   | Authoritative source               |
+| ---------------------------- | ------------------------------- | --------------------------------------------------------------------- | ---------------------------------- |
+| Traditional project item     | At least one tab is `receiving` | Every tab is `quiet`, `unavailable`, or `stopped`                     | Shared browser-local output status |
+| Per-terminal tab/runtime row | That terminal is `receiving`    | `quiet`, `unavailable`, or `stopped`                                  | Shared browser-local output status |
+| Process liveness             | `SessionInfo.alive === true`    | Backend PTY exited, was killed, or lost its target                    | `terminal:listDetailed`            |
+| Shell lifecycle              | Verified `editing` event        | Validated lifecycle transition, replay reset, restart, or termination | `terminal:lifecycle`               |
+
+The shared output status precedence is:
+
+1. `alive === false` → `stopped`.
+2. Stream unavailable or replaying → `unavailable`.
+3. Non-empty live output observed within 3,000 ms → `receiving`.
+4. Otherwise → `quiet`.
+
+The project indicator is green only when at least one tab resolves to
+`receiving`. This is a UI-only aggregation. Quiet or unavailable output does
+not mutate `SessionInfo.alive`; an idle but healthy shell remains alive, and a
+verified `editing` lifecycle remains editing while no output arrives.
+
+```text
+/ws terminal:output
+  -> browser-local activity store
+  -> shared terminal output status
+  -> per-terminal indicator
+  -> Traditional project aggregate (any receiving tab)
+
+terminal:listDetailed
+  -> SessionInfo.alive
+  -> stopped precedence in the shared status
+
+terminal:lifecycle
+  -> shell suggestion/lifecycle controller
+```
 
 **TerminalTreeView** (`packages/ui/src/components/organisms/TerminalTreeView.tsx`)
 

@@ -1078,10 +1078,15 @@ Callback receives:
   willRestart: boolean;
   restartIn?: number;       // milliseconds
   restartCount?: number;
+  incarnation?: number;    // nonnegative safe integer identifying the PTY incarnation
 }
 ```
 
 Returns unsubscribe function.
+
+The optional `incarnation` lets clients distinguish PTYs when a public session ID is
+reused: a client may reject a delayed exit event from an older incarnation. Older
+clients may ignore this field and continue handling exits by session ID.
 
 **onProcessRestarted?(id: string, cb: (restart: {...}) => void): () => void** (Optional, Phase 5+)
 Subscribe to process restart event.

@@ -15,7 +15,11 @@ const mocks = vi.hoisted(() => {
     restartIn?: number;
     restartCount?: number;
   }) => void;
-
+  type RestartCallback = (restart: {
+    restartCount: number;
+    previousExitCode: number | null;
+  }) => void;
+  type EventCallback = (payload: unknown) => void;
   class FakeTerminal {
     readonly cols = 120;
     readonly rows = 30;
@@ -63,6 +67,13 @@ const mocks = vi.hoisted(() => {
     onExitBySession: new Map<string, (exitCode: number | null) => void>(),
     onExitEnhanced: null as ExitEnhancedCallback | null,
     onExitEnhancedBySession: new Map<string, ExitEnhancedCallback>(),
+    onRestart: null as RestartCallback | null,
+    onRestartBySession: new Map<string, RestartCallback>(),
+    onTerminalChanged: null as EventCallback | null,
+    listDetailedAlive: true,
+    listDetailedResponses: [] as Array<
+      Promise<Array<{ id: string; alive: boolean }>>
+    >,
     onStatus: null as ((status: string) => void) | null,
     statusListeners: new Set<(status: string) => void>(),
     transportGeneration: 0,
@@ -92,7 +103,15 @@ const mocks = vi.hoisted(() => {
       saveDebounced: vi.fn(),
     },
     transport: {
-      invoke: vi.fn().mockResolvedValue([{ id: "term-1", alive: true }]),
+      invoke: vi.fn((channel: string) => {
+        if (channel === "terminal:listDetailed") {
+          return (
+            mocks.listDetailedResponses.shift() ??
+            Promise.resolve([{ id: "term-1", alive: mocks.listDetailedAlive }])
+          );
+        }
+        return Promise.resolve([{ id: "term-1", alive: true }]);
+      }),
       terminalAttach: vi.fn(() => true),
       terminalWrite: vi.fn(),
       terminalResize: vi.fn(),
@@ -135,12 +154,29 @@ const mocks = vi.hoisted(() => {
           };
         },
       ),
+      onProcessRestarted: vi.fn((_id: string, callback: RestartCallback) => {
+        mocks.onRestart = callback;
+        mocks.onRestartBySession.set(_id, callback);
+        return () => {
+          if (mocks.onRestartBySession.get(_id) === callback) {
+            mocks.onRestartBySession.delete(_id);
+          }
+        };
+      }),
       onTerminalBuffer: vi.fn((_id: string, callback: BufferCallback) => {
         mocks.onBuffer = callback;
         mocks.onBufferBySession.set(_id, callback);
         return () => {
           if (mocks.onBufferBySession.get(_id) === callback) {
             mocks.onBufferBySession.delete(_id);
+          }
+        };
+      }),
+      onEvent: vi.fn((_channel: string, callback: EventCallback) => {
+        mocks.onTerminalChanged = callback;
+        return () => {
+          if (mocks.onTerminalChanged === callback) {
+            mocks.onTerminalChanged = null;
           }
         };
       }),
@@ -304,6 +340,7 @@ vi.mock("@/lib/command-history.js", () => ({
 }));
 vi.mock("@/lib/utils.js", () => ({
   cn: (...values: string[]) => values.join(" "),
+  generateUUID: () => "00000000-0000-4000-8000-000000000000",
 }));
 
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
@@ -326,6 +363,11 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     mocks.onExit = null;
     mocks.onExitBySession.clear();
     mocks.onExitEnhanced = null;
+    mocks.onRestart = null;
+    mocks.onRestartBySession.clear();
+    mocks.onTerminalChanged = null;
+    mocks.listDetailedAlive = true;
+    mocks.listDetailedResponses.length = 0;
     mocks.onExitEnhancedBySession.clear();
     mocks.onStatus = null;
     mocks.statusListeners.clear();
@@ -400,6 +442,43 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     });
 
     expect(mocks.terminal?.options.convertEol).toBe(false);
+  });
+  it("calls the latest onExit prop from the stable enhanced exit listener", async () => {
+    const initialOnExit = vi.fn();
+    const latestOnExit = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <TerminalPanel
+          sessionId="term-1"
+          project="web"
+          command="bash"
+          onExit={initialOnExit}
+        />,
+      );
+    });
+    await vi.waitFor(() => expect(mocks.onExitEnhanced).toBeTypeOf("function"));
+    const storedEnhancedExit = mocks.onExitEnhanced;
+
+    await act(async () => {
+      root.render(
+        <TerminalPanel
+          sessionId="term-1"
+          project="web"
+          command="bash"
+          onExit={latestOnExit}
+        />,
+      );
+    });
+
+    expect(mocks.transport.onTerminalExitEnhanced).toHaveBeenCalledOnce();
+    await act(async () =>
+      storedEnhancedExit?.({ exitCode: 17, willRestart: false }),
+    );
+
+    expect(initialOnExit).not.toHaveBeenCalled();
+    expect(latestOnExit).toHaveBeenCalledOnce();
+    expect(latestOnExit).toHaveBeenCalledWith(17);
   });
 
   it("keeps hidden mounted panels isolated and clears them on host cleanup", async () => {
@@ -547,6 +626,255 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     expect(getTerminalOutputActivitySnapshot("term-1").recentOutput).toBe(
       false,
     );
+  });
+
+  it("reopens output after a confirmed in-place process restart", async () => {
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+    await vi.waitFor(() => {
+      expect(mocks.onBuffer).toBeTypeOf("function");
+      expect(mocks.onRestart).toBeTypeOf("function");
+    });
+
+    await act(async () => {
+      mocks.onBuffer?.({
+        data: "initial-replay",
+        offset: 14,
+        reset: true,
+        truncated: false,
+      });
+    });
+    const staleReplayCallback = mocks.terminal?.writes.at(-1)?.callback;
+    await act(async () => mocks.onData?.("before-restart"));
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+
+    await act(async () =>
+      mocks.onExitEnhanced?.({
+        exitCode: 17,
+        willRestart: true,
+        restartIn: 1_000,
+        restartCount: 1,
+      }),
+    );
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+    const writesBeforeRestart = mocks.terminal?.writes.length ?? 0;
+    await act(async () =>
+      mocks.onBuffer?.({
+        data: "stale-buffer-during-restart",
+        offset: 14,
+        reset: false,
+        truncated: false,
+      }),
+    );
+    expect(mocks.terminal?.writes.length).toBe(writesBeforeRestart);
+
+    await act(async () =>
+      mocks.onRestart?.({ restartCount: 1, previousExitCode: 17 }),
+    );
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: true,
+    });
+
+    await act(async () => staleReplayCallback?.());
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: true,
+    });
+    expect(mocks.setReplayActive).toHaveBeenLastCalledWith(false);
+
+    const writesAfterRestart = mocks.terminal?.writes.length ?? 0;
+    await act(async () =>
+      mocks.onBuffer?.({
+        data: "stale-buffer-after-restart",
+        offset: 14,
+        reset: false,
+        truncated: false,
+      }),
+    );
+    expect(mocks.terminal?.writes.length).toBe(writesAfterRestart);
+
+    await act(async () => mocks.onData?.("after-restart"));
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: true,
+      streamReady: true,
+    });
+    expect(
+      mocks.terminal?.writes.slice(writesBeforeRestart).map(({ data }) => data),
+    ).toContain("after-restart");
+  });
+
+  it("recovers from the generic terminal change after an auto-restart", async () => {
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+    await vi.waitFor(() => {
+      expect(mocks.onBuffer).toBeTypeOf("function");
+      expect(mocks.onTerminalChanged).toBeTypeOf("function");
+    });
+
+    await act(async () => {
+      mocks.onBuffer?.({
+        data: "initial-replay",
+        offset: 14,
+        reset: true,
+        truncated: false,
+      });
+      mocks.terminal?.writes.at(-1)?.callback?.();
+    });
+    await act(async () =>
+      mocks.onExitEnhanced?.({
+        exitCode: 17,
+        willRestart: true,
+        restartIn: 1_000,
+        restartCount: 1,
+      }),
+    );
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+
+    await act(async () => mocks.onTerminalChanged?.({}));
+    await vi.waitFor(() =>
+      expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+        recentOutput: false,
+        streamReady: true,
+      }),
+    );
+
+    await act(async () => mocks.onData?.("after-generic-restart"));
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: true,
+      streamReady: true,
+    });
+  });
+
+  it("keeps restart unavailable when liveness still reports the session dead", async () => {
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+    await vi.waitFor(() => {
+      expect(mocks.onBuffer).toBeTypeOf("function");
+      expect(mocks.onTerminalChanged).toBeTypeOf("function");
+    });
+
+    await act(async () => {
+      mocks.onBuffer?.({
+        data: "initial-replay",
+        offset: 14,
+        reset: true,
+        truncated: false,
+      });
+      mocks.terminal?.writes.at(-1)?.callback?.();
+    });
+    mocks.listDetailedAlive = false;
+    await act(async () =>
+      mocks.onExitEnhanced?.({
+        exitCode: 17,
+        willRestart: true,
+        restartIn: 1_000,
+        restartCount: 1,
+      }),
+    );
+
+    const invokeCountBeforeProbe = mocks.transport.invoke.mock.calls.length;
+    await act(async () => mocks.onTerminalChanged?.({}));
+    await vi.waitFor(() =>
+      expect(mocks.transport.invoke).toHaveBeenCalledTimes(
+        invokeCountBeforeProbe + 1,
+      ),
+    );
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+  });
+
+  it("ignores a stale liveness result from an earlier restart probe", async () => {
+    await act(async () => {
+      root.render(
+        <TerminalPanel sessionId="term-1" project="web" command="bash" />,
+      );
+    });
+    await vi.waitFor(() => {
+      expect(mocks.onBuffer).toBeTypeOf("function");
+      expect(mocks.onTerminalChanged).toBeTypeOf("function");
+    });
+
+    await act(async () => {
+      mocks.onBuffer?.({
+        data: "initial-replay",
+        offset: 14,
+        reset: true,
+        truncated: false,
+      });
+      mocks.terminal?.writes.at(-1)?.callback?.();
+    });
+    let resolveFirst!: (
+      sessions: Array<{ id: string; alive: boolean }>,
+    ) => void;
+    let resolveSecond!: (
+      sessions: Array<{ id: string; alive: boolean }>,
+    ) => void;
+    const firstResponse = new Promise<Array<{ id: string; alive: boolean }>>(
+      (resolve) => {
+        resolveFirst = resolve;
+      },
+    );
+    const secondResponse = new Promise<Array<{ id: string; alive: boolean }>>(
+      (resolve) => {
+        resolveSecond = resolve;
+      },
+    );
+    mocks.listDetailedResponses.push(firstResponse, secondResponse);
+
+    await act(async () =>
+      mocks.onExitEnhanced?.({
+        exitCode: 17,
+        willRestart: true,
+        restartIn: 1_000,
+        restartCount: 1,
+      }),
+    );
+    await act(async () => {
+      mocks.onTerminalChanged?.({});
+      mocks.onTerminalChanged?.({});
+    });
+    await vi.waitFor(() =>
+      expect(mocks.transport.invoke).toHaveBeenCalledTimes(3),
+    );
+
+    await act(async () => {
+      resolveSecond([{ id: "term-1", alive: false }]);
+      await Promise.resolve();
+    });
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
+
+    await act(async () => {
+      resolveFirst([{ id: "term-1", alive: true }]);
+      await Promise.resolve();
+    });
+    expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
+      recentOutput: false,
+      streamReady: false,
+    });
   });
 
   it("resets on transport replacement and reactivates after a fresh replay", async () => {

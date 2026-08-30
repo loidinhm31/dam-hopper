@@ -32,11 +32,11 @@ export function resolveDragOverlayTitle(tab: DisplayTabEntry | undefined) {
   return { title: tab?.title, label: tab?.label ?? "Terminal" };
 }
 
-
 interface LayoutTreeProps {
   node: LayoutNode;
   layout: UseTerminalLayoutResult;
   mountedSessions: MountedSession[];
+  terminalCommitStatusEnabled?: boolean;
   openTabs: DisplayTabEntry[];
   onNewTerminal: () => void;
   onSessionExit: (sessionId: string) => void;
@@ -55,6 +55,7 @@ function LayoutTree({
   node,
   layout,
   mountedSessions,
+  terminalCommitStatusEnabled,
   openTabs,
   onNewTerminal,
   onSessionExit,
@@ -100,6 +101,7 @@ function LayoutTree({
         node={node}
         layout={layout}
         mountedSessions={mountedSessions}
+        terminalCommitStatusEnabled={terminalCommitStatusEnabled}
         openTabs={openTabs}
         onNewTerminal={onNewTerminal}
         onSessionExit={onSessionExit}
@@ -133,6 +135,7 @@ function LayoutTree({
           node={node.children[0]}
           layout={layout}
           mountedSessions={mountedSessions}
+          terminalCommitStatusEnabled={terminalCommitStatusEnabled}
           openTabs={openTabs}
           onNewTerminal={onNewTerminal}
           onSessionExit={onSessionExit}
@@ -147,7 +150,10 @@ function LayoutTree({
           onCloseBrowser={onCloseBrowser}
         />
       </Panel>
-      <Separator className="bg-[var(--color-border)] hover:bg-[var(--color-primary)] transition-colors data-[orientation=vertical]:w-px data-[orientation=vertical]:cursor-col-resize data-[orientation=horizontal]:h-px data-[orientation=horizontal]:cursor-row-resize" />
+      <Separator
+        aria-label="Resize split pane"
+        className="bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:w-px data-[orientation=vertical]:cursor-col-resize data-[orientation=horizontal]:h-px data-[orientation=horizontal]:cursor-row-resize"
+      />
       <Panel
         id={node.children[1].id}
         defaultSize={node.sizes[1]}
@@ -158,6 +164,7 @@ function LayoutTree({
           node={node.children[1]}
           layout={layout}
           mountedSessions={mountedSessions}
+          terminalCommitStatusEnabled={terminalCommitStatusEnabled}
           openTabs={openTabs}
           onNewTerminal={onNewTerminal}
           onSessionExit={onSessionExit}
@@ -180,6 +187,7 @@ export interface SplitLayoutProps {
   root: LayoutNode;
   layout: UseTerminalLayoutResult;
   mountedSessions: MountedSession[];
+  terminalCommitStatusEnabled?: boolean;
   openTabs: DisplayTabEntry[];
   onNewTerminal: () => void;
   onSessionExit: (sessionId: string) => void;
@@ -223,6 +231,7 @@ export function SplitLayout({
   root,
   layout,
   mountedSessions,
+  terminalCommitStatusEnabled,
   openTabs,
   onNewTerminal,
   onSessionExit,
@@ -307,6 +316,7 @@ export function SplitLayout({
           node={root}
           layout={layout}
           mountedSessions={mountedSessions}
+          terminalCommitStatusEnabled={terminalCommitStatusEnabled}
           openTabs={openTabs}
           onNewTerminal={onNewTerminal}
           onSessionExit={onSessionExit}
