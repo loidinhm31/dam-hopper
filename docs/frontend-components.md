@@ -148,17 +148,46 @@ keeps stored summaries readable and marks the view paused; deletion remains expl
 ## Latest Commit in Terminal
 
 **Locations:** `packages/ui/src/components/organisms/SettingsAppearanceSection.tsx`,
-`packages/ui/src/components/organisms/TerminalCommitStatusChip.tsx`, and
-`packages/ui/src/components/organisms/ActiveTerminalRuntimeDisplay.tsx`
+`packages/ui/src/components/organisms/TerminalCommitStatusChip.tsx`,
+`packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.tsx`,
+and `packages/ui/src/components/organisms/ActiveTerminalRuntimeDisplay.tsx`
 
 Settings > Appearance exposes one **Show latest commit in terminal** toggle. When
-enabled, the active terminal header renders a compact status chip containing the
+enabled, the Runtime terminal header renders a compact status chip containing the
 current branch, latest commit message, localized timestamp, and seven-character short
-hash; hovering exposes full values through the tooltip, and the complete details are
-also included in the chip's accessible label. The chip is passive and does not add a refresh action or polling:
-the shared project-status query supplies data and Git mutations invalidate it when
-fresh status is needed. Missing, invalid, non-Git, or unavailable project status is
-handled fail-closed by hiding the chip.
+hash. Traditional mode instead renders each named project's branch, projected worktree
+path, and latest commit message in three icon-led rows; branch and worktree values may
+truncate with a tooltip, while long commit messages wrap instead of being truncated.
+Hovering exposes full values, and the complete Runtime details plus all Traditional values
+are included in accessible labels. The status is passive and does not add a refresh action
+or polling: the shared project-status and worktree queries supply data, and Git mutations
+invalidate it when fresh status is needed.
+Missing, invalid, non-Git, unavailable project status, or unavailable worktree discovery is
+handled fail-closed by hiding the metadata.
+
+## Traditional Terminal Projects
+
+**Locations:** `packages/ui/src/components/organisms/TraditionalTerminalProjectsDisplay.tsx`,
+`packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.tsx`, and
+`packages/ui/src/lib/traditional-terminal-projects.ts`
+
+Traditional mode groups open terminal tabs by their mounted session project and
+keeps stopped tabs in their project row until the user explicitly closes them. The
+project activity dot is green only when at least one grouped tab is receiving output
+in the shared browser-local activity state. Quiet, unavailable, and stopped tabs
+keep the project row visible but make it non-green; backend `SessionInfo.alive`
+remains the separate process-liveness value. The navigator and selected pane `+`
+normally target the selected terminal project (or create a free terminal for the
+synthetic Free terminals group). If the global workspace project
+changes while the active Traditional terminal remains in another project, those
+`+` actions target the newly selected workspace project; explicitly selecting a
+different terminal project updates the target again. The workspace header keeps its
+`+` available in that mismatch state as an additional current-project launch action.
+Desktop uses a persisted, keyboard- and mouse-resizable project rail bounded to
+220–520 pixels. Its named vertical separator supports Arrow keys in 16-pixel steps,
+Shift+Arrow keys in 32-pixel steps, and Home/End for the minimum/maximum width.
+Compact layouts expose the same navigator in a bottom sheet without the desktop rail
+resize handle.
 
 ## Shared File Decorations
 
@@ -678,7 +707,7 @@ interface TerminalPanelProps {
 - `PaneContainer` renders labeled five-zone docking previews only while dragging, keeping pointer interference off the live terminal during normal input.
 - Re-dropping onto the same pane center only changes active tab focus; invalid self-edge splits are ignored.
 - Terminal pin/unpin is browser-tab state shared by the IDE tab bar and Runtime navigator. Pinned live sessions survive a page reload through versioned IDs-only `sessionStorage` (`dam-hopper:terminal-pins:v1`), but never leave the browser tab or reach the server. Unpinning and explicit terminal removal clear the stored ID; stale IDs are removed after a successful terminal-session refresh. Pinned sessions hide their close action and cannot be closed until unpinned. IDE and Runtime terminal output use the theme background, with Runtime output adding an inset border and focus ring for clearer contrast.
-- Terminal layout persistence remains in localStorage under `dam-hopper:terminal-layout`.
+- Terminal layout persistence uses project-scoped localStorage keys in the form `dam-hopper:terminal-layout:v2:<encoded-group-id>`. Traditional terminal projects intentionally do not migrate the legacy global layout tree; each project starts with its default pane on first visit.
 
 **Runtime verification notes:**
 

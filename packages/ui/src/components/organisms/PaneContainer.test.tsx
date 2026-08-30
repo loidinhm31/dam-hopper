@@ -139,6 +139,9 @@ describe("PaneContainer browser integration", () => {
     ).toBe("shell:demo");
     const divider = container.querySelector('[role="separator"]');
     expect(divider?.getAttribute("aria-orientation")).toBe("vertical");
+    expect(divider?.getAttribute("aria-label")).toBe(
+      "Resize terminal and browser panels",
+    );
 
     await act(async () =>
       container
