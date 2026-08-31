@@ -36,7 +36,10 @@ export function targetScopedCommandSessionId(
   worktreePath?: string,
   commandKey?: string,
 ): string {
-  const key = commandKey == null ? "" : `:${commandKey}`;
+  const key =
+    commandKey == null
+      ? ""
+      : `:${type === "custom" ? commandKey.replace(/[^a-zA-Z0-9:._-]/g, "-") : commandKey}`;
   return `${type}:${project}${key}${targetSuffix(project, worktreePath)}`;
 }
 

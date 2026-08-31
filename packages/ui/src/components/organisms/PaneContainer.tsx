@@ -44,6 +44,7 @@ interface PaneContainerProps {
   onToggleTabPin?: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onRenameSession?: (sessionId: string) => void;
   activeSessionId?: string | null;
   suppressTerminalFocus?: boolean;
   browserOpen?: boolean;
@@ -62,6 +63,7 @@ export const PaneContainer = memo(function PaneContainer({
   onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
+  onRenameSession,
   activeSessionId = null,
   suppressTerminalFocus = false,
   browserOpen = false,
@@ -410,6 +412,7 @@ export const PaneContainer = memo(function PaneContainer({
         }}
         onToggleTabPin={onToggleTabPin ?? (() => {})}
         onCloseTab={onCloseTab}
+        onRenameSession={onRenameSession}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         onNewTerminal={onNewTerminal}
         onSplitPaneHorizontal={() => layout.splitPane(node.id, "horizontal")}

@@ -44,6 +44,7 @@ interface LayoutTreeProps {
   onToggleTabPin?: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onRenameSession?: (sessionId: string) => void;
   activeSessionId: string | null;
   suppressTerminalFocus?: boolean;
   browserOpen?: boolean;
@@ -63,6 +64,7 @@ function LayoutTree({
   onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
+  onRenameSession,
   activeSessionId,
   suppressTerminalFocus = false,
   browserOpen = false,
@@ -108,6 +110,7 @@ function LayoutTree({
         onSelectTab={onSelectTab}
         onToggleTabPin={onToggleTabPin ?? (() => {})}
         onCloseTab={onCloseTab}
+        onRenameSession={onRenameSession}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         activeSessionId={activeSessionId}
         suppressTerminalFocus={suppressTerminalFocus}
@@ -142,6 +145,7 @@ function LayoutTree({
           onSelectTab={onSelectTab}
           onToggleTabPin={onToggleTabPin}
           onCloseTab={onCloseTab}
+          onRenameSession={onRenameSession}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           activeSessionId={activeSessionId}
           suppressTerminalFocus={suppressTerminalFocus}
@@ -171,6 +175,7 @@ function LayoutTree({
           onSelectTab={onSelectTab}
           onToggleTabPin={onToggleTabPin}
           onCloseTab={onCloseTab}
+          onRenameSession={onRenameSession}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           activeSessionId={activeSessionId}
           suppressTerminalFocus={suppressTerminalFocus}
@@ -195,6 +200,7 @@ export interface SplitLayoutProps {
   onToggleTabPin?: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onRenameSession?: (sessionId: string) => void;
   activeSessionId?: string | null;
   suppressTerminalFocus?: boolean;
   browserOpen?: boolean;
@@ -239,6 +245,7 @@ export function SplitLayout({
   onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
+  onRenameSession,
   activeSessionId = null,
   suppressTerminalFocus = false,
   browserOpen = false,
@@ -323,6 +330,7 @@ export function SplitLayout({
           onSelectTab={onSelectTab}
           onToggleTabPin={onToggleTabPin}
           onCloseTab={onCloseTab}
+          onRenameSession={onRenameSession}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           activeSessionId={activeSessionId}
           suppressTerminalFocus={shouldSuppressTerminalFocus}

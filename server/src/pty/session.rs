@@ -81,6 +81,7 @@ pub struct RespawnOpts {
     pub project: Option<String>,
     /// Server-validated canonical worktree path for this session.
     pub worktree_path: Option<String>,
+    pub name: Option<String>,
     pub restart_policy: RestartPolicy,
     pub restart_max_retries: u32,
 }
@@ -99,14 +100,15 @@ pub struct SessionMeta {
     pub project: Option<String>,
     pub command: String,
     pub cwd: String,
-    /// Immutable server-validated target ownership, if this is a worktree
-    /// session. This survives shell `cd` changes and reconnects.
+    /// Server-validated target ownership, if this is a worktree session.
     #[serde(
         rename = "worktreePath",
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(rename = "type")]
     pub session_type: SessionType,
     pub alive: bool,
@@ -118,8 +120,6 @@ pub struct SessionMeta {
     pub last_exit_at: Option<u64>,
     pub restart_policy: RestartPolicy,
     /// The process stopped because its registered worktree target disappeared.
-    /// The metadata remains visible for buffer replay, close, or retry with the
-    /// same session ID once the target is available again.
     #[serde(
         rename = "targetUnavailable",
         default,
@@ -134,9 +134,10 @@ impl SessionMeta {
         project: Option<String>,
         command: String,
         cwd: String,
+        name: Option<String>,
         restart_policy: RestartPolicy,
     ) -> Self {
-        Self::new_with_target(id, project, command, cwd, None, restart_policy)
+        Self::new_with_target(id, project, command, cwd, None, name, restart_policy)
     }
 
     pub fn new_with_target(
@@ -145,6 +146,7 @@ impl SessionMeta {
         command: String,
         cwd: String,
         worktree_path: Option<String>,
+        name: Option<String>,
         restart_policy: RestartPolicy,
     ) -> Self {
         Self {
@@ -155,6 +157,7 @@ impl SessionMeta {
             command,
             cwd,
             worktree_path,
+            name,
             alive: true,
             exit_code: None,
             started_at: now_ms(),

@@ -789,7 +789,9 @@ describe("migrated context-menu consumers", () => {
     );
     await act(async () => undefined);
 
-    const item = document.querySelector<HTMLElement>('[role="menuitem"]');
+    const item = [
+      ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ].find((candidate) => candidate.textContent?.includes("Export Diagnostics"));
     expect(item?.textContent).toContain("Export Diagnostics");
     await act(async () => item?.click());
     expect(onExport).toHaveBeenCalledOnce();
