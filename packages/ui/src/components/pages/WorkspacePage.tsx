@@ -21,7 +21,7 @@ import {
   Globe2,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
 import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShell.js";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
@@ -34,6 +34,7 @@ import { BrowserDebugPanel } from "@/components/organisms/BrowserDebugPanel.js";
 import type { ChangedFileSelection } from "@/components/organisms/ChangedFilesList.js";
 import { DiagnosticsTimeWindowSelect } from "@/components/molecules/DiagnosticsTimeWindowSelect.js";
 import { TerminalDiagnosticsContextMenu } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
+import { RenameItemDialog } from "@/components/organisms/RenameItemDialog.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -74,6 +75,7 @@ import {
   type TerminalUsageMode,
 } from "@/lib/terminal-usage-mode.js";
 import { shouldRenderEmptyTerminalBrowserSurface } from "@/lib/terminal-browser-surface.js";
+import { terminalBaseLabel } from "@/lib/terminal-title.js";
 import { buildTraditionalTerminalProjectGroups } from "@/lib/traditional-terminal-projects.js";
 import {
   loadTerminalFilePanelOpen,
@@ -355,6 +357,12 @@ export default function WorkspacePage() {
     useState<DiagnosticsTimeWindowMinutes>(10);
   const [terminalDiagnosticsMenuTarget, setTerminalDiagnosticsMenuTarget] =
     useState<TerminalDiagnosticsMenuTarget | null>(null);
+  const [terminalRenameState, setTerminalRenameState] = useState<{
+    sessionId: string;
+    value: string;
+    pending: boolean;
+    error: string | null;
+  } | null>(null);
   const [terminalDiagnosticsError, setTerminalDiagnosticsError] = useState<
     string | null
   >(null);
@@ -470,6 +478,7 @@ export default function WorkspacePage() {
     }
   }, [projects, activeProject, setActiveProject]);
 
+  const queryClient = useQueryClient();
   const { state, derived, actions } = useTerminalManager(
     searchParams,
     setSearchParams,
@@ -540,8 +549,13 @@ export default function WorkspacePage() {
         sessionId,
         label:
           tab?.title?.fullText ??
-          tab?.label ??
-          (mounted ? `${mounted.project} · ${mounted.command}` : "Terminal"),
+          terminalBaseLabel(
+            sessionMap.get(sessionId)?.name ?? mounted?.name,
+            tab?.label ??
+              (mounted
+                ? `${mounted.project} · ${mounted.command}`
+                : "Terminal"),
+          ),
         ...(tab?.title ? { openTitle: tab.title } : {}),
         mounted: Boolean(mounted),
         registered: registeredTerminalIds.has(sessionId),
@@ -650,13 +664,13 @@ export default function WorkspacePage() {
     : undefined;
   const isTerminalDiagnosticsMenuTargetAvailable =
     terminalDiagnosticsMenuTarget !== null &&
-    (terminalDiagnosticsTargetSession
-      ? terminalDiagnosticsTargetSession.alive
-      : mountedSessions.some(
+    Boolean(
+      terminalDiagnosticsTargetSession ??
+        mountedSessions.find(
           (session) =>
             session.sessionId === terminalDiagnosticsMenuTarget.sessionId,
-        ));
-
+        ),
+    );
   const openTerminalDiagnosticsMenu = useCallback(
     (sessionId: string, x: number, y: number) => {
       setTerminalDiagnosticsError(null);
@@ -664,6 +678,41 @@ export default function WorkspacePage() {
     },
     [],
   );
+  const openTerminalRenameDialog = useCallback(
+    (sessionId: string) => {
+      const session = sessionMap.get(sessionId);
+      setTerminalRenameState({
+        sessionId,
+        value: session?.name ?? "",
+        pending: false,
+        error: null,
+      });
+      setTerminalDiagnosticsMenuTarget(null);
+    },
+    [sessionMap],
+  );
+  const submitTerminalRename = useCallback(async () => {
+    if (!terminalRenameState || terminalRenameState.pending) return;
+    const { sessionId, value } = terminalRenameState;
+    setTerminalRenameState((state) =>
+      state ? { ...state, pending: true } : state,
+    );
+    try {
+      await api.terminal.rename(sessionId, value);
+      await queryClient.invalidateQueries({ queryKey: ["terminal-sessions"] });
+      setTerminalRenameState(null);
+    } catch (error) {
+      setTerminalRenameState((state) =>
+        state
+          ? {
+              ...state,
+              pending: false,
+              error: error instanceof Error ? error.message : String(error),
+            }
+          : state,
+      );
+    }
+  }, [queryClient, terminalRenameState]);
 
   const handleExportTerminalDiagnostics = useCallback(async () => {
     const target = terminalDiagnosticsMenuTarget;
@@ -1527,6 +1576,7 @@ export default function WorkspacePage() {
                 onSelectTab={handleSelectTab}
                 onToggleTabPin={handleToggleTabPin}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
+                onRenameSession={openTerminalRenameDialog}
                 onOpenTunnelInBrowser={handleOpenTunnelInBrowser}
                 browserOpen={browserOpen && !isCompactWorkspace}
                 renderBrowserContent={(onClose) =>
@@ -1552,6 +1602,7 @@ export default function WorkspacePage() {
                 onToggleTabPin={handleToggleTabPin}
                 onCloseTab={handleCloseTab}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
+                onRenameSession={openTerminalRenameDialog}
                 onVisibleSessionIdsChange={handleVisibleSplitSessionsChange}
                 browserOpen={browserOpen && !isCompactWorkspace}
                 renderBrowserContent={(onClose) =>
@@ -1662,6 +1713,7 @@ export default function WorkspacePage() {
       toggleTerminalFilePanel,
       diagnosticsWindowMinutes,
       openTerminalDiagnosticsMenu,
+      openTerminalRenameDialog,
       webglEnabledSessionIds,
       handleVisibleSplitSessionsChange,
       renderBrowserContent,
@@ -1696,6 +1748,7 @@ export default function WorkspacePage() {
             onKillFreeTerminal={handleKillTerminal}
             onRemoveFreeTerminal={handleRemoveFreeTerminal}
             onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
+            onRenameSession={openTerminalRenameDialog}
             onUpdateProfile={handleUpdateProfile}
             onUpdateCustomCommand={handleUpdateCustomCommand}
           />
@@ -1720,6 +1773,7 @@ export default function WorkspacePage() {
       handleOpenFreeTerminalSavePrompt,
       handleUpdateProfile,
       handleUpdateCustomCommand,
+      openTerminalRenameDialog,
       handleRemoveFreeTerminal,
     ],
   );
@@ -2247,11 +2301,32 @@ export default function WorkspacePage() {
             x={terminalDiagnosticsMenuTarget.x}
             y={terminalDiagnosticsMenuTarget.y}
             isPending={exportDiagnostics.isPending}
+            isAlive={terminalDiagnosticsTargetSession?.alive ?? false}
             error={terminalDiagnosticsError}
             onExport={() => void handleExportTerminalDiagnostics()}
+            onRename={() =>
+              openTerminalRenameDialog(terminalDiagnosticsMenuTarget.sessionId)
+            }
             onClose={closeTerminalDiagnosticsMenu}
           />
         )}
+      <RenameItemDialog
+        open={terminalRenameState !== null}
+        value={terminalRenameState?.value ?? ""}
+        onValueChange={(value) =>
+          setTerminalRenameState((state) =>
+            state ? { ...state, value, error: null } : state,
+          )
+        }
+        onConfirm={submitTerminalRename}
+        onCancel={() => setTerminalRenameState(null)}
+        pending={terminalRenameState?.pending ?? false}
+        error={terminalRenameState?.error ?? undefined}
+        title="Rename terminal"
+        description="Enter a custom terminal name. Leave blank to restore the default label."
+        submitLabel="Rename"
+        allowEmpty
+      />
 
       {/* Floating search dialog */}
       {searchOpen && projectName && (

@@ -50,6 +50,8 @@ export function isProjectTargetError(
 }
 
 export interface SessionInfo {
+  /** Optional server-owned runtime label. */
+  name?: string;
   id: string;
   /** Opaque concrete PTY identity used to reject stale push events. */
   incarnation?: number;
@@ -1624,9 +1626,12 @@ export const api = {
       cols: number;
       rows: number;
       worktreePath?: string;
+      name?: string | null;
     }) => getTransport().invoke<SessionInfo>("terminal:create", opts),
     kill: (id: string) => getTransport().invoke<void>("terminal:kill", id),
     remove: (id: string) => getTransport().invoke<void>("terminal:remove", id),
+    rename: (id: string, name: string | null) =>
+      getTransport().invoke<SessionInfo>("terminal:rename", { id, name }),
     list: () => getTransport().invoke<SessionInfo[]>("terminal:list"),
     listDetailed: () =>
       getTransport().invoke<SessionInfo[]>("terminal:listDetailed"),

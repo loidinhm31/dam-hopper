@@ -57,7 +57,7 @@ describe("TerminalDiagnosticsContextMenu", () => {
     );
   });
 
-  it("renders pending and error feedback without exposing another action", async () => {
+  it("renders rename before pending export feedback", async () => {
     await mount(
       <TerminalDiagnosticsContextMenu
         x={40}
@@ -65,18 +65,17 @@ describe("TerminalDiagnosticsContextMenu", () => {
         isPending
         error="Export unavailable"
         onExport={vi.fn()}
+        onRename={vi.fn()}
         onClose={vi.fn()}
       />,
     );
 
+    expect(document.body.textContent).toContain("Rename");
     expect(document.body.textContent).toContain("Exporting…");
     expect(document.body.textContent).toContain("Export unavailable");
-    expect(
-      document
-        .querySelector('[role="menuitem"]')
-        ?.hasAttribute("data-disabled"),
-    ).toBe(true);
-    expect(document.querySelectorAll('[role="menuitem"]')).toHaveLength(1);
+    const menuItems = document.querySelectorAll('[role="menuitem"]');
+    expect(menuItems).toHaveLength(2);
+    expect(menuItems[1]?.hasAttribute("data-disabled")).toBe(true);
   });
 
   it("opens through its synthetic pointer trigger without an unanchored warning", async () => {

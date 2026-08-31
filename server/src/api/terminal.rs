@@ -39,6 +39,33 @@ pub struct CreateSessionBody {
     /// Optional registered worktree target. The server resolves and records
     /// the canonical target before spawning the PTY.
     pub worktree_path: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct RenameSessionBody {
+    pub name: Option<String>,
+}
+
+fn normalize_terminal_name(name: Option<String>) -> Result<Option<String>, AppError> {
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    if name.chars().count() > 64 {
+        return Err(AppError::InvalidInput(
+            "Terminal name must be 64 characters or fewer".to_string(),
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(AppError::InvalidInput(
+            "Terminal name must not contain control characters".to_string(),
+        ));
+    }
+    Ok(Some(name))
 }
 
 fn default_cols() -> u16 {
@@ -64,6 +91,7 @@ pub async fn create_session(
         rows,
         project,
         worktree_path,
+        name,
     } = body;
     let target = resolve_terminal_target(&state, project.as_deref(), worktree_path).await?;
     let cwd = resolve_terminal_cwd(&state, target.as_ref(), requested_cwd).await?;
@@ -84,6 +112,7 @@ pub async fn create_session(
         rows,
         project,
         worktree_path: canonical_worktree_path,
+        name: normalize_terminal_name(name)?,
         restart_policy,
         restart_max_retries,
     }) {
@@ -242,6 +271,18 @@ pub async fn list_detailed(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.pty_manager.list_detailed()).into_response()
 }
 
+pub async fn rename_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<RenameSessionBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let name = normalize_terminal_name(body.name).map_err(ApiError::from_app)?;
+    let meta = state
+        .pty_manager
+        .rename(&id, name)
+        .map_err(ApiError::from_app)?;
+    Ok(Json(meta))
+}
 // ---------------------------------------------------------------------------
 // GET /api/terminal/:id/buffer
 // ---------------------------------------------------------------------------
@@ -357,6 +398,43 @@ fn load_project_env_file(
             "Failed to read env_file for project '{project_name}': {} ({err})",
             env_path.display()
         )))),
+    }
+}
+
+#[cfg(test)]
+mod terminal_name_tests {
+    use super::normalize_terminal_name;
+    use crate::error::AppError;
+
+    #[test]
+    fn terminal_name_normalizes_trimmed_and_blank_values() {
+        assert_eq!(
+            normalize_terminal_name(Some("  Release shell \t".to_string())).unwrap(),
+            Some("Release shell".to_string())
+        );
+        assert_eq!(normalize_terminal_name(None).unwrap(), None);
+        assert_eq!(
+            normalize_terminal_name(Some(" \n\t ".to_string())).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn terminal_name_rejects_control_characters_and_long_values() {
+        let control_error =
+            normalize_terminal_name(Some("Release\u{0007}shell".to_string())).unwrap_err();
+        assert!(matches!(
+            control_error,
+            AppError::InvalidInput(message)
+                if message == "Terminal name must not contain control characters"
+        ));
+
+        let length_error = normalize_terminal_name(Some("x".repeat(65))).unwrap_err();
+        assert!(matches!(
+            length_error,
+            AppError::InvalidInput(message)
+                if message == "Terminal name must be 64 characters or fewer"
+        ));
     }
 }
 

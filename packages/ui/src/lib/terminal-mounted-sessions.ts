@@ -26,6 +26,7 @@ export function upsertMountedSession(
     current.project === nextSession.project &&
     current.command === nextSession.command &&
     current.cwd === nextSession.cwd &&
+    current.name === nextSession.name &&
     current.worktreePath === nextSession.worktreePath
   ) {
     return sessions;
