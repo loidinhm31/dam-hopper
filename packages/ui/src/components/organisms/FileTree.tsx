@@ -40,6 +40,10 @@ import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useEditorStore } from "@/stores/editor.js";
 import {
+  explorerTreeScopeKey,
+  useExplorerTreeStore,
+} from "@/stores/explorer-tree.js";
+import {
   useExplorerLanguageScan,
   useGitDiff,
   useProject,
@@ -327,10 +331,13 @@ export function FileTree({
 }: FileTreeProps) {
   const worktreePath = target?.worktreePath;
   const targetProject = target?.project ?? project;
-  const requestTarget =
-    worktreePath == null
-      ? targetProject
-      : { project: targetProject, worktreePath };
+  const requestTarget = useMemo(
+    () =>
+      worktreePath == null
+        ? targetProject
+        : { project: targetProject, worktreePath },
+    [targetProject, worktreePath],
+  );
   const {
     explorerShowHidden: showHidden,
     explorerLanguageFilter: configuredLanguageFilter,
@@ -377,9 +384,14 @@ export function FileTree({
   const liveTreeCommitVersionRef = useRef(0);
   const liveTreeCommitWaitersRef = useRef<Set<() => void>>(new Set());
 
-  // Track dirs the user has expanded so we can auto-reload them after a refetch
-  // wipes children back to null.
-  const expandedDirsRef = useRef<Set<string>>(new Set());
+  const scopeKey = useMemo(
+    () => explorerTreeScopeKey(requestTarget),
+    [requestTarget],
+  );
+  const openMap = useExplorerTreeStore((s) => s.openMapByTarget[scopeKey]);
+  const setFolderOpen = useExplorerTreeStore((s) => s.setFolderOpen);
+  const prunePath = useExplorerTreeStore((s) => s.prunePath);
+  const renamePath = useExplorerTreeStore((s) => s.renamePath);
 
   // Parent layout effects run after Arborist has committed its new rows. Lazy
   // reveal waits on this boundary before invoking TreeApi for loaded children.
@@ -401,14 +413,21 @@ export function FileTree({
 
   useEffect(() => {
     if (!data || isLanguageMode) return;
-    const unloaded = collectUnloadedExpanded(
-      data.nodes,
-      expandedDirsRef.current,
+    const targetOpenMap =
+      useExplorerTreeStore.getState().openMapByTarget[scopeKey] ?? {};
+    const openIds = new Set(
+      Object.entries(targetOpenMap)
+        .filter(([, isOpen]) => Boolean(isOpen))
+        .map(([id]) => id),
     );
+    if (openIds.size === 0) return;
+    const unloaded = collectUnloadedExpanded(data.nodes, openIds);
     for (const id of unloaded) {
-      void loadChildren(id);
+      void loadChildren(id).catch(() => {
+        prunePath(scopeKey, id);
+      });
     }
-  }, [data, isLanguageMode, loadChildren]);
+  }, [data, isLanguageMode, loadChildren, prunePath, scopeKey]);
 
   const clearTreeSelection = useCallback(() => {
     const tree = treeRef.current as
@@ -536,8 +555,9 @@ export function FileTree({
       onFileOpen?.(node.data);
     } else {
       if (!isLanguageMode && node.data.children === null) {
-        expandedDirsRef.current.add(node.data.id);
-        void loadChildren(node.data.id);
+        void loadChildren(node.data.id).catch(() => {
+          prunePath(scopeKey, node.data.id);
+        });
       }
       node.toggle();
     }
@@ -634,7 +654,11 @@ export function FileTree({
     setRenaming(true);
     try {
       const result = await ops.rename(rename.path, newPath);
-      if (!result.ok) setOpError(result.error ?? "Rename failed");
+      if (!result.ok) {
+        setOpError(result.error ?? "Rename failed");
+      } else {
+        renamePath(scopeKey, rename.path, newPath);
+      }
     } catch (error) {
       setOpError(error instanceof Error ? error.message : "Rename failed");
     } finally {
@@ -684,8 +708,11 @@ export function FileTree({
         for (const node of deleteState.nodes) {
           try {
             const result = await ops.deleteEntry(node.id);
-            if (!result.ok)
+            if (!result.ok) {
               failures.push(`${node.name}: ${result.error ?? "Delete failed"}`);
+            } else {
+              prunePath(scopeKey, node.id);
+            }
           } catch (error) {
             failures.push(
               `${node.name}: ${error instanceof Error ? error.message : "Delete failed"}`,
@@ -770,8 +797,11 @@ export function FileTree({
       if (srcPath === newPath) continue;
       try {
         const result = await ops.move(srcPath, newPath);
-        if (!result.ok)
+        if (!result.ok) {
           failures.push(`${name}: ${result.error ?? "Move failed"}`);
+        } else {
+          renamePath(scopeKey, srcPath, newPath);
+        }
       } catch (error) {
         failures.push(
           `${name}: ${error instanceof Error ? error.message : "Move failed"}`,
@@ -1029,6 +1059,23 @@ export function FileTree({
               data={renderedNodes}
               childrenAccessor={childrenAccessor}
               openByDefault={false}
+              initialOpenState={isLanguageMode ? undefined : openMap}
+              onToggle={(id) => {
+                if (isLanguageMode || isLoadingSentinel(id)) return;
+                const isOpen = treeRef.current?.isOpen(id) ?? false;
+                setFolderOpen(scopeKey, id, isOpen);
+                if (isOpen) {
+                  const node = treeRef.current?.get(id);
+                  if (
+                    node?.data.kind === "dir" &&
+                    node.data.children === null
+                  ) {
+                    void loadChildren(id).catch(() => {
+                      prunePath(scopeKey, id);
+                    });
+                  }
+                }
+              }}
               onActivate={handleActivate}
               onMove={isLanguageMode ? undefined : handleMove}
               disableDrag={(node) =>
