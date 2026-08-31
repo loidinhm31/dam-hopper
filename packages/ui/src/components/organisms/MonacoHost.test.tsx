@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MonacoHost } from "./MonacoHost.js";
 
 const mockPolicy = vi.hoisted(() => ({ enabled: false }));
@@ -101,5 +103,149 @@ describe("MonacoHost Android policy", () => {
     surface.remove();
     vi.unstubAllGlobals();
     mockPolicy.enabled = false;
+  });
+});
+
+describe("MonacoHost viewState lifecycle persistence", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("calls onViewStateChange with viewState and tabKey on editor blur", async () => {
+    const onViewStateChange = vi.fn();
+    const mockViewState = { cursorState: [{ position: { lineNumber: 10, column: 1 } }] };
+    let blurHandler: (() => void) | undefined;
+
+    await act(async () => {
+      root.render(
+        <MonacoHost
+          tabKey="tab-blur"
+          content="code"
+          tier="normal"
+          onChange={() => {}}
+          onSave={() => {}}
+          onViewStateChange={onViewStateChange}
+        />,
+      );
+    });
+
+    const mockEditor = {
+      getDomNode: () => document.createElement("div"),
+      restoreViewState: vi.fn(),
+      saveViewState: vi.fn(() => mockViewState),
+      updateOptions: vi.fn(),
+      addCommand: vi.fn(),
+      onMouseDown: vi.fn(),
+      onDidBlurEditorWidget: (cb: () => void) => {
+        blurHandler = cb;
+      },
+      deltaDecorations: vi.fn(() => []),
+    };
+
+    lastOnMount?.(mockEditor, { KeyMod: { CtrlCmd: 1 }, KeyCode: { KeyS: 1 } });
+
+    blurHandler?.();
+    expect(onViewStateChange).toHaveBeenCalledWith(mockViewState, "tab-blur");
+  });
+
+  it("persists previous tab's viewState when tabKey changes", async () => {
+    const onViewStateChange = vi.fn();
+    const mockViewState1 = { cursorState: [{ position: { lineNumber: 50, column: 5 } }] };
+
+    await act(async () => {
+      root.render(
+        <MonacoHost
+          tabKey="tab-1"
+          content="file 1"
+          tier="normal"
+          onChange={() => {}}
+          onSave={() => {}}
+          onViewStateChange={onViewStateChange}
+        />,
+      );
+    });
+
+    const mockEditor = {
+      getDomNode: () => document.createElement("div"),
+      restoreViewState: vi.fn(),
+      saveViewState: vi.fn(() => mockViewState1),
+      updateOptions: vi.fn(),
+      addCommand: vi.fn(),
+      onMouseDown: vi.fn(),
+      onDidBlurEditorWidget: vi.fn(),
+      deltaDecorations: vi.fn(() => []),
+    };
+
+    lastOnMount?.(mockEditor, { KeyMod: { CtrlCmd: 1 }, KeyCode: { KeyS: 1 } });
+
+    await act(async () => {
+      root.render(
+        <MonacoHost
+          tabKey="tab-2"
+          content="file 2"
+          tier="normal"
+          onChange={() => {}}
+          onSave={() => {}}
+          onViewStateChange={onViewStateChange}
+        />,
+      );
+    });
+
+    expect(onViewStateChange).toHaveBeenCalledWith(mockViewState1, "tab-1");
+  });
+
+  it("persists viewState on component unmount", async () => {
+    const onViewStateChange = vi.fn();
+    const mockViewState = { cursorState: [{ position: { lineNumber: 99, column: 1 } }] };
+
+    await act(async () => {
+      root.render(
+        <MonacoHost
+          tabKey="tab-unmount"
+          content="unmount test"
+          tier="normal"
+          onChange={() => {}}
+          onSave={() => {}}
+          onViewStateChange={onViewStateChange}
+        />,
+      );
+    });
+
+    const mockEditor = {
+      getDomNode: () => document.createElement("div"),
+      restoreViewState: vi.fn(),
+      saveViewState: vi.fn(() => mockViewState),
+      updateOptions: vi.fn(),
+      addCommand: vi.fn(),
+      onMouseDown: vi.fn(),
+      onDidBlurEditorWidget: vi.fn(),
+      deltaDecorations: vi.fn(() => []),
+    };
+
+    lastOnMount?.(mockEditor, { KeyMod: { CtrlCmd: 1 }, KeyCode: { KeyS: 1 } });
+
+    await act(async () => {
+      root.unmount();
+    });
+
+    expect(onViewStateChange).toHaveBeenCalledWith(mockViewState, "tab-unmount");
   });
 });

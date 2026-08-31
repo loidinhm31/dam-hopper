@@ -229,6 +229,7 @@ interface MigratedEditorTab {
   content: string;
   savedContent: string;
   dirty: false;
+  viewState: unknown | undefined;
   loading: false;
   saving: false;
   conflicted: false;
@@ -300,6 +301,7 @@ function persistedTab(value: unknown, keyMap: Map<string, string>): Tab | null {
   const gitRootId =
     typeof raw.gitRootId === "string" ? raw.gitRootId : undefined;
   const diffPath = typeof raw.diffPath === "string" ? raw.diffPath : undefined;
+  const viewState = asRecord(raw.viewState) ?? undefined;
   const key =
     tier === "diff"
       ? editorDiffTabKey(target, raw.path, commitHash, gitRootId, diffPath)
@@ -322,6 +324,7 @@ function persistedTab(value: unknown, keyMap: Map<string, string>): Tab | null {
     content: typeof raw.content === "string" ? raw.content : "",
     savedContent: typeof raw.savedContent === "string" ? raw.savedContent : "",
     dirty: false,
+    viewState,
     loading: false,
     saving: false,
     conflicted: false,
@@ -362,6 +365,7 @@ export function migrateEditorState(persisted: unknown): {
         content: normalized.content,
         savedContent: normalized.savedContent,
         dirty: false as const,
+        viewState: normalized.viewState,
         loading: false as const,
         saving: false as const,
         conflicted: false as const,
@@ -1391,6 +1395,7 @@ export const useEditorStore = create<EditorState>()(
           size: t.size,
           tier: t.tier,
           mime: t.mime,
+          viewState: t.viewState,
           fileStatus: t.fileStatus,
           additions: t.additions,
           deletions: t.deletions,

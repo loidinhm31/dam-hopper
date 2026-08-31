@@ -609,3 +609,123 @@ describe("editor store video guards", () => {
     });
   });
 });
+
+describe("editor store view state persistence and hydration", () => {
+  beforeEach(resetEditorStore);
+  afterEach(resetEditorStore);
+
+  it("saveViewState updates viewState on the specified tab key", () => {
+    const tab1 = makeTab("alpha", "src/one.ts");
+    const tab2 = makeTab("alpha", "src/two.ts");
+    useEditorStore.setState({ tabs: [tab1, tab2] });
+
+    const mockViewState = {
+      cursorState: [{ position: { lineNumber: 42, column: 10 } }],
+      viewState: { scrollLeft: 0, firstPosition: { lineNumber: 35, column: 1 } },
+    };
+
+    useEditorStore.getState().saveViewState(tab1.key, mockViewState);
+
+    const tabs = useEditorStore.getState().tabs;
+    expect(tabs.find((t) => t.key === tab1.key)?.viewState).toEqual(mockViewState);
+    expect(tabs.find((t) => t.key === tab2.key)?.viewState).toBeUndefined();
+  });
+
+  it("migrateEditorState preserves viewState from persisted storage", () => {
+    const sampleViewState = {
+      cursorState: [{ position: { lineNumber: 120, column: 5 } }],
+      viewState: { scrollLeft: 0, firstPosition: { lineNumber: 110, column: 1 } },
+    };
+
+    const persisted = {
+      tabs: [
+        {
+          key: JSON.stringify(["file", "alpha", "root", "src/app.tsx"]),
+          project: "alpha",
+          path: "src/app.tsx",
+          name: "app.tsx",
+          mtime: 12345,
+          size: 678,
+          tier: "normal",
+          viewState: sampleViewState,
+        },
+      ],
+      activeKeys: {
+        "alpha::root": JSON.stringify(["file", "alpha", "root", "src/app.tsx"]),
+      },
+    };
+
+    const migrated = migrateEditorState(persisted);
+    expect(migrated.tabs).toHaveLength(1);
+    expect(migrated.tabs[0].viewState).toEqual(sampleViewState);
+    expect(migrated.tabs[0].hydrated).toBe(true);
+  });
+
+  it("migrateEditorState safely handles missing or non-object viewState", () => {
+    const persisted = {
+      tabs: [
+        {
+          key: JSON.stringify(["file", "alpha", "root", "src/no-vs.ts"]),
+          project: "alpha",
+          path: "src/no-vs.ts",
+          tier: "normal",
+        },
+        {
+          key: JSON.stringify(["file", "alpha", "root", "src/invalid-vs.ts"]),
+          project: "alpha",
+          path: "src/invalid-vs.ts",
+          tier: "normal",
+          viewState: "not-an-object",
+        },
+        {
+          key: JSON.stringify(["file", "alpha", "root", "src/null-vs.ts"]),
+          project: "alpha",
+          path: "src/null-vs.ts",
+          tier: "normal",
+          viewState: null,
+        },
+      ],
+      activeKeys: {},
+    };
+
+    const migrated = migrateEditorState(persisted);
+    expect(migrated.tabs).toHaveLength(3);
+    expect(migrated.tabs[0].viewState).toBeUndefined();
+    expect(migrated.tabs[1].viewState).toBeUndefined();
+    expect(migrated.tabs[2].viewState).toBeUndefined();
+  });
+
+  it("retains viewState after loadContent executes on a hydrated tab", async () => {
+    const sampleViewState = {
+      cursorState: [{ position: { lineNumber: 88, column: 1 } }],
+      viewState: { scrollLeft: 0, firstPosition: { lineNumber: 80, column: 1 } },
+    };
+
+    const tab: Tab = {
+      ...makeTab("alpha", "src/main.ts"),
+      hydrated: true,
+      viewState: sampleViewState,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("console.log('hello');"),
+      mime: "text/typescript",
+      mtime: 2,
+      size: 21,
+    } as SuccessfulRead);
+
+    await useEditorStore.getState().loadContent(tab.key);
+
+    const updatedTab = useEditorStore.getState().tabs[0];
+    expect(updatedTab.hydrated).toBe(false);
+    expect(updatedTab.content).toBe("console.log('hello');");
+    expect(updatedTab.viewState).toEqual(sampleViewState);
+  });
+});

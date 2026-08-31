@@ -4,8 +4,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Preserve Explorer Tree Expansion & Editor View Scroll Position (2026-08-31)
 
-- **Phase 01 — [COMPLETED 2026-08-31]**: persistent Explorer tree expansion store `useExplorerTreeStore` delivered with target scope isolation (`${project}::${targetKey}`), automatic cascading child loading on remount, folder prune/rename synchronization on deletion/move/rename, and unit test coverage.
-- Focused validation: full UI Vitest (213 files / 1,419 tests passed), UI TypeScript build passed. [Plan](../plans/260831-1802-preserve-explorer-tree-and-editor-scroll/plan.md).
+- **Phases 01–03 — [COMPLETED 2026-08-31]**:
+  - **Phase 01**: persistent Explorer tree expansion store `useExplorerTreeStore` delivered with target scope isolation (`${project}::${targetKey}`), automatic cascading child loading on remount, folder prune/rename synchronization on deletion/move/rename, and unit test coverage.
+  - **Phase 02**: editor Monaco `viewState` (cursor position, column, scroll state, and code folds) persisted to `dam-hopper:editor-state` across tab switching, component unmounting, and browser page reloads; race-safe `tabKey` scoping on `onViewStateChange` prevents tab switch cross-contamination.
+  - **Phase 03**: end-to-end integration and regression validation across IDE workspace, compact mobile layout, and floating terminal panels; verified preserved tree expansion, cascading child folder loading, and editor line position retention across tab switches and reloads.
+- Validation: full UI Vitest (213 files / 1,422 tests passed), UI TypeScript build passed. [Plan](../plans/260831-1802-preserve-explorer-tree-and-editor-scroll/plan.md).
 
 ### Runtime Terminal Custom-Name Persistence (2026-08-31)
 
@@ -411,6 +414,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-08-31:** Completed Preserve Explorer Tree Expansion & Editor View Scroll Position Phase 03: Integration and Verification (Verified Explorer tree expansion persistence across IDE/mobile/terminal surfaces, editor viewState preservation on unmount/tab-switch/reload, zero test regressions across 213 files / 1,422 tests, UI TypeScript build passed).
+
+- **2026-08-31:** Completed Preserve Explorer Tree Expansion & Editor View Scroll Position Phase 02: Editor ViewState Persistence (Monaco viewState persistence to `dam-hopper:editor-state`, unmount/pre-tab-switch key-scoped viewState save, hydration & migration support, full UI suite passed).
 
 - **2026-08-31:** Completed Preserve Explorer Tree Expansion & Editor View Scroll Position Phase 01: Explorer Tree Expansion Store (Zustand persistent store, target scoping, cascading child load on remount, rename/prune synchronization, full UI suite passed).
 
