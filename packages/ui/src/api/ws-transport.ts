@@ -525,6 +525,14 @@ function channelToEndpoint(
         method: "DELETE",
         url: `/api/terminal/${encodeURIComponent(data as string)}/remove`,
       };
+    case "terminal:rename": {
+      const d = data as { id: string; name: string | null };
+      return {
+        method: "PATCH",
+        url: `/api/terminal/${encodeURIComponent(d.id)}`,
+        body: { name: d.name },
+      };
+    }
 
     // Health
     case "health:get":

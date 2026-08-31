@@ -185,7 +185,7 @@ pub async fn switch_workspace(
     let path = std::path::PathBuf::from(&body.path);
     let cfg = load_config_from_workspace_or_file(&path).map_err(ApiError::from_app)?;
 
-    state.pty_manager.dispose();
+    state.pty_manager.dispose().map_err(ApiError::from_app)?;
 
     let _workspace_context = state.workspace_context_guard.write().await;
     state.media_tickets.revoke_all();

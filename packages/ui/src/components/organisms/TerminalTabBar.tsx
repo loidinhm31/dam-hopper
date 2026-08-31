@@ -34,6 +34,7 @@ interface Props {
   onSavePromptChange?: (name: string) => void;
   onSavePromptSubmit?: () => void;
   onSavePromptCancel?: () => void;
+  onRenameSession?: (sessionId: string) => void;
 }
 
 export function TerminalTabBar({
@@ -46,6 +47,7 @@ export function TerminalTabBar({
   onSavePromptChange,
   onSavePromptSubmit,
   onSavePromptCancel,
+  onRenameSession,
 }: Props) {
   const saveInputRef = useRef<HTMLInputElement>(null);
   const { isAndroidChromeNativeInputSuppressed } =
@@ -100,10 +102,15 @@ export function TerminalTabBar({
                 sessionId={tab.sessionId}
                 alive={tab.session?.alive}
               />
-              <TerminalTitleText
-                title={tab.title}
-                className="min-w-0 flex-1 font-mono"
-              />
+              <span
+                onDoubleClick={() => onRenameSession?.(tab.sessionId)}
+                className="min-w-0 flex-1"
+              >
+                <TerminalTitleText
+                  title={tab.title}
+                  className="font-mono"
+                />
+              </span>
               <button
                 type="button"
                 aria-label="Close terminal"
