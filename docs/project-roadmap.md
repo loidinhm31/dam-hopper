@@ -2,6 +2,22 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Traditional Terminal Search Focus and Floating Scroll Controls (2026-08-31)
+
+- **Bug fix — [COMPLETED 2026-08-31; final review found no issues]**:
+  Traditional-mode Global Search keeps focus through callback-only pane rerenders;
+  semantic pane/session focus and native-input suppression remain intact.
+  Enabled `TerminalScrollButtons` render only in the active Traditional pane
+  above `MobileTerminalAccessoryBar` with the Runtime-compatible accessory-rail
+  contract; inactive panes and Browser remain excluded. Runtime source and
+  behavior remain unchanged.
+- Focused validation passed: UI TypeScript build, focused unit tests (2 files/5
+  tests), focused Chromium tests (2 files/8 tests), and actual-app smoke
+  confirming three-character search focus retention, scroll trigger/group
+  placement above keyboard controls, no xterm focus on scroll activation, and
+  Runtime contrast. No broad repository-suite or production/cross-platform
+  release validation is claimed. [Plan](../plans/260831-0629-traditional-terminal-search-scroll-fix/plan.md).
+
 ### Traditional Terminal Projects Panel Selection Fallback (2026-08-31)
 
 - **Bug fix — [COMPLETED 2026-08-31; review approved 8.5/10]**: Traditional mode now supplies a same-project fallback after closing an active terminal; Runtime global-last behavior remains unchanged.
