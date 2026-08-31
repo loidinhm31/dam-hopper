@@ -1,7 +1,8 @@
 ---
 title: "Preserve Explorer Tree Expansion & Editor View Scroll Position"
 description: "Persist expanded Explorer directory tree across unmounts/reloads and ensure editor line position/viewState is preserved"
-status: in_progress
+status: complete
+completed: 2026-08-31
 priority: P2
 effort: 4h
 branch: develop
@@ -19,8 +20,8 @@ Preserve the expanded directory tree in the Explorer panel across sidebar tool s
 | # | Phase | Status | Effort | Link |
 |---|-------|--------|--------|------|
 | 1 | Explorer Tree Expansion Store | Complete (2026-08-31) | 2h | [phase-01](./phase-01-explorer-tree-expansion-store.md) |
-| 2 | Editor ViewState Persistence | Pending | 1h | [phase-02](./phase-02-editor-viewstate-persistence.md) |
-| 3 | Integration & Verification | Pending | 1h | [phase-03](./phase-03-integration-and-verification.md) |
+| 2 | Editor ViewState Persistence | Complete (2026-08-31) | 1h | [phase-02](./phase-02-editor-viewstate-persistence.md) |
+| 3 | Integration & Verification | Complete (2026-08-31) | 1h | [phase-03](./phase-03-integration-and-verification.md) |
 
 ## Dependencies
 - `react-arborist` (`Tree`, `initialOpenState`, `onToggle`)

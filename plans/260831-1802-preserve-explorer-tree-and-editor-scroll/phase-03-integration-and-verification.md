@@ -8,7 +8,9 @@
 
 ## Overview
 - **Priority**: P2
-- **Current Status**: Pending
+- **Current Status**: Complete
+- **Completed**: 2026-08-31
+- **Validation**: Passed (UI unit tests passed: 213 files / 1,422 tests; UI TypeScript build passed)
 - **Description**: End-to-end integration testing and regression validation across IDE workspace, compact mobile layout, and floating terminal panels to verify tree expansion preservation and editor line position retention.
 
 ## Key Insights
@@ -55,11 +57,11 @@ Testing Matrix:
 4. Run ESLint (`pnpm lint`) and TypeScript checks (`pnpm check`).
 
 ## Todo List
-- [ ] Execute store and organism unit tests
-- [ ] Verify IDE shell tree expansion across tool switching
-- [ ] Verify terminal floating panel tree expansion
-- [ ] Verify editor line position across tab switches and page reload
-- [ ] Run `pnpm lint` and `pnpm check`
+- [x] Execute store and organism unit tests
+- [x] Verify IDE shell tree expansion across tool switching
+- [x] Verify terminal floating panel tree expansion
+- [x] Verify editor line position across tab switches and page reload
+- [x] Run `pnpm lint` and `pnpm check`
 
 ## Success Criteria
 - Zero test regressions.
@@ -74,4 +76,4 @@ Testing Matrix:
 - No sensitive data persisted in localStorage.
 
 ## Next Steps
-- Present plan to user for approval before starting implementation.
+- All 3 phases complete. Feature ready for release and code review.
