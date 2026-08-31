@@ -453,7 +453,9 @@ export function EditorTabs({
                 readOnly={!activeTab.targetAvailable}
                 onChange={(val) => setContent(activeTab.key, val)}
                 onSave={() => void handleSave(activeTab.key)}
-                onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
+                onViewStateChange={(vs, key) =>
+                  saveViewState(key ?? activeTab.key, vs)
+                }
                 lineChanges={activeLineChanges}
                 onGitIndicatorClick={openActiveDiff}
               />
@@ -477,7 +479,9 @@ export function EditorTabs({
                 readOnly={!activeTab.targetAvailable}
                 onChange={(val) => setContent(activeTab.key, val)}
                 onSave={() => void handleSave(activeTab.key)}
-                onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
+                onViewStateChange={(vs, key) =>
+                  saveViewState(key ?? activeTab.key, vs)
+                }
                 onEditorReady={setActiveEditor}
                 lineChanges={activeLineChanges}
                 onGitIndicatorClick={openActiveDiff}
