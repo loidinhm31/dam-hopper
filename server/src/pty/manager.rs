@@ -417,6 +417,7 @@ pub struct PtyCreateOpts {
     pub rows: u16,
     pub project: Option<String>,
     pub worktree_path: Option<String>,
+    pub name: Option<String>,
     pub restart_policy: RestartPolicy,
     pub restart_max_retries: u32,
 }
@@ -434,6 +435,7 @@ impl PtyCreateOpts {
             rows: self.rows,
             project: self.project.clone(),
             worktree_path: self.worktree_path.clone(),
+            name: self.name.clone(),
             restart_policy: self.restart_policy,
             restart_max_retries: self.restart_max_retries,
         }
@@ -686,6 +688,18 @@ impl Inner {
             && self.replacement_is_current(id, replacement_incarnation)
     }
 
+    fn prune_killed_markers(&mut self) {
+        let known_ids = self
+            .live
+            .keys()
+            .chain(self.dead.keys())
+            .chain(self.failed_replacements.keys())
+            .chain(self.pending_replacements.keys())
+            .cloned()
+            .collect::<HashSet<_>>();
+        self.killed.retain(|id| known_ids.contains(id));
+    }
+
     fn advance_past(&mut self, persisted_max: Option<u64>) {
         if let Some(maximum) = persisted_max {
             self.next_incarnation = self
@@ -693,6 +707,9 @@ impl Inner {
                 .max(maximum.saturating_add(1).min(i64::MAX as u64));
         }
     }
+}
+fn expired_failed_replacement_is_cleanup_candidate(failed: &FailedReplacement) -> bool {
+    !failed.meta.target_unavailable && failed.created_at.elapsed() >= DEAD_SESSION_TTL
 }
 
 /// Serializes reader events against ID reuse. A reader from an older
@@ -1040,8 +1057,10 @@ impl PtySessionManager {
             opts.command.clone(),
             opts.cwd.clone(),
             opts.worktree_path.clone(),
+            None,
             opts.restart_policy,
         );
+        failure_meta.name = opts.name.clone();
         failure_meta.incarnation = incarnation;
         let failure_persistence = FailedReplacementPersistence::from(&opts);
 
@@ -1572,40 +1591,87 @@ impl PtySessionManager {
         Ok(())
     }
 
-    /// Kill + immediately evict all metadata (no 60s TTL).
+    /// Kill + immediately evict all metadata (no 60s TTL), after durable removal.
     pub fn remove(&self, id: &str) -> Result<Option<u64>, AppError> {
+        self.remove_with_expected(id, None)
+    }
+
+    fn remove_with_expected(
+        &self,
+        id: &str,
+        expected_incarnation: Option<u64>,
+    ) -> Result<Option<u64>, AppError> {
         let _persistence_guard = self.persistence_gate.lock().unwrap();
-        let mut inner = self.inner.lock().unwrap();
-        // Allocate a removal watermark after any in-flight replacement. The
-        // persistence worker uses it to reject a late SessionCreated from the
-        // replacement that the user just removed, while allowing a genuinely
-        // later create to persist normally.
-        let removal_incarnation = inner.allocate_incarnation();
-        let removed_incarnation = inner
-            .live
-            .get(id)
-            .map(|session| session.incarnation)
-            .or_else(|| inner.dead.get(id).map(|session| session.incarnation));
-        inner.pending_replacements.remove(id);
-        inner.failed_replacements.remove(id);
-        // Mark as killed so reader thread won't restart.
-        inner.killed.insert(id.to_string());
-        // Terminate live session (if any) and record whether it was alive.
-        let was_live = if let Some(session) = inner.live.remove(id) {
-            session.terminate();
-            true
-        } else {
-            false
+        let (removal_incarnation, removed_incarnation) = {
+            let mut inner = self.inner.lock().unwrap();
+            let removal_incarnation = inner.allocate_incarnation();
+            let removed_incarnation = inner
+                .live
+                .get(id)
+                .map(|session| session.incarnation)
+                .or_else(|| inner.dead.get(id).map(|session| session.incarnation))
+                .or_else(|| {
+                    inner
+                        .failed_replacements
+                        .get(id)
+                        .map(|session| session.incarnation)
+                });
+            (removal_incarnation, removed_incarnation)
         };
-        inner.dead.remove(id);
+        if expected_incarnation.is_some_and(|expected| removed_incarnation != Some(expected)) {
+            return Ok(None);
+        }
+
+        if let Some(tx) = &self.persist_tx {
+            let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(0);
+            if tx
+                .send(crate::persistence::PersistCmd::SessionRemoved {
+                    session_id: id.to_string(),
+                    incarnation: removal_incarnation,
+                    reply: reply_tx,
+                })
+                .is_err()
+            {
+                if let Some(store) = &self.session_store {
+                    store
+                        .delete_session_for_incarnation(id, removal_incarnation)
+                        .map_err(|e| AppError::PersistenceError(e.to_string()))?;
+                } else {
+                    return Err(AppError::PersistenceError(
+                        "persistence worker disconnected".into(),
+                    ));
+                }
+            } else {
+                reply_rx
+                    .recv()
+                    .map_err(|e| AppError::PersistenceError(e.to_string()))?
+                    .map_err(AppError::PersistenceError)?;
+            }
+        } else if let Some(store) = &self.session_store {
+            store
+                .delete_session_for_incarnation(id, removal_incarnation)
+                .map_err(|e| AppError::PersistenceError(e.to_string()))?;
+        }
+
+        let was_live = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.pending_replacements.remove(id);
+            inner.failed_replacements.remove(id);
+            inner.killed.insert(id.to_string());
+            let was_live = if let Some(session) = inner.live.remove(id) {
+                session.terminate();
+                true
+            } else {
+                false
+            };
+            inner.dead.remove(id);
+            was_live
+        };
         if let Some(incarnation) = removed_incarnation {
             if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
                 pfm.unregister_session(id, incarnation);
             }
         }
-        drop(inner);
-
-        // Record user-requested removal for diagnostics (Phase 03).
         self.record_diag(
             "pty",
             "terminal.remove",
@@ -1614,32 +1680,82 @@ impl PtySessionManager {
                 ("wasLive".into(), was_live.to_string()),
             ]),
         );
-
-        // Send SessionRemoved to persist worker (if enabled)
-        if let Some(tx) = &self.persist_tx {
-            if let Err(e) = tx.send(crate::persistence::PersistCmd::SessionRemoved {
-                session_id: id.to_string(),
-                incarnation: removal_incarnation,
-            }) {
-                warn!("Failed to persist SessionRemoved: {}", e);
-                if let Some(store) = &self.session_store {
-                    store
-                        .delete_session_for_incarnation(id, removal_incarnation)
-                        .map_err(|store_error| {
-                            AppError::PersistenceError(store_error.to_string())
-                        })?;
-                } else {
-                    return Err(AppError::PersistenceError(e.to_string()));
-                }
-            }
-        } else if let Some(store) = &self.session_store {
-            store
-                .delete_session_for_incarnation(id, removal_incarnation)
-                .map_err(|store_error| AppError::PersistenceError(store_error.to_string()))?;
-        }
-
         self.sink.send_terminal_changed();
         Ok(removed_incarnation)
+    }
+
+    pub fn rename(&self, id: &str, name: Option<String>) -> Result<SessionMeta, AppError> {
+        let _persistence_guard = self.persistence_gate.lock().unwrap();
+        let incarnation = {
+            let inner = self.inner.lock().unwrap();
+            if let Some(session) = inner.live.get(id) {
+                session.incarnation
+            } else if let Some(session) = inner.dead.get(id) {
+                session.incarnation
+            } else {
+                return Err(AppError::SessionNotFound(id.to_string()));
+            }
+        };
+        if let Some(tx) = &self.persist_tx {
+            let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(0);
+            if tx
+                .send(crate::persistence::PersistCmd::SessionRenamed {
+                    session_id: id.to_string(),
+                    incarnation,
+                    name: name.clone(),
+                    reply: reply_tx,
+                })
+                .is_err()
+            {
+                if let Some(store) = &self.session_store {
+                    if !store
+                        .rename_session_for_incarnation(id, incarnation, name.clone())
+                        .map_err(|e| AppError::PersistenceError(e.to_string()))?
+                    {
+                        return Err(AppError::PersistenceError("stale terminal identity".into()));
+                    }
+                } else {
+                    return Err(AppError::PersistenceError(
+                        "persistence worker disconnected".into(),
+                    ));
+                }
+            } else if !reply_rx
+                .recv()
+                .map_err(|e| AppError::PersistenceError(e.to_string()))?
+                .map_err(AppError::PersistenceError)?
+            {
+                return Err(AppError::PersistenceError("stale terminal identity".into()));
+            }
+        } else if let Some(store) = &self.session_store {
+            if !store
+                .rename_session_for_incarnation(id, incarnation, name.clone())
+                .map_err(|e| AppError::PersistenceError(e.to_string()))?
+            {
+                return Err(AppError::PersistenceError("stale terminal identity".into()));
+            }
+        }
+
+        let updated = {
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(session) = inner.live.get_mut(id) {
+                if session.incarnation != incarnation {
+                    return Err(AppError::PersistenceError("stale terminal identity".into()));
+                }
+                session.meta.name = name.clone();
+                session.respawn_opts.name = name.clone();
+                session.meta.clone()
+            } else if let Some(session) = inner.dead.get_mut(id) {
+                if session.incarnation != incarnation {
+                    return Err(AppError::PersistenceError("stale terminal identity".into()));
+                }
+                session.meta.name = name.clone();
+                session.meta.clone()
+            } else {
+                return Err(AppError::SessionNotFound(id.to_string()));
+            }
+        };
+        self.sink.send_terminal_changed();
+        Ok(updated)
     }
 
     pub fn is_alive(&self, id: &str) -> bool {
@@ -1674,6 +1790,7 @@ impl PtySessionManager {
     /// Convert a failed automatic respawn into a stable orphan tombstone and
     /// retain it in persistence so reconnecting clients can close or retry it.
     pub fn mark_target_unavailable(&self, id: &str, project: &str, worktree_path: &str) -> bool {
+        let _persistence_guard = self.persistence_gate.lock().unwrap();
         let target_identity = target_path_identity(Path::new(worktree_path));
         let mut unavailable_persistence: Option<(SessionMeta, FailedReplacementPersistence)> = None;
         let incarnation = {
@@ -1783,7 +1900,7 @@ impl PtySessionManager {
         failure_meta: Option<SessionMeta>,
         failure_persistence: Option<FailedReplacementPersistence>,
     ) {
-        finish_failed_replacement(
+        finish_failed_replacement_locked(
             &self.inner,
             &self.persist_tx,
             self.session_store.as_deref(),
@@ -1839,24 +1956,131 @@ impl PtySessionManager {
     }
 
     /// Dispose all sessions while keeping the manager reusable.
-    pub fn dispose(&self) {
-        self.dispose_internal(false);
+    pub fn dispose(&self) -> Result<(), AppError> {
+        self.dispose_internal(false)
     }
 
     /// Permanently close the manager and dispose all sessions for server exit.
     pub fn shutdown(&self) {
-        self.dispose_internal(true);
+        let _ = self.dispose_internal(true);
         self.readers.join_all();
     }
 
-    fn dispose_internal(&self, closing: bool) {
+    fn evict_identity_after_durable_removal(&self, id: &str, expected_incarnation: u64) {
+        let (session, was_live) = {
+            let mut inner = self.inner.lock().unwrap();
+            let live_matches = inner
+                .live
+                .get(id)
+                .is_some_and(|session| session.incarnation == expected_incarnation);
+            let dead_matches = inner
+                .dead
+                .get(id)
+                .is_some_and(|session| session.incarnation == expected_incarnation);
+            let failed_matches = inner
+                .failed_replacements
+                .get(id)
+                .is_some_and(|session| session.incarnation == expected_incarnation);
+            if !(live_matches || dead_matches || failed_matches) {
+                return;
+            }
+
+            inner.pending_replacements.remove(id);
+            inner.killed.insert(id.to_string());
+            let session = live_matches.then(|| inner.live.remove(id).unwrap());
+            if dead_matches {
+                inner.dead.remove(id);
+            }
+            if failed_matches {
+                inner.failed_replacements.remove(id);
+            }
+            (session, live_matches)
+        };
+
+        if let Some(session) = session {
+            session.terminate();
+        }
+        if was_live {
+            if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
+                pfm.unregister_session(id, expected_incarnation);
+            }
+        }
+    }
+
+    fn dispose_internal(&self, closing: bool) -> Result<(), AppError> {
         let _lifecycle_drain = self.lifecycle_gate.begin_dispose(closing);
         let _persistence_guard = self.persistence_gate.lock().unwrap();
-        let (sessions, live_session_ids) = {
+        let (previous_generation, identities) = {
             let mut inner = self.inner.lock().unwrap();
             info!(count = inner.live.len(), "Disposing all PTY sessions");
             inner.closing |= closing;
+            let previous_generation = inner.generation;
             inner.generation = inner.generation.wrapping_add(1);
+            let mut identities = inner
+                .live
+                .iter()
+                .map(|(id, session)| (id.clone(), session.incarnation))
+                .chain(
+                    inner
+                        .dead
+                        .iter()
+                        .map(|(id, session)| (id.clone(), session.incarnation)),
+                )
+                .chain(
+                    inner
+                        .failed_replacements
+                        .iter()
+                        .map(|(id, session)| (id.clone(), session.incarnation)),
+                )
+                .collect::<Vec<_>>();
+            identities.sort_by(|a, b| a.0.cmp(&b.0));
+            identities.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+            (previous_generation, identities)
+        };
+        if !closing {
+            for (id, expected_incarnation) in &identities {
+                let removal_incarnation = self.inner.lock().unwrap().allocate_incarnation();
+                let result = if let Some(tx) = &self.persist_tx {
+                    let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(0);
+                    if tx
+                        .send(crate::persistence::PersistCmd::SessionRemoved {
+                            session_id: id.clone(),
+                            incarnation: removal_incarnation,
+                            reply: reply_tx,
+                        })
+                        .is_err()
+                    {
+                        if let Some(store) = &self.session_store {
+                            store
+                                .delete_session_for_incarnation(id, removal_incarnation)
+                                .map_err(|e| AppError::PersistenceError(e.to_string()))
+                        } else {
+                            Err(AppError::PersistenceError(
+                                "persistence worker disconnected".into(),
+                            ))
+                        }
+                    } else {
+                        reply_rx
+                            .recv()
+                            .map_err(|e| AppError::PersistenceError(e.to_string()))?
+                            .map_err(AppError::PersistenceError)
+                    }
+                } else if let Some(store) = &self.session_store {
+                    store
+                        .delete_session_for_incarnation(id, removal_incarnation)
+                        .map_err(|e| AppError::PersistenceError(e.to_string()))
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = result {
+                    self.inner.lock().unwrap().generation = previous_generation;
+                    return Err(error);
+                }
+                self.evict_identity_after_durable_removal(id, *expected_incarnation);
+            }
+        }
+        let (sessions, live_session_ids) = {
+            let mut inner = self.inner.lock().unwrap();
             let live_session_ids = inner
                 .live
                 .iter()
@@ -1866,6 +2090,7 @@ impl PtySessionManager {
                 .live
                 .keys()
                 .chain(inner.dead.keys())
+                .chain(inner.failed_replacements.keys())
                 .cloned()
                 .collect::<Vec<_>>();
             inner.killed.extend(session_ids);
@@ -1873,24 +2098,21 @@ impl PtySessionManager {
                 .live
                 .drain()
                 .map(|(_, session)| session)
-                .collect::<Vec<LiveSession>>();
+                .collect::<Vec<_>>();
             inner.dead.clear();
             inner.failed_replacements.clear();
             inner.pending_replacements.clear();
             (sessions, live_session_ids)
         };
-
-        // Mark sessions killed before terminating them so reader threads cannot
-        // enqueue an automatic restart while the server is leaving.
         for session in &sessions {
             session.terminate();
         }
-
         if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
             for (id, incarnation) in live_session_ids {
                 pfm.unregister_session(&id, incarnation);
             }
         }
+        Ok(())
     }
 
     /// Stop every current producer while keeping the reader-owned cleanup
@@ -1966,50 +2188,61 @@ impl PtySessionManager {
 
     /// Spawn a tokio task that sweeps expired dead-session tombstones every 30s.
     pub fn spawn_cleanup_task(&self) {
-        let inner = Arc::clone(&self.inner);
+        let manager = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
-                let mut guard = inner.lock().unwrap();
-                let before = guard.dead.len();
-                guard
-                    .dead
-                    .retain(|_, d| d.died_at.elapsed() < DEAD_SESSION_TTL);
-                let removed = before - guard.dead.len();
-                if removed > 0 {
-                    debug!(removed, "Dead session tombstones swept");
-                }
-                guard
-                    .failed_replacements
-                    .retain(|_, replacement| replacement.created_at.elapsed() < DEAD_SESSION_TTL);
-                // Clean up killed set entries for sessions that no longer exist.
-                // Prevents unbounded memory growth when session IDs are never reused.
-                let before_killed = guard.killed.len();
-                // Collect orphaned IDs to avoid borrow checker conflict with retain closure.
-                let orphaned: Vec<String> = guard
-                    .killed
-                    .iter()
-                    .filter(|id| !guard.live.contains_key(*id) && !guard.dead.contains_key(*id))
-                    .cloned()
-                    .collect();
-                for id in orphaned {
-                    guard.killed.remove(&id);
-                }
-                let removed_killed = before_killed - guard.killed.len();
-                if removed_killed > 0 {
-                    debug!(
-                        removed = removed_killed,
-                        "Orphaned killed set entries cleaned"
-                    );
+                let candidates = {
+                    let mut guard = manager.inner.lock().unwrap();
+                    guard.prune_killed_markers();
+                    guard
+                        .dead
+                        .iter()
+                        .filter(|(_, dead)| {
+                            !dead.meta.target_unavailable
+                                && dead.died_at.elapsed() >= DEAD_SESSION_TTL
+                        })
+                        .map(|(id, dead)| (id.clone(), dead.incarnation))
+                        .chain(
+                            guard
+                                .failed_replacements
+                                .iter()
+                                .filter(|(_, failed)| {
+                                    expired_failed_replacement_is_cleanup_candidate(failed)
+                                })
+                                .map(|(id, failed)| (id.clone(), failed.incarnation)),
+                        )
+                        .collect::<Vec<_>>()
+                };
+                for (id, incarnation) in candidates {
+                    // Re-check identity in remove's persistence-first critical
+                    // section so a reused public ID is never swept.
+                    let current = {
+                        let guard = manager.inner.lock().unwrap();
+                        guard
+                            .dead
+                            .get(&id)
+                            .map(|dead| {
+                                dead.incarnation == incarnation
+                                    && !dead.meta.target_unavailable
+                                    && dead.died_at.elapsed() >= DEAD_SESSION_TTL
+                            })
+                            .or_else(|| {
+                                guard.failed_replacements.get(&id).map(|failed| {
+                                    failed.incarnation == incarnation
+                                        && expired_failed_replacement_is_cleanup_candidate(failed)
+                                })
+                            })
+                            .unwrap_or(false)
+                    };
+                    if current {
+                        let _ = manager.remove_with_expected(&id, Some(incarnation));
+                    }
                 }
             }
         });
     }
-
-    // -----------------------------------------------------------------------
-    // Internal
-    // -----------------------------------------------------------------------
 
     fn kill_internal(&self, id: &str) {
         let _persistence_guard = self.persistence_gate.lock().unwrap();
@@ -2020,6 +2253,7 @@ impl PtySessionManager {
         let mut inner = self.inner.lock().unwrap();
         // Mark as killed BEFORE removing from live — reader thread checks this.
         inner.killed.insert(id.to_string());
+        inner.pending_replacements.remove(id);
         let removed_incarnation = if let Some(session) = inner.live.remove(id) {
             if suppress_exit {
                 *inner
@@ -2365,6 +2599,7 @@ fn reader_thread(
                     rows: 24,
                     project: None,
                     worktree_path: None,
+                    name: None,
                     restart_policy: RestartPolicy::Never,
                     restart_max_retries: 0,
                 },
@@ -2404,6 +2639,7 @@ fn reader_thread(
                     rows: 24,
                     project: None,
                     worktree_path: None,
+                    name: None,
                     restart_policy: RestartPolicy::Never,
                     restart_max_retries: 0,
                 },
@@ -2660,14 +2896,17 @@ async fn supervisor_loop(
         };
         if let Err(e) = respawn_result {
             warn!(id = %session_id, error = %e, "Respawn failed");
-            let failure_state = finish_respawn_source_failure(
-                &inner,
-                &persist_tx,
-                session_store.as_deref(),
-                &session_id,
-                source_incarnation,
-                target_unavailable,
-            );
+            let failure_state = {
+                let _persistence_guard = persistence_gate.lock().unwrap();
+                finish_respawn_source_failure(
+                    &inner,
+                    &persist_tx,
+                    session_store.as_deref(),
+                    &session_id,
+                    source_incarnation,
+                    target_unavailable,
+                )
+            };
             if target_unavailable && failure_state.is_some() {
                 if let (Some(project), Some(worktree_path)) =
                     (project.as_deref(), target_path.as_deref())
@@ -2765,6 +3004,34 @@ fn finish_respawn_source_failure(
 /// was already published live), retaining the newest scrollback buffer in
 /// either case.
 fn finish_failed_replacement(
+    persistence_gate: &Arc<Mutex<()>>,
+    inner: &Arc<Mutex<Inner>>,
+    persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+    session_store: Option<&SessionStore>,
+    session_id: &str,
+    replacement_incarnation: u64,
+    target_unavailable: bool,
+    preserve_target_unavailable: bool,
+    fallback_buffer: Option<Arc<Mutex<crate::pty::buffer::ScrollbackBuffer>>>,
+    failure_meta: Option<SessionMeta>,
+    failure_persistence: Option<FailedReplacementPersistence>,
+) {
+    let _persistence_guard = persistence_gate.lock().unwrap();
+    finish_failed_replacement_locked(
+        inner,
+        persist_tx,
+        session_store,
+        session_id,
+        replacement_incarnation,
+        target_unavailable,
+        preserve_target_unavailable,
+        fallback_buffer,
+        failure_meta,
+        failure_persistence,
+    );
+}
+
+fn finish_failed_replacement_locked(
     inner: &Arc<Mutex<Inner>>,
     persist_tx: &Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<&SessionStore>,
@@ -3213,7 +3480,7 @@ fn persist_buffer_snapshot(
 /// Called by supervisor task after backoff delay.
 async fn respawn_internal(
     session_id: &str,
-    cmd: RespawnCmd,
+    mut cmd: RespawnCmd,
     inner: &Arc<Mutex<Inner>>,
     sink: &Arc<dyn EventSink>,
     respawn_tx: &mpsc::Sender<RespawnCmd>,
@@ -3228,7 +3495,6 @@ async fn respawn_internal(
     #[cfg(test)] respawn_test_hook: Arc<RespawnTestHook>,
     #[cfg(test)] spawn_test_hook: Arc<SpawnTestHook>,
 ) -> Result<(), AppError> {
-    let opts = &cmd.respawn_opts;
     let source_incarnation = cmd.incarnation;
 
     // Reserve before slow PTY setup so a newer request invalidates this one.
@@ -3238,6 +3504,11 @@ async fn respawn_internal(
             return Err(AppError::PtyError(
                 "PTY respawn was superseded by a newer request".into(),
             ));
+        }
+        // A rename may have occurred after the reader queued this command.
+        // The dead tombstone is authoritative for the replacement.
+        if let Some(source) = guard.dead.get(session_id) {
+            cmd.respawn_opts.name = source.meta.name.clone();
         }
         let preserve_target_unavailable = guard
             .dead
@@ -3254,23 +3525,32 @@ async fn respawn_internal(
             source_buffer,
         )
     };
+    let opts = &cmd.respawn_opts;
 
     let Some(_lifecycle_permit) = lifecycle_gate.try_begin() else {
         info!(id = %session_id, "Respawn skipped while PTY manager is disposing");
+        inner
+            .lock()
+            .unwrap()
+            .finish_replacement(session_id, replacement_incarnation);
         return Ok(());
     };
-
     // Check before opening a PTY, then repeat the check immediately before
     // publishing the new session. dispose() can race with either phase.
-    {
+
+    let stale = {
         let inner_guard = inner.lock().unwrap();
-        if lifecycle_gate.is_disposing()
+        lifecycle_gate.is_disposing()
             || inner_guard.generation != cmd.generation
             || inner_guard.killed.contains(session_id)
-        {
-            info!(id = %session_id, "Stale respawn request — skipping restart");
-            return Ok(());
-        }
+    };
+    if stale {
+        info!(id = %session_id, "Stale respawn request — skipping restart");
+        inner
+            .lock()
+            .unwrap()
+            .finish_replacement(session_id, replacement_incarnation);
+        return Ok(());
     }
 
     #[cfg(test)]
@@ -3287,6 +3567,7 @@ async fn respawn_internal(
         Ok(pair) => pair,
         Err(error) => {
             finish_failed_replacement(
+                &persistence_gate,
                 inner,
                 &persist_tx,
                 session_store.as_deref(),
@@ -3313,6 +3594,7 @@ async fn respawn_internal(
         Ok(child) => child,
         Err(error) => {
             finish_failed_replacement(
+                &persistence_gate,
                 inner,
                 &persist_tx,
                 session_store.as_deref(),
@@ -3333,6 +3615,7 @@ async fn respawn_internal(
         Err(error) => {
             let _ = child.kill();
             finish_failed_replacement(
+                &persistence_gate,
                 inner,
                 &persist_tx,
                 session_store.as_deref(),
@@ -3353,6 +3636,7 @@ async fn respawn_internal(
         Err(error) => {
             let _ = child.kill();
             finish_failed_replacement(
+                &persistence_gate,
                 inner,
                 &persist_tx,
                 session_store.as_deref(),
@@ -3375,6 +3659,7 @@ async fn respawn_internal(
         opts.command.clone(),
         opts.cwd.clone(),
         opts.worktree_path.clone(),
+        opts.name.clone(),
         opts.restart_policy,
     );
     meta.restart_count = cmd.restart_count + 1;
@@ -3384,7 +3669,7 @@ async fn respawn_internal(
     let child_killer = child.clone_killer();
     let lifecycle = integration.as_ref().map(ShellIntegration::lifecycle);
     let incarnation = replacement_incarnation;
-    let session = LiveSession::new(
+    let mut session = LiveSession::new(
         meta.clone(),
         incarnation,
         pair.master,
@@ -3416,6 +3701,10 @@ async fn respawn_internal(
         if !inner_guard.respawn_replacement_is_current(session_id, source_incarnation, incarnation)
         {
             drop(inner_guard);
+            inner
+                .lock()
+                .unwrap()
+                .finish_replacement(session_id, incarnation);
             session.terminate();
             return Err(AppError::PtyError(
                 "PTY respawn was superseded by a newer request".into(),
@@ -3426,9 +3715,21 @@ async fn respawn_internal(
             || inner_guard.killed.contains(session_id)
         {
             drop(inner_guard);
+            inner
+                .lock()
+                .unwrap()
+                .finish_replacement(session_id, incarnation);
             session.terminate();
             info!(id = %session_id, "Respawn cancelled before publish");
             return Ok(());
+        }
+        if let Some(source) = inner_guard.dead.get(session_id) {
+            if source.incarnation == source_incarnation {
+                let latest_name = source.meta.name.clone();
+                meta.name = latest_name.clone();
+                session.meta.name = latest_name.clone();
+                session.respawn_opts.name = latest_name;
+            }
         }
         // Remove from killed set (allow future restarts if user doesn't kill again).
         inner_guard.killed.remove(session_id);
@@ -3509,7 +3810,7 @@ async fn respawn_internal(
             if let Some(pfm) = &port_forward_manager_for_failure {
                 pfm.unregister_session(session_id, incarnation);
             }
-            finish_failed_replacement(
+            finish_failed_replacement_locked(
                 inner,
                 &persist_tx_for_failure,
                 session_store.as_deref(),
@@ -3949,6 +4250,54 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dispose_restores_generation_when_removal_persistence_fails() {
+        let mut manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "terminal:dispose-persistence-failure";
+        manager
+            .create(PtyCreateOpts {
+                id: id.to_string(),
+                command: "sleep 60".to_string(),
+                cwd: "/tmp".to_string(),
+                env: HashMap::new(),
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: RestartPolicy::Never,
+                restart_max_retries: crate::config::schema::DEFAULT_RESTART_MAX_RETRIES,
+            })
+            .unwrap();
+        let previous_generation = manager.inner.lock().unwrap().generation;
+        let (tx, rx) = std::sync::mpsc::sync_channel(0);
+        manager.persist_tx = Some(tx);
+        let worker = std::thread::spawn(move || {
+            let crate::persistence::PersistCmd::SessionRemoved { reply, .. } = rx.recv().unwrap()
+            else {
+                panic!("expected SessionRemoved");
+            };
+            reply
+                .send(Err("forced removal failure".to_string()))
+                .unwrap();
+        });
+
+        let result = manager.dispose();
+        worker.join().unwrap();
+
+        assert!(matches!(
+            result,
+            Err(AppError::PersistenceError(message)) if message == "forced removal failure"
+        ));
+        let inner = manager.inner.lock().unwrap();
+        assert_eq!(inner.generation, previous_generation);
+        assert!(inner.live.contains_key(id));
+        drop(inner);
+
+        manager.persist_tx = None;
+        manager.remove(id).unwrap();
+    }
+
     #[test]
     fn stale_respawn_reservation_cannot_publish_after_newer_replacement() {
         let mut inner = Inner::new();
@@ -3958,6 +4307,7 @@ mod tests {
             None,
             "cat".to_string(),
             "/tmp".to_string(),
+            None,
             RestartPolicy::Always,
         );
         inner.dead.insert(
@@ -3991,6 +4341,7 @@ mod tests {
             None,
             "cat".to_string(),
             "/tmp".to_string(),
+            None,
             RestartPolicy::Never,
         );
         inner.lock().unwrap().dead.insert(
@@ -4023,6 +4374,7 @@ mod tests {
             Some("demo".to_string()),
             "cat".to_string(),
             "/tmp/demo-feature".to_string(),
+            None,
             RestartPolicy::Always,
         );
         meta.worktree_path = Some("/tmp/demo-feature".to_string());
@@ -4055,6 +4407,7 @@ mod tests {
             Some("demo".to_string()),
             "cat".to_string(),
             "/tmp/demo".to_string(),
+            None,
             RestartPolicy::Always,
         );
         inner.lock().unwrap().dead.insert(
@@ -4085,6 +4438,7 @@ mod tests {
             Some("demo".to_string()),
             "cat".to_string(),
             target.to_string(),
+            None,
             RestartPolicy::Never,
         );
         meta.worktree_path = Some(target.to_string());
@@ -4141,6 +4495,7 @@ mod tests {
             Some("demo".to_string()),
             "cat".to_string(),
             target.to_string(),
+            None,
             RestartPolicy::Never,
         );
         meta.worktree_path = Some(target.to_string());
@@ -4188,6 +4543,7 @@ mod tests {
             rows: 40,
             project: Some("demo".to_string()),
             worktree_path: Some(target.to_string()),
+            name: None,
             restart_policy: RestartPolicy::Always,
             restart_max_retries: 7,
         };
@@ -4197,6 +4553,7 @@ mod tests {
             opts.command.clone(),
             opts.cwd.clone(),
             opts.worktree_path.clone(),
+            None,
             opts.restart_policy,
         );
         meta.incarnation = 12;
@@ -4238,6 +4595,7 @@ mod tests {
             "old".to_string(),
             old_target.to_string(),
             Some(old_target.to_string()),
+            None,
             RestartPolicy::Never,
         );
         let opts = PtyCreateOpts {
@@ -4249,6 +4607,7 @@ mod tests {
             rows: 30,
             project: Some("demo".to_string()),
             worktree_path: Some(new_target.to_string()),
+            name: None,
             restart_policy: RestartPolicy::Never,
             restart_max_retries: 4,
         };
@@ -4258,6 +4617,7 @@ mod tests {
             opts.command.clone(),
             opts.cwd.clone(),
             opts.worktree_path.clone(),
+            None,
             opts.restart_policy,
         );
 
@@ -4269,7 +4629,7 @@ mod tests {
             );
             inner.pending_replacements.insert(id.to_string(), 11);
         }
-        finish_failed_replacement(
+        finish_failed_replacement_locked(
             &manager.inner,
             &None,
             Some(&store),
@@ -4309,6 +4669,7 @@ mod tests {
             None,
             "cat".to_string(),
             "/tmp".to_string(),
+            None,
             RestartPolicy::Always,
         );
         {
@@ -4320,7 +4681,7 @@ mod tests {
             guard.pending_replacements.insert(id.to_string(), 11);
         }
 
-        finish_failed_replacement(
+        finish_failed_replacement_locked(
             &inner,
             &None,
             None,
@@ -4385,6 +4746,7 @@ mod tests {
             None,
             "cat".to_string(),
             "/tmp".to_string(),
+            None,
             RestartPolicy::Never,
         );
         store
@@ -4426,6 +4788,7 @@ mod tests {
             None,
             "cat".to_string(),
             "/tmp".to_string(),
+            None,
             RestartPolicy::Never,
         );
         store
@@ -4458,6 +4821,7 @@ mod tests {
             Some("test-project".to_string()),
             "cat".to_string(),
             "/missing/worktree".to_string(),
+            None,
             RestartPolicy::Never,
         );
         meta.worktree_path = Some("/missing/worktree".to_string());
@@ -4511,13 +4875,15 @@ mod tests {
         let removed = rx
             .recv_timeout(std::time::Duration::from_secs(1))
             .expect("session removal must not be dropped when the queue is full");
-        assert!(matches!(
-            removed,
+        match removed {
             crate::persistence::PersistCmd::SessionRemoved {
-                session_id,
-            incarnation: _,
-            } if session_id == "terminal:removed"
-        ));
+                session_id, reply, ..
+            } => {
+                assert_eq!(session_id, "terminal:removed");
+                reply.send(Ok(())).unwrap();
+            }
+            _ => panic!("expected session removal"),
+        }
         sender.join().unwrap();
     }
 
@@ -4530,6 +4896,7 @@ mod tests {
             None,
             "cat".to_string(),
             "/tmp".to_string(),
+            None,
             RestartPolicy::Never,
         );
         store
@@ -4549,11 +4916,13 @@ mod tests {
     fn lifecycle_persistence_falls_back_when_worker_is_disconnected() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let store = crate::persistence::SessionStore::open(temp.path()).unwrap();
-        let dead_meta = SessionMeta::new(
+        let dead_meta = SessionMeta::new_with_target(
             "terminal:dead-fallback".to_string(),
             None,
             "cat".to_string(),
             "/tmp".to_string(),
+            None,
+            None,
             RestartPolicy::Never,
         );
         store
@@ -4566,11 +4935,13 @@ mod tests {
         persist_session_dead(&persist_tx, Some(&store), &dead_meta.id, 1);
         assert!(store.load_sessions().unwrap().is_empty());
 
-        let unavailable_meta = SessionMeta::new(
+        let unavailable_meta = SessionMeta::new_with_target(
             "terminal:unavailable-fallback".to_string(),
             None,
             "cat".to_string(),
             "/tmp".to_string(),
+            None,
+            None,
             RestartPolicy::Never,
         );
         store
@@ -4585,11 +4956,13 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert!(sessions[0].meta.target_unavailable);
 
-        let exited_meta = SessionMeta::new(
+        let exited_meta = SessionMeta::new_with_target(
             "terminal:exited-fallback".to_string(),
             None,
             "cat".to_string(),
             "/tmp".to_string(),
+            None,
+            None,
             RestartPolicy::Never,
         );
         store
@@ -4623,6 +4996,7 @@ mod tests {
             None,
             "cat".to_string(),
             "/tmp".to_string(),
+            None,
             RestartPolicy::Never,
         );
         let buffer = Arc::new(Mutex::new(crate::pty::buffer::ScrollbackBuffer::new(1024)));
@@ -4661,5 +5035,120 @@ mod tests {
             matches!(err, AppError::SessionNotFound(_)),
             "Expected SessionNotFound error, got: {err:?}"
         );
+    }
+    #[test]
+    fn cleanup_prunes_orphaned_killed_markers() {
+        let mut inner = Inner::new();
+        inner.killed.extend([
+            "orphaned".to_string(),
+            "dead-session".to_string(),
+            "pending-session".to_string(),
+        ]);
+        let dead_meta = SessionMeta::new(
+            "dead-session".to_string(),
+            None,
+            "cat".to_string(),
+            "/tmp".to_string(),
+            None,
+            RestartPolicy::Never,
+        );
+        inner.dead.insert(
+            dead_meta.id.clone(),
+            DeadSession::exited(dead_meta, 0, 1, None, terminal_shutdown()),
+        );
+        inner
+            .pending_replacements
+            .insert("pending-session".to_string(), 2);
+
+        inner.prune_killed_markers();
+
+        assert!(!inner.killed.contains("orphaned"));
+        assert!(inner.killed.contains("dead-session"));
+        assert!(inner.killed.contains("pending-session"));
+    }
+
+    #[tokio::test]
+    async fn kill_cancels_pending_replacement_reservation() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "terminal:pending-kill";
+        manager
+            .inner
+            .lock()
+            .unwrap()
+            .pending_replacements
+            .insert(id.to_string(), 2);
+
+        manager.kill_internal_impl(id, false);
+
+        let inner = manager.inner.lock().unwrap();
+        assert!(!inner.pending_replacements.contains_key(id));
+        assert!(inner.killed.contains(id));
+    }
+
+    #[test]
+    fn target_unavailable_failed_replacements_are_exempt_from_ttl_cleanup() {
+        let mut meta = SessionMeta::new(
+            "target-unavailable".to_string(),
+            Some("project".to_string()),
+            "cat".to_string(),
+            "/tmp/missing".to_string(),
+            None,
+            RestartPolicy::Never,
+        );
+        meta.target_unavailable = true;
+        let mut failed = FailedReplacement {
+            meta,
+            incarnation: 1,
+            buffer: None,
+            persistence: None,
+            created_at: std::time::Instant::now() - DEAD_SESSION_TTL - Duration::from_secs(1),
+        };
+
+        assert!(!expired_failed_replacement_is_cleanup_candidate(&failed));
+
+        failed.meta.target_unavailable = false;
+        assert!(expired_failed_replacement_is_cleanup_candidate(&failed));
+    }
+
+    #[tokio::test]
+    async fn target_unavailable_promotion_persists_name_before_remove() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = Arc::new(crate::persistence::SessionStore::open(temp.path()).unwrap());
+        let id = "terminal:target-unavailable-name";
+        let meta = SessionMeta::new_with_target(
+            id.to_string(),
+            Some("project".to_string()),
+            "cat".to_string(),
+            "/tmp/missing".to_string(),
+            Some("/tmp/missing".to_string()),
+            Some("Persisted name".to_string()),
+            RestartPolicy::Never,
+        );
+        let manager =
+            PtySessionManager::with_persist(Arc::new(NoopEventSink), None, Some(store.clone()));
+        manager.inner.lock().unwrap().failed_replacements.insert(
+            id.to_string(),
+            FailedReplacement {
+                meta,
+                incarnation: 1,
+                buffer: None,
+                persistence: Some(FailedReplacementPersistence {
+                    env: HashMap::new(),
+                    cols: 80,
+                    rows: 24,
+                    restart_max_retries: 0,
+                }),
+                created_at: std::time::Instant::now(),
+            },
+        );
+
+        assert!(manager.mark_target_unavailable(id, "project", "/tmp/missing"));
+        let sessions = store.load_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].meta.name.as_deref(), Some("Persisted name"));
+        assert!(sessions[0].meta.target_unavailable);
+
+        manager.remove(id).unwrap();
+        assert!(store.load_sessions().unwrap().is_empty());
     }
 }

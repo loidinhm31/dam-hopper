@@ -19,6 +19,11 @@ interface Props {
   onConfirm: () => void | Promise<void>;
   onCancel: () => void;
   pending?: boolean;
+  title?: string;
+  description?: string;
+  submitLabel?: string;
+  allowEmpty?: boolean;
+  error?: string;
 }
 
 /** Uses the shared focus-trapped dialog to outlast context-menu restoration. */
@@ -29,6 +34,11 @@ export function RenameItemDialog({
   onConfirm,
   onCancel,
   pending = false,
+  title = "Rename item",
+  description = "Enter the new file or folder name.",
+  submitLabel = "Rename",
+  allowEmpty = false,
+  error,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const { isAndroidChromeNativeInputSuppressed } =
@@ -55,12 +65,17 @@ export function RenameItemDialog({
         onInteractOutside={(event) => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>Rename item</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {isAndroidChromeNativeInputSuppressed
               ? "Text entry is unavailable on Android Chrome. Use a desktop browser to rename this item."
-              : "Enter the new file or folder name."}
+              : description}
           </DialogDescription>
+          {error && (
+            <p role="alert" className="text-sm text-[var(--color-danger)]">
+              {error}
+            </p>
+          )}
         </DialogHeader>
         <form
           className="grid gap-4 py-4"
@@ -93,7 +108,9 @@ export function RenameItemDialog({
               type="submit"
               variant="primary"
               disabled={
-                isAndroidChromeNativeInputSuppressed || !value.trim() || pending
+                isAndroidChromeNativeInputSuppressed ||
+                (!allowEmpty && !value.trim()) ||
+                pending
               }
               title={
                 isAndroidChromeNativeInputSuppressed
@@ -102,7 +119,7 @@ export function RenameItemDialog({
               }
               loading={pending}
             >
-              Rename
+              {submitLabel}
             </Button>
           </DialogFooter>
         </form>

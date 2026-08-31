@@ -734,6 +734,7 @@ async fn diagnostics_export_includes_live_terminal_tail() {
             rows: 24,
             project: Some("demo".to_string()),
             worktree_path: None,
+            name: None,
             restart_policy: crate::config::schema::RestartPolicy::Never,
             restart_max_retries: 0,
         })
@@ -821,6 +822,7 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
                 rows: 24,
                 project: Some("demo".to_string()),
                 worktree_path: None,
+                name: None,
                 restart_policy: crate::config::schema::RestartPolicy::Never,
                 restart_max_retries: 0,
             })
@@ -4394,6 +4396,80 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(!worktree_path.exists());
+}
+
+#[tokio::test]
+async fn terminal_create_and_rename_round_trips_custom_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let session_id = "terminal:api-name-roundtrip";
+
+    let created = post_json(
+        state.clone(),
+        "/api/terminal",
+        serde_json::json!({
+            "id": session_id,
+            "command": "sleep 30",
+            "name": "  Build shell  ",
+        }),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_body = axum::body::to_bytes(created.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created_json: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
+    assert_eq!(created_json["name"], "Build shell");
+
+    let renamed = patch_json(
+        state.clone(),
+        &format!("/api/terminal/{session_id}"),
+        serde_json::json!({ "name": "Release shell" }),
+    )
+    .await;
+    assert_eq!(renamed.status(), StatusCode::OK);
+    let renamed_body = axum::body::to_bytes(renamed.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let renamed_json: serde_json::Value = serde_json::from_slice(&renamed_body).unwrap();
+    assert_eq!(renamed_json["name"], "Release shell");
+
+    let cleared = patch_json(
+        state.clone(),
+        &format!("/api/terminal/{session_id}"),
+        serde_json::json!({ "name": "   " }),
+    )
+    .await;
+    assert_eq!(cleared.status(), StatusCode::OK);
+    let cleared_body = axum::body::to_bytes(cleared.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let cleared_json: serde_json::Value = serde_json::from_slice(&cleared_body).unwrap();
+    assert!(cleared_json.get("name").is_none());
+
+    let invalid = patch_json(
+        state.clone(),
+        &format!("/api/terminal/{session_id}"),
+        serde_json::json!({ "name": "x".repeat(65) }),
+    )
+    .await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    let invalid_body = axum::body::to_bytes(invalid.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let invalid_json: serde_json::Value = serde_json::from_slice(&invalid_body).unwrap();
+    assert_eq!(
+        invalid_json["error"],
+        "Invalid input: Terminal name must be 64 characters or fewer"
+    );
+
+    let removed = delete_json(
+        state,
+        &format!("/api/terminal/{session_id}/remove"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]

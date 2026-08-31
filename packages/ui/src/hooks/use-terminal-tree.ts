@@ -235,12 +235,11 @@ export function useTerminalTree() {
 
       // Custom commands from config
       for (const [key, cmd] of Object.entries(p.commands ?? {})) {
-        const safeKey = key.replace(/[^a-zA-Z0-9:._-]/g, "-");
         const sessionId = targetScopedCommandSessionId(
           "custom",
           p.name,
           activeWorktreePath,
-          safeKey,
+          key,
         );
         commands.push({
           key,

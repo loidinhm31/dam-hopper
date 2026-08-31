@@ -2,6 +2,17 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Preserve Explorer Tree Expansion & Editor View Scroll Position (2026-08-31)
+
+- **Phase 01 — [COMPLETED 2026-08-31]**: persistent Explorer tree expansion store `useExplorerTreeStore` delivered with target scope isolation (`${project}::${targetKey}`), automatic cascading child loading on remount, folder prune/rename synchronization on deletion/move/rename, and unit test coverage.
+- Focused validation: full UI Vitest (213 files / 1,419 tests passed), UI TypeScript build passed. [Plan](../plans/260831-1802-preserve-explorer-tree-and-editor-scroll/plan.md).
+
+### Runtime Terminal Custom-Name Persistence (2026-08-31)
+
+- **Feature — [COMPLETED 2026-08-31; final review approved]**: Added nullable runtime custom names independent of configured profile names. SQLite migration 009 and persistence-first acknowledged rename/removal/dispose keep names and lifecycle cleanup durable; race-safe replacement/restore cleanup prevents stale identities from mutating newer sessions.
+- Create and authenticated `PATCH` rename validate trimmed names (≤64 Unicode scalars, no control characters), with blank/`null` clear. Names propagate through create, respawn, restore, API/WebSocket, and frontend terminal surfaces; durable rename UX uses custom labels with existing fallback labels when cleared.
+- Validation: backend full `cargo test` passed **874 tests, 2 ignored**; full UI Vitest passed **212 files / 1,411 tests**; production build passed; focused browser smoke passed. Broad browser remains **183/187**, with four failures in unchanged baseline areas (`app-zoom` expected 320×180, received 352×198; `ssh-forward-multi-connection` expected switches disabled, enabled; `terminal-panel-replay-notifications` expected inactive activity, active). No restart-persistence manual claim is made because graceful stop removes sessions by design.
+
 ### Traditional Terminal Search Focus and Floating Scroll Controls (2026-08-31)
 
 - **Bug fix — [COMPLETED 2026-08-31; final review found no issues]**:
@@ -400,6 +411,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-08-31:** Completed Preserve Explorer Tree Expansion & Editor View Scroll Position Phase 01: Explorer Tree Expansion Store (Zustand persistent store, target scoping, cascading child load on remount, rename/prune synchronization, full UI suite passed).
 
 - **2026-07-19:** Completed Codex terminal notification controls Phase 03: Wire delivery gates and Settings UI (review approved 01:45 +07).
   - ✅ Kept notification history independent while gating in-app toast, browser popup, and synthesized chime delivery from their persisted preferences.

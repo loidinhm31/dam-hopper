@@ -20,6 +20,7 @@ import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import type { TreeProject, TreeCommand } from "@/hooks/use-terminal-tree.js";
 import type { SessionInfo, ProjectType } from "@/api/client.js";
 import { getSessionStatus, getStatusDotColor } from "@/lib/session-status.js";
+import { terminalBaseLabel } from "@/lib/terminal-title.js";
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import { useGlobalConfig, useUpdateUiConfig } from "@/api/queries.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
@@ -42,6 +43,7 @@ interface Props {
   onSelectFreeTerminal: (sessionId: string) => void;
   onKillFreeTerminal: (sessionId: string) => void;
   onRemoveFreeTerminal: (sessionId: string) => void;
+  onRenameSession: (sessionId: string) => void;
   onSaveFreeTerminal: (sessionId: string) => void;
   onUpdateProfile: (
     projectName: string,
@@ -137,6 +139,7 @@ function CommandRow({
   onSelect,
   onLaunch,
   onKill,
+  onRenameSession,
   onEdit,
   onDragStart,
   onDragEnd,
@@ -154,6 +157,7 @@ function CommandRow({
   onSelect: () => void;
   onLaunch: () => void;
   onKill: () => void;
+  onRenameSession?: (sessionId: string) => void;
   onEdit?: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
@@ -190,7 +194,19 @@ function CommandRow({
       <GripVertical className="h-3 w-3 shrink-0 opacity-0 group-hover:opacity-40 cursor-grab active:cursor-grabbing mr-0.5" />
       <StatusDot session={cmd.session} />
       <Terminal className="h-3 w-3 shrink-0 opacity-60" />
-      <span className="flex-1 truncate font-mono">{cmd.label ?? cmd.key}</span>
+      <span
+        className="flex-1 truncate font-mono"
+        onDoubleClick={
+          cmd.session && onRenameSession
+            ? (event) => {
+                event.stopPropagation();
+                onRenameSession(cmd.session!.id);
+              }
+            : undefined
+        }
+      >
+        {terminalBaseLabel(cmd.session?.name, cmd.label ?? cmd.key)}
+      </span>
       {cmd.session?.orphaned && <OrphanedLabel />}
 
       <div className={rowActionsClass(isCoarsePointer)}>
@@ -330,6 +346,7 @@ function InstanceRow({
   isCoarsePointer,
   onSelect,
   onKill,
+  onRenameSession,
 }: {
   session: SessionInfo;
   index: number;
@@ -337,6 +354,7 @@ function InstanceRow({
   isCoarsePointer: boolean;
   onSelect: () => void;
   onKill: () => void;
+  onRenameSession?: (sessionId: string) => void;
 }) {
   return (
     <div
@@ -350,8 +368,11 @@ function InstanceRow({
       )}
     >
       <StatusDot session={session} />
-      <span className="flex-1 truncate font-mono opacity-70">
-        instance #{index + 1}
+      <span
+        className="flex-1 truncate font-mono opacity-70"
+        onDoubleClick={() => onRenameSession?.(session.id)}
+      >
+        {session.name ?? `instance #${index + 1}`}
       </span>
       {session.orphaned && <OrphanedLabel />}
       {session.alive && (
@@ -389,14 +410,15 @@ function FreeTerminalRow({
   onKill,
   onRemove,
   onSave,
-  saveDisabled,
   onDragStart,
   onDragEnd,
   onDragOver,
   onDragEnter,
   onDrop,
+  saveDisabled,
   isDragged,
   isOver,
+  onRenameSession,
 }: {
   session: SessionInfo;
   label: string;
@@ -414,6 +436,7 @@ function FreeTerminalRow({
   onDrop: (e: React.DragEvent) => void;
   isDragged: boolean;
   isOver: boolean;
+  onRenameSession?: (sessionId: string) => void;
 }) {
   return (
     <div
@@ -437,7 +460,12 @@ function FreeTerminalRow({
       <GripVertical className="h-3 w-3 shrink-0 opacity-0 group-hover:opacity-40 cursor-grab active:cursor-grabbing mr-0.5" />
       <StatusDot session={session} />
       <Terminal className="h-3 w-3 shrink-0 opacity-60" />
-      <span className="flex-1 truncate font-mono">{label}</span>
+      <span
+        className="flex-1 truncate font-mono"
+        onDoubleClick={() => onRenameSession?.(session.id)}
+      >
+        {session.name ?? label}
+      </span>
       {session.orphaned && <OrphanedLabel />}
       <div className={rowActionsClass(isCoarsePointer)}>
         {session.command && (
@@ -600,6 +628,7 @@ function ProfileRow({
   onDrop,
   isDragged,
   isOver,
+  onRenameSession,
 }: {
   cmd: TreeCommand;
   selectedId: string | null;
@@ -619,6 +648,7 @@ function ProfileRow({
   onDragEnter: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
   isDragged: boolean;
+  onRenameSession?: (sessionId: string) => void;
   isOver: boolean;
 }) {
   const sessions = cmd.sessions ?? [];
@@ -722,6 +752,7 @@ function ProfileRow({
               isCoarsePointer={isCoarsePointer}
               onSelect={() => onSelectInstance(session.id)}
               onKill={() => onKillInstance(session.id)}
+              onRenameSession={onRenameSession}
             />
           ))}
           {sessions.length === 0 && (
@@ -753,6 +784,7 @@ export function TerminalTreeView({
   onSelectFreeTerminal,
   onKillFreeTerminal,
   onRemoveFreeTerminal,
+  onRenameSession,
   onSaveFreeTerminal,
   onUpdateProfile,
   onUpdateCustomCommand,
@@ -1169,6 +1201,7 @@ export function TerminalTreeView({
                 onKill={() => onKillFreeTerminal(session.id)}
                 onRemove={() => onRemoveFreeTerminal(session.id)}
                 onSave={() => onSaveFreeTerminal(session.id)}
+                onRenameSession={onRenameSession}
                 saveDisabled={isAndroidChromeNativeInputSuppressed}
                 onDragStart={(e) => handleDragStart(e, "free", session.id)}
                 onDragEnd={handleDragEnd}
@@ -1309,6 +1342,7 @@ export function TerminalTreeView({
                         onKillInstance={(sessionId) =>
                           onKillTerminal(sessionId)
                         }
+                        onRenameSession={onRenameSession}
                         onEdit={() => startProfileEdit(project.name, cmd)}
                         onDelete={() =>
                           onDeleteProfile(project.name, cmd.profileName!)
@@ -1355,6 +1389,7 @@ export function TerminalTreeView({
                         onSelect={() => onSelectTerminal(cmd.sessionId)}
                         onLaunch={() => onLaunchTerminal(project.name, cmd)}
                         onKill={() => onKillTerminal(cmd.sessionId)}
+                        onRenameSession={onRenameSession}
                         onEdit={
                           canEdit
                             ? () => startCommandEdit(project.name, cmd)

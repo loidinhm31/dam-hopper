@@ -2,12 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
   applyTerminalTitleOrdinals,
   freeTerminalBaseLabel,
+  terminalBaseLabel,
 } from "./terminal-title.js";
 
 describe("freeTerminalBaseLabel", () => {
   it("uses indexed and readable pending labels", () => {
     expect(freeTerminalBaseLabel(1)).toBe("Terminal 1");
     expect(freeTerminalBaseLabel()).toBe("Terminal (starting…)");
+  });
+});
+
+describe("terminalBaseLabel", () => {
+  it("prefers a configured name and preserves fallback labels when absent", () => {
+    expect(terminalBaseLabel("Release", "project:bash")).toBe("Release");
+    expect(terminalBaseLabel("", "project:bash")).toBe("");
+    expect(terminalBaseLabel(null, "project:bash")).toBe("project:bash");
+    expect(terminalBaseLabel(undefined, "project:bash")).toBe("project:bash");
   });
 });
 
