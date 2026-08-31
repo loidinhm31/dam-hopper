@@ -1,5 +1,19 @@
 # 2026-08-31
 
+- **Traditional-mode Global Search focus retention.** Callback-only pane
+  rerenders no longer move focus from Global Search to xterm while typing;
+  semantic pane/session focus and native-input suppression remain intact.
+- **Traditional active-pane floating scroll controls.** Enabled
+  `TerminalScrollButtons` now render only for the active Traditional pane above
+  `MobileTerminalAccessoryBar` with the Runtime-compatible accessory-rail
+  contract; inactive panes and Browser remain excluded. Runtime source and
+  behavior remain unchanged.
+- Focused validation passed: UI TypeScript build, focused unit tests (2 files/5
+  tests), focused Chromium tests (2 files/8 tests), and actual-app smoke
+  confirming three-character search focus retention, scroll trigger/group
+  placement above keyboard controls, no xterm focus on scroll activation, and
+  Runtime contrast. Final code review found no issues; no broad repository-suite
+  or production/cross-platform release validation is claimed. [See plan](../plans/260831-0629-traditional-terminal-search-scroll-fix/plan.md).
 - **Traditional terminal close selection fix.** Closing a Traditional terminal now
   keeps the selected terminal within the same project instead of selecting one
   from another project; Runtime behavior is preserved. Focused validation passed:

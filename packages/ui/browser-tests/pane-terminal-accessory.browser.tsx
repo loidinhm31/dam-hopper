@@ -17,7 +17,17 @@ const mockSettings = vi.hoisted(() => ({
   mobileCustomKeyboardPadding: 6,
   mobileCustomKeyboardRowGap: 4,
   terminalCommitStatusEnabled: false,
+  terminalScrollButtonsEnabled: true,
+  terminalScrollStep: 3,
 }));
+const mockTerminal = vi.hoisted(() => ({
+  focus: vi.fn(),
+  attachCustomKeyEventHandler: vi.fn(),
+  scrollToTop: vi.fn(),
+  scrollLines: vi.fn(),
+  scrollToBottom: vi.fn(),
+}));
+let terminalTextarea: HTMLTextAreaElement | null = null;
 
 vi.mock("@/stores/settings.js", () => ({
   useSettingsStore: (selector?: (state: typeof mockSettings) => unknown) =>
@@ -64,7 +74,13 @@ vi.mock("@/lib/terminal-native-input-policy.js", () => ({
 }));
 
 vi.mock("@/lib/terminal-registry.js", () => ({
-  terminalRegistry: { get: () => undefined },
+  terminalRegistry: {
+    get: () => ({
+      terminal: mockTerminal,
+      fitAddon: {},
+      findController: {},
+    }),
+  },
   subscribeToRegistry: () => () => {},
 }));
 
@@ -89,16 +105,22 @@ describe("PaneContainer terminal accessory placement in Chromium", () => {
   let root: Root;
 
   beforeEach(() => {
+    mockTerminal.focus.mockClear();
+    mockTerminal.attachCustomKeyEventHandler.mockClear();
+    terminalTextarea = document.createElement("textarea");
+    terminalTextarea.className = "xterm-helper-textarea";
+    document.body.append(terminalTextarea);
+    mockTerminal.focus.mockImplementation(() => terminalTextarea?.focus());
     container = document.createElement("div");
     container.style.height = "420px";
     container.style.width = "1280px";
     document.body.append(container);
     root = createRoot(container);
   });
-
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    terminalTextarea = null;
     document.body.innerHTML = "";
   });
 
@@ -180,6 +202,64 @@ describe("PaneContainer terminal accessory placement in Chromium", () => {
         ?.querySelector('[data-testid="mobile-terminal-accessory-bar"]')
         ?.getAttribute("data-session-id"),
     ).toBe("session-1");
+    const scrollTrigger = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Show terminal scroll buttons"]',
+    );
+    expect(scrollTrigger).not.toBeNull();
+    expect(
+      terminalArea?.querySelectorAll(
+        '[aria-label="Show terminal scroll buttons"]',
+      ),
+    ).toHaveLength(1);
+    expect(
+      browserPane?.querySelector(
+        '[aria-label="Show terminal scroll buttons"]',
+      ),
+    ).toBeNull();
+    expect(scrollTrigger?.parentElement?.getAttribute("style")).toContain(
+      "6.25rem",
+    );
+
+    await act(async () => scrollTrigger?.click());
+    expect(
+      terminalArea?.querySelector(
+        '[role="group"][aria-label="Terminal scroll controls"]',
+      ),
+    ).not.toBeNull();
+
+    await act(async () =>
+      terminalArea
+        ?.querySelector<HTMLButtonElement>('[aria-label="Show terminal keys"]')
+        ?.click(),
+    );
+    const scrollRail = terminalArea?.querySelector<HTMLElement>(
+      '[aria-label="Hide terminal scroll buttons"]',
+    )?.parentElement;
+    const accessoryPanel = terminalArea?.querySelector<HTMLElement>(
+      '[data-testid="mobile-terminal-accessory-panel"]',
+    );
+    expect(scrollRail?.getAttribute("style")).toContain("100%");
+    const scrollBounds = scrollRail?.getBoundingClientRect();
+    const accessoryBounds = accessoryPanel?.getBoundingClientRect();
+    expect(
+      scrollBounds &&
+        accessoryBounds &&
+        (scrollBounds.bottom <= accessoryBounds.top ||
+          scrollBounds.top >= accessoryBounds.bottom),
+    ).toBe(true);
+    await act(async () =>
+      terminalArea
+        ?.querySelector<HTMLButtonElement>('[aria-label="Hide terminal keys"]')
+        ?.click(),
+    );
+    expect(
+      terminalArea?.querySelector('[data-testid="mobile-terminal-accessory-panel"]'),
+    ).toBeNull();
+    expect(
+      terminalArea?.querySelectorAll(
+        '[aria-label="Show terminal scroll buttons"], [aria-label="Hide terminal scroll buttons"]',
+      ),
+    ).toHaveLength(1);
 
     await renderPane("session-2");
 
@@ -198,5 +278,29 @@ describe("PaneContainer terminal accessory placement in Chromium", () => {
         '[data-testid="mobile-terminal-accessory-bar"]',
       ),
     ).toBeNull();
+    expect(
+      terminalArea?.querySelectorAll(
+        '[aria-label="Show terminal scroll buttons"], [aria-label="Hide terminal scroll buttons"]',
+      ),
+    ).toHaveLength(1);
+    expect(
+      browserPane?.querySelector(
+        '[aria-label="Show terminal scroll buttons"], [aria-label="Hide terminal scroll buttons"]',
+      ),
+    ).toBeNull();
+  });
+  it("retains Global Search focus when only the pane callback changes", async () => {
+    await page.viewport(1280, 420);
+    await renderPane("session-1");
+    const globalSearchInput = document.createElement("input");
+    globalSearchInput.setAttribute("aria-label", "Global Search");
+    document.body.append(globalSearchInput);
+    globalSearchInput.focus();
+    const initialFocusCount = mockTerminal.focus.mock.calls.length;
+
+    await renderPane("session-1");
+
+    expect(document.activeElement).toBe(globalSearchInput);
+    expect(mockTerminal.focus).toHaveBeenCalledTimes(initialFocusCount);
   });
 });
