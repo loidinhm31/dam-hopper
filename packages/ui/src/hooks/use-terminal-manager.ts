@@ -12,7 +12,10 @@ import {
   useProjectTargetStore,
 } from "@/stores/project-target.js";
 import { generateUUID, sanitizeSessionSegment } from "@/lib/utils.js";
-import { terminalProfileSessionId } from "@/lib/terminal-target-identity.js";
+import {
+  targetScopedCommandSessionId,
+  terminalProfileSessionId,
+} from "@/lib/terminal-target-identity.js";
 import {
   getTerminalLaunchContext,
   getTerminalLaunchRequest,
@@ -49,8 +52,12 @@ import {
 import {
   applyTerminalTitleOrdinals,
   freeTerminalBaseLabel,
+  terminalBaseLabel,
 } from "@/lib/terminal-title.js";
-import type { TabEntry, DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type {
+  TabEntry,
+  DisplayTabEntry,
+} from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TreeCommand, TreeProject } from "@/hooks/use-terminal-tree.js";
 import type { SessionInfo } from "@/api/client.js";
@@ -147,6 +154,7 @@ export interface TerminalManagerActions {
     command: string,
     cwd?: string,
     worktreePath?: string,
+    name?: string,
   ) => void;
 }
 
@@ -276,6 +284,7 @@ export function findSessionMeta(
 ): {
   project: string;
   command: string;
+  name?: string;
   sessionType?: SessionInfo["type"];
   cwd?: string;
   worktreePath?: string;
@@ -288,6 +297,7 @@ export function findSessionMeta(
           return {
             project: project.name,
             command: cmd.command,
+            name: match.name,
             sessionType: match.type,
             cwd: match.cwd,
             worktreePath: match.worktreePath,
@@ -297,6 +307,7 @@ export function findSessionMeta(
         return {
           project: project.name,
           command: cmd.command,
+          name: cmd.session?.name,
           sessionType: cmd.session?.type,
           cwd: cmd.session?.cwd ?? cmd.cwd,
           worktreePath: cmd.session?.worktreePath,
@@ -309,11 +320,31 @@ export function findSessionMeta(
     ? {
         project: sessionProject(s),
         command: s.command,
+        name: s.name,
         sessionType: s.type,
         cwd: s.cwd,
         worktreePath: s.worktreePath,
       }
     : null;
+}
+
+export function findCustomCommandSessionIds(
+  sessions: readonly Pick<SessionInfo, "id" | "worktreePath">[],
+  projectName: string,
+  originalKey: string,
+): string[] {
+  return sessions
+    .filter(
+      (session) =>
+        session.id ===
+        targetScopedCommandSessionId(
+          "custom",
+          projectName,
+          session.worktreePath,
+          originalKey,
+        ),
+    )
+    .map((session) => session.id);
 }
 function sameOpenTabs(a: TabEntry[], b: TabEntry[]) {
   return (
@@ -344,6 +375,7 @@ function sameMountedSessions(a: MountedSession[], b: MountedSession[]) {
         session.project === other.project &&
         session.command === other.command &&
         session.cwd === other.cwd &&
+        session.name === other.name &&
         session.worktreePath === other.worktreePath
       );
     })
@@ -365,9 +397,10 @@ export function buildTerminalDisplayTabs(
         ? { ...hydrated, alive: false }
         : hydrated;
     const isFree = type === "free" || session?.type === "free";
-    const label = isFree
+    const fallbackLabel = isFree
       ? freeTerminalBaseLabel(freeTerminalIndexMap.get(tab.sessionId))
       : tab.label;
+    const label = terminalBaseLabel(session?.name, fallbackLabel);
     const baseTab = {
       ...tab,
       label,
@@ -411,6 +444,7 @@ export function useTerminalManager(
     useState<FreeTerminalSavePromptState | null>(null);
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
   const [initialPinnedTerminalIds] = useState(() => loadPinnedTerminalIds());
+  const removingSessionIdsRef = useRef<Set<string>>(new Set());
   const suppressedAutoAttachIdsRef = useRef<Set<string>>(new Set());
   const pendingAutoAttachIdsRef = useRef<Set<string>>(new Set());
   const locallyStoppedSessionMarkersRef = useRef<
@@ -481,6 +515,7 @@ export function useTerminalManager(
     command: string,
     cwd?: string,
     worktreePath?: string,
+    name?: string,
   ) {
     suppressedAutoAttachIdsRef.current.delete(sessionId);
     pendingAutoAttachIdsRef.current.add(sessionId);
@@ -489,6 +524,7 @@ export function useTerminalManager(
     const sessionTargetPath =
       worktreePath ?? sessionMap.get(sessionId)?.worktreePath;
     const currentSession = sessionMap.get(sessionId);
+    const sessionName = name ?? currentSession?.name;
     const { type } = parseTerminalSessionId(sessionId);
     const projectMetadata =
       type !== "free" && currentSession?.type !== "free" && project
@@ -502,7 +538,10 @@ export function useTerminalManager(
         ...prev,
         {
           sessionId,
-          label: tabLabel(sessionId, project, command),
+          label: terminalBaseLabel(
+            sessionName,
+            tabLabel(sessionId, project, command),
+          ),
           session: currentSession,
           isSaveable: isAdHoc,
           ...projectMetadata,
@@ -515,6 +554,7 @@ export function useTerminalManager(
         prev,
         createMountedSession(sessionId, {
           project,
+          name: sessionName,
           command,
           cwd,
           worktreePath: sessionTargetPath,
@@ -556,6 +596,39 @@ export function useTerminalManager(
     );
   }
 
+  async function removeSessionDurably(sessionId: string): Promise<boolean> {
+    if (removingSessionIdsRef.current.has(sessionId)) return false;
+    removingSessionIdsRef.current.add(sessionId);
+    try {
+      await api.terminal.remove(sessionId);
+    } catch (error) {
+      logger.error("useTerminalManager", "failed to remove terminal session", {
+        sessionId,
+        error,
+      });
+      await qc
+        .invalidateQueries({ queryKey: ["terminal-sessions"] })
+        .catch(() => undefined);
+      return false;
+    } finally {
+      removingSessionIdsRef.current.delete(sessionId);
+    }
+
+    await qc
+      .invalidateQueries({ queryKey: ["terminal-sessions"] })
+      .catch((error: unknown) => {
+        logger.warn(
+          "useTerminalManager",
+          "failed to refresh terminal sessions",
+          {
+            sessionId,
+            error,
+          },
+        );
+      });
+    return true;
+  }
+
   async function invalidateProjectConfig() {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["projects"] }),
@@ -583,6 +656,7 @@ export function useTerminalManager(
         meta.command,
         meta.cwd,
         meta.worktreePath,
+        meta.name,
       );
     }
 
@@ -744,6 +818,7 @@ export function useTerminalManager(
           cmd.command,
           launch.cwd,
           launch.worktreePath,
+          session?.name,
         );
       })
       .catch((err: unknown) => {
@@ -788,6 +863,7 @@ export function useTerminalManager(
           cmd.command,
           launch.cwd,
           launch.worktreePath,
+          session?.name,
         );
       })
       .catch((err: unknown) => {
@@ -854,7 +930,7 @@ export function useTerminalManager(
       });
   }
 
-  function handleDeleteProfile(projectName: string, profileName: string) {
+  async function handleDeleteProfile(projectName: string, profileName: string) {
     const project = projects.find((p) => p.name === projectName);
     if (!project) return;
 
@@ -865,23 +941,18 @@ export function useTerminalManager(
     const instanceIds = sessions
       .filter((s) => s.id.startsWith(prefix))
       .map((s) => s.id);
-
     for (const id of instanceIds) {
-      const s = sessionMap.get(id);
-      if (s?.alive) void api.terminal.kill(id);
+      if (!(await removeSessionDurably(id))) {
+        throw new Error(`Failed to remove terminal ${id}`);
+      }
+      removeSessionsFromUi([id]);
     }
-
-    removeSessionsFromUi(instanceIds);
 
     const updated = (project.terminals ?? []).filter(
       (t) => t.name !== profileName,
     );
-    void api.config
-      .updateProject(projectName, { terminals: updated })
-      .then(() => {
-        void qc.invalidateQueries({ queryKey: ["projects"] });
-        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
-      });
+    await api.config.updateProject(projectName, { terminals: updated });
+    await invalidateProjectConfig();
   }
 
   async function handleUpdateProfile(
@@ -917,23 +988,21 @@ export function useTerminalManager(
       throw new Error("Profile not found");
     }
 
-    await api.config.updateProject(projectName, { terminals: updated });
-    await invalidateProjectConfig();
-
-    if (originalName === trimmedName) return;
-
-    const prefix = `terminal:${projectName}:${sanitizeSessionSegment(originalName.replace(/ /g, "_"))}:`;
-    const instanceIds = sessions
-      .filter((session) => session.id.startsWith(prefix))
-      .map((session) => session.id);
-
-    for (const id of instanceIds) {
-      if (sessionMap.get(id)?.alive) {
-        void api.terminal.kill(id);
+    if (originalName !== trimmedName) {
+      const prefix = `terminal:${projectName}:${sanitizeSessionSegment(originalName.replace(/ /g, "_"))}:`;
+      const instanceIds = sessions
+        .filter((session) => session.id.startsWith(prefix))
+        .map((session) => session.id);
+      for (const id of instanceIds) {
+        if (!(await removeSessionDurably(id))) {
+          throw new Error(`Failed to remove terminal ${id}`);
+        }
+        removeSessionsFromUi([id]);
       }
     }
-    removeSessionsFromUi(instanceIds);
-    await qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+
+    await api.config.updateProject(projectName, { terminals: updated });
+    await invalidateProjectConfig();
   }
 
   async function handleUpdateCustomCommand(
@@ -950,17 +1019,27 @@ export function useTerminalManager(
     const trimmedKey = next.key.trim();
     const trimmedCommand = next.command.trim();
     const existing = Object.keys(commands).filter((key) => key !== originalKey);
-
     const keyError = validateCustomCommandKey(trimmedKey, existing);
     if (keyError) throw new Error(keyError);
     if (!trimmedCommand) throw new Error("Command is required");
 
     const updated: Record<string, string> = {};
     for (const [key, value] of Object.entries(commands)) {
-      if (key === originalKey) {
-        updated[trimmedKey] = trimmedCommand;
-      } else {
-        updated[key] = value;
+      updated[key === originalKey ? trimmedKey : key] =
+        key === originalKey ? trimmedCommand : value;
+    }
+
+    if (originalKey !== trimmedKey) {
+      const oldIds = findCustomCommandSessionIds(
+        sessions,
+        projectName,
+        originalKey,
+      );
+      for (const id of oldIds) {
+        if (!(await removeSessionDurably(id))) {
+          throw new Error(`Failed to remove terminal ${id}`);
+        }
+        removeSessionsFromUi([id]);
       }
     }
 
@@ -968,20 +1047,6 @@ export function useTerminalManager(
       commands: Object.keys(updated).length > 0 ? updated : undefined,
     });
     await invalidateProjectConfig();
-
-    if (originalKey === trimmedKey) return;
-
-    const oldSessionPrefix = `custom:${projectName}:${originalKey.replace(/[^a-zA-Z0-9:._-]/g, "-")}`;
-    const oldSessionIds = sessions
-      .filter((session) => session.id.startsWith(oldSessionPrefix))
-      .map((session) => session.id);
-    for (const oldSessionId of oldSessionIds) {
-      if (sessionMap.get(oldSessionId)?.alive) {
-        void api.terminal.kill(oldSessionId);
-      }
-    }
-    removeSessionsFromUi(oldSessionIds);
-    await qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
   }
 
   function handleSaveProfile() {
@@ -1057,6 +1122,7 @@ export function useTerminalManager(
           "",
           launch.cwd,
           launch.worktreePath,
+          session?.name,
         );
       })
       .catch((err: unknown) => {
@@ -1102,6 +1168,7 @@ export function useTerminalManager(
           command,
           launch.cwd,
           launch.worktreePath,
+          session?.name,
         );
       })
       .catch((err: unknown) => {
@@ -1156,6 +1223,7 @@ export function useTerminalManager(
           command,
           launch.cwd,
           launch.worktreePath,
+          session?.name,
         );
       })
       .catch((err: unknown) => {
@@ -1216,6 +1284,7 @@ export function useTerminalManager(
           command,
           launch.cwd,
           launch.worktreePath,
+          session?.name,
         );
       })
       .catch((err: unknown) => {
@@ -1246,6 +1315,7 @@ export function useTerminalManager(
           prev,
           createMountedSession(sessionId, {
             project: meta.project,
+            name: meta.name,
             command: meta.command,
             cwd: meta.cwd,
             worktreePath: meta.worktreePath,
@@ -1279,26 +1349,22 @@ export function useTerminalManager(
     });
   }
 
-  function handleCloseTab(
+  async function handleCloseTab(
     sessionId: string,
     preferredFallbackSessionId?: string,
   ) {
     if (!isTerminalTabClosable(openTabs, sessionId)) return;
+    if (!(await removeSessionDurably(sessionId))) return;
     suppressedAutoAttachIdsRef.current.add(sessionId);
     pendingAutoAttachIdsRef.current.delete(sessionId);
     locallyStoppedSessionMarkersRef.current.delete(sessionId);
     forgetPinnedTerminalIds([sessionId]);
-    // Terminate the terminal session when the tab is closed
-    handleKillTerminal(sessionId);
 
     setOpenTabs((prev) => {
       const remaining = prev.filter((t) => t.sessionId !== sessionId);
       if (activeTab === sessionId) {
         setActiveTab(
-          resolveTerminalCloseFallback(
-            remaining,
-            preferredFallbackSessionId,
-          ),
+          resolveTerminalCloseFallback(remaining, preferredFallbackSessionId),
         );
       }
       return remaining;
@@ -1311,11 +1377,9 @@ export function useTerminalManager(
     void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
   }
 
-  function handleRemoveFreeTerminal(sessionId: string) {
+  async function handleRemoveFreeTerminal(sessionId: string) {
+    if (!(await removeSessionDurably(sessionId))) return;
     removeSessionsFromUi([sessionId]);
-    void api.terminal.remove(sessionId).then(() => {
-      void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
-    });
   }
 
   function handleOpenFreeTerminalSavePrompt(sessionId: string) {

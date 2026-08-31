@@ -218,7 +218,10 @@ fn build_router_with_web_dir_and_origins(
         .route("/api/terminal", get(terminal::list_sessions))
         .route("/api/terminal/detailed", get(terminal::list_detailed))
         .route("/api/terminal/{id}/buffer", get(terminal::get_buffer))
-        .route("/api/terminal/{id}", delete(terminal::kill_session))
+        .route(
+            "/api/terminal/{id}",
+            delete(terminal::kill_session).patch(terminal::rename_session),
+        )
         .route(
             "/api/terminal/{id}/remove",
             delete(terminal::remove_session),

@@ -54,10 +54,18 @@ pub enum PersistCmd {
         rows: u16,
         restart_max_retries: u32,
     },
-    /// Session removed — delete from DB
+    /// Session renamed — update metadata after queued commands complete.
+    SessionRenamed {
+        session_id: String,
+        incarnation: u64,
+        name: Option<String>,
+        reply: std::sync::mpsc::SyncSender<Result<bool, String>>,
+    },
+    /// Session removed — delete from DB after queued commands complete.
     SessionRemoved {
         session_id: String,
         incarnation: u64,
+        reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
     /// Graceful shutdown — flush all and exit
     Shutdown,
@@ -223,20 +231,32 @@ impl PersistWorker {
                 }
                 true
             }
+            PersistCmd::SessionRenamed {
+                session_id,
+                incarnation,
+                name,
+                reply,
+            } => {
+                let result = self
+                    .store
+                    .rename_session_for_incarnation(&session_id, incarnation, name)
+                    .map_err(|e| e.to_string());
+                let _ = reply.send(result);
+                true
+            }
             PersistCmd::SessionRemoved {
                 session_id,
                 incarnation,
+                reply,
             } => {
-                // Remove from pending queue and delete from DB
                 self.pending.retain(|(pending_id, pending_incarnation), _| {
-                    pending_id != &session_id || incarnation != *pending_incarnation
+                    pending_id != &session_id || *pending_incarnation > incarnation
                 });
-                if let Err(e) = self
+                let result = self
                     .store
                     .delete_session_for_incarnation(&session_id, incarnation)
-                {
-                    warn!(session_id, error = %e, "Failed to delete persisted session");
-                }
+                    .map_err(|e| e.to_string());
+                let _ = reply.send(result);
                 true
             }
             PersistCmd::Shutdown => {
@@ -312,6 +332,7 @@ mod tests {
             command: "test".to_string(),
             cwd: "/tmp".to_string(),
             worktree_path: None,
+            name: None,
             session_type: SessionType::Shell,
             alive: true,
             exit_code: None,
@@ -570,6 +591,7 @@ mod tests {
         tx.send(PersistCmd::SessionRemoved {
             session_id: "s1".to_string(),
             incarnation: 0,
+            reply: std::sync::mpsc::sync_channel(1).0,
         })
         .unwrap();
 
@@ -581,6 +603,41 @@ mod tests {
         // Session should be deleted
         let sessions = (*store).load_sessions().unwrap();
         assert_eq!(sessions.len(), 0);
+    }
+
+    #[test]
+    fn session_rename_acknowledges_persisted_update() {
+        let (store, _tmp) = create_test_store();
+        let (tx, rx) = mpsc::channel();
+        let worker = PersistWorker::new(rx, store.clone());
+
+        tx.send(PersistCmd::SessionCreated {
+            meta: create_test_meta("rename-ack"),
+            incarnation: 4,
+            env: HashMap::new(),
+            cols: 80,
+            rows: 24,
+            restart_max_retries: 5,
+        })
+        .unwrap();
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        tx.send(PersistCmd::SessionRenamed {
+            session_id: "rename-ack".to_string(),
+            incarnation: 4,
+            name: Some("Acknowledged".to_string()),
+            reply: reply_tx,
+        })
+        .unwrap();
+        tx.send(PersistCmd::Shutdown).unwrap();
+        drop(tx);
+
+        worker.run();
+
+        assert!(reply_rx.recv().unwrap().unwrap());
+        assert_eq!(
+            store.load_sessions().unwrap()[0].meta.name.as_deref(),
+            Some("Acknowledged")
+        );
     }
 
     #[test]
@@ -717,6 +774,7 @@ mod tests {
         tx.send(PersistCmd::SessionRemoved {
             session_id: "ordered".to_string(),
             incarnation: 10,
+            reply: std::sync::mpsc::sync_channel(1).0,
         })
         .unwrap();
         tx.send(PersistCmd::SessionCreated {

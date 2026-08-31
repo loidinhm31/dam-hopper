@@ -133,6 +133,57 @@ describe("WsTransport terminal lifecycle", () => {
   });
 });
 
+describe("WsTransport terminal rename", () => {
+  it("maps rename requests to the protected terminal PATCH route", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "session/1", name: "Build" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("terminal:rename", {
+      id: "session/1",
+      name: "Build",
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/terminal/session%2F1",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "PATCH",
+      body: JSON.stringify({ name: "Build" }),
+    });
+    transport.destroy();
+  });
+
+  it("preserves null when clearing a terminal name", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "session-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("terminal:rename", {
+      id: "session-1",
+      name: null,
+    });
+
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "PATCH",
+      body: JSON.stringify({ name: null }),
+    });
+    transport.destroy();
+  });
+});
+
 describe("WsTransport usage setup endpoints", () => {
   it("maps setup status and configuration to protected usage routes", async () => {
     installMockWebSocket();

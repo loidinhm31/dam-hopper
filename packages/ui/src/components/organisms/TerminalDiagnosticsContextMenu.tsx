@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Download } from "lucide-react";
+import { Download, Pencil } from "lucide-react";
 import { ContextMenu } from "@/components/ui/ContextMenu.js";
 
 export type TerminalDiagnosticsMenuHandler = (
@@ -28,8 +28,10 @@ interface TerminalDiagnosticsContextMenuProps {
   x: number;
   y: number;
   isPending: boolean;
+  isAlive?: boolean;
   error: string | null;
   onExport: () => void;
+  onRename?: () => void;
   onClose: () => void;
 }
 
@@ -42,8 +44,10 @@ export function TerminalDiagnosticsContextMenu({
   x,
   y,
   isPending,
+  isAlive = true,
   error,
   onExport,
+  onRename,
   onClose,
 }: TerminalDiagnosticsContextMenuProps) {
   // The synthetic trigger event below opens this controlled menu and supplies
@@ -82,7 +86,17 @@ export function TerminalDiagnosticsContextMenu({
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content className="w-48">
-          <ContextMenu.Item disabled={isPending} onSelect={onExport}>
+          <ContextMenu.Item
+            onSelect={() => {
+              setOpen(false);
+              onClose();
+              onRename?.();
+            }}
+          >
+            <Pencil className="h-3.5 w-3.5 shrink-0" />
+            Rename
+          </ContextMenu.Item>
+          <ContextMenu.Item disabled={isPending || !isAlive} onSelect={onExport}>
             <Download className="h-3.5 w-3.5 shrink-0" />
             {isPending ? "Exporting…" : "Export Diagnostics"}
           </ContextMenu.Item>

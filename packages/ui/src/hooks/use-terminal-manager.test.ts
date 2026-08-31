@@ -4,10 +4,12 @@ import {
   rememberTerminalSessionIncarnation,
   resetTerminalSessionIncarnations,
 } from "@/lib/terminal-incarnation-state.js";
+import { targetScopedCommandSessionId } from "@/lib/terminal-target-identity.js";
 import { useProjectTargetStore } from "@/stores/project-target.js";
 import {
   applyLocalStoppedSession,
   buildTerminalDisplayTabs,
+  findCustomCommandSessionIds,
   findSessionMeta,
   getLocallyStoppedSessionIds,
   getLocallyStoppedSessionMarker,
@@ -134,12 +136,7 @@ describe("buildTerminalDisplayTabs", () => {
   });
 });
 
-
-
-
-
 describe("findSessionMeta", () => {
-
   it("keeps cwd and target metadata for deep-link terminal selection", () => {
     const session: SessionInfo = {
       id: "terminal:demo:dev:1",
@@ -164,12 +161,61 @@ describe("findSessionMeta", () => {
   });
   it("falls back to the encoded project for deep-link session metadata", () => {
     const session: SessionInfo = {
-      id: "terminal:encoded-project:_:1", project: undefined, command: "bash",
-      cwd: "/repo", type: "terminal", alive: true, startedAt: 1,
+      id: "terminal:encoded-project:_:1",
+      project: undefined,
+      command: "bash",
+      cwd: "/repo",
+      type: "terminal",
+      alive: true,
+      startedAt: 1,
     };
-    expect(findSessionMeta(session.id, [], new Map([[session.id, session]]))).toMatchObject({
-      project: "encoded-project", sessionType: "terminal",
+    expect(
+      findSessionMeta(session.id, [], new Map([[session.id, session]])),
+    ).toMatchObject({
+      project: "encoded-project",
+      sessionType: "terminal",
     });
+  });
+});
+
+describe("custom command session identity", () => {
+  it("does not match a longer command key sharing the same prefix", () => {
+    const worktreePath = "/worktrees/feature";
+    const sessions = [
+      { id: "custom:demo:foo", worktreePath: undefined },
+      { id: "custom:demo:foobar", worktreePath: undefined },
+      {
+        id: targetScopedCommandSessionId("custom", "demo", worktreePath, "foo"),
+        worktreePath,
+      },
+      {
+        id: targetScopedCommandSessionId(
+          "custom",
+          "demo",
+          worktreePath,
+          "foobar",
+        ),
+        worktreePath,
+      },
+    ];
+
+    expect(findCustomCommandSessionIds(sessions, "demo", "foo")).toEqual([
+      "custom:demo:foo",
+      targetScopedCommandSessionId("custom", "demo", worktreePath, "foo"),
+    ]);
+    const colonKey = targetScopedCommandSessionId(
+      "custom",
+      "demo",
+      undefined,
+      "foo:bar",
+    );
+    expect(
+      findCustomCommandSessionIds(
+        [{ id: colonKey, worktreePath: undefined }],
+        "demo",
+        "foo:bar",
+      ),
+    ).toEqual([colonKey]);
   });
 });
 

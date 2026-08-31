@@ -76,9 +76,7 @@ export function ProjectInfoCommandsSection({
                     typeof target === "string"
                       ? undefined
                       : (target?.worktreePath ?? undefined),
-                    type === "custom"
-                      ? key.replace(/[^a-zA-Z0-9:._-]/g, "-")
-                      : undefined,
+                    type === "custom" ? key : undefined,
                   ),
                 })
               }

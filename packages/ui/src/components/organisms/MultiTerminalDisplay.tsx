@@ -18,6 +18,7 @@ import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/Term
 export interface MountedSession {
   sessionId: string;
   project: string;
+  name?: string;
   command: string;
   cwd?: string;
   worktreePath?: string;
@@ -34,6 +35,7 @@ interface Props {
   onSelectTab?: (sessionId: string) => void;
   onToggleTabPin?: (sessionId: string) => void;
   onCloseTab?: (sessionId: string) => void;
+  onRenameSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   layoutRevision?: number;
   renderTerminals?: boolean;
@@ -55,6 +57,7 @@ export function MultiTerminalDisplay({
   onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
+  onRenameSession,
   layoutRevision = 0,
   renderTerminals = true,
   onVisibleSessionIdsChange,
@@ -184,6 +187,7 @@ export function MultiTerminalDisplay({
           onSelectTab={onSelectTab ?? (() => {})}
           onToggleTabPin={onToggleTabPin ?? (() => {})}
           onCloseTab={onCloseTab ?? (() => {})}
+          onRenameSession={onRenameSession}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           activeSessionId={activeSessionId}
           suppressTerminalFocus={suppressTerminalNativeInput}
