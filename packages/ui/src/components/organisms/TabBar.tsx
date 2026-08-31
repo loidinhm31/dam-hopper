@@ -42,6 +42,7 @@ interface DraggableTabProps {
   onTogglePin?: (sessionId: string) => void;
   onClose: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onRenameSession?: (sessionId: string) => void;
 }
 
 export function DraggableTab({
@@ -52,6 +53,7 @@ export function DraggableTab({
   onTogglePin,
   onClose,
   onOpenDiagnosticsMenu,
+  onRenameSession,
 }: DraggableTabProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `tab:${paneId}:${tab.sessionId}`,
@@ -87,6 +89,7 @@ export function DraggableTab({
         type="button"
         className="flex items-center gap-1.5 px-1.5 py-1.5 text-xs whitespace-nowrap"
         onClick={() => onSelect(tab.sessionId)}
+        onDoubleClick={() => onRenameSession?.(tab.sessionId)}
         onContextMenu={(event) =>
           openTerminalDiagnosticsContextMenu(
             event,
@@ -164,6 +167,7 @@ export interface TabBarProps {
   onToggleTabPin: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onRenameSession?: (sessionId: string) => void;
   onNewTerminal: () => void;
   onSplitPaneHorizontal: () => void;
   onSplitPaneVertical: () => void;
@@ -181,6 +185,7 @@ export function TabBar({
   onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
+  onRenameSession,
   onNewTerminal,
   onSplitPaneHorizontal,
   onSplitPaneVertical,
@@ -229,6 +234,7 @@ export function TabBar({
                   isActive={tab.sessionId === activeSessionId}
                   onSelect={onSelectTab}
                   onTogglePin={onToggleTabPin}
+                  onRenameSession={onRenameSession}
                   onClose={onCloseTab}
                   onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
                 />

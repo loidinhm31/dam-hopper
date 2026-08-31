@@ -47,6 +47,7 @@ export interface TraditionalTerminalProjectsDisplayProps {
     preferredFallbackSessionId?: string,
   ) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onRenameSession?: (sessionId: string) => void;
   onVisibleSessionIdsChange?: (sessionIds: ReadonlySet<string>) => void;
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
@@ -68,6 +69,7 @@ export function TraditionalTerminalProjectsDisplay({
   onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
+  onRenameSession,
   onVisibleSessionIdsChange,
   browserOpen = false,
   renderBrowserContent,
@@ -183,6 +185,7 @@ export function TraditionalTerminalProjectsDisplay({
         onSelectTab={handleSelectTab}
         onToggleTabPin={onToggleTabPin}
         onCloseTab={handleCloseTerminalTab}
+        onRenameSession={onRenameSession}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         onVisibleSessionIdsChange={onVisibleSessionIdsChange}
         browserOpen={browserOpen}

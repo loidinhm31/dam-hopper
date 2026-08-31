@@ -35,6 +35,7 @@ interface Props {
   onToggleTabPin?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onRenameSession?: (sessionId: string) => void;
   onMoveItem: (groupId: string, draggedId: string, targetId: string) => void;
   onSetDragState: (
     state:
@@ -129,6 +130,7 @@ function RuntimeSessionLeaf({
   onToggleTabPin,
   onCloseSession,
   onOpenDiagnosticsMenu,
+  onRenameSession,
   onStartTunnel,
   onStopTunnel,
   onOpenTunnelInBrowser,
@@ -140,6 +142,7 @@ function RuntimeSessionLeaf({
   onToggleTabPin?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onRenameSession?: (sessionId: string) => void;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
   onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
@@ -174,6 +177,7 @@ function RuntimeSessionLeaf({
               onOpenDiagnosticsMenu,
             )
           }
+          onDoubleClick={() => onRenameSession?.(session.sessionId)}
         >
           <TerminalActivityIndicator
             sessionId={session.sessionId}
@@ -264,6 +268,7 @@ export function TerminalRuntimeNavigatorItem({
   onToggleTabPin,
   onCloseSession,
   onOpenDiagnosticsMenu,
+  onRenameSession,
   onMoveItem,
   onSetDragState,
   onStartTunnel,
@@ -329,6 +334,7 @@ export function TerminalRuntimeNavigatorItem({
           onSelectSession={onSelectSession}
           onToggleTabPin={onToggleTabPin}
           onCloseSession={onCloseSession}
+          onRenameSession={onRenameSession}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           onStartTunnel={onStartTunnel}
           onStopTunnel={onStopTunnel}
@@ -355,6 +361,7 @@ export function TerminalRuntimeNavigatorItem({
                 onSelectSession={onSelectSession}
                 onToggleTabPin={onToggleTabPin}
                 onCloseSession={onCloseSession}
+                onRenameSession={onRenameSession}
                 onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
                 onStartTunnel={onStartTunnel}
                 onStopTunnel={onStopTunnel}

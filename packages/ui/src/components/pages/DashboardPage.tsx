@@ -100,7 +100,7 @@ function SessionRow({
         {session.project}
       </span>
       <span className="text-xs text-[var(--color-text-muted)] truncate flex-1 min-w-0">
-        {session.command}
+        {session.name ?? session.command}
       </span>
       <span className="text-[10px] text-[var(--color-text-muted)]/60 tabular-nums shrink-0">
         {formatUptime(session.startedAt)}
@@ -147,7 +147,7 @@ export function DashboardPage() {
     () =>
       aliveSessions.map((session) => ({
         id: session.id,
-        label: `${session.project ?? "free"} · ${session.command}`,
+        label: session.name ?? `${session.project ?? "free"} · ${session.command}`,
       })),
     [aliveSessions],
   );
