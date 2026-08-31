@@ -32,7 +32,7 @@ interface MarkdownHostProps {
   readOnly?: boolean;
   onChange: (value: string) => void;
   onSave: () => void;
-  onViewStateChange: (vs: unknown) => void;
+  onViewStateChange: (vs: unknown, targetKey?: string) => void;
   lineChanges?: GitLineChange[];
   onGitIndicatorClick?: () => void;
 }
