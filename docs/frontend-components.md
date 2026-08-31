@@ -896,6 +896,15 @@ snapshot.
 
 **Terminal mode:** The floating Files panel defaults to its Explorer left-pane tab each time it opens and adds a sibling Changes tab. Closing it unmounts its content, so it reopens in Explorer rather than retaining a prior Changes selection. Explorer continues to render `FileTree` with its Git status badges; Changes reuses `ChangedFilesList` for local stage/unstage, discard, commit, and diff-opening actions. The separate floating Git panel remains the surface for branch, history, and remote operations.
 
+### Editor viewState persistence
+
+**Locations:** `packages/ui/src/components/organisms/MonacoHost.tsx`, `packages/ui/src/components/organisms/EditorTabs.tsx`, `packages/ui/src/stores/editor.ts`
+
+**Purpose:** Preserves Monaco editor view states (cursor position, column, scroll offsets, and code folds) across tab switching, component unmounting (such as sidebar/panel toggling), and page reloads.
+
+- **Storage & Hydration:** View state is part of persisted editor tab state under `dam-hopper:editor-state` in `localStorage`. Hydrated tabs retain view state across `loadContent` invocations so opening the file restores line and column positions.
+- **Race-Safe State Capture:** `MonacoHost` captures the originating tab's view state prior to switching active `tabKey` using `prevTabKeyRef` and on unmount, passing `targetKey` explicitly to prevent view states from polluting newly selected tabs.
+
 ### Explorer language filter
 
 **Locations:** `packages/ui/src/components/organisms/FileTree.tsx`, `packages/ui/src/hooks/use-fs-subscription.ts`, `packages/ui/src/api/queries.ts`, and `packages/ui/src/lib/explorer-language-scan.ts`

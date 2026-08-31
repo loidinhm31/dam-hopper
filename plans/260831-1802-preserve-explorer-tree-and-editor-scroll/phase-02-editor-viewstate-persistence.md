@@ -9,7 +9,8 @@
 
 ## Overview
 - **Priority**: P2
-- **Current Status**: Pending
+- **Current Status**: Complete
+- **Completed**: 2026-08-31
 - **Description**: Ensure editor tabs persist their Monaco `viewState` (cursor line, column, scroll position, and code folds) to `localStorage` and restore it during tab hydration, tab switching, and component unmount/remount cycles without tab-switch race conditions.
 
 ## Key Insights
@@ -69,11 +70,11 @@ MonacoHost mount / tabKey effect -> editor.restoreViewState(viewState)
    - Add tests verifying that `saveViewState` persists `viewState` through `partialize` and that `migrateEditorState` / `persistedTab` correctly preserves it during hydration.
 
 ## Todo List
-- [ ] Update `partialize` in `editor.ts` to include `viewState`
-- [ ] Update `persistedTab` in `editor.ts` to restore `viewState`
-- [ ] Update `onViewStateChange` signature in `EditorTabs.tsx` and `MarkdownHost.tsx`
-- [ ] Add unmount / pre-tab-switch key-scoped view state save in `MonacoHost.tsx`
-- [ ] Add unit tests in `editor.test.ts` for view state persistence and hydration
+- [x] Update `partialize` in `editor.ts` to include `viewState`
+- [x] Update `persistedTab` in `editor.ts` to restore `viewState`
+- [x] Update `onViewStateChange` signature in `EditorTabs.tsx` and `MarkdownHost.tsx`
+- [x] Add unmount / pre-tab-switch key-scoped view state save in `MonacoHost.tsx`
+- [x] Add unit tests in `editor.test.ts` for view state persistence and hydration
 
 ## Success Criteria
 - Opening a file, scrolling to line 200, placing cursor, and refreshing the browser leaves the file positioned at line 200 with cursor in place.
