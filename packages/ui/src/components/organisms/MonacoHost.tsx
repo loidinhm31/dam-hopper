@@ -36,7 +36,7 @@ interface MonacoHostProps {
   viewState?: unknown;
   onChange: (value: string) => void;
   onSave: () => void;
-  onViewStateChange: (vs: unknown) => void;
+  onViewStateChange: (vs: unknown, targetKey?: string) => void;
   onEditorReady?: (
     editor: monacoNs.editor.IStandaloneCodeEditor | null,
   ) => void;
@@ -74,29 +74,28 @@ export function MonacoHost({
     useAndroidChromeInputPolicy();
   const editorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof monacoNs | null>(null);
-  const viewStateRef = useRef<unknown>(viewState);
   const lineChangesRef = useRef<GitLineChange[]>(lineChanges ?? []);
   const onGitIndicatorClickRef = useRef(onGitIndicatorClick);
   const gitDecorationIdsRef = useRef<string[]>([]);
   const wheelEnabledRef = useRef(
     useSettingsStore.getState().editorZoomWheelEnabled,
   );
+  const prevTabKeyRef = useRef(tabKey);
+  const onViewStateChangeRef = useRef(onViewStateChange);
+  const onEditorReadyRef = useRef(onEditorReady);
 
   // Persist latest onSave ref so the Ctrl+S command always calls the current handler
   const onSaveRef = useRef(onSave);
   useEffect(() => {
     onSaveRef.current = onSave;
+    onViewStateChangeRef.current = onViewStateChange;
+    onEditorReadyRef.current = onEditorReady;
   });
 
   useEffect(() => {
     lineChangesRef.current = lineChanges ?? [];
     onGitIndicatorClickRef.current = onGitIndicatorClick;
   }, [lineChanges, onGitIndicatorClick]);
-
-  // Persist latest viewState ref so blur handler always saves current state
-  useEffect(() => {
-    viewStateRef.current = viewState;
-  });
 
   const handleMount: OnMount = useCallback(
     (editor, monaco) => {
@@ -142,7 +141,7 @@ export function MonacoHost({
       // Persist view state on blur
       editor.onDidBlurEditorWidget(() => {
         const vs = editor.saveViewState();
-        if (vs) onViewStateChange(vs);
+        if (vs) onViewStateChangeRef.current(vs, prevTabKeyRef.current);
       });
 
       // ResizeObserver layout — avoids automaticLayout's internal polling overhead.
@@ -213,6 +212,20 @@ export function MonacoHost({
     if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
   }, [isAndroidChromeNativeInputSuppressed, readOnly]);
 
+  // Capture view state of previous tab when tabKey changes, before updating prevTabKeyRef
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (editor && prevTabKeyRef.current !== tabKey) {
+      const vs = editor.saveViewState();
+      if (vs) {
+        onViewStateChangeRef.current(vs, prevTabKeyRef.current);
+      }
+      prevTabKeyRef.current = tabKey;
+    } else {
+      prevTabKeyRef.current = tabKey;
+    }
+  }, [tabKey]);
+
   // Restore view state when switching tabs (content ref changes)
   useEffect(() => {
     const editor = editorRef.current;
@@ -258,15 +271,18 @@ export function MonacoHost({
     });
     return () => {
       unsub();
-      onEditorReady?.(null);
+      onEditorReadyRef.current?.(null);
       const ed = editorRef.current;
       if (ed) {
+        const vs = ed.saveViewState();
+        if (vs) {
+          onViewStateChangeRef.current(vs, prevTabKeyRef.current);
+        }
         ed.deltaDecorations(gitDecorationIdsRef.current, []);
         (ed as unknown as { _roCleanup?: () => void })._roCleanup?.();
         (ed as unknown as { _wheelCleanup?: () => void })._wheelCleanup?.();
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const isDegraded = tier === "degraded";

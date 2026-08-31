@@ -46,6 +46,7 @@ interface ActiveTerminalRuntimeDisplayProps {
   onToggleTabPin?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onRenameSession?: (sessionId: string) => void;
   onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
@@ -59,6 +60,7 @@ export function RuntimeActiveSessionTitle({
   activeProject,
   terminalCommitStatusEnabled = false,
   onOpenDiagnosticsMenu,
+  onRenameSession,
 }: {
   activeSessionId: string | null;
   activeSessionTitle?: OpenTerminalTitle;
@@ -66,6 +68,7 @@ export function RuntimeActiveSessionTitle({
   activeProject?: string;
   terminalCommitStatusEnabled?: boolean;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onRenameSession?: (sessionId: string) => void;
 }) {
   return (
     <div
@@ -79,16 +82,21 @@ export function RuntimeActiveSessionTitle({
         );
       }}
     >
-      {activeSessionTitle ? (
-        <TerminalTitleText
-          title={activeSessionTitle}
-          className="text-xs font-semibold"
-        />
-      ) : (
-        <p className="truncate text-xs font-semibold text-[var(--color-text)]">
-          {activeSessionLabel ?? "No terminal selected"}
-        </p>
-      )}
+      <span
+        className="min-w-0"
+        onDoubleClick={() => activeSessionId && onRenameSession?.(activeSessionId)}
+      >
+        {activeSessionTitle ? (
+          <TerminalTitleText
+            title={activeSessionTitle}
+            className="text-xs font-semibold"
+          />
+        ) : (
+          <p className="truncate text-xs font-semibold text-[var(--color-text)]">
+            {activeSessionLabel ?? "No terminal selected"}
+          </p>
+        )}
+      </span>
       <div className="flex min-w-0 items-center gap-1.5">
         <p className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
           Full-width terminal
@@ -117,6 +125,7 @@ export function ActiveTerminalRuntimeDisplay({
   onSelectTab,
   onToggleTabPin,
   onCloseSession,
+  onRenameSession,
   onOpenDiagnosticsMenu,
   onOpenTunnelInBrowser,
   browserOpen = false,
@@ -169,7 +178,7 @@ export function ActiveTerminalRuntimeDisplay({
     (tab) => tab.sessionId === activeSessionId,
   );
   const activeSessionLabel = activeSession
-    ? `${activeSession.project}: ${activeSession.command}`
+    ? activeSession.name ?? `${activeSession.project}: ${activeSession.command}`
     : "No terminal selected";
   const handleMobileSelectSession = (sessionId: string) => {
     onSelectTab?.(sessionId);
@@ -203,6 +212,7 @@ export function ActiveTerminalRuntimeDisplay({
             activeProject={activeSession?.project}
             terminalCommitStatusEnabled={terminalCommitStatusEnabled}
             onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
+            onRenameSession={onRenameSession}
           />
           <button
             type="button"
@@ -242,6 +252,7 @@ export function ActiveTerminalRuntimeDisplay({
               onCloseSession={onCloseSession}
               onToggleTabPin={onToggleTabPin}
               onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
+              onRenameSession={onRenameSession}
               onMoveGroup={ordering.moveGroup}
               onMoveItem={ordering.moveItem}
               onNewFreeTerminal={handleMobileNewTerminal}
@@ -272,6 +283,7 @@ export function ActiveTerminalRuntimeDisplay({
         onCloseSession={onCloseSession}
         onToggleTabPin={onToggleTabPin}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
+        onRenameSession={onRenameSession}
         onMoveGroup={ordering.moveGroup}
         onMoveItem={ordering.moveItem}
         onNewFreeTerminal={handleNewTerminal}
@@ -307,6 +319,7 @@ export function ActiveTerminalRuntimeDisplay({
             activeSessionTitle={activeOpenTab?.title}
             activeSessionLabel={activeSessionLabel}
             onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
+            onRenameSession={onRenameSession}
           />
           <TerminalCommitStatusChip
             project={activeSession?.project}

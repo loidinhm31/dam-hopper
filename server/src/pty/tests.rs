@@ -91,6 +91,7 @@ mod pty_tests {
             rows: 24,
             project: None,
             worktree_path: None,
+            name: None,
             restart_policy: RestartPolicy::Never,
             restart_max_retries: DEFAULT_RESTART_MAX_RETRIES,
         }
@@ -292,6 +293,34 @@ mod pty_tests {
         assert!(!mgr.is_alive("free:remove-test"));
         let sessions = mgr.list();
         assert!(!sessions.iter().any(|s| s.id == "free:remove-test"));
+    }
+
+    #[test]
+    fn session_rename_updates_live_metadata() {
+        let mgr = make_manager();
+        let id = "terminal:session-rename";
+        let mut options = opts(id, "cat");
+        options.name = Some("Initial".to_string());
+        mgr.create(options).unwrap();
+
+        assert_eq!(
+            mgr.list()
+                .into_iter()
+                .find(|session| session.id == id)
+                .and_then(|session| session.name),
+            Some("Initial".to_string())
+        );
+        let renamed = mgr.rename(id, Some("Renamed".to_string())).unwrap();
+        assert_eq!(renamed.name.as_deref(), Some("Renamed"));
+        assert_eq!(
+            mgr.list()
+                .into_iter()
+                .find(|session| session.id == id)
+                .and_then(|session| session.name),
+            Some("Renamed".to_string())
+        );
+
+        mgr.remove(id).unwrap();
     }
 
     #[test]
@@ -566,7 +595,7 @@ mod pty_tests {
         let mgr = make_manager();
         mgr.create(opts("build:dispose1", "cat")).unwrap();
         mgr.create(opts("build:dispose2", "cat")).unwrap();
-        mgr.dispose();
+        mgr.dispose().expect("dispose should succeed");
         assert!(!mgr.is_alive("build:dispose1"));
         assert!(!mgr.is_alive("build:dispose2"));
         let sessions = mgr.list();
@@ -582,7 +611,7 @@ mod pty_tests {
         mgr.create(options).unwrap();
         assert!(wait_for(Duration::from_secs(2), || mgr.is_alive(id)));
 
-        mgr.dispose();
+        mgr.dispose().expect("dispose should succeed");
 
         assert!(wait_for(Duration::from_secs(2), || mgr.list().is_empty()));
     }
@@ -602,7 +631,7 @@ mod pty_tests {
                 .any(|session| session.id == id && !session.alive)
         }));
 
-        mgr.dispose();
+        mgr.dispose().expect("dispose should succeed");
 
         std::thread::sleep(Duration::from_millis(1500));
         assert!(mgr.list().is_empty(), "queued restart recreated {id}");
@@ -629,7 +658,10 @@ mod pty_tests {
             "dispose should enter the lifecycle drain"
         );
         hook.release();
-        dispose_task.await.expect("dispose task should finish");
+        dispose_task
+            .await
+            .expect("dispose task should finish")
+            .expect("dispose should succeed");
 
         assert!(
             tokio_wait_for(Duration::from_secs(2), || mgr.list().is_empty()).await,
@@ -659,7 +691,10 @@ mod pty_tests {
         hook.release();
 
         let result = create_task.await.expect("create task should finish");
-        dispose_task.await.expect("dispose task should finish");
+        dispose_task
+            .await
+            .expect("dispose task should finish")
+            .expect("dispose should succeed");
         assert!(
             matches!(result, Err(crate::error::AppError::Unavailable(_))),
             "in-flight create should be rejected after dispose: {result:?}"
@@ -689,7 +724,10 @@ mod pty_tests {
         hook.release();
 
         let result = create_task.await.expect("create task should finish");
-        dispose_task.await.expect("dispose task should finish");
+        dispose_task
+            .await
+            .expect("dispose task should finish")
+            .expect("dispose should succeed");
         assert!(
             matches!(result, Err(crate::error::AppError::Unavailable(_))),
             "in-flight pre-spawn create should be rejected after dispose: {result:?}"
@@ -718,7 +756,10 @@ mod pty_tests {
             "dispose should enter the lifecycle drain"
         );
         hook.release();
-        dispose_task.await.expect("dispose task should finish");
+        dispose_task
+            .await
+            .expect("dispose task should finish")
+            .expect("dispose should succeed");
 
         assert!(
             tokio_wait_for(Duration::from_secs(2), || mgr.list().is_empty()).await,
@@ -1727,11 +1768,13 @@ mod pty_tests {
     fn retrying_target_session_hydrates_persisted_scrollback_before_attach() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let store = Arc::new(SessionStore::open(temp.path()).unwrap());
-        let meta = SessionMeta::new(
+        let meta = SessionMeta::new_with_target(
             "shell:retry-buffer".to_string(),
             None,
             "old command".to_string(),
             "/tmp".to_string(),
+            None,
+            None,
             RestartPolicy::Never,
         );
         store
@@ -1746,9 +1789,15 @@ mod pty_tests {
             )
             .unwrap();
 
-        let (tx, _rx) = std::sync::mpsc::sync_channel(256);
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        let worker = PersistWorker::new(rx, store.clone());
+        let handle = std::thread::spawn(move || worker.run());
         let mgr = test_rt().block_on(async {
-            PtySessionManager::with_persist(Arc::new(NoopEventSink), Some(tx), Some(store))
+            PtySessionManager::with_persist(
+                Arc::new(NoopEventSink),
+                Some(tx.clone()),
+                Some(store.clone()),
+            )
         });
         mgr.restore_unavailable_session(meta, 0);
         mgr.create(opts("shell:retry-buffer", "sleep 1")).unwrap();
@@ -1756,6 +1805,8 @@ mod pty_tests {
         let replay = mgr.get_buffer("shell:retry-buffer").unwrap();
         assert!(replay.contains("persisted target history"), "{replay:?}");
         mgr.remove("shell:retry-buffer").unwrap();
+        tx.send(PersistCmd::Shutdown).unwrap();
+        handle.join().unwrap();
     }
 
     #[test]
@@ -1834,7 +1885,17 @@ mod pty_tests {
         let serialized_events = events.lock().unwrap().join("\n");
         assert!(!serialized_events.contains("dam_hopper.run_id="));
         assert!(!serialized_events.contains("redacted-correlation-marker"));
-        mgr.remove("shell:otel-environment").unwrap();
+        let remover = std::thread::spawn(move || mgr.remove("shell:otel-environment"));
+        match rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("expected SessionRemoved command")
+        {
+            PersistCmd::SessionRemoved { reply, .. } => {
+                reply.send(Ok(())).unwrap();
+            }
+            _ => panic!("expected SessionRemoved after terminal output assertions"),
+        }
+        remover.join().unwrap().unwrap();
     }
 
     #[test]
@@ -2170,6 +2231,7 @@ mod pty_tests {
             rows,
             project,
             worktree_path: None,
+            name: None,
             restart_policy: RestartPolicy::Always,
             restart_max_retries: 1,
         };

@@ -2916,6 +2916,8 @@ API layer (handlers) catch AppError → HTTP status:
   never changes server, workspace, project-file, API, or database state.
 - **Drag-and-drop file move:** FileTree.tsx DnD via react-arborist's built-in `onMove`. Drop on dir → move into dir. Drop on file → move to file's parent. Calls existing `ops.move()` with server-side sandbox validation.
 - **Backend search API:** `GET /api/fs/search?project=X&q=QUERY[&case=bool&max=N]` in server/src/api/fs.rs. Uses `ignore` crate v0.4 for .gitignore-aware directory walking. Plain text search (regex-escaped server-side). Results capped at 1000, default 200.
+- **Persistent explorer tree expansion:** `packages/ui/src/stores/explorer-tree.ts` (`useExplorerTreeStore`) persists directory open/close states in `localStorage` under `dam-hopper:explorer-tree-state` keyed by target scope (`${project}::${targetKey}`). `FileTree` uses this state for `initialOpenState`, cascading child hydration on remount, error-safe directory pruning, and rename/move/delete tree synchronization.
+- **Persistent editor view state:** Monaco editor `viewState` (cursor position, column, scroll offsets, and code folds) is persisted in `dam-hopper:editor-state` via `packages/ui/src/stores/editor.ts`. `MonacoHost` captures view state before switching active tabs and on unmount with race-safe tab attribution, preserving view state across tab switching and app reloads.
 - **Frontend search panel:** New "SEARCH" tab in SidebarTabSwitcher. SearchPanel component with debounced input (useDeferredValue), results grouped by file with match highlighting. `useFileSearch` hook in packages/ui/src/hooks/. Ctrl+Shift+F keyboard shortcut to focus search. Gated behind ide_explorer feature flag.
 
 **Phase 08 (Complete):** IDE Tool Windows Refactoring.

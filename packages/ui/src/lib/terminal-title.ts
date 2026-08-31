@@ -12,6 +12,13 @@ export function freeTerminalBaseLabel(index?: number): string {
   return index === undefined ? "Terminal (starting…)" : `Terminal ${index}`;
 }
 
+export function terminalBaseLabel(
+  name: string | null | undefined,
+  fallback: string,
+): string {
+  return name ?? fallback;
+}
+
 const PROJECTLESS_TAB_GROUP = Symbol("projectless-terminal-tabs");
 
 export function applyTerminalTitleOrdinals<

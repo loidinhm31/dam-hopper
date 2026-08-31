@@ -39,10 +39,9 @@ pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
 // POST /api/settings/reset  (workspace:reset IPC)
 // ---------------------------------------------------------------------------
 
-pub async fn reset(State(state): State<AppState>) -> impl IntoResponse {
-    // Stop all PTY sessions — equivalent to workspace reset
-    state.pty_manager.dispose();
-    Json(serde_json::json!({ "ok": true })).into_response()
+pub async fn reset(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    state.pty_manager.dispose().map_err(ApiError::from_app)?;
+    Ok(Json(serde_json::json!({ "ok": true })).into_response())
 }
 
 // ---------------------------------------------------------------------------

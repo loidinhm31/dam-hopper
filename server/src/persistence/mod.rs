@@ -111,6 +111,14 @@ impl SessionStore {
                 "migrations/008_persisted_port_incarnation.sql"
             ))?;
         }
+        let has_name: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'name'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_name == 0 {
+            conn.execute_batch(include_str!("migrations/009_session_name.sql"))?;
+        }
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -204,15 +212,16 @@ impl SessionStore {
 
         conn.execute(
             "INSERT INTO sessions
-             (id, project, command, cwd, worktree_path, session_type, restart_policy,
+             (id, project, command, cwd, worktree_path, name, session_type, restart_policy,
              restart_max_retries, env_json, cols, rows, created_at, updated_at, alive,
               target_unavailable, incarnation)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1, ?15, ?16)
              ON CONFLICT(id) DO UPDATE SET
                 project = excluded.project,
                 command = excluded.command,
                 cwd = excluded.cwd,
                 worktree_path = excluded.worktree_path,
+                name = excluded.name,
                 session_type = excluded.session_type,
                 restart_policy = excluded.restart_policy,
                 restart_max_retries = excluded.restart_max_retries,
@@ -236,6 +245,7 @@ impl SessionStore {
                 meta.command,
                 meta.cwd,
                 meta.worktree_path,
+                meta.name,
                 session_type,
                 restart_policy,
                 restart_max_retries as i64,
@@ -329,7 +339,7 @@ impl SessionStore {
     pub fn load_sessions(&self) -> Result<Vec<PersistedSession>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT s.id, s.project, s.command, s.cwd, s.worktree_path, s.session_type,
+            "SELECT s.id, s.project, s.command, s.cwd, s.worktree_path, s.name, s.session_type,
                     s.restart_policy, s.env_json, s.cols, s.rows, s.created_at,
                     s.target_unavailable, s.incarnation
              FROM sessions AS s
@@ -348,14 +358,15 @@ impl SessionStore {
                 let command: String = row.get(2)?;
                 let cwd: String = row.get(3)?;
                 let worktree_path: Option<String> = row.get(4)?;
-                let session_type_str: String = row.get(5)?;
-                let restart_policy_str: String = row.get(6)?;
-                let env_json: String = row.get(7)?;
-                let cols: u16 = row.get(8)?;
-                let rows: u16 = row.get(9)?;
-                let created_at: i64 = row.get(10)?;
-                let target_unavailable: bool = row.get::<_, i64>(11)? != 0;
-                let incarnation: i64 = row.get(12)?;
+                let name: Option<String> = row.get(5)?;
+                let session_type_str: String = row.get(6)?;
+                let restart_policy_str: String = row.get(7)?;
+                let env_json: String = row.get(8)?;
+                let cols: u16 = row.get(9)?;
+                let rows: u16 = row.get(10)?;
+                let created_at: i64 = row.get(11)?;
+                let target_unavailable: bool = row.get::<_, i64>(12)? != 0;
+                let incarnation: i64 = row.get(13)?;
 
                 let session_type = match session_type_str.as_str() {
                     "shell" => crate::pty::session::SessionType::Shell,
@@ -383,6 +394,7 @@ impl SessionStore {
                     command,
                     cwd,
                     worktree_path,
+                    name,
                     session_type,
                     alive: false, // Will be set to true when restored
                     exit_code: None,
@@ -410,7 +422,6 @@ impl SessionStore {
     /// Returns (data, total_written) if found, None if not.
     pub fn load_buffer(&self, id: &str) -> Result<Option<(Vec<u8>, u64)>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
-
         conn.query_row(
             "SELECT data, total_written FROM session_buffers WHERE session_id = ?1",
             params![id],
@@ -423,13 +434,30 @@ impl SessionStore {
         .optional()
     }
 
-    pub fn delete_session_for_incarnation(
+    pub fn rename_session_for_incarnation(
         &self,
         id: &str,
         incarnation: u64,
+        name: Option<String>,
+    ) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE sessions SET name = ?1, updated_at = ?2
+             WHERE id = ?3 AND incarnation = ?4
+               AND NOT EXISTS (
+                   SELECT 1 FROM session_removals AS r
+                   WHERE r.id = sessions.id AND r.incarnation >= sessions.incarnation
+               )",
+            params![name, now_ms() as i64, id, incarnation as i64],
+        )?;
+        Ok(changed != 0)
+    }
+
+    fn delete_session_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        id: &str,
+        incarnation: u64,
     ) -> Result<(), rusqlite::Error> {
-        let mut conn = self.conn.lock().unwrap();
-        let transaction = conn.transaction()?;
         transaction.execute(
             "INSERT INTO session_removals (id, incarnation, updated_at)
              VALUES (?1, ?2, ?3)
@@ -438,6 +466,17 @@ impl SessionStore {
                 updated_at = excluded.updated_at
              WHERE excluded.incarnation > session_removals.incarnation",
             params![id, incarnation as i64, now_ms() as i64],
+        )?;
+        transaction.execute(
+            "DELETE FROM session_buffers
+             WHERE session_id = ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM sessions
+                   WHERE id = ?1 AND incarnation > (
+                       SELECT incarnation FROM session_removals WHERE id = ?1
+                   )
+               )",
+            params![id],
         )?;
         transaction.execute(
             "DELETE FROM persisted_ports
@@ -455,6 +494,38 @@ impl SessionStore {
                )",
             params![id],
         )?;
+        Ok(())
+    }
+
+    pub fn cleanup_dead_sessions(&self) -> Result<usize, rusqlite::Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let transaction = conn.transaction()?;
+        let mut stmt =
+            transaction.prepare("SELECT id, incarnation FROM sessions WHERE alive = 0")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?.max(0) as u64,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        for (id, incarnation) in &rows {
+            Self::delete_session_in_transaction(&transaction, id, *incarnation)?;
+        }
+        transaction.commit()?;
+        Ok(rows.len())
+    }
+
+    pub fn delete_session_for_incarnation(
+        &self,
+        id: &str,
+        incarnation: u64,
+    ) -> Result<(), rusqlite::Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let transaction = conn.transaction()?;
+        Self::delete_session_in_transaction(&transaction, id, incarnation)?;
         transaction.commit()?;
         Ok(())
     }
@@ -616,6 +687,7 @@ mod tests {
             command: "npm run dev".to_string(),
             cwd: "/test/path".to_string(),
             worktree_path: Some("/test/worktree".to_string()),
+            name: None,
             session_type: SessionType::Shell,
             alive: true,
             exit_code: None,
@@ -657,6 +729,66 @@ mod tests {
         assert_eq!(sessions[0].env.get("NODE_ENV").unwrap(), "development");
         assert_eq!(sessions[0].cols, 120);
         assert_eq!(sessions[0].rows, 32);
+    }
+
+    #[test]
+    fn session_rename_round_trip_preserves_name_and_rejects_stale_identity() {
+        let (store, _temp) = create_test_store();
+        let mut meta = create_test_session();
+        meta.name = Some("Release shell".to_string());
+        let env = HashMap::new();
+
+        store
+            .save_session_for_incarnation(&meta, 7, &env, 120, 32, 5)
+            .unwrap();
+        assert_eq!(
+            store.load_sessions().unwrap()[0].meta.name.as_deref(),
+            Some("Release shell")
+        );
+
+        assert!(store
+            .rename_session_for_incarnation(&meta.id, 7, Some("Renamed shell".to_string()))
+            .unwrap());
+        assert_eq!(
+            store.load_sessions().unwrap()[0].meta.name.as_deref(),
+            Some("Renamed shell")
+        );
+        assert!(!store
+            .rename_session_for_incarnation(&meta.id, 6, Some("stale".to_string()))
+            .unwrap());
+        assert_eq!(
+            store.load_sessions().unwrap()[0].meta.name.as_deref(),
+            Some("Renamed shell")
+        );
+    }
+
+    #[test]
+    fn expired_dead_session_cleanup_removes_rows_and_buffers() {
+        let (store, _temp) = create_test_store();
+        let meta = create_test_session();
+        let env = HashMap::new();
+
+        store
+            .save_session_for_incarnation(&meta, 17, &env, 80, 24, 5)
+            .unwrap();
+        store
+            .save_buffer_for_incarnation(&meta.id, 17, b"dead output", 11)
+            .unwrap();
+        store
+            .mark_session_dead_for_incarnation(&meta.id, 17)
+            .unwrap();
+
+        assert_eq!(store.cleanup_dead_sessions().unwrap(), 1);
+        assert!(store.load_buffer(&meta.id).unwrap().is_none());
+        let conn = store.conn.lock().unwrap();
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id = ?1",
+                params![meta.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
     }
 
     #[test]
@@ -872,6 +1004,7 @@ mod tests {
             command: "test".to_string(),
             cwd: "/".to_string(),
             worktree_path: None,
+            name: None,
             session_type: SessionType::Shell,
             alive: true,
             exit_code: None,

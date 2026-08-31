@@ -1,7 +1,7 @@
 import type { SessionInfo } from "@/api/client.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
-import { freeTerminalBaseLabel } from "@/lib/terminal-title.js";
+import { freeTerminalBaseLabel, terminalBaseLabel } from "@/lib/terminal-title.js";
 
 export interface ParsedTerminalSessionId {
   type: string;
@@ -50,16 +50,23 @@ export function sessionProject(session: SessionInfo): string {
   return session.project ?? parsed.project ?? "";
 }
 
-function sessionTabLabel(session: SessionInfo, freeTerminalIndexMap: Map<string, number>) {
+function sessionTabLabel(
+  session: SessionInfo,
+  freeTerminalIndexMap: Map<string, number>,
+) {
   const { type, profile } = parseTerminalSessionId(session.id);
   const project = sessionProject(session);
-  if (type === "free") return freeTerminalBaseLabel(freeTerminalIndexMap.get(session.id));
-  if (type === "terminal") {
-    if (profile && profile !== "_") return `${project}:${profile.replace(/_/g, " ")}`;
-    const cmdBase = session.command.split(/[\s/\\]/).find(Boolean) ?? session.command;
-    return `${project}:${cmdBase}`;
-  }
-  return `${project}:${type}`;
+  const fallback =
+    type === "free"
+      ? freeTerminalBaseLabel(freeTerminalIndexMap.get(session.id))
+      : type === "terminal"
+        ? profile && profile !== "_"
+          ? `${project}:${profile.replace(/_/g, " ")}`
+          : `${project}:${
+              session.command.split(/[\s/\\]/).find(Boolean) ?? session.command
+            }`
+        : `${project}:${type}`;
+  return terminalBaseLabel(session.name, fallback);
 }
 
 function tabForSession(
@@ -84,6 +91,7 @@ function mountedForSession(session: SessionInfo): MountedSession {
   return {
     sessionId: session.id,
     project: sessionProject(session),
+    name: session.name,
     command: session.command,
     cwd: session.cwd,
     worktreePath: session.worktreePath,

@@ -3,8 +3,10 @@ use tracing::{info, warn};
 use crate::{
     config::schema::{DamHopperConfig, ProjectConfig},
     error::AppError,
+    fs::FsError,
     pty::manager::{PtyCreateOpts, PtySessionManager},
     state::AppState,
+    workspace_target::WorkspaceTargetError,
 };
 
 use super::SessionStore;
@@ -71,6 +73,9 @@ async fn restore_sessions_inner(
     projects: &[ProjectConfig],
     session_buffer_ttl_hours: u64,
 ) -> Result<usize, AppError> {
+    store
+        .cleanup_dead_sessions()
+        .map_err(|e| AppError::PersistenceError(e.to_string()))?;
     let persisted = store
         .load_sessions()
         .map_err(|e| AppError::PersistenceError(e.to_string()))?;
@@ -89,8 +94,11 @@ async fn restore_sessions_inner(
             warn!(
                 id = %id,
                 project = ?session.meta.project,
-                "Skipping session for removed project"
+                "Deleting session for removed project"
             );
+            store
+                .delete_session_for_incarnation(&id, session.incarnation)
+                .map_err(|e| AppError::PersistenceError(e.to_string()))?;
             continue;
         }
 
@@ -103,6 +111,17 @@ async fn restore_sessions_inner(
                 worktree_path.to_string(),
                 session.meta.cwd.clone(),
             )),
+            (None, Some(worktree_path)) => {
+                warn!(
+                    id = %id,
+                    worktree_path,
+                    "Deleting persisted terminal with target but no project"
+                );
+                store
+                    .delete_session_for_incarnation(&id, session.incarnation)
+                    .map_err(|e| AppError::PersistenceError(e.to_string()))?;
+                continue;
+            }
             _ => None,
         };
         let persisted_meta = session.meta.clone();
@@ -139,7 +158,7 @@ async fn restore_sessions_inner(
                     Ok((canonical_target, canonical_cwd)) => {
                         (canonical_cwd, Some(canonical_target))
                     }
-                    Err(error) => {
+                    Err(error) if is_target_unavailable_error(&error) => {
                         warn!(
                             id = %id,
                             project,
@@ -159,15 +178,22 @@ async fn restore_sessions_inner(
                             .restore_unavailable_session(session.meta.clone(), session.incarnation);
                         continue;
                     }
+                    Err(error) => {
+                        warn!(
+                            id = %id,
+                            project,
+                            worktree_path,
+                            error = %error,
+                            "Deleting persisted terminal with invalid worktree target"
+                        );
+                        store
+                            .delete_session_for_incarnation(&id, session.incarnation)
+                            .map_err(|store_error| {
+                                AppError::PersistenceError(store_error.to_string())
+                            })?;
+                        continue;
+                    }
                 }
-            }
-            (None, Some(worktree_path)) => {
-                warn!(
-                    id = %id,
-                    worktree_path,
-                    "Skipping persisted terminal with target but no project"
-                );
-                continue;
             }
             _ => (session.meta.cwd.clone(), session.meta.worktree_path.clone()),
         };
@@ -181,6 +207,7 @@ async fn restore_sessions_inner(
             rows: session.rows,
             project: session.meta.project.clone(),
             worktree_path,
+            name: session.meta.name.clone(),
             restart_policy: session.meta.restart_policy,
             restart_max_retries,
         };
@@ -215,10 +242,13 @@ async fn restore_sessions_inner(
             Err(e) => {
                 let target_disappeared =
                     if let Some((project, worktree_path, cwd)) = &restore_target {
-                        pty_manager
+                        match pty_manager
                             .validate_targeted_session(project, worktree_path, cwd)
                             .await
-                            .is_err()
+                        {
+                            Ok(_) => false,
+                            Err(error) => is_target_unavailable_error(&error),
+                        }
                     } else {
                         false
                     };
@@ -236,7 +266,12 @@ async fn restore_sessions_inner(
                         })?;
                     pty_manager.restore_unavailable_session(persisted_meta, persisted_incarnation);
                 } else {
-                    warn!(id = %id, error = %e, "Failed to restore session");
+                    warn!(id = %id, error = %e, "Deleting failed persisted session");
+                    store
+                        .delete_session_for_incarnation(&id, persisted_incarnation)
+                        .map_err(|store_error| {
+                            AppError::PersistenceError(store_error.to_string())
+                        })?;
                 }
             }
         }
@@ -252,6 +287,16 @@ async fn restore_sessions_inner(
     }
 
     Ok(restored)
+}
+
+fn is_target_unavailable_error(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::WorkspaceTarget(
+            WorkspaceTargetError::UnregisteredTarget | WorkspaceTargetError::UnavailableTarget
+        ) | AppError::Fs(FsError::NotFound)
+            | AppError::NotFound(_)
+    )
 }
 
 #[cfg(test)]
@@ -281,6 +326,34 @@ mod tests {
         let temp = NamedTempFile::new().unwrap();
         let store = SessionStore::open(temp.path()).unwrap();
         (store, temp)
+    }
+
+    #[test]
+    fn restore_reconciles_only_target_loss_errors() {
+        use crate::{error::AppError, fs::FsError, workspace_target::WorkspaceTargetError};
+
+        assert!(is_target_unavailable_error(&AppError::WorkspaceTarget(
+            WorkspaceTargetError::UnregisteredTarget,
+        )));
+        assert!(is_target_unavailable_error(&AppError::WorkspaceTarget(
+            WorkspaceTargetError::UnavailableTarget,
+        )));
+        assert!(is_target_unavailable_error(&AppError::Fs(
+            FsError::NotFound
+        )));
+        assert!(is_target_unavailable_error(&AppError::NotFound(
+            "missing target".to_string(),
+        )));
+
+        assert!(!is_target_unavailable_error(&AppError::WorkspaceTarget(
+            WorkspaceTargetError::InvalidPath,
+        )));
+        assert!(!is_target_unavailable_error(&AppError::WorkspaceTarget(
+            WorkspaceTargetError::UnknownProject,
+        )));
+        assert!(!is_target_unavailable_error(&AppError::PtyError(
+            "spawn failed".to_string(),
+        )));
     }
 
     fn create_test_config() -> DamHopperConfig {
@@ -362,6 +435,7 @@ mod tests {
             command: "echo hi".to_string(),
             cwd: "/test/path".to_string(),
             worktree_path: None,
+            name: None,
             session_type: crate::pty::session::SessionType::Shell,
             alive: true,
             exit_code: None,
@@ -399,6 +473,7 @@ mod tests {
             command: "echo done".to_string(),
             cwd: "/test/path".to_string(),
             worktree_path: None,
+            name: None,
             session_type: crate::pty::session::SessionType::Shell,
             alive: true,
             exit_code: None,
@@ -439,6 +514,7 @@ mod tests {
             command: "true".to_string(),
             cwd: "/test/path".to_string(),
             worktree_path: None,
+            name: None,
             session_type: crate::pty::session::SessionType::Shell,
             alive: true,
             exit_code: None,
@@ -489,6 +565,7 @@ mod tests {
             command: "npm start".to_string(),
             cwd: "/test/path".to_string(),
             worktree_path: None,
+            name: None,
             session_type: crate::pty::session::SessionType::Run,
             alive: true,
             exit_code: None,
@@ -532,6 +609,7 @@ mod tests {
             command: "echo 'test'".to_string(),
             cwd: "/test/path".to_string(),
             worktree_path: None,
+            name: None,
             session_type: crate::pty::session::SessionType::Shell,
             alive: true, // Will be ignored (sessions in DB are alive candidates)
             exit_code: None,
@@ -586,6 +664,7 @@ mod tests {
             command: "sleep 30".to_string(),
             cwd: worktree_text.clone(),
             worktree_path: Some(worktree_text),
+            name: None,
             session_type: crate::pty::session::SessionType::Terminal,
             alive: true,
             exit_code: None,
@@ -615,6 +694,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restore_deletes_malformed_target_unavailable_rows() {
+        let (store, _temp) = create_test_store();
+        let config = create_test_config();
+        let meta = SessionMeta {
+            id: "malformed-target-unavailable".to_string(),
+            incarnation: 0,
+            project: None,
+            command: "sleep 30".to_string(),
+            cwd: "/missing/worktree".to_string(),
+            worktree_path: Some("/missing/worktree".to_string()),
+            name: Some("Retain only valid targets".to_string()),
+            session_type: crate::pty::session::SessionType::Terminal,
+            alive: true,
+            exit_code: None,
+            started_at: crate::pty::session::now_ms(),
+            restart_count: 0,
+            last_exit_at: None,
+            restart_policy: RestartPolicy::Always,
+            target_unavailable: true,
+        };
+        store
+            .save_session_for_incarnation(&meta, 0, &HashMap::new(), 80, 24, 5)
+            .unwrap();
+
+        let (event_sink, _rx) = BroadcastEventSink::new(100);
+        let pty_manager = PtySessionManager::new(Arc::new(event_sink));
+
+        let restored = restore_sessions(&store, &pty_manager, &config)
+            .await
+            .unwrap();
+
+        assert_eq!(restored, 0);
+        assert!(pty_manager.list().is_empty());
+        assert!(store.load_sessions().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn restore_revalidates_external_worktree_and_nested_cwd() {
         let repo = tempfile::tempdir().unwrap();
         let worktree_parent = tempfile::tempdir().unwrap();
@@ -636,6 +752,7 @@ mod tests {
             command: "sleep 30".to_string(),
             cwd: nested.to_string_lossy().into_owned(),
             worktree_path: Some(worktree_text.clone()),
+            name: None,
             session_type: crate::pty::session::SessionType::Terminal,
             alive: true,
             exit_code: None,
