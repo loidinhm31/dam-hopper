@@ -2,14 +2,20 @@ pub mod error;
 pub mod model;
 pub mod service;
 pub mod store;
+pub mod observation;
+pub mod reconcile;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod observation_tests;
 
 pub use error::WorkflowError;
 pub use model::*;
 pub use service::WorkflowService;
 pub use store::*;
+pub use observation::*;
+pub use reconcile::*;
 /// Maximum length of an item title in characters.
 pub const MAX_TITLE_CHARS: usize = 200;
 
