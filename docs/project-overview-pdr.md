@@ -298,6 +298,82 @@ evidence.
 - Preserve the deferred threat model in [system architecture](./system-architecture.md#deferred-remediation-design-fixed-v1-contract); do not treat it as shipped capability.
 - Before any future privileged implementation: reopen architecture/security review; define kernel/distro/systemd and pidfd policy; approve audit retention and any global cache operation; accept residual enrolled-server compromise risk.
 
+### PR-011: Workflow Tracking Domain & Relational Persistence (Phase 01)
+
+**Status:** Domain and SQLite repository foundation implemented on 2026-09-02.
+The phase is additive and does not yet expose workflow REST or WebSocket
+routes.
+
+**Functional Requirements:**
+
+- Identify a tracked workspace by a caller-resolved canonical config locator
+  that is unique within the persistence database.
+- Persist work items as `Plan`, `Phase`, or `Task` with project and optional
+  worktree scope, ordering, summary, status, and lifecycle timestamps.
+- Record manual work sessions with optional item association and target scope.
+- Correlate sessions with external `terminal` or `agent` resources, including
+  incarnation/run metadata and observed state.
+- Attach durable notes to an item, session, or both; support soft deletion and
+  bounded physical purge.
+- Append activity events with source, scope, optional JSON payload, expiry, and
+  retry-safe event IDs.
+- Build a bounded workspace overview with project summaries, hierarchy nodes,
+  active sessions, recent events, and factual descendant-task progress.
+
+**Plan-first hierarchy:**
+
+- A Plan is a root and cannot have a parent.
+- A Phase must have a Plan parent.
+- A Task may be standalone or child of a Plan or Phase.
+- A Task cannot parent another Task.
+- Creation validates parent workspace/project scope, rejects cycles, and caps
+  depth at three levels.
+
+**Acceptance Criteria:**
+
+- [x] Migration `010_workflow_tracking.sql` adds six workflow tables,
+  relationships, checks, unique constraints, and query indexes without
+  changing existing terminal-session tables.
+- [x] `SessionStore::open()` enables foreign keys and applies migration 010
+  idempotently when the workflow schema is absent; `WorkflowStore` shares its
+  connection and does not open a second database.
+- [x] Domain enums have stable lowercase snake_case storage values and
+  camelCase model serialization; invalid request values are reported through
+  `WorkflowModelError`.
+- [x] Item, session, resource, note, and event mutations are transaction
+  helpers. Optional audit events commit atomically with their domain mutation.
+- [x] Event IDs are idempotent, event history is keyset paginated, notes are
+  soft-deleted before bounded purge, and observation updates do not mutate
+  session lifecycle fields.
+- [x] Overview limits are clamped and expose truncation rather than returning
+  unbounded projects, items, sessions, or event history.
+- [x] `server/src/workflow/tests.rs` covers model transitions, migration data
+  preservation, hierarchy/scope rules, idempotency, overlapping sessions,
+  observation isolation, note retention, overview progress, pagination, and
+  purge.
+
+**Technical Constraints:**
+
+- Reuse the configured `sessions.db` SQLite connection through
+  `Arc<Mutex<Connection>>`; preserve the existing Unix `0o600` permission
+  boundary.
+- Keep enum values constrained in SQL and parsed through domain conversions;
+  do not expose canonical workspace locators in serialized responses.
+- Enforce 200-character titles, 8 KiB note bodies, 200-character external IDs,
+  64-character harness labels, 128-character run IDs, and 4 KiB event
+  payloads before persistence.
+- Use millisecond Unix timestamps and explicit state-transition validation.
+- Keep events as metadata references rather than foreign keys so audit history
+  can outlive item/session cleanup.
+
+**Security and scope boundary:**
+
+The locator is server-only. Workspace-scoped entity reads include a workspace
+filter, while resource-link reads are anchored to their session identity.
+Cross-project parent/item associations are rejected. This phase does not infer
+session completion from external resource observations, does not launch or
+control terminals/agents, and does not add an HTTP authorization surface.
+
 ## Non-Functional Requirements
 
 ### Performance
@@ -341,7 +417,8 @@ evidence.
 
 **Context:** Multiple PTY sessions, git operations, filesystem operations run concurrently.
 
-**Decision:** Use Arc<Mutex<T>> for PtySessionManager, FsSubsystem, AgentStoreService.
+**Decision:** Use Arc<Mutex<T>> for PtySessionManager, FsSubsystem,
+AgentStoreService, and WorkflowStore.
 
 **Rationale:** Cheap clones, clear ownership, Mutex never held across `.await`.
 
@@ -366,6 +443,25 @@ evidence.
 **Rationale:** No file duplication, easy to add/remove items, clear visibility of distribution.
 
 **Alternative Rejected:** Copy (duplicates), environment variables (harder to manage).
+
+### Decision: Additive workflow persistence on the session database
+
+**Context:** Workflow continuity needs durable relational records without
+breaking terminal session recovery or creating a second database lifecycle.
+
+**Decision:** Apply migration 010 after the existing migrations and add
+workspace/item/session/resource-link/note/event tables with foreign keys,
+checks, indexes, and bounded repository methods. Share the existing
+`Arc<Mutex<Connection>>` through `WorkflowStore`.
+
+**Rationale:** Existing `SessionStore::open()` owns database permissions,
+foreign-key setup, and migration ordering. Reusing that connection keeps
+startup, backup, and access-control boundaries singular while `CREATE TABLE IF
+NOT EXISTS` preserves existing session data.
+
+**Boundary:** Domain/store code is available for later API and UI phases.
+Migration 010 does not itself add workflow routes, automatic terminal/agent
+attachment, or inferred session completion.
 
 ## Roadmap
 

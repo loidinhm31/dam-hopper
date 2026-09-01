@@ -2,6 +2,12 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Workflow Tracking and Continuity (2026-09-02)
+
+- **Phase 01 — Domain and relational persistence [COMPLETED / DONE 2026-09-02]**: Delivered snapshot-first workflow persistence in the existing SQLite `SessionStore`, including migration 010, Plan/Phase/Task hierarchy and invariants, manual sessions, terminal/agent resource links, durable notes, bounded activity events, factual overview aggregation, keyset history pagination, idempotent transactional mutations, and bounded retention purge.
+- Validation: server `cargo test` passed 888/888 executed tests (2 ignored), including all 14 workflow tests; independent review scored 9.2/10. Post-review source fixes (SQLite foreign-key enforcement, 501-row overview probe, and dedicated note-target validation) are implemented and validated. [Test report](../plans/reports/tester-phase-01-260902-0010-domain-relational-persistence.md) · [Review report](../plans/reports/code-reviewer-260902-0012-phase-01-domain-and-relational-persistence.md).
+- Phase 02 (service and REST API) remains pending; see the [workflow tracking plan](../plans/260901-0919-workflow-tracking-notes/plan.md).
+
 ### Preserve Explorer Tree Expansion & Editor View Scroll Position (2026-08-31)
 
 - **Phases 01–03 — [COMPLETED 2026-08-31]**:
