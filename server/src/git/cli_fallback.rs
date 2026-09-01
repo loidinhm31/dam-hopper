@@ -297,8 +297,17 @@ pub async fn add_worktree(
         })
 }
 
-pub async fn remove_worktree(project_path: &Path, worktree_path: &str) -> Result<(), AppError> {
-    run_git(&["worktree", "remove", worktree_path], project_path).await?;
+pub async fn remove_worktree(
+    project_path: &Path,
+    worktree_path: &str,
+    force: bool,
+) -> Result<(), AppError> {
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push(worktree_path);
+    run_git(&args, project_path).await?;
     Ok(())
 }
 

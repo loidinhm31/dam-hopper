@@ -1323,7 +1323,11 @@ export function useSshListKeys() {
 export function useRemoveWorktree(project: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (path: string) => api.git.removeWorktree(project, path),
+    mutationFn: (params: string | { path: string; force?: boolean }) => {
+      const path = typeof params === "string" ? params : params.path;
+      const force = typeof params === "string" ? undefined : params.force;
+      return api.git.removeWorktree(project, path, { force });
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["worktrees", project] });
     },

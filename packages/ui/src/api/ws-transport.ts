@@ -356,11 +356,11 @@ function channelToEndpoint(
       };
     }
     case "git:removeWorktree": {
-      const d = data as { project: string; path: string };
+      const d = data as { project: string; path: string; force?: boolean };
       return {
         method: "DELETE",
         url: `/api/git/${encodeURIComponent(d.project)}/worktrees`,
-        body: { path: d.path },
+        body: { path: d.path, ...(d.force != null ? { force: d.force } : {}) },
       };
     }
     case "git:branches": {

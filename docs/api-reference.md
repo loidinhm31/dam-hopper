@@ -631,18 +631,22 @@ The response is the projected worktree metadata, including both `path` and
 `repositoryPath`; discovery is refreshed after the mutation.
 
 **DELETE /api/git/{project}/worktrees**
-Remove one registered non-main worktree. Body: `{ "path": "<target path>" }`.
+Remove one registered non-main worktree. Body: `{ "path": "<target path>", "force": false }`.
 The path is resolved through the target contract, but Git removal operates on
 the corresponding `repositoryPath`. The configured/main worktree cannot be
-removed. Successful response: `{ "ok": true }`.
+removed. Optional `force: true` allows removing worktrees that contain untracked
+or modified files. When `force` is omitted or `false`, deleting a dirty worktree
+fails with `409 WORKTREE_DIRTY`. Deleting a prunable worktree whose directory is
+already missing from disk cleans up its stale administrative metadata. Successful
+response: `{ "ok": true }`.
 
 The browser re-fetches discovery immediately before this request. It refuses
 to start removal when the exact target owns dirty editor tabs or live terminal
 sessions, and explains the blockers in the Project panel. Git still enforces
-its own dirty/untracked protection; the user must refresh and retry after
-closing or saving those resources. A successful removal invalidates discovery
-and falls back new operations to the configured root when the removed target
-was selected.
+its own dirty/untracked protection unless forced; the user must refresh and retry
+after closing or saving those resources or pass `force: true`. A successful removal
+invalidates discovery and falls back new operations to the configured root when
+the removed target was selected.
 
 If Git reports a registered path as missing or prunable, the row remains
 visible as unavailable. New operations fail closed rather than redirecting to
