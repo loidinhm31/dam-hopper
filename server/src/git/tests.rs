@@ -625,7 +625,9 @@ async fn add_and_remove_worktree() {
     let wts = list_worktrees(path).await.unwrap();
     assert_eq!(wts.len(), 2);
 
-    crate::git::remove_worktree(path, &wt.path).await.unwrap();
+    crate::git::remove_worktree(path, &wt.path, false)
+        .await
+        .unwrap();
 
     let wts_after = list_worktrees(path).await.unwrap();
     assert_eq!(wts_after.len(), 1);
@@ -650,7 +652,9 @@ async fn add_worktree_create_branch() {
 
     assert_eq!(wt.branch, "new-branch");
 
-    crate::git::remove_worktree(path, &wt.path).await.unwrap();
+    crate::git::remove_worktree(path, &wt.path, false)
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------

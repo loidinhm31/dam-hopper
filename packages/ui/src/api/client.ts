@@ -1183,8 +1183,16 @@ export const api = {
       options: { path: string; branch: string; createBranch?: boolean },
     ) =>
       getTransport().invoke<Worktree>("git:addWorktree", { project, options }),
-    removeWorktree: (project: string, path: string) =>
-      getTransport().invoke<void>("git:removeWorktree", { project, path }),
+    removeWorktree: (
+      project: string,
+      path: string,
+      options?: { force?: boolean },
+    ) =>
+      getTransport().invoke<void>("git:removeWorktree", {
+        project,
+        path,
+        force: options?.force,
+      }),
     branches: (target: ProjectTargetInput, root?: string) =>
       getTransport().invoke<Branch[]>("git:branches", {
         ...normalizeProjectTarget(target),

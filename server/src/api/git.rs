@@ -19,7 +19,9 @@ use crate::git::{
 };
 use crate::pty::EventSink as _;
 use crate::state::AppState;
-use crate::workspace_target::{is_not_git_repository_error, ProjectTargetRef};
+use crate::workspace_target::{
+    is_not_git_repository_error, ProjectTargetRef, WorkspaceTargetError,
+};
 
 use super::error::ApiError;
 
@@ -299,12 +301,27 @@ pub async fn add_worktree_route(
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /api/git/:project/worktrees  { path: string }
+// DELETE /api/git/:project/worktrees  { path: string, force?: boolean }
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoveWorktreeBody {
     pub path: String,
+    #[serde(default)]
+    pub force: bool,
+}
+
+fn is_worktree_dirty_error(error: &AppError) -> bool {
+    match error {
+        AppError::Git(message) => {
+            let lower = message.to_ascii_lowercase();
+            lower.contains("contains modified or untracked files")
+                || lower.contains("use --force")
+                || lower.contains("use -f")
+        }
+        _ => false,
+    }
 }
 
 pub async fn remove_worktree_route(
@@ -319,39 +336,90 @@ pub async fn remove_worktree_route(
         .workspace_target_project_path(&project)
         .await
         .map_err(ApiError::from_app)?;
-    let target = state
+
+    let target_result = state
         .resolve_project_target(&ProjectTargetRef {
             project: project.clone(),
-            worktree_path: Some(body.path),
+            worktree_path: Some(body.path.clone()),
         })
-        .await
-        .map_err(ApiError::from_app)?;
-    let worktree = target.worktree().cloned().ok_or_else(|| {
-        ApiError::from_app(crate::error::AppError::InvalidInput(
-            "The configured project root cannot be removed as a worktree".to_string(),
-        ))
-    })?;
-    if worktree.is_main {
-        return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
-            "The configured project root cannot be removed as a worktree".to_string(),
-        )));
+        .await;
+
+    match target_result {
+        Ok(target) => {
+            let worktree = target.worktree().cloned().ok_or_else(|| {
+                ApiError::from_app(crate::error::AppError::InvalidInput(
+                    "The configured project root cannot be removed as a worktree".to_string(),
+                ))
+            })?;
+            if worktree.is_main {
+                return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+                    "The configured project root cannot be removed as a worktree".to_string(),
+                )));
+            }
+            if worktree.is_locked {
+                return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+                    "Cannot remove locked worktree".to_string(),
+                )));
+            }
+            let live_sessions = state
+                .pty_manager
+                .live_sessions_for_target(&project, target.target_path());
+            if !live_sessions.is_empty() {
+                return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+                    format!(
+                        "Cannot remove worktree while {} live terminal session(s) use it",
+                        live_sessions.len()
+                    ),
+                )));
+            }
+            if let Err(error) =
+                remove_worktree(&project_path, &worktree.repository_path, body.force).await
+            {
+                if !body.force && is_worktree_dirty_error(&error) {
+                    return Err(ApiError::from_app(AppError::WorktreeDirty(
+                        "Worktree contains modified or untracked files, use --force to delete it"
+                            .to_string(),
+                    )));
+                }
+                return Err(ApiError::from_app(error));
+            }
+            state.invalidate_project_worktrees(&project_path).await;
+            Ok(Json(serde_json::json!({ "ok": true })))
+        }
+        Err(AppError::WorkspaceTarget(WorkspaceTargetError::UnavailableTarget)) => {
+            let worktrees = state
+                .refresh_project_worktrees(&project)
+                .await
+                .map_err(map_worktree_git_error)?;
+            let stale_match = worktrees.into_iter().find(|candidate| {
+                candidate.repository_path == body.path
+                    || candidate.path == body.path
+                    || std::path::Path::new(&candidate.path) == std::path::Path::new(&body.path)
+            });
+            if let Some(candidate) = stale_match {
+                if candidate.is_main {
+                    return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+                        "The configured project root cannot be removed as a worktree".to_string(),
+                    )));
+                }
+                if candidate.is_locked {
+                    return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+                        "Cannot remove locked worktree".to_string(),
+                    )));
+                }
+                // Clean up stale worktree administrative metadata when the directory is already gone.
+                let _ = remove_worktree(&project_path, &candidate.repository_path, false).await;
+                let _ = prune_worktrees(&project_path).await;
+                state.invalidate_project_worktrees(&project_path).await;
+                Ok(Json(serde_json::json!({ "ok": true })))
+            } else {
+                Err(ApiError::from_app(AppError::WorkspaceTarget(
+                    WorkspaceTargetError::UnavailableTarget,
+                )))
+            }
+        }
+        Err(error) => Err(ApiError::from_app(error)),
     }
-    let live_sessions = state
-        .pty_manager
-        .live_sessions_for_target(&project, target.target_path());
-    if !live_sessions.is_empty() {
-        return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
-            format!(
-                "Cannot remove worktree while {} live terminal session(s) use it",
-                live_sessions.len()
-            ),
-        )));
-    }
-    remove_worktree(&project_path, &worktree.repository_path)
-        .await
-        .map_err(ApiError::from_app)?;
-    state.invalidate_project_worktrees(&project_path).await;
-    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 // ---------------------------------------------------------------------------
