@@ -9,7 +9,7 @@ pub mod workspace;
 pub use error::WorkflowStoreError;
 
 use crate::workflow::model::*;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use std::sync::{Arc, Mutex};
 
 /// Thread-safe storage repository for workflow tracking entities.
@@ -109,6 +109,18 @@ impl WorkflowStore {
         tx.commit()?;
         Ok(result)
     }
+    pub fn update_item_cas(
+        &self, id: &str, workspace_id: &str, title: Option<&str>,
+        summary: Option<Option<&str>>, status: Option<ItemStatus>, sort_order: Option<i64>,
+        worktree_path: Option<Option<&str>>, updated_at: u64, expected_updated_at: u64,
+        event: Option<&WorkflowEvent>,
+    ) -> Result<WorkflowItem, WorkflowStoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        let result = item::update_item_tx_cas(&tx,id,workspace_id,title,summary,status,sort_order,worktree_path,updated_at,Some(expected_updated_at),event)?;
+        tx.commit()?;
+        Ok(result)
+    }
 
     pub fn get_item(
         &self,
@@ -130,18 +142,8 @@ impl WorkflowStore {
         item::list_items(&conn, workspace_id, project_name, status, limit)
     }
 
-    pub fn delete_item(
-        &self,
-        id: &str,
-        workspace_id: &str,
-        event: Option<&WorkflowEvent>,
-    ) -> Result<bool, WorkflowStoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction()?;
-        let deleted = item::delete_item_tx(&tx, id, workspace_id, event)?;
-        tx.commit()?;
-        Ok(deleted)
-    }
+    pub fn delete_item(&self,id:&str,workspace_id:&str,event:Option<&WorkflowEvent>)->Result<bool,WorkflowStoreError>{let mut conn=self.lock()?;let tx=conn.transaction()?;let deleted=item::delete_item_tx(&tx,id,workspace_id,event)?;tx.commit()?;Ok(deleted)}
+    pub fn delete_item_cas(&self,id:&str,workspace_id:&str,expected_updated_at:u64,event:Option<&WorkflowEvent>)->Result<bool,WorkflowStoreError>{let mut conn=self.lock()?;let tx=conn.transaction()?;let result=item::delete_item_tx_cas(&tx,id,workspace_id,Some(expected_updated_at),event)?;tx.commit()?;Ok(result)}
 
     // -----------------------------------------------------------------------
     // Work Sessions & Resource Links
@@ -293,7 +295,12 @@ impl WorkflowStore {
         tx.commit()?;
         Ok(result)
     }
+    pub fn get_note(&self, id: &str, workspace_id: &str) -> Result<Option<WorkflowNote>, WorkflowStoreError> {
+        let conn = self.lock()?;
+        note::get_note(&conn, id, workspace_id)
+    }
 
+    pub fn soft_delete_note_cas(&self,id:&str,workspace_id:&str,deleted_at:u64,expected:u64,event:Option<&WorkflowEvent>)->Result<bool,WorkflowStoreError>{let mut conn=self.lock()?;let tx=conn.transaction()?;let result=note::soft_delete_note_tx_cas(&tx,id,workspace_id,deleted_at,expected,event)?;tx.commit()?;Ok(result)}
     pub fn list_notes_for_item(
         &self,
         item_id: &str,
@@ -343,6 +350,18 @@ impl WorkflowStore {
         )
     }
 
+    pub fn get_event(&self, id: &str, workspace_id: &str) -> Result<Option<WorkflowEvent>, WorkflowStoreError> {
+        let conn = self.lock()?;
+        event::get_event(&conn, id, workspace_id)
+    }
+    pub fn purge_history_before(&self, workspace_id: &str, before_ms: u64, limit: usize) -> Result<(usize, usize), WorkflowStoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        let event_count = tx.execute("DELETE FROM workflow_events WHERE rowid IN (SELECT rowid FROM workflow_events WHERE workspace_id=?1 AND recorded_at<?2 LIMIT ?3)", params![workspace_id,before_ms,limit as i64])?;
+        let note_count = tx.execute("DELETE FROM workflow_notes WHERE rowid IN (SELECT rowid FROM workflow_notes WHERE workspace_id=?1 AND deleted_at IS NOT NULL AND deleted_at<?2 LIMIT ?3)", params![workspace_id,before_ms,limit as i64])?;
+        tx.commit()?;
+        Ok((event_count,note_count))
+    }
     // -----------------------------------------------------------------------
     // Overview & Purge
     // -----------------------------------------------------------------------

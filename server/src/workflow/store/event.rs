@@ -1,7 +1,7 @@
 use crate::workflow::enums::*;
 use crate::workflow::model::{validate_event_payload, WorkflowEvent};
 use crate::workflow::store::error::WorkflowStoreError;
-use rusqlite::{params, Connection, Row, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use std::str::FromStr;
 
 pub fn row_to_event(row: &Row<'_>) -> rusqlite::Result<WorkflowEvent> {
@@ -60,6 +60,10 @@ pub fn record_event_tx(
 
     Ok(())
 }
+pub fn get_event(conn: &Connection, id: &str, workspace_id: &str) -> Result<Option<WorkflowEvent>, WorkflowStoreError> {
+    let mut stmt = conn.prepare("SELECT id, workspace_id, event_type, source, project_name, worktree_path, item_id, session_id, occurred_at, recorded_at, payload_json, expires_at FROM workflow_events WHERE id = ?1 AND workspace_id = ?2")?;
+    Ok(stmt.query_row(params![id, workspace_id], row_to_event).optional()?)
+}
 
 /// Lists activity events using keyset pagination (recorded_at DESC, id DESC).
 pub fn list_events_keyset(
@@ -69,7 +73,7 @@ pub fn list_events_keyset(
     cursor_id: Option<&str>,
     limit: usize,
 ) -> Result<Vec<WorkflowEvent>, WorkflowStoreError> {
-    let limit = limit.clamp(1, crate::workflow::MAX_HISTORY_LIMIT);
+    let limit = limit.clamp(1, crate::workflow::MAX_HISTORY_LIMIT + 1);
 
     let (query, has_cursor) = match (cursor_recorded_at, cursor_id) {
         (Some(_), Some(_)) => (

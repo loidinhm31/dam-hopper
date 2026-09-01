@@ -1,12 +1,15 @@
+pub mod error;
 pub mod model;
+pub mod service;
 pub mod store;
 
 #[cfg(test)]
 mod tests;
 
+pub use error::WorkflowError;
 pub use model::*;
+pub use service::WorkflowService;
 pub use store::*;
-
 /// Maximum length of an item title in characters.
 pub const MAX_TITLE_CHARS: usize = 200;
 
@@ -43,6 +46,8 @@ pub const MAX_HISTORY_LIMIT: usize = 100;
 /// Default retention for activity events in days (90 days).
 pub const DEFAULT_EVENT_RETENTION_DAYS: u32 = 90;
 
+/// Default stale-session attention threshold.
+pub const DEFAULT_STALE_AFTER_HOURS: u32 = 24;
 /// Default grace retention for soft-deleted notes in days (7 days).
 pub const DEFAULT_DELETED_NOTE_RETENTION_DAYS: u32 = 7;
 

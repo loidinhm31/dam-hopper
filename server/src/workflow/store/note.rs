@@ -36,10 +36,16 @@ pub fn create_note_tx(
     }
 
     if let Some(item_id) = &note.item_id {
-        let _ = super::item::get_item_tx(tx, item_id, &note.workspace_id)?
+        let item = super::item::get_item_tx(tx, item_id, &note.workspace_id)?
             .ok_or_else(|| WorkflowStoreError::ItemNotFound(item_id.clone()))?;
+        if let Some(session_id) = &note.session_id {
+            let session = super::session::get_session_tx(tx, session_id, &note.workspace_id)?
+                .ok_or_else(|| WorkflowStoreError::SessionNotFound(session_id.clone()))?;
+            if item.project_name != session.project_name || item.worktree_path != session.worktree_path {
+                return Err(WorkflowStoreError::HierarchyViolation("Note targets differ".to_string()));
+            }
+        }
     }
-
     if let Some(session_id) = &note.session_id {
         let _ = super::session::get_session_tx(tx, session_id, &note.workspace_id)?
             .ok_or_else(|| WorkflowStoreError::SessionNotFound(session_id.clone()))?;
@@ -94,6 +100,7 @@ pub fn soft_delete_note_tx(
         Ok(false)
     }
 }
+pub fn soft_delete_note_tx_cas(tx:&Transaction<'_>,id:&str,workspace_id:&str,deleted_at:u64,expected:u64,event:Option<&WorkflowEvent>)->Result<bool,WorkflowStoreError>{let current=get_note_tx(tx,id,workspace_id)?.ok_or_else(||WorkflowStoreError::NoteNotFound(id.to_owned()))?;if current.updated_at!=expected{return Err(WorkflowStoreError::OptimisticConflict);}soft_delete_note_tx(tx,id,workspace_id,deleted_at,event)}
 
 pub fn get_note_tx(
     tx: &Transaction<'_>,
@@ -112,6 +119,10 @@ pub fn get_note_tx(
         .optional()?;
 
     Ok(note)
+}
+pub fn get_note(conn: &Connection, id: &str, workspace_id: &str) -> Result<Option<WorkflowNote>, WorkflowStoreError> {
+    let mut stmt = conn.prepare("SELECT id, workspace_id, item_id, session_id, body, source, created_at, updated_at, deleted_at FROM workflow_notes WHERE id = ?1 AND workspace_id = ?2")?;
+    Ok(stmt.query_row(params![id, workspace_id], row_to_note).optional()?)
 }
 
 pub fn list_notes_for_item(

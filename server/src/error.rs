@@ -3,6 +3,7 @@ use thiserror::Error;
 use crate::browser_debug::BrowserDebugError;
 use crate::fs::FsError;
 use crate::tunnel::TunnelError;
+use crate::workflow::error::WorkflowError;
 use crate::workspace_target::WorkspaceTargetError;
 
 #[derive(Debug, Error)]
@@ -57,6 +58,8 @@ pub enum AppError {
 
     #[error("Workspace target error: {0}")]
     WorkspaceTarget(WorkspaceTargetError),
+    #[error(transparent)]
+    Workflow(#[from] WorkflowError),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -76,6 +79,7 @@ impl From<TunnelError> for AppError {
 impl AppError {
     pub fn status_code(&self) -> u16 {
         match self {
+            AppError::Workflow(error) => error.status_code(),
             AppError::ConfigNotFound(_)
             | AppError::NotFound(_)
             | AppError::SessionNotFound(_)
@@ -98,6 +102,7 @@ impl AppError {
 
     pub fn api_code(&self) -> Option<&'static str> {
         match self {
+            AppError::Workflow(error) => Some(error.api_code()),
             AppError::GitUnavailable => Some("GIT_NOT_INITIALIZED"),
             AppError::WorkspaceTarget(error) => Some(match error {
                 WorkspaceTargetError::UnknownProject => "WORKSPACE_PROJECT_NOT_FOUND",

@@ -42,7 +42,7 @@
 │  │  ├─ /api/fs/image/* → Preview ticket/stream/revoke     │
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
-│  │  ├─ /api/usage/* → Codex OTel usage (opt-in)           │
+│  │  ├─ /api/workflow/* → WorkflowService REST boundary  │
 │  │  ├─ /api/browser-debug/* → Ephemeral artifacts         │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
@@ -51,7 +51,7 @@
 │     ├─ BrowserDebugArtifactManager (ephemeral, TTL/sweep)  │
 │     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
-│     ├─ WorkflowStore (shared sessions.db repository)       │
+│     ├─ WorkflowService → WorkflowStore (shared DB)        │
 │     ├─ CommandRegistry (BM25 search)                      │
 │     └─ Broadcast channels (PTY output, git progress)      │
 └─────────────────────────────────────────────────────────────┘
@@ -834,116 +834,129 @@ pub struct PersistedSession {
 - created_at / updated_at in milliseconds (Unix epoch)
 - total_written counter tracks bytes for buffer offset tracking (Phase 02)
 
-### workflow/ (Phase 01: domain and relational persistence)
+### Workflow (Phase 02: service and REST API)
 
-`server/src/lib.rs` exports `workflow` as a domain module. The workflow
-repository is deliberately separate from the HTTP/WebSocket surface in this
-phase: there are no workflow routes or `AppState` field yet. A caller creates
-`WorkflowStore` from the shared `Arc<Mutex<rusqlite::Connection>>` returned by
-`SessionStore::connection()`.
+`server/src/lib.rs` exports the workflow domain. Phase 01 added the relational
+model and repository; Phase 02 adds `WorkflowService` and the protected Axum
+REST boundary. Workflow state remains separate from terminal WebSocket
+messages: all workflow writes use `/api/workflow/*`.
 
 `SessionStore::open()` enables SQLite foreign keys and applies migrations
 001–009 before applying migration 010 when the workflow workspace table is not
 present. Migration 010 uses `CREATE TABLE IF NOT EXISTS` for an additive
-schema. Existing terminal-session tables and data remain untouched. The
-workflow entities therefore share the configured `sessions.db` file and its
-Unix `0o600` permission boundary.
+schema. Existing terminal-session tables and data remain untouched. Workflow
+entities therefore share the configured `sessions.db` file and its Unix
+`0o600` permission boundary.
 
 **Migration 010 tables:**
 
 | Table | Stored contract |
 | --- | --- |
-| `workflow_workspaces` | Text `id` (generated UUID), unique caller-resolved canonical config `locator`, display `name`, and create/update millisecond timestamps. |
+| `workflow_workspaces` | Text `id` (generated UUID), unique caller-resolved config `locator`, display `name`, and create/update millisecond timestamps. |
 | `workflow_items` | Workspace/project/optional worktree scope, optional parent, `kind` (`plan`, `phase`, `task`), title/summary, status, ordering, source, lifecycle timestamps, and optional completion/archive timestamps. Workspace deletion cascades. |
 | `workflow_sessions` | Workspace/project/optional worktree scope, optional item link, lifecycle status (`running`, `ended`, `abandoned`), start/end timestamps, source, and create/update timestamps. Workspace deletion cascades; deleting an item sets `item_id` to `NULL`. |
 | `workflow_resource_links` | Session correlation for `terminal` or `agent` resources, external/incarnation identity, optional harness/run metadata, observed state, suggested end time, first/last seen, source, and timestamps. `(session_id, resource_type, external_id)` is unique and session deletion cascades. |
-| `workflow_notes` | Workspace-scoped text attached to an item, a session, or both. `deleted_at` implements soft deletion; the table check constraint requires at least one target. Item/session/workspace deletion cascades. |
+| `workflow_notes` | Workspace-scoped text attached to an item, a session, or both. `deleted_at` implements soft deletion; a check constraint requires at least one target. Item/session/workspace deletion cascades. |
 | `workflow_events` | Append-only activity records with event type/source, optional project/worktree/item/session scope, occurred/recorded times, optional JSON payload, and optional expiry. Event item/session identifiers are metadata rather than foreign keys so history can outlive entity cleanup. |
 
 Indexes cover workspace/project/status queries, item parent traversal,
 session/item lookup, resource external identity, note targets/deletion, and
-event keyset/expiry scans. Enum values are persisted as lowercase
-snake_case strings, while API-facing domain structs use `camelCase` serde
-field names. `WorkflowWorkspace::locator` is skipped during serialization so
-the canonical filesystem locator is not exposed to clients.
+event keyset/expiry scans. Enum values persist as lowercase `snake_case`
+strings, while API-facing structs use `camelCase` serde fields.
+`WorkflowWorkspace::locator` is skipped during serialization because it is a
+canonical filesystem locator, not client data.
 
-**Domain enums:**
+**Domain invariants:**
 
-- `ItemKind`: `Plan`, `Phase`, `Task`.
-- `ItemStatus`: `Backlog`, `Next`, `InProgress`, `Blocked`, `Done`, `Canceled`;
-  open/completed predicates are explicit.
+- `ItemKind`: `Plan`, `Phase`, `Task`; a Plan is root-only, a Phase requires a
+  same-project/target Plan parent, and a Task may be standalone or child of a
+  Plan/Phase. Task parents, cycles, cross-workspace/project/target parents, and
+  hierarchy depth over three levels are rejected.
+- `ItemStatus`: `Backlog`, `Next`, `InProgress`, `Blocked`, `Done`, `Canceled`.
+  Open-state transitions, completion/cancellation, and reopen-to-`InProgress`
+  are validated explicitly.
 - `SessionStatus`: `Running`, `Ended`, `Abandoned`; only `Running` is active.
-- `ResourceLinkType`: `Terminal`, `Agent`.
-- `ResourceObservedState`: `Attached`, `Exited`, `Stale`, `Detached`,
-  `Crashed`, `Unknown`.
-- `WorkflowSource`: `Manual`, `Terminal`, `Git`, `Agent`, `System`.
-- `WorkflowEventType`: item create/update/status-change/delete, session
-  start/end/abandon/update, resource link/unlink/observation, note add/delete,
-  and workspace purge.
+  Manual session end time must not precede start time.
+- `ResourceLinkType`: `Terminal`, `Agent`. `ResourceObservedState` is
+  `Attached`, `Exited`, `Stale`, `Detached`, `Crashed`, or `Unknown`.
+- `WorkflowSource`: `Manual`, `Terminal`, `Git`, `Agent`, or `System`.
+  `WorkflowEventType` is a closed set of item, session, resource, note, and
+  workspace activity classifications.
+- Titles are trimmed and capped at 200 characters; note bodies at 8 KiB;
+  external IDs at 200 characters; harness labels at 64 characters; run IDs at
+  128 characters; event JSON payloads at 4 KiB.
 
-The enum implementations provide stable `as_str()`, `Display`, and
-case-insensitive `FromStr` conversions. Request parsing reports
-`WorkflowModelError::UnknownEnumValue`; SQL `CHECK` constraints provide a
-second write boundary. Row conversion uses the domain defaults for any
-unexpected legacy value, so a malformed pre-existing row does not abort a
-read.
+Enum implementations provide stable `as_str()`, `Display`, and case-insensitive
+`FromStr` conversions. Request parsing rejects unknown values and SQL `CHECK`
+constraints provide a second write boundary. Invalid legacy enum values fall
+back to domain defaults during reads instead of aborting an overview.
 
-**Plan-first hierarchy:**
+**WorkflowService boundary:**
 
-- A `Plan` is always a root and cannot have a parent.
-- A `Phase` must have a `Plan` parent.
-- A `Task` may be standalone or child of a `Plan` or `Phase`; it cannot have a
-  `Task` parent.
-- Item creation loads the parent in the same transaction, requires the parent
-  to share the workspace and project, walks ancestors, rejects cycles, and
-  caps the hierarchy at `MAX_HIERARCHY_DEPTH` (three levels).
-- Deleting an item uses the self-referencing foreign key cascade for
-  descendants. Invalid legacy/orphan rows are not rewritten; overview assembly
-  treats a parentless phase as an orphaned root for display.
+`server/src/workflow/service.rs` owns the current-profile/workspace boundary
+between handlers and the synchronous store. It holds `WorkflowStore`, the
+configuration handle, `WorkspaceTargetResolver`, the shared workspace guard,
+and `PtySessionManager`. It captures the current config locator/name/projects
+before database work, lazily resolves the workflow workspace, and validates
+project/worktree targets. Omitted `worktreePath` means the configured root;
+explicit paths must be absolute and currently registered by Git.
 
-Model validation runs before writes: titles are trimmed and limited to 200
-characters; note bodies are non-empty and limited to 8 KiB; external IDs are
-non-empty and limited to 200 characters; harness labels and run IDs are
-bounded; event payloads are limited to 4 KiB; and session end timestamps cannot
-precede start timestamps. Item transitions allow reopen from `Done` or
-`Canceled`; session transitions allow `Running` → `Ended`/`Abandoned`, with
-terminal self-transitions treated as idempotent no-ops.
+`WorkflowStore` calls are dispatched through `tokio::task::spawn_blocking`.
+This keeps SQLite mutex/transaction work off the async executor and avoids
+holding configuration or target locks across database calls. `AppState` keeps
+an optional `Arc<WorkflowService>`; `main.rs` builds it from the existing
+`SessionStore::connection()` and never opens a second workflow database. A
+missing workflow service returns `503 workflow_store_unavailable` only for
+workflow routes, leaving PTY and IDE APIs operational.
 
-**Transactional `WorkflowStore` methods:**
+**Protected REST surface:**
 
-| Area | Mutating operations | Read/maintenance operations |
-| --- | --- | --- |
-| Workspace | `get_or_create_workspace` | `get_workspace_by_id`, `get_workspace_by_locator` |
-| Items | `create_item`, `update_item`, `delete_item` | `get_item`, `list_items` (project/status filters and bounded limit) |
-| Sessions/resources | `start_session`, `update_session_status`, `link_resource`, `update_resource_observation`, `unlink_resource` | `get_session`, `list_active_sessions`, `get_links_for_session` |
-| Notes | `create_note`, `soft_delete_note` | `list_notes_for_item`, `list_notes_for_session` with optional deleted rows |
-| Events | `record_event` | `list_events_keyset`, `purge_expired_events`, `purge_soft_deleted_notes` |
-| Overview | — | `get_overview` builds project summaries, Plan/Phase/Task trees, factual task progress, active sessions, and recent events |
+| Route | Responsibility |
+| --- | --- |
+| `GET /api/workflow/overview` | Bounded workspace, project, Plan/Phase/Task tree, notes, active sessions, progress, and recent events. |
+| `GET /api/workflow/events` | Descending `(recorded_at, id)` keyset history with opaque cursor. |
+| `POST /api/workflow/items`; `PATCH/DELETE /api/workflow/items/{id}` | Plan-first item mutations; PATCH/DELETE require `updatedAt` CAS. |
+| `POST /api/workflow/sessions`; `POST /api/workflow/sessions/{id}/end`; `POST /api/workflow/sessions/{id}/abandon` | Manual session lifecycle with explicit RFC3339 work times. |
+| `POST/DELETE /api/workflow/sessions/{id}/links` | Terminal/agent resource link and CAS unlink. |
+| `POST /api/workflow/notes`; `DELETE /api/workflow/notes/{id}` | Durable note creation and CAS soft deletion. |
+| `DELETE /api/workflow/history` | Explicit permanent purge of old events and soft-deleted notes. |
 
-Mutating wrappers lock the shared connection, open a SQLite transaction, call
-the focused `_tx` helper, and commit only after every validation, entity
-mutation, and optional event write succeeds. Any error rolls back the whole
-operation. This makes an item/session/note mutation and its audit event
-atomic. Event IDs are idempotent through `INSERT OR IGNORE`; item creation
-recognizes an already-recorded event and returns the current item.
+The route group inherits the existing auth middleware and applies a focused
+32 KiB request limit. Request DTOs deny unknown fields and use camelCase.
+Mutation responses are `{ resource, replayed, eventId }`; retries with the
+same UUID request ID return the current resource with `replayed: true`.
+DELETE responses are typed tombstones. Workflow errors map to sanitized stable
+codes: 400 for invalid/domain-limit requests, 404 for missing scoped entities,
+409 for CAS, target, and transition conflicts, 413 when the route body cap is
+exceeded before handler execution, and 503 for unavailable workflow storage.
 
-Session starts may atomically create an initial resource link and event.
-Resource links upsert on their natural session/type/external identity.
-Observation updates change only link observation fields and never infer or
-modify session status or session timestamps. Overlapping manual sessions are
-valid. Notes are soft-deleted first and physically purged later in bounded
-transactions. Event history uses `(recorded_at DESC, id DESC)` keyset
-pagination, with limits clamped to the workflow constants; overview queries
-also cap project/item/session counts and expose a `truncated` flag.
+Overview reads are bounded to 100 projects, 500 items, and 100 running
+sessions, with a `truncated` flag. Item progress contains factual tracked and
+completed Task counts only when descendant Tasks exist. Event history defaults
+to 50 rows and caps callers at 100; keyset order is
+`(recorded_at DESC, id DESC)`.
 
-`WorkflowStoreError` distinguishes SQLite failures, model validation,
-workspace/item/session/note not-found conditions, duplicate requests, and
-hierarchy violations. The domain and store tests in
-`server/src/workflow/tests.rs` exercise enum/transition validation, migration
-preservation, hierarchy/scope checks, idempotency, overlapping sessions,
-observation isolation, note retention, overview progress, pagination, and
-purge behavior.
+Mutating repository wrappers lock the shared connection, open a transaction,
+run the focused `_tx` helper, append an optional event in that transaction,
+and commit only after validation and entity mutation succeed. Any error rolls
+back both entity and event. Resource links upsert by natural identity;
+observation updates only link health/suggested times and never infer or mutate
+session lifecycle timestamps. Notes soft-delete before physical purge, while
+item deletion cascades descendants.
 
+`WorkflowStoreError` distinguishes SQLite, model-validation, not-found,
+duplicate-request, optimistic-conflict, and hierarchy failures so API adapters
+do not match error strings. Workflow API integration coverage is in
+`server/tests/workflow_api.rs`; domain/store coverage remains in
+`server/src/workflow/tests.rs`. See [Workflow API reference](./workflow-api.md)
+for request/response fields and examples.
+
+Startup runs workflow retention purge once and then every 24 hours. Purge
+removes expired events and old soft-deleted notes in batches of 500. API event
+constructors currently assign the 90-day default expiry directly; the
+`workflow_event_retention_days` setting is validated/exposed but custom event
+expiry is not yet wired into those constructors. The deleted-note retention
+setting is consumed by automatic purge.
 ### Persist Worker (Phase 05)
 
 **Purpose**: Async worker thread that batches terminal session buffers and persists them to SQLite while bounding PTY snapshot memory use.
