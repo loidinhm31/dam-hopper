@@ -1,0 +1,917 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>DamHopper workflow context — planning prototype</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #1e293b;
+      --surface-2: #26354a;
+      --surface-3: #111a28;
+      --border: #33445d;
+      --border-strong: #4c6384;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --subtle: #8595aa;
+      --primary: #3b82f6;
+      --primary-soft: rgba(59, 130, 246, .14);
+      --success: #22c55e;
+      --warning: #facc15;
+      --danger: #f87171;
+      --orange: #fb923c;
+      --cyan: #22d3ee;
+      --focus: #60a5fa;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-right: env(safe-area-inset-right, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --safe-left: env(safe-area-inset-left, 0px);
+      --font: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --shadow: 0 22px 65px rgba(0, 0, 0, .48);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      min-width: 320px;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.5 var(--font);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select, textarea { font: inherit; }
+    button, select { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .5; }
+    [hidden] { display: none !important; }
+    svg.icon { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    ::selection { background: rgba(59, 130, 246, .35); }
+
+    .app {
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background-color: var(--bg);
+      background-image: linear-gradient(rgba(59,130,246,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(59,130,246,.025) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+    .top-nav {
+      min-height: calc(48px + var(--safe-top));
+      padding: var(--safe-top) max(14px, var(--safe-right)) 0 max(14px, var(--safe-left));
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex: 0 0 auto;
+      border-bottom: 1px solid var(--border);
+      background: rgba(30, 41, 59, .94);
+      box-shadow: 0 4px 24px rgba(0, 0, 0, .32), inset 0 -1px rgba(59,130,246,.05);
+      z-index: 20;
+    }
+    .brand { display: flex; align-items: center; gap: 9px; min-width: max-content; font-weight: 750; letter-spacing: -.02em; }
+    .brand-mark { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid rgba(96,165,250,.55); border-radius: 5px; color: #bfdbfe; background: linear-gradient(145deg, rgba(59,130,246,.25), rgba(34,211,238,.06)); font-size: 11px; }
+    .route-nav { display: flex; align-self: stretch; gap: 2px; }
+    .nav-item { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 0 10px; }
+    .nav-item.active { color: var(--text); border-bottom-color: var(--primary); background: rgba(59,130,246,.06); }
+    .nav-item:hover { color: var(--text); background: rgba(255,255,255,.04); }
+    .nav-spacer { flex: 1; }
+    .top-cluster { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .mode-switch { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); }
+    .mode-switch button { min-height: 30px; padding: 0 9px; border: 0; border-radius: 3px; color: var(--muted); background: transparent; }
+    .mode-switch button.active { background: var(--surface-2); color: var(--text); }
+    .project-switch, .profile-chip, .icon-button {
+      min-height: 32px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      background: rgba(13,17,23,.66);
+    }
+    .project-switch { display: flex; align-items: center; gap: 7px; padding: 0 10px; white-space: nowrap; }
+    .profile-chip { display: flex; align-items: center; gap: 7px; padding: 0 9px; color: var(--muted); white-space: nowrap; }
+    .icon-button { width: 32px; display: grid; place-items: center; color: var(--muted); }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px rgba(34,197,94,.12); }
+
+    .workflow-row {
+      height: 40px;
+      flex: 0 0 40px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 max(12px, var(--safe-right)) 0 max(12px, var(--safe-left));
+      border-bottom: 1px solid var(--border);
+      background: rgba(30,41,59,.55);
+      backdrop-filter: blur(10px);
+      z-index: 16;
+    }
+    .workflow-name { display: flex; align-items: center; gap: 7px; color: #bfdbfe; font-weight: 700; white-space: nowrap; }
+    .context-divider { width: 1px; height: 18px; background: var(--border); }
+    .context-bit { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
+    .context-bit strong { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+    .context-progress { display: flex; align-items: center; gap: 7px; min-width: 110px; }
+    .mini-track { width: 50px; height: 4px; border-radius: 9px; overflow: hidden; background: #0a0f17; }
+    .mini-track span { display: block; width: 67%; height: 100%; background: var(--primary); }
+    .attention { color: #fde68a; }
+    .workflow-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    .quick-button, .open-button, .close-button, .ghost-button, .primary-button, .status-button {
+      min-height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      padding: 0 10px;
+      color: var(--text);
+      background: rgba(13,17,23,.66);
+      transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease;
+    }
+    .quick-button:hover, .open-button:hover, .close-button:hover, .ghost-button:hover, .status-button:hover { border-color: var(--border-strong); background: var(--surface-2); }
+    .primary-button { background: var(--primary); border-color: var(--primary); color: white; font-weight: 700; }
+    .primary-button:hover { background: #60a5fa; border-color: #60a5fa; }
+    .button-label-short { display: none; }
+
+    .prototype-bar {
+      min-height: 52px;
+      flex: 0 0 auto;
+      padding: 7px max(12px, var(--safe-right)) 7px max(12px, var(--safe-left));
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px dashed rgba(251,146,60,.35);
+      background: rgba(120,53,15,.10);
+      z-index: 15;
+    }
+    .prototype-label { min-width: 154px; }
+    .eyebrow { color: var(--orange); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .prototype-copy { color: var(--muted); font-size: 10px; }
+    .scenario-buttons, .state-buttons { display: flex; gap: 5px; }
+    .scenario-button, .state-button {
+      min-height: 34px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      padding: 0 9px;
+      color: var(--muted);
+      background: transparent;
+      white-space: nowrap;
+    }
+    .scenario-button:hover, .state-button:hover { color: var(--text); background: rgba(255,255,255,.04); }
+    .scenario-button[aria-pressed="true"], .state-button[aria-pressed="true"] { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
+    .state-control { margin-left: auto; display: flex; align-items: center; gap: 7px; padding-left: 10px; border-left: 1px solid var(--border); }
+    .control-label { color: var(--subtle); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+    .mobile-prototype-controls { display: none; width: 100%; gap: 8px; }
+    .mobile-prototype-controls label { min-width: 0; flex: 1; color: var(--muted); font-size: 10px; }
+    .mobile-prototype-controls select { width: 100%; min-height: 44px; margin-top: 3px; border: 1px solid var(--border); border-radius: 5px; padding: 0 30px 0 9px; color: var(--text); background: var(--surface-3); }
+
+    .deck {
+      height: clamp(320px, 42dvh, 440px);
+      flex: 0 0 auto;
+      border-bottom: 1px solid var(--border-strong);
+      background: rgba(13,17,23,.98);
+      box-shadow: 0 14px 34px rgba(0,0,0,.36);
+      z-index: 14;
+    }
+    .deck-shell { height: 100%; display: flex; flex-direction: column; }
+    .deck-head { min-height: 43px; display: flex; align-items: center; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--border); background: var(--surface-3); }
+    .deck-title { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+    .deck-title h2 { margin: 0; font-size: 13px; }
+    .scenario-description { color: var(--muted); font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .deck-head-actions { margin-left: auto; display: flex; gap: 7px; }
+    .deck-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(220px,.78fr) minmax(380px,1.35fr) minmax(320px,1fr); }
+    .pane-mount { min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border); }
+    .pane-mount:last-child { border-right: 0; }
+    .pane { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+    .pane-head { min-height: 46px; padding: 7px 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border); background: rgba(30,41,59,.36); }
+    .pane-heading { min-width: 0; }
+    .pane-heading h3 { margin: 0; font-size: 12px; }
+    .pane-heading p { margin: 1px 0 0; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pane-scroll { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+    .pane-section { padding: 10px; border-bottom: 1px solid var(--border); }
+    .pane-section:last-child { border-bottom: 0; }
+    .section-label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; color: var(--subtle); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .scope-badge, .chip, .source-badge {
+      display: inline-flex; align-items: center; gap: 5px; min-height: 21px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: rgba(13,17,23,.65); font-size: 10px; white-space: nowrap;
+    }
+    .scope-badge { color: #bfdbfe; border-color: rgba(59,130,246,.35); }
+    .source-badge.manual { color: #c4b5fd; border-color: rgba(139,92,246,.35); }
+    .source-badge.observed { color: #a5f3fc; border-color: rgba(34,211,238,.30); }
+    .chip.blocked { color: #fecaca; border-color: rgba(248,113,113,.35); }
+    .chip.stale { color: #fde68a; border-color: rgba(250,204,21,.30); }
+    .chip.running { color: #bbf7d0; border-color: rgba(34,197,94,.30); }
+    .chip.done { color: #bbf7d0; border-color: rgba(34,197,94,.30); }
+
+    .project-list, .work-tree, .timeline { display: grid; gap: 6px; }
+    .project-card, .work-row {
+      width: 100%; text-align: left; border: 1px solid transparent; border-radius: 6px; color: var(--text); background: transparent;
+    }
+    .project-card { padding: 8px; }
+    .project-card:hover, .work-row:hover { background: rgba(255,255,255,.035); }
+    .project-card[aria-selected="true"], .work-row[aria-selected="true"] { border-color: rgba(59,130,246,.55); background: var(--primary-soft); box-shadow: inset 2px 0 var(--primary); }
+    .project-top, .work-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .project-title, .work-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+    .project-meta, .work-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; color: var(--muted); font-size: 10px; }
+    .project-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-meter { height: 3px; margin-top: 7px; border-radius: 8px; overflow: hidden; background: #090e15; }
+    .project-meter span { display: block; height: 100%; background: var(--primary); }
+    .status-icon { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; font-size: 10px; font-weight: 900; }
+    .status-icon.running { color: #bbf7d0; background: rgba(34,197,94,.14); }
+    .status-icon.blocked { color: #fecaca; background: rgba(248,113,113,.14); }
+    .status-icon.stale { color: #fde68a; background: rgba(250,204,21,.12); }
+    .status-icon.done { color: #bbf7d0; background: rgba(34,197,94,.14); }
+    .status-icon.next { color: #cbd5e1; background: rgba(148,163,184,.12); }
+    .work-row { padding: 6px 7px; }
+    .work-row.level-1 { margin-left: 13px; width: calc(100% - 13px); }
+    .work-row.level-2 { margin-left: 27px; width: calc(100% - 27px); }
+    .tree-guide { color: var(--subtle); }
+    .kind-label { color: var(--subtle); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+    .standalone-divider { margin: 7px 0 3px; display: flex; align-items: center; gap: 8px; color: var(--subtle); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+    .standalone-divider::after { content: ""; height: 1px; flex: 1; background: var(--border); }
+
+    .capture-form { display: grid; grid-template-columns: minmax(140px,1.4fr) minmax(90px,.7fr); gap: 7px; }
+    .capture-form .full { grid-column: 1 / -1; }
+    .field { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 10px; }
+    .field input, .field select, .field textarea {
+      width: 100%; min-height: 34px; border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px; color: var(--text); background: #0b111a;
+    }
+    .field textarea { min-height: 48px; resize: vertical; }
+    .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--primary); outline: 2px solid rgba(59,130,246,.18); outline-offset: 0; }
+    .capture-footer { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .capture-note { color: var(--subtle); font-size: 9px; }
+    .captured-list { grid-column: 1 / -1; display: grid; gap: 5px; }
+    .captured-item { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid rgba(34,197,94,.2); border-radius: 5px; background: rgba(34,197,94,.06); font-size: 10px; }
+    .captured-item strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .detail-card { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: rgba(30,41,59,.30); }
+    .detail-card-head { padding: 8px 9px; display: flex; align-items: flex-start; gap: 8px; border-bottom: 1px solid var(--border); }
+    .detail-card-head h4 { margin: 0; font-size: 11px; }
+    .detail-card-head p { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
+    .detail-card-body { padding: 8px 9px; display: grid; gap: 7px; }
+    .note-box, .observed-notice, .retention-note { padding: 7px 8px; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); background: rgba(13,17,23,.55); font-size: 10px; }
+    .note-box strong, .observed-notice strong { color: var(--text); }
+    .observed-notice { border-color: rgba(34,211,238,.24); background: rgba(34,211,238,.06); }
+    .retention-note { color: var(--subtle); border-style: dashed; }
+    .progress-line { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+    .progress-track { height: 5px; border-radius: 8px; overflow: hidden; background: #0a0f17; }
+    .progress-track span { display: block; height: 100%; background: linear-gradient(90deg, var(--primary), var(--cyan)); }
+
+    .association-list { display: grid; gap: 6px; }
+    .association { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: rgba(30,41,59,.28); }
+    .association-body { min-width: 0; flex: 1; }
+    .association-body strong, .association-body span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .association-body span { margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .association-state { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .session-editor { display: grid; gap: 8px; }
+    .time-row { display: grid; grid-template-columns: 1fr auto; gap: 7px; align-items: end; }
+    .now-button { min-width: 52px; min-height: 34px; border: 1px solid var(--border-strong); border-radius: 5px; color: #bfdbfe; background: var(--primary-soft); }
+    .now-button:hover { background: rgba(59,130,246,.22); }
+    .timeline-item { position: relative; display: grid; grid-template-columns: 52px 1fr; gap: 8px; padding-left: 11px; color: var(--muted); font-size: 10px; }
+    .timeline-item::before { content: ""; position: absolute; left: 1px; top: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--border-strong); }
+    .timeline-item time { color: var(--subtle); }
+    .timeline-item strong { color: var(--text); font-weight: 600; }
+
+    .example-state { height: 100%; min-height: 0; display: grid; place-items: center; padding: 18px; text-align: center; }
+    .example-card { max-width: 340px; display: grid; justify-items: center; gap: 9px; }
+    .example-icon { width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: var(--surface-3); }
+    .example-card h3 { margin: 0; font-size: 12px; }
+    .example-card p { margin: 0; color: var(--muted); font-size: 10px; }
+    .skeleton-stack { width: min(100%, 280px); display: grid; gap: 8px; }
+    .skeleton { height: 40px; border-radius: 5px; background: linear-gradient(90deg, rgba(51,68,93,.45), rgba(76,99,132,.58), rgba(51,68,93,.45)); background-size: 200% 100%; animation: shimmer 1.6s infinite linear; }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+
+    .workspace { min-height: 0; flex: 1; display: grid; grid-template-columns: 44px 232px minmax(0,1fr); overflow: hidden; }
+    .activity-rail { border-right: 1px solid var(--border); background: rgba(17,26,40,.82); display: flex; flex-direction: column; align-items: center; padding: 8px 0; gap: 6px; }
+    .rail-button { width: 34px; height: 34px; border: 0; border-left: 2px solid transparent; color: var(--subtle); background: transparent; display: grid; place-items: center; }
+    .rail-button.active { color: var(--text); border-left-color: var(--primary); background: rgba(59,130,246,.08); }
+    .explorer { min-width: 0; border-right: 1px solid var(--border); background: rgba(17,26,40,.72); display: flex; flex-direction: column; }
+    .workspace-panel-title { height: 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .tree { padding: 7px; display: grid; gap: 2px; color: var(--muted); font-size: 11px; }
+    .tree-row { height: 27px; display: flex; align-items: center; gap: 7px; padding: 0 7px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tree-row.active { color: var(--text); background: rgba(59,130,246,.10); }
+    .indent { padding-left: 20px; }
+    .workbench { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0,1fr) 150px; background: rgba(13,17,23,.70); }
+    .editor { min-width: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
+    .tabs { height: 34px; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); background: rgba(17,26,40,.82); }
+    .tab { min-width: 160px; display: flex; align-items: center; gap: 7px; padding: 0 11px; color: var(--muted); border-right: 1px solid var(--border); }
+    .tab.active { color: var(--text); background: var(--bg); border-top: 1px solid var(--primary); }
+    .editor-content { min-height: 0; flex: 1; display: grid; grid-template-columns: 46px 1fr; padding: 12px 0; overflow: hidden; color: #cbd5e1; font-size: 12px; line-height: 1.85; }
+    .line-numbers { padding-right: 10px; text-align: right; color: #475569; user-select: none; }
+    .code-line { white-space: pre; }
+    .syntax-blue { color: #60a5fa; }.syntax-cyan { color: #22d3ee; }.syntax-green { color: #86efac; }.syntax-orange { color: #fdba74; }.syntax-muted { color: #64748b; }
+    .terminal { min-height: 0; display: flex; flex-direction: column; background: rgba(7,11,17,.88); }
+    .terminal-head { height: 32px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
+    .terminal-content { padding: 8px 12px; color: #cbd5e1; font-size: 11px; overflow: hidden; }
+    .prompt { color: var(--success); }
+    .terminal-cursor { display: inline-block; width: 7px; height: 13px; vertical-align: -2px; background: #cbd5e1; opacity: .75; }
+
+    .sheet-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.62); backdrop-filter: blur(2px); }
+    .mobile-sheet {
+      position: fixed; z-index: 61; left: var(--safe-left); right: var(--safe-right); bottom: 0; height: 35dvh; min-height: 260px; max-height: calc(100dvh - var(--safe-top));
+      display: none; flex-direction: column; overflow: hidden; border: 1px solid var(--border-strong); border-bottom: 0; border-radius: 14px 14px 0 0; background: #0d1521; box-shadow: var(--shadow); transform-origin: bottom; animation: sheet-in .2s cubic-bezier(.2,.75,.25,1);
+    }
+    .mobile-sheet.expanded { height: 90dvh; }
+    @keyframes sheet-in { from { transform: translateY(18px); opacity: .7; } }
+    .sheet-grabber { min-height: 44px; border: 0; background: transparent; display: grid; place-items: center; }
+    .sheet-grabber::before { content: ""; width: 42px; height: 4px; border-radius: 9px; background: var(--border-strong); }
+    .sheet-head { min-height: 51px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--border); }
+    .sheet-title { min-width: 0; flex: 1; }
+    .sheet-title h2 { margin: 0; font-size: 12px; }
+    .sheet-title p { margin: 1px 0 0; color: var(--muted); font-size: 9px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .sheet-controls { display: flex; gap: 8px; }
+    .sheet-controls button { width: 44px; min-height: 44px; padding: 0; }
+    .segments { min-height: 52px; padding: 4px 8px; display: grid; grid-template-columns: repeat(3,1fr); gap: 4px; border-bottom: 1px solid var(--border); background: var(--surface-3); }
+    .segment-button { min-height: 44px; border: 1px solid transparent; border-radius: 5px; color: var(--muted); background: transparent; }
+    .segment-button[aria-selected="true"] { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
+    .mobile-pane { min-height: 0; flex: 1; overflow: hidden; padding-bottom: max(8px, var(--safe-bottom)); }
+    .live-region { position: fixed; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+    @media (max-width: 1099px) and (min-width: 700px) {
+      .deck { height: 440px; }
+      .deck-grid { grid-template-columns: minmax(210px,.75fr) minmax(380px,1.25fr); grid-template-rows: minmax(0,1fr) 132px; }
+      .pane-mount[data-segment="execution"] { grid-column: 1 / -1; border-top: 1px solid var(--border); }
+      .pane-mount[data-segment="execution"] .pane-scroll { display: grid; grid-template-columns: 1fr 1fr 1fr; overflow: auto; }
+      .pane-mount[data-segment="execution"] .pane-section { border-right: 1px solid var(--border); border-bottom: 0; }
+      .route-nav .nav-item:nth-child(n+4), .profile-chip span:last-child { display: none; }
+    }
+
+    @media (max-width: 699px) {
+      body { font-size: 12px; }
+      .top-nav { min-height: calc(48px + var(--safe-top)); gap: 8px; padding-left: max(8px,var(--safe-left)); padding-right: max(8px,var(--safe-right)); }
+      .brand span:last-child, .route-nav, .mode-switch, .project-switch, .profile-chip span:last-child { display: none; }
+      .brand { gap: 0; }
+      .top-cluster { gap: 6px; }
+      .profile-chip { width: 36px; justify-content: center; padding: 0; }
+      .workflow-row { height: 48px; flex-basis: 48px; gap: 7px; }
+      .workflow-name span, .context-divider, .context-bit.target, .context-progress, .attention .attention-copy, .quick-button { display: none; }
+      .workflow-name { min-width: 20px; }
+      .context-bit { flex: 1; overflow: hidden; }
+      .context-bit strong { display: block; }
+      .attention { flex: 0 0 auto; }
+      .workflow-actions { margin-left: 0; }
+      .open-button { min-width: 44px; min-height: 44px; padding: 0 9px; }
+      .button-label-long { display: none; }
+      .button-label-short { display: inline; }
+      .prototype-bar { min-height: 70px; padding-top: 6px; padding-bottom: 6px; }
+      .prototype-label, .scenario-buttons, .state-control { display: none; }
+      .mobile-prototype-controls { display: flex; }
+      .deck { display: none !important; }
+      .workspace { grid-template-columns: 1fr; }
+      .activity-rail, .explorer { display: none; }
+      .workbench { grid-template-rows: minmax(0,1fr) 126px; }
+      .tab { min-width: 132px; }
+      .editor-content { grid-template-columns: 34px 1fr; font-size: 10px; padding-top: 8px; }
+      .code-line { white-space: pre; }
+      .mobile-sheet { display: flex; }
+      .pane-head { min-height: 52px; }
+      .project-card, .work-row { min-height: 52px; }
+      .capture-form { grid-template-columns: 1fr; }
+      .capture-form .full, .capture-footer, .captured-list { grid-column: 1; }
+      .field input, .field select, .field textarea, .now-button, .ghost-button, .primary-button, .status-button { min-height: 44px; }
+      .time-row { grid-template-columns: 1fr 56px; }
+      .pane-section { padding: 11px 10px; }
+      .sheet-backdrop { display: block; }
+    }
+
+    @media (max-width: 379px) {
+      .prototype-bar { min-height: 66px; }
+      .mobile-prototype-controls { gap: 5px; }
+      .context-bit span { display: none; }
+      .top-nav .icon-button:first-of-type { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute;overflow:hidden">
+    <symbol id="i-workflow" viewBox="0 0 24 24"><path d="M6 5h12M6 12h7M6 19h12"/><circle cx="4" cy="5" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="19" r="1"/><path d="m16 10 3 2-3 2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5"/></symbol>
+    <symbol id="i-collapse" viewBox="0 0 24 24"><path d="M3 8h5V3M21 8h-5V3M3 16h5v5M21 16h-5v5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v10H3z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h4"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 7 4 4-4 4M11 17h7"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M8 9c4 0 4-2 8-2"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 4h14v13l-4 4H5zM15 21v-4h4M8 8h8M8 12h6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2.5 20h19zM12 9v5M12 17h.01"/></symbol>
+    <symbol id="i-profile" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c.8-5 3.5-7 8-7s7.2 2 8 7"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="M4 6h16v14H4zM8 6V4h8v2M8 11h8"/></symbol>
+  </svg>
+
+  <div class="app" id="app">
+    <header class="top-nav" aria-label="DamHopper application header">
+      <div class="brand"><span class="brand-mark">DH</span><span>dam-hopper</span></div>
+      <nav class="route-nav" aria-label="Primary prototype navigation">
+        <button class="nav-item active" type="button">Workspace</button>
+        <button class="nav-item" type="button">Projects</button>
+        <button class="nav-item" type="button">Git</button>
+        <button class="nav-item" type="button">Usage</button>
+      </nav>
+      <div class="nav-spacer"></div>
+      <div class="top-cluster">
+        <div class="mode-switch" aria-label="Workspace mode">
+          <button class="active" type="button">IDE</button><button type="button">Terminal</button>
+        </div>
+        <button class="project-switch" type="button" aria-label="Current project dam-hopper, feature worktree">
+          <svg class="icon"><use href="#i-folder"/></svg><span>dam-hopper</span><span style="color:var(--subtle)">feat/workflow…</span>
+        </button>
+        <button class="icon-button" type="button" aria-label="Notifications"><svg class="icon"><use href="#i-alert"/></svg></button>
+        <div class="profile-chip" title="Workflow context is scoped to this profile only"><span class="dot"></span><span>Local workstation</span></div>
+        <button class="icon-button" type="button" aria-label="Open menu"><svg class="icon"><use href="#i-menu"/></svg></button>
+      </div>
+    </header>
+
+    <section class="workflow-row" aria-label="Workflow context companion row">
+      <div class="workflow-name"><svg class="icon"><use href="#i-workflow"/></svg><span>Workflow context</span></div>
+      <span class="context-divider" aria-hidden="true"></span>
+      <div class="context-bit target"><svg class="icon"><use href="#i-git"/></svg><strong data-context-project>dam-hopper · feat/workflow-tracking-notes</strong></div>
+      <span class="context-divider" aria-hidden="true"></span>
+      <div class="context-bit"><span>Work</span><strong data-context-work>Validate hierarchy in prototype</strong></div>
+      <div class="context-progress"><div class="mini-track" aria-label="Plan progress 4 of 6"><span></span></div><span>4/6</span></div>
+      <div class="context-bit"><svg class="icon"><use href="#i-clock"/></svg><strong data-context-time>01:08:14</strong></div>
+      <div class="context-bit attention"><svg class="icon"><use href="#i-alert"/></svg><span class="attention-copy" data-context-attention>1 blocked · 1 stale</span></div>
+      <div class="workflow-actions">
+        <button class="quick-button" type="button" data-quick><svg class="icon"><use href="#i-plus"/></svg>Quick capture</button>
+        <button class="open-button" type="button" data-open aria-expanded="false" aria-controls="desktop-deck mobile-sheet">
+          <span class="button-label-long">Open context</span><span class="button-label-short">Open</span><svg class="icon"><use href="#i-chevron"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <section class="prototype-bar" aria-label="Planning prototype controls">
+      <div class="prototype-label"><div class="eyebrow">Planning prototype</div><div class="prototype-copy">Disposable · nothing is saved or launched</div></div>
+      <div class="scenario-buttons" role="group" aria-label="Workflow scenarios">
+        <button type="button" class="scenario-button" data-scenario="orient" aria-pressed="true">1 · Orient across projects</button>
+        <button type="button" class="scenario-button" data-scenario="blocked" aria-pressed="false">2 · Resume blocked work</button>
+        <button type="button" class="scenario-button" data-scenario="session" aria-pressed="false">3 · Capture / end session</button>
+      </div>
+      <div class="state-control">
+        <span class="control-label">Example state</span>
+        <div class="state-buttons" role="group" aria-label="Example data states">
+          <button type="button" class="state-button" data-state="data" aria-pressed="true">Data</button>
+          <button type="button" class="state-button" data-state="loading" aria-pressed="false">Loading</button>
+          <button type="button" class="state-button" data-state="empty" aria-pressed="false">Empty</button>
+          <button type="button" class="state-button" data-state="error" aria-pressed="false">Error</button>
+        </div>
+      </div>
+      <div class="mobile-prototype-controls">
+        <label>Scenario<select id="mobile-scenario" aria-label="Choose workflow scenario"><option value="orient">1 · Orient projects</option><option value="blocked">2 · Resume blocked</option><option value="session">3 · Capture / end</option></select></label>
+        <label>Example<select id="mobile-state" aria-label="Choose example data state"><option value="data">Data</option><option value="loading">Loading</option><option value="empty">Empty</option><option value="error">Error</option></select></label>
+      </div>
+    </section>
+
+    <section class="deck" id="desktop-deck" aria-label="Workflow context deck" hidden>
+      <div class="deck-shell">
+        <header class="deck-head">
+          <div class="deck-title"><h2 tabindex="-1" data-deck-heading>Workflow context deck</h2><span class="scenario-description" data-scenario-description>Scan active, blocked, and stale work without leaving the workspace.</span></div>
+          <div class="deck-head-actions"><button class="ghost-button" type="button" data-quick><svg class="icon"><use href="#i-plus"/></svg>Quick capture</button><button class="close-button" type="button" data-close><svg class="icon"><use href="#i-close"/></svg>Close</button></div>
+        </header>
+        <div class="deck-grid">
+          <div class="pane-mount" data-pane-mount data-segment="projects"></div>
+          <div class="pane-mount" data-pane-mount data-segment="work"></div>
+          <div class="pane-mount" data-pane-mount data-segment="execution"></div>
+        </div>
+      </div>
+    </section>
+
+    <main class="workspace" aria-label="Existing workspace chrome mockup">
+      <aside class="activity-rail" aria-label="Workspace tools">
+        <button type="button" class="rail-button active" aria-label="Explorer"><svg class="icon"><use href="#i-file"/></svg></button>
+        <button type="button" class="rail-button" aria-label="Git"><svg class="icon"><use href="#i-git"/></svg></button>
+        <button type="button" class="rail-button" aria-label="Terminals"><svg class="icon"><use href="#i-terminal"/></svg></button>
+        <button type="button" class="rail-button" aria-label="Notes"><svg class="icon"><use href="#i-note"/></svg></button>
+      </aside>
+      <aside class="explorer" aria-label="Explorer">
+        <div class="workspace-panel-title"><span>Explorer</span><span>•••</span></div>
+        <div class="tree">
+          <div class="tree-row active"><svg class="icon"><use href="#i-folder"/></svg>dam-hopper</div>
+          <div class="tree-row indent"><svg class="icon"><use href="#i-folder"/></svg>packages</div>
+          <div class="tree-row indent"><svg class="icon"><use href="#i-folder"/></svg>plans</div>
+          <div class="tree-row indent"><svg class="icon"><use href="#i-file"/></svg>workflow-context-prototype.html</div>
+          <div class="tree-row indent"><svg class="icon"><use href="#i-file"/></svg>README.md</div>
+        </div>
+      </aside>
+      <section class="workbench" aria-label="Workspace editor and terminal">
+        <div class="editor">
+          <div class="tabs"><div class="tab active"><svg class="icon"><use href="#i-file"/></svg>workflow-context-prototype.html</div><div class="tab"><svg class="icon"><use href="#i-file"/></svg>phase-05-responsive…</div></div>
+          <div class="editor-content" aria-hidden="true">
+            <div class="line-numbers">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9</div>
+            <div><div class="code-line"><span class="syntax-blue">&lt;section</span> <span class="syntax-cyan">aria-label</span>=<span class="syntax-green">"Workflow context"</span><span class="syntax-blue">&gt;</span></div><div class="code-line">  <span class="syntax-blue">&lt;header&gt;</span>Plan → Phase → Task<span class="syntax-blue">&lt;/header&gt;</span></div><div class="code-line">  <span class="syntax-muted">&lt;!-- planning-only, no runtime side effects --&gt;</span></div><div class="code-line">  <span class="syntax-blue">&lt;div</span> <span class="syntax-cyan">data-profile</span>=<span class="syntax-green">"current"</span><span class="syntax-blue">&gt;</span></div><div class="code-line">    <span class="syntax-orange">Manual timestamps win.</span></div><div class="code-line">    Observations remain provenance.</div><div class="code-line">  <span class="syntax-blue">&lt;/div&gt;</span></div><div class="code-line"><span class="syntax-blue">&lt;/section&gt;</span></div></div>
+          </div>
+        </div>
+        <div class="terminal">
+          <div class="terminal-head"><span>Terminal · dam-hopper #2</span><span>observed running</span></div>
+          <div class="terminal-content"><span class="prompt">loidinh@workstation</span>:~/WS/dam-hopper$ pnpm dev<br><span style="color:var(--cyan)">VITE</span> ready in 412 ms<br><br><span class="prompt">➜</span> Local: http://localhost:5173/<br><span class="terminal-cursor"></span></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="sheet-backdrop" data-backdrop hidden></div>
+  <section class="mobile-sheet" id="mobile-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" aria-describedby="sheet-description" aria-hidden="true" hidden>
+    <button class="sheet-grabber" type="button" data-snap aria-label="Expand workflow sheet to 90 percent height"></button>
+    <header class="sheet-head">
+      <div class="sheet-title"><h2 id="sheet-title">Workflow context</h2><p id="sheet-description" data-scenario-description>Scan active, blocked, and stale work without leaving the workspace.</p></div>
+      <div class="sheet-controls"><button class="ghost-button" type="button" data-snap aria-label="Expand workflow sheet"><svg class="icon" data-snap-icon><use href="#i-expand"/></svg></button><button class="close-button" type="button" data-close aria-label="Close workflow sheet"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    </header>
+    <div class="segments" role="tablist" aria-label="Workflow context sections">
+      <button class="segment-button" type="button" role="tab" id="segment-projects" aria-controls="mobile-pane" aria-selected="true" data-segment-button="projects">Projects</button>
+      <button class="segment-button" type="button" role="tab" id="segment-work" aria-controls="mobile-pane" aria-selected="false" data-segment-button="work">Work</button>
+      <button class="segment-button" type="button" role="tab" id="segment-execution" aria-controls="mobile-pane" aria-selected="false" data-segment-button="execution">Execution</button>
+    </div>
+    <div class="mobile-pane" id="mobile-pane" role="tabpanel" aria-labelledby="segment-projects" tabindex="0" data-mobile-mount data-segment="projects"></div>
+  </section>
+
+  <div class="live-region" aria-live="polite" aria-atomic="true" id="live-region"></div>
+
+  <template id="projects-template">
+    <section class="pane" aria-label="Projects in current profile">
+      <header class="pane-head"><div class="pane-heading"><h3>Projects</h3><p>Active first, then blocked and stale</p></div><span class="scope-badge"><svg class="icon"><use href="#i-profile"/></svg>Current profile only</span></header>
+      <div class="pane-scroll">
+        <div class="pane-section">
+          <div class="section-label"><span>Local workstation</span><span>3 configured</span></div>
+          <div class="project-list" role="listbox" aria-label="Workflow projects">
+            <button type="button" class="project-card" role="option" data-project="dam-hopper" aria-selected="true"><div class="project-top"><span class="status-icon running">▶</span><span class="project-title">dam-hopper</span><span class="chip running">Running</span></div><div class="project-meta"><svg class="icon"><use href="#i-git"/></svg><span>feat/workflow-tracking-notes</span><span>· 2 terminals</span></div><div class="project-meter"><span style="width:67%"></span></div></button>
+            <button type="button" class="project-card" role="option" data-project="atlas-mobile" aria-selected="false"><div class="project-top"><span class="status-icon blocked">!</span><span class="project-title">atlas-mobile</span><span class="chip blocked">Blocked</span></div><div class="project-meta"><svg class="icon"><use href="#i-git"/></svg><span>release/2.8 · certificate decision</span></div><div class="project-meter"><span style="width:42%;background:var(--danger)"></span></div></button>
+            <button type="button" class="project-card" role="option" data-project="ledger-api" aria-selected="false"><div class="project-top"><span class="status-icon stale">◷</span><span class="project-title">ledger-api</span><span class="chip stale">Stale · 6d</span></div><div class="project-meta"><svg class="icon"><use href="#i-git"/></svg><span>main · no running session</span></div><div class="project-meter"><span style="width:80%;background:var(--warning)"></span></div></button>
+          </div>
+        </div>
+        <div class="pane-section"><div class="retention-note"><strong style="color:var(--text)">Scope boundary</strong><br>Only projects and associations from <em>Local workstation</em> appear. Switching profiles clears this deck before loading.</div></div>
+      </div>
+    </section>
+  </template>
+
+  <template id="work-template">
+    <section class="pane" aria-label="Plan phase and task hierarchy">
+      <header class="pane-head"><div class="pane-heading"><h3>Work · recommended hierarchy</h3><p>Plan → Phase → Task, with standalone tasks allowed</p></div><span class="source-badge manual">✎ Manual semantics</span></header>
+      <div class="pane-scroll">
+        <div class="pane-section">
+          <div class="section-label"><span>Quick capture</span><span>Explicit · reversible</span></div>
+          <form class="capture-form" data-capture-form>
+            <label class="field"><span>Title</span><input name="title" required maxlength="80" placeholder="What needs attention?" autocomplete="off"></label>
+            <label class="field"><span>Kind</span><select name="kind"><option>Task</option><option>Phase</option><option>Plan</option></select></label>
+            <label class="field full"><span>Parent / placement</span><select name="parent"><option>Standalone task</option><option>Workflow tracking & continuity → Responsive context</option><option>Workflow tracking & continuity → Shell integration</option></select></label>
+            <label class="field full"><span>Optional note</span><textarea name="note" maxlength="180" placeholder="Decision, blocker, or next step"></textarea></label>
+            <div class="captured-list" data-captured-list></div>
+            <div class="capture-footer"><span class="capture-note">Creates planning context only. Never starts terminals, agents, or worktrees.</span><button type="submit" class="primary-button"><svg class="icon"><use href="#i-plus"/></svg>Capture</button></div>
+          </form>
+        </div>
+        <div class="pane-section">
+          <div class="section-label"><span>dam-hopper · feat/workflow…</span><span>4 / 6 done</span></div>
+          <div class="work-tree" role="tree" aria-label="Work hierarchy">
+            <button type="button" class="work-row" role="treeitem" aria-level="1" aria-expanded="true" data-work="plan" aria-selected="false"><div class="work-main"><span class="status-icon running">▶</span><span class="kind-label">Plan</span><span class="work-title">Workflow tracking & continuity</span></div><div class="work-meta"><span>2 phases · 6 tasks</span><span>67%</span></div></button>
+            <button type="button" class="work-row level-1" role="treeitem" aria-level="2" aria-expanded="true" data-work="responsive" aria-selected="true"><div class="work-main"><span class="tree-guide">└</span><span class="status-icon running">▶</span><span class="kind-label">Phase</span><span class="work-title">Responsive context surface</span></div><div class="work-meta"><span>2 of 3 tasks done</span></div></button>
+            <button type="button" class="work-row level-2" role="treeitem" aria-level="3" data-work="prototype" aria-selected="false"><div class="work-main"><span class="tree-guide">└</span><span class="status-icon done">✓</span><span class="kind-label">Task</span><span class="work-title">Prototype hierarchy in context</span></div></button>
+            <button type="button" class="work-row level-2" role="treeitem" aria-level="3" data-work="validate" aria-selected="false"><div class="work-main"><span class="tree-guide">└</span><span class="status-icon running">▶</span><span class="kind-label">Task</span><span class="work-title">Validate mobile bottom sheet</span></div></button>
+            <button type="button" class="work-row level-2" role="treeitem" aria-level="3" data-work="focus" aria-selected="false"><div class="work-main"><span class="tree-guide">└</span><span class="status-icon next">○</span><span class="kind-label">Task</span><span class="work-title">Keyboard focus audit</span></div></button>
+            <button type="button" class="work-row level-1" role="treeitem" aria-level="2" aria-expanded="true" data-work="shell" aria-selected="false"><div class="work-main"><span class="tree-guide">└</span><span class="status-icon next">○</span><span class="kind-label">Phase</span><span class="work-title">Workspace shell integration</span></div><div class="work-meta"><span>0 of 2 tasks done</span></div></button>
+            <div class="standalone-divider">Standalone work</div>
+            <button type="button" class="work-row" role="treeitem" aria-level="1" data-work="blocked" aria-selected="false"><div class="work-main"><span class="status-icon blocked">!</span><span class="kind-label">Task</span><span class="work-title">Decide certificate handoff for Atlas</span><span class="chip blocked">Blocked</span></div><div class="work-meta"><span>No plan or phase parent · atlas-mobile</span></div></button>
+          </div>
+        </div>
+        <div class="pane-section">
+          <div class="detail-card">
+            <div class="detail-card-head"><span class="status-icon running" data-detail-icon>▶</span><div style="min-width:0;flex:1"><h4 data-work-detail-title>Responsive context surface</h4><p data-work-detail-meta>Phase · in progress · updated 12m ago</p></div><span class="source-badge manual">Manual</span></div>
+            <div class="detail-card-body">
+              <div class="progress-line"><span>Progress</span><div class="progress-track"><span data-detail-progress style="width:67%"></span></div><strong data-detail-progress-label>2 / 3</strong></div>
+              <div class="note-box"><strong>Durable note</strong><br><span data-work-detail-note>Keep the 40px companion row below TopNav. Mobile uses one segment at a time; do not squeeze the desktop deck.</span></div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap"><span class="chip running" data-detail-status>▶ In progress</span><span class="source-badge manual">✎ Status set manually</span><span class="source-badge observed">◇ Target observed</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <template id="execution-template">
+    <section class="pane" aria-label="Execution and work session associations">
+      <header class="pane-head"><div class="pane-heading"><h3>Execution associations</h3><p>References existing resources; no startup controls</p></div><span class="scope-badge"><svg class="icon"><use href="#i-profile"/></svg>Current profile</span></header>
+      <div class="pane-scroll">
+        <div class="pane-section">
+          <div class="section-label"><span>Linked resources</span><span>2 associations</span></div>
+          <div class="association-list">
+            <div class="association"><svg class="icon" style="color:var(--success)"><use href="#i-terminal"/></svg><div class="association-body"><strong>Terminal · dam-hopper #2</strong><span>feat/workflow-tracking-notes · existing PTY</span></div><div class="association-state"><span class="dot"></span><span data-terminal-state>Running · observed</span></div></div>
+            <div class="association"><svg class="icon" style="color:#c4b5fd"><use href="#i-link"/></svg><div class="association-body"><strong>Harness · Manual</strong><span>Adapter boundary · lifecycle suggestions only</span></div><span class="source-badge manual">Manual label</span></div>
+          </div>
+        </div>
+        <div class="pane-section">
+          <div class="section-label"><span>Work session · manual authority</span><span class="chip running" data-session-status>▶ Running</span></div>
+          <div class="session-editor" data-session-editor>
+            <div class="time-row"><label class="field"><span>Started at (manual)</span><input type="datetime-local" data-start-time value="2026-09-01T09:34"></label><button type="button" class="now-button" data-now="start">Now</button></div>
+            <div class="time-row"><label class="field"><span>Ended at (manual)</span><input type="datetime-local" data-end-time></label><button type="button" class="now-button" data-now="end">Now</button></div>
+            <div class="observed-notice"><strong data-observed-title>Terminal is running (observed)</strong><br><span data-observed-copy>Observed lifecycle is context only. It never replaces either manual timestamp.</span></div>
+            <button type="button" class="status-button" data-end-session><svg class="icon"><use href="#i-clock"/></svg>End session using entered time</button>
+          </div>
+        </div>
+        <div class="pane-section">
+          <div class="section-label"><span>Recent provenance</span><span>Events retained 90 days</span></div>
+          <div class="timeline">
+            <div class="timeline-item"><time>10:42</time><span><strong>Terminal exit observed</strong><br>Suggestion only · manual end left unchanged</span></div>
+            <div class="timeline-item"><time>10:18</time><span><strong>Durable note updated</strong><br>Manual · phase</span></div>
+            <div class="timeline-item"><time>09:34</time><span><strong>Work session started</strong><br>Manual timestamp · terminal association observed</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <script>
+    (() => {
+      "use strict";
+      const app = document.querySelector("#app");
+      const desktopDeck = document.querySelector("#desktop-deck");
+      const mobileSheet = document.querySelector("#mobile-sheet");
+      const backdrop = document.querySelector("[data-backdrop]");
+      const liveRegion = document.querySelector("#live-region");
+      const mobileMount = document.querySelector("[data-mobile-mount]");
+      const mobileScenario = document.querySelector("#mobile-scenario");
+      const mobileState = document.querySelector("#mobile-state");
+      const mobileMedia = window.matchMedia("(max-width: 699px)");
+      const scenarios = {
+        orient: {
+          description: "Scan active, blocked, and stale work without leaving the workspace.",
+          project: "dam-hopper", work: "responsive", segment: "projects",
+          contextProject: "dam-hopper · feat/workflow-tracking-notes", contextWork: "Validate hierarchy in prototype", contextTime: "01:08:14", attention: "1 blocked · 1 stale",
+          detailTitle: "Responsive context surface", detailMeta: "Phase · in progress · updated 12m ago", detailNote: "Keep the 40px companion row below TopNav. Mobile uses one segment at a time; do not squeeze the desktop deck.", detailStatus: "▶ In progress", detailProgress: "67%", detailProgressLabel: "2 / 3"
+        },
+        blocked: {
+          description: "Resume a standalone blocked task with its last durable decision visible.",
+          project: "atlas-mobile", work: "blocked", segment: "work",
+          contextProject: "atlas-mobile · release/2.8", contextWork: "Decide certificate handoff for Atlas", contextTime: "Paused", attention: "Blocked · note from yesterday",
+          detailTitle: "Decide certificate handoff for Atlas", detailMeta: "Standalone task · blocked · updated yesterday", detailNote: "Waiting for Security to confirm whether the signing certificate stays in the current vault. Resume by reviewing the handoff note—not terminal scrollback.", detailStatus: "! Blocked", detailProgress: "0%", detailProgressLabel: "Blocked"
+        },
+        session: {
+          description: "Capture explicit context, then end a manual session without telemetry overwriting time.",
+          project: "dam-hopper", work: "validate", segment: "execution",
+          contextProject: "dam-hopper · feat/workflow-tracking-notes", contextWork: "Validate mobile bottom sheet", contextTime: "01:08:14", attention: "Terminal exit observed at 10:42",
+          detailTitle: "Validate mobile bottom sheet", detailMeta: "Task · in progress · session linked", detailNote: "Check 390px layout at both 35dvh and 90dvh. Record the manual end only after review is complete.", detailStatus: "▶ In progress", detailProgress: "50%", detailProgressLabel: "In progress"
+        }
+      };
+      let currentScenario = "orient";
+      let currentState = "data";
+      let activeSegment = "projects";
+      let isOpen = false;
+      let returnFocus = null;
+      const capturedItems = [];
+
+      function icon(id) {
+        return `<svg class="icon" aria-hidden="true"><use href="#${id}"></use></svg>`;
+      }
+
+      function announce(message) {
+        liveRegion.textContent = "";
+        window.setTimeout(() => { liveRegion.textContent = message; }, 20);
+      }
+
+      function stateMarkup(segment, state) {
+        const labels = { projects: "projects", work: "work items", execution: "execution associations" };
+        if (state === "loading") return `<div class="example-state" role="status" aria-label="Loading ${labels[segment]}"><div class="example-card"><div class="example-icon">${icon("i-refresh")}</div><h3>Loading ${labels[segment]}…</h3><p>Geometry stays stable while current-profile data is requested.</p><div class="skeleton-stack"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></div></div>`;
+        if (state === "empty") return `<div class="example-state"><div class="example-card"><div class="example-icon">${icon(segment === "execution" ? "i-link" : "i-box")}</div><h3>No ${labels[segment]} yet</h3><p>${segment === "work" ? "Capture a task, phase, or plan. Nothing will start automatically." : segment === "execution" ? "This work has no terminal or harness association. That is valid." : "No workflow context is bound in this profile."}</p><button class="ghost-button" type="button" data-quick>${icon("i-plus")}Quick capture</button></div></div>`;
+        return `<div class="example-state"><div class="example-card"><div class="example-icon" style="color:var(--danger)">${icon("i-alert")}</div><h3>${segment === "projects" ? "Project summary unavailable" : segment === "work" ? "This work item failed to refresh" : "Associations unavailable"}</h3><p>Scoped error example. Cached context in other panes remains usable; no terminal state is changed.</p><button class="ghost-button" type="button" data-retry>${icon("i-refresh")}Retry example</button></div></div>`;
+      }
+
+      function renderCapturedItems(root = document) {
+        root.querySelectorAll("[data-captured-list]").forEach((list) => {
+          list.replaceChildren();
+          capturedItems.forEach((item) => {
+            const row = document.createElement("div");
+            row.className = "captured-item";
+            const mark = document.createElement("span");
+            mark.className = "status-icon next";
+            mark.textContent = "+";
+            const title = document.createElement("strong");
+            title.textContent = item.title;
+            const meta = document.createElement("span");
+            meta.className = "source-badge manual";
+            meta.textContent = `${item.kind} · Manual`;
+            row.append(mark, title, meta);
+            list.append(row);
+          });
+        });
+      }
+
+      function applyScenarioTo(root = document) {
+        const scenario = scenarios[currentScenario];
+        root.querySelectorAll("[data-project]").forEach((el) => el.setAttribute("aria-selected", String(el.dataset.project === scenario.project)));
+        root.querySelectorAll("[data-work]").forEach((el) => el.setAttribute("aria-selected", String(el.dataset.work === scenario.work)));
+        root.querySelectorAll("[data-work-detail-title]").forEach((el) => { el.textContent = scenario.detailTitle; });
+        root.querySelectorAll("[data-work-detail-meta]").forEach((el) => { el.textContent = scenario.detailMeta; });
+        root.querySelectorAll("[data-work-detail-note]").forEach((el) => { el.textContent = scenario.detailNote; });
+        root.querySelectorAll("[data-detail-status]").forEach((el) => {
+          el.textContent = scenario.detailStatus;
+          el.className = `chip ${currentScenario === "blocked" ? "blocked" : "running"}`;
+        });
+        root.querySelectorAll("[data-detail-progress]").forEach((el) => { el.style.width = scenario.detailProgress; });
+        root.querySelectorAll("[data-detail-progress-label]").forEach((el) => { el.textContent = scenario.detailProgressLabel; });
+        root.querySelectorAll("[data-detail-icon]").forEach((el) => {
+          el.textContent = currentScenario === "blocked" ? "!" : "▶";
+          el.className = `status-icon ${currentScenario === "blocked" ? "blocked" : "running"}`;
+        });
+        root.querySelectorAll("[data-terminal-state]").forEach((el) => { el.textContent = currentScenario === "session" ? "Exited 10:42 · observed" : "Running · observed"; });
+        root.querySelectorAll("[data-observed-title]").forEach((el) => { el.textContent = currentScenario === "session" ? "Terminal exited at 10:42 (observed)" : "Terminal is running (observed)"; });
+        root.querySelectorAll("[data-observed-copy]").forEach((el) => { el.textContent = currentScenario === "session" ? "The manual end field remains blank. Use Now or type a deliberate time; observation is only a suggestion." : "Observed lifecycle is context only. It never replaces either manual timestamp."; });
+        root.querySelectorAll("[data-session-status]").forEach((el) => { el.textContent = currentScenario === "session" ? "◇ Exit observed" : "▶ Running"; el.className = `chip ${currentScenario === "session" ? "stale" : "running"}`; });
+        renderCapturedItems(root);
+      }
+
+      function renderMount(mount, segment) {
+        mount.dataset.segment = segment;
+        mount.replaceChildren();
+        if (currentState === "data") {
+          const template = document.querySelector(`#${segment}-template`);
+          mount.append(template.content.cloneNode(true));
+          applyScenarioTo(mount);
+        } else {
+          mount.innerHTML = stateMarkup(segment, currentState);
+        }
+      }
+
+      function renderAll() {
+        document.querySelectorAll("[data-pane-mount]").forEach((mount) => renderMount(mount, mount.dataset.segment));
+        renderMount(mobileMount, activeSegment);
+        mobileMount.setAttribute("aria-labelledby", `segment-${activeSegment}`);
+      }
+
+      function setSegment(segment, focusTab = false) {
+        activeSegment = segment;
+        document.querySelectorAll("[data-segment-button]").forEach((button) => {
+          const selected = button.dataset.segmentButton === segment;
+          button.setAttribute("aria-selected", String(selected));
+          button.tabIndex = selected ? 0 : -1;
+          if (selected && focusTab) button.focus();
+        });
+        renderMount(mobileMount, segment);
+        mobileMount.setAttribute("aria-labelledby", `segment-${segment}`);
+      }
+
+      function syncOpenPresentation() {
+        const mobile = mobileMedia.matches;
+        desktopDeck.hidden = !isOpen || mobile;
+        mobileSheet.hidden = !isOpen || !mobile;
+        backdrop.hidden = !isOpen || !mobile;
+        mobileSheet.setAttribute("aria-hidden", String(!isOpen || !mobile));
+        app.toggleAttribute("inert", isOpen && mobile);
+        if (isOpen && mobile) app.setAttribute("aria-hidden", "true");
+        else app.removeAttribute("aria-hidden");
+        document.querySelectorAll("[data-open]").forEach((button) => button.setAttribute("aria-expanded", String(isOpen)));
+        if (isOpen && mobile) renderMount(mobileMount, activeSegment);
+      }
+
+      function openContext(segment = activeSegment, focusTarget = true) {
+        returnFocus = document.activeElement;
+        activeSegment = segment;
+        isOpen = true;
+        setSegment(segment);
+        syncOpenPresentation();
+        if (focusTarget) window.requestAnimationFrame(() => {
+          if (mobileMedia.matches) document.querySelector(`[data-segment-button="${segment}"]`)?.focus();
+          else document.querySelector("[data-deck-heading]")?.focus();
+        });
+      }
+
+      function closeContext() {
+        isOpen = false;
+        syncOpenPresentation();
+        if (returnFocus instanceof HTMLElement && document.contains(returnFocus)) returnFocus.focus();
+        announce("Workflow context closed.");
+      }
+
+      function setScenario(name, shouldOpen = true) {
+        if (!scenarios[name]) return;
+        currentScenario = name;
+        currentState = "data";
+        const scenario = scenarios[name];
+        activeSegment = scenario.segment;
+        document.querySelectorAll("[data-scenario]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.scenario === name)));
+        document.querySelectorAll("[data-state]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.state === "data")));
+        mobileScenario.value = name;
+        mobileState.value = "data";
+        document.querySelectorAll("[data-scenario-description]").forEach((el) => { el.textContent = scenario.description; });
+        document.querySelectorAll("[data-context-project]").forEach((el) => { el.textContent = scenario.contextProject; });
+        document.querySelectorAll("[data-context-work]").forEach((el) => { el.textContent = scenario.contextWork; });
+        document.querySelectorAll("[data-context-time]").forEach((el) => { el.textContent = scenario.contextTime; });
+        document.querySelectorAll("[data-context-attention]").forEach((el) => { el.textContent = scenario.attention; });
+        renderAll();
+        setSegment(activeSegment);
+        if (shouldOpen) openContext(activeSegment, false);
+        announce(`Scenario ${name} selected. ${scenario.description}`);
+      }
+
+      function setUiState(state) {
+        if (!["data", "loading", "empty", "error"].includes(state)) return;
+        currentState = state;
+        document.querySelectorAll("[data-state]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.state === state)));
+        mobileState.value = state;
+        renderAll();
+        if (!isOpen) openContext(activeSegment, false);
+        announce(`${state} example displayed.`);
+      }
+
+      function localDateTimeValue(date = new Date()) {
+        const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+        return local.toISOString().slice(0, 16);
+      }
+
+      function setSnap(expanded) {
+        mobileSheet.classList.toggle("expanded", expanded);
+        document.querySelectorAll("[data-snap]").forEach((button) => button.setAttribute("aria-label", expanded ? "Collapse workflow sheet to 35 percent height" : "Expand workflow sheet to 90 percent height"));
+        document.querySelectorAll("[data-snap-icon] use").forEach((use) => use.setAttribute("href", expanded ? "#i-collapse" : "#i-expand"));
+        announce(expanded ? "Workflow sheet expanded to 90 percent height." : "Workflow sheet collapsed to 35 percent height.");
+      }
+
+      document.addEventListener("click", (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) return;
+        const scenarioButton = target.closest("[data-scenario]");
+        if (scenarioButton) { setScenario(scenarioButton.dataset.scenario); return; }
+        const stateButton = target.closest("[data-state]");
+        if (stateButton) { setUiState(stateButton.dataset.state); return; }
+        if (target.closest("[data-open]")) { isOpen ? closeContext() : openContext(); return; }
+        if (target.closest("[data-close]")) { closeContext(); return; }
+        if (target.closest("[data-quick]")) {
+          currentState = "data";
+          activeSegment = "work";
+          renderAll();
+          openContext("work", false);
+          window.requestAnimationFrame(() => document.querySelector(mobileMedia.matches ? "#mobile-pane [name=title]" : "#desktop-deck [name=title]")?.focus());
+          return;
+        }
+        const segmentButton = target.closest("[data-segment-button]");
+        if (segmentButton) { setSegment(segmentButton.dataset.segmentButton); return; }
+        if (target.closest("[data-snap]")) { setSnap(!mobileSheet.classList.contains("expanded")); return; }
+        if (target.closest("[data-backdrop]")) { closeContext(); return; }
+        if (target.closest("[data-retry]")) { setUiState("data"); return; }
+        const nowButton = target.closest("[data-now]");
+        if (nowButton) {
+          const editor = nowButton.closest("[data-session-editor]");
+          const input = editor?.querySelector(nowButton.dataset.now === "start" ? "[data-start-time]" : "[data-end-time]");
+          if (input instanceof HTMLInputElement) input.value = localDateTimeValue();
+          announce(`${nowButton.dataset.now === "start" ? "Start" : "End"} timestamp set manually to now. Observed terminal state was not changed.`);
+          return;
+        }
+        if (target.closest("[data-end-session]")) {
+          const editor = target.closest("[data-session-editor]");
+          const end = editor?.querySelector("[data-end-time]");
+          if (end instanceof HTMLInputElement && !end.value) { end.focus(); announce("Enter an end timestamp or use Now before ending the session."); }
+          else announce("Session marked ended using the manual timestamp. Terminal observation remains separate provenance.");
+          return;
+        }
+        const project = target.closest("[data-project]");
+        if (project) { document.querySelectorAll("[data-project]").forEach((el) => el.setAttribute("aria-selected", String(el.dataset.project === project.dataset.project))); announce(`${project.querySelector(".project-title")?.textContent} selected in prototype.`); return; }
+        const work = target.closest("[data-work]");
+        if (work) { document.querySelectorAll("[data-work]").forEach((el) => el.setAttribute("aria-selected", String(el.dataset.work === work.dataset.work))); announce(`${work.querySelector(".work-title")?.textContent} selected in prototype.`); }
+      });
+
+      document.addEventListener("submit", (event) => {
+        const form = event.target;
+        if (!(form instanceof HTMLFormElement) || !form.matches("[data-capture-form]")) return;
+        event.preventDefault();
+        const data = new FormData(form);
+        const title = String(data.get("title") || "").trim();
+        if (!title) return;
+        capturedItems.push({ title, kind: String(data.get("kind") || "Task"), parent: String(data.get("parent") || "Standalone task"), note: String(data.get("note") || "") });
+        form.reset();
+        renderCapturedItems();
+        announce(`${title} captured manually. No terminal, agent, worktree, or route action occurred.`);
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && isOpen) { event.preventDefault(); closeContext(); return; }
+        const target = event.target;
+        const typingOwner = target instanceof Element && (target.matches("input, textarea, select, [contenteditable=true]") || target.closest(".terminal, .editor-content"));
+        if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "w" && !typingOwner) { event.preventDefault(); isOpen ? closeContext() : openContext(); return; }
+        if (event.key === "Tab" && isOpen && mobileMedia.matches) {
+          const focusables = [...mobileSheet.querySelectorAll("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")].filter((el) => !el.hidden && el.getClientRects().length);
+          if (!focusables.length) return;
+          const first = focusables[0], last = focusables[focusables.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        }
+        const tab = target instanceof Element ? target.closest("[data-segment-button]") : null;
+        if (tab && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+          event.preventDefault();
+          const order = ["projects", "work", "execution"];
+          const direction = event.key === "ArrowRight" ? 1 : -1;
+          const next = order[(order.indexOf(tab.dataset.segmentButton) + direction + order.length) % order.length];
+          setSegment(next, true);
+        }
+      });
+
+      mobileScenario.addEventListener("change", () => setScenario(mobileScenario.value));
+      mobileState.addEventListener("change", () => setUiState(mobileState.value));
+      mobileMedia.addEventListener("change", syncOpenPresentation);
+      renderAll();
+      setScenario("orient", false);
+    })();
+  </script>
+</body>
+</html>

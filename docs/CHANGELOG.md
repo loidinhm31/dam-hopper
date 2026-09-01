@@ -1,3 +1,26 @@
+# 2026-09-02
+
+- **Phase 01: Workflow tracking domain and relational persistence.** Added the
+  additive `010_workflow_tracking.sql` migration for workspace identities,
+  Plan/Phase/Task items, manual sessions, terminal/agent resource links,
+  durable notes, and append-only activity events. Existing terminal-session
+  tables remain unchanged and all workflow tables share the configured
+  `sessions.db`.
+- Added serializable workflow models and closed enums for item kind/status,
+  session lifecycle, resource observations, provenance, and event types.
+  Validation enforces bounded titles/bodies/identifiers/payloads, timestamps,
+  transitions, and the Plan-first hierarchy (Plan root → Phase → Task, with
+  standalone or Plan-level tasks).
+- Added `WorkflowStore` repositories for workspace/item/session/resource/note/
+  event CRUD, bounded overview aggregation, keyset history, and retention.
+  Mutations use SQLite transactions; optional audit events commit atomically,
+  event IDs are retry-idempotent, and resource observations never rewrite
+  session lifecycle state.
+- `server/src/workflow/tests.rs` covers model rules, migration preservation,
+  hierarchy/scope checks, idempotency, overlapping sessions, note retention,
+  overview progress, pagination, and purge. Workflow HTTP/WebSocket routes
+  remain outside this phase. [See phase plan](../plans/260901-0919-workflow-tracking-notes/phase-01-domain-and-relational-persistence.md).
+
 # 2026-08-31
 
 - **Preserve Explorer Tree Expansion & Editor View Scroll Position (Phases 01–03).**

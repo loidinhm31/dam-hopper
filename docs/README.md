@@ -8,7 +8,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 1. **[Project Overview & PDR](./project-overview-pdr.md)** — Vision, requirements, architecture decisions
 2. **[Configuration Guide](./configuration-guide.md)** — Set up the global `dam-hopper.toml` project registry
-3. **[System Architecture](./system-architecture.md)** — How the system works
+3. **[System Architecture](./system-architecture.md)** — How the system works, including workflow persistence
 
 ## Feature Guides
 
@@ -24,6 +24,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
+- **[Changelog](./CHANGELOG.md)** — Dated feature, persistence, and release notes
 
 ## Deployment
 
@@ -98,6 +99,21 @@ exists before linking it from a new document.
 - Health checks for broken symlinks
 - See: [System Architecture](./system-architecture.md#module-breakdown)
 
+**Workflow Tracking Persistence (Phase 01)** — Additive SQLite domain and
+repository foundation for workspaces, Plan/Phase/Task items, manual sessions,
+terminal/agent correlations, notes, and activity events.
+
+- Plan-first hierarchy: Plan roots, Phase children, and standalone/Plan/Phase
+  tasks; item creation rejects cross-scope parents, cycles, and depth >3.
+- Store boundary: `WorkflowStore` shares the configured session database and
+  commits entity mutations plus optional events atomically.
+- Retention: notes soft-delete before bounded purge; events support expiry and
+  keyset history pagination.
+- See [Project Overview & PDR](./project-overview-pdr.md#pr-011-workflow-tracking-domain--relational-persistence-phase-01),
+  [System Architecture](./system-architecture.md#workflow-phase-01-domain-and-relational-persistence),
+  and [Code Standards](./code-standards.md#workflow-domain-and-relational-store-phase-01).
+
+
 ## Common Tasks
 
 1. Find the component in `packages/ui/src/components/` (the browser host is `apps/web`)
@@ -128,6 +144,17 @@ Terminal lifecycle follows six main states:
 See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle) for detailed flow.
 
 ## Recent Changes
+
+**Phase 01 Workflow Tracking (Complete ✓):**
+
+- ✓ Added additive migration 010 for six workflow tables sharing `sessions.db`
+- ✓ Added Plan/Phase/Task models, status/source/resource/event enums, and
+  bounded validation
+- ✓ Added transactional `WorkflowStore` methods for hierarchy, sessions,
+  links, notes, events, overview aggregation, and retention
+- ✓ Added domain/store tests for migration preservation, Plan-first rules,
+  scope isolation, idempotency, pagination, and purge
+
 
 **Phase 06 (Complete ✓):**
 
@@ -212,7 +239,8 @@ Browser (React SPA)
 Rust Server (Axum)
     ├─ AppState (config, PTY manager, FS subsystem, auth)
     ├─ Router (routes REST/WebSocket)
-    └─ Services (PtySessionManager, FsSubsystem, AgentStoreService)
+    ├─ Services (PtySessionManager, FsSubsystem, AgentStoreService)
+    └─ Persistence (SessionStore + WorkflowStore over SQLite)
 ```
 
 Key patterns:
@@ -220,13 +248,18 @@ Key patterns:
 - Arc<Mutex<T>> for cheap-clone shared state
 - Never hold locks across `.await`
 - Feature gating at route registration time
+- Workflow mutations use SQLite transactions; optional audit events commit with
+  their entity mutation.
 - Error types per module (thiserror)
 
 See [System Architecture](./system-architecture.md) for detailed breakdown.
 
 ## File Structure
 
-```
+server/
+├── src/
+│   ├── persistence/              # SQLite session store and migrations
+│   └── workflow/                 # Workflow domain models and store
 apps/
 ├── web/                          # Thin Vite browser host
 packages/
@@ -238,7 +271,8 @@ docs/
 ├── api-reference.md              # REST/WebSocket endpoints
 ├── configuration-guide.md        # dam-hopper.toml & setup
 ├── code-standards.md             # Patterns, testing, security
-└── codebase-summary.md           # Quick module reference
+├── codebase-summary.md           # Quick module reference
+└── CHANGELOG.md                  # Dated implementation and release notes
 ```
 
 Each file is self-contained but linked for cross-reference.
