@@ -1,10 +1,6 @@
 # API Reference
 
-The API base URL depends on deployment: direct/legacy defaults to
-`http://localhost:4800`; Docker uses the same port with explicit combined
-`--web-dir /opt/dam-hopper/web`; systemd production is backend-only at
-`http://localhost:4801`; and the dedicated release web host is
-`http://localhost:4802` with API requests sent to the configured runtime origin.
+Base URL depends on deployment: Docker/direct legacy defaults to `http://localhost:4800`; systemd production is backend-only on `http://localhost:4801` with the UI hosted separately.
 
 ## Authentication
 
@@ -83,41 +79,25 @@ Clear authentication session.
 
 Response: `{ "ok": true }`
 
-## Dedicated Web Host (Phase 03)
+## Workflow Tracking Service and REST API (Phase 02)
 
-The `dam-hopper-web` binary is a separate, non-writing static host. Its default
-bind is `0.0.0.0:4802`; `--root PATH` is required, and optional
-`--runtime-config PATH` supplies the public API origin metadata. It accepts only
-`GET` and `HEAD`; other methods return `405` with `Allow: GET, HEAD`. It never
-proxies API requests, executes runtime JavaScript, lists directories, or exposes
-write/admin routes.
+Workflow routes are protected by the normal `/api/*` authentication layer and
+share the configured SQLite session database. The route group covers:
 
-### Reserved web routes
+- `GET /api/workflow/overview`
+- `GET /api/workflow/events`
+- `POST /api/workflow/items`; `PATCH /api/workflow/items/{id}`; `DELETE /api/workflow/items/{id}`
+- `POST /api/workflow/sessions`
+- `POST /api/workflow/sessions/{id}/end`; `POST /api/workflow/sessions/{id}/abandon`
+- `POST /api/workflow/sessions/{id}/links`; `DELETE /api/workflow/sessions/{id}/links`
+- `POST /api/workflow/notes`; `DELETE /api/workflow/notes/{id}`
+- `DELETE /api/workflow/history`
 
-| Route                                          | Success payload                                                                                              | Headers/behavior                                                                              |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `GET`/`HEAD /__dam-hopper/health`              | `{ "schemaVersion": 1, "status": "ok", "version": "X.Y.Z", "role": "web" }`                                  | `200`, `application/json`, `Cache-Control: no-store`; `HEAD` body empty                       |
-| `GET`/`HEAD /__dam-hopper/runtime-config.json` | `{ "schemaVersion": 1, "releaseVersion": "X.Y.Z", "profileId": "UUID-v4" [, "apiUrl": "https://api.example"] }` | `200`, `application/json`, `Cache-Control: no-store`; missing config is `404` with `no-store` |
-
-Reserved paths never fall through to files or `index.html`. Runtime config is
-validated at host startup and bounded to 4 KiB; `apiUrl` is optional (omitted when
-unset, never JSON `null`) and, when present, must be an exact HTTP(S) origin without credentials, path, query, or fragment.
-
-### Static response policy
-
-- Existing regular files stream from the selected root with MIME detection.
-- `/` and `index.html` return `Cache-Control: no-cache`.
-- Vite/content-hashed assets return
-  `public,max-age=31536000,immutable`.
-- Other assets return `public,max-age=3600`.
-- SPA fallback returns `index.html` only for extensionless browser navigation
-  whose `Accept` permits HTML (`text/html`, `*/*`, or absent). Missing
-  asset-like paths, traversal/encoded separators, symlinks, directories, and
-  reserved prefixes return `404`.
-
-The API server's default router is API-only and returns API `404` for browser
-paths. Static serving exists only when `dam-hopper-server` receives explicit
-`--web-dir PATH` (Docker uses `--web-dir /opt/dam-hopper/web`).
+Requests use strict camelCase DTOs, UUID `requestId` replay keys, and
+RFC3339 timestamps. Item and note/link deletes plus item updates use
+optimistic `updatedAt` CAS. See the dedicated
+[Workflow API reference](./workflow-api.md) for request/response fields,
+keyset cursor behavior, hierarchy rules, retention, and examples.
 
 ## Frontend Diagnostics Snapshot (Phase 01)
 
@@ -671,22 +651,18 @@ The response is the projected worktree metadata, including both `path` and
 `repositoryPath`; discovery is refreshed after the mutation.
 
 **DELETE /api/git/{project}/worktrees**
-Remove one registered non-main worktree. Body: `{ "path": "<target path>", "force": false }`.
+Remove one registered non-main worktree. Body: `{ "path": "<target path>" }`.
 The path is resolved through the target contract, but Git removal operates on
 the corresponding `repositoryPath`. The configured/main worktree cannot be
-removed. Optional `force: true` allows removing worktrees that contain untracked
-or modified files. When `force` is omitted or `false`, deleting a dirty worktree
-fails with `409 WORKTREE_DIRTY`. Deleting a prunable worktree whose directory is
-already missing from disk cleans up its stale administrative metadata. Successful
-response: `{ "ok": true }`.
+removed. Successful response: `{ "ok": true }`.
 
 The browser re-fetches discovery immediately before this request. It refuses
 to start removal when the exact target owns dirty editor tabs or live terminal
 sessions, and explains the blockers in the Project panel. Git still enforces
-its own dirty/untracked protection unless forced; the user must refresh and retry
-after closing or saving those resources or pass `force: true`. A successful removal
-invalidates discovery and falls back new operations to the configured root when
-the removed target was selected.
+its own dirty/untracked protection; the user must refresh and retry after
+closing or saving those resources. A successful removal invalidates discovery
+and falls back new operations to the configured root when the removed target
+was selected.
 
 If Git reports a registered path as missing or prunable, the row remains
 visible as unavailable. New operations fail closed rather than redirecting to
@@ -1533,21 +1509,6 @@ All functions in `packages/ui/src/api/server-config.ts`.
   - restores a valid active profile when the stored selection is missing
   - migrates the legacy URL, username, and token only when the legacy URL matches the destination profile
 
-### Runtime-origin bootstrap (Phase 03)
-
-`apps/web/src/main.tsx` runs `migrateToProfiles()`, then calls
-`fetchRuntimeConfig()` before creating a transport. The fetch uses the relative
-`/__dam-hopper/runtime-config.json` endpoint, `cache: "no-store"`, a 2-second
-timeout, and a 4 KiB response limit; 404, malformed JSON, invalid schema,
-invalid UUID, invalid release version, or invalid API origin all fail closed.
-
-When valid config with an `apiUrl` is available, `reconcileManagedProfile({ profileId, apiUrl })`
-creates or updates one stable-ID `"Deployed Server"` profile. An existing active
-user profile always wins. If the managed profile's normalized API URL changes,
-only that profile's token is cleared before the update. When `apiUrl` is omitted from
-runtime config, or with no active profile and no valid runtime config, the browser uses
-`IdleTransport` and the existing profile/setup guard; it never guesses an API URL from the web `Host` or `:4802`.
-
 ### Storage Breakdown
 
 | Key                           | Storage        | Scope             | Persistence            |
@@ -1917,17 +1878,15 @@ Response: `{ "ok": true }`
 ### Settings & Health
 
 **GET /api/health** (public, no auth required)
-Returns the API process health payload. It does not prove that a separate
-`dam-hopper-web` process or its static assets are available.
+Server health + feature flags.
 
 Response:
 
 ```json
 {
-  "schemaVersion": 1,
   "status": "ok",
-  "version": "0.1.0",
-  "role": "api"
+  "version": "0.2.0",
+  "features": {}
 }
 ```
 

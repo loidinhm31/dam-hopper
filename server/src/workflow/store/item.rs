@@ -62,10 +62,9 @@ pub fn create_item_tx(
     let parent_kind = if let Some(ref pid) = item.parent_id {
         let parent = get_item_tx(tx, pid, &item.workspace_id)?
             .ok_or_else(|| WorkflowStoreError::ItemNotFound(pid.clone()))?;
-
-        if parent.project_name != item.project_name {
+        if parent.project_name != item.project_name || parent.worktree_path != item.worktree_path {
             return Err(WorkflowStoreError::HierarchyViolation(
-                "Parent item belongs to a different project".to_string(),
+                "Parent item belongs to a different target scope".to_string(),
             ));
         }
 
@@ -143,7 +142,6 @@ pub fn create_item_tx(
     Ok(result)
 }
 
-/// Updates an existing work item inside a transaction.
 pub fn update_item_tx(
     tx: &Transaction<'_>,
     id: &str,
@@ -156,8 +154,21 @@ pub fn update_item_tx(
     updated_at: u64,
     event: Option<&WorkflowEvent>,
 ) -> Result<WorkflowItem, WorkflowStoreError> {
+    update_item_tx_cas(tx,id,workspace_id,title,summary,status,sort_order,worktree_path,updated_at,None,event)
+}
+
+pub fn update_item_tx_cas(
+    tx: &Transaction<'_>, id: &str, workspace_id: &str, title: Option<&str>,
+    summary: Option<Option<&str>>, status: Option<ItemStatus>, sort_order: Option<i64>,
+    worktree_path: Option<Option<&str>>, updated_at: u64, expected_updated_at: Option<u64>,
+    event: Option<&WorkflowEvent>,
+) -> Result<WorkflowItem, WorkflowStoreError> {
     let current = get_item_tx(tx, id, workspace_id)?
         .ok_or_else(|| WorkflowStoreError::ItemNotFound(id.to_string()))?;
+    if let Some(expected) = expected_updated_at {
+        if current.updated_at != expected { return Err(WorkflowStoreError::OptimisticConflict); }
+    }
+    let updated_at = updated_at.max(current.updated_at.saturating_add(1));
 
     let new_title = if let Some(t) = title {
         validate_title(t)?;
@@ -303,39 +314,35 @@ pub fn list_items(
 
     let mut stmt = conn.prepare(&query)?;
     let rows = match (project_name, status) {
-        (Some(p), Some(s)) => {
-            stmt.query_map(params![workspace_id, p, s.as_str()], row_to_item)?
-        }
+        (Some(p), Some(s)) => stmt.query_map(params![workspace_id, p, s.as_str()], row_to_item)?,
         (Some(p), None) => stmt.query_map(params![workspace_id, p], row_to_item)?,
         (None, Some(s)) => stmt.query_map(params![workspace_id, s.as_str()], row_to_item)?,
         (None, None) => stmt.query_map(params![workspace_id], row_to_item)?,
     };
-
     let mut items = Vec::new();
-    for row in rows {
-        items.push(row?);
-    }
+    for row in rows { items.push(row?); }
     Ok(items)
 }
 
-/// Deletes a work item and its descendant hierarchy.
 pub fn delete_item_tx(
-    tx: &Transaction<'_>,
-    id: &str,
-    workspace_id: &str,
-    event: Option<&WorkflowEvent>,
+    tx: &Transaction<'_>, id: &str, workspace_id: &str, event: Option<&WorkflowEvent>,
 ) -> Result<bool, WorkflowStoreError> {
+    delete_item_tx_cas(tx,id,workspace_id,None,event)
+}
+pub fn delete_item_tx_cas(
+    tx: &Transaction<'_>, id: &str, workspace_id: &str, expected_updated_at: Option<u64>,
+    event: Option<&WorkflowEvent>, 
+) -> Result<bool, WorkflowStoreError> {
+    if let Some(expected) = expected_updated_at {
+        let current = get_item_tx(tx,id,workspace_id)?.ok_or_else(||WorkflowStoreError::ItemNotFound(id.to_owned()))?;
+        if current.updated_at != expected { return Err(WorkflowStoreError::OptimisticConflict); }
+    }
     let rows_affected = tx.execute(
         "DELETE FROM workflow_items WHERE id = ?1 AND workspace_id = ?2",
         params![id, workspace_id],
     )?;
-
     if rows_affected > 0 {
-        if let Some(ev) = event {
-            super::event::record_event_tx(tx, ev)?;
-        }
+        if let Some(ev) = event { super::event::record_event_tx(tx, ev)?; }
         Ok(true)
-    } else {
-        Ok(false)
-    }
+    } else { Ok(false) }
 }

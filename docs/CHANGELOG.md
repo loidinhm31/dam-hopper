@@ -20,6 +20,18 @@
   hierarchy/scope checks, idempotency, overlapping sessions, note retention,
   overview progress, pagination, and purge. Workflow HTTP/WebSocket routes
   remain outside this phase. [See phase plan](../plans/260901-0919-workflow-tracking-notes/phase-01-domain-and-relational-persistence.md).
+- **Phase 02: Workflow service and REST API.** Added the profile/workspace-
+  scoped `WorkflowService` and protected `/api/workflow/*` routes for bounded
+  overview/history, Plan-first item CRUD, manual session lifecycle,
+  terminal/agent links, durable notes, and explicit history purge.
+- REST mutations use strict camelCase DTOs, UUID request replay keys,
+  optimistic `updatedAt` CAS for item/note/link updates, typed sanitized
+  workflow errors, and a focused 32 KiB body limit. Events use opaque keyset
+  cursors; automatic retention purges in bounded batches.
+- Added API integration coverage in `server/tests/workflow_api.rs` for auth,
+  hierarchy, overview, replay/CAS, sessions, links, notes, pagination, limits,
+  invalid transitions, and purge. [See workflow API reference](./workflow-api.md).
+
 
 # 2026-08-31
 

@@ -374,6 +374,104 @@ Cross-project parent/item associations are rejected. This phase does not infer
 session completion from external resource observations, does not launch or
 control terminals/agents, and does not add an HTTP authorization surface.
 
+### PR-012: Workflow Service and REST API (Phase 02)
+
+**Status:** Complete / DONE on 2026-09-02. The protected service and REST
+boundary builds on PR-011's additive workflow persistence foundation. Review
+approved the implementation at 9.5/10; the recorded validation report covers
+14 workflow domain tests, 8 API integration tests, and the full server target.
+See the [Phase 02 test report](../plans/reports/tester-260902-0306-workflow-service-rest-api.md)
+and [code review](../plans/reports/code-reviewer-260902-0312-phase-02-workflow-service-rest-api.md).
+
+**Functional Requirements:**
+
+- Expose the current authenticated workspace through
+  `GET /api/workflow/overview` with bounded project summaries, Plan/Phase/Task
+  trees, standalone Tasks, notes, running sessions, recent events, factual
+  descendant-Task counts, and an explicit `truncated` flag.
+- Expose append-only activity history through
+  `GET /api/workflow/events` with opaque `(recordedAt, id)` keyset cursors,
+  bounded limits, and no raw payload or canonical locator disclosure.
+- Support Plan-first item mutations through `POST /api/workflow/items` and
+  `PATCH`/`DELETE /api/workflow/items/{id}`. PATCH and DELETE require
+  optimistic `updatedAt` checks.
+- Support manual session start/end/abandon through
+  `POST /api/workflow/sessions`,
+  `POST /api/workflow/sessions/{id}/end`, and
+  `POST /api/workflow/sessions/{id}/abandon`. Manual RFC3339 work timestamps
+  are preserved and `endedAt >= startedAt` is enforced.
+- Support terminal/agent correlations through
+  `POST`/`DELETE /api/workflow/sessions/{id}/links`, including terminal
+  incarnation or bounded agent harness/run metadata.
+- Support durable notes through `POST /api/workflow/notes` and CAS-protected
+  soft deletion at `DELETE /api/workflow/notes/{id}`.
+- Support explicit permanent history cleanup through
+  `DELETE /api/workflow/history?before=...`, returning deleted event/note
+  counts. Automatic startup/daily retention remains bounded and non-fatal.
+
+**Cross-cutting contract:**
+
+- All workflow routes inherit existing authentication; workflow storage
+  failure maps to a workflow-only `503` and does not gate terminal/IDE APIs.
+- JSON uses `camelCase`, request DTOs deny unknown fields, and mutations
+  require client-generated UUID `requestId`. Successful retries return the
+  current resource with `replayed: true`; DELETE returns a typed tombstone.
+- Current config/workspace, project, and registered worktree target are
+  server-authoritative. Explicit worktree paths must be absolute and
+  currently registered; cross-workspace/project/item associations are
+  rejected.
+- The workflow route group has a focused 32 KiB body limit. Titles, notes,
+  external IDs, harness labels, run IDs, and event payloads retain the domain
+  limits from PR-011.
+
+**Architecture:**
+
+- `WorkflowService` is the service boundary. It snapshots config scope,
+  resolves targets, and dispatches synchronous `WorkflowStore` work through
+  `tokio::task::spawn_blocking`.
+- `AppState` holds an optional shared `Arc<WorkflowService>` created from the
+  existing `SessionStore::connection()`; no second workflow database exists.
+- Item/session/link/note mutations append typed events atomically in the same
+  SQLite transaction. Event history uses `(recorded_at DESC, id DESC)` keyset
+  pagination; notes soft-delete before physical purge.
+- The complete endpoint contract is in
+  [Workflow API](./workflow-api.md); the service/data-flow record is in
+  [System Architecture](./system-architecture.md#workflow-phase-02-service-and-rest-api).
+
+**Acceptance Criteria:**
+
+- [x] Protected overview and history routes are mounted under the existing
+  Axum auth middleware.
+- [x] Item create/update/delete, session lifecycle, resource links, note
+  create/delete, and history purge routes return the documented shapes.
+- [x] Replay IDs are idempotent, stale item/note/link writes return conflict,
+  and invalid transitions/targets do not write partial state.
+- [x] Overview and event history are bounded; cursor and payload validation
+  reject malformed or oversized input.
+- [x] `server/tests/workflow_api.rs` covers auth, hierarchy, overview,
+  replay/CAS, session lifecycle, links, notes, validation, pagination, and
+  purge.
+
+**Changed backend files:**
+
+- `server/src/workflow/service.rs`
+- `server/src/api/workflow/*`
+- `server/tests/workflow_api.rs`
+- Supporting router/state/startup/error/config wiring in
+  `server/src/api/router.rs`, `server/src/state.rs`, `server/src/main.rs`,
+  `server/src/api/error.rs`, `server/src/error.rs`, and
+  `server/src/config/schema.rs`.
+
+**Security and boundaries:**
+
+The API never serializes the canonical registry locator, raw commands, CWD,
+environment, terminal output, or arbitrary adapter payloads. It validates
+targets through the authoritative resolver, scopes every lookup to the
+current workspace, and maps internal failures to sanitized workflow codes.
+Phase 02 does not expose resource-observation ingestion or infer session
+completion from terminal/agent state; those integrations remain follow-up
+work.
+
 ## Non-Functional Requirements
 
 ### Performance

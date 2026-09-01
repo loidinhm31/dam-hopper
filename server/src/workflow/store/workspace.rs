@@ -10,7 +10,12 @@ pub fn get_or_create_workspace(
     name: &str,
     now_ms: u64,
 ) -> Result<WorkflowWorkspace, WorkflowStoreError> {
-    if let Some(existing) = get_workspace_by_locator(conn, locator)? {
+    if let Some(mut existing) = get_workspace_by_locator(conn, locator)? {
+        let tx = conn.transaction()?;
+        tx.execute("UPDATE workflow_workspaces SET name = ?1, updated_at = ?2 WHERE locator = ?3", params![name, now_ms, locator])?;
+        tx.commit()?;
+        existing.name = name.to_string();
+        existing.updated_at = now_ms;
         return Ok(existing);
     }
 

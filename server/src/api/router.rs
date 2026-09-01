@@ -29,7 +29,7 @@ use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
     fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, media_session,
     port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, usage,
-    usage_sessions, workspace, ws,
+    usage_sessions, workspace, ws, workflow,
 };
 
 /// Build the full Axum router without cross-origin browser access and without static web serving.
@@ -69,6 +69,19 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/auth/status", get(auth::status))
         .route("/ws", get(ws::ws_handler));
 
+    let workflow_routes = Router::new()
+        .route("/api/workflow/overview", get(workflow::overview))
+        .route("/api/workflow/events", get(workflow::events))
+        .route("/api/workflow/items", post(workflow::item::create))
+        .route("/api/workflow/items/{id}", patch(workflow::item::patch).delete(workflow::item::delete))
+        .route("/api/workflow/sessions", post(workflow::session::create))
+        .route("/api/workflow/sessions/{id}/end", post(workflow::session::end))
+        .route("/api/workflow/sessions/{id}/abandon", post(workflow::session::abandon))
+        .route("/api/workflow/sessions/{id}/links", post(workflow::session::link).delete(workflow::session::unlink))
+        .route("/api/workflow/notes", post(workflow::note::create))
+        .route("/api/workflow/history", delete(workflow::purge::purge))
+        .route("/api/workflow/notes/{id}", delete(workflow::note::delete))
+        .layer(RequestBodyLimitLayer::new(32 * 1024));
     // Protected routes — auth middleware checks damhopper-auth cookie
     let protected = Router::new()
         // Workspace
@@ -369,6 +382,7 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/settings/reset", post(settings::reset))
         .route("/api/settings/export", get(settings::export_settings))
         .route("/api/settings/import", post(settings::import_settings))
+        .merge(workflow_routes)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
