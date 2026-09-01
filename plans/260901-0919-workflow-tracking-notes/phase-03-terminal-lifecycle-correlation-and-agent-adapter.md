@@ -13,9 +13,12 @@
 - **Date:** 2026-09-01
 - **Description:** Correlate explicit workflow sessions with authoritative PTY create/exit/restart facts and define a harness-neutral, allowlisted observation boundary.
 - **Priority:** P2
-- **Implementation status:** Pending
-- **Review status:** Pending
-
+- **Implementation status:** Complete / DONE (2026-09-02)
+- **Progress:** 100%
+- **Completed:** 2026-09-02
+- **Review status:** Approved / Complete (2026-09-02)
+- **Validation:** Workflow observation and PTY lifecycle coverage passed; manual agent harness bounds verified; full server suite 907/907 passed with 2 ignored (100%).
+- **Handoff:** Terminal lifecycle correlation, incarnation-ordered link status updates, startup reconciliation of live/dead terminals, target-scoped validation, and bounded manual agent harness links complete; ready for Phase 04.
 ## Key Insights
 - PTY public session IDs persist through respawn; incarnation distinguishes concrete processes. `terminal:exit` carries `willRestart`; `process:restarted` confirms continuation.
 - Correlation must happen server-side, not by watching frontend WebSocket delivery. Browser disconnects and profile switches must not lose lifecycle facts.
@@ -67,12 +70,12 @@
 9. Test direct Plan sessions with no children, respawn observations, exhausted restart, terminal kill/remove, suggestions, duplicate events, old incarnation, server restart, crash before final event, queue full/store unavailable, manual timestamp preservation, cross-target rejection, no synthesized breakdown, and manual harness bounds.
 
 ## Todo List
-- [ ] Closed terminal observation contract contains no sensitive free-form telemetry.
-- [ ] PTY lifecycle emits correct incarnation-aware link observations.
-- [ ] Restart and startup reconciliation preserve every manual timestamp/status.
-- [ ] Manual harness links and future adapter boundary use explicit target correlation only.
-- [ ] Direct Plan sessions link resources without requiring or creating Phase/Task records.
-- [ ] Fault-isolation tests prove PTY input/output remain unaffected.
+- [x] Closed terminal observation contract contains no sensitive free-form telemetry.
+- [x] PTY lifecycle emits correct incarnation-aware link observations.
+- [x] Restart and startup reconciliation preserve every manual timestamp/status.
+- [x] Manual harness links and future adapter boundary use explicit target correlation only.
+- [x] Direct Plan sessions link resources without requiring or creating Phase/Task records.
+- [x] Fault-isolation tests prove PTY input/output remain unaffected.
 
 ## Success Criteria
 - Auto-restarting a terminal preserves one resource link across incarnations while leaving the manual work session untouched.

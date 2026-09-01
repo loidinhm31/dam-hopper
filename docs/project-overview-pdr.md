@@ -436,7 +436,7 @@ and [code review](../plans/reports/code-reviewer-260902-0312-phase-02-workflow-s
   pagination; notes soft-delete before physical purge.
 - The complete endpoint contract is in
   [Workflow API](./workflow-api.md); the service/data-flow record is in
-  [System Architecture](./system-architecture.md#workflow-phase-02-service-and-rest-api).
+  [System Architecture](./system-architecture.md#workflow-phases-01-03-service-rest-and-lifecycle-correlation).
 
 **Acceptance Criteria:**
 
@@ -468,9 +468,88 @@ The API never serializes the canonical registry locator, raw commands, CWD,
 environment, terminal output, or arbitrary adapter payloads. It validates
 targets through the authoritative resolver, scopes every lookup to the
 current workspace, and maps internal failures to sanitized workflow codes.
-Phase 02 does not expose resource-observation ingestion or infer session
-completion from terminal/agent state; those integrations remain follow-up
-work.
+At the Phase 02 boundary, resource-observation ingestion and inferred session
+completion were intentionally absent. PR-013 adds only the server-internal
+PTY observation worker and link-state reconciliation; manual session lifecycle
+remains explicit and user-controlled.
+
+### PR-013: Terminal Lifecycle Correlation and Agent Adapter (Phase 03)
+
+**Status:** Complete / DONE on 2026-09-02. The implementation correlates
+authoritative PTY lifecycle facts with existing workflow resource links while
+preserving manual-session ownership. Review approved the implementation at
+9.8/10; the dated review reports 28 workflow tests and 907 full-server tests
+passing. See the [Phase 03 code review](../plans/reports/code-reviewer-260902-0420-phase-03-terminal-lifecycle-correlation.md).
+
+**Functional Requirements:**
+
+- Emit a closed, terminal-only `WorkflowObservation` contract for create,
+  exit-pending-restart, successful restart, final exit, and removal.
+- Deliver observations through a bounded `sync_channel(256)` using non-blocking
+  PTY sends. SQLite work belongs to the observation worker, never PTY reader or
+  supervisor hot paths.
+- Persist only terminal ID, incarnation, configured project, validated
+  worktree target, server time, exit code, restart count/delay, and action.
+  Command lines, arguments, CWD, environment, prompts, and terminal output are
+  excluded.
+- Correlate observations by public terminal ID plus incarnation. Older
+  observations cannot regress newer links; deterministic event IDs suppress
+  replay duplicates.
+- Map terminal link health to `Attached`, `Stale`, `Exited`, `Crashed`, or
+  `Detached`. Final exit/removal may provide a suggested end time only.
+- Keep manual workflow session `status`, `startedAt`, and `endedAt` immutable
+  from observation, restart, crash, removal, and startup-reconcile paths.
+- Reconcile persisted terminal links after `restore_sessions_with_state` using
+  the restored live `(sessionId, incarnation)` set.
+- Accept bounded manual agent `harnessLabel` and `runId` values through the
+  protected link API. Do not inspect commands, auto-detect harnesses, or ship
+  harness-specific lifecycle producers.
+- Permit direct Plan session links without synthesizing Phase or Task records.
+
+**Architecture:**
+
+- `PtySessionManager` holds a clone-cheap `WorkflowObservationRecorder`;
+  production wiring installs `BoundedObservationRecorder`, while tests/default
+  construction use a no-op recorder.
+- `observation.rs` owns the `sync_channel(256)` worker and transactional link
+  updates. `reconcile.rs` owns post-restore attached/detached reconciliation.
+- `WorkflowService` exposes asynchronous reconciliation through the existing
+  shared `WorkflowStore`; no second SQLite database or generic observation
+  endpoint is introduced.
+- PTY lifecycle code emits observations after authoritative state boundaries:
+  publication for create, restart decision/result, final exit, and removal.
+
+**Acceptance Criteria:**
+
+- [x] PTY input/output and restart handling remain non-blocking when the
+  observation queue is full or workflow storage fails.
+- [x] Lifecycle observations update only resource links/events and preserve
+  every manual session status and timestamp.
+- [x] Incarnation ordering and deterministic event IDs reject stale/replayed
+  observations.
+- [x] Startup restore marks live links attached and still-active missing links
+  detached without changing final link outcomes or abandoning manual sessions.
+- [x] Target mismatch rejects terminal links without partial writes.
+- [x] Manual harness bounds, direct Plan linking, crash/exit/removal, queue
+  overflow, and real PTY lifecycle behavior are covered by tests.
+
+**Changed backend files:**
+
+- `server/src/workflow/observation.rs`
+- `server/src/workflow/reconcile.rs`
+- `server/src/workflow/observation_tests.rs`
+- `server/src/workflow/mod.rs`
+- `server/src/workflow/service.rs`
+- `server/src/workflow/store/session.rs`
+- `server/src/workflow/store/mod.rs`
+- `server/src/pty/manager.rs`
+- `server/src/api/workflow/session.rs`
+- `server/src/main.rs`
+
+**Security and boundaries:** Workflow observations carry no free-form terminal
+telemetry. Manual harness IDs are size-bounded and target-scoped; they do not
+grant execution authority. PTY failures, queue pressure, and SQLite failures
+degrade workflow observation only and do not interrupt terminal operation.
 
 ## Non-Functional Requirements
 
