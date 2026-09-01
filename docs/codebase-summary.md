@@ -6,11 +6,14 @@ This document provides a high-level overview of the current repository. Historic
 
 **DamHopper** is a workspace management system for agent-based development. It combines a Rust backend server with split frontend hosts (`apps/web` for browser, `apps/native` for Tauri) that both reuse a shared React UI package (`packages/ui`) to provide an integrated environment for workspaces, agents, terminals, file operations, and optional Browser Debug.
 
-**Repository Structure**:
+**Repository Snapshot**:
 
-- 274 total files
-- ~564K tokens
-- Predominantly Rust (server) and TypeScript/React (web)
+- Repomix snapshot (2026-09-02): 1,475 files, 3,089,883 tokens, and 12,496,681 characters.
+- Repomix security scanning excluded three suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
+- The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
+
+The snapshot is a compaction aid, not a release artifact; generated
+`repomix-output.xml` remains gitignored.
 
 ## Current Frontend Shared Logic
 
@@ -54,6 +57,9 @@ This document provides a high-level overview of the current repository. Historic
 - **Agent Store**: Version-controlled agent configurations, skills, and templates
 - **Authentication**: JWT-based with dev-mode bypass; no-auth binds require a trusted development network
 - **WebSocket Transport**: Bi-directional communication for real-time updates
+- **Workflow Store**: Domain-first Plan/Phase/Task hierarchy, scoped sessions,
+  terminal/agent resource links, notes, events, and bounded overview queries
+  persisted in the additive migration-010 SQLite tables.
 
 ### Frontend (React + Vite)
 
@@ -69,6 +75,26 @@ This document provides a high-level overview of the current repository. Historic
 - **Agent Store Inventory**: Browse, ship, and manage agent templates
 - **Configuration Management**: Workspace and global configuration editors
 - **Search**: Command search (BM25 index), file search with fuzzy matching
+
+### Workflow Tracking (`server/src/workflow/`)
+
+- `model/enums.rs`: closed domain enums for item kind/status, session status,
+  resource type/observation state, provenance, and event classification.
+- `model/types.rs`: camelCase-serialized workspace, item, session, link, note,
+  event, project-summary, progress, and overview structures; canonical
+  workspace locators are not serialized.
+- `model/validation.rs`: title/note/resource/payload bounds, item/session
+  transitions, timestamps, and Plan-first hierarchy validation.
+- `store/`: scoped SQLite repositories. Mutations use transaction helpers and
+  optional same-transaction events; reads provide bounded filters, keyset
+  history, retention purge, and tree/progress aggregation.
+- `persistence/migrations/010_workflow_tracking.sql`: additive six-table
+  schema with foreign-key cascades, checks, uniqueness, and query indexes.
+
+The 14 tests in `server/src/workflow/tests.rs` cover model rules, migration
+preservation of existing session data, hierarchy/scope checks, retry
+idempotency, overlapping sessions, observation isolation, note retention,
+overview progress, event pagination, and bounded purge.
 
 ## Architecture Layers
 
@@ -96,6 +122,10 @@ Service Layer (server/)
   ├── File System Subsystem
   ├── Command Registry (BM25)
   └── SSH Credential Store
+         ↓
+Persistence
+  ├── SessionStore (`sessions.db`)
+  └── WorkflowStore (workflow tables, shared connection)
          ↓
 Infrastructure
   ├── MongoDB (user auth, optional)
@@ -259,6 +289,27 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 - Binary and UTF-8 support
 - Shell lifecycle integration for Bash, Zsh, and Fish with optional exit status
 
+### Workflow Tracking (`server/src/workflow/`)
+
+- `WorkflowStore` shares the session `Arc<Mutex<Connection>>`; it does not
+  create a second database.
+- Model enums persist as lowercase snake_case values and domain structs use
+  camelCase serde fields. The canonical workspace locator is server-only.
+- Item creation enforces Plan-root / Phase-under-Plan / Task-under-Plan-or-Phase
+  (or standalone) with same-workspace/project scope, cycle detection, and a
+  three-level depth cap.
+- Item/session/note/resource mutations can record an event in the same SQLite
+  transaction. Event IDs are retry-idempotent; event history is keyset-paged.
+- Overview aggregation returns bounded project/item/session data, active
+  sessions, non-deleted notes, recent events, and factual task progress.
+
+- Workflow tables share the configured SQLite session database (`sessions.db`
+  by default); migration 010 does not create a second workflow database.
+
+- `persistence/` — SQLite session store, migration runner, restore/worker, and
+  ordered SQL migrations. Migration `010_workflow_tracking.sql` adds workflow
+  tables without changing existing terminal tables.
+
 ### Agent Store (`server/src/agent_store/`)
 
 - Git-backed agent storage
@@ -365,6 +416,12 @@ dam-hopper/
 │   │   │   └── mod.rs        # Router configuration
 │   │   ├── pty/              # Terminal management
 │   │   ├── fs/               # File system operations
+│   │   ├── persistence/      # SQLite store, worker, restore, migrations
+│   │   │   └── migrations/010_workflow_tracking.sql
+│   │   ├── workflow/         # Workflow models and relational store
+│   │   │   ├── model/
+│   │   │   ├── store/
+│   │   │   └── tests.rs
 │   │   ├── agent_store/      # Agent store service
 │   │   └── lib.rs            # Library exports
 │   ├── tests/
@@ -398,6 +455,9 @@ dam-hopper/
 
 - **Server**: 111 unit tests, 7 integration tests (auth)
 - **Web**: Component tests with Vitest, 80% coverage target
+- **Workflow**: 14 source-level tests cover model/transition validation,
+  migration preservation, hierarchy/scope invariants, idempotency, resource
+  observation isolation, note retention, pagination, purge, and overview.
 
 ### Known Limitations (Pre-existing)
 
@@ -445,9 +505,15 @@ dam-hopper/
 | [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
 | [ws-protocol-guide.md](./ws-protocol-guide.md)                 | WebSocket message types, terminal protocol    |
 | [project-roadmap.md](./project-roadmap.md)                     | Planned features and phases                   |
+| [CHANGELOG.md](./CHANGELOG.md)                               | Dated implementation and release notes           |
 
 ---
 
-**Last Updated**: August 30, 2026
-**Phase Status**: Current support is tracked by feature and platform qualification; historical phase labels and evidence remain dated records.
-**Generated by**: Manual source-verified maintenance; a temporary Repomix refresh was attempted but blocked by the harness policy.
+**Last Updated**: September 2, 2026
+**Phase Status**: Phase 01 workflow domain and relational persistence is
+implemented as an additive SQLite foundation; API integration remains a later
+scope. Current support is tracked by feature and platform qualification;
+historical phase labels and evidence remain dated records.
+**Generated by**: Repomix v1.18.0 snapshot (1,475 files / 3,089,883 tokens)
+plus source-verified maintenance. Three security-flagged files were excluded
+from the compaction output.

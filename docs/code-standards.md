@@ -7,7 +7,7 @@
 ```
 server/src/
 ├── main.rs           # Bootstrap, router setup
-├── lib.rs            # Crate root
+├── lib.rs            # Crate root and public module exports
 ├── state.rs          # AppState definition
 ├── error.rs          # Top-level AppError
 ├── api/              # HTTP handlers + WebSocket
@@ -24,6 +24,11 @@ server/src/
 │   ├── error.rs
 │   ├── sandbox.rs    # Path validation
 │   └── ops.rs        # Directory/file operations
+├── persistence/      # SQLite session store, worker, restore, migrations
+│   └── migrations/   # Ordered additive SQL migrations
+├── workflow/         # Workflow domain models and relational store
+│   ├── model/        # Enums, value types, validation
+│   └── store/        # Workspace/item/session/note/event repositories
 ├── web/              # Frontend shared logic
 │   └── lib/
 │       ├── file-decoration.ts       # Shared decoration registry + lookup helpers
@@ -494,6 +499,101 @@ pub fn with_persist(
 - 10 sessions: ~300ms
 - 50 sessions: ~1.2s (acceptable, rarely occurs)
 - With parallel spawning (future): could reduce further
+
+### Workflow domain and relational store (Phase 01)
+
+Workflow code is split by responsibility:
+
+- `server/src/workflow/model/` owns serializable domain structs, snake_case
+  enum conversion, validation constants, and state-transition rules.
+- `server/src/workflow/store/` owns synchronous SQLite repository helpers,
+  grouped by workspace, item, session/resource, note, event, and overview.
+- `server/src/workflow/tests.rs` exercises the model, migration, repository,
+  hierarchy, idempotency, retention, and aggregation contracts.
+
+`SessionStore::open()` is the only database-opening path. It enables foreign
+keys, applies migrations 001–009, then applies migration 010 when
+`workflow_workspaces` is absent. Migration 010 is additive and shares the
+terminal session database; it must not rename, reset, or reinterpret existing
+session tables. `WorkflowStore::new(session_store.connection())` shares the
+same `Arc<Mutex<Connection>>`; it does not open a second workflow database.
+
+**Domain model conventions:**
+
+- `ItemKind` is `Plan | Phase | Task`.
+- `ItemStatus` is `Backlog | Next | InProgress | Blocked | Done | Canceled`.
+- `SessionStatus` is `Running | Ended | Abandoned`.
+- `ResourceLinkType` is `Terminal | Agent`.
+- `ResourceObservedState` is `Attached | Exited | Stale | Detached | Crashed |
+  Unknown`.
+- `WorkflowSource` identifies `Manual | Terminal | Git | Agent | System`.
+- `WorkflowEventType` is a closed set of item, session, resource, note, and
+  workspace activity classifications.
+
+Persist enum values with each type's `as_str()` representation and deserialize
+using case-insensitive `FromStr`; SQL `CHECK` constraints mirror the allowed
+values. Domain structs use `#[serde(rename_all = "camelCase")]` for the client
+contract. `WorkflowWorkspace::locator` is `#[serde(skip_serializing)]` because
+it is a canonical filesystem path, not client data.
+
+**Validation before persistence:**
+
+- Trim and reject empty item titles; cap them at 200 characters.
+- Reject empty note bodies; cap raw body size at 8 KiB.
+- Reject empty external IDs; cap them at 200 characters.
+- Cap agent harness labels at 64 characters and run IDs at 128 characters.
+- Cap event JSON payloads at 4 KiB.
+- Reject session end times earlier than start times.
+- Use explicit item/session transition validators; self-transitions are
+  idempotent, while closed sessions only reopen through a new session record
+  (session transitions do not reopen `Ended`/`Abandoned`).
+
+**Plan-first hierarchy invariant:**
+
+| Child kind | Allowed parent |
+| --- | --- |
+| `Plan` | None (root only) |
+| `Phase` | `Plan` (required) |
+| `Task` | None, `Plan`, or `Phase` |
+
+`Task` cannot parent another task. Item creation reads the parent inside the
+same transaction, checks workspace and project scope, walks ancestors, rejects
+cycles, and enforces `MAX_HIERARCHY_DEPTH = 3`. The self-referencing
+`parent_id` foreign key cascades descendant deletion. The overview builder
+keeps a parentless legacy phase visible as an orphan root rather than
+silently rewriting data.
+
+**Repository transaction pattern:**
+
+```rust
+let mut conn = self.lock()?;
+let tx = conn.transaction()?;
+let result = item::create_item_tx(&tx, item, event)?;
+tx.commit()?;
+Ok(result)
+```
+
+Use a transaction for every mutation that can include an event. The focused
+`*_tx` helper validates inputs, checks same-workspace references, mutates the
+entity, records an optional event on the same transaction, and returns only
+after commit. Any error drops the transaction and rolls back both entity and
+event. Read methods use the locked connection and include workspace scope in
+entity lookups.
+
+| Repository area | Required behavior |
+| --- | --- |
+| Workspace | Get-or-create by unique canonical locator; look up by ID or locator. |
+| Items | Create/update/delete with hierarchy and transition checks; list with project/status filters and bounded limits. |
+| Sessions | Start with optional item, resource link, and event atomically; end/abandon only through validated transitions; overlapping sessions are allowed. |
+| Resources | Upsert by session/type/external ID; observations update link state and suggested end time only, never session status or timestamps; unlink is idempotent. |
+| Notes | Require an item or session target in the same workspace; soft-delete first; list can include deleted rows. |
+| Events | `INSERT OR IGNORE` by event ID for retry idempotency; keyset page by `(recorded_at DESC, id DESC)`; purge expiry in bounded transactions. |
+| Overview | Bound project/item/session counts, include a `truncated` flag, attach non-deleted notes and active sessions, and compute factual task progress. |
+
+`WorkflowStoreError` is the public repository error boundary. Keep SQLite
+errors, model validation errors, not-found errors, duplicate requests, and
+hierarchy violations distinguishable so API adapters can map them without
+matching error strings.
 
 ## TypeScript Frontend (`apps/web`, `apps/native`, `packages/ui`)
 
