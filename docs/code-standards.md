@@ -26,9 +26,12 @@ server/src/
 │   └── ops.rs        # Directory/file operations
 ├── persistence/      # SQLite session store, worker, restore, migrations
 │   └── migrations/   # Ordered additive SQL migrations
-├── workflow/         # Workflow domain models and relational store
+├── workflow/         # Workflow domain, observation, reconciliation, and store
 │   ├── model/        # Enums, value types, validation
-│   └── store/        # Workspace/item/session/note/event repositories
+│   ├── store/        # Workspace/item/session/note/event repositories
+│   ├── observation.rs # Closed terminal observations + bounded worker
+│   ├── reconcile.rs  # Startup terminal-link reconciliation
+│   └── observation_tests.rs # Lifecycle and fault-isolation tests
 ├── web/              # Frontend shared logic
 │   └── lib/
 │       ├── file-decoration.ts       # Shared decoration registry + lookup helpers
@@ -500,7 +503,7 @@ pub fn with_persist(
 - 50 sessions: ~1.2s (acceptable, rarely occurs)
 - With parallel spawning (future): could reduce further
 
-### Workflow domain, service, and REST API (Phases 01–02)
+### Workflow domain, service, REST API, and lifecycle correlation (Phases 01–03)
 
 Workflow code is split by responsibility:
 
@@ -508,17 +511,26 @@ Workflow code is split by responsibility:
   enum conversion, validation constants, and state-transition rules.
 - `server/src/workflow/store/` owns synchronous SQLite repository helpers,
   grouped by workspace, item, session/resource, note, event, and overview.
+- `server/src/workflow/observation.rs` owns the closed terminal observation
+  payload, non-blocking recorder, `sync_channel(256)` worker, and transactional
+  resource-link state updates.
+- `server/src/workflow/reconcile.rs` compares persisted terminal links with the
+  restored live `(sessionId, incarnation)` set after startup restore.
 - `server/src/workflow/tests.rs` exercises the model, migration, repository,
   hierarchy, idempotency, retention, and aggregation contracts.
+- `server/src/workflow/observation_tests.rs` covers lifecycle mapping,
+  incarnation ordering, duplicate suppression, startup reconciliation, queue
+  overflow, manual harness bounds, and PTY fault isolation.
 - `server/src/workflow/service.rs` is the HTTP/service boundary. It captures
-  current config scope, validates projects and registered worktrees, and
-  dispatches blocking `WorkflowStore` calls through `spawn_blocking`.
+  current config scope, validates projects and registered worktrees, dispatches
+  blocking `WorkflowStore` calls through `spawn_blocking`, and exposes startup
+  reconciliation.
 - `server/src/api/workflow/` owns strict camelCase DTOs, timestamp/target
   mapping, opaque event cursors, and separate overview/events, item,
   session/link, note, and purge handlers. The router keeps these routes behind
   the existing auth layer and a focused 32 KiB body limit.
 - `server/tests/workflow_api.rs` is the protected HTTP integration target;
-  keep API contract coverage separate from the domain/store tests.
+  keep API contract coverage separate from domain/store and lifecycle tests.
 
 `SessionStore::open()` is the only database-opening path. It enables foreign
 keys, applies migrations 001–009, then applies migration 010 when
@@ -527,6 +539,28 @@ terminal session database; it must not rename, reset, or reinterpret existing
 session tables. `WorkflowStore::new(session_store.connection())` shares the
 same `Arc<Mutex<Connection>>`; it does not open a second workflow database.
 
+The PTY manager starts with `NoopWorkflowObservationRecorder`; production
+wiring replaces it with `BoundedObservationRecorder` after the workflow store
+is available. PTY readers and the restart supervisor call only non-blocking
+`try_send`. The observation worker owns SQLite access, and queue/storage
+failures are counted or logged without blocking terminal input, output, or
+restart handling. Lifecycle payloads are allowlisted metadata only: terminal
+ID, incarnation, project/validated worktree target, server time, exit code,
+restart count/delay, and action. Never add command text, arguments, CWD, env,
+prompts, output, or arbitrary adapter JSON.
+
+Startup ordering is strict: restore live PTYs first, collect their
+`(sessionId, incarnation)` identities, then run terminal-link reconciliation.
+`attached`, `stale`, `exited`, `crashed`, and `detached` are link health states;
+older incarnations cannot regress a newer link and deterministic event IDs
+suppress replay duplicates. Observation and reconciliation paths may update
+only link health/last-seen/suggested-end fields. Manual session
+`status`/`startedAt`/`endedAt` are user-owned and immutable there.
+
+Agent resources remain manual in this phase. Accept bounded `harnessLabel` and
+`runId` values through the protected link route; do not inspect PTY commands or
+ship a harness-specific producer.
+
 **Domain model conventions:**
 
 - `ItemKind` is `Plan | Phase | Task`.
@@ -534,7 +568,7 @@ same `Arc<Mutex<Connection>>`; it does not open a second workflow database.
 - `SessionStatus` is `Running | Ended | Abandoned`.
 - `ResourceLinkType` is `Terminal | Agent`.
 - `ResourceObservedState` is `Attached | Exited | Stale | Detached | Crashed |
-  Unknown`.
+  `Unknown`; terminal lifecycle processing emits the first five as applicable.
 - `WorkflowSource` identifies `Manual | Terminal | Git | Agent | System`.
 - `WorkflowEventType` is a closed set of item, session, resource, note, and
   workspace activity classifications.
@@ -594,7 +628,7 @@ entity lookups.
 | Workspace | Get-or-create by unique canonical locator; look up by ID or locator. |
 | Items | Create/update/delete with hierarchy and transition checks; list with project/status filters and bounded limits. |
 | Sessions | Start with optional item, resource link, and event atomically; end/abandon only through validated transitions; overlapping sessions are allowed. |
-| Resources | Upsert by session/type/external ID; observations update link state and suggested end time only, never session status or timestamps; unlink is idempotent. |
+| Resources | Upsert by session/type/external ID; observations update link state and suggested end time only, never session status or timestamps; compare terminal incarnations and keep unlink idempotent. |
 | Notes | Require an item or session target in the same workspace; soft-delete first; list can include deleted rows. |
 | Events | `INSERT OR IGNORE` by event ID for retry idempotency; keyset page by `(recorded_at DESC, id DESC)`; purge expiry in bounded transactions. |
 | Overview | Bound project/item/session counts, include a `truncated` flag, attach non-deleted notes and active sessions, and compute factual task progress. |
@@ -609,6 +643,16 @@ CAS/target/transition conflicts to 409, route body-cap failures to 413, and
 unavailable workflow storage to 503. Mutation handlers require UUID
 `requestId`; item and note/link updates require `updatedAt` for optimistic
 concurrency.
+
+**PTY/workflow fault-isolation rules:**
+
+- Keep workflow SQLite out of PTY input/output, reader, and supervisor locks.
+- Lifecycle callbacks must copy or clone a recorder handle and return
+  immediately after `try_send`; never wait for SQLite or an unbounded queue.
+- Keep create/final-exit/removal observations ordered; restart observations
+  remain incarnation-aware and replay-safe.
+- Test full queues, unavailable storage, stale incarnations, clean restart,
+  crash/final exit, explicit removal, and manual timestamp preservation.
 
 ## TypeScript Frontend (`apps/web`, `apps/native`, `packages/ui`)
 
