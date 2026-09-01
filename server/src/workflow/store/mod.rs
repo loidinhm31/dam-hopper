@@ -25,7 +25,7 @@ impl WorkflowStore {
     }
 
     /// Acquires the internal SQLite mutex for operations.
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, WorkflowStoreError> {
+    pub(crate) fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, WorkflowStoreError> {
         self.conn.lock().map_err(|_| {
             WorkflowStoreError::Sqlite(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(1),
@@ -264,6 +264,31 @@ impl WorkflowStore {
     ) -> Result<Vec<WorkflowResourceLink>, WorkflowStoreError> {
         let conn = self.lock()?;
         session::get_links_for_session(&conn, session_id)
+    }
+
+    pub fn find_links_by_external_id(
+        &self,
+        resource_type: ResourceLinkType,
+        external_id: &str,
+    ) -> Result<Vec<WorkflowResourceLink>, WorkflowStoreError> {
+        let conn = self.lock()?;
+        session::find_links_by_external_id(&conn, resource_type, external_id)
+    }
+
+    pub fn list_all_links_by_type(
+        &self,
+        resource_type: ResourceLinkType,
+    ) -> Result<Vec<WorkflowResourceLink>, WorkflowStoreError> {
+        let conn = self.lock()?;
+        session::list_all_links_by_type(&conn, resource_type)
+    }
+
+    pub fn get_session_by_id(
+        &self,
+        id: &str,
+    ) -> Result<Option<WorkflowSession>, WorkflowStoreError> {
+        let conn = self.lock()?;
+        session::get_session_by_id(&conn, id)
     }
 
     // -----------------------------------------------------------------------
