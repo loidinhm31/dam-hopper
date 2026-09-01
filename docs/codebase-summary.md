@@ -6,25 +6,20 @@ This document provides a high-level overview of the current repository. Historic
 
 **DamHopper** is a workspace management system for agent-based development. It combines a Rust backend server with split frontend hosts (`apps/web` for browser, `apps/native` for Tauri) that both reuse a shared React UI package (`packages/ui`) to provide an integrated environment for workspaces, agents, terminals, file operations, and optional Browser Debug.
 
-**Repository Structure**:
+**Repository Snapshot**:
 
-- Repomix snapshot (2026-09-04): 1,580 files and 3,279,350 tokens packed into
-  `repomix-output.xml`; four security-sensitive files were excluded by the
-  compaction security check.
-- Predominantly Rust (server) and TypeScript/React (web). The Linux release
-  package includes the `dam-hopper` manager and `dam-hopper-web` binaries;
-  the web host is declared in the same Cargo package for lockstep versioning.
+- Repomix snapshot (2026-09-02): 1,475 files, 3,089,883 tokens, and 12,496,681 characters.
+- Repomix security scanning excluded three suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
+- The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
+
+The snapshot is a compaction aid, not a release artifact; generated
+`repomix-output.xml` remains gitignored.
 
 ## Current Frontend Shared Logic
 
 - **Shared Runtime Logger**: `packages/shared/src/logger.ts` centralizes `configureLogger`, `getLoggerConfig`, `resolveLogLevel`, and `logger.debug/info/warn/error`, with recursive sensitive metadata redaction before the sink.
 - **Host-resource alerts**: the cached snapshot retains its legacy memory `alert` and adds bounded concurrent thermal/disk `currentAlerts`; resource and memory incidents share newest-first bounded history and the existing validated `host:alertChanged` channel. Explicit resource recovery removes only its incident, while an omitted additive field remains compatible with older servers.
 - **Host-resource storage preference**: `UiConfig.hostResourcePinnedMount` persists as TOML `host_resource_pinned_mount`; `null` clears it and non-null values are limited to 1–4096 UTF-8 bytes. The browser treats an absent mount as missing without fallback rebinding. It is presentation-only and independent of telemetry/alert classification.
-- **Runtime Origin Bootstrap**: `apps/web/src/main.tsx` fetches the reserved
-  `/__dam-hopper/runtime-config.json` before constructing transport. Valid
-  config reconciles one stable-ID managed profile; an existing active user
-  profile wins, and missing/invalid config leaves the client idle rather than
-  guessing the web origin or port.
 - **Web Bootstrap Logging**: `apps/web` resolves its bootstrap log level from Vite env, with dev defaulting to `debug` and production defaulting to `warn` when no override is set.
 - **High-Value Call Sites**: transport, auth, terminal, dashboard, error boundary, and filesystem flows now use the shared logger instead of direct `console` calls.
 - **File Decorations**: `packages/ui/src/lib/file-decoration.ts` is the shared registry for file icon, badge, display-language, and Monaco-language lookup.
@@ -62,20 +57,9 @@ This document provides a high-level overview of the current repository. Historic
 - **Agent Store**: Version-controlled agent configurations, skills, and templates
 - **Authentication**: JWT-based with dev-mode bypass; no-auth binds require a trusted development network
 - **WebSocket Transport**: Bi-directional communication for real-time updates
-- **Linux Release Manager and Publisher**: `server/src/bin/dam-hopper.rs`
-  dispatches `fetch`, `install`, `role set`, `start`, `status`, `rollback`,
-  `recover`, `validate`, and `version`. `server/src/linux_release/` owns Fedora
-  profile checks, bounded GitHub acquisition, optional attestation, exact
-  inventory/archive validation, role projection, deployment locking, pending
-  candidate persistence, durable activation, health-gated rollback, and boot
-  recovery. `.github/workflows/release-linux.yml` builds the stable four-asset
-  release; see [Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md).
-- **Dedicated Web Host**: `server/src/bin/dam-hopper-web.rs` runs the
-  non-writing `web_host` router on port `4802`. It validates a non-symlink
-  release root and optional ≤4 KiB runtime config, serves only GET/HEAD, keeps
-  health/runtime routes reserved with `no-store`, streams regular files, applies
-  hashed/index/one-hour cache classes, and restricts SPA fallback to safe HTML
-  navigation. It has no `AppState`, API database, proxy, or write surface.
+- **Workflow Store**: Domain-first Plan/Phase/Task hierarchy, scoped sessions,
+  terminal/agent resource links, notes, events, and bounded overview queries
+  persisted in the additive migration-010 SQLite tables.
 
 ### Frontend (React + Vite)
 
@@ -92,6 +76,26 @@ This document provides a high-level overview of the current repository. Historic
 - **Configuration Management**: Workspace and global configuration editors
 - **Search**: Command search (BM25 index), file search with fuzzy matching
 
+### Workflow Tracking (`server/src/workflow/`)
+
+- `model/enums.rs`: closed domain enums for item kind/status, session status,
+  resource type/observation state, provenance, and event classification.
+- `model/types.rs`: camelCase-serialized workspace, item, session, link, note,
+  event, project-summary, progress, and overview structures; canonical
+  workspace locators are not serialized.
+- `model/validation.rs`: title/note/resource/payload bounds, item/session
+  transitions, timestamps, and Plan-first hierarchy validation.
+- `store/`: scoped SQLite repositories. Mutations use transaction helpers and
+  optional same-transaction events; reads provide bounded filters, keyset
+  history, retention purge, and tree/progress aggregation.
+- `persistence/migrations/010_workflow_tracking.sql`: additive six-table
+  schema with foreign-key cascades, checks, uniqueness, and query indexes.
+
+The 14 tests in `server/src/workflow/tests.rs` cover model rules, migration
+preservation of existing session data, hierarchy/scope checks, retry
+idempotency, overlapping sessions, observation isolation, note retention,
+overview progress, event pagination, and bounded purge.
+
 ## Architecture Layers
 
 ### Application Tier
@@ -105,15 +109,9 @@ Browser Host (apps/web/) / Native Host (apps/native/)
          ├── Page templates (Dashboard, Workspace, Git, Settings)
          ├── API client + transport abstractions
          └── Hooks, stores, styles, assets, tests
-         │
-         ├── release browser → dam-hopper-web :4802
-         │                    └── static assets + runtime origin metadata
-         └── API/WS → dam-hopper-server :4801 (systemd)
-                              :4800 only for direct/legacy/Docker modes
-                                      ↓
+         ↓
 Backend BFF/API (server/)
-  ├── API-only router by default
-  ├── Optional explicit --web-dir combined fallback (Docker)
+  ├── Router (axum-based HTTP)
   ├── Auth Middleware (JWT validation)
   ├── API Handlers
   └── WebSocket Handler
@@ -124,6 +122,10 @@ Service Layer (server/)
   ├── File System Subsystem
   ├── Command Registry (BM25)
   └── SSH Credential Store
+         ↓
+Persistence
+  ├── SessionStore (`sessions.db`)
+  └── WorkflowStore (workflow tables, shared connection)
          ↓
 Infrastructure
   ├── MongoDB (user auth, optional)
@@ -138,8 +140,8 @@ Infrastructure
 
 - **Language**: Rust (deployment pins Rust 1.97.1)
 - **Runtime**: Tokio (async/await)
-- **Web Framework**: Axum 0.8
-- **WebSocket**: Axum's WebSocket extractor (`axum::extract::ws`) + Tokio, tower-http
+- **Web Framework**: Axum 0.7
+- **WebSocket**: Tokio-TungsteniteWebSocket, tower-http
 - **Authentication**: JWT (jsonwebtoken), bcrypt
 - **Database**: MongoDB (optional), SQLite (internal)
 - **Build**: Cargo, Docker
@@ -162,21 +164,11 @@ Infrastructure
 
 - Browser Debug native child WebView is Windows v1 supported only after the WebView2 gate; Linux implementation/package builds are runtime-unverified, macOS is deferred, and Android uses the iframe adapter.
 - Native Browser Debug stores profile-scoped data under app data, validates generation/nonce/request identity, mirrors app zoom, and reports raw rendered bounds. Native relay v1 exposes picker/navigation; console forwarding is disabled.
-- `dam-hopper-web` is the dedicated non-writing release SPA host on
-  `0.0.0.0:4802`; it serves static assets plus reserved health/runtime-origin
-  JSON only. Phase 04 renders independent API (`root:root`, `4801`) and web
-  (`dam-hopper-web`, `4802`) candidates; Phase 05 installs them through the
-  durable activation transaction and orders
-  `dam-hopper-recovery.service` before both app units. Docker explicitly
-  combines both through `--web-dir /opt/dam-hopper/web` on port `4800`; Phase
-  07 migrates eligible legacy format-2 roots via the manager and retires the
-  checkout runner after commit.
-
-- Web runtime origin is fetched at `/__dam-hopper/runtime-config.json` with `cache: "no-store"` and strict 4 KiB/schema/origin validation. Active user profiles outrank managed deployment profiles; a managed URL change clears only that profile's token.
-- Build-time origins for the extension are controlled by `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS`; changing them requires rebuilding and redistributing the extension. `VITE_DAM_HOPPER_LOG_LEVEL` controls web bootstrap logging, while `VITE_DAM_HOPPER_SERVER_URL` is forbidden for production builds.
+- Docker serves the built SPA from `/opt/dam-hopper/web` on port 4800. systemd production is backend-only on `0.0.0.0:4801`; legacy nohup is loopback `127.0.0.1:4800` and must remain separate.
+- Build-time origins for the extension are controlled by `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS`; changing them requires rebuilding and redistributing the extension. `VITE_DAM_HOPPER_LOG_LEVEL` controls web bootstrap logging.
 - Profile metadata and tokens are localStorage-scoped; editor persistence is metadata-only and Encrypt session material is memory-only. Transport rebind destroys the previous WS and advances a generation to reject stale responses.
 
-See [Native Browser Debug Support](./native-browser-debug-support.md), [Configuration Guide](./configuration-guide.md), [Linux systemd](./linux-systemd.md), and [API Reference](./api-reference.md).
+See [Native Browser Debug Support](./native-browser-debug-support.md), [Configuration Guide](./configuration-guide.md), and [Linux systemd](./linux-systemd.md).
 
 ### Phase 03: IntelliJ-Compatible Git Actions ✅ Complete
 
@@ -297,6 +289,27 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 - Binary and UTF-8 support
 - Shell lifecycle integration for Bash, Zsh, and Fish with optional exit status
 
+### Workflow Tracking (`server/src/workflow/`)
+
+- `WorkflowStore` shares the session `Arc<Mutex<Connection>>`; it does not
+  create a second database.
+- Model enums persist as lowercase snake_case values and domain structs use
+  camelCase serde fields. The canonical workspace locator is server-only.
+- Item creation enforces Plan-root / Phase-under-Plan / Task-under-Plan-or-Phase
+  (or standalone) with same-workspace/project scope, cycle detection, and a
+  three-level depth cap.
+- Item/session/note/resource mutations can record an event in the same SQLite
+  transaction. Event IDs are retry-idempotent; event history is keyset-paged.
+- Overview aggregation returns bounded project/item/session data, active
+  sessions, non-deleted notes, recent events, and factual task progress.
+
+- Workflow tables share the configured SQLite session database (`sessions.db`
+  by default); migration 010 does not create a second workflow database.
+
+- `persistence/` — SQLite session store, migration runner, restore/worker, and
+  ordered SQL migrations. Migration `010_workflow_tracking.sql` adds workflow
+  tables without changing existing terminal tables.
+
 ### Agent Store (`server/src/agent_store/`)
 
 - Git-backed agent storage
@@ -305,126 +318,19 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 - BM25-based command search
 - Incremental imports and exports
 
-### Linux Release Manager (`server/src/linux_release/`)
-
-Phases 01–08 define the release-manifest and manager lifecycle, one-time legacy
-format-2 migration, checkout-runner retirement, and comprehensive validation.
-All share one focused release module:
-
-- `constants.rs`, `version.rs`, `manifest.rs`, `manifest_validation.rs`,
-  `inventory.rs`, `inventory_path.rs`, and `inventory_validation.rs` enforce
-  profile, stable tag/SemVer, lockstep versions, normalized paths, role
-  projections, required service/template/sysusers assets, modes, digests, and
-  runtime-file exclusions.
-- `cli.rs` plus `server/src/bin/dam-hopper.rs` define and dispatch the manager
-  grammar. `privilege.rs` enforces non-root `fetch`, root mutation commands,
-  and read-only `status`/`version`.
-- `platform.rs`, `origin.rs`, and `host_config.rs` gate Fedora 44/x86_64,
-  glibc/systemd requirements, exact web origins, and persistent role/public
-  host configuration.
-- `acquire.rs`, `acquire_client.rs`, and `attestation.rs` resolve stable
-  GitHub releases, bound HTTPS requests, require archive SHA-256 equality, and
-  optionally run repository-bound `gh` attestation checks.
-- `archive.rs` and `archive_extract.rs` reject unsafe tar entries and extract
-  only the selected role projection.
-- `unit.rs`, `unit_parser.rs`, and `unit_policy.rs` render allowlisted
-  placeholders into independent API/web units and enforce their identities,
-  paths, lifecycle, environment, hardening, and no-coupling properties.
-  `stage_units.rs` writes selected units, the recovery unit, web sysusers, and
-  candidate public config; `systemd.rs` uses direct `systemd-analyze`,
-  `systemd-sysusers`, and `systemctl` argument vectors.
-- `account.rs`, `ownership.rs`, `process.rs`, and `process_holders.rs` check
-  the dedicated web account, release/state modes, process identity/executable/
-  cgroup, 4800/4801/4802 listeners, and SQLite holder safety.
-- `layout.rs`, `lock.rs`, `stage.rs`, `stage_transaction.rs`,
-  `legacy_format2_root.rs`, `legacy_format2_manifest.rs`,
-  `legacy_format2_unit.rs`, and `legacy_format2_inspect.rs` provide canonical
-  paths, transaction staging, and exact read-only legacy-layout verification.
-  `migration.rs` stages a sibling workspace, imports the previous format-2
-  release, and coordinates atomic exchange/rollback.
-- `durable_fs.rs`, `state.rs`, `state_record.rs`, `journal.rs`, `transaction.rs`,
-  and `systemd_backup.rs` persist the generation-numbered state envelope,
-  enforce the deployment journal, retain unit/config backups, and make updates
-  crash durable.
-- `health.rs`, `activate_preflight.rs`, `activate.rs`, `rollback.rs`,
-  `recovery.rs`, and `retention.rs` implement exact health probes, preflight,
-  lock-scoped cutover, automatic/manual rollback, boot reconciliation, and
-  fail-closed retention.
-- `error.rs` keeps diagnostics typed and bounded. The publisher schema remains
-  `deploy/release/release-manifest.schema.json`.
-
-`server` renders `dam-hopper-api.service` as `root:root` on `0.0.0.0:4801`;
-`web` renders `dam-hopper-web.service` as the isolated `dam-hopper-web` account
-on `0.0.0.0:4802`; `both` stages both from one exact release. API
-`NoNewPrivileges=false` is intentional for interactive PTY `sudo` behavior.
-Web uses strict systemd sandboxing, no environment files/write paths, and
-read-only access only to its release root and public host config. Neither app
-unit depends on the other; both are preceded by the recovery unit.
-
-#### Activation and recovery
-
-`install` and `role set` stop at `PENDING`. The unified `start` command takes
-the deployment lock and advances only valid transitions:
-
-`ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING → COMMITTED`
-
-The transaction quiesces old services, proves cgroups/listeners/SQLite holders
-are clear, installs concrete units/configuration, daemon-reloads, and starts
-the selected candidate. `health.rs` requires initial readiness within 20
-seconds, then 20 consecutive probes at 500 ms (10 seconds) for API
-`/api/health` and web `/__dam-hopper/health`; probes verify active MainPID,
-expected executable/identity/listener, and exact `schemaVersion: 1`, `status:
-ok`, role, and version JSON. A mismatch fails; a transient failure resets the
-stability window.
-
-The manager writes `/var/lib/dam-hopper-manager/state.json` with a
-same-directory temp file, write/sync, rename, and parent-directory sync. It
-records active/previous/pending releases, transaction phase, hashes, and the
-latest failure; `/opt/dam-hopper/current` is repaired afterward as a
-convenience pointer. Candidate failure restores the previous concrete units,
-config, and state through the same health gate. First-install failure leaves
-all app units stopped/disabled and no active release. Manual `rollback`
-promotes the recorded previous release through the same rules; restoration
-failure or corrupt/unowned/hash-mismatched state becomes `RECOVERY_REQUIRED`.
-`recovery.rs` resumes pending work only where safe, restores interrupted
-transactions, repairs committed pointers/enablement, and otherwise blocks all
-application units.
-
-Phase 07 validates the legacy root, marker, binary, unit, and wants-link
-invariants before staging under `/opt/.dam-hopper-migration.<tx_id>`. It requires
-the side root and canonical root to share a device, exchanges them with Linux
-`renameat2(RENAME_EXCHANGE)`, and records an `imported-format-2` previous source
-for rollback. Commit removes the migration marker and redundant exchanged root;
-the old checkout scripts, fixed unit, fixture, and package aliases are absent.
-
-### Dedicated web host (`server/src/web_host/`)
-
-`web_host` is an API-state-free, non-writing Axum host used by the release web
-role. `router.rs` reserves health/runtime-config routes before static fallback;
-`safe_path.rs` rejects symlink components, traversal, encoded separators, and
-directory access; `cache_policy.rs` classifies hashed assets, index HTML,
-reserved metadata, and other files; `runtime_config.rs` validates the public
-schema and ≤4 KiB input. `server/src/bin/dam-hopper-web.rs` supplies the
-`0.0.0.0:4802` CLI and graceful SIGTERM/CTRL-C lifecycle.
+## Configuration
 
 ### Environment Variables
 
 ```bash
-DAM_HOPPER_CONFIG              # API project registry file
-DAM_HOPPER_WORKSPACE           # Legacy workspace directory override
-DAM_HOPPER_PORT                # API listen port (default: 4800; systemd: 4801)
-DAM_HOPPER_HOST                # API bind address (default: 0.0.0.0)
-DAM_HOPPER_CORS_ORIGINS        # Exact credentialed browser origins
-DAM_HOPPER_NO_AUTH             # Dev mode API auth bypass
-DAM_HOPPER_WEB_DIR             # Explicit API combined-mode static root (Docker)
-DAM_HOPPER_WEB_ROOT            # Dedicated web host static root
-DAM_HOPPER_WEB_HOST            # Dedicated web bind address (default: 0.0.0.0)
-DAM_HOPPER_WEB_PORT            # Dedicated web port (default: 4802)
-DAM_HOPPER_WEB_RUNTIME_CONFIG  # Optional runtime-config.json path
-DAM_HOPPER_WEB_RELEASE_VERSION # Optional health release-version override
-MONGODB_URI                    # MongoDB connection (optional)
-MONGODB_DATABASE               # MongoDB database name (optional)
-RUST_ENV                       # Runtime environment (blocks no-auth in production)
+DAM_HOPPER_CONFIG        # Explicit project registry file
+DAM_HOPPER_WORKSPACE     # Legacy workspace directory override / discovery root
+DAM_HOPPER_PORT          # Server port (default: 4800)
+DAM_HOPPER_HOST          # Bind address (default: 0.0.0.0)
+DAM_HOPPER_NO_AUTH       # Dev mode, bypasses auth
+MONGODB_URI              # MongoDB connection (optional)
+MONGODB_DATABASE         # MongoDB database name (optional)
+RUST_ENV                 # Runtime environment (blocks if "production")
 ```
 
 ### Configuration Files
@@ -441,38 +347,6 @@ registry-dir/
       ├── agent-store/     # Agent store repository
       └── cache/           # Cache directory
 ```
-
-The Linux release manager uses a separate host layout:
-
-```text
-/opt/dam-hopper/
-  ├── .staging/<transaction-id>/       # root-private in-flight transaction (0700)
-  ├── releases/<tag>/<role>/           # immutable unpacked role view
-  └── current                           # repaired active-view convenience link
-/etc/dam-hopper/
-  ├── host.toml                         # recorded role + exact allowed origins
-  ├── host-config.json                  # active public web runtime config
-  ├── sysusers.d/dam-hopper-web.conf    # committed web identity input (web role)
-  ├── server.env                        # machine-local API environment
-  └── web.env                           # reserved machine-local web environment
-/var/lib/dam-hopper-manager/
-  ├── pending-units-<tx_id>/                # candidate API/web/recovery units + sysusers
-  ├── pending-host-config-<tx_id>.json      # candidate public web config
-  ├── backups/<transaction-id>/         # unit/config rollback backups
-  └── state.json                        # authoritative generation/state envelope
-/etc/systemd/system/
-  ├── dam-hopper-recovery.service       # boot reconciliation unit
-  ├── dam-hopper-api.service            # committed API unit
-  └── dam-hopper-web.service            # committed web unit
-/run/lock/dam-hopper/deploy.lock        # nonblocking deployment lock
-```
-
-Staging writes only the manager's pending candidate. Explicit `start` installs
-the selected concrete units/configuration, atomically commits state, repairs
-`current`, and garbage-collects only verified unreferenced trees. Published
-release assets must not contain machine-local environment/config, tokens,
-credentials, or SQLite state. See [Linux Release Manager](./linux-release-manager.md)
-for ownership and transaction details.
 
 ## Development Commands
 
@@ -493,41 +367,6 @@ cargo test auth_no_auth    # Specific test module
 
 # Release build
 cargo build --release
-
-# Release manifest contract checks
-cargo test --test linux_release_manifest --test linux_release_manifest_errors
-cargo test linux_release
-```
-
-### Dedicated web host
-
-```bash
-# Serve a selected immutable web release view
-cargo run --bin dam-hopper-web -- \
-  --root /path/to/immutable/web-dist \
-  --host 0.0.0.0 --port 4802 \
-  --runtime-config /etc/dam-hopper/runtime-config.json
-```
-
-`--root` is required and must be a real directory, not a symlink. Omit
-`--runtime-config` for a static-only host; the reserved endpoint then returns 404. Runtime JSON is public, bounded to 4 KiB, and contains no credentials.
-
-The API server does not serve static files unless an explicit `--web-dir` is
-passed. Docker is the supported combined-mode example:
-
-```bash
-dam-hopper-server --port 4800 --web-dir /opt/dam-hopper/web
-```
-
-```bash
-# Inspect the manager grammar without mutating the host
-cargo run --bin dam-hopper -- version
-
-# Focused Linux release manager suites
-cargo test --test linux_release_cli --test linux_release_platform \
-  --test linux_release_archive --test linux_release_acquisition \
-  --test linux_release_staging --test linux_release_manifest \
-  --test linux_release_manifest_errors
 ```
 
 ### Web Development
@@ -567,80 +406,64 @@ pnpm check        # Build web + native, lint, and run Rust tests
 
 ```
 dam-hopper/
-├── server/                         # Rust backend and release binaries
+├── server/                    # Rust backend
 │   ├── src/
-│   │   ├── main.rs                 # API bootstrap (API-only by default)
-│   │   ├── bin/dam-hopper.rs       # Linux release manager binary
-│   │   ├── bin/dam-hopper-web.rs   # Dedicated static web host binary
-│   │   ├── web_host/               # Web routes, paths, cache, runtime config
-│   │   ├── api/                    # Axum REST/WebSocket handlers
-│   │   ├── linux_release/          # Manifest, acquisition, and staging
-│   │   ├── pty/                    # Terminal management
-│   │   ├── fs/                     # Filesystem operations/sandbox
-│   │   ├── agent_store/            # Agent-store service
-│   │   └── lib.rs                  # Library exports
+│   │   ├── main.rs           # CLI entry point, production safety guards
+│   │   ├── state.rs          # AppState definition
+│   │   ├── api/
+│   │   │   ├── auth.rs       # Authentication handlers
+│   │   │   ├── ws.rs         # WebSocket transport
+│   │   │   └── mod.rs        # Router configuration
+│   │   ├── pty/              # Terminal management
+│   │   ├── fs/               # File system operations
+│   │   ├── persistence/      # SQLite store, worker, restore, migrations
+│   │   │   └── migrations/010_workflow_tracking.sql
+│   │   ├── workflow/         # Workflow models and relational store
+│   │   │   ├── model/
+│   │   │   ├── store/
+│   │   │   └── tests.rs
+│   │   ├── agent_store/      # Agent store service
+│   │   └── lib.rs            # Library exports
 │   ├── tests/
-│   │   ├── linux_release_*.rs      # Focused release suites
-│   │   └── common/release_fixtures.rs
-│   └── Cargo.toml                  # Server and binary metadata
-├── deploy/release/
-│   └── release-manifest.schema.json # Publisher schema v1
+│   │   └── auth_no_auth.rs   # Auth bypass integration tests
+│   └── Cargo.toml            # Dependencies
 ├── apps/
-│   ├── web/                        # Thin browser Vite host
-│   ├── native/                     # Tauri v2 host and shell
-│   └── browser-extension/          # Browser debug extension
+│   ├── web/                  # Thin browser Vite host
+│   └── native/               # Tauri v2 host + src-tauri shell
 ├── packages/
-│   ├── ui/                         # Shared React UI and tests
-│   ├── shared/                     # Shared runtime utilities
-│   └── browser-bridge/             # Browser debug protocol
-├── docs/                           # Maintained documentation
-├── plans/                          # Feature plans and phase reports
-└── CLAUDE.md                       # Development commands
+│   ├── ui/                   # Shared React UI, hooks, stores, tests, styles
+│   └── shared/               # Shared logger and runtime helpers
+├── docs/                      # Documentation
+│   ├── codebase-summary.md   # This file
+│   ├── system-architecture.md
+│   ├── api-reference.md
+│   ├── code-standards.md
+│   └── phase-01-server-auth-bypass/
+│       ├── index.md
+│       └── implementation.md
+├── plans/                     # Feature plans and phases
+│   └── 20260416-multi-server-auth/
+│       ├── phase-01-server-auth-bypass.md
+│       ├── phase-02-multi-server-frontend.md
+│       └── phase-03-auth-integration.md
+└── CLAUDE.md                  # Development commands
 ```
 
 ## Test Coverage
 
 ### Passing Tests
 
-- **Linux release Phase 02**: 45/45 focused tests across seven suites:
-  CLI/privilege, platform/origins, acquisition, archive, staging, and the two
-  Manifest v1 contract suites.
-- **Linux release Phase 03**: `linux_release_web_host` 8/8; API-only/default
-  and API-health focused tests 2/2; runtime/server-config Vitest 72/72.
-- **Linux release Phase 04**: focused `linux_release_unit_policy`,
-  `linux_release_ownership`, and `linux_release_staging` suites cover
-  allowlisted rendering, API-root/web-isolated policy, role-selected
-  candidates, staged web sysusers/public-config validation, ownership modes,
-  listener parsing, role conflicts, lock contention, and symlink rejection.
-- **Linux release Phase 05**: `linux_release_state_machine`,
-  `linux_release_health`, and `linux_release_unit_policy` cover durable phase
-  transitions, recovery classification, health identity/listener/JSON gates,
-  candidate and rollback unit policy, and recovery-unit ordering.
-- **Linux release Phase 07**: format-2 fixture/drift/exchange suites cover
-  exact read-only verification, side-root exchange, rollback restoration, and
-  imported-format-2 retention; Fedora rehearsal remains fixture-level evidence.
-- **Linux release Phase 08**: comprehensive validation passed across 1,018 Rust
-  tests (31 suites), 1,447 UI tests, deterministic package-twice archive digest
-  verification, unprivileged rootless dual-process smoke, and 6 deployment test
-  journeys. Review approved 9.8/10.
-- **Compile proofs**: vendored all-target Cargo check plus UI and web builds
-  exited `0` (recorded 2026-09-04).
-- **Other server/frontend counts**: historical snapshots only; consult the
-  dated roadmap/changelog entries rather than treating them as a release gate.
-### Known Limitations (Pre-existing or phase-scoped)
+- **Server**: 111 unit tests, 7 integration tests (auth)
+- **Web**: Component tests with Vitest, 80% coverage target
+- **Workflow**: 14 source-level tests cover model/transition validation,
+  migration preservation, hierarchy/scope invariants, idempotency, resource
+  observation isolation, note retention, pagination, purge, and overview.
 
-- Phase 07 completes the one-time format-2 migration and checkout-runner
-  retirement. Staging invokes static legacy-layout checks; the separate live
-  inspector covers active service/process/health evidence when requested.
-  Fedora rehearsal is fixture-level and does not imply production deployment
-  evidence or broader distro support.
-- The API candidate intentionally runs as `root` by owner decision; this broad
-  privilege is an accepted v1 risk. The web candidate remains separately
-  unprivileged and sandboxed.
-- Recovery blocks all application units when durable state is corrupt,
-  unowned, hash-mismatched, or cannot be restored safely.
-- Platform-specific Windows filesystem behavior and Git worktree edge cases
-  remain outside this phase.
+### Known Limitations (Pre-existing)
+
+- 8 platform-specific failures (Windows symlink privileges, path format)
+- Git worktree edge cases
+- Not phase-01-related
 
 ## Performance Metrics
 
@@ -670,91 +493,27 @@ dam-hopper/
 - **Account Status**: Supports enabled/disabled flag
 - **Connection**: Pooled, support for MongoDB Atlas
 
-### Linux release manager
-
-- Manifest v1 is validated by `server/src/linux_release/` before archive
-  inspection; the publisher schema remains
-  `deploy/release/release-manifest.schema.json`.
-- The `dam-hopper` manager implements the complete grammar and privilege
-  policy. Non-root `fetch` downloads a stable GitHub release with bounded
-  HTTPS; root `install`/`role set` validates and stages a role view. `status`
-  and `version` are read-only; `start` activates a pending candidate or
-  starts/verifies the committed role; `rollback` and `recover` run the durable
-  lifecycle paths.
-- Archive inspection requires exact common/server/web inventory equality,
-  normalized paths, regular files/directories, manifest modes, sizes, and
-  SHA-256 digests. Links, special entries, and disallowed runtime/config files
-  fail closed.
-- Phase 04 renders independent units from allowlisted release-root/version/
-  public-config/origin placeholders. The API candidate is `root:root` on
-  `0.0.0.0:4801` with explicit environment ordering and `NoNewPrivileges=false`;
-  the web candidate is `dam-hopper-web` on `0.0.0.0:4802` with strict sandboxing,
-  no environment files/write paths, and read-only release/config paths. Neither
-  app unit depends on the other.
-- `dam-hopper-web` is declared through `sysusers.d` with `/nonexistent` home and
-  `/sbin/nologin`; the account verifier rejects missing, root, login-capable, or
-  unrestricted-home identities. Rendered unit/sysusers files use `0644`;
-  release directories/binaries use `0755` and other release files `0644`.
-- The deployment lock is `/run/lock/dam-hopper/deploy.lock`; transaction
-  extraction is under `/opt/dam-hopper/.staging/<transaction-id>`, role views
-  under `/opt/dam-hopper/releases/<tag>/<role>`, and pending candidates under
-  `/var/lib/dam-hopper-manager/`. Unit/config backups live under
-  `backups/<transaction-id>/`; `/var/lib/dam-hopper-manager/state.json` is the
-  authoritative generation-numbered state envelope. `/opt/dam-hopper/current`
-  is a repaired convenience pointer.
-- Valid activation advances
-  `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING → COMMITTED`.
-  `health.rs` requires readiness within 20 seconds, then 20 consecutive probes
-  at 500 ms (10 seconds) for API `/api/health` and web
-  `/__dam-hopper/health`, checking active MainPID, expected executable/
-  identity/listener, and exact role/version health JSON.
-- `dam-hopper-recovery.service` is a root boot-reconciliation unit ordered
-  before the API and web units. Candidate failure restores the previous
-  concrete units/configuration through the same health gate; first-install
-  failure leaves application units stopped/disabled with no active release.
-  Manual `rollback` promotes the recorded previous release by the same rules;
-  unsafe or unrecoverable state is `RECOVERY_REQUIRED`.
-- Retention deletes only verified unreferenced release trees. Published
-  archives contain no machine-local `.env`, server config, token, credentials,
-  or SQLite state. API root authority is an accepted v1 risk; web remains
-  separately unprivileged and isolated.
-
-### Dedicated web host
-
-- `dam-hopper-web` receives only a selected static root and optional runtime
-  config; root/config symlinks are rejected and runtime input is capped at 4 KiB.
-- Reserved health/runtime-config paths cannot fall through to distribution files
-  or SPA HTML. Both return `Cache-Control: no-store`.
-- File resolution rejects traversal, NUL, encoded separators, symlinks, and
-  directories. Other methods return `405` with `Allow: GET, HEAD`; no writes,
-  proxy, API, or runtime execution are exposed.
-- Runtime `apiUrl` is an exact HTTP(S) origin with no credentials/path/query/
-  fragment. The browser never derives it from `Host`; managed profile URL changes
-  clear only the managed profile token.
-
 ## Documentation Library
 
-| Document                                                                       | Purpose                                                                                                                                                                                                           |
-| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [system-architecture.md](./system-architecture.md)                             | Component interactions, data flow                                                                                                                                                                                 |
-| [api-reference.md](./api-reference.md)                                         | HTTP endpoints, request/response schemas                                                                                                                                                                          |
-| [code-standards.md](./code-standards.md)                                       | Naming conventions, patterns, best practices                                                                                                                                                                      |
-| [configuration-guide.md](./configuration-guide.md)                             | Setup, environment variables, config files                                                                                                                                                                        |
-| [linux-release-manifest.md](./linux-release-manifest.md)                       | Linux release manifest v1 contract                                                                                                                                                                                |
-| [linux-release-manager.md](./linux-release-manager.md)                         | Phase 02 manager CLI, platform gate, acquisition, staging, Phase 03 web role handoff, Phase 04 units, Phase 05 activation/recovery, Phase 06 bootstrap handoff, and Phase 07 format-2 migration/runner retirement |
-| [linux-release-publisher-bootstrap.md](./linux-release-publisher-bootstrap.md) | Central GitHub publisher DAG, exact assets, reproducibility, SBOM, attestations, and bootstrap                                                                                                                    |
-| [native-browser-debug-support.md](./native-browser-debug-support.md)           | Native Browser Debug platform gate and security boundaries                                                                                                                                                        |
-| [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md)   | Profile storage, switching, and cross-origin policy                                                                                                                                                               |
-| [ws-protocol-guide.md](./ws-protocol-guide.md)                                 | WebSocket message types, terminal protocol                                                                                                                                                                        |
-| [project-roadmap.md](./project-roadmap.md)                                     | Planned features and phases                                                                                                                                                                                       |
+| Document                                                       | Purpose                                       |
+| -------------------------------------------------------------- | --------------------------------------------- |
+| [system-architecture.md](./system-architecture.md)             | Component interactions, data flow             |
+| [api-reference.md](./api-reference.md)                         | HTTP endpoints, request/response schemas      |
+| [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
+| [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
+| [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
+| [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
+| [ws-protocol-guide.md](./ws-protocol-guide.md)                 | WebSocket message types, terminal protocol    |
+| [project-roadmap.md](./project-roadmap.md)                     | Planned features and phases                   |
+| [CHANGELOG.md](./CHANGELOG.md)                               | Dated implementation and release notes           |
 
 ---
 
-**Last Updated**: September 4, 2026
-**Phase Status**: Phases 01–08 of the Linux Release Installer Architecture
-are complete and reviewed; Phase 08 delivers comprehensive behavioral, security,
-and failure-injection validation. Phase 09 documentation and release cutover is
-currently in progress.
-**Generated by**: Source review grounded in `repomix-output.xml` (Repomix
-1.18.0); metrics reflect the 1,562-file/3,196,063-token compaction and four
-security exclusions.
+**Last Updated**: September 2, 2026
+**Phase Status**: Phase 01 workflow domain and relational persistence is
+implemented as an additive SQLite foundation; API integration remains a later
+scope. Current support is tracked by feature and platform qualification;
+historical phase labels and evidence remain dated records.
+**Generated by**: Repomix v1.18.0 snapshot (1,475 files / 3,089,883 tokens)
+plus source-verified maintenance. Three security-flagged files were excluded
+from the compaction output.
