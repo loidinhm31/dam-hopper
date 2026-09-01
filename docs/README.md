@@ -20,6 +20,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Reference Documentation
 
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
+- **[Workflow API](./workflow-api.md)** — Phase 02 workflow service, REST endpoints, CAS/replay, and retention
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
@@ -99,19 +100,18 @@ exists before linking it from a new document.
 - Health checks for broken symlinks
 - See: [System Architecture](./system-architecture.md#module-breakdown)
 
-**Workflow Tracking Persistence (Phase 01)** — Additive SQLite domain and
-repository foundation for workspaces, Plan/Phase/Task items, manual sessions,
-terminal/agent correlations, notes, and activity events.
+**Workflow Tracking Service and REST API (Phase 02)** — Protected REST
+boundary over the Phase 01 SQLite workflow domain.
 
-- Plan-first hierarchy: Plan roots, Phase children, and standalone/Plan/Phase
-  tasks; item creation rejects cross-scope parents, cycles, and depth >3.
-- Store boundary: `WorkflowStore` shares the configured session database and
-  commits entity mutations plus optional events atomically.
-- Retention: notes soft-delete before bounded purge; events support expiry and
-  keyset history pagination.
-- See [Project Overview & PDR](./project-overview-pdr.md#pr-011-workflow-tracking-domain--relational-persistence-phase-01),
-  [System Architecture](./system-architecture.md#workflow-phase-01-domain-and-relational-persistence),
-  and [Code Standards](./code-standards.md#workflow-domain-and-relational-store-phase-01).
+- Overview: bounded workspace/project summaries, Plan/Phase/Task trees,
+  running sessions, notes, factual Task progress, and recent events
+- Mutations: item CRUD with Plan-first validation, CAS, and request replay;
+  manual session lifecycle; terminal/agent links; note CAS and soft deletion
+- History: opaque keyset event pagination and explicit/bounded retention purge
+- See [Workflow API](./workflow-api.md), [System Architecture](./system-architecture.md#workflow-phase-02-service-and-rest-api),
+  [Project Overview & PDR](./project-overview-pdr.md#pr-012-workflow-service-and-rest-api-phase-02),
+  and [Codebase Summary](./codebase-summary.md#workflow-tracking-service-and-rest-api-phase-02).
+- See [Code Standards](./code-standards.md#workflow-domain-service-and-rest-api-phases-01-02) for implementation conventions.
 
 
 ## Common Tasks
@@ -145,16 +145,23 @@ See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle)
 
 ## Recent Changes
 
-**Phase 01 Workflow Tracking (Complete ✓):**
+**Phase 02 Workflow Service and REST API (Complete ✓ 2026-09-02):**
+
+- ✓ Added `WorkflowService` current-workspace/target boundary and shared-store
+  `spawn_blocking` orchestration
+- ✓ Mounted protected `/api/workflow/*` endpoints for overview, event history,
+  item CRUD, session lifecycle/links, notes, and history purge
+- ✓ Added request-id replay, item/note/link CAS, strict DTO validation, typed
+  workflow errors, bounded overview/keyset history, and automatic retention
+- ✓ Added `server/tests/workflow_api.rs` integration coverage
+
+**Phase 01 Workflow Tracking Foundation (Complete ✓):**
 
 - ✓ Added additive migration 010 for six workflow tables sharing `sessions.db`
 - ✓ Added Plan/Phase/Task models, status/source/resource/event enums, and
   bounded validation
 - ✓ Added transactional `WorkflowStore` methods for hierarchy, sessions,
   links, notes, events, overview aggregation, and retention
-- ✓ Added domain/store tests for migration preservation, Plan-first rules,
-  scope isolation, idempotency, pagination, and purge
-
 
 **Phase 06 (Complete ✓):**
 
@@ -239,7 +246,7 @@ Browser (React SPA)
 Rust Server (Axum)
     ├─ AppState (config, PTY manager, FS subsystem, auth)
     ├─ Router (routes REST/WebSocket)
-    ├─ Services (PtySessionManager, FsSubsystem, AgentStoreService)
+    ├─ Services (WorkflowService, PtySessionManager, FsSubsystem, AgentStoreService)
     └─ Persistence (SessionStore + WorkflowStore over SQLite)
 ```
 
@@ -269,6 +276,7 @@ docs/
 ├── project-overview-pdr.md       # Product requirements & roadmap
 ├── system-architecture.md        # Module breakdown & data flow
 ├── api-reference.md              # REST/WebSocket endpoints
+├── workflow-api.md              # Phase 02 workflow REST contract
 ├── configuration-guide.md        # dam-hopper.toml & setup
 ├── code-standards.md             # Patterns, testing, security
 ├── codebase-summary.md           # Quick module reference

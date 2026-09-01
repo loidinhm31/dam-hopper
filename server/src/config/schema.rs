@@ -350,18 +350,39 @@ pub struct ServerConfig {
     /// Database file path (default: ~/.config/dam-hopper/sessions.db)
     #[serde(default = "default_session_db_path", alias = "session_db_path")]
     pub session_db_path: String,
-
     /// TTL for dead session buffers in hours (default: 24)
-    #[serde(
-        default = "default_session_buffer_ttl_hours",
-        alias = "session_buffer_ttl_hours"
-    )]
+    #[serde(default = "default_session_buffer_ttl_hours", alias = "session_buffer_ttl_hours")]
     pub session_buffer_ttl_hours: u64,
-
     #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default, alias = "host_resources")]
     pub host_resources: HostResourceMonitorConfig,
+    #[serde(default = "default_workflow_event_retention_days", alias = "workflow_event_retention_days")]
+    pub workflow_event_retention_days: u32,
+    #[serde(default = "default_workflow_deleted_note_retention_days", alias = "workflow_deleted_note_retention_days")]
+    pub workflow_deleted_note_retention_days: u32,
+    #[serde(default = "default_workflow_stale_after_hours", alias = "workflow_stale_after_hours")]
+    pub workflow_stale_after_hours: u32,
+}
+
+pub const fn default_workflow_event_retention_days() -> u32 { 90 }
+pub const fn default_workflow_deleted_note_retention_days() -> u32 { 7 }
+pub const fn default_workflow_stale_after_hours() -> u32 { 24 }
+
+impl ServerConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        self.telemetry.validate()?;
+        if !(1..=3650).contains(&self.workflow_event_retention_days) {
+            return Err("server.workflow_event_retention_days must be between 1 and 3650".into());
+        }
+        if !(1..=3650).contains(&self.workflow_deleted_note_retention_days) {
+            return Err("server.workflow_deleted_note_retention_days must be between 1 and 3650".into());
+        }
+        if !(1..=8760).contains(&self.workflow_stale_after_hours) {
+            return Err("server.workflow_stale_after_hours must be between 1 and 8760".into());
+        }
+        Ok(())
+    }
 }
 
 impl Default for ServerConfig {
@@ -371,9 +392,13 @@ impl Default for ServerConfig {
             session_buffer_ttl_hours: default_session_buffer_ttl_hours(),
             telemetry: TelemetryConfig::default(),
             host_resources: HostResourceMonitorConfig::default(),
+            workflow_event_retention_days: default_workflow_event_retention_days(),
+            workflow_deleted_note_retention_days: default_workflow_deleted_note_retention_days(),
+            workflow_stale_after_hours: default_workflow_stale_after_hours(),
         }
     }
 }
+
 
 // ──────────────────────────────────────────────
 // Top-level workspace config (on-disk)

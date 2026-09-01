@@ -27,6 +27,7 @@ use crate::workspace_target::{
     ProjectTargetRef, ProjectWorktree, ResolvedProjectTarget, WorkspaceTargetError,
     WorkspaceTargetResolver,
 };
+use crate::workflow::{WorkflowService, WorkflowStore};
 
 /// Shared application state across all Axum handlers.
 ///
@@ -107,6 +108,8 @@ pub struct AppState {
     /// Serializes telemetry queries, deletion, retention, and collector changes.
     pub telemetry_coordinator: Arc<tokio::sync::Mutex<()>>,
     /// Server-authoritative, short-lived registered worktree discovery cache.
+    /// Optional workflow store/service. Workflow availability never gates PTY APIs.
+    pub workflow: Option<Arc<WorkflowService>>,
     pub workspace_target_resolver: WorkspaceTargetResolver,
 }
 
@@ -279,8 +282,22 @@ impl AppState {
             codex_exporter: CodexExporterManager::default_paths()
                 .map_err(|error| anyhow::anyhow!("Codex exporter manager unavailable: {error}"))?,
             telemetry_coordinator: Arc::new(tokio::sync::Mutex::new(())),
+            workflow: None,
             workspace_target_resolver: WorkspaceTargetResolver::new(),
         })
+    }
+    /// Attach the optional workflow repository using the existing session DB connection.
+    pub fn with_workflow_store(mut self, store: Option<WorkflowStore>) -> Self {
+        self.workflow = store.map(|store| {
+            Arc::new(WorkflowService::new(
+                store,
+                self.config.clone(),
+                self.workspace_target_resolver.clone(),
+                self.workspace_context_guard.clone(),
+                self.pty_manager.clone(),
+            ))
+        });
+        self
     }
 
     #[cfg(test)]

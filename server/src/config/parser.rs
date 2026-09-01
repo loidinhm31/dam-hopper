@@ -51,8 +51,7 @@ pub fn read_config(file_path: &Path) -> Result<DamHopperConfig, AppError> {
 }
 
 fn validate_config(raw: &DamHopperConfigRaw) -> Result<(), AppError> {
-    raw.server.telemetry.validate().map_err(AppError::Config)?;
-
+    raw.server.validate().map_err(AppError::Config)?;
     // Unique project names
     let names: Vec<&str> = raw.projects.iter().map(|p| p.name.as_str()).collect();
     let unique: std::collections::HashSet<_> = names.iter().collect();
@@ -304,6 +303,18 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
     config.insert(
         "session_buffer_ttl_hours".to_string(),
         Value::Integer(server.session_buffer_ttl_hours as i64),
+    );
+    config.insert(
+        "workflow_event_retention_days".to_string(),
+        Value::Integer(server.workflow_event_retention_days.into()),
+    );
+    config.insert(
+        "workflow_deleted_note_retention_days".to_string(),
+        Value::Integer(server.workflow_deleted_note_retention_days.into()),
+    );
+    config.insert(
+        "workflow_stale_after_hours".to_string(),
+        Value::Integer(server.workflow_stale_after_hours.into()),
     );
     if server.telemetry != Default::default() {
         let telemetry = &server.telemetry;

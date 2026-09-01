@@ -20,6 +20,11 @@ impl From<AppError> for ApiError {
         Self(e)
     }
 }
+impl From<crate::workflow::error::WorkflowError> for ApiError {
+    fn from(error: crate::workflow::error::WorkflowError) -> Self {
+        Self(crate::error::AppError::Workflow(error))
+    }
+}
 
 #[derive(Serialize)]
 struct ErrorBody {
