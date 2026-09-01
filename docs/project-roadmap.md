@@ -2,35 +2,11 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
-### Linux Release Installer Architecture (2026-09-04)
+### Workflow Tracking and Continuity (2026-09-02)
 
-- **Phase 01 — [COMPLETED 2026-09-03 16:07:45 +07:00]**: established the strict release-manifest v1 contract, lockstep `vX.Y.Z`/SemVer/component-version validation, Fedora 44 x86_64 systemd profile constants, role-scoped inventory projections, bounded canonical JSON, path/file-type/security exclusions, service/rollback invariants, and matching JSON Schema.
-- Validation: vendored all-target `cargo check` passed; focused manifest suites passed 20/20 and the `linux_release` filter passed 10/10 (30/30 executed test invocations); scoped code review approved 9.5/10 with no blocking findings.
-- **Phase 02 — [COMPLETED 2026-09-03]**: delivered the Rust `dam-hopper` CLI grammar and privilege matrix (`fetch`, `install`, `role set`, `start`, `status`, `rollback`, `recover`, `version`), Fedora 44/x86_64/systemd profile validation, bounded GitHub acquisition, mandatory SHA-256 with optional attestation, root-safe staging with source-integrity checks, strict archive traversal, role projections, and durable pending metadata without service activation.
-- Validation: `cargo check --manifest-path server/Cargo.toml --bin dam-hopper --tests` passed; `linux_release_*` suites passed **45/45 across 7 suites**; scoped clippy and `systemctl --version` checks passed; code review approved **8.8/10** with no blocking findings. Non-blocking hardening recommendations remain recorded in the [review report](../plans/reports/code-review-260903-1644-phase-02-rust-cli-acquisition-staging.md).
-- **Phase 03 — [COMPLETED 2026-09-03]**: delivered the non-writing `dam-hopper-web` static host on port `4802`, reserved health/runtime-config routes, strict safe-path and cache policies, bounded runtime-origin bootstrap, managed-profile token invalidation, API-only server defaults, and explicit Docker combined-mode `--web-dir`.
-- Validation: `linux_release_web_host` passed **8/8**; API-only/default and API-health focused tests passed **2/2**; runtime/server-config Vitest passed **72/72**; vendored all-target Cargo check plus UI/web builds exited `0`; code review approved **8.5/10** with no blocking findings. [Phase 03 plan](../plans/260903-0919-linux-release-installer-architecture/phase-03-web-host-runtime-origin-health.md).
-- **Phase 04 — [COMPLETED 2026-09-03 20:57:20 +07:00]**: delivered role-aware independent API/web systemd unit templates, strict placeholder rendering and policy validation, exact role inventory, dedicated `dam-hopper-web` sysuser, ownership/mode checks, process/listener evidence, root-private pending-unit staging, atomic host configuration, and no-shell systemd adapters. API runs as `root` per the accepted MVP directive; web remains separately unprivileged and isolated. [Phase 04 plan](../plans/260903-0919-linux-release-installer-architecture/phase-04-role-aware-systemd-ownership.md).
-- Validation: Linux release integration suites passed **66/66 across 10 suites**; vendored all-target `cargo check` passed with no warnings; scoped review approved **9.0/10** with no blocking findings. Non-blocking hardening recommendations remain recorded in the [review report](../plans/reports/code-review-260903-2025-phase-04-role-aware-systemd-ownership.md).
-- **Phase 05 — [COMPLETED 2026-09-03 23:45:08 +07:00]**: delivered durable state/journal records, fsync-backed activation transactions, exact process/listener/health stability probes, automatic/manual rollback, boot-time recovery, and reference-safe retention. [Phase 05 plan](../plans/260903-0919-linux-release-installer-architecture/phase-05-durable-activation-rollback-recovery.md).
-- Validation: vendored all-target `cargo check` passed; Phase 05 suites passed **19/19**; full `linux_release*` matrix passed **77/77**; Cycle 2 review approved **9.8/10** with no blocking findings. [Review report](../plans/reports/code-review-260903-2332-phase-05-durable-activation-rollback-recovery.md).
-- **Phase 06 — [COMPLETED 2026-09-04 01:05:00 +07:00]**: delivered the central stable-tag GitHub publisher, desktop/stable tag namespace split, deterministic archive assembly, external Manifest v1 and SPDX SBOM generation, exact four-asset local/draft gate, four-subject artifact attestations, and a non-root bootstrap that ends at pending staging. [Phase 06 plan](../plans/260903-0919-linux-release-installer-architecture/phase-06-central-github-publisher-bootstrap.md).
-- Validation: publisher contract tests passed **24/24**; `pnpm release:verify`, shell syntax, Node syntax, and vendored all-target `cargo check` passed with no warnings. Cycle 2 review approved **9.5/10** with no blocking findings. [Review report](../plans/reports/code-review-260904-0115-phase-06-central-github-publisher-bootstrap.md).
-- **Phase 07 — [COMPLETED 2026-09-04]**: delivered exact read-only legacy
-  format-2 verification, same-device sibling staging at
-  `/opt/.dam-hopper-migration.<tx_id>`, Linux `renameat2(RENAME_EXCHANGE)`
-  cutover, rollback restoration, imported-format-2 retention, and retirement
-  of the checkout-built runner scripts, fixed unit, fixture, and aliases.
-  [Phase 07 plan](../plans/260903-0919-linux-release-installer-architecture/phase-07-format-2-migration-runner-retirement.md).
-- Validation: focused migration fixture/drift/exchange suites passed **14/14**;
-  the Fedora rehearsal passed at fixture level; Cycle 2 review approved **9.0/10**
-  with no blocking findings. No production-host deployment claim is implied.
-- **Phase 08 — [COMPLETED 2026-09-04 13:30:00 +07:00]**: delivered comprehensive behavioral, security, and failure-injection validation across deterministic contracts, reproducible packaging, rootless real-process dual smoke, modular deployment scripts, crash-recovery boundary reconciliation, reboot state-machine matrix, and format-2 migration cutover.
-- Validation: Rust test suite passed **1,018/1,018 across 31 suites**; UI contract tests passed **1,447/1,447**; UI/web builds passed; shell syntax checked across 11 files; `release:package-twice` verified deterministic SHA-256 byte-for-byte; rootless dual-process smoke passed; deployment test journeys passed across 6 scripts; review approved **9.8/10** with zero critical issues. [Review report](../plans/reports/code-review-260904-1320-phase-08.md).
-- **Phase 09 — [COMPLETED 2026-09-04]**: completed the documentation and release cutover for the attested Fedora 44 x86_64 installer. Maintained docs now use the non-root bootstrap, pending install, explicit `dam-hopper start`, health-gated rollback/recovery, exact role/origin contracts, and format-2 migration guidance; obsolete checkout-runner instructions are removed or clearly historical.
-- Validation: maintained-document links (145 relative links, 18 anchors), Markdown structure, CLI examples against implemented `--help`, `docs/linux-systemd.md` size (313 lines), and stale runner-reference audit passed; docs-manager scope review passed ([docs report](../plans/reports/docs-manager-260904-1601-phase-09-documentation-release-cutover.md)). Completion is grounded in Phase 08 terminal tester/reviewer evidence on Fedora 44 x86_64/systemd 259 ([tester](../plans/reports/tester-260904-1316-phase-08-behavioral-security-failure-validation.md), [review](../plans/reports/code-review-260904-1320-phase-08.md)). External MongoDB, firewall/Tailscale, DNS/TLS automation, unsupported distros, and protected-tag publication remain outside this cutover. Parent plan progress: **100% (136h/136h; Phases 01–09 complete)**.
-  [Phase 09 plan](../plans/260903-0919-linux-release-installer-architecture/phase-09-documentation-roadmap-changelog-cutover.md).
-  [Parent plan](../plans/260903-0919-linux-release-installer-architecture/plan.md).
+- **Phase 01 — Domain and relational persistence [COMPLETED / DONE 2026-09-02]**: Delivered snapshot-first workflow persistence in the existing SQLite `SessionStore`, including migration 010, Plan/Phase/Task hierarchy and invariants, manual sessions, terminal/agent resource links, durable notes, bounded activity events, factual overview aggregation, keyset history pagination, idempotent transactional mutations, and bounded retention purge.
+- Validation: server `cargo test` passed 888/888 executed tests (2 ignored), including all 14 workflow tests; independent review scored 9.2/10. Post-review source fixes (SQLite foreign-key enforcement, 501-row overview probe, and dedicated note-target validation) are implemented and validated. [Test report](../plans/reports/tester-phase-01-260902-0010-domain-relational-persistence.md) · [Review report](../plans/reports/code-reviewer-260902-0012-phase-01-domain-and-relational-persistence.md).
+- Phase 02 (service and REST API) remains pending; see the [workflow tracking plan](../plans/260901-0919-workflow-tracking-notes/plan.md).
 
 ### Preserve Explorer Tree Expansion & Editor View Scroll Position (2026-08-31)
 
@@ -97,6 +73,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ### Terminal Touch Keyboard and Smooth Scroll (2026-08-28)
 
 - **Phases 01–02 — [COMPLETED 2026-08-29 16:48:06 +07:00]**: terminal scroll controls no longer focus xterm input or open the soft keyboard; xterm v6 coarse-pointer touch scrolling uses buffered custom `scrollLines` handling with bounded fling, plus explicit `touch-action: none` and contained overscroll/momentum CSS. Validation: UI TypeScript build PASS; full UI Vitest 1347/1347; focused terminal browser regressions 10/10; Chromium mobile-emulation swipe moved the xterm scrollbar from 280px to 158px. Physical Android hardware validation remains a release follow-up. [Plan](../plans/260828-1430-terminal-touch-keyboard-and-smooth-scroll/plan.md).
+
 
 ### Terminal Floating Controls UX (2026-08-29)
 
@@ -222,11 +199,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] Loopback-only authenticated binary receiver with bounded decoding and retry-safe dedupe
 - [x] Field-level forward compatibility with partial/unavailable token coverage
 - [x] Explicit managed local exporter setup with exact ownership/conflict protection, atomic
-      `0600` writes, no bearer disclosure; Codex restart remains a separate user action
+  `0600` writes, no bearer disclosure; Codex restart remains a separate user action
 
 **Phase 06: Usage UI and Compact Navigation — [COMPLETED 2026-07-26; APPROVED]**
 
-- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls _(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)_
+- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls *(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)*
 - [x] Explicit all/range deletion confirmation and no-cost/no-productivity interpretation copy
 
 **Phase 07: Security, Fault, Performance, Documentation — [VALIDATED; REVIEW APPROVED 2026-07-26; PLATFORM CHECKS PENDING]**

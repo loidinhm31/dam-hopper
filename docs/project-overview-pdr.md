@@ -176,7 +176,6 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Diagnostics export from Settings > Maintenance with canonical frontend snapshot payload and capped terminal tails.
 
 **Acceptance Criteria:**
-
 - ✓ Native image/video streams require an opaque ticket bound to an authenticated actor/session
 - ✓ Ticket clients require `session-cookie-v1` and a credentialed successful `HEAD` before native source/download exposure
 - ✓ Profile change/logout revokes the bounded media session before credential removal, including stale dialog profiles
@@ -243,6 +242,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Sensitive metadata is redacted before sink delivery unless local diagnostics explicitly disable it
 - ✓ Shared logger is used by the high-value UI surfaces noted above
 
+
 ### PR-010: Browser Debug and Native Child WebView
 
 **Status:** Windows v1 runtime-supported behind `VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG`; Linux child/relay implementation exists but runtime and permission behavior are unverified; macOS is deferred; Android uses iframe fallback.
@@ -256,214 +256,6 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Windows release evidence must pass the documented WebView2 gate; Linux build/package evidence is not runtime proof.
 
 See [Native Browser Debug Support](./native-browser-debug-support.md) for the platform matrix and rollback path.
-
-### PR-011: Linux Release Identity, Manager, Manifest, and Publisher v1
-
-**Status:** Phases 01–08 complete and reviewed (2026-09-04); Phase 09 documentation and release cutover in progress. Phase 01 defines
-the release metadata contract; Phase 02 adds the Rust manager's unprivileged
-acquisition and root-only role staging; Phase 03 adds the dedicated web host,
-runtime-origin bootstrap, and API-only default; Phase 04 adds role-aware
-systemd units and ownership policy; Phase 05 adds durable activation, health
-gates, rollback, recovery, and retention; Phase 06 adds the central GitHub
-publisher, deterministic archive, manifest/SBOM generation, asset gate, and
-non-root bootstrap; Phase 07 adds one-time exact format-2 migration and
-checkout-built runner retirement; Phase 08 delivers comprehensive behavioral,
-security, and failure-injection validation.
-**Phase 03 delivery boundary:**
-
-- `dam-hopper-web` serves a selected immutable web root independently, defaults
-  to `0.0.0.0:4802`, and does not write API state.
-- Reserved health and runtime-config routes, safe-path checks, SPA fallback,
-  and cache classes are implemented with GET/HEAD-only static serving.
-- Runtime config is bounded at 4 KiB and validates schema, SemVer, UUID v4, and
-  an exact HTTP(S) API origin; the frontend fails closed when it is invalid.
-- The frontend preserves an active user profile, reconciles one managed
-  deployed-server profile, and clears its token when the managed URL changes.
-- `dam-hopper-server` remains API-only by default. Docker opts into combined
-  serving explicitly with `--web-dir`; no browser-origin guessing is used.
-
-Phase 03 evidence: `linux_release_web_host` 8/8, focused API health/router
-checks 2/2, runtime-config/profile Vitest 72/72, scoped compile/build checks
-passed, and review scored 8.5/10 with no blocking findings.
-
-**Phase 05 delivery boundary:**
-
-- `install` and `role set` stage only a pending candidate. Unified `start`
-  performs activation or starts/verifies the committed role when no candidate
-  is pending.
-- The authoritative `/var/lib/dam-hopper-manager/state.json` envelope records
-  generation, active/previous/pending releases, transaction phase, hashes, and
-  latest failure; `/opt/dam-hopper/current` is a repairable convenience link.
-- Valid activation is `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED →
-SWITCHED → PROBING → COMMITTED`, with lock-scoped quiesce, concrete unit/
-  config switch, daemon reload, health probing, and atomic commit.
-- Candidate health requires readiness within 20 seconds plus 20 consecutive
-  probes at 500 ms (10-second stability) for API `/api/health` and web
-  `/__dam-hopper/health`, including process identity, listener, and exact JSON
-  role/version checks.
-- `dam-hopper-recovery.service` runs `dam-hopper recover --boot` before the API
-  and web units. Interrupted transactions restore the previous release or the
-  first-install baseline; corrupt or unrecoverable state is blocked.
-- Automatic and manual rollback use recorded unit/config backups and the same
-  health gate. Retention removes only verified unreferenced release trees.
-
-**Phase 06 delivery boundary:**
-
-- `release-linux.yml` is the stable `vX.Y.Z` publisher; `release.yml` is
-  desktop-only under `desktop-v*`.
-- The publisher builds three Rust binaries and the web dist, assembles one
-  deterministic profile archive twice, and blocks on differing SHA-256 values.
-- The four public assets are the executable bootstrap, archive,
-  `release-manifest.json`, and tag-specific SPDX 2.3 SBOM. All four receive
-  GitHub artifact attestations before draft upload and environment-approved
-  publication.
-- The local and draft-release asset gate requires the exact names and checks
-  manifest/archive metadata; the Rust manager revalidates inventory, role
-  projections, file metadata, and digests.
-- Bootstrap downloads as the caller, optionally verifies manifest/archive
-  attestations, extracts only the manager, and stops after root staging at
-  `PENDING`; it does not accept `--api-url` or activate services.
-
-**Phase 07 delivery boundary:**
-
-- The manager performs read-only format-2 checks for the root, exact marker/bin
-  inventories, regular-file modes, four-line manifest, nonce/digest matches,
-  fixed unit directives, forbidden settings, and the wants-link target.
-- Format 1 and unknown layouts fail closed. Static staging uses the sibling
-  `/opt/.dam-hopper-migration.<tx_id>` workspace; it requires the same device
-  and exchanges roots with Linux `renameat2(RENAME_EXCHANGE)`, without a copy
-  fallback.
-- The migration record retains an `imported-format-2` previous source.
-  Rollback restores the old root/unit/wants link/binary; commit removes the
-  marker and redundant exchanged root. The old checkout scripts, fixed unit,
-  fixture, and package aliases are retired.
-- The separate live inspector can verify active service/process identity,
-  listeners, and API health when requested; fixture rehearsal is not
-  production deployment evidence.
-
-The implementation caveats are explicit: the current Rust build job runs on
-`ubuntu-latest` rather than a Fedora 44 image, and the workflow sets a fixed
-`SOURCE_DATE_EPOCH` for archive reproducibility. Fedora-host/ABI evidence and
-stronger action pinning remain later release gates.
-
-**Functional Requirements:**
-
-- Publish one immutable `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz`
-  archive for Fedora 44 x86_64 systemd.
-- Treat protected `vX.Y.Z` as release authority and require stable SemVer plus
-  one matching version for `cli`, `api`, `webHost`, and `webAssets`.
-- Validate archive size/SHA-256, commit SHA, profile ABI requirements, exact
-  role-scoped inventory, API/web service contracts, and the `n-1` rollback
-  declaration before extraction.
-- Provide the manager grammar: `fetch`, `install`, `role set`, `start`,
-  `status`, `rollback`, `recover`, and `version`; `activate` and install-time
-  `--api-url` are not part of the contract.
-- Resolve `fetch --latest` once to a stable tag, download only the exact
-  manifest/archive assets, require archive SHA-256 equality, and optionally
-  verify GitHub attestations.
-- Require an explicit role on fresh install; inherit a recorded role on
-  upgrade; permit role changes only through `role set`. Keep web URL setup in
-  the existing client-side server-profile flow.
-- Stage only a pending candidate. `install` and `role set` must not switch the
-  active release, alter active/rollback metadata, install or start units, open
-  listeners, or remove current runtime state.
-- Make `start` the sole activation entrypoint. Advance only the durable state
-  machine `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED →
-PROBING → COMMITTED`, under the deployment lock and with atomic state writes.
-- Require a 20-second startup deadline and a 10-second stability window of 20
-  consecutive 500 ms probes for each selected unit; check process identity,
-  executable, listener, and exact role/version health JSON.
-- Run `dam-hopper-recovery.service` before app units at boot. Automatically
-  restore interrupted transactions and support manual rollback through the same
-  health-gated transaction; fail closed as `RECOVERY_REQUIRED` when unsafe.
-
-**Acceptance Criteria:**
-
-- [x] Rust `ReleaseManifest` types use camelCase names and deny unknown fields.
-- [x] Manifest payloads are bounded at 1 MiB; inventories at 20,000 entries;
-      normalized paths at 255 bytes.
-- [x] Stable tag/version, component equality, Fedora/systemd profile, archive,
-      service, rollback, required-path, role, mode, digest, and file-type rules
-      are validated.
-- [x] `dam-hopper` Clap grammar and EUID matrix are implemented: non-root
-      `fetch`, root mutation commands, and read-only `status`/`version`.
-- [x] Platform checks cover Fedora 44, x86_64, glibc >= 2.43, systemd >= 259,
-      and an active system manager; exact web origins reject unsafe or duplicate
-      values.
-- [x] GitHub acquisition uses bounded HTTPS requests and mandatory archive
-      SHA-256 verification; attestation remains optional.
-- [x] Root staging uses a nonblocking deployment lock, no-follow bundle opens,
-      exact manifest inventory inspection, regular-file/directory extraction, role
-      projection, and fsync-backed pending metadata.
-- [x] `dam-hopper-web` binds independently on the documented web port, serves
-      only GET/HEAD static requests, and exposes reserved health/runtime-config
-      routes with no-store JSON responses.
-- [x] Web-root safety rejects symlink/traversal escapes; immutable hashed
-      assets, root/index documents, and other assets receive distinct cache policy.
-- [x] Phase 05 durable state records generation, active/previous/pending
-      releases, transaction phase, hashes, and latest failure at
-      `/var/lib/dam-hopper-manager/state.json`; active `current` is repairable.
-- [x] State transitions enforce
-      `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING →
-COMMITTED` and classify interrupted work for boot recovery.
-- [x] Candidate health enforces the 20-second startup deadline, 20 consecutive
-      500 ms probes, exact process/listener identity, and API/web role-version JSON.
-- [x] `dam-hopper-recovery.service` is ordered before API/web units and
-      `dam-hopper recover --boot` repairs safe interruptions or blocks unsafe state.
-- [x] Automatic candidate rollback, first-install baseline cleanup, manual
-      previous-release rollback, and verified unreferenced-tree retention are
-      implemented.
-- [x] Frontend runtime-origin validation is bounded, exact-origin based, and
-      fail-closed; managed-profile precedence and token invalidation are covered.
-- [x] API router constructors default to API-only behavior; Docker's combined
-      mode passes an explicit `--web-dir`.
-- [x] Phase 03 focused suites pass: web host 8/8, API health/router 2/2, and
-      runtime-config/profile Vitest 72/72; scoped compile/build checks pass.
-- [x] Focused release suites pass 45/45 tests across seven suites; scoped
-      manager compile/check and review gates pass with no blocking findings.
-- [x] Phase 06 central publisher DAG, exact four-asset gate, deterministic
-      archive, SPDX SBOM, GitHub attestations, and bootstrap staging are delivered;
-      focused publisher contract tests and syntax/alignment checks pass.
-- [x] Phase 07 exact format-2 verifier, sibling same-device staging,
-      `renameat2(RENAME_EXCHANGE)` cutover, rollback restoration, and
-      `imported-format-2` retention are delivered; old checkout runner scripts,
-      fixed unit, fixture, and package aliases are absent.
-
-**Technical Constraints:**
-
-- Keep release constants, version logic, manifest types, inventory validation,
-  CLI, acquisition, archive, layout, lock, staging, durable state, journal,
-  transaction, activation, rollback, recovery, health, and retention in
-  focused `server/src/linux_release/` modules.
-- Keep web-host routing, runtime-config validation, safe-path checks, and cache
-  policy in focused `server/src/web_host/` modules; keep browser bootstrap and
-  managed-profile reconciliation in the frontend API layer.
-- Treat the web root as immutable input: reject symlink roots/paths, bound
-  runtime-config files at 4 KiB, and never derive the API origin from `Host`.
-- Persist state with same-directory temporary writes, file and parent-directory
-  sync, atomic rename/link replacement, and generation validation. Never treat
-  `/opt/dam-hopper/current` as authoritative.
-- Keep activation lock-scoped and phase-valid:
-  `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING →
-COMMITTED`. Health probes must use the 20-second startup deadline and
-  10-second consecutive-probe window.
-- Order the root recovery oneshot before API/web units; recovery must fail
-  closed on corrupt, unowned, hash-mismatched, or unrestorable state.
-- Target prerequisites are the Fedora profile, public GitHub HTTPS access, and
-  systemd; `gh` is optional only for attestation verification.
-- Use canonical UTF-8/LF JSON with deterministic field order and no
-  credentials, mutable URLs, timestamps, `latest` pointers, or machine-local
-  runtime configuration in published assets.
-- Treat Rust validation as authoritative for cross-field rules; keep the
-  publisher JSON Schema structurally equivalent.
-- The API service runs as `root` for this MVP by owner direction; the web
-  service remains separately unprivileged. Record this as a critical accepted
-  risk rather than a least-privilege recommendation.
-
-See [Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md),
-[Linux Release Manifest v1](./linux-release-manifest.md), and [Linux Release
-Manager](./linux-release-manager.md).
-
 ### PR-009: Host Resource Monitoring (Current Delivery)
 
 **Status:** Phase 07 completed on 2026-08-10 with release-owner approval after local packaging, soak, and browser validation. Phase 02 host-resource restoration alerts completed on 2026-08-11: additive thermal/disk current alerts, mixed history, validated compatible push events, and per-target recovery are now delivered. The still-unobserved Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are owner-authorized deferred follow-up work, not passed gates. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.
@@ -505,6 +297,82 @@ evidence.
 - Re-authentication/action lifecycle and privileged helper/IPC/enrollment remain one inactive backlog. They are not dependencies of monitoring Phase 07.
 - Preserve the deferred threat model in [system architecture](./system-architecture.md#deferred-remediation-design-fixed-v1-contract); do not treat it as shipped capability.
 - Before any future privileged implementation: reopen architecture/security review; define kernel/distro/systemd and pidfd policy; approve audit retention and any global cache operation; accept residual enrolled-server compromise risk.
+
+### PR-011: Workflow Tracking Domain & Relational Persistence (Phase 01)
+
+**Status:** Domain and SQLite repository foundation implemented on 2026-09-02.
+The phase is additive and does not yet expose workflow REST or WebSocket
+routes.
+
+**Functional Requirements:**
+
+- Identify a tracked workspace by a caller-resolved canonical config locator
+  that is unique within the persistence database.
+- Persist work items as `Plan`, `Phase`, or `Task` with project and optional
+  worktree scope, ordering, summary, status, and lifecycle timestamps.
+- Record manual work sessions with optional item association and target scope.
+- Correlate sessions with external `terminal` or `agent` resources, including
+  incarnation/run metadata and observed state.
+- Attach durable notes to an item, session, or both; support soft deletion and
+  bounded physical purge.
+- Append activity events with source, scope, optional JSON payload, expiry, and
+  retry-safe event IDs.
+- Build a bounded workspace overview with project summaries, hierarchy nodes,
+  active sessions, recent events, and factual descendant-task progress.
+
+**Plan-first hierarchy:**
+
+- A Plan is a root and cannot have a parent.
+- A Phase must have a Plan parent.
+- A Task may be standalone or child of a Plan or Phase.
+- A Task cannot parent another Task.
+- Creation validates parent workspace/project scope, rejects cycles, and caps
+  depth at three levels.
+
+**Acceptance Criteria:**
+
+- [x] Migration `010_workflow_tracking.sql` adds six workflow tables,
+  relationships, checks, unique constraints, and query indexes without
+  changing existing terminal-session tables.
+- [x] `SessionStore::open()` enables foreign keys and applies migration 010
+  idempotently when the workflow schema is absent; `WorkflowStore` shares its
+  connection and does not open a second database.
+- [x] Domain enums have stable lowercase snake_case storage values and
+  camelCase model serialization; invalid request values are reported through
+  `WorkflowModelError`.
+- [x] Item, session, resource, note, and event mutations are transaction
+  helpers. Optional audit events commit atomically with their domain mutation.
+- [x] Event IDs are idempotent, event history is keyset paginated, notes are
+  soft-deleted before bounded purge, and observation updates do not mutate
+  session lifecycle fields.
+- [x] Overview limits are clamped and expose truncation rather than returning
+  unbounded projects, items, sessions, or event history.
+- [x] `server/src/workflow/tests.rs` covers model transitions, migration data
+  preservation, hierarchy/scope rules, idempotency, overlapping sessions,
+  observation isolation, note retention, overview progress, pagination, and
+  purge.
+
+**Technical Constraints:**
+
+- Reuse the configured `sessions.db` SQLite connection through
+  `Arc<Mutex<Connection>>`; preserve the existing Unix `0o600` permission
+  boundary.
+- Keep enum values constrained in SQL and parsed through domain conversions;
+  do not expose canonical workspace locators in serialized responses.
+- Enforce 200-character titles, 8 KiB note bodies, 200-character external IDs,
+  64-character harness labels, 128-character run IDs, and 4 KiB event
+  payloads before persistence.
+- Use millisecond Unix timestamps and explicit state-transition validation.
+- Keep events as metadata references rather than foreign keys so audit history
+  can outlive item/session cleanup.
+
+**Security and scope boundary:**
+
+The locator is server-only. Workspace-scoped entity reads include a workspace
+filter, while resource-link reads are anchored to their session identity.
+Cross-project parent/item associations are rejected. This phase does not infer
+session completion from external resource observations, does not launch or
+control terminals/agents, and does not add an HTTP authorization surface.
 
 ## Non-Functional Requirements
 
@@ -549,7 +417,8 @@ evidence.
 
 **Context:** Multiple PTY sessions, git operations, filesystem operations run concurrently.
 
-**Decision:** Use Arc<Mutex<T>> for PtySessionManager, FsSubsystem, AgentStoreService.
+**Decision:** Use Arc<Mutex<T>> for PtySessionManager, FsSubsystem,
+AgentStoreService, and WorkflowStore.
 
 **Rationale:** Cheap clones, clear ownership, Mutex never held across `.await`.
 
@@ -574,6 +443,25 @@ evidence.
 **Rationale:** No file duplication, easy to add/remove items, clear visibility of distribution.
 
 **Alternative Rejected:** Copy (duplicates), environment variables (harder to manage).
+
+### Decision: Additive workflow persistence on the session database
+
+**Context:** Workflow continuity needs durable relational records without
+breaking terminal session recovery or creating a second database lifecycle.
+
+**Decision:** Apply migration 010 after the existing migrations and add
+workspace/item/session/resource-link/note/event tables with foreign keys,
+checks, indexes, and bounded repository methods. Share the existing
+`Arc<Mutex<Connection>>` through `WorkflowStore`.
+
+**Rationale:** Existing `SessionStore::open()` owns database permissions,
+foreign-key setup, and migration ordering. Reusing that connection keeps
+startup, backup, and access-control boundaries singular while `CREATE TABLE IF
+NOT EXISTS` preserves existing session data.
+
+**Boundary:** Domain/store code is available for later API and UI phases.
+Migration 010 does not itself add workflow routes, automatic terminal/agent
+attachment, or inferred session completion.
 
 ## Roadmap
 
