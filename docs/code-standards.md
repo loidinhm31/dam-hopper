@@ -7,7 +7,7 @@
 ```
 server/src/
 ├── main.rs           # Bootstrap, router setup
-├── lib.rs            # Crate root
+├── lib.rs            # Crate root and public module exports
 ├── state.rs          # AppState definition
 ├── error.rs          # Top-level AppError
 ├── api/              # HTTP handlers + WebSocket
@@ -24,6 +24,11 @@ server/src/
 │   ├── error.rs
 │   ├── sandbox.rs    # Path validation
 │   └── ops.rs        # Directory/file operations
+├── persistence/      # SQLite session store, worker, restore, migrations
+│   └── migrations/   # Ordered additive SQL migrations
+├── workflow/         # Workflow domain models and relational store
+│   ├── model/        # Enums, value types, validation
+│   └── store/        # Workspace/item/session/note/event repositories
 ├── web/              # Frontend shared logic
 │   └── lib/
 │       ├── file-decoration.ts       # Shared decoration registry + lookup helpers
@@ -32,47 +37,7 @@ server/src/
 ├── pty/              # Terminal sessions
 ├── git/              # Git operations
 ├── agent_store/      # Item distribution
-├── commands/         # Command registry
-├── linux_release/    # Versioned Linux release contract and lifecycle manager
-│   ├── constants.rs       # Profile, service, rollback, and parser limits
-│   ├── version.rs         # Stable SemVer/tag and digest validation
-│   ├── manifest.rs        # Strict Manifest v1 serde types
-│   ├── manifest_validation.rs
-│   ├── inventory.rs       # Roles, modes, sizes, digests
-│   ├── inventory_path.rs
-│   ├── inventory_validation.rs
-│   ├── cli.rs             # Manager grammar
-│   ├── privilege.rs       # EUID policy
-│   ├── platform.rs        # Fedora/arch/glibc/systemd gate
-│   ├── origin.rs           # Exact web-origin validation
-│   ├── host_config.rs      # Role/origin persistence
-│   ├── acquire*.rs         # Bounded GitHub acquisition
-│   ├── attestation.rs
-│   ├── archive*.rs         # Inspection and role extraction
-│   ├── layout.rs           # Canonical filesystem paths
-│   ├── lock.rs             # Nonblocking deployment lock
-│   ├── durable_fs.rs       # Atomic writes, sync, and link replacement
-│   ├── state*.rs           # Authoritative state envelope and records
-│   ├── journal.rs          # Deployment phase graph and recovery class
-│   ├── transaction.rs      # Lock-scoped activation transaction
-│   ├── systemd_backup.rs   # Unit/config rollback backups
-│   ├── process*.rs         # Process, listener, cgroup, and holder evidence
-│   ├── health.rs           # Exact service health and stability probes
-│   ├── activate*.rs        # Preflight and durable cutover
-│   ├── rollback.rs         # Automatic, manual, and migration rollback
-│   ├── recovery.rs         # Boot-time reconciliation
-│   ├── retention.rs        # Verified release garbage collection
-│   ├── stage*.rs           # Transaction and pending handoff
-│   ├── legacy_format2_*.rs # Exact read-only legacy verifier
-│   ├── migration.rs        # Side-root exchange and rollback record
-│   └── error.rs            # Typed bounded diagnostics
-├── web_host/         # Dedicated static web host, runtime origin, and health
-│   ├── mod.rs
-│   ├── router.rs
-│   ├── safe_path.rs
-│   ├── cache_policy.rs
-│   └── runtime_config.rs
-└── ...
+└── commands/         # Command registry
 ```
 
 ### Error Handling Pattern
@@ -93,159 +58,17 @@ pub enum FsError {
 }
 ```
 
-### Linux release publisher, contract, manager, staging, durable activation, and format-2 migration
+Top-level `AppError` wraps module errors:
 
-`server/src/linux_release/` is a deliberately split Rust module. Keep fixed
-profile/service/rollback values and parser limits in `constants.rs`; stable
-SemVer, exact `vX.Y.Z` tags, and lowercase digest checks in `version.rs`; strict
-camelCase `serde` data shapes in `manifest.rs`; and cross-field rules in
-`manifest_validation.rs`. Inventory path normalization and required-asset
-checks belong in `inventory_path.rs` and `inventory_validation.rs`, not in
-archive extraction code.
+```rust
+pub enum AppError {
+    Fs(FsError),
+    Git(GitError),
+    NotFound(String),
+}
+```
 
-`cli.rs` owns only Clap grammar and argument incompatibilities. Keep
-`server/src/bin/dam-hopper.rs` a thin parser/dispatcher: privilege checks and
-host preflight happen before staging, while network, archive, layout, state,
-and lifecycle behavior remains in focused modules. `privilege.rs` must preserve
-the non-root `fetch`, root mutation, and read-only `status`/`version` matrix.
-`install` and `role set` stop at a pending candidate; the unified `start`
-command owns activation and committed-role startup/verification.
-
-`acquire_client.rs` must keep HTTPS, GitHub-related host validation, bounded
-redirects, connect/request deadlines, and response-size limits. `acquire.rs`
-must resolve `--latest` to one stable tag, validate the manifest before
-accepting the archive, and require archive SHA-256 equality. Attestation is an
-optional `gh` subprocess boundary: no shell interpolation, inherited
-credentials, or mutable repository is allowed.
-
-`archive.rs` must enumerate entries and compare the exact normalized set with
-the manifest before extraction. Accept only regular files/directories, reject
-links and special entries, and verify kind, mode, size, and SHA-256. Use
-`archive_extract.rs` to create only selected-role paths inside a new
-transaction directory; never use permissive whole-archive unpacking.
-
-`stage_transaction.rs` acquires `DeploymentLock` before privileged reads,
-reopens bundle inputs without following links, streams the archive into a
-root-private transaction directory, inspects the staged copy, and renames only
-the completed role view. `stage.rs` writes pending state after the rename.
-Pending writes use a same-directory temporary file, write/sync, rename, and
-parent-directory sync. Staging must not switch the active link, start units,
-or remove current runtime state.
-
-The authoritative envelope is
-`/var/lib/dam-hopper-manager/state.json`. Keep generation, active/previous
-release records, pending candidate, transaction phase, hashes, and latest
-failure in `state.rs`/`state_record.rs`; treat `/opt/dam-hopper/current` as a
-repairable convenience pointer. `durable_fs.rs` must preserve the
-temp-file → write/sync → rename → parent-sync sequence for state, config, and
-symlink replacement. `transaction.rs` and `journal.rs` must validate the
-lock-scoped phase graph; do not skip phases or mutate durable state outside the
-transaction boundary.
-Valid forward activation is:
-
-`ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING → COMMITTED`
-
-`activate_preflight.rs` must validate old/candidate manifests, generations,
-role units, ownership, cgroups, listeners, and SQLite holders before quiesce.
-`activate.rs` must stop/disable old selected units, prove them clear, install
-concrete candidate units/configuration, daemon-reload, start the selected
-units, and enter `PROBING`. `health.rs` requires initial readiness within
-20 seconds, then 20 consecutive probes at 500 ms (10 seconds). Every probe
-checks active MainPID, expected executable/UID, exact listener, HTTP success,
-and exact role/version JSON for API `/api/health` and web
-`/__dam-hopper/health`; transient failures reset the stability window and
-identity/listener/contract mismatches fail the transaction.
-
-`dam-hopper-recovery.service` is a root oneshot unit ordered after local
-filesystems and before `dam-hopper-api.service` and
-`dam-hopper-web.service`. `recovery.rs` must classify the persisted phase:
-resume safe `STAGED`/`PENDING`, restore old state for interrupted
-`QUIESCED`/`SWITCHED`/`PROBING`, repair pointers/enablement for `COMMITTED`,
-and stop/block all application units for corrupt or unrecoverable state.
-
-`rollback.rs` must stop the candidate, restore recorded unit/config backups,
-and run the same health gate. First-install failure leaves no active release
-and all application units stopped/disabled. Manual rollback promotes the
-recorded previous release through the same transaction rules; restoration
-failure becomes `RECOVERY_REQUIRED`. `retention.rs` may delete only
-unreferenced trees whose manifest, ownership, and canonical path checks pass.
-
-Manifest structs use camelCase wire names and `deny_unknown_fields`. Validate
-the 1 MiB manifest limit before deserialization, then enforce the 20,000-entry
-inventory limit, 255-byte normalized paths, regular file/directory metadata,
-role projections, required paths, service values, and rollback declaration.
-Use `ReleaseError` variants that identify only contract fields or normalized
-relative paths; never include credentials, headers, or arbitrary file content.
-
-The JSON Schema at `deploy/release/release-manifest.schema.json` covers
-structural constraints. Rust validation remains authoritative for cross-field
-equality and required-path rules. Any schema change requires matching Rust
-types, constants, validation, tests, and [the release-manifest guide](./linux-release-manifest.md).
-
-### Publisher boundary
-
-Keep release assembly in `deploy/release/`: the shell packager accepts only
-explicit binaries/web output and normalizes archive metadata; the Node
-manifest generator hashes final bytes and emits sorted inventory; the asset
-gate rejects missing, extra, empty, or inconsistent public files. The stable
-workflow must preserve the read-only build → attest → environment-approved
-publish order. Never package `.env*`, tokens, runtime TOML, credentials,
-SQLite/DB files, mutable URLs, or CI secrets. Keep bootstrap downloads
-unprivileged and end only at manager `PENDING`; activation belongs to
-`sudo dam-hopper start`.
-
-See [Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)
-for the concrete workflow and artifact contract.
-
-### Legacy format-2 migration and runner retirement (Phase 07)
-
-Keep `legacy_format2_root.rs`, `legacy_format2_manifest.rs`, and
-`legacy_format2_unit.rs` read-only: they verify the canonical root, exact
-marker/bin inventories, modes, four-line marker, nonce/digest matches, fixed
-unit directives, forbidden settings, and the wants-link target. The separate
-`legacy_format2_inspect.rs` live path may add active service/process identity,
-listener, and API-health evidence; static staging must not claim those checks.
-
-`migration.rs` must stage under the sibling
-`/opt/.dam-hopper-migration.<tx_id>` root with mode `0700`, verify the canonical
-and side roots share a device, and use Linux
-`renameat2(RENAME_EXCHANGE)` for the cutover. No copy-based exchange fallback is
-permitted. Persist `MigrationRecord` before exchange; rollback restores the
-legacy root, unit, wants link, and binary, while commit removes only the
-transaction marker and redundant exchanged root after hash verification.
-
-Do not reintroduce checkout-built production/reset scripts, the fixed
-`dam-hopper.service`, the legacy fixture, or `linux:production`/`linux:reset`
-aliases. `imported-format-2` is a rollback source, never a Manifest v1
-publisher input. Keep migration tests fixture-scoped and distinguish them from
-live Fedora deployment evidence.
-
-### Dedicated web host and runtime-origin rules (Phase 03)
-
-Keep `server/src/web_host/` independent from API `AppState`. `mod.rs` owns
-validated root setup and bind configuration; `router.rs` registers reserved
-routes before the static fallback; `safe_path.rs` owns path and SPA checks;
-`cache_policy.rs` owns cache classes; and `runtime_config.rs` owns strict
-runtime/health payload validation. Keep `server/src/bin/dam-hopper-web.rs` a
-thin CLI that supplies root, host, port, and optional runtime-config paths.
-
-- The web host serves only GET and HEAD. A reserved
-  `/__dam-hopper/` request never falls through to user files; static files are
-  streamed with MIME detection and HEAD responses have no body.
-- Reject NUL, backslash, encoded separators/traversal, literal `..`, symlink
-  components, and directories before opening a web path. SPA fallback is only
-  for a safe extensionless path with an HTML-compatible `Accept` header.
-- Keep health/runtime-config responses `no-store`; do not derive API origins
-  from `Host`. Runtime config stays <=4 KiB and uses strict schema, SemVer,
-  UUID v4, and exact HTTP(S)-origin validation.
-- Keep cache policy explicit: no-cache for root/index, immutable one-year
-  caching for Vite content-hashed assets, and bounded public caching for other
-  assets.
-- API router constructors pass no web directory by default. Combined serving
-  is an explicit `--web-dir` mode (used by Docker), not an implicit fallback.
-- Frontend startup fetches the relative runtime-config endpoint before
-  transport creation, preserves an active user profile, and clears a managed
-  profile token when its API URL changes.
+API handlers map to HTTP status via `ApiError::from(AppError)`.
 
 ### Async Patterns
 
@@ -677,6 +500,101 @@ pub fn with_persist(
 - 50 sessions: ~1.2s (acceptable, rarely occurs)
 - With parallel spawning (future): could reduce further
 
+### Workflow domain and relational store (Phase 01)
+
+Workflow code is split by responsibility:
+
+- `server/src/workflow/model/` owns serializable domain structs, snake_case
+  enum conversion, validation constants, and state-transition rules.
+- `server/src/workflow/store/` owns synchronous SQLite repository helpers,
+  grouped by workspace, item, session/resource, note, event, and overview.
+- `server/src/workflow/tests.rs` exercises the model, migration, repository,
+  hierarchy, idempotency, retention, and aggregation contracts.
+
+`SessionStore::open()` is the only database-opening path. It enables foreign
+keys, applies migrations 001–009, then applies migration 010 when
+`workflow_workspaces` is absent. Migration 010 is additive and shares the
+terminal session database; it must not rename, reset, or reinterpret existing
+session tables. `WorkflowStore::new(session_store.connection())` shares the
+same `Arc<Mutex<Connection>>`; it does not open a second workflow database.
+
+**Domain model conventions:**
+
+- `ItemKind` is `Plan | Phase | Task`.
+- `ItemStatus` is `Backlog | Next | InProgress | Blocked | Done | Canceled`.
+- `SessionStatus` is `Running | Ended | Abandoned`.
+- `ResourceLinkType` is `Terminal | Agent`.
+- `ResourceObservedState` is `Attached | Exited | Stale | Detached | Crashed |
+  Unknown`.
+- `WorkflowSource` identifies `Manual | Terminal | Git | Agent | System`.
+- `WorkflowEventType` is a closed set of item, session, resource, note, and
+  workspace activity classifications.
+
+Persist enum values with each type's `as_str()` representation and deserialize
+using case-insensitive `FromStr`; SQL `CHECK` constraints mirror the allowed
+values. Domain structs use `#[serde(rename_all = "camelCase")]` for the client
+contract. `WorkflowWorkspace::locator` is `#[serde(skip_serializing)]` because
+it is a canonical filesystem path, not client data.
+
+**Validation before persistence:**
+
+- Trim and reject empty item titles; cap them at 200 characters.
+- Reject empty note bodies; cap raw body size at 8 KiB.
+- Reject empty external IDs; cap them at 200 characters.
+- Cap agent harness labels at 64 characters and run IDs at 128 characters.
+- Cap event JSON payloads at 4 KiB.
+- Reject session end times earlier than start times.
+- Use explicit item/session transition validators; self-transitions are
+  idempotent, while closed sessions only reopen through a new session record
+  (session transitions do not reopen `Ended`/`Abandoned`).
+
+**Plan-first hierarchy invariant:**
+
+| Child kind | Allowed parent |
+| --- | --- |
+| `Plan` | None (root only) |
+| `Phase` | `Plan` (required) |
+| `Task` | None, `Plan`, or `Phase` |
+
+`Task` cannot parent another task. Item creation reads the parent inside the
+same transaction, checks workspace and project scope, walks ancestors, rejects
+cycles, and enforces `MAX_HIERARCHY_DEPTH = 3`. The self-referencing
+`parent_id` foreign key cascades descendant deletion. The overview builder
+keeps a parentless legacy phase visible as an orphan root rather than
+silently rewriting data.
+
+**Repository transaction pattern:**
+
+```rust
+let mut conn = self.lock()?;
+let tx = conn.transaction()?;
+let result = item::create_item_tx(&tx, item, event)?;
+tx.commit()?;
+Ok(result)
+```
+
+Use a transaction for every mutation that can include an event. The focused
+`*_tx` helper validates inputs, checks same-workspace references, mutates the
+entity, records an optional event on the same transaction, and returns only
+after commit. Any error drops the transaction and rolls back both entity and
+event. Read methods use the locked connection and include workspace scope in
+entity lookups.
+
+| Repository area | Required behavior |
+| --- | --- |
+| Workspace | Get-or-create by unique canonical locator; look up by ID or locator. |
+| Items | Create/update/delete with hierarchy and transition checks; list with project/status filters and bounded limits. |
+| Sessions | Start with optional item, resource link, and event atomically; end/abandon only through validated transitions; overlapping sessions are allowed. |
+| Resources | Upsert by session/type/external ID; observations update link state and suggested end time only, never session status or timestamps; unlink is idempotent. |
+| Notes | Require an item or session target in the same workspace; soft-delete first; list can include deleted rows. |
+| Events | `INSERT OR IGNORE` by event ID for retry idempotency; keyset page by `(recorded_at DESC, id DESC)`; purge expiry in bounded transactions. |
+| Overview | Bound project/item/session counts, include a `truncated` flag, attach non-deleted notes and active sessions, and compute factual task progress. |
+
+`WorkflowStoreError` is the public repository error boundary. Keep SQLite
+errors, model validation errors, not-found errors, duplicate requests, and
+hierarchy violations distinguishable so API adapters can map them without
+matching error strings.
+
 ## TypeScript Frontend (`apps/web`, `apps/native`, `packages/ui`)
 
 ### Profile Management Pattern
@@ -996,16 +914,14 @@ Types: feat, fix, refactor, test, docs, perf, ci, chore.
 
 **Rust:**
 
-- Release binaries:
-  - `server/target/release/dam-hopper` (Linux release manager CLI)
-  - `server/target/release/dam-hopper-server` (Axum + Tokio backend API)
-  - `server/target/release/dam-hopper-web` (Dedicated static web host)
-- Target profile: Fedora 44 GNU glibc (glibc >= 2.43) with vendored C libraries (`openssl`, `libgit2` vendored features); not musl-libc.
+- Release: `server/target/release/dam-hopper-server`
+- Binary includes all dependencies (musl-libc for portability)
 
 **Web:**
 
 - Vite output: `apps/web/dist/`
-- Dedicated release web assets are served by `dam-hopper-web` from an immutable root; API static serving is enabled only with explicit `--web-dir` (the Docker image uses that combined mode).
+- Served by Rust binary via `tower-http::ServeDir`
+
 ## Dependency Policy
 
 **Rust:**
@@ -1050,17 +966,6 @@ Routes registered conditionally at router construction time.
 - [ ] Media ticket issuance requires authentication; actor/session-bound tickets preserve expiry, revocation, revalidation, and no-store responses
 - [ ] Auth cookies remain SameSite=Strict; media cookies remain host-only SameSite=Lax when used, with cleartext interception/modification risk documented
 - [ ] Error messages don't leak paths/credentials
-- [ ] Release manifest input is bounded before parsing; unknown fields, unsafe paths, links/special entries, and disallowed runtime files fail closed
-- [ ] Release inventory carries lowercase digests and role/mode metadata only; manifest diagnostics never echo credentials or arbitrary content
-- [ ] Release acquisition runs as non-root; use HTTPS, bounded redirects/deadlines/response sizes, and mandatory archive SHA-256 checks
-- [ ] Root staging holds `DeploymentLock`, opens bundle files with no-follow semantics, extracts only exact manifest role entries, and writes pending state only after final rename
-- Dedicated web health/runtime-config routes are public but return only bounded
-  version/role/origin metadata with `Cache-Control: no-store`; do not expose
-  tokens or filesystem paths.
-- Web roots and descendants reject symlinks, traversal encodings, special
-  files, and directories where a regular file is required.
-- Runtime-origin bootstrap accepts only the strict HTTP(S) origin contract and
-  fails closed; never infer an API URL from browser `Host`, port, or referrer.
 
 ## Telemetry Privacy and Fault Boundaries
 
@@ -1092,4 +997,4 @@ Routes registered conditionally at router construction time.
 - The iframe bridge is semantic DOM/ARIA metadata only; never transmit HTML, forms, secrets, or page content.
 - Profile, editor, transport-generation, and Encrypt persistence boundaries are metadata-only, profile-scoped, or memory-only as described in source.
 
-See [Native Browser Debug Support](./native-browser-debug-support.md), [Configuration Guide](./configuration-guide.md), [Linux Release Manifest v1](./linux-release-manifest.md), and [Linux Release Manager](./linux-release-manager.md).
+See [Native Browser Debug Support](./native-browser-debug-support.md) and [Configuration Guide](./configuration-guide.md).
