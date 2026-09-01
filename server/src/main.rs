@@ -248,6 +248,10 @@ async fn main() -> anyhow::Result<()> {
         load_or_create_server_setup().expect("Failed to load or create OPAQUE server setup");
 
     // AppState::new() performs production safety validation for no-auth mode
+    let workflow_store = session_store
+        .as_ref()
+        .map(|store| dam_hopper_server::workflow::WorkflowStore::new(store.connection()));
+    // AppState::new() performs production safety validation for no-auth mode
     let state = AppState::new(
         workspace_dir.clone(),
         config,
@@ -264,7 +268,24 @@ async fn main() -> anyhow::Result<()> {
         opaque_server_setup,
         diagnostics,
         telemetry_runtime.clone(),
-    )?;
+    )?.with_workflow_store(workflow_store);
+    if let Some(workflow) = state.workflow.clone() {
+        let startup = workflow.clone();
+        tokio::spawn(async move {
+            if let Err(error) = startup.purge_expired().await {
+                tracing::warn!(error = %error, "Workflow retention purge failed");
+            }
+        });
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(86_400));
+            loop {
+                interval.tick().await;
+                if let Err(error) = workflow.purge_expired().await {
+                    tracing::warn!(error = %error, "Workflow retention purge failed");
+                }
+            }
+        });
+    }
 
     state.pty_manager.set_target_context(PtyTargetContext::new(
         state.fs.clone(),

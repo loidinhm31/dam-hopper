@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-02): 1,475 files, 3,089,883 tokens, and 12,496,681 characters.
+- Repomix snapshot (2026-09-02): 1,490 files, 3,133,993 tokens, and 12,684,994 characters.
 - Repomix security scanning excluded three suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
@@ -76,7 +76,10 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **Configuration Management**: Workspace and global configuration editors
 - **Search**: Command search (BM25 index), file search with fuzzy matching
 
-### Workflow Tracking (`server/src/workflow/`)
+### Workflow Tracking Service and REST API (Phase 02)
+
+The workflow subsystem is a domain-first Rust service over the shared SQLite
+session database:
 
 - `model/enums.rs`: closed domain enums for item kind/status, session status,
   resource type/observation state, provenance, and event classification.
@@ -85,16 +88,35 @@ The snapshot is a compaction aid, not a release artifact; generated
   workspace locators are not serialized.
 - `model/validation.rs`: title/note/resource/payload bounds, item/session
   transitions, timestamps, and Plan-first hierarchy validation.
-- `store/`: scoped SQLite repositories. Mutations use transaction helpers and
-  optional same-transaction events; reads provide bounded filters, keyset
-  history, retention purge, and tree/progress aggregation.
+- `store/`: synchronous scoped SQLite repositories. Mutations use transaction
+  helpers and optional same-transaction events; reads provide bounded filters,
+  keyset history, retention purge, and tree/progress aggregation.
+- `service.rs`: current config/workspace scope, target resolution,
+  `spawn_blocking` store dispatch, and retention orchestration.
+- `api/workflow/`: strict DTOs, mapping/cursor helpers, protected overview,
+  event, item, session/link, note, and purge handlers.
 - `persistence/migrations/010_workflow_tracking.sql`: additive six-table
   schema with foreign-key cascades, checks, uniqueness, and query indexes.
 
-The 14 tests in `server/src/workflow/tests.rs` cover model rules, migration
-preservation of existing session data, hierarchy/scope checks, retry
-idempotency, overlapping sessions, observation isolation, note retention,
-overview progress, event pagination, and bounded purge.
+`AppState.workflow` is an optional `Arc<WorkflowService>` constructed from the
+existing `SessionStore::connection()`. A missing workflow store returns a
+workflow-only `503`; terminal and IDE APIs remain available. Every workflow
+route is protected by the existing auth layer and has a focused 32 KiB body
+limit. Mutations require UUID `requestId`, use `camelCase`, and return
+`{ resource, replayed, eventId }`; PATCH/DELETE item and note/link operations
+also enforce optimistic `updatedAt` concurrency.
+
+The service validates the current configured project and registered worktree
+before writes. Overview is one bounded response (workspace/projects,
+Plan/Phase/Task trees, standalone Tasks, notes, running sessions, factual
+Task progress, recent events, and `truncated`). Event history uses opaque
+keyset cursors. See [Workflow API](./workflow-api.md) for the complete route
+contract and examples.
+
+The 14 domain/store tests in `server/src/workflow/tests.rs` plus the 8 API
+integration tests in `server/tests/workflow_api.rs` cover model rules,
+migration preservation, hierarchy/scope checks, replay/CAS, session lifecycle,
+resource links, notes, pagination, retention, overview, and purge.
 
 ## Architecture Layers
 
@@ -117,6 +139,7 @@ Backend BFF/API (server/)
   └── WebSocket Handler
          ↓
 Service Layer (server/)
+  ├── WorkflowService (scope, target validation, retention)
   ├── PTY Session Manager
   ├── Agent Store Service
   ├── File System Subsystem
@@ -289,26 +312,43 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 - Binary and UTF-8 support
 - Shell lifecycle integration for Bash, Zsh, and Fish with optional exit status
 
-### Workflow Tracking (`server/src/workflow/`)
+### Workflow Tracking Service and REST API (Phase 02)
 
-- `WorkflowStore` shares the session `Arc<Mutex<Connection>>`; it does not
-  create a second database.
-- Model enums persist as lowercase snake_case values and domain structs use
-  camelCase serde fields. The canonical workspace locator is server-only.
-- Item creation enforces Plan-root / Phase-under-Plan / Task-under-Plan-or-Phase
-  (or standalone) with same-workspace/project scope, cycle detection, and a
-  three-level depth cap.
-- Item/session/note/resource mutations can record an event in the same SQLite
-  transaction. Event IDs are retry-idempotent; event history is keyset-paged.
-- Overview aggregation returns bounded project/item/session data, active
-  sessions, non-deleted notes, recent events, and factual task progress.
+- `WorkflowService` (`server/src/workflow/service.rs`) owns the
+  current-profile/workspace boundary and composes `WorkflowStore`,
+  configuration, `WorkspaceTargetResolver`, workspace coordination, and the
+  PTY manager used to validate live terminal links.
+- `service.scope()` copies the current config locator, workspace name, and
+  project paths; `service.workspace()` lazily gets or creates the workflow
+  workspace entity. `resolve_target()` maps a project plus optional
+  `worktreePath` to a server-authorized configured root or registered Git
+  worktree.
+- Synchronous SQLite methods run through `WorkflowService::store_call()` and
+  `tokio::task::spawn_blocking`; configuration/target locks are not held
+  across database work.
+- `server/src/api/workflow/` separates route concerns into strict DTOs,
+  timestamp/target mapping, cursor encoding, overview/events, item mutations,
+  session/link lifecycle, note mutations, and purge. The protected router
+  mounts `/api/workflow/overview`, `/events`, `/items`, `/sessions`, `/notes`,
+  and `/history`.
+- Item PATCH/DELETE and note/link DELETE require the current `updatedAt`;
+  stale writes map to a sanitized `workflow_conflict`. Every domain mutation
+  can append its typed activity event in the same transaction, and retries
+  return `replayed: true`.
+- Resource links are terminal/agent correlations. Terminal links are checked
+  against a live PTY and matching project/worktree; agent links carry bounded
+  harness/run metadata. Store-level observations change only link state and
+  suggested times, never session lifecycle timestamps.
+- Overview reads are bounded to 100 projects, 500 items, and 100 running
+  sessions; event pages default to 50 and cap at 100. The API exposes factual
+  descendant-Task counts without fabricated percentages.
+- `main.rs` runs startup and daily bounded retention purge. Event constructors
+  currently use the 90-day default expiry directly; custom
+  `workflow_event_retention_days` values are not yet wired into constructors.
 
-- Workflow tables share the configured SQLite session database (`sessions.db`
-  by default); migration 010 does not create a second workflow database.
-
-- `persistence/` — SQLite session store, migration runner, restore/worker, and
-  ordered SQL migrations. Migration `010_workflow_tracking.sql` adds workflow
-  tables without changing existing terminal tables.
+Workflow tables share `sessions.db` (migration 010); no second workflow
+database is opened. Domain/store implementation details remain in
+`persistence/`, `workflow/model/`, and `workflow/store/`.
 
 ### Agent Store (`server/src/agent_store/`)
 
@@ -408,44 +448,42 @@ pnpm check        # Build web + native, lint, and run Rust tests
 dam-hopper/
 ├── server/                    # Rust backend
 │   ├── src/
-│   │   ├── main.rs           # CLI entry point, production safety guards
-│   │   ├── state.rs          # AppState definition
+│   │   ├── main.rs            # CLI entry point and startup tasks
+│   │   ├── state.rs           # AppState definition
 │   │   ├── api/
-│   │   │   ├── auth.rs       # Authentication handlers
-│   │   │   ├── ws.rs         # WebSocket transport
-│   │   │   └── mod.rs        # Router configuration
-│   │   ├── pty/              # Terminal management
-│   │   ├── fs/               # File system operations
-│   │   ├── persistence/      # SQLite store, worker, restore, migrations
+│   │   │   ├── workflow/      # Protected workflow REST handlers and DTOs
+│   │   │   ├── auth.rs        # Authentication handlers
+│   │   │   ├── ws.rs          # WebSocket transport
+│   │   │   └── router.rs      # Axum route registration
+│   │   ├── pty/               # Terminal management
+│   │   ├── fs/                # File system operations
+│   │   ├── persistence/       # SQLite store, worker, restore, migrations
 │   │   │   └── migrations/010_workflow_tracking.sql
-│   │   ├── workflow/         # Workflow models and relational store
+│   │   ├── workflow/          # Workflow service, models, relational store
 │   │   │   ├── model/
 │   │   │   ├── store/
+│   │   │   ├── service.rs
 │   │   │   └── tests.rs
-│   │   ├── agent_store/      # Agent store service
-│   │   └── lib.rs            # Library exports
+│   │   ├── agent_store/       # Agent store service
+│   │   └── lib.rs             # Library exports
 │   ├── tests/
-│   │   └── auth_no_auth.rs   # Auth bypass integration tests
-│   └── Cargo.toml            # Dependencies
+│   │   ├── workflow_api.rs    # Workflow REST integration tests
+│   │   └── auth_no_auth.rs    # Auth bypass integration tests
+│   └── Cargo.toml             # Dependencies
 ├── apps/
-│   ├── web/                  # Thin browser Vite host
-│   └── native/               # Tauri v2 host + src-tauri shell
+│   ├── web/                   # Thin browser Vite host
+│   └── native/                # Tauri v2 host + src-tauri shell
 ├── packages/
-│   ├── ui/                   # Shared React UI, hooks, stores, tests, styles
-│   └── shared/               # Shared logger and runtime helpers
+│   ├── ui/                    # Shared React UI, hooks, stores, tests, styles
+│   └── shared/                # Shared logger and runtime helpers
 ├── docs/                      # Documentation
-│   ├── codebase-summary.md   # This file
+│   ├── README.md
+│   ├── workflow-api.md        # Phase 02 workflow REST contract
+│   ├── codebase-summary.md
 │   ├── system-architecture.md
 │   ├── api-reference.md
-│   ├── code-standards.md
-│   └── phase-01-server-auth-bypass/
-│       ├── index.md
-│       └── implementation.md
-├── plans/                     # Feature plans and phases
-│   └── 20260416-multi-server-auth/
-│       ├── phase-01-server-auth-bypass.md
-│       ├── phase-02-multi-server-frontend.md
-│       └── phase-03-auth-integration.md
+│   └── project-overview-pdr.md
+├── plans/                     # Feature plans and reports
 └── CLAUDE.md                  # Development commands
 ```
 
@@ -453,17 +491,19 @@ dam-hopper/
 
 ### Passing Tests
 
-- **Server**: 111 unit tests, 7 integration tests (auth)
+- **Server**: Rust unit/integration coverage is tracked per target; the Phase
+  02 workflow targets passed 14 domain/store tests and 8 REST integration
+  tests.
 - **Web**: Component tests with Vitest, 80% coverage target
-- **Workflow**: 14 source-level tests cover model/transition validation,
-  migration preservation, hierarchy/scope invariants, idempotency, resource
-  observation isolation, note retention, pagination, purge, and overview.
+- **Workflow API**: `server/tests/workflow_api.rs` covers auth, overview,
+  Plan-first hierarchy, replay/CAS, sessions, links, notes, limits, event
+  pagination, and history purge.
 
 ### Known Limitations (Pre-existing)
 
 - 8 platform-specific failures (Windows symlink privileges, path format)
 - Git worktree edge cases
-- Not phase-01-related
+- Not workflow-phase-related
 
 ## Performance Metrics
 
@@ -499,6 +539,7 @@ dam-hopper/
 | -------------------------------------------------------------- | --------------------------------------------- |
 | [system-architecture.md](./system-architecture.md)             | Component interactions, data flow             |
 | [api-reference.md](./api-reference.md)                         | HTTP endpoints, request/response schemas      |
+| [workflow-api.md](./workflow-api.md)                              | Phase 02 workflow service and REST endpoint contract |
 | [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
 | [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
 | [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
@@ -510,10 +551,10 @@ dam-hopper/
 ---
 
 **Last Updated**: September 2, 2026
-**Phase Status**: Phase 01 workflow domain and relational persistence is
-implemented as an additive SQLite foundation; API integration remains a later
-scope. Current support is tracked by feature and platform qualification;
-historical phase labels and evidence remain dated records.
-**Generated by**: Repomix v1.18.0 snapshot (1,475 files / 3,089,883 tokens)
+**Phase Status**: Phase 02 workflow service and protected REST API is complete
+on top of the Phase 01 additive SQLite domain/persistence foundation. Current
+support is tracked by feature and platform qualification; historical phase
+labels and evidence remain dated records.
+**Generated by**: Repomix v1.18.0 snapshot (1,490 files / 3,133,993 tokens)
 plus source-verified maintenance. Three security-flagged files were excluded
 from the compaction output.

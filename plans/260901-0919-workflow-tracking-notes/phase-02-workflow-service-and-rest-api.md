@@ -12,8 +12,12 @@
 - **Date:** 2026-09-01
 - **Description:** Add a protected service/API boundary that validates current workspace, configured projects, registered targets, ownership, payloads, and retention before persistence.
 - **Priority:** P2
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Implementation status:** Complete / DONE (2026-09-02)
+- **Progress:** 100%
+- **Completed:** 2026-09-02
+- **Review status:** Complete / Approved (2026-09-02)
+- **Validation:** Workflow unit tests 14/14 and API integration tests 8/8 passed; full server suite 896/896 executed tests passed (2 ignored). See the [test report](../../reports/tester-260902-0306-workflow-service-rest-api.md) and [review report](../../reports/code-reviewer-260902-0312-phase-02-workflow-service-rest-api.md).
+- **Handoff:** Workflow service and protected Axum REST API endpoints complete; ready for Phase 03.
 
 ## Key Insights
 - All routes under the existing protected Axum router inherit cookie auth/no-auth policy; no route or service is needed.
@@ -78,13 +82,13 @@
 9. Add router integration tests for auth, current-profile/workspace isolation, Plan-only creation, every parent rule, no placeholder children, direct Plan notes/sessions, standalone Tasks, target rejection, null progress/factual counts, manual timestamp round-trip/order, lifecycle conflicts, stale update conflict, replay, manual harness bounds, limits, redaction, pagination, and store-unavailable isolation.
 
 ## Todo List
-- [ ] Manual timestamp and manual harness-link contracts preserve submitted values and current-profile scope.
-- [ ] Plan-only, optional breakdown, direct ownership, standalone Task, and factual-count contracts are complete.
-- [ ] Service validates workspace/project/target ownership.
-- [ ] Protected REST contracts and typed errors complete.
-- [ ] Mutation replay and optimistic concurrency complete.
-- [ ] Retention/purge bounded and non-fatal.
-- [ ] API integration tests cover isolation and redaction.
+- [x] Manual timestamp and manual harness-link contracts preserve submitted values and current-profile scope.
+- [x] Plan-only, optional breakdown, direct ownership, standalone Task, and factual-count contracts are complete.
+- [x] Service validates workspace/project/target ownership.
+- [x] Protected REST contracts and typed errors complete.
+- [x] Mutation replay and optimistic concurrency complete.
+- [x] Retention/purge bounded and non-fatal.
+- [x] API integration tests cover isolation and redaction.
 
 ## Success Criteria
 - Cross-workspace IDs and unregistered targets return non-disclosing 404/target errors and write nothing.
