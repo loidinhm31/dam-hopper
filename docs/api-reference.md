@@ -79,6 +79,26 @@ Clear authentication session.
 
 Response: `{ "ok": true }`
 
+## Workflow Tracking Service and REST API (Phase 02)
+
+Workflow routes are protected by the normal `/api/*` authentication layer and
+share the configured SQLite session database. The route group covers:
+
+- `GET /api/workflow/overview`
+- `GET /api/workflow/events`
+- `POST /api/workflow/items`; `PATCH /api/workflow/items/{id}`; `DELETE /api/workflow/items/{id}`
+- `POST /api/workflow/sessions`
+- `POST /api/workflow/sessions/{id}/end`; `POST /api/workflow/sessions/{id}/abandon`
+- `POST /api/workflow/sessions/{id}/links`; `DELETE /api/workflow/sessions/{id}/links`
+- `POST /api/workflow/notes`; `DELETE /api/workflow/notes/{id}`
+- `DELETE /api/workflow/history`
+
+Requests use strict camelCase DTOs, UUID `requestId` replay keys, and
+RFC3339 timestamps. Item and note/link deletes plus item updates use
+optimistic `updatedAt` CAS. See the dedicated
+[Workflow API reference](./workflow-api.md) for request/response fields,
+keyset cursor behavior, hierarchy rules, retention, and examples.
+
 ## Frontend Diagnostics Snapshot (Phase 01)
 
 Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is written by the browser host before app render and stored in `localStorage` only.

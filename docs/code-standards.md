@@ -500,7 +500,7 @@ pub fn with_persist(
 - 50 sessions: ~1.2s (acceptable, rarely occurs)
 - With parallel spawning (future): could reduce further
 
-### Workflow domain and relational store (Phase 01)
+### Workflow domain, service, and REST API (Phases 01–02)
 
 Workflow code is split by responsibility:
 
@@ -510,6 +510,15 @@ Workflow code is split by responsibility:
   grouped by workspace, item, session/resource, note, event, and overview.
 - `server/src/workflow/tests.rs` exercises the model, migration, repository,
   hierarchy, idempotency, retention, and aggregation contracts.
+- `server/src/workflow/service.rs` is the HTTP/service boundary. It captures
+  current config scope, validates projects and registered worktrees, and
+  dispatches blocking `WorkflowStore` calls through `spawn_blocking`.
+- `server/src/api/workflow/` owns strict camelCase DTOs, timestamp/target
+  mapping, opaque event cursors, and separate overview/events, item,
+  session/link, note, and purge handlers. The router keeps these routes behind
+  the existing auth layer and a focused 32 KiB body limit.
+- `server/tests/workflow_api.rs` is the protected HTTP integration target;
+  keep API contract coverage separate from the domain/store tests.
 
 `SessionStore::open()` is the only database-opening path. It enables foreign
 keys, applies migrations 001–009, then applies migration 010 when
@@ -594,6 +603,12 @@ entity lookups.
 errors, model validation errors, not-found errors, duplicate requests, and
 hierarchy violations distinguishable so API adapters can map them without
 matching error strings.
+The API adapter maps these typed errors to sanitized workflow codes and
+statuses: invalid/domain-limit requests to 400, missing scoped entities to 404,
+CAS/target/transition conflicts to 409, route body-cap failures to 413, and
+unavailable workflow storage to 503. Mutation handlers require UUID
+`requestId`; item and note/link updates require `updatedAt` for optimistic
+concurrency.
 
 ## TypeScript Frontend (`apps/web`, `apps/native`, `packages/ui`)
 

@@ -66,17 +66,15 @@ pub fn start_session_tx(
     event: Option<&WorkflowEvent>,
 ) -> Result<WorkflowSession, WorkflowStoreError> {
     validate_timestamps(session.started_at, session.ended_at)?;
-
     if let Some(item_id) = &session.item_id {
         let item = super::item::get_item_tx(tx, item_id, &session.workspace_id)?
             .ok_or_else(|| WorkflowStoreError::ItemNotFound(item_id.clone()))?;
-        if item.project_name != session.project_name {
+        if item.project_name != session.project_name || item.worktree_path != session.worktree_path {
             return Err(WorkflowStoreError::HierarchyViolation(
-                "Session project does not match target item project".to_string(),
+                "Session target does not match item target".to_string(),
             ));
         }
     }
-
     tx.execute(
         "INSERT INTO workflow_sessions (
             id, workspace_id, project_name, worktree_path, item_id,
@@ -125,15 +123,15 @@ pub fn update_session_status_tx(
 
     let final_ended_at = match (new_status, ended_at) {
         (SessionStatus::Running, _) => None,
-        (SessionStatus::Ended | SessionStatus::Abandoned, Some(e)) => {
+        (SessionStatus::Ended, Some(e)) => {
             validate_timestamps(current.started_at, Some(e))?;
             Some(e)
         }
-        (SessionStatus::Ended | SessionStatus::Abandoned, None) => {
-            current.ended_at.or(Some(updated_at))
-        }
+        (SessionStatus::Ended, None) => current.ended_at,
+        (SessionStatus::Abandoned, supplied) => supplied.or(current.ended_at),
     };
 
+    let updated_at = updated_at.max(current.updated_at.saturating_add(1));
     tx.execute(
         "UPDATE workflow_sessions
          SET status = ?1, ended_at = ?2, updated_at = ?3
