@@ -47,11 +47,13 @@
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
+│     │  └─ WorkflowObservationRecorder → bounded worker     │
+│     │     (`sync_channel(256)`, non-blocking PTY handoff)   │
 │     ├─ TelemetryStore/Worker (opt-in, separate SQLite)     │
 │     ├─ BrowserDebugArtifactManager (ephemeral, TTL/sweep)  │
 │     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
-│     ├─ WorkflowService → WorkflowStore (shared DB)        │
+│     ├─ WorkflowService → WorkflowStore + startup reconcile │
 │     ├─ CommandRegistry (BM25 search)                      │
 │     └─ Broadcast channels (PTY output, git progress)      │
 └─────────────────────────────────────────────────────────────┘
@@ -834,12 +836,14 @@ pub struct PersistedSession {
 - created_at / updated_at in milliseconds (Unix epoch)
 - total_written counter tracks bytes for buffer offset tracking (Phase 02)
 
-### Workflow (Phase 02: service and REST API)
+### Workflow (Phases 01–03: service, REST, and lifecycle correlation)
 
 `server/src/lib.rs` exports the workflow domain. Phase 01 added the relational
-model and repository; Phase 02 adds `WorkflowService` and the protected Axum
-REST boundary. Workflow state remains separate from terminal WebSocket
-messages: all workflow writes use `/api/workflow/*`.
+model and repository; Phase 02 added `WorkflowService` and the protected Axum
+REST boundary; Phase 03 connects authoritative PTY lifecycle observations to
+existing terminal resource links. Workflow state remains separate from
+terminal WebSocket messages: public workflow writes use `/api/workflow/*`,
+while internal observations use a bounded PTY-to-worker channel.
 
 `SessionStore::open()` enables SQLite foreign keys and applies migrations
 001–009 before applying migration 010 when the workflow workspace table is not
@@ -897,9 +901,10 @@ back to domain defaults during reads instead of aborting an overview.
 between handlers and the synchronous store. It holds `WorkflowStore`, the
 configuration handle, `WorkspaceTargetResolver`, the shared workspace guard,
 and `PtySessionManager`. It captures the current config locator/name/projects
-before database work, lazily resolves the workflow workspace, and validates
-project/worktree targets. Omitted `worktreePath` means the configured root;
-explicit paths must be absolute and currently registered by Git.
+before database work, lazily resolves the workflow workspace, validates
+project/worktree targets, and dispatches startup terminal-link reconciliation.
+Omitted `worktreePath` means the configured root; explicit paths must be
+absolute and currently registered by Git.
 
 `WorkflowStore` calls are dispatched through `tokio::task::spawn_blocking`.
 This keeps SQLite mutex/transaction work off the async executor and avoids
@@ -940,9 +945,10 @@ Mutating repository wrappers lock the shared connection, open a transaction,
 run the focused `_tx` helper, append an optional event in that transaction,
 and commit only after validation and entity mutation succeed. Any error rolls
 back both entity and event. Resource links upsert by natural identity;
-observation updates only link health/suggested times and never infer or mutate
-session lifecycle timestamps. Notes soft-delete before physical purge, while
-item deletion cascades descendants.
+observation processing updates only link health, incarnation, last-seen, and
+optional suggested end time. It never infers or mutates manual session
+status/timestamps. Notes soft-delete before physical purge, while item
+deletion cascades descendants.
 
 `WorkflowStoreError` distinguishes SQLite, model-validation, not-found,
 duplicate-request, optimistic-conflict, and hierarchy failures so API adapters
@@ -950,6 +956,57 @@ do not match error strings. Workflow API integration coverage is in
 `server/tests/workflow_api.rs`; domain/store coverage remains in
 `server/src/workflow/tests.rs`. See [Workflow API reference](./workflow-api.md)
 for request/response fields and examples.
+
+**Terminal lifecycle correlation (Phase 03):**
+
+`PtySessionManager` receives a clone-cheap `WorkflowObservationRecorder`.
+Construction defaults to `NoopWorkflowObservationRecorder`; production wiring
+installs `BoundedObservationRecorder` after the shared workflow store exists.
+PTY reader and restart-supervisor paths call only non-blocking `try_send` into a
+`sync_channel(256)`. The dedicated observation worker is the only component
+that opens workflow SQLite transactions. A full queue increments a bounded
+drop counter and logs; worker/storage errors are logged. Neither condition
+blocks PTY input, output, restart, or removal paths.
+
+The closed `WorkflowObservation` payload permits only terminal session ID,
+concrete incarnation, configured project, validated worktree target, server
+observation time, exit code, restart count/delay, and action. It excludes
+command lines, arguments, CWD, environment, prompts, terminal output, and
+arbitrary adapter JSON. Create/final-exit/removal observations preserve ordered
+delivery; restart observations are incarnation-aware and replay-safe.
+
+Terminal link state is distinct from manual workflow-session lifecycle:
+
+| Link state | Transition source |
+| --- | --- |
+| `Attached` | Successful PTY create/restart or live startup reconciliation. |
+| `Stale` | Exit observed with an automatic restart pending. |
+| `Exited` | Final exit observed with code `0`. |
+| `Crashed` | Final exit observed with non-zero or unavailable code. |
+| `Detached` | Explicit PTY removal or active (`attached`/`stale`) link missing or dead during startup reconciliation. |
+
+An incoming observation with an older incarnation is ignored. Equal replay
+observations produce no duplicate event because their deterministic event ID
+already exists; a newer incarnation may update the link. Final exit and
+removal can set `suggested_end_time` for user review but never set
+`workflow_sessions.ended_at`, change `status`, or abandon a manual session.
+This also applies to direct Plan attachments; no Phase or Task is synthesized.
+
+Startup ordering is restore first, reconcile second. After
+`restore_sessions_with_state` returns, `main.rs` gathers the live
+`(sessionId, incarnation)` identities from `PtySessionManager::list()` and
+calls `WorkflowService::reconcile_terminal_links()`. Live links become
+`Attached` with the current incarnation; missing/dead links transition to
+`Detached` only when their persisted state is `Attached` or `Stale`.
+Already-final `Exited`/`Crashed` links remain unchanged. A clean restart with
+identical live identities causes no needless update or duplicate observation
+event.
+
+Agent resources are manual in this MVP. The protected link API accepts a
+bounded `harnessLabel` (64 characters) and `runId` (128 characters), validates
+the session target, and stores no process or prompt data. No automatic
+harness producer, command inspection, lifecycle enum, or generic observation
+endpoint is shipped.
 
 Startup runs workflow retention purge once and then every 24 hours. Purge
 removes expired events and old soft-deleted notes in batches of 500. API event
@@ -1838,7 +1895,7 @@ hash-bound packaged runtime evidence owned by a release engineer. Windows/macOS/
 show the listener works for a second local process before Stop and is unreachable after Stop, scope
 switch, and graceful app exit; missing/manual-pending evidence is not a release pass.
 
-### pty/ (Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅)
+### pty/ (Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅ / Phase 03: Workflow correlation ✅)
 
 Manages portable terminal sessions with automatic restart capabilities and idempotent creation.
 
@@ -1856,6 +1913,10 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
 - `remove()` immediately evicts session + adds to killed set (no restart on user kill)
 - `spawn_cleanup_task()` runs every 30s: prunes expired tombstones AND orphaned killed set entries (prevents unbounded memory growth)
 - Bounded respawn channel (256 slots) prevents DoS
+- A clone-cheap `WorkflowObservationRecorder` receives create, pending-restart,
+  restarted, final-exit, and removal facts through non-blocking `try_send` to
+  the separate workflow observation worker. It carries no command, CWD, env, or
+  output data and never opens SQLite from PTY reader/supervisor paths.
 
 **api/terminal.rs** — terminal creation env resolution:
 
@@ -2906,26 +2967,33 @@ export interface SessionInfo {
 ```
 User launches terminal
   ↓
-terminal:create (with optional worktreePath) → Backend validates target and creates PTY
+terminal:create (optional worktreePath) → backend validates target and creates PTY
   ↓
-Frontend stores the returned SessionInfo (alive=true)
+WorkflowObservation::TerminalCreated (ID, incarnation, target, server time)
+  └→ non-blocking try_send → sync_channel(256) → SQLite worker → link=Attached
   ↓
-TerminalPanel mounts, xterm renders, streams output
+Frontend stores SessionInfo (alive=true); TerminalPanel mounts and streams output
   ↓
 Process exits
+  ├→ terminal:exit (willRestart flag) → TerminalPanel writes exit banner
+  └→ WorkflowObservation::TerminalExitPendingRestart or TerminalFinalExit
+      └→ worker → link=Stale, Exited, or Crashed (manual session unchanged)
   ↓
-terminal:exit (willRestart flag set by backend)
+If willRestart=true, supervisor creates a new incarnation
+  ├→ process:restarted → TerminalPanel writes restart banner
+  └→ WorkflowObservation::TerminalRestarted → worker → link=Attached
   ↓
-TerminalPanel writes exit banner (color based on exit code + willRestart)
-  ↓
-If willRestart=true, waits for restart...
-  ↓
-process:restarted event
-  ↓
-TerminalPanel writes restart banner, UI updates badge
-  ↓
-xterm resumes streaming (same session ID, new PTY)
+xterm resumes streaming under the same public session ID
 ```
+
+On server restart, `restore_sessions_with_state` runs before workflow
+reconciliation. `main.rs` collects live `(sessionId, incarnation)` identities
+from `PtySessionManager::list()` and calls
+`WorkflowService::reconcile_terminal_links()`. Live links return to
+`Attached`; active links missing from the restored set become `Detached`, while
+already-final `Exited`/`Crashed` links remain unchanged. This path updates only
+link observation fields and leaves manual workflow-session status and
+timestamps unchanged.
 
 **FileTree.tsx (react-arborist)**
 

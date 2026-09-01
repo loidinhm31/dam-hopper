@@ -392,3 +392,95 @@ pub fn list_active_sessions(
     }
     Ok(sessions)
 }
+
+pub fn get_session_by_id_tx(
+    tx: &Transaction<'_>,
+    id: &str,
+) -> Result<Option<WorkflowSession>, WorkflowStoreError> {
+    let mut stmt = tx.prepare(
+        "SELECT id, workspace_id, project_name, worktree_path, item_id,
+                status, started_at, ended_at, source, created_at, updated_at
+         FROM workflow_sessions
+         WHERE id = ?1",
+    )?;
+
+    let session = stmt.query_row(params![id], row_to_session).optional()?;
+    Ok(session)
+}
+
+pub fn get_session_by_id(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<WorkflowSession>, WorkflowStoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, workspace_id, project_name, worktree_path, item_id,
+                status, started_at, ended_at, source, created_at, updated_at
+         FROM workflow_sessions
+         WHERE id = ?1",
+    )?;
+
+    let session = stmt.query_row(params![id], row_to_session).optional()?;
+    Ok(session)
+}
+
+pub fn find_links_by_external_id_tx(
+    tx: &Transaction<'_>,
+    resource_type: ResourceLinkType,
+    external_id: &str,
+) -> Result<Vec<WorkflowResourceLink>, WorkflowStoreError> {
+    let mut stmt = tx.prepare(
+        "SELECT id, session_id, resource_type, external_id, incarnation,
+                harness_label, run_id, observed_state, suggested_end_time,
+                first_seen_at, last_seen_at, link_source, created_at, updated_at
+         FROM workflow_resource_links
+         WHERE resource_type = ?1 AND external_id = ?2",
+    )?;
+
+    let rows = stmt.query_map(params![resource_type.as_str(), external_id], row_to_link)?;
+    let mut links = Vec::new();
+    for row in rows {
+        links.push(row?);
+    }
+    Ok(links)
+}
+
+pub fn find_links_by_external_id(
+    conn: &Connection,
+    resource_type: ResourceLinkType,
+    external_id: &str,
+) -> Result<Vec<WorkflowResourceLink>, WorkflowStoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, resource_type, external_id, incarnation,
+                harness_label, run_id, observed_state, suggested_end_time,
+                first_seen_at, last_seen_at, link_source, created_at, updated_at
+         FROM workflow_resource_links
+         WHERE resource_type = ?1 AND external_id = ?2",
+    )?;
+
+    let rows = stmt.query_map(params![resource_type.as_str(), external_id], row_to_link)?;
+    let mut links = Vec::new();
+    for row in rows {
+        links.push(row?);
+    }
+    Ok(links)
+}
+
+pub fn list_all_links_by_type(
+    conn: &Connection,
+    resource_type: ResourceLinkType,
+) -> Result<Vec<WorkflowResourceLink>, WorkflowStoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, resource_type, external_id, incarnation,
+                harness_label, run_id, observed_state, suggested_end_time,
+                first_seen_at, last_seen_at, link_source, created_at, updated_at
+         FROM workflow_resource_links
+         WHERE resource_type = ?1",
+    )?;
+
+    let rows = stmt.query_map(params![resource_type.as_str()], row_to_link)?;
+    let mut links = Vec::new();
+    for row in rows {
+        links.push(row?);
+    }
+    Ok(links)
+}

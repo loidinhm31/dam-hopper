@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -264,7 +265,12 @@ async fn main() -> anyhow::Result<()> {
         opaque_server_setup,
         diagnostics,
         telemetry_runtime.clone(),
-    )?.with_workflow_store(workflow_store);
+    )?.with_workflow_store(workflow_store.clone());
+    if let Some(workflow_store_for_obs) = workflow_store.clone() {
+        let (recorder, _dropped, _worker_handle) =
+            dam_hopper_server::workflow::observation::start_observation_worker(workflow_store_for_obs);
+        state.pty_manager.set_workflow_recorder(Arc::new(recorder));
+    }
     if let Some(workflow) = state.workflow.clone() {
         let startup = workflow.clone();
         tokio::spawn(async move {
@@ -306,6 +312,16 @@ async fn main() -> anyhow::Result<()> {
                     .await;
                 if seeded > 0 {
                     tracing::info!(seeded, "Seeded persisted port candidates");
+                }
+                if let Some(workflow) = &state.workflow {
+                    match workflow.reconcile_terminal_links(live_sessions.clone()).await {
+                        Ok((attached, detached)) => {
+                            tracing::info!(attached, detached, "Reconciled workflow terminal links");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to reconcile workflow terminal links");
+                        }
+                    }
                 }
             }
             Err(e) => {

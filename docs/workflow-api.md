@@ -1,9 +1,11 @@
 # Workflow Service and REST API
 
-Phase 02 is complete (2026-09-02). This document describes the protected
+Phase 03 is complete (2026-09-02). This document describes the protected
 workflow service boundary and the `/api/workflow/*` REST contract. The API is
 server-side workflow tracking; it does not start terminals, run agents, or
-infer session completion from a resource observation.
+infer manual-session completion from a resource observation. Terminal lifecycle
+observations are produced internally by the PTY manager; there is no generic
+observation-ingestion route.
 
 ## Scope and authorization
 
@@ -14,8 +16,9 @@ configured bearer/cookie transport); an unauthenticated request receives
 local development deployment.
 
 The workflow route group has a `32 KiB` request-body limit. JSON request and
-response fields use `camelCase`; request DTOs reject unknown fields. Resource,
-item, session, note, and event IDs supplied by clients are UUID strings.
+response fields use `camelCase`; request DTOs reject unknown fields. Request
+IDs and workflow entity IDs are UUID strings; external resource IDs are
+non-empty bounded strings.
 Timestamps are RFC3339 values with an explicit timezone, serialized with
 millisecond precision (for example, `2026-09-02T10:00:00.000Z`).
 
@@ -48,6 +51,10 @@ flowchart LR
     Service --> Blocking["spawn_blocking store_call"]
     Blocking --> Store["WorkflowStore"]
     Store --> DB[("sessions.db / SQLite")]
+    PTY["PtySessionManager"] --> Observe["Bounded workflow recorder\nsync_channel(256)"]
+    Observe --> Store
+    Restore["restore_sessions_with_state"] --> Reconcile["Startup terminal-link reconciliation"]
+    Reconcile --> Store
     Main["Startup + daily task"] --> Purge["Bounded retention purge"]
     Purge --> Service
 ```
@@ -67,6 +74,24 @@ workflow requests return `503 workflow_store_unavailable`, while terminal,
 filesystem, and other IDE APIs remain available. Startup runs a purge once,
 then repeats it every 24 hours; each purge works in batches of 500 and yields
 between batches.
+
+Phase 03 also installs a clone-cheap `WorkflowObservationRecorder` on the PTY
+manager. Production uses a non-blocking `try_send` into a bounded
+`sync_channel(256)`; a worker thread is the only observation consumer that
+opens workflow SQLite transactions. Queue-full and storage failures are
+counted/logged without blocking PTY input, output, or restart handling. The
+closed observation payload contains only terminal ID, incarnation, configured
+project, validated worktree target, server time, exit/restart metadata, and
+allowlisted lifecycle action; it never contains command text, CWD, environment,
+or terminal output.
+
+After `restore_sessions_with_state` finishes, startup collects the restored
+live `(sessionId, incarnation)` set and reconciles persisted terminal links.
+Live identities become attached. Missing/dead identities are detached only
+when their persisted link is still `attached` or `stale`; already-final
+`exited`/`crashed` links remain terminal outcomes. Reconciliation changes only
+link state and observation timestamps, never manual session status or
+`startedAt`/`endedAt`.
 
 The additive migration `010_workflow_tracking.sql` creates the six workflow
 tables in the existing `sessions.db`. Repository mutations lock the shared
@@ -357,9 +382,26 @@ Links one external resource to a session. The natural identity is
 at 200 characters. Terminal links may include an `incarnation`, but cannot
 include `harnessLabel` or `runId`; the referenced PTY must currently exist and
 match the session project/worktree. Agent links cannot include `incarnation`
-and may include a harness label (64-character cap) and run ID (128-character
-cap). New links start with `observedState: attached` and record
+and may include a manually supplied harness label (64-character cap) and run
+ID (128-character cap). Phase 03 ships no automatic harness producer or
+command inspection. New links start with `observedState: attached` and record
 `resource_linked`.
+
+Terminal link state is observation-driven:
+
+| `observedState` | Meaning |
+| --- | --- |
+| `attached` | PTY creation, successful restart, or startup reconciliation found the incarnation live. |
+| `stale` | The incarnation exited while an automatic restart is pending. |
+| `exited` | Final exit was observed with exit code `0`. |
+| `crashed` | Final exit was observed with a non-zero or unavailable exit code. |
+| `detached` | The PTY was explicitly removed or missing after startup restore. |
+| `unknown` | Reserved model value; not emitted by the Phase 03 terminal recorder. |
+
+Incarnations are ordered per public terminal ID. An older observation cannot
+overwrite a newer link incarnation; equal replay observations are suppressed
+by deterministic event IDs. Final exit/removal may set `suggestedEndTime`, but
+observation processing never changes manual session status or timestamps.
 
 The response `LinkDto` includes `id`, `sessionId`, `resourceType`,
 `externalId`, optional `incarnation`, `harnessLabel`, `runId`,
@@ -381,10 +423,11 @@ Request:
 
 The path identifies the session; `resourceType` and `externalId` identify the
 link. `updatedAt` is the link CAS value. A successful unlink records
-`resource_unlinked` and returns a link tombstone. Phase 02 has no public
-resource-observation ingestion route; observation updates remain a repository
-capability for later lifecycle integration and cannot change session status or
-manual timestamps.
+`resource_unlinked` and returns a link tombstone. Phase 03 observation
+ingestion remains an internal PTY-to-worker boundary, not a public route; it
+updates only resource-link health and optional suggested times. Explicit
+`/end` and `/abandon` requests remain the sole manual session lifecycle
+transitions.
 
 ## Notes
 
@@ -452,41 +495,52 @@ sessions, and non-deleted notes are never age-deleted.
 
 ## Validation and implementation evidence
 
-The Phase 02 integration target is `server/tests/workflow_api.rs`. Its eight
-cases cover auth enforcement, empty and nested overview responses, Plan-first
-hierarchy, replay and item CAS, session lifecycle, resource links, note CAS,
-invalid transitions, limits, unknown projects, keyset pagination, and history
-purge. The domain/store tests remain in `server/src/workflow/tests.rs`.
+The Phase 03 workflow target is `server/src/workflow/observation_tests.rs`,
+which covers lifecycle mapping, incarnation ordering, duplicate suppression,
+startup reconciliation, bounded queue overflow, direct Plan sessions, manual
+harness links, manual timestamp preservation, and a real PTY-manager flow.
+The Phase 02 API integration target remains `server/tests/workflow_api.rs`;
+its eight cases cover the protected REST contract. The dated Phase 03 review
+reports 28 workflow tests and 907 full-server tests passing with no critical
+issues. See the [Phase 03 code review](../plans/reports/code-reviewer-260902-0420-phase-03-terminal-lifecycle-correlation.md).
 
-Primary Phase 02 backend files:
+Primary Phase 03 backend files:
 
-- `server/src/workflow/service.rs` — current-workspace scope, target resolution,
-  blocking store calls, and retention orchestration.
-- `server/src/api/workflow/mod.rs` — overview/events handlers and module wiring.
-- `server/src/api/workflow/dto.rs` — strict request and response DTOs.
-- `server/src/api/workflow/cursor.rs` — opaque event cursor encoding/decoding.
-- `server/src/api/workflow/mapping.rs` — timestamp, target, and model mapping.
-- `server/src/api/workflow/item.rs` — item create/patch/delete handlers.
-- `server/src/api/workflow/session.rs` — session lifecycle and link handlers.
-- `server/src/api/workflow/note.rs` — note create/soft-delete handlers.
-- `server/src/api/workflow/purge.rs` — explicit history purge handler.
-- `server/tests/workflow_api.rs` — protected HTTP integration coverage.
+- `server/src/workflow/observation.rs` — closed terminal observation payloads,
+  non-blocking bounded recorder/worker, and transactional link updates.
+- `server/src/workflow/reconcile.rs` — post-restore live/missing terminal
+  reconciliation.
+- `server/src/workflow/service.rs` — async reconciliation dispatch and target
+  scope.
+- `server/src/pty/manager.rs` — incarnation-aware create/exit/restart/remove
+  observation emission.
+- `server/src/api/workflow/session.rs` — target-validated terminal links and
+  bounded manual agent harness links.
+- `server/src/workflow/observation_tests.rs` — Phase 03 behavioral coverage.
 
-Supporting wiring is in `server/src/api/router.rs`, `server/src/state.rs`,
-`server/src/main.rs`, `server/src/api/error.rs`, `server/src/error.rs`, and
-`server/src/config/schema.rs`.
+Phase 01–02 domain, store, and API files remain listed in the earlier
+workflow documentation and continue to own the public REST contract.
 
 ## Boundaries and follow-up
 
-Phase 02 intentionally keeps workflow writes out of the terminal WebSocket.
-It does not expose the registry locator, raw commands, CWD, environment,
-terminal output, or arbitrary adapter payloads. It also does not yet connect
-PTY exit/restart facts or agent observations to automatic workflow updates;
-those are planned integration work for later phases.
+Workflow writes remain separate from terminal WebSocket messages. Phase 03
+connects authoritative PTY lifecycle facts to existing terminal resource links
+without exposing a generic observation endpoint. Persisted observation data is
+strictly allowlisted: terminal ID, incarnation, project/validated worktree
+target, server time, exit code, restart count/delay, and action. Command lines,
+arguments, CWD, environment, prompts, output, and arbitrary adapter payloads
+are excluded from the workflow database and API.
 
-See [System Architecture](./system-architecture.md#workflow-phase-02-service-and-rest-api),
-[Codebase Summary](./codebase-summary.md#workflow-tracking-service-and-rest-api-phase-02),
-and [Project Overview & PDR](./project-overview-pdr.md#pr-012-workflow-service-and-rest-api-phase-02)
+Manual sessions are immutable from observation and reconciliation paths:
+`status`, `startedAt`, and `endedAt` change only through the explicit manual
+session endpoints. A terminal final exit, crash, or removal may provide a
+`suggestedEndTime` for user review, but never fabricates `endedAt` or abandons
+the session. Agent metadata is also manual in this MVP; future harness
+producers require a separate security and contract review.
+
+See [System Architecture](./system-architecture.md#workflow-phases-01-03-service-rest-and-lifecycle-correlation),
+[Codebase Summary](./codebase-summary.md#workflow-tracking-service-and-rest-api-phases-01-03),
+and [Project Overview & PDR](./project-overview-pdr.md#pr-013-terminal-lifecycle-correlation-and-agent-adapter)
 for the design and requirement records.
 
 ### Known implementation note

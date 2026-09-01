@@ -31,6 +31,26 @@
 - Added API integration coverage in `server/tests/workflow_api.rs` for auth,
   hierarchy, overview, replay/CAS, sessions, links, notes, pagination, limits,
   invalid transitions, and purge. [See workflow API reference](./workflow-api.md).
+- **Phase 03: Terminal lifecycle correlation and agent adapter.** Added the
+  closed `WorkflowObservation` contract and clone-cheap PTY recorder. A bounded
+  `sync_channel(256)` worker keeps workflow SQLite off PTY input/output/restart
+  hot paths; queue-full and storage failures are counted/logged without
+  blocking terminal operation.
+- Lifecycle payloads are strictly allowlisted (terminal ID, incarnation,
+  configured project, validated worktree target, server time, exit/restart
+  metadata, and action). Command lines, arguments, CWD, environment, prompts,
+  output, and arbitrary adapter payloads are excluded.
+- Terminal links transition through `attached`, `stale`, `exited`, `crashed`,
+  and `detached` with incarnation ordering and deterministic replay
+  suppression. Final exit/removal may suggest an end time but never changes
+  manual session status or `startedAt`/`endedAt`.
+- Startup restores PTYs before reconciling persisted terminal links against
+  live `(sessionId, incarnation)` identities. Agent links remain bounded manual
+  `harnessLabel`/`runId` metadata; no automatic harness producer or generic
+  observation endpoint was added. Direct Plan sessions do not synthesize
+  Phase/Task children.
+- Phase 03 review reports 28 workflow tests and 907 full-server tests passing;
+  review approved 9.8/10. [Code review](../plans/reports/code-reviewer-260902-0420-phase-03-terminal-lifecycle-correlation.md).
 
 
 # 2026-08-31

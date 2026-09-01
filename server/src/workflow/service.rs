@@ -126,4 +126,16 @@ impl WorkflowService {
         }
         Ok((e_total, n_total))
     }
+
+    /// Reconcile persisted terminal links against live PTY sessions after startup restore.
+    pub async fn reconcile_terminal_links(
+        &self,
+        live_terminals: Vec<(String, u64)>,
+    ) -> Result<(usize, usize), WorkflowError> {
+        let now = crate::api::workflow::mapping::now_ms();
+        self.store_call(move |s| {
+            crate::workflow::reconcile::reconcile_startup_terminal_links(&s, &live_terminals, now)
+        })
+        .await
+    }
 }

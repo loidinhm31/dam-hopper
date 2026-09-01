@@ -20,7 +20,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Reference Documentation
 
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
-- **[Workflow API](./workflow-api.md)** — Phase 02 workflow service, REST endpoints, CAS/replay, and retention
+- **[Workflow API](./workflow-api.md)** — Phase 03 workflow REST, lifecycle correlation, CAS/replay, and retention
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
@@ -100,18 +100,30 @@ exists before linking it from a new document.
 - Health checks for broken symlinks
 - See: [System Architecture](./system-architecture.md#module-breakdown)
 
-**Workflow Tracking Service and REST API (Phase 02)** — Protected REST
-boundary over the Phase 01 SQLite workflow domain.
+**Workflow Tracking Service and REST API (Phase 03)** — Protected REST
+boundary over the Phase 01–02 SQLite workflow domain and Phase 03's
+server-internal terminal lifecycle observer.
 
 - Overview: bounded workspace/project summaries, Plan/Phase/Task trees,
   running sessions, notes, factual Task progress, and recent events
 - Mutations: item CRUD with Plan-first validation, CAS, and request replay;
-  manual session lifecycle; terminal/agent links; note CAS and soft deletion
+  manual session lifecycle; target-validated terminal/agent links; note CAS
+  and soft deletion
+- Lifecycle: bounded `sync_channel(256)` observation worker maps
+  incarnation-ordered terminal facts to `attached`, `stale`, `exited`,
+  `crashed`, and `detached` link states
+- Privacy/authority: no command line, arguments, CWD, env, prompt, output, or
+  arbitrary adapter payload; observations never change manual session status
+  or `startedAt`/`endedAt`
+- Agent adapter: bounded manual `harnessLabel`/`runId` only; no automatic
+  harness producer or generic observation endpoint
+- Startup: restore PTYs first, then reconcile links against live identities;
+  direct Plan sessions need no synthetic Phase/Task children
 - History: opaque keyset event pagination and explicit/bounded retention purge
-- See [Workflow API](./workflow-api.md), [System Architecture](./system-architecture.md#workflow-phase-02-service-and-rest-api),
-  [Project Overview & PDR](./project-overview-pdr.md#pr-012-workflow-service-and-rest-api-phase-02),
-  and [Codebase Summary](./codebase-summary.md#workflow-tracking-service-and-rest-api-phase-02).
-- See [Code Standards](./code-standards.md#workflow-domain-service-and-rest-api-phases-01-02) for implementation conventions.
+- See [Workflow API](./workflow-api.md), [System Architecture](./system-architecture.md#workflow-phases-01-03-service-rest-and-lifecycle-correlation),
+  [Project Overview & PDR](./project-overview-pdr.md#pr-013-terminal-lifecycle-correlation-and-agent-adapter),
+  and [Codebase Summary](./codebase-summary.md#workflow-tracking-service-rest-api-and-lifecycle-correlation-phases-01-03).
+- See [Code Standards](./code-standards.md#workflow-domain-service-rest-api-and-lifecycle-correlation-phases-01-03) for implementation conventions.
 
 
 ## Common Tasks
@@ -134,16 +146,35 @@ See token at `~/.config/dam-hopper/server-token`.
 
 ### Debug Session Lifecycle
 
-Terminal lifecycle follows six main states:
+The terminal UI lifecycle follows process states:
 
-- **alive** — Process running (🟢 green dot)
-- **restarting** — Exited, will restart after backoff (🟡 yellow dot)
-- **crashed** — Exited non-zero, no restart (🔴 red dot)
-- **exited** — Exited zero, no restart (⚪ gray dot)
+- **alive** — Process running (green dot)
+- **restarting** — Exited, will restart after backoff (yellow dot)
+- **crashed** — Exited non-zero, no restart (red dot)
+- **exited** — Exited zero, no restart (gray dot)
 
-See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle) for detailed flow.
+Workflow resource links expose a separate observed state machine:
+`attached → stale` while restart is pending, then `attached` for a new
+incarnation or `exited`/`crashed` after final exit; explicit removal and
+missing startup identities detach links that were still `attached` or `stale`.
+See [Workflow API](./workflow-api.md#resource-links).
+
+See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle) for the UI flow.
 
 ## Recent Changes
+
+**Phase 03 Terminal Lifecycle Correlation and Agent Adapter (Complete ✓ 2026-09-02):**
+
+- ✓ Added the closed terminal-only `WorkflowObservation` contract and
+  clone-cheap PTY recorder with bounded `sync_channel(256)` worker
+- ✓ Kept workflow SQLite off PTY input/output/restart hot paths; full queues and
+  storage failures degrade observations without blocking terminal operation
+- ✓ Added incarnation ordering and deterministic replay suppression for
+  `attached`, `stale`, `exited`, `crashed`, and `detached` link states
+- ✓ Preserved manual session status and timestamps; final exit/removal only
+  suggest an end time
+- ✓ Added post-restore link reconciliation, manual bounded harness/run links,
+  direct Plan-session support, and lifecycle/fault-isolation tests
 
 **Phase 02 Workflow Service and REST API (Complete ✓ 2026-09-02):**
 
@@ -247,6 +278,7 @@ Rust Server (Axum)
     ├─ AppState (config, PTY manager, FS subsystem, auth)
     ├─ Router (routes REST/WebSocket)
     ├─ Services (WorkflowService, PtySessionManager, FsSubsystem, AgentStoreService)
+    ├─ Workflow observer (non-blocking `sync_channel(256)` → SQLite worker)
     └─ Persistence (SessionStore + WorkflowStore over SQLite)
 ```
 
@@ -257,6 +289,9 @@ Key patterns:
 - Feature gating at route registration time
 - Workflow mutations use SQLite transactions; optional audit events commit with
   their entity mutation.
+- PTY observations use bounded `try_send`; observer/storage failures never block
+  terminal I/O or restart handling.
+- Workflow observations exclude command, CWD, env, prompt, and output data.
 - Error types per module (thiserror)
 
 See [System Architecture](./system-architecture.md) for detailed breakdown.
@@ -266,7 +301,7 @@ See [System Architecture](./system-architecture.md) for detailed breakdown.
 server/
 ├── src/
 │   ├── persistence/              # SQLite session store and migrations
-│   └── workflow/                 # Workflow domain models and store
+│   └── workflow/                 # Domain, REST, observation, reconciliation
 apps/
 ├── web/                          # Thin Vite browser host
 packages/
@@ -276,7 +311,7 @@ docs/
 ├── project-overview-pdr.md       # Product requirements & roadmap
 ├── system-architecture.md        # Module breakdown & data flow
 ├── api-reference.md              # REST/WebSocket endpoints
-├── workflow-api.md              # Phase 02 workflow REST contract
+├── workflow-api.md               # Phase 03 workflow REST/lifecycle contract
 ├── configuration-guide.md        # dam-hopper.toml & setup
 ├── code-standards.md             # Patterns, testing, security
 ├── codebase-summary.md           # Quick module reference
