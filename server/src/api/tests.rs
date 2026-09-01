@@ -4399,6 +4399,98 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
 }
 
 #[tokio::test]
+async fn git_worktree_remove_dirty_worktree_requires_force() {
+    let project = tempfile::tempdir().unwrap();
+    init_git_repo(project.path());
+    git(&["branch", "dirty-feat"], project.path());
+    let worktree_path = project.path().join("dirty-worktree");
+    let state = make_state_with_project(&project);
+
+    let add_resp = post_json(
+        state.clone(),
+        "/api/git/test-project/worktrees",
+        serde_json::json!({
+            "branch": "dirty-feat",
+            "path": "dirty-worktree",
+        }),
+    )
+    .await;
+    assert_eq!(add_resp.status(), StatusCode::OK);
+
+    // Create an untracked file to make the worktree dirty
+    std::fs::write(worktree_path.join("untracked.txt"), "hello").unwrap();
+
+    // Removing without force should return 409 Conflict with WORKTREE_DIRTY
+    let resp = delete_json(
+        state.clone(),
+        "/api/git/test-project/worktrees",
+        serde_json::json!({ "path": worktree_path }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "WORKTREE_DIRTY");
+    assert!(worktree_path.exists());
+
+    // Removing with force: true should succeed
+    let resp = delete_json(
+        state.clone(),
+        "/api/git/test-project/worktrees",
+        serde_json::json!({ "path": worktree_path, "force": true }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(!worktree_path.exists());
+}
+
+#[tokio::test]
+async fn git_worktree_remove_prunable_worktree_cleans_up_metadata() {
+    let project = tempfile::tempdir().unwrap();
+    init_git_repo(project.path());
+    git(&["branch", "stale-feat"], project.path());
+    let worktree_path = project.path().join("stale-worktree");
+    let state = make_state_with_project(&project);
+
+    let add_resp = post_json(
+        state.clone(),
+        "/api/git/test-project/worktrees",
+        serde_json::json!({
+            "branch": "stale-feat",
+            "path": "stale-worktree",
+        }),
+    )
+    .await;
+    assert_eq!(add_resp.status(), StatusCode::OK);
+
+    // Simulate external deletion of directory
+    std::fs::remove_dir_all(&worktree_path).unwrap();
+    assert!(!worktree_path.exists());
+
+    // DELETE /api/git/:project/worktrees on prunable worktree should clean up metadata and return 200 OK
+    let resp = delete_json(
+        state.clone(),
+        "/api/git/test-project/worktrees",
+        serde_json::json!({ "path": worktree_path }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Verify it is no longer returned in worktrees list
+    let list_resp = get(state, "/api/git/test-project/worktrees").await;
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let list_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let worktrees = list_json.as_array().unwrap();
+    assert_eq!(worktrees.len(), 1);
+    assert!(worktrees[0]["isMain"].as_bool().unwrap());
+}
+
+#[tokio::test]
 async fn terminal_create_and_rename_round_trips_custom_name() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
