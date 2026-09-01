@@ -312,6 +312,10 @@ pub async fn link(
         return Err(err(WorkflowError::Conflict));
     }
 
+    let mut resolved_incarnation = req.incarnation;
+    let mut observed_state = ResourceObservedState::Attached;
+    let mut suggested_end_time = None;
+
     if req.resource_type == ResourceLinkType::Terminal {
         let pty_sessions = service.pty_manager.list();
         let pty_match = pty_sessions.into_iter().find(|p| {
@@ -325,6 +329,11 @@ pub async fn link(
                 {
                     return Err(err(WorkflowError::TargetUnavailable));
                 }
+                resolved_incarnation = resolved_incarnation.or(Some(p.incarnation));
+                if !p.alive {
+                    observed_state = ResourceObservedState::Exited;
+                    suggested_end_time = Some(now);
+                }
             }
             None => {
                 return Err(err(WorkflowError::TargetUnavailable));
@@ -337,11 +346,11 @@ pub async fn link(
         session_id: session_id.clone(),
         resource_type: req.resource_type,
         external_id: req.external_id,
-        incarnation: req.incarnation,
+        incarnation: resolved_incarnation,
         harness_label: req.harness_label,
         run_id: req.run_id,
-        observed_state: ResourceObservedState::Attached,
-        suggested_end_time: None,
+        observed_state,
+        suggested_end_time,
         first_seen_at: now,
         last_seen_at: now,
         link_source: WorkflowSource::Manual,

@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-02): 1,490 files, 3,133,993 tokens, and 12,684,994 characters.
+- Repomix snapshot (2026-09-02): 1,494 files, 3,145,324 tokens, and 12,734,821 characters.
 - Repomix security scanning excluded three suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
@@ -76,7 +76,7 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **Configuration Management**: Workspace and global configuration editors
 - **Search**: Command search (BM25 index), file search with fuzzy matching
 
-### Workflow Tracking Service and REST API (Phase 02)
+### Workflow Tracking Service, REST API, and Lifecycle Correlation (Phases 01–03)
 
 The workflow subsystem is a domain-first Rust service over the shared SQLite
 session database:
@@ -91,8 +91,12 @@ session database:
 - `store/`: synchronous scoped SQLite repositories. Mutations use transaction
   helpers and optional same-transaction events; reads provide bounded filters,
   keyset history, retention purge, and tree/progress aggregation.
+- `observation.rs`: closed terminal-only observation enum, clone-cheap recorder,
+  bounded `sync_channel(256)` worker, and incarnation-aware link updates.
+- `reconcile.rs`: startup reconciliation of persisted terminal links against
+  restored live `(sessionId, incarnation)` identities.
 - `service.rs`: current config/workspace scope, target resolution,
-  `spawn_blocking` store dispatch, and retention orchestration.
+  `spawn_blocking` store dispatch, retention orchestration, and reconciliation.
 - `api/workflow/`: strict DTOs, mapping/cursor helpers, protected overview,
   event, item, session/link, note, and purge handlers.
 - `persistence/migrations/010_workflow_tracking.sql`: additive six-table
@@ -110,13 +114,30 @@ The service validates the current configured project and registered worktree
 before writes. Overview is one bounded response (workspace/projects,
 Plan/Phase/Task trees, standalone Tasks, notes, running sessions, factual
 Task progress, recent events, and `truncated`). Event history uses opaque
-keyset cursors. See [Workflow API](./workflow-api.md) for the complete route
-contract and examples.
+keyset cursors. Terminal links are checked against live PTY target metadata and
+incarnation. Agent links are manual and carry only bounded `harnessLabel` and
+`runId`; no automatic harness producer ships in Phase 03.
+
+The PTY manager emits only allowlisted lifecycle metadata through a
+non-blocking `try_send` to `sync_channel(256)`. The worker is the only
+observation path that writes workflow SQLite, so queue-full or storage errors
+cannot block terminal input/output/restart paths. Payloads exclude command
+lines, arguments, CWD, environment, prompts, output, and arbitrary adapter
+data. Link states are `attached`, `stale`, `exited`, `crashed`, or `detached`;
+older incarnations cannot regress newer state, and duplicate events are
+suppressed by deterministic IDs. Observation/reconciliation updates never
+change manual session status or `startedAt`/`endedAt`; a final exit/removal may
+only provide a suggested end time.
+
+Startup restores PTYs first, collects live identities, then reconciles workflow
+terminal links. Direct Plan sessions need no Phase/Task children, and manual
+session timestamps remain user-controlled.
 
 The 14 domain/store tests in `server/src/workflow/tests.rs` plus the 8 API
-integration tests in `server/tests/workflow_api.rs` cover model rules,
-migration preservation, hierarchy/scope checks, replay/CAS, session lifecycle,
-resource links, notes, pagination, retention, overview, and purge.
+integration tests in `server/tests/workflow_api.rs` cover the Phase 01–02
+contract. Phase 03 lifecycle coverage is in
+`server/src/workflow/observation_tests.rs`; the dated Phase 03 review reports
+28 workflow tests and 907 full-server tests passing.
 
 ## Architecture Layers
 
@@ -139,8 +160,9 @@ Backend BFF/API (server/)
   └── WebSocket Handler
          ↓
 Service Layer (server/)
-  ├── WorkflowService (scope, target validation, retention)
+  ├── WorkflowService (scope, target validation, retention, reconcile)
   ├── PTY Session Manager
+  │    └── WorkflowObservationRecorder (non-blocking lifecycle handoff)
   ├── Agent Store Service
   ├── File System Subsystem
   ├── Command Registry (BM25)
@@ -148,6 +170,7 @@ Service Layer (server/)
          ↓
 Persistence
   ├── SessionStore (`sessions.db`)
+  ├── Workflow observation worker (`sync_channel(256)`)
   └── WorkflowStore (workflow tables, shared connection)
          ↓
 Infrastructure
@@ -312,12 +335,12 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 - Binary and UTF-8 support
 - Shell lifecycle integration for Bash, Zsh, and Fish with optional exit status
 
-### Workflow Tracking Service and REST API (Phase 02)
+### Workflow Tracking Service and REST API (Phases 01–03)
 
 - `WorkflowService` (`server/src/workflow/service.rs`) owns the
   current-profile/workspace boundary and composes `WorkflowStore`,
   configuration, `WorkspaceTargetResolver`, workspace coordination, and the
-  PTY manager used to validate live terminal links.
+  PTY manager used to validate live terminal links and startup reconciliation.
 - `service.scope()` copies the current config locator, workspace name, and
   project paths; `service.workspace()` lazily gets or creates the workflow
   workspace entity. `resolve_target()` maps a project plus optional
@@ -336,19 +359,35 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
   can append its typed activity event in the same transaction, and retries
   return `replayed: true`.
 - Resource links are terminal/agent correlations. Terminal links are checked
-  against a live PTY and matching project/worktree; agent links carry bounded
-  harness/run metadata. Store-level observations change only link state and
-  suggested times, never session lifecycle timestamps.
+  against a live PTY and matching project/worktree/incarnation; agent links
+  carry only manually supplied bounded harness/run metadata.
+- `server/src/workflow/observation.rs` defines the closed terminal observation
+  enum and non-blocking `BoundedObservationRecorder`. PTY create, pending
+  restart, successful restart, final exit, and removal facts enter a
+  `sync_channel(256)`; the worker updates only resource-link health and
+  appends deterministic, replay-safe events.
+- Observation payloads contain only terminal ID, incarnation, configured
+  project, validated target, server time, exit/restart metadata, and action.
+  Command lines, arguments, CWD, env, prompts, output, and arbitrary adapter
+  payloads are excluded.
+`server/src/workflow/reconcile.rs` runs after restored PTYs are known:
+live links become `attached`; missing/dead links transition to `detached` only
+when their persisted state is `attached` or `stale`, while final
+`exited`/`crashed` outcomes remain unchanged. Manual session
+status/timestamps remain unchanged. Older incarnations are ignored; final
+exit/removal can set only a suggested end time.
 - Overview reads are bounded to 100 projects, 500 items, and 100 running
   sessions; event pages default to 50 and cap at 100. The API exposes factual
   descendant-Task counts without fabricated percentages.
-- `main.rs` runs startup and daily bounded retention purge. Event constructors
-  currently use the 90-day default expiry directly; custom
-  `workflow_event_retention_days` values are not yet wired into constructors.
+- `main.rs` starts the observer when workflow storage is available, restores
+  PTYs, then reconciles live terminal identities before serving normal traffic.
+  Retention purge still runs at startup and daily; event constructors currently
+  use the 90-day default expiry directly.
 
 Workflow tables share `sessions.db` (migration 010); no second workflow
 database is opened. Domain/store implementation details remain in
-`persistence/`, `workflow/model/`, and `workflow/store/`.
+`persistence/`, `workflow/model/`, `workflow/store/`, `workflow/observation.rs`,
+and `workflow/reconcile.rs`.
 
 ### Agent Store (`server/src/agent_store/`)
 
@@ -459,11 +498,14 @@ dam-hopper/
 │   │   ├── fs/                # File system operations
 │   │   ├── persistence/       # SQLite store, worker, restore, migrations
 │   │   │   └── migrations/010_workflow_tracking.sql
-│   │   ├── workflow/          # Workflow service, models, relational store
+│   │   ├── workflow/          # Workflow service, models, observation, store
 │   │   │   ├── model/
 │   │   │   ├── store/
+│   │   │   ├── observation.rs
+│   │   │   ├── reconcile.rs
 │   │   │   ├── service.rs
-│   │   │   └── tests.rs
+│   │   │   ├── tests.rs
+│   │   │   └── observation_tests.rs
 │   │   ├── agent_store/       # Agent store service
 │   │   └── lib.rs             # Library exports
 │   ├── tests/
@@ -478,7 +520,7 @@ dam-hopper/
 │   └── shared/                # Shared logger and runtime helpers
 ├── docs/                      # Documentation
 │   ├── README.md
-│   ├── workflow-api.md        # Phase 02 workflow REST contract
+│   ├── workflow-api.md        # Phase 03 workflow REST/lifecycle contract
 │   ├── codebase-summary.md
 │   ├── system-architecture.md
 │   ├── api-reference.md
@@ -491,13 +533,17 @@ dam-hopper/
 
 ### Passing Tests
 
-- **Server**: Rust unit/integration coverage is tracked per target; the Phase
-  02 workflow targets passed 14 domain/store tests and 8 REST integration
-  tests.
-- **Web**: Component tests with Vitest, 80% coverage target
+- **Server**: Rust unit/integration coverage is tracked per target. The dated
+  Phase 03 review reports 28 workflow tests and 907 full-server tests passing;
+  the workflow lifecycle cases are in `server/src/workflow/observation_tests.rs`.
 - **Workflow API**: `server/tests/workflow_api.rs` covers auth, overview,
   Plan-first hierarchy, replay/CAS, sessions, links, notes, limits, event
   pagination, and history purge.
+- **Workflow lifecycle**: observation tests cover terminal state mapping,
+  incarnation ordering, duplicate suppression, startup reconciliation, bounded
+  queue overflow, direct Plan/manual harness links, manual timestamp
+  preservation, and real PTY observation delivery.
+- **Web**: Component tests with Vitest, 80% coverage target
 
 ### Known Limitations (Pre-existing)
 
@@ -539,7 +585,7 @@ dam-hopper/
 | -------------------------------------------------------------- | --------------------------------------------- |
 | [system-architecture.md](./system-architecture.md)             | Component interactions, data flow             |
 | [api-reference.md](./api-reference.md)                         | HTTP endpoints, request/response schemas      |
-| [workflow-api.md](./workflow-api.md)                              | Phase 02 workflow service and REST endpoint contract |
+| [workflow-api.md](./workflow-api.md)                            | Phase 03 workflow REST and lifecycle contract |
 | [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
 | [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
 | [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
@@ -551,10 +597,10 @@ dam-hopper/
 ---
 
 **Last Updated**: September 2, 2026
-**Phase Status**: Phase 02 workflow service and protected REST API is complete
-on top of the Phase 01 additive SQLite domain/persistence foundation. Current
-support is tracked by feature and platform qualification; historical phase
-labels and evidence remain dated records.
-**Generated by**: Repomix v1.18.0 snapshot (1,490 files / 3,133,993 tokens)
+**Phase Status**: Phase 03 terminal lifecycle correlation and manual agent
+harness adapter is complete on top of the Phase 01–02 workflow domain/service
+foundation. Current support is tracked by feature and platform qualification;
+historical phase labels and evidence remain dated records.
+**Generated by**: Repomix v1.18.0 snapshot (1,494 files / 3,145,324 tokens)
 plus source-verified maintenance. Three security-flagged files were excluded
 from the compaction output.
