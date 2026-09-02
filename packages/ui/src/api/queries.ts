@@ -54,6 +54,7 @@ import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 import { rememberTerminalSessionIncarnations } from "@/lib/terminal-incarnation-state.js";
 
+export * from "./workflow-queries.js";
 type QueryInvalidator = Pick<
   ReturnType<typeof useQueryClient>,
   "invalidateQueries"

@@ -62,6 +62,9 @@ impl SessionStore {
         }
 
         let conn = Connection::open(path)?;
+        // Enable foreign key constraints
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+
 
         // Run migrations (idempotent)
         conn.execute_batch(include_str!("migrations/001_initial.sql"))?;
@@ -119,11 +122,26 @@ impl SessionStore {
         if has_name == 0 {
             conn.execute_batch(include_str!("migrations/009_session_name.sql"))?;
         }
+        let has_workflow: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workflow_workspaces'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_workflow == 0 {
+            conn.execute_batch(include_str!(
+                "migrations/010_workflow_tracking.sql"
+            ))?;
+        }
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
     }
+    /// Returns a clone of the internal SQLite connection handle.
+    pub fn connection(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.conn)
+    }
+
 
     /// Saves metadata for a concrete PTY incarnation. The UPSERT keeps the
     /// session buffer row intact and rejects stale reader commands that arrive

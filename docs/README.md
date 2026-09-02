@@ -8,7 +8,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 1. **[Project Overview & PDR](./project-overview-pdr.md)** — Vision, requirements, architecture decisions
 2. **[Configuration Guide](./configuration-guide.md)** — Set up the global `dam-hopper.toml` project registry
-3. **[System Architecture](./system-architecture.md)** — How the system works
+3. **[System Architecture](./system-architecture.md)** — How the system works, including workflow persistence
 
 ## Feature Guides
 
@@ -20,10 +20,13 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Reference Documentation
 
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
+- **[Workflow API](./workflow-api.md)** — Phase 02–03 workflow REST, lifecycle correlation, CAS/replay, and retention
+- **[Workflow Client State](./workflow-client-state.md)** — Phase 04 shared UI DTOs, transport mapping, and React Query isolation
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
+- **[Changelog](./CHANGELOG.md)** — Dated feature, persistence, and release notes
 
 ## Deployment
 
@@ -98,6 +101,34 @@ exists before linking it from a new document.
 - Health checks for broken symlinks
 - See: [System Architecture](./system-architecture.md#module-breakdown)
 
+**Workflow Tracking Service, REST API, and Client State (Phases 01–04)** — The
+server-side workflow domain/API is documented separately from the shared UI
+adapter. The Phase 04 client layer adds strict DTOs, domain helpers, typed
+transport channels, profile-safe React Query state, and mutation wrappers.
+
+- Server contract: bounded workspace/project summaries, Plan/Phase/Task trees,
+  running sessions, notes, factual Task progress, recent events, CAS/replay,
+  and terminal/agent link lifecycle
+- Shared UI contract: closed workflow unions/interfaces, Plan-first helper
+  predicates, explicit manual timestamp handling, and deterministic ordering
+- Transport: `api.workflow` delegates named operations through the active
+  transport; `WsTransport` maps 13 workflow channels to protected REST paths
+  and URL-encodes cursors and resource IDs
+- Query state: profile-scoped key hashing plus transport-generation overview
+  keys prevent stale server data from crossing profile/transport boundaries
+- Mutation policy: one caller-owned request UUID, no optimistic snapshot
+  writes, root `['workflow']` invalidation only after success, typed errors on
+  failure
+- Ownership: React Query stores server state; workflow presentation state
+  remains component-local and is not written to localStorage or URL search
+  params
+- See [Workflow API](./workflow-api.md) and [Workflow Client State](./workflow-client-state.md),
+  [System Architecture](./system-architecture.md#workflow-client-types-transport-and-query-state-phase-04),
+  [Project Overview & PDR](./project-overview-pdr.md#pr-014-workflow-client-types-transport-and-query-state-phase-04),
+  [Codebase Summary](./codebase-summary.md#workflow-client-types-transport-and-query-state-phase-04),
+  and [Code Standards](./code-standards.md#workflow-client-contracts-phase-04).
+
+
 ## Common Tasks
 
 1. Find the component in `packages/ui/src/components/` (the browser host is `apps/web`)
@@ -118,16 +149,53 @@ See token at `~/.config/dam-hopper/server-token`.
 
 ### Debug Session Lifecycle
 
-Terminal lifecycle follows six main states:
+The terminal UI lifecycle follows process states:
 
-- **alive** — Process running (🟢 green dot)
-- **restarting** — Exited, will restart after backoff (🟡 yellow dot)
-- **crashed** — Exited non-zero, no restart (🔴 red dot)
-- **exited** — Exited zero, no restart (⚪ gray dot)
+- **alive** — Process running (green dot)
+- **restarting** — Exited, will restart after backoff (yellow dot)
+- **crashed** — Exited non-zero, no restart (red dot)
+- **exited** — Exited zero, no restart (gray dot)
 
-See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle) for detailed flow.
+Workflow resource links expose a separate observed state machine:
+`attached → stale` while restart is pending, then `attached` for a new
+incarnation or `exited`/`crashed` after final exit; explicit removal and
+missing startup identities detach links that were still `attached` or `stale`.
+See [Workflow API](./workflow-api.md#resource-links).
+
+See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle) for the UI flow.
 
 ## Recent Changes
+
+**Phase 03 Terminal Lifecycle Correlation and Agent Adapter (Complete ✓ 2026-09-02):**
+
+- ✓ Added the closed terminal-only `WorkflowObservation` contract and
+  clone-cheap PTY recorder with bounded `sync_channel(256)` worker
+- ✓ Kept workflow SQLite off PTY input/output/restart hot paths; full queues and
+  storage failures degrade observations without blocking terminal operation
+- ✓ Added incarnation ordering and deterministic replay suppression for
+  `attached`, `stale`, `exited`, `crashed`, and `detached` link states
+- ✓ Preserved manual session status and timestamps; final exit/removal only
+  suggest an end time
+- ✓ Added post-restore link reconciliation, manual bounded harness/run links,
+  direct Plan-session support, and lifecycle/fault-isolation tests
+
+**Phase 02 Workflow Service and REST API (Complete ✓ 2026-09-02):**
+
+- ✓ Added `WorkflowService` current-workspace/target boundary and shared-store
+  `spawn_blocking` orchestration
+- ✓ Mounted protected `/api/workflow/*` endpoints for overview, event history,
+  item CRUD, session lifecycle/links, notes, and history purge
+- ✓ Added request-id replay, item/note/link CAS, strict DTO validation, typed
+  workflow errors, bounded overview/keyset history, and automatic retention
+- ✓ Added `server/tests/workflow_api.rs` integration coverage
+
+**Phase 01 Workflow Tracking Foundation (Complete ✓):**
+
+- ✓ Added additive migration 010 for six workflow tables sharing `sessions.db`
+- ✓ Added Plan/Phase/Task models, status/source/resource/event enums, and
+  bounded validation
+- ✓ Added transactional `WorkflowStore` methods for hierarchy, sessions,
+  links, notes, events, overview aggregation, and retention
 
 **Phase 06 (Complete ✓):**
 
@@ -212,7 +280,9 @@ Browser (React SPA)
 Rust Server (Axum)
     ├─ AppState (config, PTY manager, FS subsystem, auth)
     ├─ Router (routes REST/WebSocket)
-    └─ Services (PtySessionManager, FsSubsystem, AgentStoreService)
+    ├─ Services (WorkflowService, PtySessionManager, FsSubsystem, AgentStoreService)
+    ├─ Workflow observer (non-blocking `sync_channel(256)` → SQLite worker)
+    └─ Persistence (SessionStore + WorkflowStore over SQLite)
 ```
 
 Key patterns:
@@ -220,13 +290,21 @@ Key patterns:
 - Arc<Mutex<T>> for cheap-clone shared state
 - Never hold locks across `.await`
 - Feature gating at route registration time
+- Workflow mutations use SQLite transactions; optional audit events commit with
+  their entity mutation.
+- PTY observations use bounded `try_send`; observer/storage failures never block
+  terminal I/O or restart handling.
+- Workflow observations exclude command, CWD, env, prompt, and output data.
 - Error types per module (thiserror)
 
 See [System Architecture](./system-architecture.md) for detailed breakdown.
 
 ## File Structure
 
-```
+server/
+├── src/
+│   ├── persistence/              # SQLite session store and migrations
+│   └── workflow/                 # Domain, REST, observation, reconciliation
 apps/
 ├── web/                          # Thin Vite browser host
 packages/
@@ -236,9 +314,11 @@ docs/
 ├── project-overview-pdr.md       # Product requirements & roadmap
 ├── system-architecture.md        # Module breakdown & data flow
 ├── api-reference.md              # REST/WebSocket endpoints
+├── workflow-api.md               # Phase 03 workflow REST/lifecycle contract
 ├── configuration-guide.md        # dam-hopper.toml & setup
 ├── code-standards.md             # Patterns, testing, security
-└── codebase-summary.md           # Quick module reference
+├── codebase-summary.md           # Quick module reference
+└── CHANGELOG.md                  # Dated implementation and release notes
 ```
 
 Each file is self-contained but linked for cross-reference.

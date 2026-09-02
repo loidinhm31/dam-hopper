@@ -27,7 +27,7 @@ const MAX_CACHED_PROJECTS: usize = 32;
 /// target. The server never trusts a supplied path without resolving it
 /// against Git's registered worktree list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectTargetRef {
     pub project: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
