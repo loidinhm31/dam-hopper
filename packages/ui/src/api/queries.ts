@@ -54,6 +54,7 @@ import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 import { rememberTerminalSessionIncarnations } from "@/lib/terminal-incarnation-state.js";
 
+export * from "./workflow-queries.js";
 type QueryInvalidator = Pick<
   ReturnType<typeof useQueryClient>,
   "invalidateQueries"
@@ -1323,11 +1324,7 @@ export function useSshListKeys() {
 export function useRemoveWorktree(project: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (params: string | { path: string; force?: boolean }) => {
-      const path = typeof params === "string" ? params : params.path;
-      const force = typeof params === "string" ? undefined : params.force;
-      return api.git.removeWorktree(project, path, { force });
-    },
+    mutationFn: (path: string) => api.git.removeWorktree(project, path),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["worktrees", project] });
     },

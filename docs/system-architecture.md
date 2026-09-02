@@ -1014,6 +1014,65 @@ constructors currently assign the 90-day default expiry directly; the
 `workflow_event_retention_days` setting is validated/exposed but custom event
 expiry is not yet wired into those constructors. The deleted-note retention
 setting is consumed by automatic purge.
+
+### Workflow Client Types, Transport, and Query State (Phase 04)
+
+The shared UI package adds a client-side boundary over the protected workflow
+REST API. It keeps wire DTOs, pure domain semantics, transport mapping, and
+React Query state in separate modules; the server remains authoritative for
+validation, workspace scope, timestamps, and mutation replay.
+
+```mermaid
+flowchart LR
+    Profile["Active server profile"] --> Hash["profileScopedQueryKeyHash"]
+    Hash --> Cache["TanStack Query cache"]
+    Replace["Transport init/reconfigure/reset"] --> Generation["Transport generation"]
+    Generation --> Overview["useWorkflowOverview key"]
+    Cache --> Overview
+    Overview --> Facade["api.workflow"]
+    Facade --> Mapper["WsTransport channelToEndpoint"]
+    Mapper --> REST["Protected /api/workflow/* REST"]
+```
+
+`workflow-dto-types.ts` mirrors camelCase response/request shapes and uses
+closed unions for item kind/status, session status, resource type/observed
+state, provenance, and event type. Optional fields retain server distinctions
+such as omitted versus `null` timestamps or targets. `workflow-domain-helpers.ts`
+contains pure Plan-first parent validation, status/attention predicates,
+factual tracked-Task progress, timestamp/interval checks, elapsed formatting,
+and deterministic item ordering. `workflow-types.ts` re-exports both modules.
+
+`client.ts` exposes a thin `api.workflow` facade for overview, event pages,
+item CRUD, session start/end/abandon, resource link/unlink, note create/delete,
+and history purge. Each method delegates a typed response through the active
+`Transport`; it does not know whether the host is web, native, or idle.
+
+`WsTransport` maps 13 stable workflow channel names to protected REST methods.
+It URL-encodes item/session/note identifiers and event cursors, removes path
+identifiers from JSON bodies, preserves request timestamps, sends profile-bound
+auth through the normal `invoke` path, and converts non-2xx responses to
+`ApiRequestError`. Workflow calls use REST; the same class's persistent
+WebSocket remains the terminal and push-event channel.
+
+The host `QueryClient` uses `profileScopedQueryKeyHash`, hashing
+`[activeProfileId, queryKey]` so equal workflow keys from different server
+profiles cannot collide. The transport singleton increments a generation when
+its instance changes. `useWorkflowOverview` subscribes to that generation and
+uses `['workflow', 'overview', transportGeneration]`; an old response settles
+only its old query entry. Events use
+`['workflow', 'events', { cursor, limit }]` under the same root.
+
+Overview/events hooks preserve prior observer data while refetching, use no
+polling interval, and support explicit `enabled` control. Mutation wrappers
+invalidate `['workflow']` only after success; failures leave cached authority
+and typed errors intact. Workflow server state is memory-only. Component-local
+selection/filter/draft/focus/elapsed-clock state does not enter URL search
+params, localStorage, terminal registries, or Zustand stores.
+
+See [Workflow Client State](./workflow-client-state.md) for the DTO field
+catalog, operation table, hook list, and Phase 04 verification. The server
+contract remains in [Workflow API](./workflow-api.md).
+
 ### Persist Worker (Phase 05)
 
 **Purpose**: Async worker thread that batches terminal session buffers and persists them to SQLite while bounding PTY snapshot memory use.

@@ -20,7 +20,8 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Reference Documentation
 
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
-- **[Workflow API](./workflow-api.md)** — Phase 03 workflow REST, lifecycle correlation, CAS/replay, and retention
+- **[Workflow API](./workflow-api.md)** — Phase 02–03 workflow REST, lifecycle correlation, CAS/replay, and retention
+- **[Workflow Client State](./workflow-client-state.md)** — Phase 04 shared UI DTOs, transport mapping, and React Query isolation
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
@@ -100,30 +101,32 @@ exists before linking it from a new document.
 - Health checks for broken symlinks
 - See: [System Architecture](./system-architecture.md#module-breakdown)
 
-**Workflow Tracking Service and REST API (Phase 03)** — Protected REST
-boundary over the Phase 01–02 SQLite workflow domain and Phase 03's
-server-internal terminal lifecycle observer.
+**Workflow Tracking Service, REST API, and Client State (Phases 01–04)** — The
+server-side workflow domain/API is documented separately from the shared UI
+adapter. The Phase 04 client layer adds strict DTOs, domain helpers, typed
+transport channels, profile-safe React Query state, and mutation wrappers.
 
-- Overview: bounded workspace/project summaries, Plan/Phase/Task trees,
-  running sessions, notes, factual Task progress, and recent events
-- Mutations: item CRUD with Plan-first validation, CAS, and request replay;
-  manual session lifecycle; target-validated terminal/agent links; note CAS
-  and soft deletion
-- Lifecycle: bounded `sync_channel(256)` observation worker maps
-  incarnation-ordered terminal facts to `attached`, `stale`, `exited`,
-  `crashed`, and `detached` link states
-- Privacy/authority: no command line, arguments, CWD, env, prompt, output, or
-  arbitrary adapter payload; observations never change manual session status
-  or `startedAt`/`endedAt`
-- Agent adapter: bounded manual `harnessLabel`/`runId` only; no automatic
-  harness producer or generic observation endpoint
-- Startup: restore PTYs first, then reconcile links against live identities;
-  direct Plan sessions need no synthetic Phase/Task children
-- History: opaque keyset event pagination and explicit/bounded retention purge
-- See [Workflow API](./workflow-api.md), [System Architecture](./system-architecture.md#workflow-phases-01-03-service-rest-and-lifecycle-correlation),
-  [Project Overview & PDR](./project-overview-pdr.md#pr-013-terminal-lifecycle-correlation-and-agent-adapter),
-  and [Codebase Summary](./codebase-summary.md#workflow-tracking-service-rest-api-and-lifecycle-correlation-phases-01-03).
-- See [Code Standards](./code-standards.md#workflow-domain-service-rest-api-and-lifecycle-correlation-phases-01-03) for implementation conventions.
+- Server contract: bounded workspace/project summaries, Plan/Phase/Task trees,
+  running sessions, notes, factual Task progress, recent events, CAS/replay,
+  and terminal/agent link lifecycle
+- Shared UI contract: closed workflow unions/interfaces, Plan-first helper
+  predicates, explicit manual timestamp handling, and deterministic ordering
+- Transport: `api.workflow` delegates named operations through the active
+  transport; `WsTransport` maps 13 workflow channels to protected REST paths
+  and URL-encodes cursors and resource IDs
+- Query state: profile-scoped key hashing plus transport-generation overview
+  keys prevent stale server data from crossing profile/transport boundaries
+- Mutation policy: one caller-owned request UUID, no optimistic snapshot
+  writes, root `['workflow']` invalidation only after success, typed errors on
+  failure
+- Ownership: React Query stores server state; workflow presentation state
+  remains component-local and is not written to localStorage or URL search
+  params
+- See [Workflow API](./workflow-api.md) and [Workflow Client State](./workflow-client-state.md),
+  [System Architecture](./system-architecture.md#workflow-client-types-transport-and-query-state-phase-04),
+  [Project Overview & PDR](./project-overview-pdr.md#pr-014-workflow-client-types-transport-and-query-state-phase-04),
+  [Codebase Summary](./codebase-summary.md#workflow-client-types-transport-and-query-state-phase-04),
+  and [Code Standards](./code-standards.md#workflow-client-contracts-phase-04).
 
 
 ## Common Tasks

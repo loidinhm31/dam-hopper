@@ -7,6 +7,13 @@ infer manual-session completion from a resource observation. Terminal lifecycle
 observations are produced internally by the PTY manager; there is no generic
 observation-ingestion route.
 
+The shared UI client for this contract is documented in
+[Workflow Client State](./workflow-client-state.md). `@dam-hopper/ui` keeps
+wire DTOs and domain helpers in focused modules, exposes the typed
+`api.workflow` facade, and uses `WsTransport` only as a channel-to-REST adapter.
+Profile-scoped query hashing and transport-generation keys are client cache
+boundaries; they do not change the server's workspace authorization scope.
+
 ## Scope and authorization
 
 All workflow routes are merged into the existing protected Axum router. They
