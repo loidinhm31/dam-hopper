@@ -366,7 +366,9 @@ pub fn list_active_sessions(
     project_name: Option<&str>,
     limit: usize,
 ) -> Result<Vec<WorkflowSession>, WorkflowStoreError> {
-    let limit = limit.min(crate::workflow::MAX_OVERVIEW_SESSIONS);
+    // Overview callers request one sentinel row to distinguish an exact cap
+    // from a truncated result before applying their public limit.
+    let limit = limit.min(crate::workflow::MAX_OVERVIEW_SESSIONS + 1);
     let mut query = String::from(
         "SELECT id, workspace_id, project_name, worktree_path, item_id,
                 status, started_at, ended_at, source, created_at, updated_at

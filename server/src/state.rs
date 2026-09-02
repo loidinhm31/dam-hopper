@@ -288,18 +288,34 @@ impl AppState {
     }
     /// Attach the optional workflow repository using the existing session DB connection.
     pub fn with_workflow_store(mut self, store: Option<WorkflowStore>) -> Self {
+        if store.is_none() {
+            self.diagnostics.record_terminal_event(
+                "workflow",
+                "workflow.store",
+                std::collections::BTreeMap::from([
+                    ("operation".to_string(), "store".to_string()),
+                    ("outcome".to_string(), "unavailable".to_string()),
+                    ("result".to_string(), "unavailable".to_string()),
+                    ("duration_ms".to_string(), "0".to_string()),
+                    ("row_count".to_string(), "0".to_string()),
+                    ("event_count".to_string(), "0".to_string()),
+                    ("count".to_string(), "0".to_string()),
+                    ("store_availability".to_string(), "unavailable".to_string()),
+                ]),
+            );
+        }
         self.workflow = store.map(|store| {
-            Arc::new(WorkflowService::new(
+            Arc::new(WorkflowService::new_with_diagnostics(
                 store,
                 self.config.clone(),
                 self.workspace_target_resolver.clone(),
                 self.workspace_context_guard.clone(),
                 self.pty_manager.clone(),
+                self.diagnostics.clone(),
             ))
         });
         self
     }
-
     #[cfg(test)]
     pub fn with_codex_exporter(mut self, manager: CodexExporterManager) -> Self {
         self.codex_exporter = manager;

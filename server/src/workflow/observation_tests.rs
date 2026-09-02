@@ -102,6 +102,22 @@ fn link_terminal(
     let created = store.link_resource(&link, None).expect("link resource");
     created
 }
+fn assert_manual_session_fields(
+    store: &WorkflowStore,
+    workspace_id: &str,
+    session_id: &str,
+    status: SessionStatus,
+    started_at: u64,
+    ended_at: Option<u64>,
+) {
+    let conn = store.lock().unwrap();
+    let loaded = get_session(&conn, session_id, workspace_id)
+        .unwrap()
+        .expect("manual session");
+    assert_eq!(loaded.status, status);
+    assert_eq!(loaded.started_at, started_at);
+    assert_eq!(loaded.ended_at, ended_at);
+}
 
 #[test]
 fn test_terminal_created_observation_updates_link_without_touching_session() {
@@ -128,12 +144,14 @@ fn test_terminal_created_observation_updates_link_without_touching_session() {
     assert_eq!(links[0].suggested_end_time, None);
     assert_eq!(links[0].last_seen_at, 2000);
 
-    // Verify session is completely untouched
-    let conn = store.lock().unwrap();
-    let loaded_session = get_session(&conn, &session.id, &ws_id).unwrap().unwrap();
-    assert_eq!(loaded_session.status, SessionStatus::Running);
-    assert_eq!(loaded_session.started_at, 1000);
-    assert_eq!(loaded_session.ended_at, None);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
 }
 
 #[test]
@@ -158,12 +176,14 @@ fn test_terminal_exit_pending_restart_observation() {
     assert_eq!(links[0].observed_state, ResourceObservedState::Stale);
     assert_eq!(links[0].suggested_end_time, Some(3000));
 
-    // Verify session remains running with manual timestamps
-    let conn = store.lock().unwrap();
-    let loaded_session = get_session(&conn, &session.id, &ws_id).unwrap().unwrap();
-    assert_eq!(loaded_session.status, SessionStatus::Running);
-    assert_eq!(loaded_session.started_at, 1000);
-    assert_eq!(loaded_session.ended_at, None);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
 }
 
 #[test]
@@ -200,11 +220,14 @@ fn test_terminal_restarted_observation() {
     assert_eq!(links[0].suggested_end_time, None);
     assert_eq!(links[0].last_seen_at, 4000);
 
-    // Session is still running
-    let conn = store.lock().unwrap();
-    let loaded_session = get_session(&conn, &session.id, &ws_id).unwrap().unwrap();
-    assert_eq!(loaded_session.status, SessionStatus::Running);
-    assert_eq!(loaded_session.ended_at, None);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
 }
 
 #[test]
@@ -244,14 +267,22 @@ fn test_terminal_final_exit_clean_and_crashed() {
     assert_eq!(links2[0].observed_state, ResourceObservedState::Crashed);
     assert_eq!(links2[0].suggested_end_time, Some(6000));
 
-    // Both sessions MUST still be running with no ended_at
-    let conn = store.lock().unwrap();
-    let s1 = get_session(&conn, &session1.id, &ws_id).unwrap().unwrap();
-    let s2 = get_session(&conn, &session2.id, &ws_id).unwrap().unwrap();
-    assert_eq!(s1.status, SessionStatus::Running);
-    assert_eq!(s2.status, SessionStatus::Running);
-    assert_eq!(s1.ended_at, None);
-    assert_eq!(s2.ended_at, None);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session1.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session2.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
 }
 
 #[test]
@@ -272,9 +303,14 @@ fn test_terminal_removed_observation() {
     assert_eq!(links[0].observed_state, ResourceObservedState::Detached);
     assert_eq!(links[0].suggested_end_time, Some(7000));
 
-    let conn = store.lock().unwrap();
-    let loaded = get_session(&conn, &session.id, &ws_id).unwrap().unwrap();
-    assert_eq!(loaded.status, SessionStatus::Running);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
 }
 
 #[test]
@@ -299,6 +335,14 @@ fn test_out_of_order_stale_incarnation_ignored() {
     assert_eq!(links[0].observed_state, ResourceObservedState::Attached);
     assert_eq!(links[0].incarnation, Some(5));
     assert_eq!(links[0].suggested_end_time, None);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
 }
 
 #[test]
@@ -328,6 +372,16 @@ fn test_observation_idempotency_duplicate_suppression() {
         .unwrap();
     let event_count: i64 = stmt.query_row([&session.id], |r| r.get(0)).unwrap();
     assert_eq!(event_count, 1);
+    drop(stmt);
+    drop(conn);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
 }
 
 #[test]
@@ -340,8 +394,6 @@ fn test_startup_reconciliation_live_and_dead_terminals() {
     let (_plan2, session2) =
         create_plan_and_session(&store, &ws_id, "sess-dead", "my-project", None);
     link_terminal(&store, &session2.id, "term-dead", 1);
-
-    // Startup reconciliation: term-live is alive with incarnation 2, term-dead was not restored
     let live_terminals = vec![("term-live".to_string(), 2u64)];
     let (attached, detached) =
         reconcile_startup_terminal_links(&store, &live_terminals, 10_000).unwrap();
@@ -357,21 +409,33 @@ fn test_startup_reconciliation_live_and_dead_terminals() {
     assert_eq!(links2[0].observed_state, ResourceObservedState::Detached);
     assert_eq!(links2[0].suggested_end_time, Some(10_000));
 
-    // Manual work sessions remain completely untouched
-    let conn = store.lock().unwrap();
-    let s1 = get_session(&conn, &session1.id, &ws_id).unwrap().unwrap();
-    let s2 = get_session(&conn, &session2.id, &ws_id).unwrap().unwrap();
-    assert_eq!(s1.status, SessionStatus::Running);
-    assert_eq!(s2.status, SessionStatus::Running);
-    assert_eq!(s1.ended_at, None);
-    assert_eq!(s2.ended_at, None);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session1.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session2.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
 }
 
 #[test]
 fn test_bounded_recorder_queue_overflow_never_blocks() {
+    let (store, ws_id) = setup_test_db();
+    let (_plan, session) =
+        create_plan_and_session(&store, &ws_id, "sess-queue", "my-project", None);
+    link_terminal(&store, &session.id, "obs-1", 1);
+
     let (tx, rx) = sync_channel::<WorkflowObservation>(2);
     let (recorder, dropped) = BoundedObservationRecorder::new(tx);
-
     let make_obs = |id: &str| WorkflowObservation::TerminalCreated {
         session_id: id.to_string(),
         incarnation: 1,
@@ -393,7 +457,206 @@ fn test_bounded_recorder_queue_overflow_never_blocks() {
     let o1 = rx.recv().unwrap();
     assert_eq!(o1.session_id(), "obs-1");
     let o2 = rx.recv().unwrap();
+    process_observation(&store, &o1).unwrap();
+    process_observation(&store, &o2).unwrap();
     assert_eq!(o2.session_id(), "obs-2");
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
+}
+
+#[test]
+fn test_exhausted_restart_observations_preserve_manual_session_fields() {
+    let (store, ws_id) = setup_test_db();
+    let (_plan, session) =
+        create_plan_and_session(&store, &ws_id, "sess-exhausted", "my-project", None);
+    link_terminal(&store, &session.id, "term-exhausted", 1);
+
+    for observation in [
+        WorkflowObservation::TerminalExitPendingRestart {
+            session_id: "term-exhausted".to_string(),
+            incarnation: 1,
+            exit_code: Some(1),
+            restart_count: 0,
+            restart_in_ms: Some(1000),
+            observed_at: 2_000,
+        },
+        WorkflowObservation::TerminalRestarted {
+            session_id: "term-exhausted".to_string(),
+            incarnation: 2,
+            restart_count: 1,
+            previous_exit_code: Some(1),
+            observed_at: 3_000,
+        },
+        WorkflowObservation::TerminalExitPendingRestart {
+            session_id: "term-exhausted".to_string(),
+            incarnation: 2,
+            exit_code: Some(1),
+            restart_count: 1,
+            restart_in_ms: Some(2000),
+            observed_at: 4_000,
+        },
+        WorkflowObservation::TerminalFinalExit {
+            session_id: "term-exhausted".to_string(),
+            incarnation: 2,
+            exit_code: Some(1),
+            restart_count: 2,
+            observed_at: 5_000,
+        },
+    ] {
+        process_observation(&store, &observation).expect("process lifecycle observation");
+    }
+
+    let links = store.get_links_for_session(&session.id).unwrap();
+    assert_eq!(links[0].observed_state, ResourceObservedState::Crashed);
+    assert_eq!(links[0].incarnation, Some(2));
+    assert_eq!(links[0].suggested_end_time, Some(5_000));
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
+}
+
+#[test]
+fn test_manual_terminal_session_stale_observation_preserves_fields() {
+    let (store, ws_id) = setup_test_db();
+    let (_plan_ended, ended) =
+        create_plan_and_session(&store, &ws_id, "sess-manual-ended", "my-project", None);
+    store
+        .update_session_status(
+            &ended.id,
+            &ws_id,
+            SessionStatus::Ended,
+            Some(2_000),
+            3_000,
+            None,
+        )
+        .unwrap();
+    link_terminal(&store, &ended.id, "term-manual-ended", 1);
+
+    let (_plan_abandoned, abandoned) =
+        create_plan_and_session(&store, &ws_id, "sess-manual-abandoned", "my-project", None);
+    store
+        .update_session_status(
+            &abandoned.id,
+            &ws_id,
+            SessionStatus::Abandoned,
+            Some(3_000),
+            4_000,
+            None,
+        )
+        .unwrap();
+    link_terminal(&store, &abandoned.id, "term-manual-abandoned", 1);
+
+    for terminal_id in ["term-manual-ended", "term-manual-abandoned"] {
+        let observation = WorkflowObservation::TerminalExitPendingRestart {
+            session_id: terminal_id.to_string(),
+            incarnation: 1,
+            exit_code: Some(1),
+            restart_count: 0,
+            restart_in_ms: Some(1000),
+            observed_at: 5_000,
+        };
+        process_observation(&store, &observation).expect("process stale observation");
+    }
+
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &ended.id,
+        SessionStatus::Ended,
+        1000,
+        Some(2_000),
+    );
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &abandoned.id,
+        SessionStatus::Abandoned,
+        1000,
+        Some(3_000),
+    );
+}
+
+#[test]
+fn test_observation_storage_failure_preserves_manual_session_and_link() {
+    let (store, ws_id) = setup_test_db();
+    let (_plan, session) =
+        create_plan_and_session(&store, &ws_id, "sess-observation-fault", "my-project", None);
+    link_terminal(&store, &session.id, "term-observation-fault", 1);
+
+    store
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TABLE workflow_events")
+        .unwrap();
+    let observation = WorkflowObservation::TerminalFinalExit {
+        session_id: "term-observation-fault".to_string(),
+        incarnation: 1,
+        exit_code: Some(0),
+        restart_count: 0,
+        observed_at: 6_000,
+    };
+    assert!(process_observation(&store, &observation).is_err());
+
+    let links = store.get_links_for_session(&session.id).unwrap();
+    assert_eq!(links[0].observed_state, ResourceObservedState::Attached);
+    assert_eq!(links[0].incarnation, Some(1));
+    assert_eq!(links[0].suggested_end_time, None);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
+}
+
+#[test]
+fn test_reconciliation_storage_failure_preserves_manual_session_and_link() {
+    let (store, ws_id) = setup_test_db();
+    let (_plan, session) =
+        create_plan_and_session(&store, &ws_id, "sess-reconcile-fault", "my-project", None);
+    link_terminal(&store, &session.id, "term-reconcile-fault", 1);
+    store
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER fail_reconcile BEFORE UPDATE ON workflow_resource_links
+             BEGIN SELECT RAISE(ABORT, 'injected reconciliation failure'); END;",
+        )
+        .unwrap();
+
+    assert!(
+        reconcile_startup_terminal_links(
+            &store,
+            &[("term-reconcile-fault".to_string(), 2)],
+            7_000,
+        )
+        .is_err()
+    );
+    let links = store.get_links_for_session(&session.id).unwrap();
+    assert_eq!(links[0].observed_state, ResourceObservedState::Attached);
+    assert_eq!(links[0].incarnation, Some(1));
+    assert_eq!(links[0].suggested_end_time, None);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
 }
 
 #[test]
@@ -471,6 +734,14 @@ async fn test_pty_lifecycle_real_manager_observation_flow() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     let links = store.get_links_for_session(&session.id).unwrap();
     assert_eq!(links.len(), 1);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
     assert_eq!(links[0].observed_state, ResourceObservedState::Attached);
 
     // Remove terminal
@@ -482,10 +753,13 @@ async fn test_pty_lifecycle_real_manager_observation_flow() {
     assert_eq!(links[0].observed_state, ResourceObservedState::Detached);
     assert!(links[0].suggested_end_time.is_some());
 
-    // Work session remains running with manual timestamps
-    let conn = store.lock().unwrap();
-    let loaded = get_session(&conn, &session.id, &ws_id).unwrap().unwrap();
-    assert_eq!(loaded.status, SessionStatus::Running);
-    assert_eq!(loaded.ended_at, None);
+    assert_manual_session_fields(
+        &store,
+        &ws_id,
+        &session.id,
+        SessionStatus::Running,
+        1000,
+        None,
+    );
     mgr.dispose().unwrap();
 }

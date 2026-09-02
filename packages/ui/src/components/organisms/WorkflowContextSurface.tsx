@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ProjectTargetRef } from "@/api/client.js";
 import type { ItemKind } from "@/api/workflow-dto-types.js";
 import { useWorkflowOverview } from "@/api/workflow-queries.js";
@@ -16,7 +16,12 @@ import {
 } from "@/components/organisms/WorkflowContextSheet.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useWorkflowSurfaceActions } from "@/hooks/use-workflow-surface-actions.js";
-import { isWorkflowShortcutOwner, matchesWorkflowToggleShortcut } from "@/lib/workflow-focus.js";
+import { cn } from "@/lib/utils.js";
+import {
+  isWorkflowShortcutOwner,
+  matchesWorkflowToggleShortcut,
+  restoreWorkflowFocus,
+} from "@/lib/workflow-focus.js";
 
 export interface WorkflowContextSurfaceProps {
   target?: ProjectTargetRef | null;
@@ -38,6 +43,7 @@ export function WorkflowContextSurface({
   const [selectedTarget, setSelectedTarget] = useState<ProjectTargetRef | null>(target ?? null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [isQuickCaptureOpen, setIsQuickCaptureOpen] = useState(false);
+  const workflowTriggerRef = useRef<HTMLDivElement | null>(null);
   const [quickCaptureKind, setQuickCaptureKind] = useState<ItemKind>("plan");
   const [quickCaptureParentId, setQuickCaptureParentId] = useState<string | null>(null);
   const [mobileSegment, setMobileSegment] = useState<MobileWorkflowSegment>("items");
@@ -48,14 +54,38 @@ export function WorkflowContextSurface({
     onOpenChange?.(open);
   };
 
-  const { data: overview, isLoading, error, refetch } = useWorkflowOverview();
+  const {
+    data: overview,
+    isLoading,
+    error,
+    refetch,
+    isUnavailable,
+  } = useWorkflowOverview();
   const effectiveTarget = selectedTarget ?? target ?? { project: "default" };
   const actions = useWorkflowSurfaceActions(effectiveTarget);
+  const overviewForSurface = isUnavailable ? undefined : overview;
 
-  const { plans, standaloneTasks } = filterOverviewByTarget(overview, effectiveTarget);
-  const activeNode = selectActivePlanOrItem(overview, effectiveTarget);
+  const { plans, standaloneTasks } = filterOverviewByTarget(
+    overviewForSurface,
+    effectiveTarget,
+  );
+  const activeNode = selectActivePlanOrItem(
+    overviewForSurface,
+    effectiveTarget,
+  );
   const runningSession = selectRunningSessionForItem(activeNode);
-  const attention = selectAttentionSummary(overview, effectiveTarget);
+  const attention = selectAttentionSummary(
+    overviewForSurface,
+    effectiveTarget,
+  );
+  useEffect(() => {
+    if (!isUnavailable) return;
+    setLocalIsOpen(false);
+    setSelectedItemId(null);
+    setIsQuickCaptureOpen(false);
+    setMobileSegment("items");
+  }, [isUnavailable]);
+
   useEffect(() => {
     setSelectedTarget(target ?? null);
   }, [target?.project, target?.worktreePath]);
@@ -96,10 +126,10 @@ export function WorkflowContextSurface({
 
   const sharedProps = {
     target: effectiveTarget,
-    projects: overview?.projects ?? [],
+    projects: overviewForSurface?.projects ?? [],
     plans,
     standaloneTasks,
-    sessions: overview?.runningSessions ?? [],
+    sessions: overviewForSurface?.runningSessions ?? [],
     selectedItemId,
     selectedTarget,
     onSelectTarget: handleSelectTarget,
@@ -122,9 +152,15 @@ export function WorkflowContextSurface({
   };
 
   return (
-    <div className="flex flex-col w-full">
+    <div
+      className={cn(
+        "flex flex-col w-full",
+        isOpen && !isCompact && "self-start",
+      )}
+    >
       <WorkflowContextRibbon
         target={effectiveTarget}
+        triggerRef={workflowTriggerRef}
         activeNode={activeNode}
         runningSession={runningSession}
         attention={attention}
@@ -132,26 +168,30 @@ export function WorkflowContextSurface({
         onToggle={() => setIsOpen(!isOpen)}
         onOpenQuickCapture={() => handleOpenQuickCapture("plan", null)}
         isLoading={isLoading}
+        isUnavailable={isUnavailable}
         error={error}
         onRetry={() => refetch()}
         nowMs={nowMs}
       />
 
-      {isCompact ? (
-        <WorkflowContextSheet
-          isOpen={isOpen}
-          onOpenChange={setIsOpen}
-          activeSegment={mobileSegment}
-          onSegmentChange={setMobileSegment}
-          {...sharedProps}
-        />
-      ) : (
-        <WorkflowContextDeck
-          isOpen={isOpen}
-          onClose={() => setIsOpen(false)}
-          {...sharedProps}
-        />
-      )}
+      {!isUnavailable &&
+        (isCompact ? (
+          <WorkflowContextSheet
+            isOpen={isOpen}
+            onOpenChange={setIsOpen}
+            onCloseAutoFocus={() => restoreWorkflowFocus(workflowTriggerRef.current)}
+            activeSegment={mobileSegment}
+            onSegmentChange={setMobileSegment}
+            {...sharedProps}
+          />
+        ) : (
+          <WorkflowContextDeck
+            isOpen={isOpen}
+            onClose={() => setIsOpen(false)}
+            onCloseAutoFocus={() => restoreWorkflowFocus(workflowTriggerRef.current)}
+            {...sharedProps}
+          />
+        ))}
     </div>
   );
 }

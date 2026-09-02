@@ -842,3 +842,55 @@ fn test_keyset_pagination_and_purge() {
     assert_eq!(remaining[0].id, "event-005");
     assert_eq!(remaining[1].id, "event-004");
 }
+
+#[test]
+fn test_overview_caps_items_projects_and_sessions() {
+    let (_tmp, store, _ss) = create_test_store();
+    let ws = store
+        .get_or_create_workspace("/config/capped.toml", "Capped", 1000)
+        .unwrap();
+
+    for (project_name, sort_order) in [("project-a", 1), ("project-b", 2)] {
+        let plan = WorkflowItem {
+            id: Uuid::new_v4().to_string(),
+            workspace_id: ws.id.clone(),
+            project_name: project_name.into(),
+            worktree_path: None,
+            parent_id: None,
+            kind: ItemKind::Plan,
+            title: format!("{project_name} plan"),
+            summary: None,
+            status: ItemStatus::Backlog,
+            sort_order,
+            source: WorkflowSource::Manual,
+            created_at: 1000,
+            updated_at: 1000,
+            completed_at: None,
+            archived_at: None,
+        };
+        store.create_item(&plan, None).unwrap();
+    }
+
+    for started_at in [1000, 2000] {
+        let session = WorkflowSession {
+            id: Uuid::new_v4().to_string(),
+            workspace_id: ws.id.clone(),
+            project_name: "backend".into(),
+            worktree_path: None,
+            item_id: None,
+            status: SessionStatus::Running,
+            started_at,
+            ended_at: None,
+            source: WorkflowSource::Manual,
+            created_at: started_at,
+            updated_at: started_at,
+        };
+        store.start_session(&session, None, None).unwrap();
+    }
+
+    let overview = store.get_overview(&ws.id, 3000, 1, 1, 1).unwrap();
+    assert_eq!(overview.plans.len(), 1);
+    assert_eq!(overview.projects.len(), 1);
+    assert_eq!(overview.running_sessions.len(), 1);
+    assert!(overview.truncated);
+}

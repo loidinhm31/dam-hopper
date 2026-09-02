@@ -1,6 +1,6 @@
 # Workflow Service and REST API
 
-Phase 03 is complete (2026-09-02). This document describes the protected
+Phases 03 and 07 are complete (2026-09-02). This document describes the protected
 workflow service boundary and the `/api/workflow/*` REST contract. The API is
 server-side workflow tracking; it does not start terminals, run agents, or
 infer manual-session completion from a resource observation. Terminal lifecycle
@@ -105,6 +105,43 @@ tables in the existing `sessions.db`. Repository mutations lock the shared
 SQLite connection, validate and mutate inside one transaction, append an
 optional activity event in that same transaction, and commit only if all steps
 succeed. Errors roll back both the domain mutation and its event.
+
+## Bounded workflow diagnostics
+
+The existing local `DiagnosticStore` records workflow diagnostics as redacted
+events in its bounded in-memory/JSONL store. These names describe the diagnostic
+metrics represented by those events; they are not a new workflow REST endpoint,
+remote export, or second telemetry database.
+
+| Metric | Recorded event and scope | Fixed-cardinality contract |
+| --- | --- | --- |
+| `workflow_operation_duration_seconds` | `workflow.operation` for workflow service/store operations | `operation` and `outcome` use fixed values; duration is capped at 60 seconds; `row_count`, `event_count`, and `count` are each capped at 1,000; `store_availability` is `available` or `unavailable`. |
+| `workflow_queue_dropped_total` | `workflow.observation_drop` when the PTY observation queue is full/disconnected | The handoff is non-blocking `try_send` to `sync_channel(256)`; `operation=observation`, `observation_kind=terminal_lifecycle`, `result=dropped`, and `outcome=queue_full` are fixed values. |
+| `workflow_reconciliation_total` | `workflow.reconciliation` after startup terminal-link reconciliation | `result` is `ok` or `error`; `attached_count`, `detached_count`, `row_count`, `event_count`, and `count` are capped at 1,000; duration is capped at 60 seconds; store availability is enum-only. |
+| `workflow_storage_errors_total` | Failed workflow store/observation/reconciliation operations | Failure and availability outcomes use fixed enums; bounded count fields are retained without raw database errors or dynamic resource labels. |
+
+Workflow operation names are fixed (`scope`, `workspace`, `target_resolve`,
+`store_call`, and `retention_purge`), and workflow outcomes are fixed
+(`ok`, `not_found`, `conflict`, `invalid_transition`, `target_unavailable`,
+`limit_exceeded`, `store_unavailable`, and `invalid_request`). The diagnostic
+payload contains no terminal/session IDs, project names, paths, note bodies,
+external run IDs, command text, CWD, environment, prompts, output, or arbitrary
+adapter data. Every duration/count bound is applied before the event reaches
+`DiagnosticStore`.
+
+### Profile-scoped old-server 404
+
+Only an `ApiRequestError` with HTTP status `404` from the overview query
+(`GET /api/workflow/overview`) is treated as an unavailable feature. The shared
+UI query exposes `availability: "unavailable"` and `isUnavailable: true`, and
+its retry callback returns `false` for that error so an older server does not
+enter a retry loop. The workflow surface hides its deck/sheet and controls and
+the ribbon announces `Workflow tracking is unavailable for this profile.`.
+
+The query key remains profile- and transport-generation-scoped, so this state
+applies only to the active server profile. Authentication failures and 5xx
+responses remain explicit `error` states with retry behavior; 404 responses
+from mutations or other routes are not reclassified as capability detection.
 
 ## Common response and errors
 
