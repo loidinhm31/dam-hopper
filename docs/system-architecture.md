@@ -42,15 +42,18 @@
 │  │  ├─ /api/fs/image/* → Preview ticket/stream/revoke     │
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
-│  │  ├─ /api/usage/* → Codex OTel usage (opt-in)           │
+│  │  ├─ /api/workflow/* → WorkflowService REST boundary  │
 │  │  ├─ /api/browser-debug/* → Ephemeral artifacts         │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
+│     │  └─ WorkflowObservationRecorder → bounded worker     │
+│     │     (`sync_channel(256)`, non-blocking PTY handoff)   │
 │     ├─ TelemetryStore/Worker (opt-in, separate SQLite)     │
 │     ├─ BrowserDebugArtifactManager (ephemeral, TTL/sweep)  │
 │     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
+│     ├─ WorkflowService → WorkflowStore + startup reconcile │
 │     ├─ CommandRegistry (BM25 search)                      │
 │     └─ Broadcast channels (PTY output, git progress)      │
 └─────────────────────────────────────────────────────────────┘
@@ -832,6 +835,367 @@ pub struct PersistedSession {
 - Environment variables serialized to JSON for portability
 - created_at / updated_at in milliseconds (Unix epoch)
 - total_written counter tracks bytes for buffer offset tracking (Phase 02)
+
+### Workflow (Phases 01–03: service, REST, and lifecycle correlation)
+
+`server/src/lib.rs` exports the workflow domain. Phase 01 added the relational
+model and repository; Phase 02 added `WorkflowService` and the protected Axum
+REST boundary; Phase 03 connects authoritative PTY lifecycle observations to
+existing terminal resource links. Workflow state remains separate from
+terminal WebSocket messages: public workflow writes use `/api/workflow/*`,
+while internal observations use a bounded PTY-to-worker channel.
+
+`SessionStore::open()` enables SQLite foreign keys and applies migrations
+001–009 before applying migration 010 when the workflow workspace table is not
+present. Migration 010 uses `CREATE TABLE IF NOT EXISTS` for an additive
+schema. Existing terminal-session tables and data remain untouched. Workflow
+entities therefore share the configured `sessions.db` file and its Unix
+`0o600` permission boundary.
+
+**Migration 010 tables:**
+
+| Table | Stored contract |
+| --- | --- |
+| `workflow_workspaces` | Text `id` (generated UUID), unique caller-resolved config `locator`, display `name`, and create/update millisecond timestamps. |
+| `workflow_items` | Workspace/project/optional worktree scope, optional parent, `kind` (`plan`, `phase`, `task`), title/summary, status, ordering, source, lifecycle timestamps, and optional completion/archive timestamps. Workspace deletion cascades. |
+| `workflow_sessions` | Workspace/project/optional worktree scope, optional item link, lifecycle status (`running`, `ended`, `abandoned`), start/end timestamps, source, and create/update timestamps. Workspace deletion cascades; deleting an item sets `item_id` to `NULL`. |
+| `workflow_resource_links` | Session correlation for `terminal` or `agent` resources, external/incarnation identity, optional harness/run metadata, observed state, suggested end time, first/last seen, source, and timestamps. `(session_id, resource_type, external_id)` is unique and session deletion cascades. |
+| `workflow_notes` | Workspace-scoped text attached to an item, a session, or both. `deleted_at` implements soft deletion; a check constraint requires at least one target. Item/session/workspace deletion cascades. |
+| `workflow_events` | Append-only activity records with event type/source, optional project/worktree/item/session scope, occurred/recorded times, optional JSON payload, and optional expiry. Event item/session identifiers are metadata rather than foreign keys so history can outlive entity cleanup. |
+
+Indexes cover workspace/project/status queries, item parent traversal,
+session/item lookup, resource external identity, note targets/deletion, and
+event keyset/expiry scans. Enum values persist as lowercase `snake_case`
+strings, while API-facing structs use `camelCase` serde fields.
+`WorkflowWorkspace::locator` is skipped during serialization because it is a
+canonical filesystem locator, not client data.
+
+**Domain invariants:**
+
+- `ItemKind`: `Plan`, `Phase`, `Task`; a Plan is root-only, a Phase requires a
+  same-project/target Plan parent, and a Task may be standalone or child of a
+  Plan/Phase. Task parents, cycles, cross-workspace/project/target parents, and
+  hierarchy depth over three levels are rejected.
+- `ItemStatus`: `Backlog`, `Next`, `InProgress`, `Blocked`, `Done`, `Canceled`.
+  Open-state transitions, completion/cancellation, and reopen-to-`InProgress`
+  are validated explicitly.
+- `SessionStatus`: `Running`, `Ended`, `Abandoned`; only `Running` is active.
+  Manual session end time must not precede start time.
+- `ResourceLinkType`: `Terminal`, `Agent`. `ResourceObservedState` is
+  `Attached`, `Exited`, `Stale`, `Detached`, `Crashed`, or `Unknown`.
+- `WorkflowSource`: `Manual`, `Terminal`, `Git`, `Agent`, or `System`.
+  `WorkflowEventType` is a closed set of item, session, resource, note, and
+  workspace activity classifications.
+- Titles are trimmed and capped at 200 characters; note bodies at 8 KiB;
+  external IDs at 200 characters; harness labels at 64 characters; run IDs at
+  128 characters; event JSON payloads at 4 KiB.
+
+Enum implementations provide stable `as_str()`, `Display`, and case-insensitive
+`FromStr` conversions. Request parsing rejects unknown values and SQL `CHECK`
+constraints provide a second write boundary. Invalid legacy enum values fall
+back to domain defaults during reads instead of aborting an overview.
+
+**WorkflowService boundary:**
+
+`server/src/workflow/service.rs` owns the current-profile/workspace boundary
+between handlers and the synchronous store. It holds `WorkflowStore`, the
+configuration handle, `WorkspaceTargetResolver`, the shared workspace guard,
+and `PtySessionManager`. It captures the current config locator/name/projects
+before database work, lazily resolves the workflow workspace, validates
+project/worktree targets, and dispatches startup terminal-link reconciliation.
+Omitted `worktreePath` means the configured root; explicit paths must be
+absolute and currently registered by Git.
+
+`WorkflowStore` calls are dispatched through `tokio::task::spawn_blocking`.
+This keeps SQLite mutex/transaction work off the async executor and avoids
+holding configuration or target locks across database calls. `AppState` keeps
+an optional `Arc<WorkflowService>`; `main.rs` builds it from the existing
+`SessionStore::connection()` and never opens a second workflow database. A
+missing workflow service returns `503 workflow_store_unavailable` only for
+workflow routes, leaving PTY and IDE APIs operational.
+
+**Protected REST surface:**
+
+| Route | Responsibility |
+| --- | --- |
+| `GET /api/workflow/overview` | Bounded workspace, project, Plan/Phase/Task tree, notes, active sessions, progress, and recent events. |
+| `GET /api/workflow/events` | Descending `(recorded_at, id)` keyset history with opaque cursor. |
+| `POST /api/workflow/items`; `PATCH/DELETE /api/workflow/items/{id}` | Plan-first item mutations; PATCH/DELETE require `updatedAt` CAS. |
+| `POST /api/workflow/sessions`; `POST /api/workflow/sessions/{id}/end`; `POST /api/workflow/sessions/{id}/abandon` | Manual session lifecycle with explicit RFC3339 work times. |
+| `POST/DELETE /api/workflow/sessions/{id}/links` | Terminal/agent resource link and CAS unlink. |
+| `POST /api/workflow/notes`; `DELETE /api/workflow/notes/{id}` | Durable note creation and CAS soft deletion. |
+| `DELETE /api/workflow/history` | Explicit permanent purge of old events and soft-deleted notes. |
+
+The route group inherits the existing auth middleware and applies a focused
+32 KiB request limit. Request DTOs deny unknown fields and use camelCase.
+Mutation responses are `{ resource, replayed, eventId }`; retries with the
+same UUID request ID return the current resource with `replayed: true`.
+DELETE responses are typed tombstones. Workflow errors map to sanitized stable
+codes: 400 for invalid/domain-limit requests, 404 for missing scoped entities,
+409 for CAS, target, and transition conflicts, 413 when the route body cap is
+exceeded before handler execution, and 503 for unavailable workflow storage.
+
+Overview reads are bounded to 100 projects, 500 items, and 100 running
+sessions, with a `truncated` flag. Item progress contains factual tracked and
+completed Task counts only when descendant Tasks exist. Event history defaults
+to 50 rows and caps callers at 100; keyset order is
+`(recorded_at DESC, id DESC)`.
+
+Mutating repository wrappers lock the shared connection, open a transaction,
+run the focused `_tx` helper, append an optional event in that transaction,
+and commit only after validation and entity mutation succeed. Any error rolls
+back both entity and event. Resource links upsert by natural identity;
+observation processing updates only link health, incarnation, last-seen, and
+optional suggested end time. It never infers or mutates manual session
+status/timestamps. Notes soft-delete before physical purge, while item
+deletion cascades descendants.
+
+`WorkflowStoreError` distinguishes SQLite, model-validation, not-found,
+duplicate-request, optimistic-conflict, and hierarchy failures so API adapters
+do not match error strings. Workflow API integration coverage is in
+`server/tests/workflow_api.rs`; domain/store coverage remains in
+`server/src/workflow/tests.rs`. See [Workflow API reference](./workflow-api.md)
+for request/response fields and examples.
+
+**Terminal lifecycle correlation (Phase 03):**
+
+`PtySessionManager` receives a clone-cheap `WorkflowObservationRecorder`.
+Construction defaults to `NoopWorkflowObservationRecorder`; production wiring
+installs `BoundedObservationRecorder` after the shared workflow store exists.
+PTY reader and restart-supervisor paths call only non-blocking `try_send` into a
+`sync_channel(256)`. The dedicated observation worker is the only component
+that opens workflow SQLite transactions. A full queue increments a bounded
+drop counter and logs; worker/storage errors are logged. Neither condition
+blocks PTY input, output, restart, or removal paths.
+
+The closed `WorkflowObservation` payload permits only terminal session ID,
+concrete incarnation, configured project, validated worktree target, server
+observation time, exit code, restart count/delay, and action. It excludes
+command lines, arguments, CWD, environment, prompts, terminal output, and
+arbitrary adapter JSON. Create/final-exit/removal observations preserve ordered
+delivery; restart observations are incarnation-aware and replay-safe.
+
+Terminal link state is distinct from manual workflow-session lifecycle:
+
+| Link state | Transition source |
+| --- | --- |
+| `Attached` | Successful PTY create/restart or live startup reconciliation. |
+| `Stale` | Exit observed with an automatic restart pending. |
+| `Exited` | Final exit observed with code `0`. |
+| `Crashed` | Final exit observed with non-zero or unavailable code. |
+| `Detached` | Explicit PTY removal or active (`attached`/`stale`) link missing or dead during startup reconciliation. |
+
+An incoming observation with an older incarnation is ignored. Equal replay
+observations produce no duplicate event because their deterministic event ID
+already exists; a newer incarnation may update the link. Final exit and
+removal can set `suggested_end_time` for user review but never set
+`workflow_sessions.ended_at`, change `status`, or abandon a manual session.
+This also applies to direct Plan attachments; no Phase or Task is synthesized.
+
+Startup ordering is restore first, reconcile second. After
+`restore_sessions_with_state` returns, `main.rs` gathers the live
+`(sessionId, incarnation)` identities from `PtySessionManager::list()` and
+calls `WorkflowService::reconcile_terminal_links()`. Live links become
+`Attached` with the current incarnation; missing/dead links transition to
+`Detached` only when their persisted state is `Attached` or `Stale`.
+Already-final `Exited`/`Crashed` links remain unchanged. A clean restart with
+identical live identities causes no needless update or duplicate observation
+event.
+
+Agent resources are manual in this MVP. The protected link API accepts a
+bounded `harnessLabel` (64 characters) and `runId` (128 characters), validates
+the session target, and stores no process or prompt data. No automatic
+harness producer, command inspection, lifecycle enum, or generic observation
+endpoint is shipped.
+
+Startup runs workflow retention purge once and then every 24 hours. Purge
+removes expired events and old soft-deleted notes in batches of 500. API event
+constructors currently assign the 90-day default expiry directly; the
+`workflow_event_retention_days` setting is validated/exposed but custom event
+expiry is not yet wired into those constructors. The deleted-note retention
+setting is consumed by automatic purge.
+
+### Workflow Client Types, Transport, and Query State (Phase 04)
+
+The shared UI package adds a client-side boundary over the protected workflow
+REST API. It keeps wire DTOs, pure domain semantics, transport mapping, and
+React Query state in separate modules; the server remains authoritative for
+validation, workspace scope, timestamps, and mutation replay.
+
+```mermaid
+flowchart LR
+    Profile["Active server profile"] --> Hash["profileScopedQueryKeyHash"]
+    Hash --> Cache["TanStack Query cache"]
+    Replace["Transport init/reconfigure/reset"] --> Generation["Transport generation"]
+    Generation --> Overview["useWorkflowOverview key"]
+    Cache --> Overview
+    Overview --> Facade["api.workflow"]
+    Facade --> Mapper["WsTransport channelToEndpoint"]
+    Mapper --> REST["Protected /api/workflow/* REST"]
+```
+
+`workflow-dto-types.ts` mirrors camelCase response/request shapes and uses
+closed unions for item kind/status, session status, resource type/observed
+state, provenance, and event type. Optional fields retain server distinctions
+such as omitted versus `null` timestamps or targets. `workflow-domain-helpers.ts`
+contains pure Plan-first parent validation, status/attention predicates,
+factual tracked-Task progress, timestamp/interval checks, elapsed formatting,
+and deterministic item ordering. `workflow-types.ts` re-exports both modules.
+
+`client.ts` exposes a thin `api.workflow` facade for overview, event pages,
+item CRUD, session start/end/abandon, resource link/unlink, note create/delete,
+and history purge. Each method delegates a typed response through the active
+`Transport`; it does not know whether the host is web, native, or idle.
+
+`WsTransport` maps 13 stable workflow channel names to protected REST methods.
+It URL-encodes item/session/note identifiers and event cursors, removes path
+identifiers from JSON bodies, preserves request timestamps, sends profile-bound
+auth through the normal `invoke` path, and converts non-2xx responses to
+`ApiRequestError`. Workflow calls use REST; the same class's persistent
+WebSocket remains the terminal and push-event channel.
+
+The host `QueryClient` uses `profileScopedQueryKeyHash`, hashing
+`[activeProfileId, queryKey]` so equal workflow keys from different server
+profiles cannot collide. The transport singleton increments a generation when
+its instance changes. `useWorkflowOverview` subscribes to that generation and
+uses `['workflow', 'overview', transportGeneration]`; an old response settles
+only its old query entry. Events use
+`['workflow', 'events', { cursor, limit }]` under the same root.
+
+Overview/events hooks preserve prior observer data while refetching, use no
+polling interval, and support explicit `enabled` control. Mutation wrappers
+invalidate `['workflow']` only after success; failures leave cached authority
+and typed errors intact. Workflow server state is memory-only. Component-local
+selection/filter/draft/focus/elapsed-clock state does not enter URL search
+params, localStorage, terminal registries, or Zustand stores.
+
+See [Workflow Client State](./workflow-client-state.md) for the DTO field
+catalog, operation table, hook list, and Phase 04 verification. The server
+contract remains in [Workflow API](./workflow-api.md).
+
+### Workflow Context Surface (UI Phase 05)
+
+The shared React package adds a responsive workflow context surface above the
+Phase 04 query boundary. `WorkflowContextSurface` requests one target-scoped
+overview, derives display state with pure selectors, and renders the same
+workflow information through an ambient ribbon plus either a desktop deck or a
+mobile sheet. Browser and native hosts reuse these components; neither host
+owns a second workflow store.
+
+```mermaid
+flowchart TD
+    Target["ProjectTargetRef"] --> Overview["useWorkflowOverview"]
+    Overview --> Selectors["workflow-selectors"]
+    Selectors --> Surface["WorkflowContextSurface"]
+    Surface --> Ribbon["WorkflowContextRibbon"]
+    Surface --> Desktop["WorkflowContextDeck"]
+    Surface --> Mobile["WorkflowContextSheet"]
+    Desktop --> Lists["Project / item / execution molecules"]
+    Mobile --> Lists
+    Lists --> Actions["use-workflow-surface-actions"]
+    Actions --> Mutations["api.workflow mutations"]
+    Mutations --> Invalidate["['workflow'] invalidation"]
+    Invalidate --> Overview
+```
+
+The selector boundary keeps target behavior deterministic: project must match,
+and an explicit `worktreePath` must match exactly. Active selection considers
+running sessions on a root Plan or standalone Task and its descendants before
+falling back to status priority and newest update time. Item trees flatten in
+pre-order for lookup, while progress labels expose only factual tracked and
+completed Task counts. The backend overview remains authoritative and bounded;
+the UI does not infer missing child items.
+
+**Component responsibilities:**
+
+| Component | Architectural role |
+| --- | --- |
+| `WorkflowContextRibbon` | `h-9` ambient `region`; target label, active item, status, elapsed duration, latest note/progress, loading/error/retry, and polite live text. |
+| `WorkflowContextDeck` | Open-only non-modal desktop `region`; `320px` minimum, `360px` base, `440px` maximum; two columns at `md`, and `220px / flexible / 300px` panes at `lg`. |
+| `WorkflowContextSheet` | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `35dvh` collapsed and `90dvh` expanded. |
+| `WorkflowProjectList` | Exact target selection plus plan, task, and running-session counts. |
+| `WorkflowItemList` / `WorkflowItemRow` | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy. |
+| `WorkflowQuickCapture` | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request. |
+| `WorkflowExecutionList` / `WorkflowSessionCard` | Explicit start/end timestamps, Now actions, elapsed duration, abandon, observed links, and manual Agent Harness/Agent Run metadata. |
+
+The surface owns only presentation state: open state, selected target/item,
+quick-capture drafts, mobile segment, and a single one-second elapsed timer
+while a running session is reported and the document is visible. React Query
+owns the overview and mutation state. No workflow presentation state is
+persisted in URL parameters, `localStorage`, terminal registries, or Zustand.
+
+`workflow-focus.ts` accepts `Mod+Shift+KeyW` only when the event and active
+element are not native editable controls, contenteditable, Monaco, xterm,
+dialogs, or explicitly suppressed/native-input surfaces. The desktop deck
+closes on Escape without a focus trap; the mobile sheet uses Dialog focus
+semantics. The focus helper restores a connected element defensively.
+
+`use-workflow-surface-actions.ts` maps UI actions to typed workflow mutations,
+generates a UUID `requestId` per request, preserves the selected target, and
+uses current ISO timestamps for status/session writes. Observed resource
+`suggestedEndTime` values only prefill a draft after an explicit user action;
+observation never changes manual workflow-session status or timestamps. Creating
+an item with immediate start creates the follow-up session with the current
+time.
+
+The focused Phase 05 report records 62/62 targeted UI/workflow tests, with
+1,493/1,493 full UI tests and 907/907 Rust tests (two ignored). Those tests do
+not qualify browser geometry, safe-area/touch behavior, focus continuity, or
+real host integration. Current implementation notes: resource-attention fields
+from `selectAttentionSummary` remain false/zero, and item-list action
+callbacks are broader than the controls currently rendered by the list.
+
+### WorkspacePage and shell integration (UI Phase 06)
+
+`WorkspacePage` is the frontend composition boundary for workflow-to-workspace
+navigation. It builds one memoized `workflowToolbarActions` node containing
+`WorkflowContextSurface`, then passes it through the existing `toolbarActions`
+slot on `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell`.
+Desktop shells render a 40px companion row above their existing content;
+`MobileWorkspaceShell` renders the action in its safe-area-aware inline row.
+The workflow surface is not a route, activity-bar tool, mobile surface, TopNav
+item, or second terminal lifecycle.
+
+```mermaid
+flowchart LR
+    Surface["WorkflowContextSurface"] -->|onOpenTerminal| Reveal["resolveWorkflowTerminalReveal"]
+    Reveal --> Select["WorkspacePage.handleSelectTerminal"]
+    Select --> Existing["useTerminalManager / existing URL semantics"]
+    Surface -->|onSelectTarget| Target["resolveWorkflowTargetSelection"]
+    Target --> Project["setActiveProject"]
+    Target --> Store["useProjectTargetStore.selectTarget"]
+    Store --> Panels["Existing target-aware panels"]
+```
+
+`workflow-workspace-integration.ts` is pure integration policy.
+`deriveWorkflowTerminalCandidates` merges stable IDs from `sessionMap` and
+`mountedSessions`, retains project/worktree/alive/incarnation observations, and
+marks unavailable targets without carrying command, CWD, or terminal output.
+`resolveWorkflowTerminalReveal` fails closed for blank, profile-mismatched, or
+unknown sessions, returns a compact Terminal-surface request only when needed,
+and leaves actual selection to `handleSelectTerminal`.
+`resolveWorkflowTargetSelection` requires a configured project and available
+worktree before the existing workspace and target stores are updated.
+
+`onOpenTerminal` is drilled from `WorkflowContextSurface` through
+`WorkflowContextDeck` / `WorkflowContextSheet`, `WorkflowExecutionList`, and
+`WorkflowSessionCard`; `onSelectTarget` flows through the surface, deck/sheet,
+and `WorkflowProjectList`. The card invokes terminal reveal only on an explicit
+linked-terminal click.
+Terminal observations and suggested end times remain read-only; manual workflow
+session mutations still require explicit user input.
+
+The `WorkflowContextSurface` instance is keyed by `activeProfileId`. A profile
+switch therefore resets only workflow presentation (open state, selection,
+mobile segment, quick-capture drafts, and elapsed clock) while leaving terminal
+buffers, editor state, mounted sessions, and Browser keep-alive outside the key
+boundary. No new URL/search parameter or duplicate project/target store is
+introduced.
+
+Phase 06 verification: targeted UI tests 62/62, full UI suite 1,515/1,515,
+relevant Chromium smoke 8/8, Rust tests 907/907 executed (2 ignored), and UI
+TypeScript compilation passed. Full browser geometry/touch/safe-area/focus and
+host-integration qualification remain Phase 07 work.
 
 ### Persist Worker (Phase 05)
 
@@ -1714,7 +2078,7 @@ hash-bound packaged runtime evidence owned by a release engineer. Windows/macOS/
 show the listener works for a second local process before Stop and is unreachable after Stop, scope
 switch, and graceful app exit; missing/manual-pending evidence is not a release pass.
 
-### pty/ (Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅)
+### pty/ (Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅ / Phase 03: Workflow correlation ✅)
 
 Manages portable terminal sessions with automatic restart capabilities and idempotent creation.
 
@@ -1732,6 +2096,10 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
 - `remove()` immediately evicts session + adds to killed set (no restart on user kill)
 - `spawn_cleanup_task()` runs every 30s: prunes expired tombstones AND orphaned killed set entries (prevents unbounded memory growth)
 - Bounded respawn channel (256 slots) prevents DoS
+- A clone-cheap `WorkflowObservationRecorder` receives create, pending-restart,
+  restarted, final-exit, and removal facts through non-blocking `try_send` to
+  the separate workflow observation worker. It carries no command, CWD, env, or
+  output data and never opens SQLite from PTY reader/supervisor paths.
 
 **api/terminal.rs** — terminal creation env resolution:
 
@@ -2782,26 +3150,33 @@ export interface SessionInfo {
 ```
 User launches terminal
   ↓
-terminal:create (with optional worktreePath) → Backend validates target and creates PTY
+terminal:create (optional worktreePath) → backend validates target and creates PTY
   ↓
-Frontend stores the returned SessionInfo (alive=true)
+WorkflowObservation::TerminalCreated (ID, incarnation, target, server time)
+  └→ non-blocking try_send → sync_channel(256) → SQLite worker → link=Attached
   ↓
-TerminalPanel mounts, xterm renders, streams output
+Frontend stores SessionInfo (alive=true); TerminalPanel mounts and streams output
   ↓
 Process exits
+  ├→ terminal:exit (willRestart flag) → TerminalPanel writes exit banner
+  └→ WorkflowObservation::TerminalExitPendingRestart or TerminalFinalExit
+      └→ worker → link=Stale, Exited, or Crashed (manual session unchanged)
   ↓
-terminal:exit (willRestart flag set by backend)
+If willRestart=true, supervisor creates a new incarnation
+  ├→ process:restarted → TerminalPanel writes restart banner
+  └→ WorkflowObservation::TerminalRestarted → worker → link=Attached
   ↓
-TerminalPanel writes exit banner (color based on exit code + willRestart)
-  ↓
-If willRestart=true, waits for restart...
-  ↓
-process:restarted event
-  ↓
-TerminalPanel writes restart banner, UI updates badge
-  ↓
-xterm resumes streaming (same session ID, new PTY)
+xterm resumes streaming under the same public session ID
 ```
+
+On server restart, `restore_sessions_with_state` runs before workflow
+reconciliation. `main.rs` collects live `(sessionId, incarnation)` identities
+from `PtySessionManager::list()` and calls
+`WorkflowService::reconcile_terminal_links()`. Live links return to
+`Attached`; active links missing from the restored set become `Detached`, while
+already-final `Exited`/`Crashed` links remain unchanged. This path updates only
+link observation fields and leaves manual workflow-session status and
+timestamps unchanged.
 
 **FileTree.tsx (react-arborist)**
 
