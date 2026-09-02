@@ -4,6 +4,7 @@ import type { ProjectTargetRef } from "@/api/client.js";
 import type { ItemKind, ItemStatus } from "@/api/workflow-dto-types.js";
 import { Button } from "@/components/atoms/Button.js";
 import { Input } from "@/components/ui/Input.js";
+import { Textarea } from "@/components/ui/Textarea.js";
 import { Label } from "@/components/ui/Label.js";
 import {
   Select,
@@ -148,13 +149,13 @@ export function WorkflowQuickCapture({
 
       <div className="flex flex-col gap-1">
         <Label htmlFor="wf-cap-summary" className="text-xs">Summary</Label>
-        <Input
+        <Textarea
           id="wf-cap-summary"
           placeholder="Brief note (optional)"
           value={summary}
           onChange={(e) => setSummary(e.target.value)}
           disabled={isSubmitting}
-          className="h-8 text-xs"
+          className="min-h-[48px] text-xs resize-y"
         />
       </div>
 
