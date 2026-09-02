@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-02): 1,534 files, 3,216,530 tokens, and 13,034,765 characters.
+- Repomix snapshot (2026-09-02): 1,538 files, 3,237,062 tokens, and 13,124,780 characters.
 - Repomix security scanning excluded three suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
@@ -205,7 +205,8 @@ status/update ordering, and expose factual tracked-Task labels. Query data
 remains memory-only; presentation state is not persisted. Current resource
 attention fields remain false/zero, and several item-list action callbacks are
 accepted but not rendered as controls. Browser geometry, touch/safe-area, focus
-continuity, and host-integration qualification remain Phase 07 work.
+continuity and host-integration qualification were completed in Phase 07; see
+the verification section below.
 
 ### WorkspacePage and shell integration (Phase 06)
 
@@ -249,6 +250,25 @@ explicit workflow mutation.
 Phase 06 verification: targeted UI tests 62/62, full UI suite 1,515/1,515,
 relevant Chromium smoke 8/8, Rust tests 907/907 executed (2 ignored), and UI
 TypeScript compilation passed. Formal source coverage remains unavailable.
+
+### Verification, rollout, observability, and docs (Phase 07)
+
+Phase 07 closes the workflow release gates. The additive migration 010 survives
+restart and rollback; older binaries ignore workflow tables, and rollback keeps
+workflow data. `DiagnosticStore` records fixed-cardinality operation duration,
+queue-drop, reconciliation, and storage-error metrics without IDs, paths,
+notes, commands, CWD, environment, prompts, or output. A profile-scoped
+overview 404 maps to feature-unavailable, suppresses query retries, and hides
+workflow controls while authentication and 5xx failures remain explicit errors.
+Keyboard/focus handling returns focus on Escape, preserves terminal/editor
+ownership, enforces 44px controls, safe-area/35–90dvh sheets, reduced motion,
+and no horizontal overflow.
+
+Phase 07 validation: focused Rust gates 134/134 passed (one PTY test ignored),
+focused UI Vitest 122/122 passed across 13 files, and real-server Chromium
+browser 4/4 passed against the actual no-auth backend. See the
+[Phase 07 plan](../plans/260901-0919-workflow-tracking-notes/phase-07-verification-rollout-observability-and-docs.md)
+and [Workflow API](./workflow-api.md).
 
 ## Architecture Layers
 
