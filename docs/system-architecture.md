@@ -1073,6 +1073,78 @@ See [Workflow Client State](./workflow-client-state.md) for the DTO field
 catalog, operation table, hook list, and Phase 04 verification. The server
 contract remains in [Workflow API](./workflow-api.md).
 
+### Workflow Context Surface (UI Phase 05)
+
+The shared React package adds a responsive workflow context surface above the
+Phase 04 query boundary. `WorkflowContextSurface` requests one target-scoped
+overview, derives display state with pure selectors, and renders the same
+workflow information through an ambient ribbon plus either a desktop deck or a
+mobile sheet. Browser and native hosts reuse these components; neither host
+owns a second workflow store.
+
+```mermaid
+flowchart TD
+    Target["ProjectTargetRef"] --> Overview["useWorkflowOverview"]
+    Overview --> Selectors["workflow-selectors"]
+    Selectors --> Surface["WorkflowContextSurface"]
+    Surface --> Ribbon["WorkflowContextRibbon"]
+    Surface --> Desktop["WorkflowContextDeck"]
+    Surface --> Mobile["WorkflowContextSheet"]
+    Desktop --> Lists["Project / item / execution molecules"]
+    Mobile --> Lists
+    Lists --> Actions["use-workflow-surface-actions"]
+    Actions --> Mutations["api.workflow mutations"]
+    Mutations --> Invalidate["['workflow'] invalidation"]
+    Invalidate --> Overview
+```
+
+The selector boundary keeps target behavior deterministic: project must match,
+and an explicit `worktreePath` must match exactly. Active selection considers
+running sessions on a root Plan or standalone Task and its descendants before
+falling back to status priority and newest update time. Item trees flatten in
+pre-order for lookup, while progress labels expose only factual tracked and
+completed Task counts. The backend overview remains authoritative and bounded;
+the UI does not infer missing child items.
+
+**Component responsibilities:**
+
+| Component | Architectural role |
+| --- | --- |
+| `WorkflowContextRibbon` | `h-9` ambient `region`; target label, active item, status, elapsed duration, latest note/progress, loading/error/retry, and polite live text. |
+| `WorkflowContextDeck` | Open-only non-modal desktop `region`; `320px` minimum, `360px` base, `440px` maximum; two columns at `md`, and `220px / flexible / 300px` panes at `lg`. |
+| `WorkflowContextSheet` | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `50dvh` collapsed and `90dvh` expanded. |
+| `WorkflowProjectList` | Exact target selection plus plan, task, and running-session counts. |
+| `WorkflowItemList` / `WorkflowItemRow` | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy. |
+| `WorkflowQuickCapture` | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request. |
+| `WorkflowExecutionList` / `WorkflowSessionCard` | Explicit start/end timestamps, Now actions, elapsed duration, abandon, observed links, and manual Agent Harness/Agent Run metadata. |
+
+The surface owns only presentation state: open state, selected target/item,
+quick-capture drafts, mobile segment, and a single one-second elapsed timer
+while a running session is reported and the document is visible. React Query
+owns the overview and mutation state. No workflow presentation state is
+persisted in URL parameters, `localStorage`, terminal registries, or Zustand.
+
+`workflow-focus.ts` accepts `Mod+Shift+KeyW` only when the event and active
+element are not native editable controls, contenteditable, Monaco, xterm,
+dialogs, or explicitly suppressed/native-input surfaces. The desktop deck
+closes on Escape without a focus trap; the mobile sheet uses Dialog focus
+semantics. The focus helper restores a connected element defensively.
+
+`use-workflow-surface-actions.ts` maps UI actions to typed workflow mutations,
+generates a UUID `requestId` per request, preserves the selected target, and
+uses current ISO timestamps for status/session writes. Observed resource
+`suggestedEndTime` values only prefill a draft after an explicit user action;
+observation never changes manual workflow-session status or timestamps. Creating
+an item with immediate start creates the follow-up session with the current
+time.
+
+The focused Phase 05 report records 62/62 targeted UI/workflow tests, with
+1,493/1,493 full UI tests and 907/907 Rust tests (two ignored). Those tests do
+not qualify browser geometry, safe-area/touch behavior, focus continuity, or
+real host integration. Current implementation notes: resource-attention fields
+from `selectAttentionSummary` remain false/zero, and item-list action
+callbacks are broader than the controls currently rendered by the list.
+
 ### Persist Worker (Phase 05)
 
 **Purpose**: Async worker thread that batches terminal session buffers and persists them to SQLite while bounding PTY snapshot memory use.
