@@ -11,11 +11,12 @@
 - Depends on: Phases 03–05. Enables Phase 07.
 
 ## Overview
-- **Date:** 2026-09-01
+- **Date:** 2026-09-02
 - **Description:** Mount one workflow surface in existing workspace shell seams and wire authoritative project/target and terminal navigation without routes, duplicate state, or terminal remounts.
 - **Priority:** P2
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Implementation status:** Complete / DONE (2026-09-02)
+- **Review status:** Complete / DONE (2026-09-02; approved 9.8/10)
+- **Validation:** Targeted UI tests 62/62, full UI suite 1,515/1,515, Chromium smoke 8/8, Rust tests 907/907 executed (2 ignored), and UI package compilation passed. See [test report](../reports/tester-260902-1430-phase-06-workspace-page-and-shell-integration.md) and [review report](../reports/code-reviewer-260902-1440-phase-06-workspace-page-and-shell-integration.md).
 
 ## Key Insights
 - All three shells already expose `toolbarActions`; this is the supported 40px companion-row seam. No shell layout API change is required.
@@ -68,14 +69,14 @@
 10. Extend shell tests to prove toolbar actions coexist with editor/terminal/overlay content and preserve existing safe-area class decisions.
 
 ## Todo List
-- [ ] Terminal observations and suggestions remain read-only until explicit workflow mutation.
-- [ ] Current-profile reset clears workflow drafts/suggestions without touching terminal/editor state.
-- [ ] Plan-only context reaches every shell without requiring or synthesizing Phase/Task children.
-- [ ] One workflow node reaches every current shell branch.
-- [ ] Terminal links use existing `handleSelectTerminal` semantics.
-- [ ] Target selection reuses project-target store and validation.
-- [ ] Profile switch resets only workflow presentation.
-- [ ] Tests guard terminal/editor/browser-debug continuity boundaries.
+- [x] Terminal observations and suggestions remain read-only until explicit workflow mutation.
+- [x] Current-profile reset clears workflow drafts/suggestions without touching terminal/editor state.
+- [x] Plan-only context reaches every shell without requiring or synthesizing Phase/Task children.
+- [x] One workflow node reaches every current shell branch.
+- [x] Terminal links use existing `handleSelectTerminal` semantics.
+- [x] Target selection reuses project-target store and validation.
+- [x] Profile switch resets only workflow presentation.
+- [x] Tests guard terminal/editor/browser-debug continuity boundaries.
 
 ## Success Criteria
 - No route/NavLink or new search parameter is added; current terminal deep links remain byte-for-byte governed by `useTerminalManager`.
