@@ -1,11 +1,21 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveTerminalFloatingPanelZIndex,
   resolveTerminalWorkspacePanelActivation,
   TERMINAL_FLOATING_PANEL_BASE_Z_INDEX,
   TERMINAL_FLOATING_PANEL_FRONT_Z_INDEX,
 } from "@/lib/terminal-workspace-panel.js";
+import { TerminalWorkspaceShell } from "./TerminalWorkspaceShell.js";
+
+vi.mock("@/components/organisms/TopNav.js", () => ({
+  TopNav: () => <div data-testid="top-nav" />,
+}));
+
+vi.mock("@/hooks/use-sidebar-collapse.js", () => ({
+  useSidebarCollapse: () => ({ collapsed: false, toggle: vi.fn() }),
+}));
 
 describe("resolveTerminalFloatingPanelZIndex", () => {
   it("keeps both floating panels at the baseline before activation", () => {
@@ -57,4 +67,24 @@ describe("resolveTerminalWorkspacePanelActivation", () => {
       ).toBeNull();
     },
   );
+});
+
+describe("TerminalWorkspaceShell rendering", () => {
+  it("renders toolbarActions as companion row above terminal content", () => {
+    const markup = renderToStaticMarkup(
+      <TerminalWorkspaceShell
+        terminalContent={<div data-testid="term-content">Terminal Area</div>}
+        fleetContent={<div>Fleet</div>}
+        gitContent={<div>Git</div>}
+        projectContent={<div>Project</div>}
+        workspaceMode="terminal"
+        onWorkspaceModeChange={() => {}}
+        toolbarActions={<div data-testid="workflow-toolbar">Workflow Actions</div>}
+      />,
+    );
+
+    expect(markup).toContain('data-testid="workflow-toolbar"');
+    expect(markup).toContain('data-testid="term-content"');
+    expect(markup).toContain("Workflow Actions");
+  });
 });

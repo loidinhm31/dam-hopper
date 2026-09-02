@@ -26,6 +26,7 @@ pub mod terminal;
 pub mod tunnel;
 pub mod usage;
 pub mod usage_sessions;
+pub mod workflow;
 // Keep the pre-extraction modules available for compatibility with existing
 // module-local tests; the routes use the shared media adapters above.
 #[allow(dead_code)]

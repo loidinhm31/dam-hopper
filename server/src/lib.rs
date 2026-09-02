@@ -19,6 +19,7 @@ pub mod telemetry;
 pub mod tunnel;
 pub mod utils;
 pub mod workspace_target;
+pub mod workflow;
 
 /// Check inotify watch limit at startup (Linux only).
 ///
