@@ -4,11 +4,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "./client.js";
+import { ApiRequestError, api } from "./client.js";
 import { profileScopedQueryKeyHash } from "./query-client.js";
-import { setActiveProfile } from "./server-config.js";
 import {
+  reconfigureTransport,
+  type Transport,
+} from "./transport.js";
+import {
+  classifyWorkflowOverviewError,
   generateWorkflowRequestId,
+  isWorkflowOverviewUnavailable,
   useAbandonWorkflowSession,
   useCreateWorkflowItem,
   useCreateWorkflowNote,
@@ -24,6 +29,7 @@ import {
   useWorkflowOverview,
   workflowQueryKeys,
 } from "./workflow-queries.js";
+import type { WorkflowOverviewAvailability } from "./workflow-queries.js";
 import type {
   EventsDto,
   ItemDto,
@@ -34,6 +40,14 @@ import type {
   SessionDto,
   TombstoneDto,
 } from "./workflow-types.js";
+
+type OverviewQuerySnapshot = {
+  availability: WorkflowOverviewAvailability;
+  isUnavailable: boolean;
+  data: OverviewDto | undefined;
+  isLoading: boolean;
+  error: Error | null;
+};
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -171,6 +185,130 @@ describe("workflow-queries", () => {
       expect(overviewSpy).toHaveBeenCalledTimes(1);
       await vi.waitFor(() => {
         expect(hookData).toEqual(mockOverview);
+      });
+    });
+
+
+    it("classifies only an overview ApiRequestError 404 as unavailable", () => {
+      expect(
+        classifyWorkflowOverviewError(new ApiRequestError("missing", 404)),
+      ).toBe("unavailable");
+      expect(
+        isWorkflowOverviewUnavailable(new ApiRequestError("missing", 404)),
+      ).toBe(true);
+      expect(
+        classifyWorkflowOverviewError(new ApiRequestError("unauthorized", 401)),
+      ).toBe("error");
+      expect(
+        classifyWorkflowOverviewError(new ApiRequestError("server error", 500)),
+      ).toBe("error");
+      expect(classifyWorkflowOverviewError(new Error("missing"))).toBe("error");
+      expect(classifyWorkflowOverviewError({ status: 404 })).toBe("error");
+    });
+
+    it("exposes a stable unavailable state for an overview 404", async () => {
+      vi.spyOn(api.workflow, "overview").mockRejectedValue(
+        new ApiRequestError("workflow route unavailable", 404),
+      );
+
+      let latestQuery: OverviewQuerySnapshot | undefined;
+      function TestHarness() {
+        latestQuery = useWorkflowOverview();
+        return <div>{latestQuery.availability}</div>;
+      }
+
+      const container = document.createElement("div");
+      document.body.append(container);
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(
+          <QueryClientProvider client={queryClient}>
+            <TestHarness />
+          </QueryClientProvider>,
+        );
+      });
+
+      await vi.waitFor(() => {
+        expect(latestQuery?.availability).toBe("unavailable");
+      });
+      expect(latestQuery?.isUnavailable).toBe(true);
+      expect(latestQuery?.error).toBeInstanceOf(ApiRequestError);
+    });
+
+    it.each([401, 500])(
+      "keeps overview status %s as a retryable error",
+      async (status) => {
+        const error = new ApiRequestError(`HTTP ${status}`, status);
+        vi.spyOn(api.workflow, "overview").mockRejectedValue(error);
+
+        let latestQuery: OverviewQuerySnapshot | undefined;
+        function TestHarness() {
+          latestQuery = useWorkflowOverview();
+          return <div>{latestQuery.availability}</div>;
+        }
+
+        const container = document.createElement("div");
+        document.body.append(container);
+        root = createRoot(container);
+
+        await act(async () => {
+          root?.render(
+            <QueryClientProvider client={queryClient}>
+              <TestHarness />
+            </QueryClientProvider>,
+          );
+        });
+
+        await vi.waitFor(() => {
+          expect(latestQuery?.availability).toBe("error");
+        });
+        expect(latestQuery?.isUnavailable).toBe(false);
+        expect(latestQuery?.error).toBe(error);
+      },
+    );
+
+    it("does not flash the prior overview after transport generation changes", async () => {
+      let resolveNext: ((overview: OverviewDto) => void) | undefined;
+      vi.spyOn(api.workflow, "overview")
+        .mockResolvedValueOnce(mockOverview)
+        .mockImplementationOnce(
+          () =>
+            new Promise<OverviewDto>((resolve) => {
+              resolveNext = resolve;
+            }),
+        );
+
+      let latestQuery: OverviewQuerySnapshot | undefined;
+      function TestHarness() {
+        latestQuery = useWorkflowOverview();
+        return <div>{latestQuery.data?.workspace.name ?? "loading"}</div>;
+      }
+
+      const container = document.createElement("div");
+      document.body.append(container);
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(
+          <QueryClientProvider client={queryClient}>
+            <TestHarness />
+          </QueryClientProvider>,
+        );
+      });
+      await vi.waitFor(() => expect(latestQuery?.data).toEqual(mockOverview));
+
+      await act(async () => {
+        reconfigureTransport({} as Transport);
+      });
+
+      await vi.waitFor(() => {
+        expect(latestQuery?.isLoading).toBe(true);
+      });
+      expect(latestQuery?.data).toBeUndefined();
+
+      await act(async () => {
+        resolveNext?.(mockOverview);
       });
     });
   });

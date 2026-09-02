@@ -18,7 +18,8 @@ export function TopNavWorkspaceModeSwitch({
 }: TopNavWorkspaceModeSwitchProps) {
   return (
     <div
-      className="flex items-center rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)]/60 p-0.5"
+      data-testid="top-nav-workspace-mode-switch"
+      className="flex shrink-0 items-center rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)]/60 p-0.5"
       title={
         workspaceModeShortcutLabel
           ? `Switch workspace mode (${workspaceModeShortcutLabel})`
@@ -32,7 +33,7 @@ export function TopNavWorkspaceModeSwitch({
           onClick={() => onWorkspaceModeChange(mode)}
           aria-pressed={workspaceMode === mode}
           className={cn(
-            "rounded-[3px] px-1.5 py-1 font-bold uppercase tracking-wider transition-colors",
+            "rounded-[3px] px-1.5 py-1 font-bold uppercase tracking-wider transition-colors shrink-0",
             !isCompactWorkspace && "sm:px-2",
             isCompactWorkspace ? compactLabelClass : "text-[10px]",
             workspaceMode === mode

@@ -9,9 +9,10 @@ import {
   RefreshCw,
   FolderGit2,
 } from "lucide-react";
+import type { RefObject } from "react";
 import type { ProjectTargetRef } from "@/api/client.js";
-import { formatElapsedDuration } from "@/api/workflow-domain-helpers.js";
 import type { ItemOverviewNodeDto, SessionDto } from "@/api/workflow-dto-types.js";
+import { formatElapsedDuration } from "@/api/workflow-domain-helpers.js";
 import {
   getTrackedTasksProgressText,
   type AttentionSummary,
@@ -29,9 +30,11 @@ export interface WorkflowContextRibbonProps {
   onToggle: () => void;
   onOpenQuickCapture?: () => void;
   isLoading?: boolean;
+  isUnavailable?: boolean;
   error?: Error | string | null;
   onRetry?: () => void;
   nowMs?: number;
+  triggerRef?: RefObject<HTMLDivElement | null>;
 }
 
 export function WorkflowContextRibbon({
@@ -43,9 +46,11 @@ export function WorkflowContextRibbon({
   onToggle,
   onOpenQuickCapture,
   isLoading = false,
+  isUnavailable = false,
   error = null,
   onRetry,
   nowMs,
+  triggerRef,
 }: WorkflowContextRibbonProps) {
   if (isLoading) {
     return (
@@ -62,6 +67,10 @@ export function WorkflowContextRibbon({
         <div className="h-6 w-16 rounded bg-[var(--color-surface-2)]" />
       </div>
     );
+  }
+
+  if (isUnavailable) {
+    return <div className="flex h-9 w-full items-center gap-2 px-3 text-xs bg-[var(--color-surface)]/80 border-b border-[var(--color-border)] text-[var(--color-text-muted)]" role="status" aria-label="Workflow unavailable for this profile"><Layers className="h-3.5 w-3.5 shrink-0" /><span className="truncate">Workflow tracking is unavailable for this profile.</span></div>;
   }
 
   if (error) {
@@ -95,13 +104,14 @@ export function WorkflowContextRibbon({
   return (
     <div
       className={cn(
-        "flex h-9 w-full items-center justify-between gap-3 px-3 text-xs",
+        "flex h-9 w-full min-w-0 items-center justify-between gap-2 px-2 text-xs sm:gap-3 sm:px-3",
         "border-b border-[var(--color-border)] bg-[var(--color-surface)]/90 backdrop-blur-xs transition-colors",
       )}
       role="region"
       aria-label="Workflow Context Bar"
     >
       <div
+        ref={triggerRef}
         className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden cursor-pointer select-none"
         onClick={onToggle}
         role="button"

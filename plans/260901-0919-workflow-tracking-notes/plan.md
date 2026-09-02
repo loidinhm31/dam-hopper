@@ -1,7 +1,7 @@
 ---
 title: "Workflow Tracking and Continuity"
 description: "Add durable project, task, phase, session, and note continuity inside the existing workspace shells."
-status: in-progress
+status: completed
 priority: P2
 effort: 88h
 branch: feat/workflow-tracking-notes
@@ -14,11 +14,11 @@ created: 2026-09-01
 ## Outcome
 A profile- and workspace-isolated context surface answers what is active, where it runs, what changed, and how to resume without replacing project, target, terminal, editor, or URL state.
 
-**Plan status:** In progress overall; Phase 01 Complete / DONE (2026-09-02), Phase 02 Complete / DONE (2026-09-02, 100%), Phase 03 Complete / DONE (2026-09-02, 100%), Phase 04 Complete / DONE (2026-09-02, 100%), Phase 05 Complete / DONE (2026-09-02, 100%), Phase 06 Complete / DONE (2026-09-02, 100%), Phase 07 pending.
+- **Plan status:** Complete / DONE (2026-09-02); Phases 01–07 Complete / DONE (100%).
 Phase 04 handoff: Strict client DTOs, domain helpers, transport mapping for all 13 workflow operations, and React Query hooks with profile and transport generation isolation verified with 100% pass rates across 51 targeted UI tests, 1,452 full UI tests, and 907 executed Rust tests (2 ignored). See [test report](../reports/tester-260902-1139-phase-04-client-types-transport-query-state.md) and [review report](../reports/code-reviewer-260902-1144-phase-04-client-types-transport-query-state.md).
 Phase 05 handoff: Responsive workflow context surface implementation complete and review approved (9.8/10). Targeted Phase 05 UI tests passed 62/62 (100%); full UI suite passed 1,493/1,493 (100%). See [test report](../reports/tester-260902-1243-phase-05-responsive-workflow-context-surface.md) and [review report](../reports/code-reviewer-260902-1245-phase-05-responsive-workflow-context-surface.md). Ready for Phase 06.
-Phase 06 handoff: WorkspacePage mounts one responsive WorkflowContextSurface through the existing toolbarActions seams for IDE, terminal, and mobile shells; authoritative terminal/target navigation and terminal/editor/browser-debug continuity remain intact, with profile changes resetting workflow presentation only. Targeted UI 62/62, full UI 1,515/1,515, Chromium smoke 8/8, Rust 907/907 executed (2 ignored), UI build, and review 9.8/10 all passed. See [test report](../reports/tester-260902-1430-phase-06-workspace-page-and-shell-integration.md) and [review report](../reports/code-reviewer-260902-1440-phase-06-workspace-page-and-shell-integration.md). Phase 07 remains pending for broader browser, rollout, observability, and docs gates.
-
+Phase 06 handoff: WorkspacePage mounts one responsive WorkflowContextSurface through the existing toolbarActions seams for IDE, terminal, and mobile shells; authoritative terminal/target navigation and terminal/editor/browser-debug continuity remain intact, with profile changes resetting workflow presentation only. Targeted UI 62/62, full UI 1,515/1,515, Chromium smoke 8/8, Rust 907/907 executed (2 ignored), UI build, and review 9.8/10 all passed. See [test report](../reports/tester-260902-1430-phase-06-workspace-page-and-shell-integration.md) and [review report](../reports/code-reviewer-260902-1440-phase-06-workspace-page-and-shell-integration.md).
+Phase 07 handoff: Complete verification, rollout, observability, and documentation across Rust backend, React UI, and real-backend Chromium browser integration. Verified bounded diagnostics metrics, 404 retry-suppression fallback, keyboard/focus accessibility contracts, and full browser continuity journey against an isolated actual no-auth backend. Rust focused suites 134/134 passed, focused UI Vitest 122/122 passed across 13 files, Chromium browser suites 4/4 passed across both files, code review APPROVED.
 ## Scope Decisions
 - **MVP:** server-owned snapshot state plus bounded typed activity events; Plan-first organization with optional Phase/Task breakdown and standalone Tasks; durable notes; manually timed sessions with **Now** fill; validated terminal links; manual harness label/run ID; terminal lifecycle observations; one overview DTO; top ambient row + desktop deck/mobile sheet.
 - Existing configured project name + `ProjectTargetRef` is identity; no duplicate workflow-project or active-worktree model.
@@ -37,7 +37,7 @@ Phase 06 handoff: WorkspacePage mounts one responsive WorkflowContextSurface thr
 | 04 | [Client state and query contracts](./phase-04-client-types-transport-and-query-state.md) | Complete / DONE (2026-09-02) | 100% | 10h | 02 |
 | 05 | [Responsive context surface](./phase-05-responsive-workflow-context-surface.md) | Complete / DONE (2026-09-02) | 100% | 16h | 04 |
 | 06 | [Workspace shell integration](./phase-06-workspace-page-and-shell-integration.md) | Complete / DONE (2026-09-02) | 100% | 10h | 03–05 |
-| 07 | [Verification, rollout, and docs](./phase-07-verification-rollout-observability-and-docs.md) | Pending | 0% | 12h | 01–06 |
+| 07 | [Verification, rollout, and docs](./phase-07-verification-rollout-observability-and-docs.md) | Complete / DONE (2026-09-02) | 100% | 12h | 01–06 |
 
 ## Key Dependencies
 - `SessionStore` migration/transaction boundary and `AppState` initialization.

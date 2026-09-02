@@ -56,7 +56,7 @@ export function TopNavUtilityStrip({
     >
       <div
         className={cn(
-          "min-w-0",
+          "min-w-0 shrink-0",
           !isCompactWorkspace && "max-w-none",
           isCompactWorkspace && "flex-1 sm:max-w-[9.5rem] sm:flex-none",
         )}

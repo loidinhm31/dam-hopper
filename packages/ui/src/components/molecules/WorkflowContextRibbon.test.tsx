@@ -75,6 +75,25 @@ describe("WorkflowContextRibbon", () => {
     expect(handleRetry).toHaveBeenCalled();
   });
 
+  it("explains profile-scoped workflow unavailability without controls", () => {
+    act(() => {
+      root.render(
+        <WorkflowContextRibbon
+          isOpen={true}
+          onToggle={vi.fn()}
+          onOpenQuickCapture={vi.fn()}
+          isUnavailable={true}
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain(
+      "Workflow tracking is unavailable for this profile.",
+    );
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
+    expect(container.querySelector("button")).toBeNull();
+  });
+
   it("renders active plan title and next note preview", () => {
     const activeNode = createMockActiveNode("Surface Redesign");
     act(() => {

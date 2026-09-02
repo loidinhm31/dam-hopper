@@ -268,22 +268,32 @@ async fn main() -> anyhow::Result<()> {
     )?.with_workflow_store(workflow_store.clone());
     if let Some(workflow_store_for_obs) = workflow_store.clone() {
         let (recorder, _dropped, _worker_handle) =
-            dam_hopper_server::workflow::observation::start_observation_worker(workflow_store_for_obs);
+            dam_hopper_server::workflow::observation::start_observation_worker_with_diagnostics(
+                workflow_store_for_obs,
+                state.diagnostics.clone(),
+            );
         state.pty_manager.set_workflow_recorder(Arc::new(recorder));
     }
     if let Some(workflow) = state.workflow.clone() {
         let startup = workflow.clone();
         tokio::spawn(async move {
             if let Err(error) = startup.purge_expired().await {
-                tracing::warn!(error = %error, "Workflow retention purge failed");
+                tracing::warn!(
+                    outcome = error.api_code(),
+                    "Workflow retention purge failed"
+                );
             }
         });
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(86_400));
+            interval.tick().await;
             loop {
                 interval.tick().await;
                 if let Err(error) = workflow.purge_expired().await {
-                    tracing::warn!(error = %error, "Workflow retention purge failed");
+                    tracing::warn!(
+                        outcome = error.api_code(),
+                        "Workflow retention purge failed"
+                    );
                 }
             }
         });
@@ -316,10 +326,17 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(workflow) = &state.workflow {
                     match workflow.reconcile_terminal_links(live_sessions.clone()).await {
                         Ok((attached, detached)) => {
-                            tracing::info!(attached, detached, "Reconciled workflow terminal links");
+                            tracing::info!(
+                                attached = attached.min(1_000),
+                                detached = detached.min(1_000),
+                                "Reconciled workflow terminal links"
+                            );
                         }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to reconcile workflow terminal links");
+                        Err(error) => {
+                            tracing::warn!(
+                                outcome = error.api_code(),
+                                "Failed to reconcile workflow terminal links"
+                            );
                         }
                     }
                 }

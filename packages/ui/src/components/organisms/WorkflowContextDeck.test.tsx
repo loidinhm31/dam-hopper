@@ -39,13 +39,15 @@ describe("WorkflowContextDeck", () => {
     expect(container.textContent).toBe("");
   });
 
-  it("renders when isOpen is true and handles close button", () => {
+  it("renders when isOpen is true and restores focus before close button", () => {
     const handleClose = vi.fn();
+    const handleCloseAutoFocus = vi.fn();
     act(() => {
       root.render(
         <WorkflowContextDeck
           isOpen={true}
           onClose={handleClose}
+          onCloseAutoFocus={handleCloseAutoFocus}
           projects={[]}
           plans={[]}
           standaloneTasks={[]}
@@ -63,16 +65,19 @@ describe("WorkflowContextDeck", () => {
       closeBtn?.click();
     });
 
-    expect(handleClose).toHaveBeenCalled();
+    expect(handleCloseAutoFocus).toHaveBeenCalledOnce();
+    expect(handleClose).toHaveBeenCalledOnce();
   });
 
-  it("handles Escape key to close", () => {
+  it("restores focus before closing on Escape", () => {
     const handleClose = vi.fn();
+    const handleCloseAutoFocus = vi.fn();
     act(() => {
       root.render(
         <WorkflowContextDeck
           isOpen={true}
           onClose={handleClose}
+          onCloseAutoFocus={handleCloseAutoFocus}
           projects={[]}
           plans={[]}
           standaloneTasks={[]}
@@ -87,6 +92,7 @@ describe("WorkflowContextDeck", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     });
 
-    expect(handleClose).toHaveBeenCalled();
+    expect(handleCloseAutoFocus).toHaveBeenCalledOnce();
+    expect(handleClose).toHaveBeenCalledOnce();
   });
 });
