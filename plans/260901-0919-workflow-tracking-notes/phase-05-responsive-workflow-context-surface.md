@@ -12,8 +12,8 @@
 - **Date:** 2026-09-01
 - **Description:** Build an accessible ambient context row that expands into a desktop deck or safe-area mobile sheet with project, work-item, and execution views.
 - **Priority:** P2
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Implementation status:** Complete / DONE (2026-09-02)
+- **Review status:** Approved (Score: 9.8/10)
 
 ## Key Insights
 - Antigravity's ambient → peek → full disclosure fits, but its bottom ribbon conflicts with terminal accessory controls. Use the existing 40px `toolbarActions` companion row directly below `TopNav`; preserve the idea, not the speculative placement.
@@ -73,14 +73,14 @@
 13. Test Plan-only creation/resume, direct notes/sessions, no fake percentage, optional Phase/direct Task, standalone Task, factual count copy, typed time/**Now**, observed-suggestion non-application, harness inputs, focus return, shortcut, row caps, safe areas, mobile segmentation, and text-only rendering.
 
 ## Todo List
-- [ ] Plan-only creation/resume and direct note/session/execution flows require no breakdown maintenance.
-- [ ] Optional Phase/direct Task/standalone Task organization and factual count copy are clear.
-- [ ] Typed and **Now** timestamps share one explicit form path; observed suggestions never auto-apply.
-- [ ] Ambient row has truthful summary/loading/error/empty states.
-- [ ] Desktop deck adapts three-to-two panes without squeezed content.
-- [ ] Mobile sheet respects safe areas, focus, touch targets, and `dvh`.
-- [ ] Forms expose explicit reversible actions only.
-- [ ] Shortcut guard protects terminal/editor/form ownership.
+- [x] Plan-only creation/resume and direct note/session/execution flows require no breakdown maintenance.
+- [x] Optional Phase/direct Task/standalone Task organization and factual count copy are clear.
+- [x] Typed and **Now** timestamps share one explicit form path; observed suggestions never auto-apply.
+- [x] Ambient row has truthful summary/loading/error/empty states.
+- [x] Desktop deck adapts three-to-two panes without squeezed content.
+- [x] Mobile sheet respects safe areas, focus, touch targets, and `dvh`.
+- [x] Forms expose explicit reversible actions only.
+- [x] Shortcut guard protects terminal/editor/form ownership.
 
 ## Success Criteria
 - A developer can orient, create/resume a Plan, add a note, start/end/abandon direct Plan work, link execution, and optionally add breakdown without leaving WorkspacePage.
