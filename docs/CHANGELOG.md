@@ -51,6 +51,8 @@
   Phase/Task children.
 - Phase 03 review reports 28 workflow tests and 907 full-server tests passing;
   review approved 9.8/10. [Code review](../plans/reports/code-reviewer-260902-0420-phase-03-terminal-lifecycle-correlation.md).
+- **Phase 04: Client types, transport, and query state.** Added strict shared-UI workflow DTOs and domain helpers, all 13 protected REST operation mappings, profile/transport-generation-isolated React Query hooks, mutation invalidation and request-ID replay handling, and manual timestamp/resource-observation helpers. Existing terminal navigation and localStorage state remain unchanged.
+- Validation: Targeted Phase 04 UI tests 51/51, full UI suite 1,452/1,452, and Rust server 907/907 executed tests passed (2 ignored); code review approved 10/10. Formal source coverage was not generated because the UI coverage provider is unavailable, and the existing React `act(...)` warning is non-blocking. [Test report](../plans/reports/tester-260902-1139-phase-04-client-types-transport-query-state.md) · [Review report](../plans/reports/code-reviewer-260902-1144-phase-04-client-types-transport-query-state.md) · [Phase plan](../plans/260901-0919-workflow-tracking-notes/phase-04-client-types-transport-and-query-state.md).
 
 
 # 2026-08-31

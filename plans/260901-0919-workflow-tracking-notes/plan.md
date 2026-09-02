@@ -14,8 +14,8 @@ created: 2026-09-01
 ## Outcome
 A profile- and workspace-isolated context surface answers what is active, where it runs, what changed, and how to resume without replacing project, target, terminal, editor, or URL state.
 
-**Plan status:** In progress overall; Phase 01 Complete / DONE (2026-09-02), Phase 02 Complete / DONE (2026-09-02, 100%), Phase 03 Complete / DONE (2026-09-02, 100%), Phases 04–07 pending.
-Phase 03 handoff: Terminal lifecycle correlation via a non-blocking bounded observation worker channel, link status update with incarnation ordering, startup reconciliation of live/dead terminals, target-scoped validation, and manual agent harness bounds verified with 100% test pass rate across 907 tests. Ready for Phase 04.
+**Plan status:** In progress overall; Phase 01 Complete / DONE (2026-09-02), Phase 02 Complete / DONE (2026-09-02, 100%), Phase 03 Complete / DONE (2026-09-02, 100%), Phase 04 Complete / DONE (2026-09-02, 100%), Phases 05–07 pending.
+Phase 04 handoff: Strict client DTOs, domain helpers, transport mapping for all 13 workflow operations, and React Query hooks with profile and transport generation isolation verified with 100% pass rates across 51 targeted UI tests, 1,452 full UI tests, and 907 executed Rust tests (2 ignored). See [test report](../reports/tester-260902-1139-phase-04-client-types-transport-query-state.md) and [review report](../reports/code-reviewer-260902-1144-phase-04-client-types-transport-query-state.md). Ready for Phase 05.
 
 ## Scope Decisions
 - **MVP:** server-owned snapshot state plus bounded typed activity events; Plan-first organization with optional Phase/Task breakdown and standalone Tasks; durable notes; manually timed sessions with **Now** fill; validated terminal links; manual harness label/run ID; terminal lifecycle observations; one overview DTO; top ambient row + desktop deck/mobile sheet.
@@ -32,7 +32,7 @@ Phase 03 handoff: Terminal lifecycle correlation via a non-blocking bounded obse
 | 01 | [Domain and relational persistence](./phase-01-domain-and-relational-persistence.md) | Complete / DONE (2026-09-02) | 100% | 14h | — |
 | 02 | [Service and REST API](./phase-02-workflow-service-and-rest-api.md) | Complete / DONE (2026-09-02) | 100% | 14h | 01 |
 | 03 | [Lifecycle correlation and adapters](./phase-03-terminal-lifecycle-correlation-and-agent-adapter.md) | Complete / DONE (2026-09-02) | 100% | 12h | 01–02 |
-| 04 | [Client state and query contracts](./phase-04-client-types-transport-and-query-state.md) | Pending | 0% | 10h | 02 |
+| 04 | [Client state and query contracts](./phase-04-client-types-transport-and-query-state.md) | Complete / DONE (2026-09-02) | 100% | 10h | 02 |
 | 05 | [Responsive context surface](./phase-05-responsive-workflow-context-surface.md) | Pending | 0% | 16h | 04 |
 | 06 | [Workspace shell integration](./phase-06-workspace-page-and-shell-integration.md) | Pending | 0% | 10h | 03–05 |
 | 07 | [Verification, rollout, and docs](./phase-07-verification-rollout-observability-and-docs.md) | Pending | 0% | 12h | 01–06 |

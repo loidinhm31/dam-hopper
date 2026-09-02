@@ -786,11 +786,16 @@ pnpm format      # Prettier
 ```
 packages/ui/src/
 ├── api/
-│   ├── client.ts          # Type definitions (mirrors Rust API)
+│   ├── client.ts          # Typed API facade and shared client types
 │   ├── fs-types.ts        # Filesystem-specific types
-│   ├── transport.ts       # Fetch transport
-│   ├── ws-transport.ts    # WebSocket client
-│   └── queries.ts         # TanStack Query hooks
+│   ├── query-client.ts    # Profile-scoped TanStack Query key hashing
+│   ├── queries.ts         # Shared TanStack Query barrel
+│   ├── transport.ts       # Transport interface and singleton lifecycle
+│   ├── workflow-domain-helpers.ts # Pure workflow domain helpers
+│   ├── workflow-dto-types.ts      # Workflow wire DTOs and requests
+│   ├── workflow-queries.ts        # Workflow TanStack Query hooks
+│   ├── workflow-types.ts          # Workflow contract barrel
+│   └── ws-transport.ts            # REST mapper and WebSocket client
 ├── components/
 │   ├── atoms/             # Smallest reusable primitives (Button, Badge)
 │   ├── molecules/         # Composed atoms (EditorTab, SidebarTabSwitcher)
@@ -818,9 +823,15 @@ Frontend diagnostics that need feature-specific breadcrumbs should go through `r
 
 ### Client Types
 
-Types in `src/api/client.ts` **intentionally duplicate** Rust API shapes. This keeps the web package independent — no shared TypeScript lib.
+Types in `packages/ui/src/api/` intentionally duplicate the server's Rust API
+shapes to keep the shared UI package independent of a generated TypeScript
+library. General client types remain in `client.ts`; Phase 04 workflow DTOs
+live in `workflow-dto-types.ts`, are re-exported by `workflow-types.ts`, and
+must stay aligned with the server's camelCase wire fields.
 
-Update client types when API changes (camelCase on wire, snake_case in Rust):
+Update the matching DTO/request type whenever the API changes. Do not widen a
+workflow field to `string` or `Record<string, unknown>` to bypass an enum or
+shape change.
 
 ```typescript
 // Rest API
@@ -864,6 +875,72 @@ const entries = await transport.invoke("GET /api/fs/list", {
 const content = await transport.fsRead(project, path);
 await transport.fsWriteFile(project, path, content, mtime);
 ```
+
+### Workflow Client Contracts (Phase 04)
+
+Keep workflow wire contracts and domain logic separate:
+
+- `workflow-dto-types.ts` owns explicit DTO/request interfaces and closed
+  unions for `ItemKind`, `ItemStatus`, `SessionStatus`, `ResourceLinkType`,
+  `ResourceObservedState`, `WorkflowSource`, and `WorkflowEventType`.
+- Treat `kind`, `status`, `resourceType`, `observedState`, `source`, and
+  `eventType` as discriminating fields. Exhaustive branches should preserve the
+  closed union; do not add arbitrary payload maps.
+- `workflow-domain-helpers.ts` is pure TypeScript. Keep Plan-first parent rules,
+  status predicates, factual tracked-Task labels, timestamp validation,
+  elapsed formatting, and deterministic item ordering out of React components.
+- `workflow-types.ts` is the public barrel. Import workflow DTOs/helpers from
+  it when a consumer needs the shared contract.
+
+Optional/null fields are meaningful wire states. Preserve distinctions such as
+missing versus `null` `worktreePath`, `endedAt`, `completedAt`,
+`suggestedEndTime`, or `deletedAt`; do not invent client defaults that change
+server authority. A workflow request carries a caller-owned UUID `requestId`;
+CAS writes retain the server-provided `updatedAt`.
+
+### Workflow Transport and Query Standards (Phase 04)
+
+`api.workflow` in `client.ts` is thin typed wiring. It calls
+`getTransport().invoke()` with stable channel names and typed response
+parameters. It must not construct URLs, duplicate auth, or silently mutate
+request bodies. `WsTransport` owns the channel-to-REST mapper:
+
+- Use the exact protected `/api/workflow/*` method/path for each operation.
+- Remove path identifiers (`id` or `sessionId`) from JSON bodies after placing
+  them in the URL.
+- Use `encodeURIComponent` for every dynamic path identifier and
+  `URLSearchParams` for event `cursor`/`limit`.
+- Keep manual session `end` and `abandon` as separate channels; preserve
+  caller-supplied timestamp bodies.
+- Let `invoke` normalize non-2xx responses to `ApiRequestError` with status and
+  optional server error code; do not render raw response bodies.
+
+Implement workflow hooks in `workflow-queries.ts`, not directly in the broad
+`queries.ts` module. Use one `workflowQueryKeys.all` root, an overview key containing the
+current transport generation, and an events key containing normalized
+`cursor`/`limit` values. The overview hook subscribes to transport replacement
+with `useSyncExternalStore`, preserves prior observer data while refetching,
+uses no polling interval, and leaves focus/reconnect refetches to QueryClient
+defaults.
+The shared `queries.ts` entry point re-exports `workflow-queries.ts` for
+consumers that use the common query API barrel.
+
+Both host bootstraps configure `profileScopedQueryKeyHash`, which hashes
+`[activeProfileId, queryKey]`. The transport singleton increments its generation
+on `initTransport`, `reconfigureTransport`, and `resetTransport`; profile
+replacement destroys the old transport before installing the new one. Workflow
+data is memory-only, never a localStorage cache.
+
+Mutation hooks invalidate the `['workflow']` root only from `onSuccess`.
+Do not perform optimistic snapshot writes in this layer. A failure must retain
+the authoritative cache and expose the typed mutation error so the component
+can retry the same request ID safely. Keep filters, drafts, focus, pending
+action state, and elapsed-clock ticks component-local; workflow hooks must not
+read/write `useSearchParams`, terminal registries, editor state, or Zustand
+workflow stores.
+
+For the complete Phase 04 contract and operation table, see
+[Workflow Client State](./workflow-client-state.md).
 
 ## Authentication & Security Patterns (Phase 01+)
 

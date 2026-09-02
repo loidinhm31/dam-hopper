@@ -551,6 +551,65 @@ telemetry. Manual harness IDs are size-bounded and target-scoped; they do not
 grant execution authority. PTY failures, queue pressure, and SQLite failures
 degrade workflow observation only and do not interrupt terminal operation.
 
+### PR-014: Workflow Client Types, Transport, and Query State (Phase 04)
+
+**Status:** Complete / DONE on 2026-09-02. Review approved the shared UI
+client foundation at 10/10. Targeted UI tests passed 51/51; the full UI suite
+passed 1,452/1,452 and the Rust server suite passed 907/907 executed tests.
+See [Workflow Client State](./workflow-client-state.md), the
+[Phase 04 test report](../plans/reports/tester-260902-1139-phase-04-client-types-transport-query-state.md),
+and [code review](../plans/reports/code-reviewer-260902-1144-phase-04-client-types-transport-query-state.md).
+
+**Functional Requirements:**
+
+- Mirror workflow response/request shapes with explicit camelCase DTOs and
+  closed unions for kind, status, resource type/state, source, and event type.
+- Preserve structured `ProjectTargetRef`, optional/null fields, manual
+  timestamps, observed resource state, and suggested end time without
+  client-authoritative correction.
+- Keep Plan-first parent validation, factual tracked-Task progress, timestamp
+  interval checks, elapsed labels, attention predicates, and item ordering in
+  pure domain helpers.
+- Expose typed `api.workflow` methods for overview/events, item CRUD, manual
+  session lifecycle, resource links, notes, and history purge.
+- Map all 13 workflow channels to protected REST methods with encoded dynamic
+  path/query values and unchanged request bodies.
+- Isolate React Query cache by active profile and transport generation; use
+  success-only root invalidation and one caller-owned replay request ID.
+
+**Architecture:**
+
+- `workflow-dto-types.ts` owns DTO/request interfaces; `workflow-types.ts`
+  re-exports them with `workflow-domain-helpers.ts`.
+- `client.ts` delegates named operations through the active `Transport`;
+  `ws-transport.ts` owns channel-to-REST mapping and `ApiRequestError` handling.
+- `workflow-queries.ts` owns query keys, generation subscription, overview/
+  event hooks, and mutation wrappers; `queries.ts` re-exports the focused
+  module for the shared query API.
+- Host `QueryClient` instances use `profileScopedQueryKeyHash`; workflow data
+  is memory-only and presentation state remains component-local.
+
+**Acceptance Criteria:**
+
+- [x] DTOs and request payloads retain server enum/optional-field semantics.
+- [x] Plan-only, nested, standalone, and direct-Plan ownership states remain
+  representable without fabricated progress percentages.
+- [x] Profile/transport replacement cannot reuse the prior profile's query
+  hash or overview generation key.
+- [x] Failed mutations preserve cached authority and typed errors; successful
+  mutations invalidate the `['workflow']` root.
+- [x] Workflow hooks do not read/write URL search params, localStorage,
+  terminal registries, editor state, or a workflow Zustand store.
+
+**Changed client files:** `packages/ui/src/api/workflow-dto-types.ts`,
+`workflow-domain-helpers.ts`, `workflow-types.ts`, `workflow-queries.ts`,
+`client.ts`, `queries.ts`, `ws-transport.ts`, and their Phase 04 tests.
+
+**Security and boundaries:** The client never persists workflow data or logs
+notes, paths, external IDs, or request bodies. Server validation remains
+authoritative for workspace/target ownership, limits, errors, and replay.
+
+
 ## Non-Functional Requirements
 
 ### Performance
