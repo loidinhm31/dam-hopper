@@ -22,12 +22,16 @@ export interface WorkflowContextSurfaceProps {
   target?: ProjectTargetRef | null;
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onOpenTerminal?: (sessionId: string) => void;
+  onSelectTarget?: (target: ProjectTargetRef) => void;
 }
 
 export function WorkflowContextSurface({
   target,
   isOpen: controlledIsOpen,
   onOpenChange,
+  onOpenTerminal,
+  onSelectTarget,
 }: WorkflowContextSurfaceProps) {
   const isCompact = useCompactWorkspace();
   const [localIsOpen, setLocalIsOpen] = useState(false);
@@ -52,6 +56,16 @@ export function WorkflowContextSurface({
   const activeNode = selectActivePlanOrItem(overview, effectiveTarget);
   const runningSession = selectRunningSessionForItem(activeNode);
   const attention = selectAttentionSummary(overview, effectiveTarget);
+  useEffect(() => {
+    setSelectedTarget(target ?? null);
+  }, [target?.project, target?.worktreePath]);
+
+  const handleSelectTarget = (nextTarget: ProjectTargetRef | null) => {
+    setSelectedTarget(nextTarget);
+    if (nextTarget) {
+      onSelectTarget?.(nextTarget);
+    }
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -88,7 +102,7 @@ export function WorkflowContextSurface({
     sessions: overview?.runningSessions ?? [],
     selectedItemId,
     selectedTarget,
-    onSelectTarget: setSelectedTarget,
+    onSelectTarget: handleSelectTarget,
     onSelectItem: (item: { id: string } | null) => setSelectedItemId(item?.id ?? null),
     onStatusChange: actions.handleStatusChange,
     onAddNote: actions.handleAddNote,
@@ -97,6 +111,7 @@ export function WorkflowContextSurface({
     onAbandonSession: actions.handleAbandonSession,
     onLinkResource: actions.handleLinkResource,
     onUnlinkResource: actions.handleUnlinkResource,
+    onOpenTerminal,
     onCreateItem: actions.handleCreateItem,
     isQuickCaptureOpen,
     onOpenQuickCapture: handleOpenQuickCapture,

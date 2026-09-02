@@ -1112,7 +1112,7 @@ the UI does not infer missing child items.
 | --- | --- |
 | `WorkflowContextRibbon` | `h-9` ambient `region`; target label, active item, status, elapsed duration, latest note/progress, loading/error/retry, and polite live text. |
 | `WorkflowContextDeck` | Open-only non-modal desktop `region`; `320px` minimum, `360px` base, `440px` maximum; two columns at `md`, and `220px / flexible / 300px` panes at `lg`. |
-| `WorkflowContextSheet` | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `50dvh` collapsed and `90dvh` expanded. |
+| `WorkflowContextSheet` | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `35dvh` collapsed and `90dvh` expanded. |
 | `WorkflowProjectList` | Exact target selection plus plan, task, and running-session counts. |
 | `WorkflowItemList` / `WorkflowItemRow` | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy. |
 | `WorkflowQuickCapture` | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request. |
@@ -1144,6 +1144,58 @@ not qualify browser geometry, safe-area/touch behavior, focus continuity, or
 real host integration. Current implementation notes: resource-attention fields
 from `selectAttentionSummary` remain false/zero, and item-list action
 callbacks are broader than the controls currently rendered by the list.
+
+### WorkspacePage and shell integration (UI Phase 06)
+
+`WorkspacePage` is the frontend composition boundary for workflow-to-workspace
+navigation. It builds one memoized `workflowToolbarActions` node containing
+`WorkflowContextSurface`, then passes it through the existing `toolbarActions`
+slot on `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell`.
+Desktop shells render a 40px companion row above their existing content;
+`MobileWorkspaceShell` renders the action in its safe-area-aware inline row.
+The workflow surface is not a route, activity-bar tool, mobile surface, TopNav
+item, or second terminal lifecycle.
+
+```mermaid
+flowchart LR
+    Surface["WorkflowContextSurface"] -->|onOpenTerminal| Reveal["resolveWorkflowTerminalReveal"]
+    Reveal --> Select["WorkspacePage.handleSelectTerminal"]
+    Select --> Existing["useTerminalManager / existing URL semantics"]
+    Surface -->|onSelectTarget| Target["resolveWorkflowTargetSelection"]
+    Target --> Project["setActiveProject"]
+    Target --> Store["useProjectTargetStore.selectTarget"]
+    Store --> Panels["Existing target-aware panels"]
+```
+
+`workflow-workspace-integration.ts` is pure integration policy.
+`deriveWorkflowTerminalCandidates` merges stable IDs from `sessionMap` and
+`mountedSessions`, retains project/worktree/alive/incarnation observations, and
+marks unavailable targets without carrying command, CWD, or terminal output.
+`resolveWorkflowTerminalReveal` fails closed for blank, profile-mismatched, or
+unknown sessions, returns a compact Terminal-surface request only when needed,
+and leaves actual selection to `handleSelectTerminal`.
+`resolveWorkflowTargetSelection` requires a configured project and available
+worktree before the existing workspace and target stores are updated.
+
+`onOpenTerminal` is drilled from `WorkflowContextSurface` through
+`WorkflowContextDeck` / `WorkflowContextSheet`, `WorkflowExecutionList`, and
+`WorkflowSessionCard`; `onSelectTarget` flows through the surface, deck/sheet,
+and `WorkflowProjectList`. The card invokes terminal reveal only on an explicit
+linked-terminal click.
+Terminal observations and suggested end times remain read-only; manual workflow
+session mutations still require explicit user input.
+
+The `WorkflowContextSurface` instance is keyed by `activeProfileId`. A profile
+switch therefore resets only workflow presentation (open state, selection,
+mobile segment, quick-capture drafts, and elapsed clock) while leaving terminal
+buffers, editor state, mounted sessions, and Browser keep-alive outside the key
+boundary. No new URL/search parameter or duplicate project/target store is
+introduced.
+
+Phase 06 verification: targeted UI tests 62/62, full UI suite 1,515/1,515,
+relevant Chromium smoke 8/8, Rust tests 907/907 executed (2 ignored), and UI
+TypeScript compilation passed. Full browser geometry/touch/safe-area/focus and
+host-integration qualification remain Phase 07 work.
 
 ### Persist Worker (Phase 05)
 

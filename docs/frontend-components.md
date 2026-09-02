@@ -938,12 +938,13 @@ snapshot.
 
 ---
 
-## Workflow Context Surface (Phase 05)
+## Workflow Context Surface (Phases 05–06)
 
-**Status:** Implemented shared responsive workflow context UI for the browser and
-native hosts. The surface reads the bounded workflow overview and keeps
-presentation state local; the server remains authoritative for workflow
-validation, timestamps, target ownership, and mutation replay.
+**Status:** Phase 05 responsive workflow context UI and Phase 06
+`WorkspacePage`/shell integration complete (2026-09-02). The surface reads the
+bounded workflow overview and keeps presentation state local; the server
+remains authoritative for workflow validation, timestamps, target ownership,
+and mutation replay.
 
 **Locations:**
 
@@ -962,6 +963,51 @@ validation, timestamps, target ownership, and mutation replay.
 | `packages/ui/src/components/organisms/WorkflowContextSheet.tsx` | Mobile bottom Dialog with Projects, Plans & Work, and Execution segments. |
 | `packages/ui/src/components/organisms/WorkflowContextSurface.tsx` | Top-level overview query, selectors, timer, keyboard handling, and deck/sheet orchestration. |
 | `packages/ui/src/hooks/use-workflow-surface-actions.ts` | Request-ID-bearing workflow mutation callbacks used by the surface. |
+
+### WorkspacePage and shell integration (Phase 06)
+
+`WorkspacePage` builds one memoized `workflowToolbarActions` node containing
+`WorkflowContextSurface`. The same node passes through the existing
+`toolbarActions` prop in every workspace branch:
+
+| Shell | Placement |
+| --- | --- |
+| `IdeShell` | 40px companion row above editor/tool content. |
+| `TerminalWorkspaceShell` | 40px companion row above terminal/overlay content. |
+| `MobileWorkspaceShell` | Safe-area-aware inline action row; existing compact surface selector remains unchanged. |
+
+The surface is not a route, activity-bar tool, mobile surface, TopNav item, or
+second PTY lifecycle. Shell mode changes therefore preserve the existing
+terminal manager, terminal buffers, editor state, and Browser keep-alive.
+
+Navigation uses existing owners and pure decisions from
+`packages/ui/src/lib/workflow-workspace-integration.ts`:
+
+- `resolveWorkflowTerminalReveal` rejects blank, profile-mismatched, or unknown
+  session IDs, then `WorkspacePage` calls existing `handleSelectTerminal`.
+  Compact mode additionally requests the existing Terminal surface; it does
+  not force workspace mode or add URL parameters.
+- `resolveWorkflowTargetSelection` requires a configured project and available
+  worktree. Successful selection calls `setActiveProject` and
+  `useProjectTargetStore.selectTarget`; unavailable historical targets stay
+  display-only.
+- `deriveWorkflowTerminalCandidates` merges stable-ID observations from
+  `sessionMap` and `mountedSessions`, carries project/worktree/alive/incarnation
+  state, and marks unavailable targets. It excludes command, CWD, and output.
+
+Callback paths are explicit: `onOpenTerminal` flows from
+`WorkflowContextSurface` through `WorkflowContextDeck` /
+`WorkflowContextSheet`, `WorkflowExecutionList`, and `WorkflowSessionCard`;
+the card invokes it only for a clicked linked terminal. `onSelectTarget` flows
+from the surface through the deck/sheet to `WorkflowProjectList`, then returns
+to `WorkspacePage` for store selection.
+
+`WorkflowContextSurface` is keyed by `activeProfileId`. A profile switch
+remounts only workflow presentation state (open state, target/item selections,
+mobile segment, quick-capture drafts, elapsed clock); terminal/editor and
+Browser keep-alive state remain outside the key boundary. Terminal observations
+and suggested end times remain read-only until the user explicitly submits a
+workflow mutation.
 
 ### Data and state flow
 
@@ -1023,9 +1069,9 @@ deck listens for Escape to close and does not install a focus trap.
 `WorkflowContextSheet` uses a bottom Radix Dialog with safe-area-bottom
 padding and segmented navigation for `projects`, `items`, and `execution`.
 Project selection returns to the Items segment. The current implementation
-uses `h-[50dvh]` when collapsed and `h-[90dvh]` when expanded, with a drag
-handle/toggle. Segment controls currently use `h-9`; browser-level touch
-target, overscroll, focus-return, and geometry qualification remain outside
+uses `h-[35dvh]` when collapsed and `h-[90dvh]` when expanded, with a drag
+handle/toggle. Segment controls use `h-11` with `min-h-[44px]`; browser-level
+touch target, overscroll, focus-return, and geometry qualification remain outside
 the unit-tested contract.
 
 ### Items, capture, and sessions
@@ -1059,11 +1105,20 @@ the current ISO time.
 
 ### Verification and current qualification
 
-The dated Phase 05 targeted report records 62/62 focused UI/workflow tests,
-1,493/1,493 full UI tests, and 907/907 Rust tests (two ignored). No production
-UI build was run in that report. Browser-level responsive geometry, safe-area
-behavior, touch targets, focus continuity, and real host integration remain
-Phase 07 qualification work rather than passed evidence.
+The dated Phase 05 report records 62/62 focused UI/workflow tests,
+1,493/1,493 full UI tests, and 907/907 Rust tests (two ignored). It did not run
+a production UI build.
+
+Phase 06 verification records targeted UI 62/62, full UI 1,515/1,515,
+relevant Chromium smoke 8/8, Rust 907/907 executed (two ignored), and UI
+TypeScript compilation passed. The focused UI breakdown is 13 pure-helper,
+26 WorkspacePage, 6 IdeShell, 12 TerminalWorkspaceShell, and 5
+MobileWorkspaceShell assertions.
+
+Formal source coverage remains unavailable because `@vitest/coverage-v8` and
+Rust coverage tools are not installed. Full Chromium geometry, safe-area/touch,
+focus continuity, and real host-integration qualification remain Phase 07
+work rather than passed evidence.
 
 The current selector implementation reports `hasResourceAttention: false` and
 `resourceAttentionCount: 0`; resource-attention projection is not yet surfaced

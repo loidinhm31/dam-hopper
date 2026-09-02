@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-02): 1,527 files, 3,200,857 tokens, and 12,966,927 characters.
+- Repomix snapshot (2026-09-02): 1,534 files, 3,216,530 tokens, and 13,034,765 characters.
 - Repomix security scanning excluded three suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
@@ -48,6 +48,7 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **Browser Debug**: `BrowserDebugKeepAliveHost` preserves one iframe across workspace surfaces; the extension bridge accepts only exact origin/source/nonce/request matches and returns bounded DOM/ARIA metadata. Optional user-mediated browser capture or manual PNG/JPEG input remains local until explicit attach; the authenticated server artifact API stores capped JSON/PNG outside project roots for 10 minutes, exposes no read/list route, and inserts only generated paths into a live PTY without auto-submit.
 - **Usage Session Audit**: `UsagePage` adds a Sessions tab backed by aggregate list/detail transport calls. It uses derived HMAC session identities, dynamic provider-qualified models, flat token summaries bounded by detail retention, cursor and URL deep links, and 15-second polling only for visible documents. Primary token totals exclude cached input; raw commands/content/storage data are not exposed. Paused summaries remain readable and deletion is explicit. Browser and native hosts share the behavior.
 - **Workflow Client Types and Query State (Phase 04)**: `packages/ui/src/api/workflow-dto-types.ts` defines explicit camelCase workflow DTOs and closed unions; `workflow-domain-helpers.ts` keeps Plan-first validation, factual progress, timestamp, duration, attention, and ordering rules pure; `workflow-types.ts` re-exports both. `client.ts` exposes the typed `api.workflow` facade, `ws-transport.ts` maps 13 channels to protected REST, and `workflow-queries.ts` owns generation-aware overview/events hooks plus success-only mutation invalidation. Host QueryClients use profile-scoped hashes; workflow data is memory-only.
+- **WorkspacePage and shell integration (Phase 06)**: `WorkspacePage` composes one `workflowToolbarActions` node and passes it through the existing `toolbarActions` companion row on `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell`. No workflow route, activity-bar tool, mobile surface, TopNav item, or duplicate PTY lifecycle is introduced.
 
 ## Key Features
 
@@ -188,7 +189,7 @@ and native hosts:
 - `WorkflowContextDeck` is a non-modal `role="region"` with a 320–440px height
   range and responsive project/work/execution panes. `WorkflowContextSheet`
   provides Projects, Plans & Work, and Execution segments at current
-  `50dvh`/`90dvh` collapsed/expanded heights.
+  `35dvh`/`90dvh` collapsed/expanded heights.
 - `WorkflowProjectList`, `WorkflowItemList`/`WorkflowItemRow`,
   `WorkflowQuickCapture`, `WorkflowExecutionList`, and
   `WorkflowSessionCard` provide target switching, Plan-first hierarchy,
@@ -205,6 +206,49 @@ remains memory-only; presentation state is not persisted. Current resource
 attention fields remain false/zero, and several item-list action callbacks are
 accepted but not rendered as controls. Browser geometry, touch/safe-area, focus
 continuity, and host-integration qualification remain Phase 07 work.
+
+### WorkspacePage and shell integration (Phase 06)
+
+`WorkspacePage` is the integration owner for the Phase 06 workflow surface. It
+builds one memoized `workflowToolbarActions` node around
+`WorkflowContextSurface` and passes that node through the existing
+`toolbarActions` seam on all three shell branches:
+
+- `IdeShell` and `TerminalWorkspaceShell` render the surface trigger in a
+  40px companion row above their existing content.
+- `MobileWorkspaceShell` renders the same action in its safe-area-aware inline
+  row; compact surface selection remains owned by the existing shell.
+
+Navigation callbacks preserve existing workspace ownership:
+
+- `onOpenTerminal` uses pure `resolveWorkflowTerminalReveal` from
+  `workflow-workspace-integration.ts` to reject blank, profile-mismatched, or
+  unknown IDs, then calls the existing `handleSelectTerminal`. Compact mode
+  requests the existing Terminal surface; it does not change workspace mode,
+  add URL parameters, or create a second terminal lookup path.
+- `onSelectTarget` uses pure `resolveWorkflowTargetSelection` to require a
+  configured project and available worktree, then calls `setActiveProject` and
+  `useProjectTargetStore.selectTarget`. Unavailable historical targets remain
+  display-only.
+- `deriveWorkflowTerminalCandidates` merges stable-ID observations from
+  `sessionMap` and `mountedSessions`, carries project/worktree/alive/incarnation
+  state, and marks unavailable targets. Candidate data excludes command, CWD,
+  and terminal output.
+
+`onOpenTerminal` is drilled from `WorkflowContextSurface` through
+`WorkflowContextDeck` / `WorkflowContextSheet`, `WorkflowExecutionList`, and
+`WorkflowSessionCard`; `onSelectTarget` flows through the surface, deck/sheet,
+and `WorkflowProjectList`. `WorkflowSessionCard` invokes the terminal callback
+only for an explicit linked-terminal click. `WorkflowContextSurface` is keyed
+by `activeProfileId`, so a profile switch remounts only workflow presentation
+state (open state, selections, mobile segment, drafts, and elapsed clock);
+terminal/editor and Browser keep-alive state remain outside that key boundary.
+Observed terminal state and suggested end times remain read-only until an
+explicit workflow mutation.
+
+Phase 06 verification: targeted UI tests 62/62, full UI suite 1,515/1,515,
+relevant Chromium smoke 8/8, Rust tests 907/907 executed (2 ignored), and UI
+TypeScript compilation passed. Formal source coverage remains unavailable.
 
 ## Architecture Layers
 
@@ -592,7 +636,8 @@ dam-hopper/
 │   ├── codebase-summary.md
 │   ├── system-architecture.md
 │   ├── api-reference.md
-│   └── project-overview-pdr.md
+│   ├── project-overview-pdr.md
+│   └── frontend-components.md # Shared React component architecture
 ├── plans/                     # Feature plans and reports
 └── CLAUDE.md                  # Development commands
 ```
@@ -617,6 +662,11 @@ dam-hopper/
   transport-generation keys, query behavior, request IDs, invalidation, and
   failure preservation. The dated Phase 04 report records 51/51 targeted
   assertions passing.
+- **WorkspacePage and shell integration**: Phase 06 targeted UI 62/62,
+  full UI 1,515/1,515, relevant Chromium smoke 8/8, Rust 907/907 executed
+  (2 ignored), and UI TypeScript compilation passed. The focused breakdown is
+  13 pure-helper, 26 WorkspacePage, 6 IdeShell, 12 TerminalWorkspaceShell,
+  and 5 MobileWorkspaceShell assertions.
 - **Web**: Component tests with Vitest, 80% coverage target
 
 ### Known Limitations (Pre-existing)
@@ -661,6 +711,7 @@ dam-hopper/
 | [api-reference.md](./api-reference.md)                         | HTTP endpoints, request/response schemas      |
 | [workflow-api.md](./workflow-api.md)                            | Phase 02–03 workflow REST and lifecycle contract |
 | [workflow-client-state.md](./workflow-client-state.md)          | Phase 04 shared UI DTO, transport, and query contract |
+| [frontend-components.md](./frontend-components.md)                | Shared React components and shell integration |
 | [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
 | [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
 | [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
@@ -672,11 +723,13 @@ dam-hopper/
 ---
 
 **Last Updated**: September 2, 2026
-**Phase Status**: Phase 05 Responsive Workflow Context Surface is implemented
-on the Phase 04 shared workflow client/query foundation and Phase 01–03
-workflow service, REST, and lifecycle correlation. Browser geometry,
+**Phase Status**: Phase 06 WorkspacePage and Shell Integration is complete /
+DONE (2026-09-02) on the Phase 05 responsive workflow context surface and
+Phase 04 shared workflow client/query foundation. It mounts through existing
+shell toolbar seams, reuses terminal/project-target owners, and resets only
+workflow presentation on profile changes. Full Chromium geometry,
 touch/safe-area, focus-continuity, and host-integration qualification remain
-Phase 07 work; historical phase labels and evidence remain dated records.
-**Generated by**: Repomix v1.18.0 snapshot (1,527 files / 3,200,857 tokens)
+Phase 07 work; formal source coverage is also unavailable.
+**Generated by**: Repomix v1.18.0 snapshot (1,534 files / 3,216,530 tokens)
 plus source-verified maintenance. Three security-flagged files were excluded
 from the compaction output.
