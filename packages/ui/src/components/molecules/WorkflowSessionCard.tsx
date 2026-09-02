@@ -12,6 +12,7 @@ export interface WorkflowSessionCardProps {
   onEndSession?: (sessionId: string, endedAt: string) => void;
   onAbandonSession?: (sessionId: string) => void;
   onUnlinkResource?: (sessionId: string, resourceType: ResourceLinkType, externalId: string) => void;
+  onOpenTerminal?: (sessionId: string) => void;
 }
 
 export function WorkflowSessionCard({
@@ -21,6 +22,7 @@ export function WorkflowSessionCard({
   onEndSession,
   onAbandonSession,
   onUnlinkResource,
+  onOpenTerminal,
 }: WorkflowSessionCardProps) {
   const isRunning = session.status === "running";
   const [endDraft, setEndDraft] = useState(getIsoNow());
@@ -69,11 +71,21 @@ export function WorkflowSessionCard({
             <div key={link.id} className="flex items-center justify-between text-[11px]">
               <div className="flex items-center gap-1">
                 {link.resourceType === "terminal" ? (
-                  <Terminal className="h-3 w-3 text-[var(--color-text-muted)]" />
+                  <button
+                    type="button"
+                    onClick={() => onOpenTerminal?.(link.externalId)}
+                    className="flex items-center gap-1 text-[var(--color-primary)] hover:underline cursor-pointer text-left font-mono"
+                    title="Open linked terminal"
+                  >
+                    <Terminal className="h-3 w-3 text-[var(--color-primary)]" />
+                    <span>{link.harnessLabel || link.externalId}</span>
+                  </button>
                 ) : (
-                  <Cpu className="h-3 w-3 text-[var(--color-text-muted)]" />
+                  <>
+                    <Cpu className="h-3 w-3 text-[var(--color-text-muted)]" />
+                    <span>{link.harnessLabel || link.externalId}</span>
+                  </>
                 )}
-                <span>{link.harnessLabel || link.externalId}</span>
                 {link.observedState !== "attached" && (
                   <span className="text-[10px] text-[var(--color-warning)]">({link.observedState})</span>
                 )}

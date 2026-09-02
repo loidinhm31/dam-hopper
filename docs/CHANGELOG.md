@@ -55,6 +55,28 @@
 - Validation: Targeted Phase 04 UI tests 51/51, full UI suite 1,452/1,452, and Rust server 907/907 executed tests passed (2 ignored); code review approved 10/10. Formal source coverage was not generated because the UI coverage provider is unavailable, and the existing React `act(...)` warning is non-blocking. [Test report](../plans/reports/tester-260902-1139-phase-04-client-types-transport-query-state.md) · [Review report](../plans/reports/code-reviewer-260902-1144-phase-04-client-types-transport-query-state.md) · [Phase plan](../plans/260901-0919-workflow-tracking-notes/phase-04-client-types-transport-and-query-state.md).
 - **Phase 05: Responsive workflow context surface.** Added the Plan-first ambient context ribbon, responsive desktop deck, mobile segmented safe-area sheet, optional Phase/Task capture, direct notes/sessions/execution links, manual timestamp/**Now** controls, observed terminal suggestions, focus-safe shortcut ownership, and loading/error/empty states.
 - Validation: targeted Phase 05 UI tests passed 62/62 (100%), full UI suite passed 1,493/1,493 (100%), and Rust server executed tests passed 907/907 (2 ignored). Review approved 9.8/10. Responsive browser geometry, safe-area, and terminal/editor continuity remain Phase 07 validation work. [Test report](../plans/reports/tester-260902-1243-phase-05-responsive-workflow-context-surface.md) · [Review report](../plans/reports/code-reviewer-260902-1245-phase-05-responsive-workflow-context-surface.md) · [Phase plan](../plans/260901-0919-workflow-tracking-notes/phase-05-responsive-workflow-context-surface.md).
+- **Phase 06: WorkspacePage and shell integration.** Complete / DONE
+  2026-09-02. Mounted one `WorkflowContextSurface` through the existing
+  `toolbarActions` companion row in `IdeShell`, `TerminalWorkspaceShell`, and
+  `MobileWorkspaceShell`; no route, activity-bar tool, mobile surface, TopNav
+  item, or duplicate PTY lifecycle.
+- Added pure `packages/ui/src/lib/workflow-workspace-integration.ts` decisions:
+  `deriveWorkflowTerminalCandidates` merges mounted/session-map observations
+  with target-unavailable state without command, CWD, or output;
+  `resolveWorkflowTerminalReveal` rejects missing/profile-mismatched/stale IDs,
+  reuses `handleSelectTerminal`, and requests the compact Terminal surface only
+  in compact mode; `resolveWorkflowTargetSelection` validates configured
+  project/worktree availability before using existing workspace and
+  project-target stores.
+- Wired `onOpenTerminal` through `WorkflowContextSurface`,
+  `WorkflowContextDeck`, `WorkflowContextSheet`, `WorkflowExecutionList`, and
+  `WorkflowSessionCard`; wired `onSelectTarget` through the surface,
+  deck/sheet, and `WorkflowProjectList`. Keyed the surface by
+  `activeProfileId` so profile changes reset workflow presentation state while
+  terminal/editor/Browser keep-alive state remains mounted.
+- Validation: targeted UI 62/62, full UI 1,515/1,515, relevant Chromium
+  smoke 8/8, Rust 907/907 executed (2 ignored), and UI TypeScript compilation
+  passed; review approved 9.8/10. [Test report](../plans/reports/tester-260902-1430-phase-06-workspace-page-and-shell-integration.md) · [Review report](../plans/reports/code-reviewer-260902-1440-phase-06-workspace-page-and-shell-integration.md) · [Phase plan](../plans/260901-0919-workflow-tracking-notes/phase-06-workspace-page-and-shell-integration.md).
 
 
 # 2026-08-31
