@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-02): 1,494 files, 3,145,324 tokens, and 12,734,821 characters.
+- Repomix snapshot (2026-09-02): 1,503 files, 3,166,551 tokens, and 12,823,616 characters.
 - Repomix security scanning excluded three suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
@@ -47,6 +47,7 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **Git VCS Roots**: `WorkspaceGitPanel` now loads server-reported VCS roots, scopes branch/history queries by selected root, groups local changes by `rootId`, and blocks mixed-root commits in the UI.
 - **Browser Debug**: `BrowserDebugKeepAliveHost` preserves one iframe across workspace surfaces; the extension bridge accepts only exact origin/source/nonce/request matches and returns bounded DOM/ARIA metadata. Optional user-mediated browser capture or manual PNG/JPEG input remains local until explicit attach; the authenticated server artifact API stores capped JSON/PNG outside project roots for 10 minutes, exposes no read/list route, and inserts only generated paths into a live PTY without auto-submit.
 - **Usage Session Audit**: `UsagePage` adds a Sessions tab backed by aggregate list/detail transport calls. It uses derived HMAC session identities, dynamic provider-qualified models, flat token summaries bounded by detail retention, cursor and URL deep links, and 15-second polling only for visible documents. Primary token totals exclude cached input; raw commands/content/storage data are not exposed. Paused summaries remain readable and deletion is explicit. Browser and native hosts share the behavior.
+- **Workflow Client Types and Query State (Phase 04)**: `packages/ui/src/api/workflow-dto-types.ts` defines explicit camelCase workflow DTOs and closed unions; `workflow-domain-helpers.ts` keeps Plan-first validation, factual progress, timestamp, duration, attention, and ordering rules pure; `workflow-types.ts` re-exports both. `client.ts` exposes the typed `api.workflow` facade, `ws-transport.ts` maps 13 channels to protected REST, and `workflow-queries.ts` owns generation-aware overview/events hooks plus success-only mutation invalidation. Host QueryClients use profile-scoped hashes; workflow data is memory-only.
 
 ## Key Features
 
@@ -67,6 +68,10 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **Terminal Emulator**: Multi-session xterm terminal management with color support and active-pane client-side find
 - **Workspace Navigation**: Multi-workspace switching, project discovery
 - **Real-time Sync**: TanStack Query for efficient data synchronization
+- **Workflow Client State**: Shared DTOs/helpers and typed `api.workflow`
+  methods feed generation-aware overview/events queries. Profile-scoped
+  `queryKeyHashFn` partitions cache entries, and workflow mutations invalidate
+  the `['workflow']` root only after successful writes.
 - **Git Integration**: Diff viewer, commit history, merge conflict handling
 
 ### Development Features
@@ -138,6 +143,36 @@ integration tests in `server/tests/workflow_api.rs` cover the Phase 01–02
 contract. Phase 03 lifecycle coverage is in
 `server/src/workflow/observation_tests.rs`; the dated Phase 03 review reports
 28 workflow tests and 907 full-server tests passing.
+
+### Workflow Client Types, Transport, and Query State (Phase 04)
+
+The Phase 04 shared UI layer is a typed, transport-agnostic client over the
+protected REST surface:
+
+- `workflow-dto-types.ts` mirrors response/request DTOs and closed field unions;
+  `workflow-types.ts` re-exports the public contract.
+- `workflow-domain-helpers.ts` keeps Plan-first child validation, status and
+  resource-attention predicates, factual tracked-Task labels, timestamp/elapsed
+  handling, and item ordering pure and reusable.
+- `client.ts` adds `api.workflow` methods for overview/events, item CRUD,
+  session lifecycle, resource links, notes, and history purge.
+- `ws-transport.ts` maps 13 channel names to exact REST methods and paths,
+  URL-encodes dynamic IDs/cursors, and preserves typed request bodies.
+- `workflow-queries.ts` uses `['workflow']` keys, includes transport generation
+  in overview keys, and invalidates the root only after successful mutations.
+`queries.ts` re-exports `workflow-queries.ts` so existing shared query imports
+can consume the focused workflow hooks.
+- `query-client.ts` supplies the host-level profile-aware key hash. Workflow
+  query data is memory-only; presentation state stays local to components.
+
+Profile switches replace/destroy the active transport and advance its generation.
+The profile hash and generation key keep old responses in their prior scope,
+while the server remains authoritative for validation, target ownership,
+timestamps, and idempotent replay.
+
+Targeted Phase 04 tests cover helper semantics, all workflow REST mappings, and
+query/cache behavior (51/51 passed in the dated test report). Details and the
+operation table are in [Workflow Client State](./workflow-client-state.md).
 
 ## Architecture Layers
 
@@ -520,7 +555,8 @@ dam-hopper/
 │   └── shared/                # Shared logger and runtime helpers
 ├── docs/                      # Documentation
 │   ├── README.md
-│   ├── workflow-api.md        # Phase 03 workflow REST/lifecycle contract
+│   ├── workflow-api.md        # Phase 02–03 workflow REST/lifecycle contract
+│   ├── workflow-client-state.md # Phase 04 shared UI client/query contract
 │   ├── codebase-summary.md
 │   ├── system-architecture.md
 │   ├── api-reference.md
@@ -543,6 +579,12 @@ dam-hopper/
   incarnation ordering, duplicate suppression, startup reconciliation, bounded
   queue overflow, direct Plan/manual harness links, manual timestamp
   preservation, and real PTY observation delivery.
+- **Workflow client**: `workflow-types.test.ts` covers pure helper semantics;
+  `ws-transport.test.ts` covers all 13 workflow channel mappings and URL
+  encoding; `workflow-queries.test.tsx` covers profile hash isolation,
+  transport-generation keys, query behavior, request IDs, invalidation, and
+  failure preservation. The dated Phase 04 report records 51/51 targeted
+  assertions passing.
 - **Web**: Component tests with Vitest, 80% coverage target
 
 ### Known Limitations (Pre-existing)
@@ -585,7 +627,8 @@ dam-hopper/
 | -------------------------------------------------------------- | --------------------------------------------- |
 | [system-architecture.md](./system-architecture.md)             | Component interactions, data flow             |
 | [api-reference.md](./api-reference.md)                         | HTTP endpoints, request/response schemas      |
-| [workflow-api.md](./workflow-api.md)                            | Phase 03 workflow REST and lifecycle contract |
+| [workflow-api.md](./workflow-api.md)                            | Phase 02–03 workflow REST and lifecycle contract |
+| [workflow-client-state.md](./workflow-client-state.md)          | Phase 04 shared UI DTO, transport, and query contract |
 | [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
 | [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
 | [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
@@ -597,10 +640,11 @@ dam-hopper/
 ---
 
 **Last Updated**: September 2, 2026
-**Phase Status**: Phase 03 terminal lifecycle correlation and manual agent
-harness adapter is complete on top of the Phase 01–02 workflow domain/service
-foundation. Current support is tracked by feature and platform qualification;
-historical phase labels and evidence remain dated records.
-**Generated by**: Repomix v1.18.0 snapshot (1,494 files / 3,145,324 tokens)
+**Phase Status**: Phase 04 shared UI workflow client types, transport mapping,
+profile isolation, and query-state foundation is complete on top of the Phase
+01–03 workflow domain/service/lifecycle foundation. Current support is tracked
+by feature and platform qualification; historical phase labels and evidence
+remain dated records.
+**Generated by**: Repomix v1.18.0 snapshot (1,503 files / 3,166,551 tokens)
 plus source-verified maintenance. Three security-flagged files were excluded
 from the compaction output.
