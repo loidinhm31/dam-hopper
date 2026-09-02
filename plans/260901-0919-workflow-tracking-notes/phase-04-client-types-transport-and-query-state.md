@@ -12,8 +12,12 @@
 - **Date:** 2026-09-01
 - **Description:** Add strict shared-UI workflow DTOs, transport mappings, profile/workspace-safe query hooks, mutation invalidation, and view-state ownership.
 - **Priority:** P2
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Implementation status:** Complete / DONE (2026-09-02)
+- **Progress:** 100%
+- **Completed:** 2026-09-02
+- **Review status:** Complete / Approved (2026-09-02)
+- **Validation:** Targeted Phase 04 UI tests 51/51 passed; full UI suite 1,452/1,452 passed; Rust server suite 907/907 executed tests passed (2 ignored). See the [test report](../../reports/tester-260902-1139-phase-04-client-types-transport-query-state.md) and [review report](../../reports/code-reviewer-260902-1144-phase-04-client-types-transport-query-state.md).
+- **Handoff:** Strict client DTOs, domain helpers, all 13 workflow REST mappings, profile/transport-generation-isolated React Query hooks, mutation invalidation, and manual timestamp/resource-observation helpers complete; ready for Phase 05.
 
 ## Key Insights
 - `api/client.ts` is transport-agnostic while `ws-transport.ts` maps operation names to protected REST endpoints.
@@ -66,12 +70,12 @@
 9. Test profile A/B key hashes, transport generation changes, old-response isolation, Plan-only grouping, optional children, standalone Tasks, null progress/factual count labels, direct Plan notes/sessions, manual timestamp round-trip, **Now** equivalence, suggestion non-application, harness-link bounds, mutation failure cache preservation, exact invalidation, cursor encoding, and request-ID stability.
 
 ## Todo List
-- [ ] DTOs match backend and avoid arbitrary payloads.
-- [ ] Plan-first grouping preserves Plan-only records, optional children, direct ownership, standalone Tasks, and factual counts.
-- [ ] Transport mapping covers every MVP endpoint.
-- [ ] Query keys isolate profile and transport generation.
-- [ ] Mutations preserve one request ID and invalidate narrowly.
-- [ ] Manual time and observed-resource helpers share one clock without conflating authoritative and suggested values.
+- [x] DTOs match backend and avoid arbitrary payloads.
+- [x] Plan-first grouping preserves Plan-only records, optional children, direct ownership, standalone Tasks, and factual counts.
+- [x] Transport mapping covers every MVP endpoint.
+- [x] Query keys isolate profile and transport generation.
+- [x] Mutations preserve one request ID and invalidate narrowly.
+- [x] Manual time and observed-resource helpers share one clock without conflating authoritative and suggested values.
 
 ## Success Criteria
 - Switching profile cannot display the previous server's workflow overview, notes, or errors.
