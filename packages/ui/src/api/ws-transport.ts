@@ -356,11 +356,11 @@ function channelToEndpoint(
       };
     }
     case "git:removeWorktree": {
-      const d = data as { project: string; path: string; force?: boolean };
+      const d = data as { project: string; path: string };
       return {
         method: "DELETE",
         url: `/api/git/${encodeURIComponent(d.project)}/worktrees`,
-        body: { path: d.path, ...(d.force != null ? { force: d.force } : {}) },
+        body: { path: d.path },
       };
     }
     case "git:branches": {
@@ -1201,6 +1201,97 @@ function channelToEndpoint(
         url: `/api/browser-debug/artifacts/${encodeURIComponent(artifactId)}`,
       };
     }
+
+    // Workflow
+    case "workflow:overview":
+      return { method: "GET", url: "/api/workflow/overview" };
+    case "workflow:events": {
+      const d =
+        (data as
+          | { cursor?: string | null; limit?: number | null }
+          | undefined) ?? {};
+      const params = new URLSearchParams();
+      if (d.cursor) params.set("cursor", d.cursor);
+      if (d.limit != null) params.set("limit", String(d.limit));
+      const qs = params.toString();
+      return {
+        method: "GET",
+        url:
+          qs.length > 0
+            ? `/api/workflow/events?${qs}`
+            : "/api/workflow/events",
+      };
+    }
+    case "workflow:createItem":
+      return { method: "POST", url: "/api/workflow/items", body: data };
+    case "workflow:patchItem": {
+      const { id, ...body } = data as { id: string } & Record<string, unknown>;
+      return {
+        method: "PATCH",
+        url: `/api/workflow/items/${encodeURIComponent(id)}`,
+        body,
+      };
+    }
+    case "workflow:deleteItem": {
+      const { id, ...body } = data as { id: string } & Record<string, unknown>;
+      return {
+        method: "DELETE",
+        url: `/api/workflow/items/${encodeURIComponent(id)}`,
+        body,
+      };
+    }
+    case "workflow:createSession":
+      return { method: "POST", url: "/api/workflow/sessions", body: data };
+    case "workflow:endSession": {
+      const { id, ...body } = data as { id: string } & Record<string, unknown>;
+      return {
+        method: "POST",
+        url: `/api/workflow/sessions/${encodeURIComponent(id)}/end`,
+        body,
+      };
+    }
+    case "workflow:abandonSession": {
+      const { id, ...body } = data as { id: string } & Record<string, unknown>;
+      return {
+        method: "POST",
+        url: `/api/workflow/sessions/${encodeURIComponent(id)}/abandon`,
+        body,
+      };
+    }
+    case "workflow:linkResource": {
+      const { sessionId, ...body } = data as { sessionId: string } & Record<
+        string,
+        unknown
+      >;
+      return {
+        method: "POST",
+        url: `/api/workflow/sessions/${encodeURIComponent(sessionId)}/links`,
+        body,
+      };
+    }
+    case "workflow:unlinkResource": {
+      const { sessionId, ...body } = data as { sessionId: string } & Record<
+        string,
+        unknown
+      >;
+      return {
+        method: "DELETE",
+        url: `/api/workflow/sessions/${encodeURIComponent(sessionId)}/links`,
+        body,
+      };
+    }
+    case "workflow:createNote":
+      return { method: "POST", url: "/api/workflow/notes", body: data };
+    case "workflow:deleteNote": {
+      const { id, ...body } = data as { id: string } & Record<string, unknown>;
+      return {
+        method: "DELETE",
+        url: `/api/workflow/notes/${encodeURIComponent(id)}`,
+        body,
+      };
+    }
+    case "workflow:purgeHistory":
+      return { method: "DELETE", url: "/api/workflow/history", body: data };
 
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);

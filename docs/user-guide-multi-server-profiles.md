@@ -18,23 +18,6 @@ On first app load, if you had a previously configured server URL, it's automatic
 
 You can then edit this profile or create new ones.
 
-## Deployed web runtime bootstrap (Phase 03)
-
-When the UI is served by `dam-hopper-web`, startup fetches the relative
-`/__dam-hopper/runtime-config.json` endpoint before creating a transport. The
-response is bounded at 4 KiB and contains schema version `1`, a stable
-`profileId` (UUID v4), a release version, and an optional HTTP(S) `apiUrl`.
-
-The browser then:
-
-1. Migrates any legacy URL into the normal user profile store.
-2. When `apiUrl` is present, reconciles the runtime profile as the managed **Deployed Server** profile.
-3. When `apiUrl` is omitted, starts in the standard server-profile setup flow where user-saved profiles remain authoritative.
-4. Preserves an existing active user profile instead of silently switching it.
-5. Clears the managed profile's token when its API URL changes.
-6. Uses an idle transport when runtime config is missing or invalid.
-
-Missing runtime config or omitted `apiUrl` is expected for standalone web or externally hosted UI deployments; it must not cause the browser to guess an API origin from `Host`, `:4802`, or a page URL. Configure a profile manually for those deployments.
 ### Option B: Manual Creation
 
 1. **Open the Profile Manager**
@@ -120,13 +103,21 @@ In the **Server Connections** dialog, each profile shows:
 
 **All profiles are saved in browser localStorage:**
 
-| Item                | Storage      | Persistence                                |
-| ------------------- | ------------ | ------------------------------------------ |
-| All profiles (JSON) | localStorage | Survives browser close, shared across tabs |
-| Active profile ID   | localStorage | Survives browser close, shared across tabs |
-| Auth token          | localStorage | Per-profile, survives browser close        |
+| Item                 | Storage      | Persistence                                      |
+| -------------------- | ------------ | ------------------------------------------------ |
+| All profiles (JSON)  | localStorage | Survives browser close, shared across tabs       |
+| Active profile ID    | localStorage | Survives browser close, shared across tabs       |
+| Auth token           | localStorage | Per-profile, survives browser close              |
+| Workflow query cache | Memory only  | Profile-hashed; cleared with the page/query client |
 
 **Browser Tabs:** All tabs in the same browser share the profiles list. Switching profiles in one tab shows the new active profile in all open tabs.
+
+
+Workflow results are intentionally not persisted with profile metadata. The
+shared UI prefixes TanStack Query cache hashes with the active profile ID, and
+replacing a profile transport advances a transport generation used by overview
+queries. This keeps cached workflow data tied to the selected server while
+allowing profile switching without a page reload.
 
 Media issue/revoke calls use Bearer credentials and `credentials: include`; native stream GET/HEAD uses only the host-only media cookie and opaque ticket. Profile switch, delete, and logout attempt bounded session revocation before local token removal.
 
