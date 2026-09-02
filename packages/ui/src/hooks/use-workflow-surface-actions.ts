@@ -13,7 +13,37 @@ import {
   useUnlinkWorkflowResource,
 } from "@/api/workflow-queries.js";
 
-export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef) {
+export interface WorkflowSurfaceActions {
+  handleCreateItem: (item: {
+    target: ProjectTargetRef;
+    kind: ItemKind;
+    title: string;
+    summary?: string;
+    status: ItemStatus;
+    parentId?: string | null;
+    startSessionImmediately?: boolean;
+  }) => Promise<void>;
+  handleStatusChange: (item: ItemDto, status: ItemStatus) => Promise<unknown>;
+  handleAddNote: (itemId: string, body: string) => Promise<unknown>;
+  handleStartSession: (startedAt: string, itemId?: string | null) => Promise<unknown>;
+  handleEndSession: (sessionId: string, endedAt: string) => Promise<unknown>;
+  handleAbandonSession: (sessionId: string) => Promise<unknown>;
+  handleLinkResource: (
+    sessionId: string,
+    req: {
+      resourceType: ResourceLinkType;
+      externalId: string;
+      harnessLabel?: string;
+      runId?: string;
+    },
+  ) => Promise<unknown>;
+  handleUnlinkResource: (
+    sessionId: string,
+    resourceType: ResourceLinkType,
+    externalId: string,
+  ) => Promise<unknown>;
+}
+export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): WorkflowSurfaceActions {
   const createItem = useCreateWorkflowItem();
   const patchItem = usePatchWorkflowItem();
   const createNote = useCreateWorkflowNote();
@@ -55,7 +85,7 @@ export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef) {
     patchItem.mutateAsync({
       id: item.id,
       requestId: generateWorkflowRequestId(),
-      updatedAt: getIsoNow(),
+      updatedAt: item.updatedAt,
       status,
     });
 
