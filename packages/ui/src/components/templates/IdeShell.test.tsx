@@ -148,4 +148,20 @@ describe("IdeShell bottom panel maximize toggle", () => {
     expect(markup).toContain("editor");
     expect(markup).toContain("Terminal content");
   });
+
+  it("renders toolbarActions as a sibling above editor content", () => {
+    const leftTools = [makeTool("explorer", "Explorer", "top")];
+    const markup = renderToStaticMarkup(
+      <IdeShell
+        leftTools={leftTools}
+        rightTools={[]}
+        editor={<div data-testid="ide-editor">Editor Content</div>}
+        toolbarActions={<div data-testid="workflow-toolbar">Workflow Actions</div>}
+      />,
+    );
+
+    expect(markup).toContain('data-testid="workflow-toolbar"');
+    expect(markup).toContain('data-testid="ide-editor"');
+    expect(markup).toContain("Explorer content");
+  });
 });
