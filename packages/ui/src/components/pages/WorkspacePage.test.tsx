@@ -42,6 +42,15 @@ let mockFreeTerminalSavePrompt: {
 } | null = null;
 let lastTerminalWorkspaceShellProps: Record<string, unknown> | null = null;
 let lastIdeShellProps: Record<string, unknown> | null = null;
+let lastWorkflowSurfaceProps: {
+  target?: { project: string; worktreePath?: string } | null;
+  onSelectTarget?: (target: { project: string; worktreePath?: string }) => void;
+  onOpenTerminal?: (sessionId: string) => void;
+} | null = null;
+let mockServerProfile: { id: string; name: string } | null = {
+  id: "profile-default",
+  name: "Default Profile",
+};
 const terminalPanelControls: TerminalWorkspacePanelControls = {
   zIndex: 20,
   onActivate: () => undefined,
@@ -132,17 +141,35 @@ vi.mock("@tanstack/react-query", () => ({
 vi.mock("@/components/templates/IdeShell.js", () => ({
   IdeShell: (props: Record<string, unknown>) => {
     lastIdeShellProps = props;
-    return <div data-shell="ide-shell" />;
+    return (
+      <div data-shell="ide-shell">
+        {props.toolbarActions as ReactNode}
+      </div>
+    );
   },
 }));
 
 vi.mock("@/components/templates/TerminalWorkspaceShell.js", () => ({
   TerminalWorkspaceShell: (props: Record<string, unknown>) => {
     lastTerminalWorkspaceShellProps = props;
-    return <div data-shell="terminal-shell" />;
+    return (
+      <div data-shell="terminal-shell">
+        {props.toolbarActions as ReactNode}
+      </div>
+    );
   },
 }));
 
+vi.mock("@/components/organisms/WorkflowContextSurface.js", () => ({
+  WorkflowContextSurface: (props: Record<string, unknown>) => {
+    lastWorkflowSurfaceProps = props as typeof lastWorkflowSurfaceProps;
+    return <div data-testid="workflow-context-surface" />;
+  },
+}));
+
+vi.mock("@/hooks/use-server-profile.js", () => ({
+  useServerProfile: () => mockServerProfile,
+}));
 vi.mock("@/components/organisms/TopNav.js", () => ({
   TopNav: ({ children }: { children?: ReactNode }) => (
     <div data-testid="top-nav">{children}</div>
@@ -346,6 +373,10 @@ describe("WorkspacePage", () => {
     localStorageMock.clear.mockClear();
     vi.stubGlobal("localStorage", localStorageMock);
     useProjectTargetStore.getState().resetTarget("demo-project");
+    lastWorkflowSurfaceProps = null;
+    lastIdeShellProps = null;
+    lastTerminalWorkspaceShellProps = null;
+    mockServerProfile = { id: "profile-default", name: "Default Profile" };
   });
 
   afterEach(() => {
@@ -520,7 +551,7 @@ describe("WorkspacePage", () => {
       expect.any(Function),
     );
     expect(lastTerminalWorkspaceShellProps?.terminalOverlayOpen).toBe(false);
-    expect(lastTerminalWorkspaceShellProps?.toolbarActions).toBeUndefined();
+    expect(lastTerminalWorkspaceShellProps?.toolbarActions).toBeDefined();
     expect(terminalMarkup).toContain('aria-label="Diagnostics time window"');
     expect(terminalMarkup).toContain('value="10" selected=""');
     expect(terminalMarkup).toContain("Show files panel");
@@ -795,6 +826,92 @@ describe("WorkspacePage", () => {
       compactSurfaceId: "browser",
       openBrowser: false,
       activateTerminalBrowserSplit: false,
+    });
+  });
+
+  describe("workflow context shell integration", () => {
+    it("passes workflow toolbarActions to IdeShell in IDE mode", () => {
+      mockWorkspaceMode = "ide";
+      stubMatchMedia(false);
+
+      renderToStaticMarkup(<WorkspacePage />);
+
+      expect(lastIdeShellProps).not.toBeNull();
+      expect(lastIdeShellProps?.toolbarActions).toBeDefined();
+      expect(isValidElement(lastIdeShellProps?.toolbarActions)).toBe(true);
+      expect(lastWorkflowSurfaceProps).not.toBeNull();
+      expect(lastWorkflowSurfaceProps?.target).toEqual({ project: "demo-project" });
+    });
+
+    it("passes workflow toolbarActions to TerminalWorkspaceShell in terminal mode", () => {
+      mockWorkspaceMode = "terminal";
+      stubMatchMedia(false);
+
+      renderToStaticMarkup(<WorkspacePage />);
+
+      expect(lastTerminalWorkspaceShellProps).not.toBeNull();
+      expect(lastTerminalWorkspaceShellProps?.toolbarActions).toBeDefined();
+      expect(isValidElement(lastTerminalWorkspaceShellProps?.toolbarActions)).toBe(true);
+    });
+
+    it("passes workflow toolbarActions in compact mobile mode", () => {
+      mockWorkspaceMode = "ide";
+      stubMatchMedia(true);
+
+      const markup = renderToStaticMarkup(<WorkspacePage />);
+      expect(markup).toContain('data-testid="workflow-context-surface"');
+    });
+
+    it("selects configured target via onSelectTarget callback", () => {
+      mockWorkspaceMode = "ide";
+      stubMatchMedia(false);
+      renderToStaticMarkup(<WorkspacePage />);
+
+      expect(lastWorkflowSurfaceProps?.onSelectTarget).toBeDefined();
+      lastWorkflowSurfaceProps?.onSelectTarget?.({
+        project: "demo-project",
+        worktreePath: "/tmp/feat-1",
+      });
+
+      expect(mockSetActiveProject).toHaveBeenCalledWith("demo-project");
+      expect(useProjectTargetStore.getState().activeTargetByProject["demo-project"]).toBe("/tmp/feat-1");
+    });
+
+    it("ignores onSelectTarget for unconfigured projects", () => {
+      mockWorkspaceMode = "ide";
+      stubMatchMedia(false);
+      renderToStaticMarkup(<WorkspacePage />);
+
+      mockSetActiveProject.mockClear();
+      lastWorkflowSurfaceProps?.onSelectTarget?.({
+        project: "unconfigured-project",
+      });
+
+      expect(mockSetActiveProject).not.toHaveBeenCalled();
+    });
+
+    it("reveals existing session on onOpenTerminal callback", () => {
+      mockWorkspaceMode = "ide";
+      stubMatchMedia(false);
+      mockSessionMap.set("session-123", { project: "demo-project", alive: true });
+
+      renderToStaticMarkup(<WorkspacePage />);
+
+      expect(lastWorkflowSurfaceProps?.onOpenTerminal).toBeDefined();
+      lastWorkflowSurfaceProps?.onOpenTerminal?.("session-123");
+
+      expect(terminalActions.handleSelectTerminal).toHaveBeenCalledWith("session-123");
+    });
+
+    it("rejects unknown session on onOpenTerminal callback", () => {
+      mockWorkspaceMode = "ide";
+      stubMatchMedia(false);
+      terminalActions.handleSelectTerminal.mockClear();
+
+      renderToStaticMarkup(<WorkspacePage />);
+
+      lastWorkflowSurfaceProps?.onOpenTerminal?.("unknown-session-456");
+      expect(terminalActions.handleSelectTerminal).not.toHaveBeenCalled();
     });
   });
 });

@@ -30,7 +30,20 @@ mod pty_tests {
         shell_lifecycle::{LifecycleEvent, LifecycleState},
         SessionMeta,
     };
+    use crate::workflow::{WorkflowObservation, WorkflowObservationRecorder};
     use crate::workspace_target::WorkspaceTargetResolver;
+
+    #[derive(Default)]
+    struct RecordingWorkflowObservations {
+        observations: Mutex<Vec<WorkflowObservation>>,
+    }
+
+    impl WorkflowObservationRecorder for RecordingWorkflowObservations {
+        fn record(&self, observation: WorkflowObservation) {
+            self.observations.lock().unwrap().push(observation);
+        }
+    }
+
     // Shared multi-thread Tokio runtime for tests. PtySessionManager::new
     // calls tokio::spawn (supervisor loop) which requires an active runtime.
     // The runtime lives for the process lifetime so spawned tasks keep running
@@ -1441,11 +1454,13 @@ mod pty_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn restart_on_failure_policy_stops_after_max_retries() {
         let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
-        let mut opts = opts("restart:retries", "exit 1");
-        opts.restart_policy = RestartPolicy::OnFailure;
-        opts.restart_max_retries = 2;
+        let observations = Arc::new(RecordingWorkflowObservations::default());
+        mgr.set_workflow_recorder(observations.clone());
+        let mut options = opts("restart:retries", "exit 1");
+        options.restart_policy = RestartPolicy::OnFailure;
+        options.restart_max_retries = 2;
 
-        mgr.create(opts).unwrap();
+        mgr.create(options).unwrap();
 
         // Initial run + 2 restarts, backoffs: 1s, 2s → ~4s total.
         tokio::time::sleep(Duration::from_secs(6)).await;
@@ -1462,6 +1477,34 @@ mod pty_tests {
             "restart_count should cap at max_retries"
         );
         assert!(!meta.alive, "Session should be dead");
+
+        let final_exit_seen = observations.observations.lock().unwrap().iter().any(
+            |observation| {
+                matches!(
+                    observation,
+                    WorkflowObservation::TerminalFinalExit {
+                        session_id,
+                        restart_count: 2,
+                        ..
+                    } if session_id == "restart:retries"
+                )
+            },
+        );
+        assert!(
+            final_exit_seen,
+            "exhaustion should emit a final-exit observation"
+        );
+
+        // Exhaustion is terminal: no delayed supervisor work may revive it or
+        // increment the count after the final failed attempt.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let stable = mgr
+            .list()
+            .into_iter()
+            .find(|s| s.id == "restart:retries")
+            .unwrap();
+        assert!(!stable.alive, "Exhausted session must remain dead");
+        assert_eq!(stable.restart_count, 2);
 
         mgr.remove("restart:retries").unwrap();
     }
