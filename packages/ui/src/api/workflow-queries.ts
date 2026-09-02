@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
-import { api } from "./client.js";
+import { ApiRequestError, api } from "./client.js";
 import {
   getTransportGeneration,
   subscribeTransportChanges,
@@ -24,6 +24,25 @@ import type {
 } from "./workflow-types.js";
 
 // ── Query Keys ──────────────────────────────────────────────────────────────
+
+export type WorkflowOverviewAvailability =
+  | "loading"
+  | "available"
+  | "unavailable"
+  | "error";
+
+/** Classify only the overview's profile-scoped 404 as feature unavailable. */
+export function classifyWorkflowOverviewError(
+  error: unknown,
+): "unavailable" | "error" {
+  return error instanceof ApiRequestError && error.status === 404
+    ? "unavailable"
+    : "error";
+}
+
+export function isWorkflowOverviewUnavailable(error: unknown): boolean {
+  return classifyWorkflowOverviewError(error) === "unavailable";
+}
 
 export const workflowQueryKeys = {
   all: ["workflow"] as const,
@@ -68,14 +87,27 @@ export function useWorkflowOverview(options?: { enabled?: boolean }) {
     getTransportGeneration,
   );
 
-  return useQuery<OverviewDto>({
+  const query = useQuery<OverviewDto>({
     queryKey: workflowQueryKeys.overview(transportGeneration),
     queryFn: () => api.workflow.overview(),
-    placeholderData: (previousData) => previousData,
     staleTime: 0,
     refetchInterval: false,
+    retry: (failureCount, error) =>
+      isWorkflowOverviewUnavailable(error) ? false : failureCount < 1,
     enabled: options?.enabled ?? true,
   });
+
+  const availability: WorkflowOverviewAvailability = query.isPending
+    ? "loading"
+    : query.isError
+      ? classifyWorkflowOverviewError(query.error)
+      : "available";
+
+  return {
+    ...query,
+    availability,
+    isUnavailable: availability === "unavailable",
+  };
 }
 
 export function useWorkflowEvents(

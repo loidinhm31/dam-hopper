@@ -15,7 +15,7 @@ use dam_hopper_server::{
     diagnostics::DiagnosticStore,
     fs::FsSubsystem,
     persistence::SessionStore,
-    pty::{BroadcastEventSink, PtySessionManager},
+    pty::{BroadcastEventSink, PtyCreateOpts, PtySessionManager},
     state::AppState,
     workflow::store::WorkflowStore,
 };
@@ -37,6 +37,13 @@ struct TestContext {
 }
 
 fn setup_test_app(no_auth: bool) -> (TestContext, axum::Router) {
+    setup_test_app_with_workflow(no_auth, true)
+}
+
+fn setup_test_app_with_workflow(
+    no_auth: bool,
+    workflow_enabled: bool,
+) -> (TestContext, axum::Router) {
     let temp_dir = tempfile::tempdir().unwrap();
     let root_path = temp_dir.path().to_path_buf();
     let project_dir = root_path.join("test-proj");
@@ -106,7 +113,7 @@ fn setup_test_app(no_auth: bool) -> (TestContext, axum::Router) {
         dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("Failed to create AppState in test")
-    .with_workflow_store(Some(workflow_store));
+    .with_workflow_store(workflow_enabled.then_some(workflow_store));
 
     if let Some(v) = old_rust_env {
         std::env::set_var("RUST_ENV", v);
@@ -136,6 +143,190 @@ async fn json_response(response: axum::response::Response) -> Value {
             String::from_utf8_lossy(&body_bytes)
         )
     })
+}
+async fn send_json(
+    router: &axum::Router,
+    method: &str,
+    uri: impl Into<String>,
+    payload: Value,
+) -> axum::response::Response {
+    let request = Request::builder()
+        .uri(uri.into())
+        .method(method)
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+        .unwrap();
+    router.clone().oneshot(request).await.unwrap()
+}
+
+async fn create_item(
+    router: &axum::Router,
+    kind: &str,
+    parent_id: Option<&str>,
+    title: &str,
+    status: &str,
+) -> Value {
+    let mut body = json!({
+        "requestId": uuid::Uuid::new_v4().to_string(),
+        "target": { "project": "test-proj" },
+        "kind": kind,
+        "title": title,
+        "status": status
+    });
+    if let Some(parent_id) = parent_id {
+        body.as_object_mut()
+            .unwrap()
+            .insert("parentId".into(), Value::String(parent_id.into()));
+    }
+    json_response(send_json(router, "POST", "/api/workflow/items", body).await).await
+}
+
+#[tokio::test]
+async fn test_plan_only_direct_notes_sessions_and_links() {
+    let (_ctx, router) = setup_test_app(true);
+
+    let plan = json_response(
+        send_json(
+            &router,
+            "POST",
+            "/api/workflow/items",
+            json!({
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "target": { "project": "test-proj" },
+                "kind": "plan",
+                "title": "Plan-only workflow",
+                "status": "in_progress"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(plan["resource"]["parentId"], Value::Null);
+    let plan_id = plan["resource"]["id"].as_str().unwrap().to_owned();
+
+    let note = json_response(
+        send_json(
+            &router,
+            "POST",
+            "/api/workflow/notes",
+            json!({
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "itemId": plan_id,
+                "body": "Direct Plan note"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(note["resource"]["itemId"], plan["resource"]["id"]);
+
+    let session = json_response(
+        send_json(
+            &router,
+            "POST",
+            "/api/workflow/sessions",
+            json!({
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "target": { "project": "test-proj" },
+                "itemId": plan["resource"]["id"],
+                "startedAt": "2026-09-02T10:00:00.123Z"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(session["resource"]["itemId"], plan["resource"]["id"]);
+    assert_eq!(
+        session["resource"]["startedAt"],
+        "2026-09-02T10:00:00.123Z"
+    );
+    let session_id = session["resource"]["id"].as_str().unwrap().to_owned();
+
+    let link = json_response(
+        send_json(
+            &router,
+            "POST",
+            format!("/api/workflow/sessions/{session_id}/links"),
+            json!({
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "resourceType": "agent",
+                "externalId": "agent-run-1",
+                "harnessLabel": "codex",
+                "runId": "run-123"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(link["resource"]["harnessLabel"], "codex");
+    assert_eq!(link["resource"]["runId"], "run-123");
+
+    let overview = json_response(
+        send_json(&router, "GET", "/api/workflow/overview", json!({})).await,
+    )
+    .await;
+    let plan_node = &overview["plans"][0];
+    assert_eq!(plan_node["item"]["id"], plan["resource"]["id"]);
+    assert_eq!(plan_node["children"].as_array().unwrap().len(), 0);
+    assert_eq!(plan_node["progress"], Value::Null);
+    assert_eq!(plan_node["notes"][0]["body"], "Direct Plan note");
+    assert_eq!(plan_node["activeSessions"][0]["id"], session["resource"]["id"]);
+    let ended = json_response(
+        send_json(
+            &router,
+            "POST",
+            format!("/api/workflow/sessions/{session_id}/end"),
+            json!({
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "endedAt": "2026-09-02T11:22:33.987Z"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(ended["resource"]["startedAt"], "2026-09-02T10:00:00.123Z");
+    assert_eq!(ended["resource"]["endedAt"], "2026-09-02T11:22:33.987Z");
+}
+
+#[tokio::test]
+async fn test_optional_and_standalone_tasks_are_factual() {
+    let (_ctx, router) = setup_test_app(true);
+    let plan = create_item(
+        &router,
+        "plan",
+        None,
+        "Optional breakdown plan",
+        "in_progress",
+    )
+    .await;
+    let plan_id = plan["resource"]["id"].as_str().unwrap().to_owned();
+    let phase = create_item(&router, "phase", Some(&plan_id), "Optional phase", "backlog").await;
+    let direct_task =
+        create_item(&router, "task", Some(&plan_id), "Direct tracked task", "done").await;
+    let standalone = create_item(&router, "task", None, "Standalone task", "backlog").await;
+
+
+    let overview = json_response(
+        send_json(&router, "GET", "/api/workflow/overview", json!({})).await,
+    )
+    .await;
+    let plan_node = &overview["plans"][0];
+    assert_eq!(plan_node["progress"]["totalTrackedTasks"], 1);
+    assert_eq!(plan_node["progress"]["completedTrackedTasks"], 1);
+    let children = plan_node["children"].as_array().unwrap();
+    let phase_node = children.iter().find(|n| n["item"]["id"] == phase["resource"]["id"]).unwrap();
+    assert_eq!(phase_node["progress"], Value::Null);
+    assert!(phase_node["children"].as_array().unwrap().is_empty());
+    let direct_node = children
+        .iter()
+        .find(|n| n["item"]["id"] == direct_task["resource"]["id"])
+        .unwrap();
+    assert_eq!(direct_node["progress"], Value::Null);
+    assert!(direct_node["children"].as_array().unwrap().is_empty());
+    let standalone_nodes = overview["standaloneTasks"].as_array().unwrap();
+    assert_eq!(standalone_nodes.len(), 1);
+    assert_eq!(standalone_nodes[0]["item"]["id"], standalone["resource"]["id"]);
+    assert_eq!(standalone_nodes[0]["progress"], Value::Null);
 }
 
 #[tokio::test]
@@ -706,4 +897,241 @@ async fn test_validation_limits_and_unknown_project() {
         .unwrap();
     let res = router.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_workflow_cursor_body_limit_and_sanitized_errors() {
+    let (_ctx, router) = setup_test_app(true);
+
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/workflow/events?cursor=not-a-valid-cursor")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let error = json_response(res).await;
+    assert_eq!(error["code"], "workflow_invalid_request");
+    assert_eq!(error["error"], "Invalid workflow request");
+    assert!(!error.to_string().contains("not-a-valid-cursor"));
+
+    let oversized = json!({
+        "requestId": uuid::Uuid::new_v4().to_string(),
+        "target": { "project": "test-proj" },
+        "kind": "plan",
+        "title": "a".repeat(40_000)
+    });
+    let res = send_json(&router, "POST", "/api/workflow/items", oversized).await;
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let unknown = json!({
+        "requestId": uuid::Uuid::new_v4().to_string(),
+        "target": { "project": "secret-project-name" },
+        "kind": "plan",
+        "title": "hidden title"
+    });
+    let res = send_json(&router, "POST", "/api/workflow/items", unknown).await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let error = json_response(res).await;
+    assert_eq!(error["code"], "workflow_not_found");
+    assert_eq!(error["error"], "Workflow resource not found");
+    assert!(!error.to_string().contains("secret-project-name"));
+    assert!(!error.to_string().contains("hidden title"));
+}
+
+#[tokio::test]
+async fn test_workflow_store_unavailable_does_not_block_terminal_api() {
+    let (_ctx, router) = setup_test_app_with_workflow(true, false);
+
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/workflow/overview")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let error = json_response(res).await;
+    assert_eq!(error["code"], "workflow_store_unavailable");
+    assert_eq!(error["error"], "Workflow storage is unavailable");
+
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/terminal")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_workflow_workspace_switch_isolates_previous_data() {
+    let (ctx, router) = setup_test_app(true);
+    let plan = json_response(
+        send_json(
+            &router,
+            "POST",
+            "/api/workflow/items",
+            json!({
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "target": { "project": "test-proj" },
+                "kind": "plan",
+                "title": "Current workspace plan"
+            }),
+        )
+        .await,
+    )
+    .await;
+    let plan_id = plan["resource"]["id"].as_str().unwrap().to_owned();
+    let updated_at = plan["resource"]["updatedAt"].as_str().unwrap().to_owned();
+
+    {
+        let mut config = ctx._app_state.config.write().await;
+        config.workspace.name = "switched-workspace".into();
+        config.config_path = ctx._temp_dir.path().join("switched.toml");
+    }
+
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/workflow/overview")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let switched = json_response(res).await;
+    assert_eq!(switched["workspace"]["name"], "switched-workspace");
+    assert!(switched["plans"].as_array().unwrap().is_empty());
+
+    let res = send_json(
+        &router,
+        "PATCH",
+        format!("/api/workflow/items/{plan_id}"),
+        json!({
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "updatedAt": updated_at,
+            "title": "must not disclose"
+        }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let error = json_response(res).await;
+    assert_eq!(error["error"], "Workflow resource not found");
+    assert!(!error.to_string().contains("Current workspace plan"));
+
+    {
+        let mut config = ctx._app_state.config.write().await;
+        config.workspace.name = "test-workspace".into();
+        config.config_path = ctx._temp_dir.path().join("dam-hopper.toml");
+    }
+    let restored = json_response(
+        send_json(&router, "GET", "/api/workflow/overview", json!({})).await,
+    )
+    .await;
+    assert_eq!(restored["plans"][0]["item"]["id"], plan["resource"]["id"]);
+}
+
+#[tokio::test]
+async fn test_workflow_harness_bounds_and_terminal_target_mismatch() {
+    let (ctx, router) = setup_test_app(true);
+    let session = json_response(
+        send_json(
+            &router,
+            "POST",
+            "/api/workflow/sessions",
+            json!({
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "target": { "project": "test-proj" },
+                "startedAt": "2026-09-02T10:00:00.000Z"
+            }),
+        )
+        .await,
+    )
+    .await;
+    let session_id = session["resource"]["id"].as_str().unwrap().to_owned();
+
+    let too_long_label = "l".repeat(65);
+    let res = send_json(
+        &router,
+        "POST",
+        format!("/api/workflow/sessions/{session_id}/links"),
+        json!({
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "resourceType": "agent",
+            "externalId": "agent-1",
+            "harnessLabel": too_long_label,
+            "runId": "run-1"
+        }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let too_long_run = "r".repeat(129);
+    let res = send_json(
+        &router,
+        "POST",
+        format!("/api/workflow/sessions/{session_id}/links"),
+        json!({
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "resourceType": "agent",
+            "externalId": "agent-1",
+            "harnessLabel": "codex",
+            "runId": too_long_run
+        }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let terminal_id = uuid::Uuid::new_v4().to_string();
+    let terminal = ctx
+        ._app_state
+        .pty_manager
+        .create(PtyCreateOpts {
+            id: terminal_id.clone(),
+            command: "sleep 5".into(),
+            cwd: ctx._temp_dir.path().display().to_string(),
+            env: Default::default(),
+            cols: 80,
+            rows: 24,
+            project: Some("different-project".into()),
+            worktree_path: None,
+            name: Some("mismatch".into()),
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        })
+        .unwrap();
+    let res = send_json(
+        &router,
+        "POST",
+        format!("/api/workflow/sessions/{session_id}/links"),
+        json!({
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "resourceType": "terminal",
+            "externalId": terminal_id
+        }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let error = json_response(res).await;
+    assert_eq!(error["code"], "workflow_target_unavailable");
+    assert_eq!(error["error"], "Workflow target is unavailable");
+    assert!(!error.to_string().contains("different-project"));
+    let _ = ctx._app_state.pty_manager.kill(&terminal.id);
 }

@@ -12,8 +12,8 @@
 - **Date:** 2026-09-01
 - **Description:** Prove migration, API, lifecycle, responsive UI, and continuity contracts; add privacy-safe diagnostics, compatibility behavior, rollout notes, and repository documentation.
 - **Priority:** P2
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Implementation status:** Complete / DONE (2026-09-02)
+- **Review status:** Approved (2026-09-02)
 
 ## Key Insights
 - This feature spans durable state, PTY lifecycle, three responsive shells, remote profiles, and focus ownership; unit tests alone are insufficient.
@@ -77,14 +77,14 @@
 13. Roll out additive migration with backup guidance. On rollback keep tables/data; on re-upgrade migration reopens idempotently. Never delete workflow data as rollback automation.
 
 ## Todo List
-- [ ] Manual timestamp/**Now** authority, suggestion non-application, and manual harness contracts pass.
-- [ ] Plan-only direct ownership, optional breakdown, standalone Tasks, null progress, and factual-count contracts pass.
-- [ ] Rust store/API/lifecycle matrix passes.
-- [ ] React contract/shell tests pass.
-- [ ] Chromium responsive/focus/terminal-continuity flows pass.
-- [ ] Isolated restart/purge/privacy smoke passes.
-- [ ] Diagnostics fixed-cardinality and content-free.
-- [ ] Docs, roadmap, README, and changelog match verified behavior.
+- [x] Manual timestamp/**Now** authority, suggestion non-application, and manual harness contracts pass.
+- [x] Plan-only direct ownership, optional breakdown, standalone Tasks, null progress, and factual-count contracts pass.
+- [x] Rust store/API/lifecycle matrix passes.
+- [x] React contract/shell tests pass.
+- [x] Chromium responsive/focus/terminal-continuity flows pass.
+- [x] Isolated restart/purge/privacy smoke passes.
+- [x] Diagnostics fixed-cardinality and content-free.
+- [x] Docs, roadmap, README, and changelog match verified behavior.
 
 ## Success Criteria
 - Every named MVP behavior has a failing-before/fixed-after behavioral gate; no project-wide suite is run until integration is complete.
