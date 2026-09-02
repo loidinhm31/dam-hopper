@@ -54,7 +54,7 @@ describe("WorkflowQuickCapture", () => {
     expect(container.textContent).toContain("Title is required");
   });
 
-  it("submits valid form with target and title", async () => {
+  it("submits valid form with target, title, and multiline summary textarea", async () => {
     const handleSubmit = vi.fn().mockResolvedValue(undefined);
     act(() => {
       root.render(
@@ -75,6 +75,21 @@ describe("WorkflowQuickCapture", () => {
       titleInput.dispatchEvent(new Event("input", { bubbles: true }));
       titleInput.dispatchEvent(new Event("change", { bubbles: true }));
     });
+
+    const summaryTextarea = container.querySelector("#wf-cap-summary") as HTMLTextAreaElement;
+    expect(summaryTextarea).not.toBeNull();
+    expect(summaryTextarea.tagName).toBe("TEXTAREA");
+
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(summaryTextarea, "Line 1: Summary note\nLine 2: Details");
+      summaryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+      summaryTextarea.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
     const form = container.querySelector("form");
     await act(async () => {
       form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -84,6 +99,7 @@ describe("WorkflowQuickCapture", () => {
       expect.objectContaining({
         target: { project: "proj-1", worktreePath: "wt-1" },
         title: "New Feature Plan",
+        summary: "Line 1: Summary note\nLine 2: Details",
         kind: "plan",
         status: "backlog",
       }),
