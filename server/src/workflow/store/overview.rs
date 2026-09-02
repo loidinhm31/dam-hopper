@@ -24,10 +24,14 @@ pub fn get_overview(
     let items_truncated = all_items.len() > max_items;
     let items: Vec<WorkflowItem> = all_items.into_iter().take(max_items).collect();
 
-    // 2. Fetch running sessions
-    let running_sessions =
-        super::session::list_active_sessions(conn, workspace_id, None, max_sessions)?;
-
+    // Request one sentinel session so `truncated` reports omitted rows while
+    // the response still honors the public maximum.
+    let session_query_limit = max_sessions.saturating_add(1);
+    let all_running_sessions =
+        super::session::list_active_sessions(conn, workspace_id, None, session_query_limit)?;
+    let sessions_truncated = all_running_sessions.len() > max_sessions;
+    let running_sessions: Vec<WorkflowSession> =
+        all_running_sessions.into_iter().take(max_sessions).collect();
     // 3. Fetch recent events (up to 20 for overview)
     let recent_events = super::event::list_events_keyset(conn, workspace_id, None, None, 20)?;
 
@@ -259,6 +263,6 @@ pub fn get_overview(
         standalone_tasks: standalone_nodes,
         running_sessions,
         recent_events,
-        truncated: items_truncated || projects_truncated,
+        truncated: items_truncated || sessions_truncated || projects_truncated,
     })
 }

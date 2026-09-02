@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import { X, Layers } from "lucide-react";
 import type { ProjectTargetRef } from "@/api/client.js";
 import type {
@@ -20,6 +20,7 @@ import { WorkflowQuickCapture } from "@/components/molecules/WorkflowQuickCaptur
 export interface WorkflowContextDeckProps {
   isOpen: boolean;
   onClose: () => void;
+  onCloseAutoFocus?: () => void;
   target?: ProjectTargetRef | null;
   projects: ProjectDto[];
   plans: ItemOverviewNodeDto[];
@@ -50,6 +51,7 @@ export interface WorkflowContextDeckProps {
 export function WorkflowContextDeck({
   isOpen,
   onClose,
+  onCloseAutoFocus,
   target,
   projects,
   plans,
@@ -76,17 +78,22 @@ export function WorkflowContextDeck({
   quickCaptureKind = "plan",
   nowMs,
 }: WorkflowContextDeckProps) {
+  const handleClose = useCallback(() => {
+    onCloseAutoFocus?.();
+    onClose();
+  }, [onClose, onCloseAutoFocus]);
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        handleClose();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, handleClose]);
 
   if (!isOpen) return null;
 
@@ -97,7 +104,7 @@ export function WorkflowContextDeck({
       id="workflow-context-deck"
       role="region"
       aria-label="Workflow Context Deck"
-      className="flex h-[360px] min-h-[320px] max-h-[440px] w-full flex-col border-b border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
+      className="relative z-10 flex h-[360px] min-h-[320px] max-h-[440px] w-full flex-col border-b border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
     >
       <div className="flex h-8 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3 text-xs">
         <div className="flex items-center gap-2 font-medium text-[var(--color-text)]">
@@ -113,7 +120,7 @@ export function WorkflowContextDeck({
           type="button"
           variant="ghost"
           size="sm"
-          onClick={onClose}
+          onClick={handleClose}
           aria-label="Close workflow deck"
           className="h-6 w-6 p-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
         >

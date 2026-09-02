@@ -99,7 +99,7 @@ export function MobileWorkspaceShell({
 
       {toolbarActions && (
         <div className="safe-area-inline flex min-h-10 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)]/80 px-3 py-1 backdrop-blur-sm">
-          <div className="flex min-w-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1.5">
             <p className="truncate text-xs font-semibold text-[var(--color-text)]">
               {activeSurface?.label}
             </p>
@@ -107,7 +107,7 @@ export function MobileWorkspaceShell({
               {workspaceMode === "ide" ? "IDE" : "Terminal"}
             </span>
           </div>
-          <div className="flex shrink-0 items-center">{toolbarActions}</div>
+          <div className="flex min-w-0 flex-1 items-center justify-end">{toolbarActions}</div>
         </div>
       )}
 

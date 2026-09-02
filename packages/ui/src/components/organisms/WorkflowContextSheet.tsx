@@ -23,6 +23,7 @@ export type MobileWorkflowSegment = "projects" | "items" | "execution";
 export interface WorkflowContextSheetProps {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
+  onCloseAutoFocus?: () => void;
   target?: ProjectTargetRef | null;
   projects: ProjectDto[];
   plans: ItemOverviewNodeDto[];
@@ -55,6 +56,7 @@ export interface WorkflowContextSheetProps {
 export function WorkflowContextSheet({
   isOpen,
   onOpenChange,
+  onCloseAutoFocus,
   target,
   projects,
   plans,
@@ -101,6 +103,10 @@ export function WorkflowContextSheet({
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          onCloseAutoFocus?.();
+        }}
         className={cn(
           "fixed bottom-0 left-0 right-0 top-auto z-50 flex flex-col rounded-t-xl border-t border-[var(--color-border)] bg-[var(--color-surface)] p-0 shadow-2xl transition-all duration-300",
           "w-full max-w-none translate-x-0 translate-y-0 safe-area-bottom",
