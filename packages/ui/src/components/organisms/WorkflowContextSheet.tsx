@@ -42,6 +42,7 @@ export interface WorkflowContextSheetProps {
   onAbandonSession?: (sessionId: string) => void;
   onLinkResource?: (sessionId: string, req: { resourceType: ResourceLinkType; externalId: string; harnessLabel?: string; runId?: string }) => void;
   onUnlinkResource?: (sessionId: string, resourceType: ResourceLinkType, externalId: string) => void;
+  onOpenTerminal?: (sessionId: string) => void;
   onCreateItem?: (item: { target: ProjectTargetRef; kind: ItemKind; title: string; summary?: string; status: ItemStatus; parentId?: string | null; startSessionImmediately?: boolean }) => Promise<void> | void;
   isQuickCaptureOpen?: boolean;
   onOpenQuickCapture?: (kind?: ItemKind, parentId?: string | null) => void;
@@ -73,6 +74,7 @@ export function WorkflowContextSheet({
   onAbandonSession,
   onLinkResource,
   onUnlinkResource,
+  onOpenTerminal,
   onCreateItem,
   isQuickCaptureOpen = false,
   onOpenQuickCapture,
@@ -178,6 +180,7 @@ export function WorkflowContextSheet({
               onAbandonSession={onAbandonSession}
               onLinkResource={onLinkResource}
               onUnlinkResource={onUnlinkResource}
+              onOpenTerminal={onOpenTerminal}
             />
           )}
         </div>

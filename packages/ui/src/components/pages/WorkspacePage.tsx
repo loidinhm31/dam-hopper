@@ -35,7 +35,11 @@ import type { ChangedFileSelection } from "@/components/organisms/ChangedFilesLi
 import { DiagnosticsTimeWindowSelect } from "@/components/molecules/DiagnosticsTimeWindowSelect.js";
 import { TerminalDiagnosticsContextMenu } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { RenameItemDialog } from "@/components/organisms/RenameItemDialog.js";
-
+import { WorkflowContextSurface } from "@/components/organisms/WorkflowContextSurface.js";
+import {
+  resolveWorkflowTerminalReveal,
+  resolveWorkflowTargetSelection,
+} from "@/lib/workflow-workspace-integration.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
   Select,
@@ -46,6 +50,7 @@ import {
 } from "@/components/ui/Select.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
+import { useProjectTargetStore } from "@/stores/project-target.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
@@ -87,7 +92,7 @@ import {
   TERMINAL_FILE_PANEL_TREE_WIDTH_KEY,
 } from "@/lib/terminal-floating-file-panel-state.js";
 import { cn } from "@/lib/utils.js";
-import type { TunnelInfo } from "@/api/client.js";
+import type { ProjectTargetRef, TunnelInfo } from "@/api/client.js";
 import type {
   FsArborNode,
   PathSearchMatch,
@@ -2239,6 +2244,79 @@ export default function WorkspacePage() {
     ],
   );
 
+  const workflowTarget = useMemo(
+    () =>
+      projectTarget?.target ??
+      (projectName ? { project: projectName } : null),
+    [projectName, projectTarget?.target],
+  );
+
+  const unavailableTargetsByProject = useProjectTargetStore(
+    (state) => state.unavailableTargetsByProject,
+  );
+
+  const handleWorkflowSelectTarget = useCallback(
+    (target: ProjectTargetRef) => {
+      const outcome = resolveWorkflowTargetSelection({
+        target,
+        projects,
+        unavailableTargetsByProject,
+      });
+      if (!outcome.canSelect || !outcome.project) {
+        return;
+      }
+      setActiveProject(outcome.project);
+      useProjectTargetStore
+        .getState()
+        .selectTarget(outcome.project, outcome.worktreePath ?? null);
+    },
+    [projects, setActiveProject, unavailableTargetsByProject],
+  );
+
+  const handleWorkflowOpenTerminal = useCallback(
+    (sessionId: string) => {
+      const outcome = resolveWorkflowTerminalReveal({
+        sessionId,
+        activeProfileId,
+        currentProfileId: activeProfileId,
+        sessionMap,
+        mountedSessions,
+        isCompactWorkspace,
+      });
+      if (!outcome.canReveal || !outcome.sessionId) {
+        return;
+      }
+      handleSelectTerminal(outcome.sessionId);
+      if (outcome.requestedCompactSurface) {
+        setRequestedCompactSurface(outcome.requestedCompactSurface);
+      }
+    },
+    [
+      activeProfileId,
+      handleSelectTerminal,
+      isCompactWorkspace,
+      mountedSessions,
+      sessionMap,
+      setRequestedCompactSurface,
+    ],
+  );
+
+  const workflowToolbarActions = useMemo(
+    () => (
+      <WorkflowContextSurface
+        key={activeProfileId ?? "default-profile"}
+        target={workflowTarget}
+        onSelectTarget={handleWorkflowSelectTarget}
+        onOpenTerminal={handleWorkflowOpenTerminal}
+      />
+    ),
+    [
+      activeProfileId,
+      handleWorkflowOpenTerminal,
+      handleWorkflowSelectTarget,
+      workflowTarget,
+    ],
+  );
   return (
     <>
       <BrowserDebugKeepAliveHost
@@ -2258,6 +2336,7 @@ export default function WorkspacePage() {
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
+          toolbarActions={workflowToolbarActions}
         />
       ) : workspaceMode === "terminal" ? (
         <TerminalWorkspaceShell
@@ -2272,6 +2351,7 @@ export default function WorkspacePage() {
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
+          toolbarActions={workflowToolbarActions}
         />
       ) : (
         <IdeShell
@@ -2283,6 +2363,7 @@ export default function WorkspacePage() {
           activateLeftTopToolRequest={ideLeftTopToolRequest}
           activateBottomToolRequest={ideBottomToolRequest}
           activateRightTopToolRequest={ideRightTopToolRequest}
+          toolbarActions={workflowToolbarActions}
           editor={
             <Suspense fallback={<PanelFallback label="Loading editor…" />}>
               <EditorTabs
