@@ -16,6 +16,7 @@ export interface WorkflowExecutionListProps {
   onAbandonSession?: (sessionId: string) => void;
   onLinkResource?: (sessionId: string, req: { resourceType: ResourceLinkType; externalId: string; harnessLabel?: string; runId?: string }) => void;
   onUnlinkResource?: (sessionId: string, resourceType: ResourceLinkType, externalId: string) => void;
+  onOpenTerminal?: (sessionId: string) => void;
 }
 
 export function WorkflowExecutionList({
@@ -28,6 +29,7 @@ export function WorkflowExecutionList({
   onAbandonSession,
   onLinkResource,
   onUnlinkResource,
+  onOpenTerminal,
 }: WorkflowExecutionListProps) {
   const [startDraft, setStartDraft] = useState(getIsoNow());
   const [harnessLabel, setHarnessLabel] = useState("");
@@ -165,6 +167,7 @@ export function WorkflowExecutionList({
                   onEndSession={onEndSession}
                   onAbandonSession={onAbandonSession}
                   onUnlinkResource={onUnlinkResource}
+                  onOpenTerminal={onOpenTerminal}
                 />
               ))}
             </div>
@@ -182,11 +185,11 @@ export function WorkflowExecutionList({
                   links={links[s.id]}
                   nowMs={nowMs}
                   onUnlinkResource={onUnlinkResource}
+                  onOpenTerminal={onOpenTerminal}
                 />
               ))}
             </div>
           )}
-
           {sessions.length === 0 && (
             <div className="p-4 text-center text-xs text-[var(--color-text-muted)]">
               No sessions recorded. Start a session above to track work time.
