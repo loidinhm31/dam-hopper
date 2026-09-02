@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ProjectTargetRef } from "@/api/client.js";
-import type { ItemKind } from "@/api/workflow-dto-types.js";
+import type { ItemDto, ItemKind } from "@/api/workflow-dto-types.js";
 import { useWorkflowOverview } from "@/api/workflow-queries.js";
 import {
   filterOverviewByTarget,
@@ -123,6 +123,12 @@ export function WorkflowContextSurface({
     setQuickCaptureParentId(parentId);
     setIsQuickCaptureOpen(true);
   };
+  const handleDeleteItem = async (item: ItemDto) => {
+    await actions.handleDeleteItem(item);
+    if (selectedItemId === item.id) {
+      setSelectedItemId(null);
+    }
+  };
 
   const sharedProps = {
     target: effectiveTarget,
@@ -135,6 +141,7 @@ export function WorkflowContextSurface({
     onSelectTarget: handleSelectTarget,
     onSelectItem: (item: { id: string } | null) => setSelectedItemId(item?.id ?? null),
     onStatusChange: actions.handleStatusChange,
+    onDeleteItem: handleDeleteItem,
     onAddNote: actions.handleAddNote,
     onStartSession: actions.handleStartSession,
     onEndSession: actions.handleEndSession,

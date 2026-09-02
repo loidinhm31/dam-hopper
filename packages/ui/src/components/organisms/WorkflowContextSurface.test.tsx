@@ -229,4 +229,54 @@ describe("WorkflowContextSurface", () => {
     const actions = (await import("@/hooks/use-workflow-surface-actions.js"));
     expect(actions).toBeDefined();
   });
+  it("deletes a selected item and auto-deselects it", async () => {
+    const deleteSpy = vi.spyOn(api.workflow, "deleteItem").mockResolvedValue({
+      resource: { id: "plan-1", deletedAt: "2026-09-01T12:35:00.000Z" },
+      replayed: false,
+      eventId: "ev-del-1",
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <WorkflowContextSurface target={{ project: "hopper-core" }} />
+        </QueryClientProvider>,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Workflow Context UI");
+    });
+
+    // Open deck
+    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    await act(async () => {
+      ribbonTrigger?.click();
+    });
+
+    // Select the plan row to display selected item bar
+    const planRow = container.querySelector('#workflow-context-deck [role="button"]') as HTMLElement;
+    await act(async () => {
+      planRow?.click();
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Selected: Workflow Context UI");
+    });
+
+    // Click the delete button in WorkflowSelectedItemBar
+    const deleteBtn = container.querySelector('button[title="Delete item"]') as HTMLButtonElement;
+    expect(deleteBtn).not.toBeNull();
+
+    await act(async () => {
+      deleteBtn.click();
+    });
+
+    expect(deleteSpy).toHaveBeenCalledWith(
+      "plan-1",
+      expect.objectContaining({
+        updatedAt: "2026-09-01T10:00:00.000Z",
+      }),
+    );
+  });
 });
