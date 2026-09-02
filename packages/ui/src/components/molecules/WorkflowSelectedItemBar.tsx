@@ -2,7 +2,7 @@ import { useState } from "react";
 import { CornerDownRight, Play, StickyNote, Trash2 } from "lucide-react";
 import type { ItemDto, ItemKind, ItemOverviewNodeDto, ItemStatus } from "@/api/workflow-dto-types.js";
 import { Button } from "@/components/atoms/Button.js";
-import { Input } from "@/components/ui/Input.js";
+import { Textarea } from "@/components/ui/Textarea.js";
 import {
   Select,
   SelectContent,
@@ -107,20 +107,45 @@ export function WorkflowSelectedItemBar({
       </div>
 
       {isAddingNote && (
-        <div className="flex items-center gap-1.5 pt-1">
-          <Input
+        <div className="flex flex-col gap-1.5 pt-1">
+          <Textarea
             value={newNoteBody}
             onChange={(e) => setNewNoteBody(e.target.value)}
             placeholder="Next action or note..."
-            className="h-7 text-xs"
+            aria-label="Note content"
+            className="min-h-[52px] text-xs resize-y"
             autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                handleAddNoteSubmit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setIsAddingNote(false);
+              }
+            }}
           />
-          <Button type="button" variant="primary" size="sm" onClick={handleAddNoteSubmit} className="h-7 text-xs">
-            Add
-          </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setIsAddingNote(false)} className="h-7 text-xs">
-            Cancel
-          </Button>
+          <div className="flex items-center justify-end gap-1.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsAddingNote(false)}
+              className="h-6 text-xs px-2"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={handleAddNoteSubmit}
+              disabled={!newNoteBody.trim()}
+              className="h-6 text-xs px-2.5"
+            >
+              Add
+            </Button>
+          </div>
         </div>
       )}
     </div>
