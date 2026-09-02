@@ -21,32 +21,6 @@ Shared runtime libraries:
 - **Tailwind CSS v4** for styling
 - **xterm.js** for terminal rendering
 
-## Browser host runtime bootstrap (Phase 03)
-
-`apps/web/src/main.tsx` resolves the browser transport before mounting React:
-
-1. `migrateToProfiles()` upgrades legacy local storage.
-2. `fetchRuntimeConfig()` requests the relative
-   `/__dam-hopper/runtime-config.json` with `cache: "no-store"`, a 2-second
-   timeout, and a 4 KiB limit.
-3. A valid `{ schemaVersion, releaseVersion, profileId, apiUrl }` document is
-   reconciled into one stable-ID `"Deployed Server"` profile.
-4. `getActiveProfile()` wins over the managed profile; otherwise a valid managed
-   profile creates the WebSocket transport. With no valid profile/config the
-   app uses `IdleTransport` and the existing setup guard.
-
-The client validates an exact HTTP(S) API origin (no credentials, path, query,
-or fragment), UUID v4 profile ID, non-empty release version, and schema version
-`1`. It never derives an API URL from the web request `Host` or assumes the web
-host's `:4802` port. If the managed API URL changes, only that profile's scoped
-token is cleared before transport creation. A missing runtime config (404) is
-normal for local Vite/Pages hosting.
-
-The production Vite build keeps `base: "./"` and emits only immutable release
-metadata; `VITE_DAM_HOPPER_SERVER_URL` is rejected during build. Development
-proxy configuration may target `http://127.0.0.1:4801`, but that value is not
-embedded in release assets.
-
 ## Host-resource alert presentation
 
 **Locations:** `packages/ui/src/components/organisms/HostResourcePopover.tsx`,
@@ -915,7 +889,6 @@ snapshot.
 **Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views. The Explorer header area also hosts `GitBranchControl` so users can switch or create branches without leaving the file browser.
 
 **Persistent Tree Expansion:** Directory open/closed states are managed by `useExplorerTreeStore` (`packages/ui/src/stores/explorer-tree.ts`) and persisted in `localStorage` under `dam-hopper:explorer-tree-state`. This ensures that expanded folders survive sidebar tool switching (e.g. Explorer ↔ Search), sidebar collapses, workspace mode transitions (IDE ↔ Terminal), and full browser page reloads.
-
 - **Target scoping:** Scoped per project target via `explorerTreeScopeKey(target)` (`${normalized.project}::${projectTargetCacheKey(normalized)}`), isolating regular project trees and worktree targets.
 - **Initial open state & toggle:** `FileTree` supplies `initialOpenState={openMap}` to `react-arborist` and synchronizes toggle events via `onToggle` and `setFolderOpen`. Toggling closed removes the key to keep persisted storage compact.
 - **Cascading child auto-hydration:** When mounting with persisted open folders, `FileTree` scans for open folders with unloaded children (`children === null`) and automatically triggers `loadChildren(id)`. If loading fails (e.g. directory deleted externally), `prunePath` cleans up the invalid path.
@@ -964,6 +937,139 @@ snapshot.
 - Reuses the same backend credential model as the sidebar strip, so page-level push retry behavior stays aligned with fetch and pull.
 
 ---
+
+## Workflow Context Surface (Phase 05)
+
+**Status:** Implemented shared responsive workflow context UI for the browser and
+native hosts. The surface reads the bounded workflow overview and keeps
+presentation state local; the server remains authoritative for workflow
+validation, timestamps, target ownership, and mutation replay.
+
+**Locations:**
+
+| Module | Responsibility |
+| --- | --- |
+| `packages/ui/src/lib/workflow-focus.ts` | Shortcut matching, editable/native/Monaco/xterm/dialog suppression, and safe focus restoration. |
+| `packages/ui/src/api/workflow-selectors.ts` | Target filtering, active-item selection, attention aggregation, tree flattening, and factual progress labels. |
+| `packages/ui/src/components/molecules/WorkflowQuickCapture.tsx` | Compact Plan-first item form with optional parent, summary, status, and immediate session start. |
+| `packages/ui/src/components/molecules/WorkflowItemRow.tsx` | Hierarchical row with depth, status icon/color, selection, active-session marker, note/progress copy, and child count. |
+| `packages/ui/src/components/molecules/WorkflowItemList.tsx` | Plan and standalone-Task trees plus selection and New Plan entry point. |
+| `packages/ui/src/components/molecules/WorkflowSessionCard.tsx` | Running/past session details, duration, manual end/abandon controls, links, and suggested end-time review. |
+| `packages/ui/src/components/molecules/WorkflowExecutionList.tsx` | Start/end session controls and manual Agent Harness/Agent Run linking. |
+| `packages/ui/src/components/molecules/WorkflowProjectList.tsx` | Project/worktree target switcher with plan, task, and running-session counts. |
+| `packages/ui/src/components/organisms/WorkflowContextRibbon.tsx` | Compact ambient summary with loading, retry, status, duration, progress, and live-region output. |
+| `packages/ui/src/components/organisms/WorkflowContextDeck.tsx` | Non-modal desktop context region with project, item, quick-capture, and execution panes. |
+| `packages/ui/src/components/organisms/WorkflowContextSheet.tsx` | Mobile bottom Dialog with Projects, Plans & Work, and Execution segments. |
+| `packages/ui/src/components/organisms/WorkflowContextSurface.tsx` | Top-level overview query, selectors, timer, keyboard handling, and deck/sheet orchestration. |
+| `packages/ui/src/hooks/use-workflow-surface-actions.ts` | Request-ID-bearing workflow mutation callbacks used by the surface. |
+
+### Data and state flow
+
+`useWorkflowOverview(effectiveTarget)` supplies the current workspace view.
+`filterOverviewByTarget` applies exact project matching and exact
+`worktreePath` matching when a path is selected; a filter with only a project
+matches that project's configured-root and worktree results. The selectors
+then choose the first root Plan or standalone Task with a directly or
+descendant-active session, otherwise the best status priority and newest
+`updatedAt`. Tree flattening is pre-order, and the progress label is factual
+(`{completed}/{total} tracked tasks done`) or `Breakdown not tracked`.
+
+The surface passes the selected target, active item, running session,
+attention summary, and mutation callbacks to the ribbon and one responsive
+context region:
+
+```text
+useWorkflowOverview
+  -> target selectors
+  -> WorkflowContextSurface
+     -> WorkflowContextRibbon
+     -> WorkflowContextDeck (desktop) | WorkflowContextSheet (compact)
+        -> ProjectList / ItemList / QuickCapture / ExecutionList
+           -> useWorkflowSurfaceActions
+              -> api.workflow mutations -> ['workflow'] cache invalidation
+```
+
+TanStack Query owns server data. Surface-local React state owns open/closed
+presentation, selected target/item, quick-capture drafts, mobile segment, and
+the elapsed clock. Workflow state is not written to URL parameters,
+`localStorage`, terminal registries, or Zustand stores. While a running
+session is present, the surface shares one visible-document-aware one-second
+timer across the ribbon and session cards; it does not start an interval when
+no running session is reported.
+
+### Ambient ribbon
+
+`WorkflowContextRibbon` is a compact `h-9` companion row (the implementation
+utility is shorter than a strict 40px guarantee), exposed as a `region` with
+an assertive error state and polite active-plan live text. It shows the
+selected project and worktree basename, the active Plan or standalone Task,
+status icon/color/text, elapsed duration for a running session, the latest
+note as `Next: ...` when available, or the factual tracked-Task label. A
+blocked indicator is shown for blocked/running attention. Loading renders a
+skeleton and errors expose Retry. The ribbon opens/closes the context region
+and offers New Plan only when no active item is selected.
+
+### Desktop deck
+
+`WorkflowContextDeck` renders only while open as a non-modal `role="region"`
+with `id="workflow-context-deck"`. Its current height utilities are
+`min-h-[320px]`, `h-[360px]`, and `max-h-[440px]`. At `md` it uses two columns;
+at `lg` it uses project, work, and execution columns
+(`220px 1fr 300px`). The Projects pane is hidden below `lg`. The desktop
+deck listens for Escape to close and does not install a focus trap.
+
+### Mobile sheet
+
+`WorkflowContextSheet` uses a bottom Radix Dialog with safe-area-bottom
+padding and segmented navigation for `projects`, `items`, and `execution`.
+Project selection returns to the Items segment. The current implementation
+uses `h-[50dvh]` when collapsed and `h-[90dvh]` when expanded, with a drag
+handle/toggle. Segment controls currently use `h-9`; browser-level touch
+target, overscroll, focus-return, and geometry qualification remain outside
+the unit-tested contract.
+
+### Items, capture, and sessions
+
+The item tree renders root Plans, recursive Phase/Task children, and
+standalone Tasks. Selecting a row toggles it off when selected again. Rows
+show status-specific icon/color, active-session state, the latest note in
+preference to progress text, and child count. `WorkflowQuickCapture` requires
+a trimmed title, defaults to Plan and Backlog, supports Phase/Task with an
+optional parent, accepts summary text, and can request an immediate session.
+
+Session cards calculate elapsed duration from explicit ISO timestamps and the
+shared `nowMs`. Running cards accept manual end timestamps, provide Now,
+validate the interval before End, and expose Abandon. Resource links show
+bounded labels and observed state. An observed `suggestedEndTime` is displayed
+only after an explicit Use suggestion action fills the draft; it never changes
+manual session status or timestamps automatically. Execution controls start a
+session from a manual timestamp (or Now) and currently expose manual Agent
+Harness/Agent Run fields when a running session is available.
+
+### Focus and action safety
+
+The default toggle is `Mod+Shift+KeyW` (Cmd on macOS, Ctrl elsewhere). The
+focus guard rejects native inputs/selects/textareas, contenteditable elements,
+Monaco editors, xterm surfaces/helper textareas, dialogs, and elements marked
+with suppression/native-input attributes. Handlers prevent the browser default
+only after ownership is established. Mutation callbacks generate a UUID
+`requestId`, preserve target scope, and use the workflow API's typed
+success/error boundary; create-with-immediate-session starts that session with
+the current ISO time.
+
+### Verification and current qualification
+
+The dated Phase 05 targeted report records 62/62 focused UI/workflow tests,
+1,493/1,493 full UI tests, and 907/907 Rust tests (two ignored). No production
+UI build was run in that report. Browser-level responsive geometry, safe-area
+behavior, touch targets, focus continuity, and real host integration remain
+Phase 07 qualification work rather than passed evidence.
+
+The current selector implementation reports `hasResourceAttention: false` and
+`resourceAttentionCount: 0`; resource-attention projection is not yet surfaced
+by the context UI. Item-list status/note/session/delete callbacks are accepted
+at the component boundary, but the current rendered list exposes selection and
+New Plan rather than controls for each callback.
 
 ## Session Status Helpers
 
