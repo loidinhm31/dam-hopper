@@ -95,4 +95,49 @@ describe("WorkflowContextDeck", () => {
     expect(handleCloseAutoFocus).toHaveBeenCalledOnce();
     expect(handleClose).toHaveBeenCalledOnce();
   });
+  it("passes onDeleteItem to WorkflowItemList and renders delete button when item is selected", () => {
+    const handleDeleteItem = vi.fn();
+    const mockPlan = {
+      item: {
+        id: "plan-1",
+        target: { project: "p1" },
+        kind: "plan" as const,
+        title: "Plan to delete",
+        status: "in_progress" as const,
+        sortOrder: 0,
+        source: "manual" as const,
+        createdAt: "2026-09-01T10:00:00.000Z",
+        updatedAt: "2026-09-01T10:00:00.000Z",
+      },
+      notes: [],
+      activeSessions: [],
+      children: [],
+    };
+
+    act(() => {
+      root.render(
+        <WorkflowContextDeck
+          isOpen={true}
+          onClose={vi.fn()}
+          projects={[]}
+          plans={[mockPlan]}
+          standaloneTasks={[]}
+          sessions={[]}
+          selectedItemId="plan-1"
+          onSelectTarget={vi.fn()}
+          onSelectItem={vi.fn()}
+          onDeleteItem={handleDeleteItem}
+        />,
+      );
+    });
+
+    const deleteBtn = container.querySelector('button[title="Delete item"]') as HTMLButtonElement;
+    expect(deleteBtn).not.toBeNull();
+
+    act(() => {
+      deleteBtn.click();
+    });
+
+    expect(handleDeleteItem).toHaveBeenCalledWith(mockPlan.item);
+  });
 });
