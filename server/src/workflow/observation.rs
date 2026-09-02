@@ -3,21 +3,76 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{debug, warn};
 
+use crate::diagnostics::DiagnosticStore;
 use crate::workflow::enums::{
     ResourceLinkType, ResourceObservedState, WorkflowEventType, WorkflowSource,
 };
 use crate::workflow::model::WorkflowEvent;
-use crate::workflow::store::session::{find_links_by_external_id_tx, get_session_by_id_tx};
 use crate::workflow::store::event::record_event_tx;
+use crate::workflow::store::session::{find_links_by_external_id_tx, get_session_by_id_tx};
 use crate::workflow::store::{WorkflowStore, WorkflowStoreError};
 use crate::workflow::DEFAULT_EVENT_RETENTION_DAYS;
+
+const MAX_DIAGNOSTIC_DURATION_MS: u128 = 60_000;
+const MAX_DIAGNOSTIC_COUNT: usize = 1_000;
+
+fn bounded_count(count: usize) -> String {
+    count.min(MAX_DIAGNOSTIC_COUNT).to_string()
+}
+
+fn observation_result(obs: &WorkflowObservation) -> &'static str {
+    match obs {
+        WorkflowObservation::TerminalCreated { .. }
+        | WorkflowObservation::TerminalRestarted { .. } => "attached",
+        WorkflowObservation::TerminalExitPendingRestart { .. } => "stale",
+        WorkflowObservation::TerminalFinalExit { exit_code, .. } => {
+            if *exit_code == Some(0) {
+                "exited"
+            } else {
+                "crashed"
+            }
+        }
+        WorkflowObservation::TerminalRemoved { .. } => "detached",
+    }
+}
+
+fn record_observation_diagnostic(
+    diagnostics: &DiagnosticStore,
+    obs: &WorkflowObservation,
+    result: &Result<usize, WorkflowStoreError>,
+    started: Instant,
+) {
+    let (outcome, availability) = match result {
+        Ok(_) => ("ok", "available"),
+        Err(_) => ("error", "unavailable"),
+    };
+    let count = result.as_ref().ok().copied().unwrap_or_default();
+    diagnostics.record_terminal_event(
+        "workflow",
+        "workflow.observation",
+        std::collections::BTreeMap::from([
+            ("operation".to_string(), "observation".to_string()),
+            ("observation_kind".to_string(), obs.action_str().to_string()),
+            ("result".to_string(), observation_result(obs).to_string()),
+            ("outcome".to_string(), outcome.to_string()),
+            (
+                "duration_ms".to_string(),
+                started.elapsed().as_millis().min(MAX_DIAGNOSTIC_DURATION_MS).to_string(),
+            ),
+            ("row_count".to_string(), bounded_count(count)),
+            ("event_count".to_string(), bounded_count(count)),
+            ("count".to_string(), bounded_count(count)),
+            ("store_availability".to_string(), availability.to_string()),
+        ]),
+    );
+}
 
 /// Current timestamp in milliseconds since Unix epoch.
 pub fn now_ms() -> u64 {
@@ -202,15 +257,25 @@ impl WorkflowObservationRecorder for NoopWorkflowObservationRecorder {
 pub struct BoundedObservationRecorder {
     sender: SyncSender<WorkflowObservation>,
     dropped_count: Arc<AtomicU64>,
+    diagnostics: Option<DiagnosticStore>,
 }
 
 impl BoundedObservationRecorder {
     pub fn new(sender: SyncSender<WorkflowObservation>) -> (Self, Arc<AtomicU64>) {
+        Self::new_with_diagnostics(sender, None)
+    }
+
+    /// Build a recorder with optional diagnostics for deterministic queue-drop tests.
+    pub fn new_with_diagnostics(
+        sender: SyncSender<WorkflowObservation>,
+        diagnostics: Option<DiagnosticStore>,
+    ) -> (Self, Arc<AtomicU64>) {
         let dropped_count = Arc::new(AtomicU64::new(0));
         (
             Self {
                 sender,
                 dropped_count: dropped_count.clone(),
+                diagnostics,
             },
             dropped_count,
         )
@@ -223,14 +288,31 @@ impl BoundedObservationRecorder {
 
 impl WorkflowObservationRecorder for BoundedObservationRecorder {
     fn record(&self, observation: WorkflowObservation) {
-        if let Err(e) = self.sender.try_send(observation) {
+        if self.sender.try_send(observation).is_err() {
             self.dropped_count.fetch_add(1, Ordering::Relaxed);
-            warn!(error = %e, "Workflow observation dropped or worker disconnected");
+            if let Some(diagnostics) = &self.diagnostics {
+                diagnostics.record_terminal_event(
+                    "workflow",
+                    "workflow.observation_drop",
+                    std::collections::BTreeMap::from([
+                        ("operation".to_string(), "observation".to_string()),
+                        ("observation_kind".to_string(), "terminal_lifecycle".to_string()),
+                        ("result".to_string(), "dropped".to_string()),
+                        ("outcome".to_string(), "queue_full".to_string()),
+                        ("duration_ms".to_string(), "0".to_string()),
+                        ("row_count".to_string(), "0".to_string()),
+                        ("event_count".to_string(), "0".to_string()),
+                        ("count".to_string(), "1".to_string()),
+                        ("store_availability".to_string(), "unknown".to_string()),
+                    ]),
+                );
+            }
+            warn!("Workflow observation dropped or worker disconnected");
         }
     }
 }
 
-/// Starts the observation worker thread with a bounded sync_channel(256).
+/// Starts the observation worker thread without diagnostic instrumentation.
 pub fn start_observation_worker(
     store: WorkflowStore,
 ) -> (
@@ -238,21 +320,54 @@ pub fn start_observation_worker(
     Arc<AtomicU64>,
     JoinHandle<()>,
 ) {
+    start_observation_worker_internal(store, None)
+}
+
+/// Starts the observation worker with the shared bounded diagnostic store.
+pub fn start_observation_worker_with_diagnostics(
+    store: WorkflowStore,
+    diagnostics: DiagnosticStore,
+) -> (
+    BoundedObservationRecorder,
+    Arc<AtomicU64>,
+    JoinHandle<()>,
+) {
+    start_observation_worker_internal(store, Some(diagnostics))
+}
+
+fn start_observation_worker_internal(
+    store: WorkflowStore,
+    diagnostics: Option<DiagnosticStore>,
+) -> (
+    BoundedObservationRecorder,
+    Arc<AtomicU64>,
+    JoinHandle<()>,
+) {
     let (tx, rx) = sync_channel::<WorkflowObservation>(256);
-    let (recorder, dropped) = BoundedObservationRecorder::new(tx);
+    let (recorder, dropped) =
+        BoundedObservationRecorder::new_with_diagnostics(tx, diagnostics.clone());
     let handle = std::thread::Builder::new()
         .name("workflow-observation-worker".to_string())
         .spawn(move || {
-            run_observation_worker(store, rx);
+            run_observation_worker(store, rx, diagnostics);
         })
         .expect("failed to spawn workflow observation worker thread");
     (recorder, dropped, handle)
 }
 
-fn run_observation_worker(store: WorkflowStore, receiver: Receiver<WorkflowObservation>) {
+fn run_observation_worker(
+    store: WorkflowStore,
+    receiver: Receiver<WorkflowObservation>,
+    diagnostics: Option<DiagnosticStore>,
+) {
     while let Ok(obs) = receiver.recv() {
-        if let Err(e) = process_observation(&store, &obs) {
-            warn!(error = %e, session_id = %obs.session_id(), "Failed to process workflow observation");
+        let result = if let Some(diagnostics) = &diagnostics {
+            process_observation_with_diagnostics(&store, &obs, diagnostics)
+        } else {
+            process_observation(&store, &obs)
+        };
+        if result.is_err() {
+            warn!("Failed to process workflow observation");
         }
     }
     debug!("Workflow observation worker stopped");
@@ -261,6 +376,25 @@ fn run_observation_worker(store: WorkflowStore, receiver: Receiver<WorkflowObser
 /// Process a single terminal lifecycle observation inside a SQLite transaction.
 /// CRITICAL: Updates resource links and activity events ONLY; NEVER changes manual session timestamps/status.
 pub fn process_observation(
+    store: &WorkflowStore,
+    obs: &WorkflowObservation,
+) -> Result<usize, WorkflowStoreError> {
+    process_observation_inner(store, obs)
+}
+
+/// Process an observation and emit only fixed-cardinality diagnostics.
+pub fn process_observation_with_diagnostics(
+    store: &WorkflowStore,
+    obs: &WorkflowObservation,
+    diagnostics: &DiagnosticStore,
+) -> Result<usize, WorkflowStoreError> {
+    let started = Instant::now();
+    let result = process_observation_inner(store, obs);
+    record_observation_diagnostic(diagnostics, obs, &result, started);
+    result
+}
+
+fn process_observation_inner(
     store: &WorkflowStore,
     obs: &WorkflowObservation,
 ) -> Result<usize, WorkflowStoreError> {
@@ -277,15 +411,9 @@ pub fn process_observation(
     let mut updated_count = 0;
 
     for link in &links {
-        // Incarnation ordering check: an observation from an older incarnation must not overwrite a newer incarnation
         if let (Some(curr_inc), Some(incoming_inc)) = (link.incarnation, obs_inc) {
             if incoming_inc < curr_inc {
-                debug!(
-                    link_id = %link.id,
-                    current_inc = curr_inc,
-                    incoming_inc = incoming_inc,
-                    "Skipping out-of-order terminal observation with older incarnation"
-                );
+                debug!("Skipping out-of-order terminal observation with older incarnation");
                 continue;
             }
         }

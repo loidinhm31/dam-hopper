@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "@/api/client.js";
+import { ApiRequestError, api } from "@/api/client.js";
 import type { OverviewDto } from "@/api/workflow-dto-types.js";
 import { WorkflowContextSurface } from "./WorkflowContextSurface.js";
 
@@ -116,6 +116,31 @@ describe("WorkflowContextSurface", () => {
     });
 
     expect(container.querySelector("#workflow-context-deck")).not.toBeNull();
+  });
+
+  it("hides workflow controls when this profile lacks the overview route", async () => {
+    vi.mocked(api.workflow.overview).mockRejectedValueOnce(
+      new ApiRequestError("workflow route unavailable", 404),
+    );
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <WorkflowContextSurface
+            target={{ project: "hopper-core" }}
+            isOpen={true}
+          />
+        </QueryClientProvider>,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(
+        "Workflow tracking is unavailable for this profile.",
+      );
+    });
+    expect(container.querySelector("#workflow-context-deck")).toBeNull();
+    expect(container.querySelector("button")).toBeNull();
   });
 
   it("handles keyboard shortcut Mod+Shift+W to toggle surface", async () => {
