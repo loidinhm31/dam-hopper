@@ -14,8 +14,9 @@ created: 2026-09-01
 ## Outcome
 A profile- and workspace-isolated context surface answers what is active, where it runs, what changed, and how to resume without replacing project, target, terminal, editor, or URL state.
 
-**Plan status:** In progress overall; Phase 01 Complete / DONE (2026-09-02), Phase 02 Complete / DONE (2026-09-02, 100%), Phase 03 Complete / DONE (2026-09-02, 100%), Phase 04 Complete / DONE (2026-09-02, 100%), Phases 05–07 pending.
-Phase 04 handoff: Strict client DTOs, domain helpers, transport mapping for all 13 workflow operations, and React Query hooks with profile and transport generation isolation verified with 100% pass rates across 51 targeted UI tests, 1,452 full UI tests, and 907 executed Rust tests (2 ignored). See [test report](../reports/tester-260902-1139-phase-04-client-types-transport-query-state.md) and [review report](../reports/code-reviewer-260902-1144-phase-04-client-types-transport-query-state.md). Ready for Phase 05.
+**Plan status:** In progress overall; Phase 01 Complete / DONE (2026-09-02), Phase 02 Complete / DONE (2026-09-02, 100%), Phase 03 Complete / DONE (2026-09-02, 100%), Phase 04 Complete / DONE (2026-09-02, 100%), Phase 05 Complete / DONE (2026-09-02, 100%), Phases 06–07 pending.
+Phase 04 handoff: Strict client DTOs, domain helpers, transport mapping for all 13 workflow operations, and React Query hooks with profile and transport generation isolation verified with 100% pass rates across 51 targeted UI tests, 1,452 full UI tests, and 907 executed Rust tests (2 ignored). See [test report](../reports/tester-260902-1139-phase-04-client-types-transport-query-state.md) and [review report](../reports/code-reviewer-260902-1144-phase-04-client-types-transport-query-state.md).
+Phase 05 handoff: Responsive workflow context surface implementation complete and review approved (9.8/10). Targeted Phase 05 UI tests passed 62/62 (100%); full UI suite passed 1,493/1,493 (100%). See [test report](../reports/tester-260902-1243-phase-05-responsive-workflow-context-surface.md) and [review report](../reports/code-reviewer-260902-1245-phase-05-responsive-workflow-context-surface.md). Ready for Phase 06.
 
 ## Scope Decisions
 - **MVP:** server-owned snapshot state plus bounded typed activity events; Plan-first organization with optional Phase/Task breakdown and standalone Tasks; durable notes; manually timed sessions with **Now** fill; validated terminal links; manual harness label/run ID; terminal lifecycle observations; one overview DTO; top ambient row + desktop deck/mobile sheet.
@@ -33,7 +34,7 @@ Phase 04 handoff: Strict client DTOs, domain helpers, transport mapping for all 
 | 02 | [Service and REST API](./phase-02-workflow-service-and-rest-api.md) | Complete / DONE (2026-09-02) | 100% | 14h | 01 |
 | 03 | [Lifecycle correlation and adapters](./phase-03-terminal-lifecycle-correlation-and-agent-adapter.md) | Complete / DONE (2026-09-02) | 100% | 12h | 01–02 |
 | 04 | [Client state and query contracts](./phase-04-client-types-transport-and-query-state.md) | Complete / DONE (2026-09-02) | 100% | 10h | 02 |
-| 05 | [Responsive context surface](./phase-05-responsive-workflow-context-surface.md) | Pending | 0% | 16h | 04 |
+| 05 | [Responsive context surface](./phase-05-responsive-workflow-context-surface.md) | Complete / DONE (2026-09-02) | 100% | 16h | 04 |
 | 06 | [Workspace shell integration](./phase-06-workspace-page-and-shell-integration.md) | Pending | 0% | 10h | 03–05 |
 | 07 | [Verification, rollout, and docs](./phase-07-verification-rollout-observability-and-docs.md) | Pending | 0% | 12h | 01–06 |
 
