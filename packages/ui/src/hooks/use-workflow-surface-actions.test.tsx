@@ -119,4 +119,37 @@ describe("useWorkflowSurfaceActions", () => {
       }),
     );
   });
+  it("deletes item passing item.updatedAt for CAS optimistic concurrency", async () => {
+    const deleteSpy = vi.spyOn(api.workflow, "deleteItem").mockResolvedValue({
+      resource: { id: "item-1", deletedAt: "2026-09-01T10:25:00.000Z" },
+      replayed: false,
+      eventId: "ev-delete-1",
+    });
+
+    let actionsResult!: WorkflowSurfaceActions;
+
+    function TestComponent() {
+      actionsResult = useWorkflowSurfaceActions({ project: "test-proj" });
+      return null;
+    }
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TestComponent />
+        </QueryClientProvider>,
+      );
+    });
+
+    await act(async () => {
+      await actionsResult.handleDeleteItem(mockItem);
+    });
+
+    expect(deleteSpy).toHaveBeenCalledWith(
+      "item-1",
+      expect.objectContaining({
+        updatedAt: "2026-09-01T10:15:00.000Z", // exact item.updatedAt for CAS check
+      }),
+    );
+  });
 });

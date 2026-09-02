@@ -32,6 +32,7 @@ export interface WorkflowContextDeckProps {
   onSelectTarget: (target: ProjectTargetRef | null) => void;
   onSelectItem: (item: ItemDto | null) => void;
   onStatusChange?: (item: ItemDto, status: ItemStatus) => void;
+  onDeleteItem?: (item: ItemDto) => void;
   onAddNote?: (itemId: string, note: string) => void;
   onStartSession?: (startedAt: string, itemId?: string | null) => void;
   onEndSession?: (sessionId: string, endedAt: string) => void;
@@ -63,6 +64,7 @@ export function WorkflowContextDeck({
   onSelectTarget,
   onSelectItem,
   onStatusChange,
+  onDeleteItem,
   onAddNote,
   onStartSession,
   onEndSession,
@@ -156,6 +158,7 @@ export function WorkflowContextDeck({
               selectedItemId={selectedItemId}
               onSelectItem={onSelectItem}
               onStatusChange={onStatusChange}
+              onDeleteItem={onDeleteItem}
               onAddNote={onAddNote}
               onOpenQuickCapture={onOpenQuickCapture}
             />

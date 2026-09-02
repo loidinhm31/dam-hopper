@@ -37,6 +37,7 @@ export interface WorkflowContextSheetProps {
   onSelectTarget: (target: ProjectTargetRef | null) => void;
   onSelectItem: (item: ItemDto | null) => void;
   onStatusChange?: (item: ItemDto, status: ItemStatus) => void;
+  onDeleteItem?: (item: ItemDto) => void;
   onAddNote?: (itemId: string, note: string) => void;
   onStartSession?: (startedAt: string, itemId?: string | null) => void;
   onEndSession?: (sessionId: string, endedAt: string) => void;
@@ -70,6 +71,7 @@ export function WorkflowContextSheet({
   onSelectTarget,
   onSelectItem,
   onStatusChange,
+  onDeleteItem,
   onAddNote,
   onStartSession,
   onEndSession,
@@ -170,6 +172,7 @@ export function WorkflowContextSheet({
                 selectedItemId={selectedItemId}
                 onSelectItem={onSelectItem}
                 onStatusChange={onStatusChange}
+                onDeleteItem={onDeleteItem}
                 onAddNote={onAddNote}
                 onOpenQuickCapture={onOpenQuickCapture}
               />
