@@ -7,6 +7,7 @@ import {
   useCreateWorkflowItem,
   useCreateWorkflowNote,
   useCreateWorkflowSession,
+  useDeleteWorkflowItem,
   useEndWorkflowSession,
   useLinkWorkflowResource,
   usePatchWorkflowItem,
@@ -42,6 +43,7 @@ export interface WorkflowSurfaceActions {
     resourceType: ResourceLinkType,
     externalId: string,
   ) => Promise<unknown>;
+  handleDeleteItem: (item: ItemDto) => Promise<unknown>;
 }
 export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): WorkflowSurfaceActions {
   const createItem = useCreateWorkflowItem();
@@ -52,6 +54,7 @@ export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): Wo
   const abandonSession = useAbandonWorkflowSession();
   const linkResource = useLinkWorkflowResource();
   const unlinkResource = useUnlinkWorkflowResource();
+  const deleteItem = useDeleteWorkflowItem();
 
   const handleCreateItem = async (item: {
     target: ProjectTargetRef;
@@ -87,6 +90,12 @@ export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): Wo
       requestId: generateWorkflowRequestId(),
       updatedAt: item.updatedAt,
       status,
+    });
+  const handleDeleteItem = (item: ItemDto) =>
+    deleteItem.mutateAsync({
+      id: item.id,
+      requestId: generateWorkflowRequestId(),
+      updatedAt: item.updatedAt,
     });
 
   const handleAddNote = (itemId: string, body: string) =>
@@ -150,6 +159,7 @@ export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): Wo
     handleStatusChange,
     handleAddNote,
     handleStartSession,
+    handleDeleteItem,
     handleEndSession,
     handleAbandonSession,
     handleLinkResource,
