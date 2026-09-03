@@ -116,4 +116,34 @@ impl Layout {
     pub fn deploy_lock_path(&self) -> PathBuf {
         self.run_lock_dir.join("deploy.lock")
     }
+
+    /// Directory holding candidate rendered systemd units:
+    /// `/var/lib/dam-hopper/pending-units`
+    pub fn pending_units_dir(&self) -> PathBuf {
+        self.var_lib_dir.join("pending-units")
+    }
+
+    /// Public host configuration JSON file:
+    /// `/etc/dam-hopper/host-config.json`
+    pub fn host_config_json_path(&self) -> PathBuf {
+        self.etc_dir.join("host-config.json")
+    }
+
+    /// Candidate host configuration JSON file before activation:
+    /// `/var/lib/dam-hopper/pending-host-config.json`
+    pub fn pending_host_config_json_path(&self) -> PathBuf {
+        self.var_lib_dir.join("pending-host-config.json")
+    }
+
+    /// Directory for system identity configuration:
+    /// `/etc/dam-hopper/sysusers.d`
+    pub fn sysusers_dir(&self) -> PathBuf {
+        self.etc_dir.join("sysusers.d")
+    }
+
+    /// Web service system identity configuration file:
+    /// `/etc/dam-hopper/sysusers.d/dam-hopper-web.conf`
+    pub fn sysusers_conf_path(&self) -> PathBuf {
+        self.sysusers_dir().join("dam-hopper-web.conf")
+    }
 }

@@ -185,6 +185,35 @@ pub enum ReleaseError {
     #[error("invalid release bundle at '{path}': {reason}")]
     InvalidBundle { path: String, reason: String },
 
+    #[error("template token injection in '{token}': {details}")]
+    TemplateTokenInjection { token: String, details: String },
+
+    #[error("unresolved template token in unit: '{token}'")]
+    UnresolvedTemplateToken { token: String },
+
+    #[error("unit policy violation for '{unit}': {reason}")]
+    UnitPolicyViolation { unit: String, reason: String },
+
+    #[error("systemd command '{command}' failed with exit code {exit_code:?}: {stderr}")]
+    SystemdCommandFailed {
+        command: String,
+        exit_code: Option<i32>,
+        stderr: String,
+    },
+
+    #[error("sysusers creation failed: {reason}")]
+    SysusersFailed { reason: String },
+
+    #[error("ownership or permission violation for '{path}': expected '{expected}', got '{got}'")]
+    OwnershipViolation {
+        path: String,
+        expected: String,
+        got: String,
+    },
+
+    #[error("process inspection failed: {reason}")]
+    ProcessInspectionFailed { reason: String },
+
     #[error("filesystem I/O error during {action}: {details}")]
     Io {
         action: &'static str,

@@ -9,6 +9,7 @@ use super::layout::Layout;
 use super::lock::DeploymentLock;
 use super::manifest::ReleaseManifest;
 use super::stage::{resolve_host_role, save_pending_state, PendingState};
+use super::stage_units::stage_candidate_units;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -92,6 +93,8 @@ pub fn stage_release_bundle(
     let result = execute_staging_transaction(layout, &tx_dir, &archive_path, &manifest, role);
     let _ = fs::remove_dir_all(&tx_dir);
     let target_dir = result?;
+    let pending_units_dir =
+        stage_candidate_units(layout, &target_dir, &manifest, role, allow_origins)?;
 
     let manifest_sha256 = hex::encode(Sha256::digest(&manifest_bytes));
 
@@ -102,6 +105,7 @@ pub fn stage_release_bundle(
         release_path: target_dir.display().to_string(),
         manifest_sha256,
         archive_sha256: manifest.archive.sha256.clone(),
+        pending_units_path: Some(pending_units_dir.display().to_string()),
     };
 
     save_pending_state(&layout.pending_state_path(), &pending)?;
