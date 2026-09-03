@@ -22,7 +22,8 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
-- **[Linux Release Manager](./linux-release-manager.md)** — Phase 02 CLI, host profile checks, acquisition, safe staging, and Phase 05 durable activation/recovery
+- **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Central GitHub publisher DAG, four assets, reproducible archive, SBOM, gates, and bootstrap usage
+- **[Linux Release Manager](./linux-release-manager.md)** — Phase 02 CLI, host profile checks, acquisition, safe staging, and Phase 05–06 publisher/bootstrap plus durable activation/recovery
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
 
@@ -32,7 +33,8 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Linux systemd](./linux-systemd.md)** — API/web units, boot recovery ordering, durable activation, health gates, and rollback
 - **[Linux nohup](./linux-nohup.md)** — legacy/recovery server on loopback port 4800
 - **[Linux Release Manifest v1](./linux-release-manifest.md)** — immutable Fedora 44 archive metadata, inventory, and role projections
-- **[Linux Release Manager](./linux-release-manager.md)** — Rust manager commands, role selection, pending candidates, durable activation, rollback, and boot recovery
+- **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Build, attest, gate, publish, and bootstrap the stable Fedora release
+- **[Linux Release Manager](./linux-release-manager.md)** — Rust manager commands, role selection, pending candidates, publisher/bootstrap handoff, durable activation, rollback, and boot recovery
 
 The dedicated `dam-hopper-web` host serves release SPA assets on port 4802.
 It is separate from the API process and exposes only static GET/HEAD plus the

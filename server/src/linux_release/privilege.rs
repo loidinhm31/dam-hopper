@@ -68,7 +68,7 @@ pub fn verify_privileges(command: &Commands, euid: u32) -> Result<(), ReleaseErr
                 });
             }
         }
-        Commands::Status(_) | Commands::Version => {}
+        Commands::Status(_) | Commands::Version | Commands::Validate(_) => {}
     }
     Ok(())
 }

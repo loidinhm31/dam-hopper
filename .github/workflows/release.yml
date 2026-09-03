@@ -1,18 +1,17 @@
-name: Build DamHopper App
+name: Build DamHopper Desktop App
 
 on:
   push:
     tags:
-      - "v*"
+      - "desktop-v*"
   pull_request:
     branches:
       - main
   workflow_dispatch: # Allows manual triggering
 
 permissions:
-  contents: write
+  contents: read
   actions: read
-
 jobs:
   native-ssh-forward-windows-gate:
     name: Windows SSH forwarding pre-bundle gate
@@ -49,7 +48,7 @@ jobs:
 
   native-ssh-forward-windows-runtime-gate:
     name: Windows SSH forwarding protected runtime gate
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
     needs: native-ssh-forward-windows-gate
     runs-on: windows-latest
     steps:
@@ -105,7 +104,7 @@ jobs:
         needs.native-ssh-forward-windows-gate.result == 'success' &&
         (
           needs.native-ssh-forward-windows-runtime-gate.result == 'success' ||
-          !startsWith(github.ref, 'refs/tags/v')
+          !startsWith(github.ref, 'refs/tags/desktop-v')
         )
       }}
     strategy:
@@ -122,7 +121,9 @@ jobs:
             bundles: nsis
 
     runs-on: ${{ matrix.platform.os }}
-
+    permissions:
+      contents: write
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -189,8 +190,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ !startsWith(matrix.platform.os, 'windows') && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
           projectPath: apps/native
-          tagName: ${{ github.ref_name }}
-          releaseName: "DamHopper v__VERSION__"
+          tagName: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && github.ref_name || '' }}
+          releaseName: "DamHopper Desktop v__VERSION__"
           releaseBody: "See the assets to download and install this version."
           releaseDraft: true
           prerelease: false

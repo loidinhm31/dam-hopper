@@ -1,10 +1,11 @@
 # Linux systemd system service
 
-Status: Phase 05 durable activation, rollback, and crash recovery are
-implemented for the Manifest v1 release manager (2026-09-03). Phase 04 supplies
-the role-aware unit and ownership policy; Phase 05 installs, probes, commits,
-rolls back, and reconciles those units. The guarded format-2 runner documented
-later remains a separate legacy path until migration.
+Status: Phase 06 central publishing/bootstrap is complete; Phase 05 durable
+activation, rollback, and crash recovery are implemented for the Manifest v1
+release manager (2026-09-03). Phase 04 supplies the role-aware unit and
+ownership policy; Phase 05 installs, probes, commits, rolls back, and
+reconciles those units. The guarded format-2 runner documented later remains a
+separate legacy path until migration.
 
 The release deployment has two process roles:
 
@@ -31,7 +32,10 @@ archive, role inventory, or rendered API/web units. See [Linux Release
 Manager](./linux-release-manager.md) for the manager grammar and transaction
 boundary.
 
-## Phase 04/05 role-aware units and activation (Manifest v1)
+For the producer-side DAG, exact four-asset release, reproducibility controls,
+and non-root bootstrap, see [Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md).
+
+## Phase 04–05 role-aware units and activation (Manifest v1)
 
 Phase 04 defines the unit and ownership boundary. Phase 05 makes it live:
 `install` or `role set` stages a release view and candidate service files;

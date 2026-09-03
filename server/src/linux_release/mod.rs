@@ -52,7 +52,7 @@ pub use acquire::{acquire_release, AcquisitionRecord};
 pub use archive::inspect_and_validate_archive;
 pub use archive_extract::extract_role_projection;
 pub use attestation::verify_file_attestation;
-pub use cli::{Cli, Commands, FetchArgs, InstallArgs, RoleCommands, RoleSetArgs};
+pub use cli::{Cli, Commands, FetchArgs, InstallArgs, RoleCommands, RoleSetArgs, ValidateArgs};
 pub use constants::*;
 pub use error::ReleaseError;
 pub use host_config::{
@@ -66,8 +66,8 @@ pub use inventory::{
 pub use layout::Layout;
 pub use lock::DeploymentLock;
 pub use manifest::{
-    ArchiveMeta, ComponentVersion, ComponentsMeta, ProfileMeta, ReleaseManifest, ReleaseMeta,
-    RollbackMeta, ServiceContract, ServicesMeta,
+    validate_manifest_and_archive, ArchiveMeta, ComponentVersion, ComponentsMeta, ProfileMeta,
+    ReleaseManifest, ReleaseMeta, RollbackMeta, ServiceContract, ServicesMeta,
 };
 pub use ownership::{
     verify_manager_state_permissions, verify_path_permissions, verify_release_ownership,

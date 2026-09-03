@@ -39,13 +39,22 @@ jobs:
         with:
           workspaces: server
 
-      - name: Build release binary
-        run: cd server && cargo build --release --features vendored
+      - name: Build release binaries
+        run: cd server && cargo build --release --features vendored --bins
+
+      - name: Validate release scripts and version alignment
+        run: |
+          bash -n deploy/release/build-release-archive.sh deploy/release/dam-hopper-install.sh
+          node -c deploy/release/generate-release-manifest.mjs deploy/release/check-release-assets.mjs deploy/release/check-version-alignment.mjs
+          node deploy/release/check-version-alignment.mjs --bin server/target/release/dam-hopper --bin server/target/release/dam-hopper-server --bin server/target/release/dam-hopper-web
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dam-hopper-server-linux-x86_64
-          path: server/target/release/dam-hopper-server
+          name: dam-hopper-linux-x86_64-binaries
+          path: |
+            server/target/release/dam-hopper
+            server/target/release/dam-hopper-server
+            server/target/release/dam-hopper-web
           if-no-files-found: error
           retention-days: 7
 
