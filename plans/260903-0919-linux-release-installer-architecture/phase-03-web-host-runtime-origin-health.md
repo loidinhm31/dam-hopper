@@ -5,6 +5,7 @@
 - [Parent plan](./plan.md)
 - [Phase 01 contract](./phase-01-contract-version-manifest.md)
 - [Accepted brainstorm](../reports/brainstorm-260903-0919-linux-release-installer-architecture.md)
+- [Phase 03 code review](../reports/code-review-260903-1835-phase-03-web-host.md)
 - [API router](../../server/src/api/router.rs)
 - [Web Vite configuration](../../apps/web/vite.config.ts)
 - [Web bootstrap](../../apps/web/src/main.tsx)
@@ -15,9 +16,10 @@
 - **Date:** 2026-09-03
 - **Description:** Build a non-writing Rust static host on `4802`, expose exact web health/runtime metadata, and bootstrap the SPA against an explicit API URL.
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Implementation status:** Completed 2026-09-03
+- **Review status:** Approved with recommendations 2026-09-03 (no blocking findings)
 - **Effort:** 14h
+- **Progress:** 100% (11/11 implementation steps; 6/6 todo items)
 
 ## Key Insights
 
@@ -103,12 +105,12 @@ The API router receives `Option<PathBuf>` for explicit combined-mode static serv
 
 ## Todo List
 
-- [ ] Add dedicated web binary and focused host modules.
-- [ ] Add exact health/runtime routes and cache policy.
-- [ ] Make API default API-only while preserving explicit Docker combined mode.
-- [ ] Add managed runtime profile bootstrap without overriding user selection.
-- [ ] Add HTTP and frontend contract coverage.
-- [ ] Run compile checks and pass scoped reviewer gate.
+- [x] Add dedicated web binary and focused host modules.
+- [x] Add exact health/runtime routes and cache policy.
+- [x] Make API default API-only while preserving explicit Docker combined mode.
+- [x] Add managed runtime profile bootstrap without overriding user selection.
+- [x] Add HTTP and frontend contract coverage.
+- [x] Run compile checks and pass scoped reviewer gate.
 
 ## Success Criteria
 

@@ -32,28 +32,26 @@ use super::{
     usage_sessions, workspace, ws,
 };
 
-/// Build the full Axum router without cross-origin browser access.
-///
-/// Production startup should use [`build_router_with_origins`] with an explicit
-/// allowlist when the UI is hosted separately.
+/// Build the full Axum router without cross-origin browser access and without static web serving.
 pub fn build_router(state: AppState) -> Router {
     build_router_with_origins(state, Vec::new())
 }
 
-/// Build the router with an exact allowlist for credentialed browser requests.
+/// Build the router with an exact allowlist for credentialed browser requests and without static web serving.
 pub fn build_router_with_origins(state: AppState, allowed_origins: Vec<HeaderValue>) -> Router {
-    build_router_with_web_dir_and_origins(state, allowed_origins, static_web_dir())
+    build_router_with_web_dir_and_origins(state, allowed_origins, None)
 }
 
 #[cfg(test)]
 pub(crate) fn build_router_with_web_dir(state: AppState, web_dir: PathBuf) -> Router {
-    build_router_with_web_dir_and_origins(state, Vec::new(), web_dir)
+    build_router_with_web_dir_and_origins(state, Vec::new(), Some(web_dir))
 }
 
-fn build_router_with_web_dir_and_origins(
+/// Build the router with explicit optional static web directory and allowed origins.
+pub fn build_router_with_web_dir_and_origins(
     mut state: AppState,
     allowed_origins: Vec<HeaderValue>,
-    web_dir: PathBuf,
+    web_dir: Option<PathBuf>,
 ) -> Router {
     state.cors_origins = Arc::new(
         allowed_origins
@@ -428,14 +426,21 @@ fn build_router_with_web_dir_and_origins(
         .merge(protected)
         .merge(ide_routes)
         .merge(video_stream)
-        .merge(image_stream)
-        // Preserve API 404 semantics; the SPA fallback is only for browser paths.
-        .route("/api", any(|| async { StatusCode::NOT_FOUND }))
-        .route("/api/", any(|| async { StatusCode::NOT_FOUND }))
-        .route("/api/{*path}", any(|| async { StatusCode::NOT_FOUND }))
-        .fallback_service(
-            ServeDir::new(&web_dir).not_found_service(ServeFile::new(web_dir.join("index.html"))),
-        )
+        .merge(image_stream);
+
+    let router = match web_dir {
+        Some(dir) => router
+            // Preserve API 404 semantics; the SPA fallback is only for browser paths.
+            .route("/api", any(|| async { StatusCode::NOT_FOUND }))
+            .route("/api/", any(|| async { StatusCode::NOT_FOUND }))
+            .route("/api/{*path}", any(|| async { StatusCode::NOT_FOUND }))
+            .fallback_service(
+                ServeDir::new(&dir).not_found_service(ServeFile::new(dir.join("index.html"))),
+            ),
+        None => router.fallback(any(|| async { StatusCode::NOT_FOUND })),
+    };
+
+    let router = router
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state);
 
@@ -460,11 +465,6 @@ pub(crate) async fn mark_allowed_media_origin(
 #[derive(Clone, Copy)]
 pub(crate) struct AllowedMediaOrigin;
 
-fn static_web_dir() -> PathBuf {
-    std::env::var_os("DAM_HOPPER_WEB_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/opt/dam-hopper/web"))
-}
 
 /// Parse a strict, canonical origin allowlist before the server starts.
 pub fn parse_cors_origins(raw_origins: Option<&str>) -> anyhow::Result<Vec<HeaderValue>> {

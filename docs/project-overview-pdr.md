@@ -259,11 +259,29 @@ See [Native Browser Debug Support](./native-browser-debug-support.md) for the pl
 
 ### PR-011: Linux Release Identity, Manager, and Manifest v1
 
-**Status:** Phases 01–02 complete and reviewed (2026-09-03). Phase 01 defines
+**Status:** Phases 01–03 complete and reviewed (2026-09-03). Phase 01 defines
 the release metadata contract; Phase 02 adds the Rust manager's unprivileged
-acquisition and root-only role staging. Dedicated web packaging, systemd unit
-installation, activation, health checks, rollback, recovery, publisher
-bootstrap, and legacy-runner retirement remain later phases.
+acquisition and root-only role staging; Phase 03 adds the dedicated web host,
+runtime-origin bootstrap, and API-only default. Archive packaging of the web
+role, systemd unit installation, activation, health checks, rollback, recovery,
+publisher bootstrap, and legacy-runner retirement remain later phases.
+
+**Phase 03 delivery boundary:**
+
+- `dam-hopper-web` serves a selected immutable web root independently, defaults
+  to `0.0.0.0:4802`, and does not write API state.
+- Reserved health and runtime-config routes, safe-path checks, SPA fallback,
+  and cache classes are implemented with GET/HEAD-only static serving.
+- Runtime config is bounded at 4 KiB and validates schema, SemVer, UUID v4, and
+  an exact HTTP(S) API origin; the frontend fails closed when it is invalid.
+- The frontend preserves an active user profile, reconciles one managed
+  deployed-server profile, and clears its token when the managed URL changes.
+- `dam-hopper-server` remains API-only by default. Docker opts into combined
+  serving explicitly with `--web-dir`; no browser-origin guessing is used.
+
+Phase 03 evidence: `linux_release_web_host` 8/8, focused API health/router
+checks 2/2, runtime-config/profile Vitest 72/72, scoped compile/build checks
+passed, and review scored 8.5/10 with no blocking findings.
 
 **Functional Requirements:**
 
@@ -305,6 +323,17 @@ bootstrap, and legacy-runner retirement remain later phases.
 - [x] Root staging uses a nonblocking deployment lock, no-follow bundle opens,
   exact manifest inventory inspection, regular-file/directory extraction, role
   projection, and fsync-backed pending metadata.
+- [x] `dam-hopper-web` binds independently on the documented web port, serves
+  only GET/HEAD static requests, and exposes reserved health/runtime-config
+  routes with no-store JSON responses.
+- [x] Web-root safety rejects symlink/traversal escapes; immutable hashed
+  assets, root/index documents, and other assets receive distinct cache policy.
+- [x] Frontend runtime-origin validation is bounded, exact-origin based, and
+  fail-closed; managed-profile precedence and token invalidation are covered.
+- [x] API router constructors default to API-only behavior; Docker's combined
+  mode passes an explicit `--web-dir`.
+- [x] Phase 03 focused suites pass: web host 8/8, API health/router 2/2, and
+  runtime-config/profile Vitest 72/72; scoped compile/build checks pass.
 - [x] Focused release suites pass 45/45 tests across seven suites; scoped
   manager compile/check and review gates pass with no blocking findings.
 
@@ -313,6 +342,11 @@ bootstrap, and legacy-runner retirement remain later phases.
 - Keep release constants, version logic, manifest types, inventory validation,
   CLI, acquisition, archive, layout, lock, and staging in focused
   `server/src/linux_release/` modules.
+- Keep web-host routing, runtime-config validation, safe-path checks, and cache
+  policy in focused `server/src/web_host/` modules; keep browser bootstrap and
+  managed-profile reconciliation in the frontend API layer.
+- Treat the web root as immutable input: reject symlink roots/paths, bound
+  runtime-config files at 4 KiB, and never derive the API origin from `Host`.
 - Target prerequisites are the Fedora profile, public GitHub HTTPS access, and
   systemd; `gh` is optional only for attestation verification.
 - Use canonical UTF-8/LF JSON with deterministic field order and no
