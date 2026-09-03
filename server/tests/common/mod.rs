@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+
+pub mod release_fixtures;
+
 use std::sync::Arc;
 
 use dam_hopper_server::{

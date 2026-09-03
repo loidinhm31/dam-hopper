@@ -28,7 +28,11 @@ pub fn validate_release_tag(tag: &str, expected_version: &str) -> Result<(), Rel
 
 /// Validate that a commit SHA is a 40-character lowercase hexadecimal string.
 pub fn validate_commit_sha(sha: &str) -> Result<(), ReleaseError> {
-    if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+    if sha.len() != 40
+        || !sha
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
         return Err(ReleaseError::InvalidCommitSha);
     }
     Ok(())
