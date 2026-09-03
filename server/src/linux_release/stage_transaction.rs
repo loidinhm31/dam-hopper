@@ -8,7 +8,7 @@ use super::inventory::TargetRole;
 use super::layout::Layout;
 use super::lock::DeploymentLock;
 use super::manifest::ReleaseManifest;
-use super::stage::{resolve_host_role, save_pending_state, PendingState};
+use super::stage::{resolve_host_role, PendingState};
 use super::stage_units::stage_candidate_units;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -98,7 +98,7 @@ pub fn stage_release_bundle(
 
     let manifest_sha256 = hex::encode(Sha256::digest(&manifest_bytes));
 
-    let pending = PendingState {
+    let pending_record = super::state_record::PendingCandidateRecord {
         tag: manifest.release.tag.clone(),
         role,
         staged_at: chrono::Utc::now().to_rfc3339(),
@@ -106,9 +106,31 @@ pub fn stage_release_bundle(
         manifest_sha256,
         archive_sha256: manifest.archive.sha256.clone(),
         pending_units_path: Some(pending_units_dir.display().to_string()),
+        pending_host_config_path: Some(
+            layout
+                .var_lib_dir
+                .join("pending-host-config.json")
+                .display()
+                .to_string(),
+        ),
+        api_unit_sha256: None,
+        web_unit_sha256: None,
+        host_config_sha256: None,
     };
 
-    save_pending_state(&layout.pending_state_path(), &pending)?;
+    let mut mgr_state = super::state::load_or_init_manager_state(&layout.manager_state_path())?;
+    mgr_state.pending = Some(pending_record.clone());
+    super::state::save_manager_state(&layout.manager_state_path(), &mut mgr_state)?;
+
+    let pending = PendingState {
+        tag: pending_record.tag,
+        role: pending_record.role,
+        staged_at: pending_record.staged_at,
+        release_path: pending_record.release_path,
+        manifest_sha256: pending_record.manifest_sha256,
+        archive_sha256: pending_record.archive_sha256,
+        pending_units_path: pending_record.pending_units_path,
+    };
     Ok(pending)
 }
 

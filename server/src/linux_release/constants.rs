@@ -40,6 +40,16 @@ pub const WEB_SERVICE_PORT: u16 = 4802;
 /// Health check HTTP path for the web server.
 pub const WEB_SERVICE_HEALTH_PATH: &str = "/__dam-hopper/health";
 
+/// Systemd unit name for the boot recovery service.
+pub const RECOVERY_SERVICE_UNIT: &str = "dam-hopper-recovery.service";
+
+/// All managed release systemd service unit names.
+pub const ALL_SERVICE_UNITS: &[&str] = &[
+    API_SERVICE_UNIT,
+    WEB_SERVICE_UNIT,
+    RECOVERY_SERVICE_UNIT,
+];
+
 /// Standard rollback declaration compatibility flag.
 pub const ROLLBACK_PREVIOUS_COMPATIBLE: bool = true;
 /// Standard rollback state compatibility level.

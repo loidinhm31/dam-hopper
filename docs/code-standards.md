@@ -33,7 +33,7 @@ server/src/
 ├── git/              # Git operations
 ├── agent_store/      # Item distribution
 ├── commands/         # Command registry
-├── linux_release/    # Versioned Linux release contract, manager, and staging
+├── linux_release/    # Versioned Linux release contract and lifecycle manager
 │   ├── constants.rs       # Profile, service, rollback, and parser limits
 │   ├── version.rs         # Stable SemVer/tag and digest validation
 │   ├── manifest.rs        # Strict Manifest v1 serde types
@@ -51,6 +51,17 @@ server/src/
 │   ├── archive*.rs         # Inspection and role extraction
 │   ├── layout.rs           # Canonical filesystem paths
 │   ├── lock.rs             # Nonblocking deployment lock
+│   ├── durable_fs.rs       # Atomic writes, sync, and link replacement
+│   ├── state*.rs           # Authoritative state envelope and records
+│   ├── journal.rs          # Deployment phase graph and recovery class
+│   ├── transaction.rs      # Lock-scoped activation transaction
+│   ├── systemd_backup.rs   # Unit/config rollback backups
+│   ├── process*.rs         # Process, listener, cgroup, and holder evidence
+│   ├── health.rs           # Exact service health and stability probes
+│   ├── activate*.rs        # Preflight and durable cutover
+│   ├── rollback.rs         # Automatic and manual rollback
+│   ├── recovery.rs         # Boot-time reconciliation
+│   ├── retention.rs        # Verified release garbage collection
 │   ├── stage*.rs           # Transaction and pending handoff
 │   └── error.rs            # Typed bounded diagnostics
 ├── web_host/         # Dedicated static web host, runtime origin, and health
@@ -79,7 +90,7 @@ pub enum FsError {
     Unavailable,
 }
 ```
-### Linux release contract, manager, and staging
+### Linux release contract, manager, staging, and durable activation
 
 `server/src/linux_release/` is a deliberately split Rust module. Keep fixed
 profile/service/rollback values and parser limits in `constants.rs`; stable
@@ -91,9 +102,11 @@ archive extraction code.
 
 `cli.rs` owns only Clap grammar and argument incompatibilities. Keep
 `server/src/bin/dam-hopper.rs` a thin parser/dispatcher: privilege checks and
-host preflight happen before staging, while network, archive, layout, and
-state behavior remains in focused modules. `privilege.rs` must preserve the
-non-root `fetch`, root mutation, and read-only `status`/`version` matrix.
+host preflight happen before staging, while network, archive, layout, state,
+and lifecycle behavior remains in focused modules. `privilege.rs` must preserve
+the non-root `fetch`, root mutation, and read-only `status`/`version` matrix.
+`install` and `role set` stop at a pending candidate; the unified `start`
+command owns activation and committed-role startup/verification.
 
 `acquire_client.rs` must keep HTTPS, GitHub-related host validation, bounded
 redirects, connect/request deadlines, and response-size limits. `acquire.rs`
@@ -111,10 +124,49 @@ transaction directory; never use permissive whole-archive unpacking.
 `stage_transaction.rs` acquires `DeploymentLock` before privileged reads,
 reopens bundle inputs without following links, streams the archive into a
 root-private transaction directory, inspects the staged copy, and renames only
-the completed role view. `stage.rs` writes `PendingState` after the rename.
-Pending writes use a same-directory temporary file, file `fsync`, rename, and
-parent-directory sync. Install must not switch the active link, start units, or
-remove current runtime state.
+the completed role view. `stage.rs` writes pending state after the rename.
+Pending writes use a same-directory temporary file, write/sync, rename, and
+parent-directory sync. Staging must not switch the active link, start units,
+or remove current runtime state.
+
+The authoritative envelope is
+`/var/lib/dam-hopper-manager/state.json`. Keep generation, active/previous
+release records, pending candidate, transaction phase, hashes, and latest
+failure in `state.rs`/`state_record.rs`; treat `/opt/dam-hopper/current` as a
+repairable convenience pointer. `durable_fs.rs` must preserve the
+temp-file → write/sync → rename → parent-sync sequence for state, config, and
+symlink replacement. `transaction.rs` and `journal.rs` must validate the
+lock-scoped phase graph; do not skip phases or mutate durable state outside the
+transaction boundary.
+
+Valid forward activation is:
+
+`ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING → COMMITTED`
+
+`activate_preflight.rs` must validate old/candidate manifests, generations,
+role units, ownership, cgroups, listeners, and SQLite holders before quiesce.
+`activate.rs` must stop/disable old selected units, prove them clear, install
+concrete candidate units/configuration, daemon-reload, start the selected
+units, and enter `PROBING`. `health.rs` requires initial readiness within
+20 seconds, then 20 consecutive probes at 500 ms (10 seconds). Every probe
+checks active MainPID, expected executable/UID, exact listener, HTTP success,
+and exact role/version JSON for API `/api/health` and web
+`/__dam-hopper/health`; transient failures reset the stability window and
+identity/listener/contract mismatches fail the transaction.
+
+`dam-hopper-recovery.service` is a root oneshot unit ordered after local
+filesystems and before `dam-hopper-api.service` and
+`dam-hopper-web.service`. `recovery.rs` must classify the persisted phase:
+resume safe `STAGED`/`PENDING`, restore old state for interrupted
+`QUIESCED`/`SWITCHED`/`PROBING`, repair pointers/enablement for `COMMITTED`,
+and stop/block all application units for corrupt or unrecoverable state.
+
+`rollback.rs` must stop the candidate, restore recorded unit/config backups,
+and run the same health gate. First-install failure leaves no active release
+and all application units stopped/disabled. Manual rollback promotes the
+recorded previous release through the same transaction rules; restoration
+failure becomes `RECOVERY_REQUIRED`. `retention.rs` may delete only
+unreferenced trees whose manifest, ownership, and canonical path checks pass.
 
 Manifest structs use camelCase wire names and `deny_unknown_fields`. Validate
 the 1 MiB manifest limit before deserialization, then enforce the 20,000-entry

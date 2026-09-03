@@ -135,6 +135,14 @@ impl RequiredPathsTracker {
                 }
                 self.has_web_unit = true;
             }
+            "systemd/dam-hopper-recovery.service"
+            | "systemd/dam-hopper-recovery.service.in" => {
+                if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Common) {
+                    return Err(ReleaseError::InvalidRequiredPath {
+                        path: "systemd/dam-hopper-recovery.service",
+                    });
+                }
+            }
             "sysusers.d/dam-hopper-web.conf" => {
                 if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Web) {
                     return Err(ReleaseError::InvalidRequiredPath {

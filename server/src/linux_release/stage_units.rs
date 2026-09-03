@@ -6,7 +6,9 @@ use super::inventory::TargetRole;
 use super::layout::Layout;
 use super::manifest::ReleaseManifest;
 use super::systemd::systemd_analyze_verify;
-use super::unit::{render_api_unit, render_web_unit, UnitRenderContext};
+use super::unit::{
+    render_api_unit, render_recovery_unit, render_web_unit, UnitRenderContext,
+};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -33,6 +35,14 @@ pub fn stage_candidate_units(
     )?;
 
     let mut staged_unit_paths = Vec::new();
+
+    // 0. Stage Recovery service unit (required dependency of app units)
+    let recovery_template = load_template(target_dir, "systemd/dam-hopper-recovery.service.in")
+        .or_else(|_| load_template(target_dir, "systemd/dam-hopper-recovery.service"))?;
+    let rendered_recovery = render_recovery_unit(&recovery_template, &ctx)?;
+    let recovery_unit_path = pending_units_dir.join("dam-hopper-recovery.service");
+    write_file_with_mode(&recovery_unit_path, rendered_recovery.as_bytes(), 0o644)?;
+    staged_unit_paths.push(recovery_unit_path);
 
     // 1. Stage API service unit if role includes Server
     if role.includes_server() {
@@ -100,6 +110,9 @@ fn load_template(release_dir: &Path, rel_path: &str) -> Result<String, ReleaseEr
     } else {
         // Fallback to checked-in template if not present in release directory
         let fallback = match rel_path {
+            p if p.contains("dam-hopper-recovery") => {
+                include_str!("../../../deploy/systemd/dam-hopper-recovery.service.in")
+            }
             p if p.contains("dam-hopper-api") => {
                 include_str!("../../../deploy/systemd/dam-hopper-api.service.in")
             }
