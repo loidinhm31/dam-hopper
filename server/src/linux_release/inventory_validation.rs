@@ -23,10 +23,15 @@ pub fn validate_inventory(entries: &[InventoryEntry]) -> Result<(), ReleaseError
             return Err(ReleaseError::DuplicateInventoryPath(entry.path.clone()));
         }
         if entry.roles.is_empty() {
-            return Err(ReleaseError::EmptyRoles { path: entry.path.clone() });
+            return Err(ReleaseError::EmptyRoles {
+                path: entry.path.clone(),
+            });
         }
         if entry.mode > 0o7777 {
-            return Err(ReleaseError::InvalidMode { path: entry.path.clone(), mode: entry.mode });
+            return Err(ReleaseError::InvalidMode {
+                path: entry.path.clone(),
+                mode: entry.mode,
+            });
         }
 
         validate_entry_kind(entry)?;
@@ -40,16 +45,26 @@ fn validate_entry_kind(entry: &InventoryEntry) -> Result<(), ReleaseError> {
     match entry.kind {
         EntryKind::File => {
             if entry.size.is_none() || entry.sha256.is_none() {
-                return Err(ReleaseError::MissingFileMetadata { path: entry.path.clone() });
+                return Err(ReleaseError::MissingFileMetadata {
+                    path: entry.path.clone(),
+                });
             }
             let sha = entry.sha256.as_ref().unwrap();
-            if sha.len() != 64 || !sha.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
-                return Err(ReleaseError::InvalidFileSha256 { path: entry.path.clone() });
+            if sha.len() != 64
+                || !sha
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            {
+                return Err(ReleaseError::InvalidFileSha256 {
+                    path: entry.path.clone(),
+                });
             }
         }
         EntryKind::Dir => {
             if entry.size.is_some() || entry.sha256.is_some() {
-                return Err(ReleaseError::UnexpectedDirectoryMetadata { path: entry.path.clone() });
+                return Err(ReleaseError::UnexpectedDirectoryMetadata {
+                    path: entry.path.clone(),
+                });
             }
         }
     }
@@ -72,38 +87,59 @@ impl RequiredPathsTracker {
     fn check_entry(&mut self, entry: &InventoryEntry) -> Result<(), ReleaseError> {
         match entry.path.as_str() {
             "bin/dam-hopper-manager" => {
-                if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Common) || entry.mode & 0o111 == 0 {
-                    return Err(ReleaseError::InvalidRequiredPath { path: "bin/dam-hopper-manager" });
+                if entry.kind != EntryKind::File
+                    || !entry.roles.contains(&ReleaseRole::Common)
+                    || entry.mode & 0o111 == 0
+                {
+                    return Err(ReleaseError::InvalidRequiredPath {
+                        path: "bin/dam-hopper-manager",
+                    });
                 }
                 self.has_manager = true;
             }
             "bin/dam-hopper-server" => {
-                if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Server) || entry.mode & 0o111 == 0 {
-                    return Err(ReleaseError::InvalidRequiredPath { path: "bin/dam-hopper-server" });
+                if entry.kind != EntryKind::File
+                    || !entry.roles.contains(&ReleaseRole::Server)
+                    || entry.mode & 0o111 == 0
+                {
+                    return Err(ReleaseError::InvalidRequiredPath {
+                        path: "bin/dam-hopper-server",
+                    });
                 }
                 self.has_server = true;
             }
             "bin/dam-hopper-web" => {
-                if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Web) || entry.mode & 0o111 == 0 {
-                    return Err(ReleaseError::InvalidRequiredPath { path: "bin/dam-hopper-web" });
+                if entry.kind != EntryKind::File
+                    || !entry.roles.contains(&ReleaseRole::Web)
+                    || entry.mode & 0o111 == 0
+                {
+                    return Err(ReleaseError::InvalidRequiredPath {
+                        path: "bin/dam-hopper-web",
+                    });
                 }
                 self.has_web = true;
             }
             "systemd/dam-hopper-api.service" => {
                 if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Server) {
-                    return Err(ReleaseError::InvalidRequiredPath { path: "systemd/dam-hopper-api.service" });
+                    return Err(ReleaseError::InvalidRequiredPath {
+                        path: "systemd/dam-hopper-api.service",
+                    });
                 }
                 self.has_api_unit = true;
             }
             "systemd/dam-hopper-web.service" => {
                 if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Web) {
-                    return Err(ReleaseError::InvalidRequiredPath { path: "systemd/dam-hopper-web.service" });
+                    return Err(ReleaseError::InvalidRequiredPath {
+                        path: "systemd/dam-hopper-web.service",
+                    });
                 }
                 self.has_web_unit = true;
             }
             "sysusers.d/dam-hopper-web.conf" => {
                 if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Web) {
-                    return Err(ReleaseError::InvalidRequiredPath { path: "sysusers.d/dam-hopper-web.conf" });
+                    return Err(ReleaseError::InvalidRequiredPath {
+                        path: "sysusers.d/dam-hopper-web.conf",
+                    });
                 }
                 self.has_web_sysusers = true;
             }

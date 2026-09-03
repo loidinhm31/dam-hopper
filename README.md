@@ -68,6 +68,15 @@ starting. Use `rollback --dry-run` first; an actual
 rollback requires the marker-backed confirmation and preserves user runtime
 state. See [Linux systemd setup](./docs/linux-systemd.md).
 
+### Linux release manager (Phase 02)
+
+The Fedora 44 x86_64 release manager downloads the immutable Manifest v1
+bundle as an unprivileged user, then validates and stages a selected role as
+root. It leaves activation, systemd unit installation, health checks, rollback,
+and recovery to later phases. See
+[Linux release manager](docs/linux-release-manager.md) and
+[Manifest v1](docs/linux-release-manifest.md).
+
 ## Configuration
 
 Create `~/.config/dam-hopper/dam-hopper.toml`:

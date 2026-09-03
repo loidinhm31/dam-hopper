@@ -10,10 +10,13 @@ production mutation by itself.
 ## Release manifest v1 boundary
 
 The [Linux Release Manifest v1](./linux-release-manifest.md) is the newer
-single-archive contract for Fedora 44 x86_64 role views. The guarded runner
-described here still uses its legacy format-2, server-only stage marker and
-does not yet consume the v1 archive or web inventory; keep those contracts
-separate until a later installer phase.
+single-archive contract for Fedora 44 x86_64 role views. Phase 02's
+`dam-hopper` manager now consumes the v1 manifest for unprivileged acquisition
+and root-only role-view staging, writing a pending candidate without starting
+services. The guarded runner described here remains a separate legacy
+format-2, server-only stage-marker workflow and does not consume the v1 archive
+or web inventory. See [Linux Release Manager](./linux-release-manager.md) for
+the manager grammar and transaction boundary.
 
 If installation stops on a stale safety assignment and no managed service
 assets remain, run `pnpm linux:reset -- --runtime-only`. It preserves the

@@ -33,14 +33,27 @@ server/src/
 ├── git/              # Git operations
 ├── agent_store/      # Item distribution
 ├── commands/         # Command registry
-└── linux_release/    # Versioned Linux release manifest contract
-    ├── constants.rs
-    ├── version.rs
-    ├── manifest.rs
-    ├── manifest_validation.rs
-    ├── inventory.rs
-    ├── inventory_path.rs
-    └── inventory_validation.rs
+├── linux_release/    # Versioned Linux release contract, manager, and staging
+│   ├── constants.rs       # Profile, service, rollback, and parser limits
+│   ├── version.rs         # Stable SemVer/tag and digest validation
+│   ├── manifest.rs        # Strict Manifest v1 serde types
+│   ├── manifest_validation.rs
+│   ├── inventory.rs       # Roles, modes, sizes, digests
+│   ├── inventory_path.rs
+│   ├── inventory_validation.rs
+│   ├── cli.rs             # Manager grammar
+│   ├── privilege.rs       # EUID policy
+│   ├── platform.rs        # Fedora/arch/glibc/systemd gate
+│   ├── origin.rs           # Exact web-origin validation
+│   ├── host_config.rs      # Role/origin persistence
+│   ├── acquire*.rs         # Bounded GitHub acquisition
+│   ├── attestation.rs
+│   ├── archive*.rs         # Inspection and role extraction
+│   ├── layout.rs           # Canonical filesystem paths
+│   ├── lock.rs             # Nonblocking deployment lock
+│   ├── stage*.rs           # Transaction and pending handoff
+│   └── error.rs            # Typed bounded diagnostics
+└── ...
 ```
 
 ### Error Handling Pattern
@@ -60,28 +73,42 @@ pub enum FsError {
     Unavailable,
 }
 ```
-
-Top-level `AppError` wraps module errors:
-
-```rust
-pub enum AppError {
-    Fs(FsError),
-    Git(GitError),
-    NotFound(String),
-}
-```
-
-API handlers map to HTTP status via `ApiError::from(AppError)`.
-
-### Release manifest validation
+### Linux release contract, manager, and staging
 
 `server/src/linux_release/` is a deliberately split Rust module. Keep fixed
-profile/service/rollback values and parser limits in `constants.rs`; keep
-stable SemVer, exact `vX.Y.Z` tag, and lowercase digest checks in `version.rs`;
-keep `serde` data shapes in `manifest.rs`; and keep cross-field rules in
+profile/service/rollback values and parser limits in `constants.rs`; stable
+SemVer, exact `vX.Y.Z` tags, and lowercase digest checks in `version.rs`; strict
+camelCase `serde` data shapes in `manifest.rs`; and cross-field rules in
 `manifest_validation.rs`. Inventory path normalization and required-asset
 checks belong in `inventory_path.rs` and `inventory_validation.rs`, not in
 archive extraction code.
+
+`cli.rs` owns only Clap grammar and argument incompatibilities. Keep
+`server/src/bin/dam-hopper.rs` a thin parser/dispatcher: privilege checks and
+host preflight happen before staging, while network, archive, layout, and
+state behavior remains in focused modules. `privilege.rs` must preserve the
+non-root `fetch`, root mutation, and read-only `status`/`version` matrix.
+
+`acquire_client.rs` must keep HTTPS, GitHub-related host validation, bounded
+redirects, connect/request deadlines, and response-size limits. `acquire.rs`
+must resolve `--latest` to one stable tag, validate the manifest before
+accepting the archive, and require archive SHA-256 equality. Attestation is an
+optional `gh` subprocess boundary: no shell interpolation, inherited
+credentials, or mutable repository is allowed.
+
+`archive.rs` must enumerate entries and compare the exact normalized set with
+the manifest before extraction. Accept only regular files/directories, reject
+links and special entries, and verify kind, mode, size, and SHA-256. Use
+`archive_extract.rs` to create only selected-role paths inside a new
+transaction directory; never use permissive whole-archive unpacking.
+
+`stage_transaction.rs` acquires `DeploymentLock` before privileged reads,
+reopens bundle inputs without following links, streams the archive into a
+root-private transaction directory, inspects the staged copy, and renames only
+the completed role view. `stage.rs` writes `PendingState` after the rename.
+Pending writes use a same-directory temporary file, file `fsync`, rename, and
+parent-directory sync. Install must not switch the active link, start units, or
+remove current runtime state.
 
 Manifest structs use camelCase wire names and `deny_unknown_fields`. Validate
 the 1 MiB manifest limit before deserialization, then enforce the 20,000-entry
@@ -90,11 +117,11 @@ role projections, required paths, service values, and rollback declaration.
 Use `ReleaseError` variants that identify only contract fields or normalized
 relative paths; never include credentials, headers, or arbitrary file content.
 
-The JSON Schema at
-`deploy/release/release-manifest.schema.json` covers structural constraints.
-Rust validation remains authoritative for cross-field equality and required-path
-rules. Any schema change requires matching Rust types, constants, validation,
-tests, and [the release-manifest guide](./linux-release-manifest.md).
+The JSON Schema at `deploy/release/release-manifest.schema.json` covers
+structural constraints. Rust validation remains authoritative for cross-field
+equality and required-path rules. Any schema change requires matching Rust
+types, constants, validation, tests, and [the release-manifest guide](./linux-release-manifest.md).
+
 
 ### Async Patterns
 
@@ -899,6 +926,8 @@ Routes registered conditionally at router construction time.
 - [ ] Error messages don't leak paths/credentials
 - [ ] Release manifest input is bounded before parsing; unknown fields, unsafe paths, links/special entries, and disallowed runtime files fail closed
 - [ ] Release inventory carries lowercase digests and role/mode metadata only; manifest diagnostics never echo credentials or arbitrary content
+- [ ] Release acquisition runs as non-root; use HTTPS, bounded redirects/deadlines/response sizes, and mandatory archive SHA-256 checks
+- [ ] Root staging holds `DeploymentLock`, opens bundle files with no-follow semantics, extracts only exact manifest role entries, and writes pending state only after final rename
 
 ## Telemetry Privacy and Fault Boundaries
 
@@ -930,4 +959,4 @@ Routes registered conditionally at router construction time.
 - The iframe bridge is semantic DOM/ARIA metadata only; never transmit HTML, forms, secrets, or page content.
 - Profile, editor, transport-generation, and Encrypt persistence boundaries are metadata-only, profile-scoped, or memory-only as described in source.
 
-See [Native Browser Debug Support](./native-browser-debug-support.md), [Configuration Guide](./configuration-guide.md), and [Linux Release Manifest v1](./linux-release-manifest.md).
+See [Native Browser Debug Support](./native-browser-debug-support.md), [Configuration Guide](./configuration-guide.md), [Linux Release Manifest v1](./linux-release-manifest.md), and [Linux Release Manager](./linux-release-manager.md).

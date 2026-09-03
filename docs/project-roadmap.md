@@ -6,7 +6,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - **Phase 01 — [COMPLETED 2026-09-03 16:07:45 +07:00]**: established the strict release-manifest v1 contract, lockstep `vX.Y.Z`/SemVer/component-version validation, Fedora 44 x86_64 systemd profile constants, role-scoped inventory projections, bounded canonical JSON, path/file-type/security exclusions, service/rollback invariants, and matching JSON Schema.
 - Validation: vendored all-target `cargo check` passed; focused manifest suites passed 20/20 and the `linux_release` filter passed 10/10 (30/30 executed test invocations); scoped code review approved 9.5/10 with no blocking findings.
-- Parent plan progress: **7% (10h/136h)**; Phase 01 complete, Phases 02–09 pending. [Plan](../plans/260903-0919-linux-release-installer-architecture/plan.md).
+- **Phase 02 — [COMPLETED 2026-09-03]**: delivered the Rust `dam-hopper` CLI grammar and privilege matrix (`fetch`, `install`, `role set`, `start`, `status`, `rollback`, `recover`, `version`), Fedora 44/x86_64/systemd profile validation, bounded GitHub acquisition, mandatory SHA-256 with optional attestation, root-safe staging with source-integrity checks, strict archive traversal, role projections, and durable pending metadata without service activation.
+- Validation: `cargo check --manifest-path server/Cargo.toml --bin dam-hopper --tests` passed; `linux_release_*` suites passed **45/45 across 7 suites**; scoped clippy and `systemctl --version` checks passed; code review approved **8.8/10** with no blocking findings. Non-blocking hardening recommendations remain recorded in the [review report](../plans/reports/code-review-260903-1644-phase-02-rust-cli-acquisition-staging.md).
+- Parent plan progress: **21% (28h/136h)**; Phases 01–02 complete, Phases 03–09 pending. [Plan](../plans/260903-0919-linux-release-installer-architecture/plan.md).
 
 ### Preserve Explorer Tree Expansion & Editor View Scroll Position (2026-08-31)
 
