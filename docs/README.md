@@ -22,6 +22,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
+- **[Linux Release Manager](./linux-release-manager.md)** — Phase 02 CLI, host profile checks, acquisition, and safe staging
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
 
@@ -31,6 +32,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
 - **[Linux Release Manifest v1](./linux-release-manifest.md)** — Immutable Fedora 44 archive metadata, inventory, and role projections
+- **[Linux Release Manager](./linux-release-manager.md)** — Rust manager commands, role selection, and pending-candidate staging
 
 - Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
 
@@ -241,7 +243,8 @@ docs/
 ├── configuration-guide.md        # dam-hopper.toml & setup
 ├── code-standards.md             # Patterns, testing, security
 ├── codebase-summary.md           # Quick module reference
-└── linux-release-manifest.md     # Linux release archive contract v1
+├── linux-release-manifest.md     # Linux release archive contract v1
+└── linux-release-manager.md      # Phase 02 manager CLI, acquisition, and staging
 ```
 
 Each file is self-contained but linked for cross-reference.
@@ -256,7 +259,8 @@ Docs are updated when:
 - Architecture changes (update system-architecture.md + code-standards.md)
 - Config schema changes (update configuration-guide.md)
 - New phases complete (update project-overview-pdr.md roadmap)
-- Release packaging contracts change (update `linux-release-manifest.md` and `system-architecture.md`)
+- Release packaging contracts change (update `linux-release-manifest.md`,
+  `linux-release-manager.md`, and `system-architecture.md`)
 
 Always verify docs against actual code implementation before publishing.
 

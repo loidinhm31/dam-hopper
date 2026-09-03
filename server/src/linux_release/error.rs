@@ -15,7 +15,9 @@ pub enum ReleaseError {
     #[error("invalid release version: {0}")]
     InvalidVersion(String),
 
-    #[error("invalid release tag '{tag}': must match 'v{version}' without prerelease or build metadata")]
+    #[error(
+        "invalid release tag '{tag}': must match 'v{version}' without prerelease or build metadata"
+    )]
     InvalidTag { tag: String, version: String },
 
     #[error("component version mismatch for {component}: expected {expected}, got {got}")]
@@ -101,4 +103,93 @@ pub enum ReleaseError {
 
     #[error("disallowed runtime/configuration file detected in release inventory: '{path}'")]
     DisallowedRuntimeFile { path: String },
+
+    #[error("unsupported operating system: expected '{expected}', got '{got}'")]
+    UnsupportedOs { expected: String, got: String },
+
+    #[error("unsupported operating system version: expected '{expected}', got '{got}'")]
+    UnsupportedOsVersion { expected: String, got: String },
+
+    #[error("unsupported architecture: expected '{expected}', got '{got}'")]
+    UnsupportedArch { expected: String, got: String },
+
+    #[error("glibc version too low: expected at least '{expected}', got '{got}'")]
+    GlibcVersionTooLow { expected: String, got: String },
+
+    #[error("systemd is not running as system manager (PID 1) on this host")]
+    SystemdNotActive,
+
+    #[error("required privilege level not met for {operation}: required EUID {expected_euid}, current EUID {actual_euid}")]
+    PrivilegeRequired {
+        operation: &'static str,
+        expected_euid: u32,
+        actual_euid: u32,
+    },
+
+    #[error(
+        "operation {operation} must be run as an unprivileged user, not root (EUID {actual_euid})"
+    )]
+    UserPrivilegeRequired {
+        operation: &'static str,
+        actual_euid: u32,
+    },
+
+    #[error("invalid web origin '{origin}': {reason}")]
+    InvalidWebOrigin {
+        origin: String,
+        reason: &'static str,
+    },
+
+    #[error("duplicate web origin '{0}'")]
+    DuplicateWebOrigin(String),
+
+    #[error(
+        "missing deployment role: fresh install requires an explicit role (--role server|web|both)"
+    )]
+    MissingRole,
+
+    #[error("cannot change recorded deployment role '{recorded}' with 'install --role {requested}'; use 'role set' instead")]
+    RoleConflict { recorded: String, requested: String },
+
+    #[error("deployment lock is currently held by another process")]
+    DeploymentLockBusy,
+
+    #[error("failed to acquire deployment lock: {0}")]
+    DeploymentLockError(String),
+
+    #[error("archive entry '{path}' is not a regular file or directory")]
+    ArchiveEntryNotRegularFileOrDir { path: String },
+
+    #[error("archive entry path '{0}' is invalid or attempts directory traversal")]
+    ArchiveEntryTraversal(String),
+
+    #[error("archive entry '{path}' has unexpected metadata: {reason}")]
+    ArchiveEntryInvalid { path: String, reason: String },
+
+    #[error("archive entry '{path}' digest mismatch: expected sha256 '{expected}', got '{got}'")]
+    ArchiveDigestMismatch {
+        path: String,
+        expected: String,
+        got: String,
+    },
+
+    #[error("archive does not match release inventory: {reason}")]
+    ArchiveInventoryMismatch { reason: String },
+
+    #[error("acquisition failed: {0}")]
+    AcquisitionFailed(String),
+
+    #[error("attestation verification failed: {0}")]
+    AttestationFailed(String),
+
+    #[error("invalid release bundle at '{path}': {reason}")]
+    InvalidBundle { path: String, reason: String },
+
+    #[error("filesystem I/O error during {action}: {details}")]
+    Io {
+        action: &'static str,
+        details: String,
+    },
+    #[error("configuration error: {0}")]
+    Config(String),
 }

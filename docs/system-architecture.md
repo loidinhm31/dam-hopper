@@ -111,27 +111,46 @@ authentication and OS privilege.
 
 The authenticated `/api/browser-debug/artifacts` routes provide ephemeral handoff storage for browser-debug tooling. `BrowserDebugArtifactManager` keeps metadata in memory and writes generated JSON/PNG paths beneath a temporary root; it exposes create, one-shot PNG upload, and delete only—there is intentionally no read/list route. Create accepts a live `terminalId` plus validated `selection` JSON (64 KiB request cap). PNG upload requires `image/png`, is capped at 4 MiB, and performs structural plus decoded-image verification before writing. Artifacts expire after 10 minutes, a 60-second sweeper removes expired files, and shutdown cleanup removes the root.
 
-### linux_release/ (Phase 01: release manifest v1)
+### linux_release/ (Phases 01–02: manifest, acquisition, and staging)
 
-`server/src/linux_release/` owns the strict metadata contract for immutable
-Fedora 44 x86_64 systemd archives. `constants.rs` centralizes the profile,
-service, rollback, archive-name, and parser-limit values. `version.rs` enforces
-stable SemVer, exact `vX.Y.Z` tags, and lowercase commit/digest formats.
-`manifest.rs` contains the camelCase `serde` types and bounded parser;
-`manifest_validation.rs` applies cross-field equality and service/rollback
-invariants. `inventory.rs`, `inventory_path.rs`, and
-`inventory_validation.rs` normalize relative paths, reject disallowed runtime
-files, validate file/directory metadata, and enforce required role-scoped
-assets. `error.rs` exposes typed diagnostics without arbitrary content dumps.
+`server/src/linux_release/` owns the strict Fedora 44 x86_64 systemd release
+profile and its first consumers. The module remains deliberately split so
+security-sensitive boundaries stay reviewable:
 
-The module is exported from `server/src/lib.rs` for consumers and integration
-tests. The publisher schema is kept at
-`deploy/release/release-manifest.schema.json`; structural schema checks and
-Rust cross-field validation are both required. The manifest is metadata, not
-archive trust evidence; attestation and extraction are later-phase concerns.
+- `constants.rs`, `version.rs`, `manifest.rs`, `inventory.rs`, and the private
+  inventory/manifest validation modules enforce the Manifest v1 wire contract,
+  SemVer/tag identity, role projections, normalized paths, required assets,
+  modes, and runtime-file exclusions.
+- `cli.rs` defines `fetch`, `install`, `role set`, `start`, `status`,
+  `rollback`, `recover`, and `version`; `privilege.rs` enforces the EUID
+  matrix. The binary at `server/src/bin/dam-hopper.rs` only parses, preflights,
+  dispatches, and reports outcomes.
+- `platform.rs` gates Fedora 44, x86_64, glibc >= 2.43, and systemd >= 259.
+  `origin.rs` and `host_config.rs` validate exact browser origins and persist
+  the selected role.
+- `acquire.rs`, `acquire_client.rs`, and `attestation.rs` keep network work
+  unprivileged, bound HTTPS redirects/deadlines/response sizes, require the
+  archive SHA-256 to match the manifest, and optionally invoke `gh` for
+  repository-bound attestation checks.
+- `archive.rs` and `archive_extract.rs` inspect gzip/tar entries against the
+  exact manifest inventory, reject links/special files/path or metadata drift,
+  and extract only the selected role's new files.
+- `layout.rs`, `lock.rs`, `stage.rs`, and `stage_transaction.rs` define the
+  `/opt`, `/etc`, `/var/lib`, and `/run/lock` paths, nonblocking deployment
+  lock, root-private transaction stage, host-role state, and fsync-backed
+  pending handoff.
 
-See [Linux Release Manifest v1](./linux-release-manifest.md) for field values,
-inventory projections, and canonicalization rules.
+Install and role change validate inputs and construct a role view under
+`/opt/dam-hopper/.staging/<transaction-id>` before renaming it to
+`/opt/dam-hopper/releases/<tag>/<role>`. `pending.json` is written only after
+the candidate rename. Phase 02 does not switch `/opt/dam-hopper/current`, touch
+active/rollback state, install or start units, or perform health probes.
+
+The module is exported from `server/src/lib.rs` for the manager and integration
+tests. The publisher schema remains at
+`deploy/release/release-manifest.schema.json`; Rust cross-field validation is
+authoritative. See [Linux Release Manager](./linux-release-manager.md) for the
+CLI grammar, paths, and transaction flow.
 
 ### config/
 
@@ -2252,15 +2271,19 @@ prove Tailscale reachability or firewall/ACL isolation for the current unit.
 
 ### Manifest v1 versus the current runner
 
-Phase 01 defines a separate single archive contract:
+Phase 01 defines the single archive contract
 `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz`, with lockstep CLI/API/web
-versions, a complete role-scoped inventory, API/web service contracts, and an
-`n-1` rollback declaration. Intended immutable role views live under
-`/opt/dam-hopper/releases/<tag>/<role>/`. The existing guarded systemd runner
-still consumes its legacy format-2 server-only stage marker and does not yet
-install this archive or its web inventory. Keep the two contracts distinct
-until a later phase wires the manifest into acquisition and staging. See
-[Linux Release Manifest v1](./linux-release-manifest.md).
+versions, complete role-scoped inventory, API/web service contracts, and an
+`n-1` rollback declaration. Phase 02's `dam-hopper` manager now consumes this
+manifest for unprivileged acquisition and root-only role-view staging. It
+persists a pending candidate under `/var/lib/dam-hopper/pending.json` but does
+not activate it or install/start units.
+
+The guarded systemd runner still consumes its legacy format-2 server-only stage
+marker and remains a separate deployment path until the later migration and
+runner-retirement phases. Do not treat a format-2 stage as a Manifest v1 bundle.
+See [Linux Release Manifest v1](./linux-release-manifest.md) and
+[Linux Release Manager](./linux-release-manager.md).
 
 ## Host resource monitoring (current delivery; remediation deferred)
 
