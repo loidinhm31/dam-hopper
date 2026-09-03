@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Structure**:
 
-- Repomix snapshot (2026-09-03): 1,507 files and 3,120,504 tokens packed into
+- Repomix snapshot (2026-09-03): 1,523 files and 3,148,406 tokens packed into
   `repomix-output.xml`; five security-sensitive files were excluded by the
   compaction security check.
 - Predominantly Rust (server) and TypeScript/React (web). The Linux release
@@ -66,9 +66,9 @@ This document provides a high-level overview of the current repository. Historic
   Phase 02 `fetch`, `install`, `role set`, `start`, `status`, `rollback`,
   `recover`, and `version` grammar. `server/src/linux_release/` owns Fedora
   profile checks, bounded GitHub acquisition, optional attestation, exact
-  inventory/archive validation, role projection, deployment locking, and
-  pending-candidate persistence. Activation and service lifecycle remain later
-  phase responsibilities.
+  inventory/archive validation, role projection, deployment locking, pending
+  candidate persistence, and Phase 04 role-aware unit/ownership staging.
+  Activation and service lifecycle remain later phase responsibilities.
 - **Dedicated Web Host**: `server/src/bin/dam-hopper-web.rs` runs the
   non-writing `web_host` router on port `4802`. It validates a non-symlink
   release root and optional ≤4 KiB runtime config, serves only GET/HEAD, keeps
@@ -161,7 +161,7 @@ Infrastructure
 
 - Browser Debug native child WebView is Windows v1 supported only after the WebView2 gate; Linux implementation/package builds are runtime-unverified, macOS is deferred, and Android uses the iframe adapter.
 - Native Browser Debug stores profile-scoped data under app data, validates generation/nonce/request identity, mirrors app zoom, and reports raw rendered bounds. Native relay v1 exposes picker/navigation; console forwarding is disabled.
-- `dam-hopper-web` is the dedicated non-writing release SPA host on `0.0.0.0:4802`; it serves static assets plus reserved health/runtime-origin JSON only. The API server is API-only by default. Docker explicitly combines both through `--web-dir /opt/dam-hopper/web` on port `4800`; systemd production keeps backend-only `0.0.0.0:4801`, and legacy nohup remains loopback `127.0.0.1:4800`.
+- `dam-hopper-web` is the dedicated non-writing release SPA host on `0.0.0.0:4802`; it serves static assets plus reserved health/runtime-origin JSON only. Phase 04 stages independent `dam-hopper-api.service` (`root:root`, `4801`) and `dam-hopper-web.service` (`dam-hopper-web`, `4802`) candidates with strict web sandboxing; activation is deferred. Docker explicitly combines both through `--web-dir /opt/dam-hopper/web` on port `4800`; the legacy runner remains separate.
 - Web runtime origin is fetched at `/__dam-hopper/runtime-config.json` with `cache: "no-store"` and strict 4 KiB/schema/origin validation. Active user profiles outrank managed deployment profiles; a managed URL change clears only that profile's token.
 - Build-time origins for the extension are controlled by `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS`; changing them requires rebuilding and redistributing the extension. `VITE_DAM_HOPPER_LOG_LEVEL` controls web bootstrap logging, while `VITE_DAM_HOPPER_SERVER_URL` is forbidden for production builds.
 - Profile metadata and tokens are localStorage-scoped; editor persistence is metadata-only and Encrypt session material is memory-only. Transport rebind destroys the previous WS and advances a generation to reject stale responses.
@@ -297,34 +297,57 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 
 ### Linux Release Manager (`server/src/linux_release/`)
 
-Phase 01's strict Manifest v1 contract, Phase 02's manager consumer, and
-Phase 03's web service metadata share one focused release module:
+Phase 01's strict Manifest v1 contract, Phase 02's manager consumer, Phase 03's
+web service metadata, and Phase 04's role-aware systemd boundary share one
+focused release module:
 
 - `constants.rs`, `version.rs`, `manifest.rs`, `manifest_validation.rs`,
   `inventory.rs`, `inventory_path.rs`, and `inventory_validation.rs` enforce
   profile, stable tag/SemVer, lockstep versions, normalized paths, role
-  projections, required assets, modes, digests, and runtime-file exclusions.
+  projections, required service/template/sysusers assets, modes, digests, and
+  runtime-file exclusions.
 - `cli.rs` plus `server/src/bin/dam-hopper.rs` define and dispatch the manager
   grammar. `privilege.rs` enforces non-root `fetch`, root mutation commands,
   and read-only `status`/`version`.
 - `platform.rs`, `origin.rs`, and `host_config.rs` gate Fedora 44/x86_64,
-  glibc/systemd requirements, exact web origins, and persistent role settings.
+  glibc/systemd requirements, exact web origins, and persistent role/public
+  host configuration.
 - `acquire.rs`, `acquire_client.rs`, and `attestation.rs` resolve stable
   GitHub releases, bound HTTPS requests, require archive SHA-256 equality, and
   optionally run repository-bound `gh` attestation checks.
 - `archive.rs` and `archive_extract.rs` reject unsafe tar entries and extract
-  only the exact selected role projection.
+  only the selected role projection.
+- `unit.rs`, `unit_parser.rs`, and `unit_policy.rs` render allowlisted
+  placeholders into independent API/web units and enforce their identities,
+  paths, lifecycle, environment, hardening, and no-coupling properties.
+- `stage_units.rs` writes selected rendered units and web sysusers input to
+  `/var/lib/dam-hopper/pending-units/`, writes a candidate public config, and
+  invokes `systemd-analyze verify` when available. `systemd.rs` uses direct
+  `systemd-analyze`, `systemd-sysusers`, and `systemctl` argument vectors.
+- `account.rs` checks the dedicated web passwd entry is non-root, non-login,
+  and restricted-home; `ownership.rs` rejects links/special files and checks
+  release/state modes and optional root ownership; `process.rs` provides
+  MainPID, effective UID/GID, executable, cgroup, and 4800/4801/4802 listener
+  evidence.
 - `layout.rs`, `lock.rs`, `stage.rs`, and `stage_transaction.rs` provide
   canonical `/opt`, `/etc`, `/var/lib`, and `/run/lock` paths, a nonblocking
-  deployment lock, root-private transaction staging, and fsync-backed
-  `PendingState` handoff.
+  deployment lock, root-private transaction staging, role resolution, and
+  fsync-backed `PendingState` handoff.
 - `error.rs` keeps diagnostics typed and bounded. The publisher schema remains
   `deploy/release/release-manifest.schema.json`.
 
-Phase 02 never activates `/opt/dam-hopper/current`, changes active/rollback
-state, or starts systemd units. Phase 03 adds the web binary and API wiring but
-leaves release activation and concrete unit installation to later phases. The
-guarded format-2 runner remains separate.
+`server` renders `dam-hopper-api.service` as `root:root` on `0.0.0.0:4801`;
+`web` renders `dam-hopper-web.service` as the isolated `dam-hopper-web` account
+on `0.0.0.0:4802`; `both` stages both from one exact release. API `NoNewPrivileges`
+is intentionally false for interactive PTY `sudo` behavior. Web uses strict
+systemd sandboxing, no environment files or write paths, and read-only access
+only to its release root and public host config. Neither unit depends on the
+other.
+
+Phase 04 stages candidates but does not install fragments into
+`/etc/systemd/system`, enable/start services, switch `/opt/dam-hopper/current`,
+or perform health-gated activation. The guarded format-2 runner remains
+separate until migration/retirement phases.
 
 ### Dedicated web host (`server/src/web_host/`)
 
@@ -373,22 +396,31 @@ registry-dir/
 
 The Linux release manager uses a separate host layout:
 
-```
+```text
 /opt/dam-hopper/
-  ├── .staging/<transaction-id>/       # root-private in-flight transaction
-  ├── releases/<tag>/<role>/           # unpacked role view
+  ├── .staging/<transaction-id>/       # root-private in-flight transaction (0700)
+  ├── releases/<tag>/<role>/           # immutable unpacked role view
   └── current                           # active-view link (later phase)
 /etc/dam-hopper/
-  ├── host.toml                         # role + exact allowed web origins
+  ├── host.toml                         # recorded role + exact allowed origins
+  ├── host-config.json                  # active public web runtime config
+  ├── sysusers.d/dam-hopper-web.conf    # committed web identity input (web role)
   ├── server.env                        # machine-local API environment
-  └── web.env                           # machine-local web environment
+  └── web.env                           # reserved machine-local web environment
 /var/lib/dam-hopper/
+  ├── pending-units/                    # rendered API/web units + web sysusers
+  ├── pending-host-config.json          # candidate public web config
   ├── pending.json                      # staged candidate handoff
   ├── active.json                       # active metadata (later phase)
   └── rollback.json                     # rollback metadata (later phase)
+/etc/systemd/system/
+  ├── dam-hopper-api.service            # committed API unit (later activation)
+  └── dam-hopper-web.service            # committed web unit (later activation)
 /run/lock/dam-hopper/deploy.lock        # nonblocking deployment lock
 ```
 
+Phase 04 writes candidates under `pending-units` and the pending host config;
+it does not replace `/etc/systemd/system` fragments or switch `current`.
 Published release assets must not contain machine-local environment/config,
 tokens, credentials, or SQLite state. See [Linux Release Manager](./linux-release-manager.md)
 for ownership and transaction details.
@@ -526,6 +558,11 @@ dam-hopper/
   Manifest v1 contract suites.
 - **Linux release Phase 03**: `linux_release_web_host` 8/8; API-only/default
   and API-health focused tests 2/2; runtime/server-config Vitest 72/72.
+- **Linux release Phase 04**: focused `linux_release_unit_policy`,
+  `linux_release_ownership`, and `linux_release_staging` suites cover
+  allowlisted rendering, API-root/web-isolated policy, role-selected
+  candidates, staged web sysusers/public-config validation, ownership modes,
+  listener parsing, role conflicts, lock contention, and symlink rejection.
 - **Compile proofs**: vendored all-target Cargo check plus UI and web builds
   exited `0` (recorded 2026-09-03).
 - **Other server/frontend counts**: historical snapshots only; consult the
@@ -533,10 +570,13 @@ dam-hopper/
 
 ### Known Limitations (Pre-existing or phase-scoped)
 
-- Linux release activation, dedicated web/systemd unit installation, health-gated
-  cutover, rollback, recovery, and format-2 migration are later phases. Phase
-  03's web binary/router and runtime-origin contract are implemented and tested,
-  but no installer lifecycle claim is made.
+- Linux release activation, unit installation/enablement, health-gated cutover,
+  rollback, recovery, and format-2 migration are later phases. Phase 04 unit
+  rendering, sysusers input, ownership checks, and candidate syntax validation
+  are implemented, but no live activation or effective-sandbox claim is made.
+- The API candidate intentionally runs as `root` by owner decision; this broad
+  privilege is an accepted v1 risk. The web candidate remains separately
+  unprivileged and sandboxed.
 - The guarded format-2 systemd runner remains separate from Manifest v1 manager
   staging.
 - Platform-specific Windows filesystem behavior and Git worktree edge cases
@@ -578,20 +618,31 @@ dam-hopper/
 - The `dam-hopper` manager implements the Phase 02 grammar and privilege
   policy. Non-root `fetch` downloads a stable GitHub release with bounded
   HTTPS; root `install`/`role set` validates and stages a role view. `status`
-  and `version` are read-only; `start`, `rollback`, and `recover` are grammar
-  placeholders for later lifecycle phases.
+  and `version` are read-only; `start`, `rollback`, and `recover` remain
+  grammar placeholders for later lifecycle phases.
 - Archive inspection requires exact common/server/web inventory equality,
   normalized paths, regular files/directories, manifest modes, sizes, and
   SHA-256 digests. Links, special entries, and disallowed runtime/config files
   fail closed.
+- Phase 04 renders independent units from allowlisted release-root/version/
+  public-config/origin placeholders. The API candidate is `root:root` on
+  `0.0.0.0:4801` with explicit environment ordering and `NoNewPrivileges=false`;
+  the web candidate is `dam-hopper-web` on `0.0.0.0:4802` with strict sandboxing,
+  no environment files/write paths, and read-only release/config paths. Neither
+  unit depends on the other.
+- `dam-hopper-web` is declared through `sysusers.d` with `/nonexistent` home and
+  `/sbin/nologin`; the account verifier rejects missing, root, login-capable, or
+  unrestricted-home identities. Rendered unit/sysusers files use `0644`;
+  release directories/binaries use `0755` and other release files `0644`.
 - The deployment lock is `/run/lock/dam-hopper/deploy.lock`; transaction
   extraction is under `/opt/dam-hopper/.staging/<transaction-id>`, role views
-  under `/opt/dam-hopper/releases/<tag>/<role>`, and pending metadata at
-  `/var/lib/dam-hopper/pending.json`. Phase 02 never switches the active link
-  or starts systemd units.
+  under `/opt/dam-hopper/releases/<tag>/<role>`, rendered candidates under
+  `/var/lib/dam-hopper/pending-units`, and pending metadata at
+  `/var/lib/dam-hopper/pending.json`. Phase 04 does not replace
+  `/etc/systemd/system`, switch the active link, or start systemd units.
 - Published archives contain no machine-local `.env`, server config, token,
-  credentials, or SQLite state. API service identity is `root` by owner
-  decision for this MVP; web remains separately unprivileged.
+  credentials, or SQLite state. API root authority is an accepted v1 risk;
+  web remains separately unprivileged and isolated.
 
 ### Dedicated web host
 
@@ -615,7 +666,7 @@ dam-hopper/
 | [code-standards.md](./code-standards.md) | Naming conventions, patterns, best practices |
 | [configuration-guide.md](./configuration-guide.md) | Setup, environment variables, config files |
 | [linux-release-manifest.md](./linux-release-manifest.md) | Linux release manifest v1 contract |
-| [linux-release-manager.md](./linux-release-manager.md) | Phase 02 manager CLI, platform gate, acquisition, staging, and Phase 03 web role handoff |
+| [linux-release-manager.md](./linux-release-manager.md) | Phase 02 manager CLI, platform gate, acquisition, staging, Phase 03 web role handoff, and Phase 04 unit candidates |
 | [native-browser-debug-support.md](./native-browser-debug-support.md) | Native Browser Debug platform gate and security boundaries |
 | [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
 | [ws-protocol-guide.md](./ws-protocol-guide.md) | WebSocket message types, terminal protocol |
@@ -624,5 +675,11 @@ dam-hopper/
 ---
 
 **Last Updated**: September 3, 2026
-**Phase Status**: Phases 01–03 of the Linux Release Installer Architecture are complete and reviewed. Phase 03's dedicated web host, runtime-origin bootstrap, API-only default, and Docker explicit combined mode are delivered; role packaging, concrete units, activation, health-gated cutover, rollback, recovery, and runner migration remain later phases.
-**Generated by**: Source review grounded in `repomix-output.xml` (Repomix 1.18.0); metrics reflect the 1,507-file/3,120,504-token compaction and five security exclusions.
+**Phase Status**: Phases 01–04 of the Linux Release Installer Architecture
+are complete and reviewed. Phase 04 adds role-aware API/web unit rendering,
+web sysusers, ownership policy, and pending candidate validation; activation,
+health-gated cutover, rollback, recovery, and runner migration remain later
+phases.
+**Generated by**: Source review grounded in `repomix-output.xml` (Repomix
+1.18.0); metrics reflect the 1,523-file/3,148,406-token compaction and five
+security exclusions.

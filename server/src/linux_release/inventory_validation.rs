@@ -119,7 +119,7 @@ impl RequiredPathsTracker {
                 }
                 self.has_web = true;
             }
-            "systemd/dam-hopper-api.service" => {
+            "systemd/dam-hopper-api.service" | "systemd/dam-hopper-api.service.in" => {
                 if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Server) {
                     return Err(ReleaseError::InvalidRequiredPath {
                         path: "systemd/dam-hopper-api.service",
@@ -127,7 +127,7 @@ impl RequiredPathsTracker {
                 }
                 self.has_api_unit = true;
             }
-            "systemd/dam-hopper-web.service" => {
+            "systemd/dam-hopper-web.service" | "systemd/dam-hopper-web.service.in" => {
                 if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Web) {
                     return Err(ReleaseError::InvalidRequiredPath {
                         path: "systemd/dam-hopper-web.service",
