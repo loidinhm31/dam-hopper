@@ -8,17 +8,23 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Structure**:
 
-- Repomix snapshot (2026-09-03): 1,499 files and 3,107,553 tokens packed into
-  `repomix-output.xml`; three security-sensitive files were excluded by the
+- Repomix snapshot (2026-09-03): 1,507 files and 3,120,504 tokens packed into
+  `repomix-output.xml`; five security-sensitive files were excluded by the
   compaction security check.
 - Predominantly Rust (server) and TypeScript/React (web). The Linux release
-  manager is a second Rust binary in the server package.
+  package now includes the `dam-hopper` manager and `dam-hopper-web` binaries;
+  the web host is declared in the same Cargo package for lockstep versioning.
 
 ## Current Frontend Shared Logic
 
 - **Shared Runtime Logger**: `packages/shared/src/logger.ts` centralizes `configureLogger`, `getLoggerConfig`, `resolveLogLevel`, and `logger.debug/info/warn/error`, with recursive sensitive metadata redaction before the sink.
 - **Host-resource alerts**: the cached snapshot retains its legacy memory `alert` and adds bounded concurrent thermal/disk `currentAlerts`; resource and memory incidents share newest-first bounded history and the existing validated `host:alertChanged` channel. Explicit resource recovery removes only its incident, while an omitted additive field remains compatible with older servers.
 - **Host-resource storage preference**: `UiConfig.hostResourcePinnedMount` persists as TOML `host_resource_pinned_mount`; `null` clears it and non-null values are limited to 1–4096 UTF-8 bytes. The browser treats an absent mount as missing without fallback rebinding. It is presentation-only and independent of telemetry/alert classification.
+- **Runtime Origin Bootstrap**: `apps/web/src/main.tsx` fetches the reserved
+  `/__dam-hopper/runtime-config.json` before constructing transport. Valid
+  config reconciles one stable-ID managed profile; an existing active user
+  profile wins, and missing/invalid config leaves the client idle rather than
+  guessing the web origin or port.
 - **Web Bootstrap Logging**: `apps/web` resolves its bootstrap log level from Vite env, with dev defaulting to `debug` and production defaulting to `warn` when no override is set.
 - **High-Value Call Sites**: transport, auth, terminal, dashboard, error boundary, and filesystem flows now use the shared logger instead of direct `console` calls.
 - **File Decorations**: `packages/ui/src/lib/file-decoration.ts` is the shared registry for file icon, badge, display-language, and Monaco-language lookup.
@@ -63,6 +69,12 @@ This document provides a high-level overview of the current repository. Historic
   inventory/archive validation, role projection, deployment locking, and
   pending-candidate persistence. Activation and service lifecycle remain later
   phase responsibilities.
+- **Dedicated Web Host**: `server/src/bin/dam-hopper-web.rs` runs the
+  non-writing `web_host` router on port `4802`. It validates a non-symlink
+  release root and optional ≤4 KiB runtime config, serves only GET/HEAD, keeps
+  health/runtime routes reserved with `no-store`, streams regular files, applies
+  hashed/index/one-hour cache classes, and restricts SPA fallback to safe HTML
+  navigation. It has no `AppState`, API database, proxy, or write surface.
 
 ### Frontend (React + Vite)
 
@@ -92,9 +104,15 @@ Browser Host (apps/web/) / Native Host (apps/native/)
          ├── Page templates (Dashboard, Workspace, Git, Settings)
          ├── API client + transport abstractions
          └── Hooks, stores, styles, assets, tests
-         ↓
+         │
+         ├── release browser → dam-hopper-web :4802
+         │                    └── static assets + runtime origin metadata
+         └── API/WS → dam-hopper-server :4801 (systemd)
+                              :4800 only for direct/legacy/Docker modes
+                                      ↓
 Backend BFF/API (server/)
-  ├── Router (axum-based HTTP)
+  ├── API-only router by default
+  ├── Optional explicit --web-dir combined fallback (Docker)
   ├── Auth Middleware (JWT validation)
   ├── API Handlers
   └── WebSocket Handler
@@ -143,11 +161,12 @@ Infrastructure
 
 - Browser Debug native child WebView is Windows v1 supported only after the WebView2 gate; Linux implementation/package builds are runtime-unverified, macOS is deferred, and Android uses the iframe adapter.
 - Native Browser Debug stores profile-scoped data under app data, validates generation/nonce/request identity, mirrors app zoom, and reports raw rendered bounds. Native relay v1 exposes picker/navigation; console forwarding is disabled.
-- Docker serves the built SPA from `/opt/dam-hopper/web` on port 4800. systemd production is backend-only on `0.0.0.0:4801`; legacy nohup is loopback `127.0.0.1:4800` and must remain separate.
-- Build-time origins for the extension are controlled by `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS`; changing them requires rebuilding and redistributing the extension. `VITE_DAM_HOPPER_LOG_LEVEL` controls web bootstrap logging.
+- `dam-hopper-web` is the dedicated non-writing release SPA host on `0.0.0.0:4802`; it serves static assets plus reserved health/runtime-origin JSON only. The API server is API-only by default. Docker explicitly combines both through `--web-dir /opt/dam-hopper/web` on port `4800`; systemd production keeps backend-only `0.0.0.0:4801`, and legacy nohup remains loopback `127.0.0.1:4800`.
+- Web runtime origin is fetched at `/__dam-hopper/runtime-config.json` with `cache: "no-store"` and strict 4 KiB/schema/origin validation. Active user profiles outrank managed deployment profiles; a managed URL change clears only that profile's token.
+- Build-time origins for the extension are controlled by `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS`; changing them requires rebuilding and redistributing the extension. `VITE_DAM_HOPPER_LOG_LEVEL` controls web bootstrap logging, while `VITE_DAM_HOPPER_SERVER_URL` is forbidden for production builds.
 - Profile metadata and tokens are localStorage-scoped; editor persistence is metadata-only and Encrypt session material is memory-only. Transport rebind destroys the previous WS and advances a generation to reject stale responses.
 
-See [Native Browser Debug Support](./native-browser-debug-support.md), [Configuration Guide](./configuration-guide.md), and [Linux systemd](./linux-systemd.md).
+See [Native Browser Debug Support](./native-browser-debug-support.md), [Configuration Guide](./configuration-guide.md), [Linux systemd](./linux-systemd.md), and [API Reference](./api-reference.md).
 
 ### Phase 03: IntelliJ-Compatible Git Actions ✅ Complete
 
@@ -278,8 +297,8 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 
 ### Linux Release Manager (`server/src/linux_release/`)
 
-Phase 01's strict Manifest v1 contract and Phase 02's manager consumer share
-one focused module:
+Phase 01's strict Manifest v1 contract, Phase 02's manager consumer, and
+Phase 03's web service metadata share one focused release module:
 
 - `constants.rs`, `version.rs`, `manifest.rs`, `manifest_validation.rs`,
   `inventory.rs`, `inventory_path.rs`, and `inventory_validation.rs` enforce
@@ -303,21 +322,38 @@ one focused module:
   `deploy/release/release-manifest.schema.json`.
 
 Phase 02 never activates `/opt/dam-hopper/current`, changes active/rollback
-state, or starts systemd units. The guarded format-2 runner remains separate.
+state, or starts systemd units. Phase 03 adds the web binary and API wiring but
+leaves release activation and concrete unit installation to later phases. The
+guarded format-2 runner remains separate.
 
-## Configuration
+### Dedicated web host (`server/src/web_host/`)
+
+`web_host` is an API-state-free, non-writing Axum host used by the release web
+role. `router.rs` reserves health/runtime-config routes before static fallback;
+`safe_path.rs` rejects symlink components, traversal, encoded separators, and
+directory access; `cache_policy.rs` classifies hashed assets, index HTML,
+reserved metadata, and other files; `runtime_config.rs` validates the public
+schema and ≤4 KiB input. `server/src/bin/dam-hopper-web.rs` supplies the
+`0.0.0.0:4802` CLI and graceful SIGTERM/CTRL-C lifecycle.
 
 ### Environment Variables
 
 ```bash
-DAM_HOPPER_CONFIG        # Explicit project registry file
-DAM_HOPPER_WORKSPACE     # Legacy workspace directory override / discovery root
-DAM_HOPPER_PORT          # Server port (default: 4800)
-DAM_HOPPER_HOST          # Bind address (default: 0.0.0.0)
-DAM_HOPPER_NO_AUTH       # Dev mode, bypasses auth
-MONGODB_URI              # MongoDB connection (optional)
-MONGODB_DATABASE         # MongoDB database name (optional)
-RUST_ENV                 # Runtime environment (blocks if "production")
+DAM_HOPPER_CONFIG              # API project registry file
+DAM_HOPPER_WORKSPACE           # Legacy workspace directory override
+DAM_HOPPER_PORT                # API listen port (default: 4800; systemd: 4801)
+DAM_HOPPER_HOST                # API bind address (default: 0.0.0.0)
+DAM_HOPPER_CORS_ORIGINS        # Exact credentialed browser origins
+DAM_HOPPER_NO_AUTH             # Dev mode API auth bypass
+DAM_HOPPER_WEB_DIR             # Explicit API combined-mode static root (Docker)
+DAM_HOPPER_WEB_ROOT            # Dedicated web host static root
+DAM_HOPPER_WEB_HOST            # Dedicated web bind address (default: 0.0.0.0)
+DAM_HOPPER_WEB_PORT            # Dedicated web port (default: 4802)
+DAM_HOPPER_WEB_RUNTIME_CONFIG  # Optional runtime-config.json path
+DAM_HOPPER_WEB_RELEASE_VERSION # Optional health release-version override
+MONGODB_URI                    # MongoDB connection (optional)
+MONGODB_DATABASE               # MongoDB database name (optional)
+RUST_ENV                       # Runtime environment (blocks no-auth in production)
 ```
 
 ### Configuration Files
@@ -382,6 +418,27 @@ cargo test --test linux_release_manifest --test linux_release_manifest_errors
 cargo test linux_release
 ```
 
+### Dedicated web host
+
+```bash
+# Serve a selected immutable web release view
+cargo run --bin dam-hopper-web -- \
+  --root /path/to/immutable/web-dist \
+  --host 0.0.0.0 --port 4802 \
+  --runtime-config /etc/dam-hopper/runtime-config.json
+```
+
+`--root` is required and must be a real directory, not a symlink. Omit
+`--runtime-config` for a static-only host; the reserved endpoint then returns
+404. Runtime JSON is public, bounded to 4 KiB, and contains no credentials.
+
+The API server does not serve static files unless an explicit `--web-dir` is
+passed. Docker is the supported combined-mode example:
+
+```bash
+dam-hopper-server --port 4800 --web-dir /opt/dam-hopper/web
+```
+
 ```bash
 # Inspect the manager grammar without mutating the host
 cargo run --bin dam-hopper -- version
@@ -430,20 +487,22 @@ pnpm check        # Build web + native, lint, and run Rust tests
 
 ```
 dam-hopper/
-├── server/                         # Rust backend
+├── server/                         # Rust backend and release binaries
 │   ├── src/
-│   │   ├── main.rs                 # Server bootstrap
+│   │   ├── main.rs                 # API bootstrap (API-only by default)
 │   │   ├── bin/dam-hopper.rs       # Linux release manager binary
+│   │   ├── bin/dam-hopper-web.rs   # Dedicated static web host binary
+│   │   ├── web_host/               # Web routes, paths, cache, runtime config
 │   │   ├── api/                    # Axum REST/WebSocket handlers
 │   │   ├── linux_release/          # Manifest, acquisition, and staging
 │   │   ├── pty/                    # Terminal management
 │   │   ├── fs/                     # Filesystem operations/sandbox
-│   │   ├── agent_store/             # Agent-store service
+│   │   ├── agent_store/            # Agent-store service
 │   │   └── lib.rs                  # Library exports
-│   ├── tests/                      # Integration tests
-│   │   ├── linux_release_*.rs      # 7 focused release suites
+│   ├── tests/
+│   │   ├── linux_release_*.rs      # Focused release suites
 │   │   └── common/release_fixtures.rs
-│   └── Cargo.toml                  # Server and manager metadata
+│   └── Cargo.toml                  # Server and binary metadata
 ├── deploy/release/
 │   └── release-manifest.schema.json # Publisher schema v1
 ├── apps/
@@ -465,13 +524,19 @@ dam-hopper/
 - **Linux release Phase 02**: 45/45 focused tests across seven suites:
   CLI/privilege, platform/origins, acquisition, archive, staging, and the two
   Manifest v1 contract suites.
+- **Linux release Phase 03**: `linux_release_web_host` 8/8; API-only/default
+  and API-health focused tests 2/2; runtime/server-config Vitest 72/72.
+- **Compile proofs**: vendored all-target Cargo check plus UI and web builds
+  exited `0` (recorded 2026-09-03).
 - **Other server/frontend counts**: historical snapshots only; consult the
   dated roadmap/changelog entries rather than treating them as a release gate.
 
 ### Known Limitations (Pre-existing or phase-scoped)
 
-- Linux release activation, systemd unit installation, health-gated cutover,
-  rollback, recovery, and format-2 migration are later phases.
+- Linux release activation, dedicated web/systemd unit installation, health-gated
+  cutover, rollback, recovery, and format-2 migration are later phases. Phase
+  03's web binary/router and runtime-origin contract are implemented and tested,
+  but no installer lifecycle claim is made.
 - The guarded format-2 systemd runner remains separate from Manifest v1 manager
   staging.
 - Platform-specific Windows filesystem behavior and Git worktree edge cases
@@ -528,6 +593,19 @@ dam-hopper/
   credentials, or SQLite state. API service identity is `root` by owner
   decision for this MVP; web remains separately unprivileged.
 
+### Dedicated web host
+
+- `dam-hopper-web` receives only a selected static root and optional runtime
+  config; root/config symlinks are rejected and runtime input is capped at 4 KiB.
+- Reserved health/runtime-config paths cannot fall through to distribution files
+  or SPA HTML. Both return `Cache-Control: no-store`.
+- File resolution rejects traversal, NUL, encoded separators, symlinks, and
+  directories. Other methods return `405` with `Allow: GET, HEAD`; no writes,
+  proxy, API, or runtime execution are exposed.
+- Runtime `apiUrl` is an exact HTTP(S) origin with no credentials/path/query/
+  fragment. The browser never derives it from `Host`; managed profile URL changes
+  clear only the managed profile token.
+
 ## Documentation Library
 
 | Document | Purpose |
@@ -537,7 +615,7 @@ dam-hopper/
 | [code-standards.md](./code-standards.md) | Naming conventions, patterns, best practices |
 | [configuration-guide.md](./configuration-guide.md) | Setup, environment variables, config files |
 | [linux-release-manifest.md](./linux-release-manifest.md) | Linux release manifest v1 contract |
-| [linux-release-manager.md](./linux-release-manager.md) | Phase 02 CLI, platform gate, acquisition, and safe staging |
+| [linux-release-manager.md](./linux-release-manager.md) | Phase 02 manager CLI, platform gate, acquisition, staging, and Phase 03 web role handoff |
 | [native-browser-debug-support.md](./native-browser-debug-support.md) | Native Browser Debug platform gate and security boundaries |
 | [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
 | [ws-protocol-guide.md](./ws-protocol-guide.md) | WebSocket message types, terminal protocol |
@@ -546,5 +624,5 @@ dam-hopper/
 ---
 
 **Last Updated**: September 3, 2026
-**Phase Status**: Phases 01–02 of the Linux Release Installer Architecture are complete and reviewed. Phase 02 manager acquisition and role staging are delivered; activation, health-gated cutover, rollback, recovery, and runner migration remain later phases.
-**Generated by**: Source review grounded in `repomix-output.xml` (Repomix 1.18.0); metrics reflect the compaction output and security exclusions.
+**Phase Status**: Phases 01–03 of the Linux Release Installer Architecture are complete and reviewed. Phase 03's dedicated web host, runtime-origin bootstrap, API-only default, and Docker explicit combined mode are delivered; role packaging, concrete units, activation, health-gated cutover, rollback, recovery, and runner migration remain later phases.
+**Generated by**: Source review grounded in `repomix-output.xml` (Repomix 1.18.0); metrics reflect the 1,507-file/3,120,504-token compaction and five security exclusions.

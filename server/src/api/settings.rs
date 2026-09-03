@@ -86,7 +86,9 @@ pub async fn import_settings(
 
 pub async fn health(_state: State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!({
+        "schemaVersion": 1,
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
+        "role": "api",
     }))
 }

@@ -26,6 +26,7 @@ import {
   removeNativeScopeId,
   retireNativeScopeId,
   subscribeToProfileChanges,
+  reconcileManagedProfile,
 } from "./server-config.js";
 
 function mockStorage(): Storage {
@@ -452,5 +453,90 @@ describe("server profile migration", () => {
 
     expect(getActiveProfile()?.id).toBe(profileB.id);
     expect(getAuthToken(profileA.id)).toBeNull();
+  });
+});
+
+describe("managed runtime profile reconciliation", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", mockStorage());
+    vi.stubGlobal("sessionStorage", mockStorage());
+    vi.stubGlobal("location", {
+      protocol: "http:",
+      host: "127.0.0.1:4802",
+      hostname: "127.0.0.1",
+      origin: "http://127.0.0.1:4802",
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("creates a managed profile and sets it active on first load", () => {
+    const profile = reconcileManagedProfile({
+      profileId: "c7325e68-07e1-4e44-8d96-b333a4658cf9",
+      apiUrl: "http://127.0.0.1:4801",
+    });
+
+    expect(profile).not.toBeNull();
+    expect(getActiveProfile()?.id).toBe("c7325e68-07e1-4e44-8d96-b333a4658cf9");
+    expect(getActiveProfile()?.url).toBe("http://127.0.0.1:4801");
+  });
+
+  it("preserves existing active user profile when reconciling managed profile", () => {
+    const userProfile = {
+      id: "user-selected-profile",
+      name: "Custom User Server",
+      url: "http://custom-server:4800",
+      authType: "basic" as const,
+      createdAt: 100,
+    };
+    saveProfiles([userProfile]);
+    setActiveProfile(userProfile.id);
+
+    const managed = reconcileManagedProfile({
+      profileId: "c7325e68-07e1-4e44-8d96-b333a4658cf9",
+      apiUrl: "http://127.0.0.1:4801",
+    });
+
+    expect(managed).not.toBeNull();
+    expect(getActiveProfile()?.id).toBe("user-selected-profile");
+    expect(getProfiles().some((p) => p.id === "c7325e68-07e1-4e44-8d96-b333a4658cf9")).toBe(true);
+  });
+
+  it("clears token when managed profile URL changes", () => {
+    const managedId = "c7325e68-07e1-4e44-8d96-b333a4658cf9";
+    reconcileManagedProfile({
+      profileId: managedId,
+      apiUrl: "http://127.0.0.1:4801",
+    });
+    setAuthToken("initial-token", managedId);
+    expect(getAuthToken(managedId)).toBe("initial-token");
+
+    // Reconcile with new URL
+    reconcileManagedProfile({
+      profileId: managedId,
+      apiUrl: "http://127.0.0.1:4809",
+    });
+
+    expect(getActiveProfile()?.url).toBe("http://127.0.0.1:4809");
+    expect(getAuthToken(managedId)).toBeNull();
+  });
+
+  it("preserves token when managed profile URL is unchanged", () => {
+    const managedId = "c7325e68-07e1-4e44-8d96-b333a4658cf9";
+    reconcileManagedProfile({
+      profileId: managedId,
+      apiUrl: "http://127.0.0.1:4801",
+    });
+    setAuthToken("stable-token", managedId);
+
+    // Reconcile with same URL
+    reconcileManagedProfile({
+      profileId: managedId,
+      apiUrl: "http://127.0.0.1:4801/",
+    });
+
+    expect(getAuthToken(managedId)).toBe("stable-token");
   });
 });

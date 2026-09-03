@@ -1,6 +1,10 @@
 # API Reference
 
-Base URL depends on deployment: Docker/direct legacy defaults to `http://localhost:4800`; systemd production is backend-only on `http://localhost:4801` with the UI hosted separately.
+The API base URL depends on deployment: direct/legacy defaults to
+`http://localhost:4800`; Docker uses the same port with explicit combined
+`--web-dir /opt/dam-hopper/web`; systemd production is backend-only at
+`http://localhost:4801`; and the dedicated release web host is
+`http://localhost:4802` with API requests sent to the configured runtime origin.
 
 ## Authentication
 
@@ -23,6 +27,7 @@ is unsafe on public networks and is rejected when MongoDB is configured or the
 runtime environment is production. Public health/auth flow behavior and WS
 origin/token policy still apply; do not infer response fields not shown by the
 handler.
+
 
 ### Auth Endpoints
 
@@ -78,6 +83,42 @@ Response (--no-auth mode):
 Clear authentication session.
 
 Response: `{ "ok": true }`
+
+## Dedicated Web Host (Phase 03)
+
+The `dam-hopper-web` binary is a separate, non-writing static host. Its default
+bind is `0.0.0.0:4802`; `--root PATH` is required, and optional
+`--runtime-config PATH` supplies the public API origin metadata. It accepts only
+`GET` and `HEAD`; other methods return `405` with `Allow: GET, HEAD`. It never
+proxies API requests, executes runtime JavaScript, lists directories, or exposes
+write/admin routes.
+
+### Reserved web routes
+
+| Route | Success payload | Headers/behavior |
+| --- | --- | --- |
+| `GET`/`HEAD /__dam-hopper/health` | `{ "schemaVersion": 1, "status": "ok", "version": "X.Y.Z", "role": "web" }` | `200`, `application/json`, `Cache-Control: no-store`; `HEAD` body empty |
+| `GET`/`HEAD /__dam-hopper/runtime-config.json` | `{ "schemaVersion": 1, "releaseVersion": "X.Y.Z", "profileId": "UUID-v4", "apiUrl": "https://api.example" }` | `200`, `application/json`, `Cache-Control: no-store`; missing config is `404` with `no-store` |
+
+Reserved paths never fall through to files or `index.html`. Runtime config is
+validated at host startup and bounded to 4 KiB; `apiUrl` must be an exact
+HTTP(S) origin without credentials, path, query, or fragment.
+
+### Static response policy
+
+- Existing regular files stream from the selected root with MIME detection.
+- `/` and `index.html` return `Cache-Control: no-cache`.
+- Vite/content-hashed assets return
+  `public,max-age=31536000,immutable`.
+- Other assets return `public,max-age=3600`.
+- SPA fallback returns `index.html` only for extensionless browser navigation
+  whose `Accept` permits HTML (`text/html`, `*/*`, or absent). Missing
+  asset-like paths, traversal/encoded separators, symlinks, directories, and
+  reserved prefixes return `404`.
+
+The API server's default router is API-only and returns API `404` for browser
+paths. Static serving exists only when `dam-hopper-server` receives explicit
+`--web-dir PATH` (Docker uses `--web-dir /opt/dam-hopper/web`).
 
 ## Frontend Diagnostics Snapshot (Phase 01)
 
@@ -1493,6 +1534,22 @@ All functions in `packages/ui/src/api/server-config.ts`.
   - restores a valid active profile when the stored selection is missing
   - migrates the legacy URL, username, and token only when the legacy URL matches the destination profile
 
+
+### Runtime-origin bootstrap (Phase 03)
+
+`apps/web/src/main.tsx` runs `migrateToProfiles()`, then calls
+`fetchRuntimeConfig()` before creating a transport. The fetch uses the relative
+`/__dam-hopper/runtime-config.json` endpoint, `cache: "no-store"`, a 2-second
+timeout, and a 4 KiB response limit; 404, malformed JSON, invalid schema,
+invalid UUID, invalid release version, or invalid API origin all fail closed.
+
+When valid config is available, `reconcileManagedProfile({ profileId, apiUrl })`
+creates or updates one stable-ID `"Deployed Server"` profile. An existing active
+user profile always wins. If the managed profile's normalized API URL changes,
+only that profile's token is cleared before the update. With no active profile
+and no valid runtime config, the browser uses `IdleTransport` and the existing
+profile/setup guard; it never guesses an API URL from the web `Host` or `:4802`.
+
 ### Storage Breakdown
 
 | Key                           | Storage        | Scope             | Persistence            |
@@ -1862,15 +1919,17 @@ Response: `{ "ok": true }`
 ### Settings & Health
 
 **GET /api/health** (public, no auth required)
-Server health + feature flags.
+Returns the API process health payload. It does not prove that a separate
+`dam-hopper-web` process or its static assets are available.
 
 Response:
 
 ```json
 {
+  "schemaVersion": 1,
   "status": "ok",
-  "version": "0.2.0",
-  "features": {}
+  "version": "0.1.0",
+  "role": "api"
 }
 ```
 

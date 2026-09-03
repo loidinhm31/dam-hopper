@@ -53,6 +53,12 @@ server/src/
 │   ├── lock.rs             # Nonblocking deployment lock
 │   ├── stage*.rs           # Transaction and pending handoff
 │   └── error.rs            # Typed bounded diagnostics
+├── web_host/         # Dedicated static web host, runtime origin, and health
+│   ├── mod.rs
+│   ├── router.rs
+│   ├── safe_path.rs
+│   ├── cache_policy.rs
+│   └── runtime_config.rs
 └── ...
 ```
 
@@ -121,6 +127,35 @@ The JSON Schema at `deploy/release/release-manifest.schema.json` covers
 structural constraints. Rust validation remains authoritative for cross-field
 equality and required-path rules. Any schema change requires matching Rust
 types, constants, validation, tests, and [the release-manifest guide](./linux-release-manifest.md).
+
+
+### Dedicated web host and runtime-origin rules (Phase 03)
+
+Keep `server/src/web_host/` independent from API `AppState`. `mod.rs` owns
+validated root setup and bind configuration; `router.rs` registers reserved
+routes before the static fallback; `safe_path.rs` owns path and SPA checks;
+`cache_policy.rs` owns cache classes; and `runtime_config.rs` owns strict
+runtime/health payload validation. Keep `server/src/bin/dam-hopper-web.rs` a
+thin CLI that supplies root, host, port, and optional runtime-config paths.
+
+- The web host serves only GET and HEAD. A reserved
+  `/__dam-hopper/` request never falls through to user files; static files are
+  streamed with MIME detection and HEAD responses have no body.
+- Reject NUL, backslash, encoded separators/traversal, literal `..`, symlink
+  components, and directories before opening a web path. SPA fallback is only
+  for a safe extensionless path with an HTML-compatible `Accept` header.
+- Keep health/runtime-config responses `no-store`; do not derive API origins
+  from `Host`. Runtime config stays <=4 KiB and uses strict schema, SemVer,
+  UUID v4, and exact HTTP(S)-origin validation.
+- Keep cache policy explicit: no-cache for root/index, immutable one-year
+  caching for Vite content-hashed assets, and bounded public caching for other
+  assets.
+- API router constructors pass no web directory by default. Combined serving
+  is an explicit `--web-dir` mode (used by Docker), not an implicit fallback.
+- Frontend startup fetches the relative runtime-config endpoint before
+  transport creation, preserves an active user profile, and clears a managed
+  profile token when its API URL changes.
+
 
 
 ### Async Patterns
@@ -878,7 +913,9 @@ Types: feat, fix, refactor, test, docs, perf, ci, chore.
 **Web:**
 
 - Vite output: `apps/web/dist/`
-- Served by Rust binary via `tower-http::ServeDir`
+- Dedicated release web assets are served by `server/target/release/dam-hopper-web`
+  from an immutable root; API static serving is enabled only with explicit
+  `--web-dir` (the Docker image uses that combined mode).
 
 ## Dependency Policy
 
@@ -928,6 +965,13 @@ Routes registered conditionally at router construction time.
 - [ ] Release inventory carries lowercase digests and role/mode metadata only; manifest diagnostics never echo credentials or arbitrary content
 - [ ] Release acquisition runs as non-root; use HTTPS, bounded redirects/deadlines/response sizes, and mandatory archive SHA-256 checks
 - [ ] Root staging holds `DeploymentLock`, opens bundle files with no-follow semantics, extracts only exact manifest role entries, and writes pending state only after final rename
+- Dedicated web health/runtime-config routes are public but return only bounded
+  version/role/origin metadata with `Cache-Control: no-store`; do not expose
+  tokens or filesystem paths.
+- Web roots and descendants reject symlinks, traversal encodings, special
+  files, and directories where a regular file is required.
+- Runtime-origin bootstrap accepts only the strict HTTP(S) origin contract and
+  fails closed; never infer an API URL from browser `Host`, port, or referrer.
 
 ## Telemetry Privacy and Fault Boundaries
 

@@ -59,4 +59,4 @@ COPY --from=web-builder /build/apps/web/dist /opt/dam-hopper/web
 EXPOSE 4800
 
 ENTRYPOINT ["dam-hopper-server"]
-CMD ["--port", "4800"]
+CMD ["--port", "4800", "--web-dir", "/opt/dam-hopper/web"]

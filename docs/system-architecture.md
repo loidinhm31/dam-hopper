@@ -15,7 +15,7 @@
 └──────────────────────┬──────────────────────────────────────┘
                        │ HTTP/WebSocket
 ┌──────────────────────▼──────────────────────────────────────┐
-│  dam-hopper-server (Rust/Axum; 4801 systemd; 4800 legacy)   │
+│  dam-hopper-server (API :4801 systemd; :4800 direct/legacy)   │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─ AppState (shared across all handlers)                  │
 │  │  ├─ workspace_dir: Arc<RwLock<PathBuf>>                │
@@ -54,13 +54,24 @@
 │     ├─ CommandRegistry (BM25 search)                      │
 │     └─ Broadcast channels (PTY output, git progress)      │
 └─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  dam-hopper-web (Rust/Axum; dedicated static host :4802)    │
+├─────────────────────────────────────────────────────────────┤
+│  immutable web root · runtime-config/health · GET/HEAD only  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-The overview names both launch modes for context. The systemd deployment uses
-`0.0.0.0:4801` for Tailscale access; the host firewall and Tailscale ACLs must
-restrict that wildcard listener. The existing `4800` nohup service is a legacy
-launch outside this deployment and is not touched by its installer, validation,
-or rollback.
+The overview names both launch modes and the two server processes. The systemd
+deployment uses `0.0.0.0:4801` for the API; the host firewall and Tailscale ACLs
+must restrict that wildcard listener. The dedicated `dam-hopper-web` process
+serves the immutable frontend root and runtime metadata on `:4802`.
+
+`dam-hopper-server` is API-only by default. Docker opts into same-process
+combined serving with an explicit `--web-dir`; direct and systemd API launches
+do not silently serve frontend assets. The existing `4800` nohup service is a
+legacy launch outside this deployment and is not touched by its installer,
+validation, or rollback.
 
 ### Host resource monitoring and remediation (planned)
 
@@ -151,6 +162,32 @@ tests. The publisher schema remains at
 `deploy/release/release-manifest.schema.json`; Rust cross-field validation is
 authoritative. See [Linux Release Manager](./linux-release-manager.md) for the
 CLI grammar, paths, and transaction flow.
+
+### web_host/ (Phase 03: dedicated static host)
+
+`server/src/web_host/` is a separate Axum application for immutable release
+frontend assets. `server/src/bin/dam-hopper-web.rs` is a thin launcher that
+requires a validated `--root` (or `DAM_HOPPER_WEB_ROOT`), defaults to
+`0.0.0.0:4802`, and does not construct API `AppState` or write API state.
+
+- `mod.rs` validates the root and optional runtime-config path, then builds the
+  host state and listener.
+- `router.rs` reserves `GET /__dam-hopper/health` and
+  `GET /__dam-hopper/runtime-config.json` before the safe static fallback.
+  Static requests are GET/HEAD only; reserved paths never become asset paths.
+- `safe_path.rs` rejects traversal, encoded separators, symlink components,
+  directories, and unsafe SPA fallback candidates.
+- `cache_policy.rs` gives no-store to runtime metadata, no-cache to root/index,
+  immutable one-year caching to Vite content-hashed assets, and one-hour public
+  caching to other assets.
+- `runtime_config.rs` validates the bounded 4 KiB schema, release SemVer, UUID
+  v4 profile ID, and exact HTTP(S) API origin. Health payloads identify the
+  `web` role without exposing filesystem details.
+
+The browser fetches runtime config from the relative web-host endpoint before
+creating a transport. It keeps an active user profile ahead of the managed
+deployed-server profile, clears a managed token when its URL changes, and fails
+closed to an idle transport when config is missing or invalid.
 
 ### config/
 
@@ -2161,6 +2198,9 @@ Server bootstrap:
 - `load_or_create_server_setup()` — OPAQUE server keypair (Phase Stealth-01)
 - `AppState` construction
 - Router registration (ide_explorer routes conditional)
+- Optional `--web-dir` enables same-process static serving for an explicitly
+  selected web root; without it, the API router is API-only. The independent
+  `dam-hopper-web` binary owns the dedicated release web-host path.
 - Port binding + graceful shutdown
 
 ## SYSTEMD SERVICE: guarded Linux workflow and bounded host acceptance
@@ -2203,6 +2243,8 @@ prove Tailscale reachability or firewall/ACL isolation for the current unit.
   `/home/loidinh`. The current repository asset and administrator handoff are
   in `deploy/systemd/dam-hopper.service` and `docs/linux-systemd.md`; the
   operator workflow builds and installs only the server binary and unit.
+- Phase 03 also delivers `dam-hopper-web` as a separate unprivileged web
+  process on `0.0.0.0:4802`; the current systemd unit remains backend-only.
 - The service bind is `0.0.0.0:4801` for Tailscale access. The wildcard bind
   must be restricted by the host firewall and Tailscale ACLs. Authentication stays enabled:
   the unit sets `RUST_ENV=production`, contains neither `--no-auth` nor
@@ -2262,9 +2304,10 @@ prove Tailscale reachability or firewall/ACL isolation for the current unit.
   `format`, `nonce`, `binary_sha256`, and `unit_sha256`; browser assets and web
   inventory are deliberately absent. Reset/rollback may still recognize the
   older format-1 web-bearing marker solely to clean up a legacy installation.
-- The systemd package does not contain a browser build. Separate browser hosts
-  must use an exact backend CORS origin and connect to the authenticated API and
-  WebSocket endpoints on `4801`.
+- The systemd package does not contain a browser build and its unit remains
+  backend-only. The separate `dam-hopper-web` release host serves the browser
+  root on `4802`; it must use an exact backend CORS origin and connect to the
+  authenticated API and WebSocket endpoints on `4801`.
 - Rollback stops/disables the unit and reloads systemd. Restoring the prior launch
   method is optional and remains a separate administrator decision after confirming
   a single process owns the port and live SQLite files.
@@ -2994,5 +3037,6 @@ Refactored `IdeShell.tsx` into a flexible, extensible "Tool Window" system.
 See the maintained platform gate and rollback procedure in
 [Native Browser Debug Support](./native-browser-debug-support.md). Deployment
 ownership is intentionally separate: Docker serves `/opt/dam-hopper/web` with
-the server on 4800, systemd runs backend-only on 4801, and legacy nohup is
-loopback-only on 4800.
+the server on 4800 only when it passes explicit `--web-dir`; the dedicated
+`dam-hopper-web` serves an immutable root on 4802; systemd runs backend-only on
+4801; and legacy nohup remains loopback-only on 4800.

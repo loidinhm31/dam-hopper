@@ -29,12 +29,16 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Deployment
 
 - **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
-- **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
-- **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
-- **[Linux Release Manifest v1](./linux-release-manifest.md)** — Immutable Fedora 44 archive metadata, inventory, and role projections
+- **[Linux systemd](./linux-systemd.md)** — backend-only production API on port 4801
+- **[Linux nohup](./linux-nohup.md)** — legacy/recovery server on loopback port 4800
+- **[Linux Release Manifest v1](./linux-release-manifest.md)** — immutable Fedora 44 archive metadata, inventory, and role projections
 - **[Linux Release Manager](./linux-release-manager.md)** — Rust manager commands, role selection, and pending-candidate staging
 
-- Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
+The dedicated `dam-hopper-web` host serves release SPA assets on port 4802.
+It is separate from the API process and exposes only static GET/HEAD plus the
+reserved health/runtime-config routes. The API is API-only by default; Docker
+explicitly opts into combined serving with `--web-dir /opt/dam-hopper/web` on
+port 4800.
 
 Historical implementation plans are not indexed here; verify that a plan path
 exists before linking it from a new document.
@@ -102,13 +106,30 @@ exists before linking it from a new document.
 - Health checks for broken symlinks
 - See: [System Architecture](./system-architecture.md#module-breakdown)
 
+**Dedicated Web Host (Phase 03)** — Release deployments can run `dam-hopper-web`
+as a non-writing static host on `4802`.
+
+- Health: `GET`/`HEAD /__dam-hopper/health` returns `schemaVersion`, `status`,
+  release `version`, and `role: "web"` with `Cache-Control: no-store`.
+- Runtime origin: `GET`/`HEAD /__dam-hopper/runtime-config.json` returns a
+  bounded `{schemaVersion, releaseVersion, profileId, apiUrl}` document, also
+  `no-store`; a missing document is a normal 404 for development/Pages.
+- Static policy: only GET/HEAD, safe regular files, MIME detection, SPA fallback
+  for extensionless HTML navigation, one-year immutable hashed assets,
+  `index.html` `no-cache`, and other assets one-hour cache.
+- The web host never proxies or serves API paths. Standard API startup is API-only;
+  Docker passes `--web-dir /opt/dam-hopper/web` explicitly for its combined mode.
+
 ## Common Tasks
 
 1. Find the component in `packages/ui/src/components/` (the browser host is `apps/web`)
 
 ```bash
 cd server
+# API-only default
 cargo run -- --config /path/to/dam-hopper.toml --port 4800
+# Dedicated release web host
+cargo run --bin dam-hopper-web -- --root /path/to/web-dist --port 4802
 ```
 
 See token at `~/.config/dam-hopper/server-token`.
@@ -132,6 +153,17 @@ Terminal lifecycle follows six main states:
 See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle) for detailed flow.
 
 ## Recent Changes
+
+**Linux Release Installer Phase 03 (Complete ✓):**
+
+- ✓ Added `dam-hopper-web`, a read-only static host on `0.0.0.0:4802`.
+- ✓ Reserved no-store health and runtime-origin JSON routes.
+- ✓ Added safe path resolution, HTML-only SPA fallback, streamed files, and
+  hashed/unhashed/index cache policies.
+- ✓ Made API startup API-only by default; Docker explicitly uses
+  `--web-dir /opt/dam-hopper/web` for combined port-4800 serving.
+- ✓ Web bootstrap validates runtime origin and reconciles one managed profile
+  without overriding a saved user profile or retaining a stale token.
 
 **Phase 06 (Complete ✓):**
 
@@ -206,17 +238,20 @@ cd server && cargo test
 
 # Web build (thin browser host)
 pnpm --filter @dam-hopper/web build
-```
-
 ## Architecture at a Glance
 
 ```
-Browser (React SPA)
-    ↓ fetch(/api/*) + WebSocket(/ws)
-Rust Server (Axum)
+Browser (React SPA, served separately in release mode)
+    ├─ fetch(/api/*) + WebSocket(/ws) → API server :4801
+    └─ GET /__dam-hopper/runtime-config.json → web host :4802
+Rust API Server (Axum; API-only by default)
     ├─ AppState (config, PTY manager, FS subsystem, auth)
-    ├─ Router (routes REST/WebSocket)
+    ├─ Router (REST/WebSocket; explicit --web-dir only for combined mode)
     └─ Services (PtySessionManager, FsSubsystem, AgentStoreService)
+Dedicated Web Host (dam-hopper-web; static, non-writing)
+    ├─ Reserved health/runtime routes
+    ├─ Safe file + HTML fallback routing
+    └─ Cache policy by response kind
 ```
 
 Key patterns:
@@ -225,6 +260,7 @@ Key patterns:
 - Never hold locks across `.await`
 - Feature gating at route registration time
 - Error types per module (thiserror)
+- Release web host is static-only; runtime API origin comes from validated config
 
 See [System Architecture](./system-architecture.md) for detailed breakdown.
 
@@ -235,21 +271,28 @@ apps/
 ├── web/                          # Thin Vite browser host
 packages/
 ├── ui/                           # Shared React UI package
+server/
+├── src/bin/dam-hopper-web.rs     # Dedicated release static host
+├── src/web_host/                 # Safe routes, paths, cache, runtime config
 docs/
 ├── README.md                     # This file
 ├── project-overview-pdr.md       # Product requirements & roadmap
 ├── system-architecture.md        # Module breakdown & data flow
 ├── api-reference.md              # REST/WebSocket endpoints
-├── configuration-guide.md        # dam-hopper.toml & setup
+├── configuration-guide.md        # dam-hopper.toml & deployment modes
 ├── code-standards.md             # Patterns, testing, security
 ├── codebase-summary.md           # Quick module reference
 ├── linux-release-manifest.md     # Linux release archive contract v1
-└── linux-release-manager.md      # Phase 02 manager CLI, acquisition, and staging
+└── linux-release-manager.md      # Release manager CLI and staging
 ```
 
 Each file is self-contained but linked for cross-reference.
 
-Phase 01 of the Tauri shared-UI split is complete: the browser entrypoint now lives in `apps/web`, and the reusable UI surface lives in `packages/ui`.
+
+Phase 01 of the Tauri shared-UI split is complete: the browser entrypoint now lives in
+`apps/web`, and the reusable UI surface lives in `packages/ui`. Linux Release
+Installer Phases 01–03 are complete; Phase 03's dedicated web host is ready for
+later role packaging and systemd activation.
 
 ## Maintenance
 

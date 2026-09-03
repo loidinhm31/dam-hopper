@@ -18,6 +18,25 @@ On first app load, if you had a previously configured server URL, it's automatic
 
 You can then edit this profile or create new ones.
 
+## Deployed web runtime bootstrap (Phase 03)
+
+When the UI is served by `dam-hopper-web`, startup fetches the relative
+`/__dam-hopper/runtime-config.json` endpoint before creating a transport. The
+response is bounded at 4 KiB and must contain schema version `1`, a stable
+`profileId` (UUID v4), a release version, and an exact HTTP(S) `apiUrl`.
+
+The browser then:
+
+1. Migrates any legacy URL into the normal user profile store.
+2. Reconciles the runtime profile as the managed **Deployed Server** profile.
+3. Preserves an existing active user profile instead of silently switching it.
+4. Clears the managed profile's token when its API URL changes.
+5. Uses an idle transport when runtime config is missing or invalid.
+
+Missing runtime config is expected for an API-only or externally hosted UI; it
+must not cause the browser to guess an API origin from `Host`, `:4802`, or a
+page URL. Configure a profile manually for those deployments.
+
 ### Option B: Manual Creation
 
 1. **Open the Profile Manager**
