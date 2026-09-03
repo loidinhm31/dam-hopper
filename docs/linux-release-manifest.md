@@ -1,10 +1,10 @@
 # Linux Release Manifest v1
 
-Status: Phases 01–03 implementation complete and reviewed (2026-09-03). This
-document defines the release metadata consumed by the manager's acquisition and
-staging paths. Phase 03 adds the dedicated web-host binary and runtime-origin
-contract. Activation, systemd unit installation, health orchestration, rollback,
-and recovery remain later phases.
+Status: Phases 01–05 implementation complete and reviewed (2026-09-03). This
+document defines the release metadata consumed by acquisition, staging, and
+durable activation. Phase 03 adds the dedicated web-host binary and
+runtime-origin contract; Phase 04 defines role-aware units; Phase 05 adds
+health-gated activation, rollback, and crash recovery.
 
 The Rust validator is the runtime authority. The publisher-facing JSON Schema
 must remain structurally equivalent to the Rust types and must reject anything
@@ -119,6 +119,7 @@ binaries must have at least one execute bit.
 | `bin/dam-hopper-manager` | file | `common` | executable |
 | `bin/dam-hopper-server` | file | `server` | executable |
 | `bin/dam-hopper-web` | file | `web` | executable |
+| `systemd/dam-hopper-recovery.service` | file | `common` | boot recovery unit template |
 | `systemd/dam-hopper-api.service` | file | `server` | unit template |
 | `systemd/dam-hopper-web.service` | file | `web` | unit template |
 | `sysusers.d/dam-hopper-web.conf` | file | `web` | sysusers input |
@@ -152,6 +153,7 @@ value, not a general recommendation to run arbitrary services as root.
   "previousReleaseCompatible": true,
   "stateCompatibility": "n-1"
 }
+```
 
 ## Phase 03 web runtime contract
 
@@ -168,7 +170,6 @@ body. Static serving allows only GET/HEAD, rejects unsafe paths and symlinks,
 and applies no-cache to root/index, immutable one-year caching to content-
 hashed assets, and one-hour public caching to other assets. Runtime config is
 machine-local and bounded at 4 KiB; it is never included in the archive.
-```
 
 ## Canonicalization and validation
 
@@ -202,23 +203,29 @@ mutating an existing one.
 
 The Phase 02 staging implementation preserves this post-commit view shape but
 replaces an existing same-tag/same-role destination before a repeated final
-rename; activation is still deferred and the active view is untouched.
+rename. Phase 05 activates only the validated immutable view and records the
+result in the manager's authoritative state envelope.
 
-## Manager consumption (Phases 02–03)
+## Manager consumption (Phases 02–05)
 
-The Rust manager is the first runtime consumer of Manifest v1:
+The Rust manager is the runtime consumer of Manifest v1:
 
 - `fetch` resolves an exact stable tag, downloads `release-manifest.json` and
-  the one expected archive, and requires the archive SHA-256 to equal
-  `manifest.archive.sha256`.
-- `install` and `role set` parse and validate the manifest before any role-view
-  extraction. They inspect every archive entry against the exact inventory and
+  the one expected archive, and requires archive SHA-256 equality.
+- `install` and `role set` parse and validate the manifest before role-view
+  extraction. They inspect every archive entry against exact inventory and
   extract only `common` plus the selected role (`both` includes all entries).
-- The manager persists the manifest and archive digests in `pending.json` only
-  after the role view has been renamed into the release directory.
+- Staging persists the pending candidate in
+  `/var/lib/dam-hopper-manager/state.json` only after the role view is renamed
+  into the release directory.
+- `start` validates the pending view, installs concrete units, and commits only
+  after exact API/web health remains stable for 20 consecutive 500 ms probes
+  following the 20-second startup deadline.
+- `rollback` and `recover` use recorded transaction backups and state; they do
+  not reconstruct units or choose a release from `/opt/dam-hopper/current`.
 
-The manager guide documents the command grammar, host profile gate, layout,
-transaction boundary, and deferred activation behavior:
+The manager guide documents the command grammar, state machine, health gate,
+rollback semantics, recovery unit, and filesystem layout:
 [Linux Release Manager](./linux-release-manager.md).
 
 ## Existing systemd runner boundary
@@ -226,12 +233,11 @@ transaction boundary, and deferred activation behavior:
 The current guarded systemd runner documented in
 [Linux systemd](./linux-systemd.md) still uses its legacy format-2 server-only
 stage marker. That marker (`format`, `nonce`, and local binary/unit hashes) is
-not the release manifest v1 contract and has no web inventory. Phase 02 adds
-manager acquisition and role-view staging for Manifest v1; Phase 03 adds the
-dedicated web binary and runtime-origin contract but does not replace the
-runner, switch the active pointer, or start services. Do not treat a format-2
-stage as a v1 archive, or this document as evidence that activation, rollback,
-or recovery is implemented.
+not the release manifest v1 contract and has no web inventory. Manifest v1
+activation uses concrete role units plus `dam-hopper-recovery.service`; it does
+not automatically migrate or retire the legacy runner. Do not treat a format-2
+stage as a v1 archive, or this document as evidence that the legacy runner has
+been converted.
 
 ## Verification
 

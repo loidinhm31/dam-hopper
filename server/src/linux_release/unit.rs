@@ -136,3 +136,32 @@ pub fn render_web_unit(template: &str, ctx: &UnitRenderContext) -> Result<String
     validate_web_unit_policy(&parsed, ctx)?;
     Ok(rendered)
 }
+
+/// Render recovery service unit and validate its strict systemd policy.
+pub fn render_recovery_unit(
+    template: &str,
+    ctx: &UnitRenderContext,
+) -> Result<String, ReleaseError> {
+    let rendered = render_unit(template, ctx)?;
+    let parsed = ParsedUnit::parse(&rendered)?;
+    let name = "dam-hopper-recovery.service";
+    let expected_exec = format!(
+        "{}/bin/dam-hopper-manager recover --boot",
+        ctx.release_root.display()
+    );
+    let actual_exec = parsed
+        .get_value("Service", "ExecStart")
+        .ok_or_else(|| ReleaseError::UnitPolicyViolation {
+            unit: name.into(),
+            reason: "missing ExecStart in recovery unit".into(),
+        })?;
+    if actual_exec != expected_exec {
+        return Err(ReleaseError::UnitPolicyViolation {
+            unit: name.into(),
+            reason: format!(
+                "ExecStart mismatch: expected '{expected_exec}', got '{actual_exec}'"
+            ),
+        });
+    }
+    Ok(rendered)
+}

@@ -5,7 +5,6 @@ use super::host_config::{load_host_config, save_host_config, HostConfig};
 use super::inventory::TargetRole;
 use super::layout::Layout;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 
 pub use super::stage_transaction::stage_release_bundle;
@@ -24,79 +23,26 @@ pub struct PendingState {
     pub pending_units_path: Option<String>,
 }
 
-/// Load pending candidate metadata if present.
+/// Load pending candidate metadata from authoritative state if present.
 pub fn load_pending_state(path: &Path) -> Result<Option<PendingState>, ReleaseError> {
-    if !path.exists() {
+    let state_path = if path.file_name() == Some(std::ffi::OsStr::new("pending.json")) {
+        path.with_file_name("state.json")
+    } else {
+        path.to_path_buf()
+    };
+    if !state_path.exists() {
         return Ok(None);
     }
-    let content = fs::read_to_string(path).map_err(|e| ReleaseError::Io {
-        action: "read pending state",
-        details: e.to_string(),
-    })?;
-    let state: PendingState = serde_json::from_str(&content)
-        .map_err(|e| ReleaseError::Config(format!("failed to parse pending state: {e}")))?;
-    Ok(Some(state))
-}
-
-/// Save pending candidate metadata durably with fsync.
-pub fn save_pending_state(path: &Path, state: &PendingState) -> Result<(), ReleaseError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ReleaseError::Io {
-            action: "create state directory",
-            details: e.to_string(),
-        })?;
-    }
-
-    let json = serde_json::to_string_pretty(state)
-        .map_err(|e| ReleaseError::Config(format!("failed to serialize pending state: {e}")))?;
-
-    let temp_path = path.with_extension(format!("tmp.{}", std::process::id()));
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&temp_path)
-        .map_err(|e| ReleaseError::Io {
-            action: "open temporary pending state file",
-            details: e.to_string(),
-        })?;
-
-    use std::io::Write;
-    let mut writer = std::io::BufWriter::new(file);
-    writer
-        .write_all(json.as_bytes())
-        .map_err(|e| ReleaseError::Io {
-            action: "write pending state",
-            details: e.to_string(),
-        })?;
-    writer.flush().map_err(|e| ReleaseError::Io {
-        action: "flush pending state buffer",
-        details: e.to_string(),
-    })?;
-    writer
-        .into_inner()
-        .map_err(|e| ReleaseError::Io {
-            action: "extract pending state inner file",
-            details: e.to_string(),
-        })?
-        .sync_all()
-        .map_err(|e| ReleaseError::Io {
-            action: "fsync pending state file",
-            details: e.to_string(),
-        })?;
-
-    fs::rename(&temp_path, path).map_err(|e| ReleaseError::Io {
-        action: "rename pending state into place",
-        details: e.to_string(),
-    })?;
-
-    if let Some(parent) = path.parent() {
-        if let Ok(dir) = fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
-    }
-
-    Ok(())
+    let mgr_state = super::state::load_or_init_manager_state(&state_path)?;
+    Ok(mgr_state.pending.map(|p| PendingState {
+        tag: p.tag,
+        role: p.role,
+        staged_at: p.staged_at,
+        release_path: p.release_path,
+        manifest_sha256: p.manifest_sha256,
+        archive_sha256: p.archive_sha256,
+        pending_units_path: p.pending_units_path,
+    }))
 }
 
 /// Resolve and update the host role configuration.

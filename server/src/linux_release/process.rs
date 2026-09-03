@@ -16,59 +16,10 @@ pub struct ServiceProcessEvidence {
     pub cgroup: Option<String>,
 }
 
-/// Inspect `/proc/net/tcp` and `/proc/net/tcp6` to see if a port is in LISTEN state.
-pub fn is_port_listening(port: u16) -> Result<bool, ReleaseError> {
-    for proc_path in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        let path = Path::new(proc_path);
-        if !path.exists() {
-            continue;
-        }
-
-        let content = fs::read_to_string(path).map_err(|e| ReleaseError::Io {
-            action: "read /proc/net/tcp",
-            details: e.to_string(),
-        })?;
-
-        if parse_proc_net_listening(&content, port) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// Parse `/proc/net/tcp` table format to detect if a specific port is in state 0A (LISTEN).
-pub fn parse_proc_net_listening(content: &str, target_port: u16) -> bool {
-    let port_hex = format!("{:04X}", target_port);
-
-    for line in content.lines().skip(1) {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() >= 4 {
-            let local_addr = fields[1];
-            let state = fields[3];
-
-            if state == "0A" {
-                if let Some((_, port_part)) = local_addr.split_once(':') {
-                    if port_part.eq_ignore_ascii_case(&port_hex) {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Check that a list of ports are not currently in use.
-pub fn check_ports_free(ports: &[u16]) -> Result<(), ReleaseError> {
-    for &port in ports {
-        if is_port_listening(port)? {
-            return Err(ReleaseError::ProcessInspectionFailed {
-                reason: format!("port {port} is already in use (listening)"),
-            });
-        }
-    }
-    Ok(())
-}
+pub use super::process_holders::{
+    check_ports_free, find_file_holders, get_cgroup_pids, is_port_listening,
+    parse_proc_net_listening, verify_no_foreign_sqlite_holders,
+};
 
 /// Inspect the main process of a systemd service unit via `/proc/<pid>`.
 pub fn inspect_service_process(
