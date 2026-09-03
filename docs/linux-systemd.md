@@ -2,18 +2,21 @@
 
 Status: repository asset plus guarded administrator workflow. The supported
 systemd package is backend-only: it builds and installs the Rust server binary
-and unit, while any browser UI is built and hosted separately. New stages use
-marker format 2; format-1 web-bearing installs remain accepted only for guarded
-reset/rollback cleanup. No command in this document performs a live reset or
-production mutation by itself.
+and unit, while any browser UI is built and hosted separately. Phase 03 also
+delivers the unprivileged `dam-hopper-web` binary, which serves an immutable
+web root on `0.0.0.0:4802`; this document does not install or start a web unit.
+New stages use marker format 2; format-1 web-bearing installs remain accepted
+only for guarded reset/rollback cleanup. No command in this document performs
+a live reset or production mutation by itself.
 
 ## Release manifest v1 boundary
 
 The [Linux Release Manifest v1](./linux-release-manifest.md) is the newer
 single-archive contract for Fedora 44 x86_64 role views. Phase 02's
-`dam-hopper` manager now consumes the v1 manifest for unprivileged acquisition
+`dam-hopper` manager consumes the v1 manifest for unprivileged acquisition
 and root-only role-view staging, writing a pending candidate without starting
-services. The guarded runner described here remains a separate legacy
+services. Phase 03 supplies the dedicated web-host binary and runtime-origin
+contract, but the guarded runner described here remains a separate legacy
 format-2, server-only stage-marker workflow and does not consume the v1 archive
 or web inventory. See [Linux Release Manager](./linux-release-manager.md) for
 the manager grammar and transaction boundary.
@@ -97,12 +100,12 @@ marker-backed rollback were covered by a legacy format-1 evidence record.
 That report is historical and its source file is no longer present; it does not
 validate the current backend-only package.
 
-## Deployment decision
-
 The systemd service is an API/backend deployment. It installs only the Rust
-server binary and unit; it does not build or copy `apps/web` or `/opt/dam-hopper/web`.
-If a browser UI is needed, build and host it separately and configure an exact
-`DAM_HOPPER_CORS_ORIGINS` entry for that UI origin.
+server binary and unit; it does not build or copy `apps/web` or
+`/opt/dam-hopper/web`. If a browser UI is needed, run the Phase 03
+`dam-hopper-web` binary against its immutable root on `:4802` (or use another
+separate host) and configure an exact `DAM_HOPPER_CORS_ORIGINS` entry for that
+UI origin. This document's systemd unit remains backend-only.
 
 The production unit binds `0.0.0.0:4801` so Tailscale clients can reach it. This
 is a wildcard IPv4 bind, not a Tailscale-only bind: the host firewall and
@@ -126,7 +129,7 @@ The service process is always `loidinh`. The system manager owns the unit and de
 - `User=loidinh` and `Group=loidinh`; the server never runs as root.
 - Direct `ExecStart` with an absolute binary, config, host, and port; no shell, wrapper, PID file, sudo, or privileged helper. Ordered user environment files are explicit and mandatory.
 - `HOME`, `XDG_CONFIG_HOME`, and `WorkingDirectory` are explicit; no web asset
-  directory is part of the systemd install contract.
+  directory or dedicated web-host unit is part of the systemd install contract.
 - `0.0.0.0:4801` is explicit for Tailscale access. Restrict port `4801` with the host firewall and Tailscale ACLs; `RUST_ENV=production` makes the existing no-auth guard fail closed if a home `.env` attempts to set `DAM_HOPPER_NO_AUTH`; the unit has no `--no-auth` flag.
 - `Restart=on-failure` with a short delay and journald stdout/stderr.
 - Normal stops send `SIGTERM`; the server snapshots buffers, marks PTYs killed, terminates their process groups, joins PTY readers before persistence shutdown, and gets 20 seconds before systemd's bounded cgroup cleanup.

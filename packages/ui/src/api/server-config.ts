@@ -816,6 +816,53 @@ export function migrateToProfiles(): void {
   }
 }
 
+/**
+ * Reconcile a deployed runtime configuration with the local server profile store.
+ *
+ * Enforces production precedence:
+ * 1. Existing active user profile remains active (user selection is never overridden).
+ * 2. Managed profile with stable ID is created or updated with new API URL.
+ * 3. If the managed profile's API URL changed, its scoped auth token is cleared before update.
+ * 4. If no profile was previously active, the managed profile is activated.
+ */
+export function reconcileManagedProfile(config: {
+  profileId: string;
+  apiUrl: string;
+}): ServerProfile | null {
+  const normalizedUrl = normalizeServerUrl(config.apiUrl);
+  const profiles = getProfiles();
+  const existingIdx = profiles.findIndex((p) => p.id === config.profileId);
+
+  let managedProfile: ServerProfile;
+
+  if (existingIdx >= 0) {
+    const existing = profiles[existingIdx];
+    if (haveServerUrlsChanged(existing.url, normalizedUrl)) {
+      clearAuthToken(config.profileId);
+      profiles[existingIdx] = { ...existing, url: normalizedUrl };
+      saveProfiles(profiles);
+    }
+    managedProfile = profiles[existingIdx];
+  } else {
+    managedProfile = {
+      id: config.profileId,
+      name: "Deployed Server",
+      url: normalizedUrl,
+      authType: "basic",
+      createdAt: Date.now(),
+    };
+    profiles.push(managedProfile);
+    saveProfiles(profiles);
+  }
+
+  const activeId = getActiveProfileId();
+  if (!activeId || !profiles.some((p) => p.id === activeId)) {
+    setActiveProfile(managedProfile.id);
+  }
+
+  return managedProfile;
+}
+
 function notifyProfileChange(event?: ServerProfileChange): void {
   profileChangeVersion += 1;
   if (event) {

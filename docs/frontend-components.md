@@ -21,6 +21,32 @@ Shared runtime libraries:
 - **Tailwind CSS v4** for styling
 - **xterm.js** for terminal rendering
 
+## Browser host runtime bootstrap (Phase 03)
+
+`apps/web/src/main.tsx` resolves the browser transport before mounting React:
+
+1. `migrateToProfiles()` upgrades legacy local storage.
+2. `fetchRuntimeConfig()` requests the relative
+   `/__dam-hopper/runtime-config.json` with `cache: "no-store"`, a 2-second
+   timeout, and a 4 KiB limit.
+3. A valid `{ schemaVersion, releaseVersion, profileId, apiUrl }` document is
+   reconciled into one stable-ID `"Deployed Server"` profile.
+4. `getActiveProfile()` wins over the managed profile; otherwise a valid managed
+   profile creates the WebSocket transport. With no valid profile/config the
+   app uses `IdleTransport` and the existing setup guard.
+
+The client validates an exact HTTP(S) API origin (no credentials, path, query,
+or fragment), UUID v4 profile ID, non-empty release version, and schema version
+`1`. It never derives an API URL from the web request `Host` or assumes the web
+host's `:4802` port. If the managed API URL changes, only that profile's scoped
+token is cleared before transport creation. A missing runtime config (404) is
+normal for local Vite/Pages hosting.
+
+The production Vite build keeps `base: "./"` and emits only immutable release
+metadata; `VITE_DAM_HOPPER_SERVER_URL` is rejected during build. Development
+proxy configuration may target `http://127.0.0.1:4801`, but that value is not
+embedded in release assets.
+
 ## Host-resource alert presentation
 
 **Locations:** `packages/ui/src/components/organisms/HostResourcePopover.tsx`,
