@@ -132,4 +132,8 @@ pub struct RollbackArgs {}
 
 /// Arguments for `recover` subcommand.
 #[derive(Debug, Args, Clone, PartialEq, Eq, Default)]
-pub struct RecoverArgs {}
+pub struct RecoverArgs {
+    /// Run boot-time reconciliation one-shot before application units start.
+    #[arg(long)]
+    pub boot: bool,
+}

@@ -1,10 +1,10 @@
 # Linux systemd system service
 
-Status: Phase 04 role-aware unit rendering and ownership checks are implemented
-for the Manifest v1 release manager. The manager stages independent API and web
-unit candidates plus the dedicated web sysuser; Phase 05 still owns activation,
-enablement, health-gated cutover, rollback, and recovery. The guarded format-2
-runner documented later remains a separate legacy path until migration.
+Status: Phase 05 durable activation, rollback, and crash recovery are
+implemented for the Manifest v1 release manager (2026-09-03). Phase 04 supplies
+the role-aware unit and ownership policy; Phase 05 installs, probes, commits,
+rolls back, and reconciles those units. The guarded format-2 runner documented
+later remains a separate legacy path until migration.
 
 The release deployment has two process roles:
 
@@ -12,18 +12,18 @@ The release deployment has two process roles:
 - `dam-hopper-web.service` runs the static host as the isolated
   `dam-hopper-web` system account.
 
-No API/web unit is installed, enabled, or started merely by staging a release.
-Fresh installs therefore remain inactive. No command in this document performs
-a live reset or production mutation by itself.
+Staging never activates a release. `install` and `role set` stop with a durable
+pending candidate; `sudo dam-hopper start` is the explicit activation/start
+boundary. No API/web unit is changed merely by staging.
 
 ## Release manifest v1 boundary
 
 The [Linux Release Manifest v1](./linux-release-manifest.md) is the immutable
 single-archive contract for Fedora 44 x86_64 role views. The `dam-hopper`
 manager consumes it for unprivileged acquisition and root-only role-view
-staging. Phase 04 renders selected service units from the attested release
-templates, validates them, and records pending unit/config paths without
-installing or starting services.
+staging. Phase 04 renders selected service units from the release templates;
+Phase 05 consumes those candidates for lock-scoped activation and health-gated
+commit.
 
 The guarded systemd runner described below remains separate: it consumes the
 legacy format-2 server-only stage marker and does not consume the Manifest v1
@@ -31,13 +31,13 @@ archive, role inventory, or rendered API/web units. See [Linux Release
 Manager](./linux-release-manager.md) for the manager grammar and transaction
 boundary.
 
-## Phase 04 role-aware units (Manifest v1)
+## Phase 04/05 role-aware units and activation (Manifest v1)
 
-Phase 04 adds the unit and ownership boundary consumed by the release manager.
-It does not replace the guarded format-2 runner yet. A manager `install` or
-`role set` stages a release view and candidate service files; it does not copy
-those files into `/etc/systemd/system`, enable a unit, start a process, or
-switch `/opt/dam-hopper/current`. Activation remains a Phase 05 operation.
+Phase 04 defines the unit and ownership boundary. Phase 05 makes it live:
+`install` or `role set` stages a release view and candidate service files;
+`start` installs concrete candidates into `/etc/systemd/system`, starts only the
+selected role, probes it, and commits only after stability. The active pointer
+and service state remain unchanged until that explicit transaction.
 
 ### Role matrix
 
@@ -55,8 +55,8 @@ The manifest requires both service contracts and the web sysusers input even
 when the selected projection installs only one service. A fresh install must
 name a role explicitly. An upgrade inherits the recorded role; changing it
 requires `role set`, not `install --role`. A `both` candidate uses one release
-tag/version for both units. The legacy `4800` listener must be free before any
-future activation.
+tag/version for both units. The legacy `4800` listener must be free before
+activation.
 
 ### Templates and rendering
 
@@ -124,10 +124,10 @@ Tailscale ACL controls, and production authentication remains enabled.
   The policy rejects `EnvironmentFile` and `ReadWritePaths`; no API token,
   environment, SQLite, project, manager-state, upload, or home path is granted.
 
-The web unit has no `Requires=`, `PartOf=`, `BindsTo=`, shared process, API
-proxy, or other API coupling. Stopping or restarting one role must not stop the
-other. The web process serves the already-validated immutable root; it does not
-write API state.
+The web unit requires only `dam-hopper-recovery.service`; it has no API
+dependency, shared process, proxy, or other API coupling. Stopping or
+restarting one application role must not stop the other. The web process serves
+the already-validated immutable root; it does not write API state.
 
 ### Web identity provisioning
 
@@ -145,41 +145,87 @@ dedicated account as both user and primary group. Account persistence after
 rollback is harmless; deleting a shared system identity is not part of
 rollback.
 
-### Ownership, modes, and pending state
+### Ownership, modes, state, and transaction paths
 
 Release bytes and machine-local state remain separate. The ownership verifier
 rejects symlinks and special files, optionally requires UID 0, and recursively
 expects release directories to be `0755`, binaries directly under `bin/` to be
 `0755`, and other regular release files to be `0644`. Rendered unit and sysusers
-files are written as `0644`; manager transaction/state boundaries use `0700`
-directories and `0600` private files.
+files are `0644`; manager transaction/state boundaries use `0700` directories
+and `0600` private files.
 
-| Path | Phase 04 role |
+| Path | Role |
 | --- | --- |
-| `/opt/dam-hopper/.staging/<transaction-id>/` | root-private extraction workspace (`0700`) |
+| `/opt/dam-hopper/.staging/<transaction-id>/` | root-private extraction workspace |
 | `/opt/dam-hopper/releases/<tag>/<role>/` | immutable validated role view |
-| `/var/lib/dam-hopper/pending-units/` | rendered candidate `*.service` and web sysusers file |
-| `/var/lib/dam-hopper/pending-host-config.json` | fsynced candidate public web config |
-| `/var/lib/dam-hopper/pending.json` | fsynced tag/role/digests/release path and pending-unit path |
+| `/var/lib/dam-hopper-manager/pending-units/` | rendered candidate units and web sysusers |
+| `/var/lib/dam-hopper-manager/pending-host-config.json` | candidate public web config |
+| `/var/lib/dam-hopper-manager/state.json` | authoritative active/previous/pending/transaction/failure envelope |
+| `/var/lib/dam-hopper-manager/backups/<tx-id>/` | transaction-owned unit/config backups |
 | `/etc/dam-hopper/host.toml` | recorded role and exact allowed origins |
-| `/etc/dam-hopper/host-config.json` | active public runtime config path, read by the web unit |
-| `/etc/systemd/system/` | active unit destination, untouched by Phase 04 staging |
+| `/etc/dam-hopper/host-config.json` | committed public runtime config |
+| `/etc/systemd/system/` | concrete active unit destinations |
 
-The staging flow acquires the deployment lock, validates the manifest/archive,
-extracts one role view, renders only the selected unit set, writes candidate
-public config, and verifies unit syntax before saving `pending.json`. It never
-uses `/opt/dam-hopper/current` as `ExecStart` authority. `pending_units_path`
-is a handoff for the later activation transaction; it is not evidence that a
-unit is enabled or active.
+Staging acquires the deployment lock, validates the manifest/archive, extracts
+one role view, renders candidates, writes public config, and persists the
+pending record. Activation then quiesces the old/new role union, backs up exact
+installed files, installs concrete units/config, reloads systemd, starts the
+candidate, probes it, enables selected units, disables removed roles, commits
+state, repairs `/opt/dam-hopper/current`, and applies reference-safe retention.
+The state envelope is authoritative; `current` is a convenience pointer.
 
-### Runtime evidence boundary
+### Durable activation state machine
 
-The process adapter can query `systemctl show` for `MainPID`, read effective
-UID/GID and `/proc/<pid>/exe`, and inspect the cgroup. The port inspector reads
-`/proc/net/tcp` and `/proc/net/tcp6` and treats state `0A` as LISTEN. These
-checks support later activation and health gates; Phase 04 tests use temporary
-trees and do not claim a live systemd unit, account, SELinux label, or firewall
-configuration.
+```text
+ABSENT | ACTIVE -> STAGED -> PENDING -> QUIESCED -> SWITCHED -> PROBING -> COMMITTED
+```
+
+`install` and `role set` construct the immutable role view and persist
+`PENDING`; they do not stop the old service. `start` owns the remainder under
+one root lock. Every boundary is written through a temporary file, `fsync`,
+atomic rename, and parent-directory sync. Invalid state combinations are
+classified as `RECOVERY_REQUIRED` rather than guessed.
+
+### Health stability gate
+
+For every selected service, the manager requires:
+
+- at most **20 seconds** to reach initial readiness;
+- then **20 consecutive probes at 500 ms** (**10 seconds** uninterrupted);
+- active `MainPID`, expected executable path, expected service identity, exact
+  listener (`4801` API or `4802` web), and loopback JSON health;
+- schema `1`, `status: "ok"`, expected role/version, JSON content type, no
+  redirects, and bounded response body.
+
+Transient readiness failures reset the consecutive count. Wrong identity,
+executable, role/version, schema, or content type fails immediately. Candidate
+startup/probe failure triggers automatic rollback; the same 20-second +
+10-second gate is required for the restored release.
+
+### Recovery and rollback
+
+`dam-hopper-recovery.service` is a root one-shot with
+`ExecStart=<release-root>/bin/dam-hopper-manager recover --boot`. It runs after
+`local-fs.target` and **before `dam-hopper-api.service` and
+`dam-hopper-web.service`**; both app units `Requires=` and `After=` it. On
+inconsistent state, recovery fails closed and disables app units.
+
+- `PENDING`/staged crash: leave the old active release running and keep the
+  candidate disabled.
+- `QUIESCED`/`SWITCHED`/`PROBING` crash: restore transaction-owned old units,
+  config, and state, then re-probe; first install restores a clean inactive
+  baseline.
+- `COMMITTED` crash: keep the candidate, repair enablement and `current`, and
+  do not version-rollback.
+- Missing/corrupt state or unowned/hash-mismatched artifacts:
+  `RECOVERY_REQUIRED`; never report rollback success.
+
+Automatic rollback stops candidate units and restores exact transaction backups.
+Manual `sudo dam-hopper rollback` promotes the recorded `previous` release
+through the same activation, probe, and commit rules; if it fails, the original
+active release is restored before recovery is required. Retention keeps active,
+one previous known-good, pending/latest-failed, and transaction-referenced
+trees; deletion occurs only after manifest/ownership verification.
 
 
 If installation stops on a stale safety assignment and no managed service

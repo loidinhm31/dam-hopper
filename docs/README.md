@@ -22,23 +22,41 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
-- **[Linux Release Manager](./linux-release-manager.md)** — Phase 02 CLI, host profile checks, acquisition, and safe staging
+- **[Linux Release Manager](./linux-release-manager.md)** — Phase 02 CLI, host profile checks, acquisition, safe staging, and Phase 05 durable activation/recovery
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
 
 ## Deployment
 
 - **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
-- **[Linux systemd](./linux-systemd.md)** — backend-only production API on port 4801
+- **[Linux systemd](./linux-systemd.md)** — API/web units, boot recovery ordering, durable activation, health gates, and rollback
 - **[Linux nohup](./linux-nohup.md)** — legacy/recovery server on loopback port 4800
 - **[Linux Release Manifest v1](./linux-release-manifest.md)** — immutable Fedora 44 archive metadata, inventory, and role projections
-- **[Linux Release Manager](./linux-release-manager.md)** — Rust manager commands, role selection, and pending-candidate staging
+- **[Linux Release Manager](./linux-release-manager.md)** — Rust manager commands, role selection, pending candidates, durable activation, rollback, and boot recovery
 
 The dedicated `dam-hopper-web` host serves release SPA assets on port 4802.
 It is separate from the API process and exposes only static GET/HEAD plus the
 reserved health/runtime-config routes. The API is API-only by default; Docker
 explicitly opts into combined serving with `--web-dir /opt/dam-hopper/web` on
 port 4800.
+
+### Durable activation, rollback, and recovery (Phase 05)
+
+`install` and `role set` stage a candidate but stop at `PENDING`. Run
+`sudo dam-hopper start` to activate it, or to start and verify the committed
+role when no candidate is pending. The durable forward state machine is:
+
+`ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING → COMMITTED`
+
+Activation is lock-scoped and health-gated. Selected units must become ready
+within 20 seconds, then pass 20 consecutive probes at 500 ms (a 10-second
+stability window) with exact process identity, executable, listener, and
+role/version JSON health checks. `dam-hopper-recovery.service` runs
+`dam-hopper recover --boot` before the API and web units at boot. Failed
+activation restores the previous concrete units/configuration; first-install
+failure leaves application units stopped/disabled with no active release.
+`sudo dam-hopper rollback` promotes the recorded previous release through the
+same transaction rules. Recovery blocks unsafe or unrecoverable state.
 
 Historical implementation plans are not indexed here; verify that a plan path
 exists before linking it from a new document.
@@ -153,6 +171,14 @@ Terminal lifecycle follows six main states:
 See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle) for detailed flow.
 
 ## Recent Changes
+
+**Linux Release Installer Phase 05 (Complete ✓):**
+
+- ✓ Durable generation-numbered activation state and lock-scoped transition
+  graph from `ABSENT`/`ACTIVE` through `STAGED`, `PENDING`, `QUIESCED`,
+  `SWITCHED`, `PROBING`, and `COMMITTED`.
+- ✓ Recovery unit ordering before API/web startup, exact 20-second readiness
+  plus 10-second health stability probing, and automatic/manual rollback.
 
 **Linux Release Installer Phase 03 (Complete ✓):**
 

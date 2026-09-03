@@ -7,16 +7,21 @@
 pub mod account;
 pub mod acquire;
 pub mod acquire_client;
+pub mod activate;
+pub mod activate_preflight;
 pub mod archive;
 pub mod archive_extract;
 pub mod attestation;
 pub mod cli;
 pub mod constants;
+pub mod durable_fs;
 pub mod error;
+pub mod health;
 pub mod host_config;
 pub mod inventory;
 mod inventory_path;
 mod inventory_validation;
+pub mod journal;
 pub mod layout;
 pub mod lock;
 pub mod manifest;
@@ -26,15 +31,22 @@ pub mod ownership;
 pub mod platform;
 pub mod privilege;
 pub mod process;
+pub mod process_holders;
+pub mod recovery;
+pub mod retention;
+pub mod rollback;
 pub mod stage;
 pub mod stage_transaction;
 pub mod stage_units;
+pub mod state;
+pub mod state_record;
 pub mod systemd;
+pub mod systemd_backup;
+pub mod transaction;
 pub mod unit;
 pub mod unit_parser;
 pub mod unit_policy;
 pub mod version;
-
 pub use account::{get_user_by_name, verify_web_sysuser_account, UserInfo};
 pub use acquire::{acquire_release, AcquisitionRecord};
 pub use archive::inspect_and_validate_archive;
@@ -67,11 +79,11 @@ pub use platform::{
     verify_os_release, verify_systemd_version, OsRelease,
 };
 pub use process::{
-    check_ports_free, inspect_service_process, is_port_listening, verify_service_identity_and_exe,
-    ServiceProcessEvidence,
+    check_ports_free, inspect_service_process, is_port_listening, parse_proc_net_listening,
+    verify_no_foreign_sqlite_holders, verify_service_identity_and_exe, ServiceProcessEvidence,
 };
 pub use privilege::{current_euid, verify_privileges};
-pub use stage::{load_pending_state, resolve_host_role, save_pending_state, PendingState};
+pub use stage::{load_pending_state, resolve_host_role, PendingState};
 pub use stage_transaction::stage_release_bundle;
 pub use stage_units::stage_candidate_units;
 pub use systemd::{
@@ -87,3 +99,26 @@ pub use unit_parser::ParsedUnit;
 pub use version::{
     validate_commit_sha, validate_release_tag, validate_sha256_hex, validate_version,
 };
+pub use activate::{execute_activation, execute_activation_locked};
+pub use durable_fs::{
+    atomic_symlink, atomic_write_file, atomic_write_json, copy_file_durable, sync_dir,
+};
+pub use health::{
+    wait_for_health_stability, HealthProbeTarget, DEFAULT_PROBE_INTERVAL,
+    DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_STARTUP_DEADLINE,
+};
+pub use journal::{classify_recovery, validate_transition, DeploymentState, RecoveryAction};
+pub use recovery::execute_recovery;
+pub use retention::apply_retention;
+pub use rollback::{execute_manual_rollback, rollback_activation_failure};
+pub use state::{
+    backup_state_file, load_or_init_manager_state, save_manager_state, ManagerState,
+};
+pub use state_record::{
+    FailureRecord, PendingCandidateRecord, ReleaseRecord, TransactionPhase, TransactionRecord,
+};
+pub use systemd_backup::{
+    backup_unit_files, install_unit_file, remove_unit_file, restore_unit_files,
+};
+pub use transaction::ActivationTransaction;
+pub use unit::render_recovery_unit;

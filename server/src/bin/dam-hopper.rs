@@ -2,8 +2,9 @@
 
 use clap::Parser;
 use dam_hopper_server::linux_release::{
-    acquire_release, current_euid, load_host_config, load_pending_state, stage_release_bundle,
-    verify_privileges, Cli, Commands, Layout, RoleCommands,
+    acquire_release, current_euid, execute_activation, execute_manual_rollback, execute_recovery,
+    load_host_config, load_or_init_manager_state, stage_release_bundle, verify_privileges, Cli,
+    Commands, Layout, RoleCommands,
 };
 use std::process::ExitCode;
 
@@ -100,19 +101,23 @@ async fn main() -> ExitCode {
                 }
             }
         },
-        Commands::Start(_) => {
-            println!("start command will activate candidate in Phase 05");
-            ExitCode::SUCCESS
-        }
+        Commands::Start(_) => match execute_activation(&layout).await {
+            Ok(()) => {
+                println!("Services successfully activated and verified.");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: activation failed: {e}");
+                ExitCode::from(1)
+            }
+        },
         Commands::Status(args) => {
             let host_config = load_host_config(&layout.host_config_path()).ok().flatten();
-            let pending = load_pending_state(&layout.pending_state_path())
-                .ok()
-                .flatten();
+            let mgr_state = load_or_init_manager_state(&layout.manager_state_path()).ok();
             if args.json {
                 let status_val = serde_json::json!({
                     "hostConfig": host_config,
-                    "pending": pending,
+                    "state": mgr_state,
                 });
                 println!("{status_val}");
             } else {
@@ -123,25 +128,59 @@ async fn main() -> ExitCode {
                 } else {
                     println!("  (not configured)");
                 }
-                println!("Pending Candidate:");
-                if let Some(p) = pending {
-                    println!("  Tag: {}", p.tag);
-                    println!("  Role: {}", p.role);
-                    println!("  Staged At: {}", p.staged_at);
-                } else {
-                    println!("  (none)");
+                if let Some(ref state) = mgr_state {
+                    println!("Active Release:");
+                    if let Some(ref a) = state.active {
+                        println!("  Tag: {}", a.tag);
+                        println!("  Role: {}", a.role);
+                        println!("  Committed At: {}", a.committed_at);
+                    } else {
+                        println!("  (none)");
+                    }
+                    println!("Previous Release:");
+                    if let Some(ref p) = state.previous {
+                        println!("  Tag: {}", p.tag);
+                        println!("  Role: {}", p.role);
+                    } else {
+                        println!("  (none)");
+                    }
+                    println!("Pending Candidate:");
+                    if let Some(ref c) = state.pending {
+                        println!("  Tag: {}", c.tag);
+                        println!("  Role: {}", c.role);
+                        println!("  Staged At: {}", c.staged_at);
+                    } else {
+                        println!("  (none)");
+                    }
+                    if let Some(ref f) = state.latest_failure {
+                        println!("Latest Failure:");
+                        println!("  Phase: {}", f.phase);
+                        println!("  Error: {}", f.sanitized_error);
+                    }
                 }
             }
             ExitCode::SUCCESS
         }
-        Commands::Rollback(_) => {
-            println!("rollback command will be available in Phase 05");
-            ExitCode::SUCCESS
-        }
-        Commands::Recover(_) => {
-            println!("recover command will be available in Phase 05");
-            ExitCode::SUCCESS
-        }
+        Commands::Rollback(_) => match execute_manual_rollback(&layout).await {
+            Ok(()) => {
+                println!("Rollback completed and verified successfully.");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: rollback failed: {e}");
+                ExitCode::from(1)
+            }
+        },
+        Commands::Recover(args) => match execute_recovery(&layout, args.boot).await {
+            Ok(()) => {
+                println!("Recovery reconciliation completed successfully.");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: recovery reconciliation failed: {e}");
+                ExitCode::from(1)
+            }
+        },
         Commands::Version => {
             println!("dam-hopper {}", env!("CARGO_PKG_VERSION"));
             println!("profile: {}", dam_hopper_server::linux_release::PROFILE_ID);

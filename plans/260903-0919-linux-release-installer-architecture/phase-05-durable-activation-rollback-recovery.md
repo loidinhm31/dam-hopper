@@ -14,9 +14,9 @@
 - **Date:** 2026-09-03
 - **Description:** Make explicit activation a durable state machine that commits only after exact process/listener/health stability and restores the previous release on failure or interruption.
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
-- **Effort:** 24h
+- **Implementation status:** Completed 2026-09-03 23:45:08 +07:00
+- **Review status:** Approved 2026-09-03 (Cycle 2; 9.8/10; no blocking findings)
+- **Progress:** 100% (13/13 implementation steps; 7/7 todo items)
 
 ## Key Insights
 
@@ -30,8 +30,8 @@
 ### Functional
 
 - Durable progression: `ABSENT|ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING → COMMITTED`; invalid combinations become `RECOVERY_REQUIRED`.
-- `install`/`role set` stop at `PENDING`. `activate` with no pending starts/verifies the committed role; with pending, it runs the transaction.
-- Preflight validates manifests, state generation, selected roles, concrete units, identities, current cgroups/listeners, forbidden `4800`, expected current SQLite holders, and candidate config.
+- `install`/`role set` stop at `PENDING`. Unified `start` with no pending starts/verifies the committed role; with pending, it runs the transaction.
+- Preflight validates manifests, state generation, selected roles, concrete units, identities (API runs as `root`, web as `dam-hopper-web`), current cgroups/listeners, forbidden `4800`, expected current SQLite holders, and candidate config.
 - Transition quiesces the union of old/new roles, proves cgroups and `4801/4802` listeners free, and proves no foreign holder of runtime SQLite before switch.
 - Candidate start deadline: 20 seconds. Then require 20 consecutive 500ms probes (10 seconds) for each selected unit: active/MainPID, exact executable, UID/GID, exact wildcard listener, and exact-version JSON health.
 - Commit only after the full stability window. Then atomically set active/previous, clear pending, enable selected units, disable removed-role units, and repair `current`.
@@ -52,7 +52,7 @@
 
 The manager owns a serialized transaction and adapters for durable filesystem, systemd, process evidence, and HTTP health. State is authoritative; `/opt/dam-hopper/current` is repaired after commit and ignored for decisions.
 
-Activation order:
+Unified `start` activation order:
 
 ```text
 lock/reconcile → validate old+candidate → QUIESCED
@@ -82,7 +82,7 @@ Recovery table:
 - `server/src/linux_release/journal.rs` — allowed transition graph and recovery classification.
 - `server/src/linux_release/transaction.rs` — lock-scoped orchestration.
 - `server/src/linux_release/health.rs` — bounded exact JSON stability probes.
-- `server/src/linux_release/activate.rs` — quiesce/switch/probe/commit.
+- `server/src/linux_release/activate.rs` — quiesce/switch/probe/commit (transaction engine dispatched by `start`).
 - `server/src/linux_release/rollback.rs` — automatic/manual restoration.
 - `server/src/linux_release/recovery.rs` — command/boot reconciliation.
 - `server/src/linux_release/retention.rs` — reference-safe bounded cleanup.
@@ -91,7 +91,7 @@ Recovery table:
 
 ### Modify
 
-- `server/src/linux_release/cli.rs` — dispatch activate/status/rollback/recover.
+- `server/src/linux_release/cli.rs` — dispatch start/status/rollback/recover (unified `start` owns activation).
 - `server/src/linux_release/stage.rs` — write pending into the authoritative envelope.
 - `server/src/linux_release/systemd.rs` — unit backup/install/enable/disable/reload and boot recovery handling.
 - `server/src/linux_release/process.rs` — role-aware cgroup/listener/database holder proofs.
@@ -122,13 +122,13 @@ Recovery table:
 
 ## Todo List
 
-- [ ] Add durable state envelope and transition graph.
-- [ ] Add lock-scoped activation and exact health stability probes.
-- [ ] Add automatic/manual rollback with verified old health.
-- [ ] Add boot-time recovery and fail-closed state classification.
-- [ ] Add bounded reference-safe retention.
-- [ ] Add every-boundary crash tests.
-- [ ] Run compile check and pass reviewer gate.
+- [x] Add durable state envelope and transition graph.
+- [x] Add lock-scoped activation and exact health stability probes.
+- [x] Add automatic/manual rollback with verified old health.
+- [x] Add boot-time recovery and fail-closed state classification.
+- [x] Add bounded reference-safe retention.
+- [x] Add every-boundary crash tests.
+- [x] Run compile check and pass reviewer gate.
 
 ## Success Criteria
 
@@ -158,4 +158,6 @@ Recovery table:
 
 ## Next Steps
 
-Phase 06 publishes the exact inputs this state machine consumes. Phase 07 adds verified legacy takeover. Unresolved questions: none.
+1. Phase 05 review approved (Cycle 2); all durability findings resolved.
+2. Phase 06 publishes exact inputs consumed by this state machine.
+3. Phase 07 adds verified legacy takeover. Unresolved questions: none.

@@ -28,7 +28,7 @@ impl Layout {
         Self {
             opt_dir: PathBuf::from("/opt/dam-hopper"),
             etc_dir: PathBuf::from("/etc/dam-hopper"),
-            var_lib_dir: PathBuf::from("/var/lib/dam-hopper"),
+            var_lib_dir: PathBuf::from("/var/lib/dam-hopper-manager"),
             run_lock_dir: PathBuf::from("/run/lock/dam-hopper"),
             systemd_unit_dir: PathBuf::from("/etc/systemd/system"),
         }
@@ -40,7 +40,7 @@ impl Layout {
         Self {
             opt_dir: root.join("opt/dam-hopper"),
             etc_dir: root.join("etc/dam-hopper"),
-            var_lib_dir: root.join("var/lib/dam-hopper"),
+            var_lib_dir: root.join("var/lib/dam-hopper-manager"),
             run_lock_dir: root.join("run/lock/dam-hopper"),
             systemd_unit_dir: root.join("etc/systemd/system"),
         }
@@ -93,8 +93,14 @@ impl Layout {
         self.etc_dir.join("web.env")
     }
 
+    /// Authoritative state envelope for release management:
+    /// `/var/lib/dam-hopper-manager/state.json`
+    pub fn manager_state_path(&self) -> PathBuf {
+        self.var_lib_dir.join("state.json")
+    }
+
     /// Durable metadata for currently active release:
-    /// `/var/lib/dam-hopper/active.json`
+    /// `/var/lib/dam-hopper-manager/active.json`
     pub fn active_state_path(&self) -> PathBuf {
         self.var_lib_dir.join("active.json")
     }

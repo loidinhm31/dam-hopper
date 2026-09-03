@@ -259,12 +259,13 @@ See [Native Browser Debug Support](./native-browser-debug-support.md) for the pl
 
 ### PR-011: Linux Release Identity, Manager, and Manifest v1
 
-**Status:** Phases 01–03 complete and reviewed (2026-09-03). Phase 01 defines
+**Status:** Phases 01–05 complete and reviewed (2026-09-03). Phase 01 defines
 the release metadata contract; Phase 02 adds the Rust manager's unprivileged
 acquisition and root-only role staging; Phase 03 adds the dedicated web host,
-runtime-origin bootstrap, and API-only default. Archive packaging of the web
-role, systemd unit installation, activation, health checks, rollback, recovery,
-publisher bootstrap, and legacy-runner retirement remain later phases.
+runtime-origin bootstrap, and API-only default; Phase 04 adds role-aware
+systemd units and ownership policy; Phase 05 adds durable activation, health
+gates, rollback, recovery, and retention. Legacy format-2 runner migration
+remains later work.
 
 **Phase 03 delivery boundary:**
 
@@ -282,6 +283,27 @@ publisher bootstrap, and legacy-runner retirement remain later phases.
 Phase 03 evidence: `linux_release_web_host` 8/8, focused API health/router
 checks 2/2, runtime-config/profile Vitest 72/72, scoped compile/build checks
 passed, and review scored 8.5/10 with no blocking findings.
+
+**Phase 05 delivery boundary:**
+
+- `install` and `role set` stage only a pending candidate. Unified `start`
+  performs activation or starts/verifies the committed role when no candidate
+  is pending.
+- The authoritative `/var/lib/dam-hopper-manager/state.json` envelope records
+  generation, active/previous/pending releases, transaction phase, hashes, and
+  latest failure; `/opt/dam-hopper/current` is a repairable convenience link.
+- Valid activation is `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED →
+  SWITCHED → PROBING → COMMITTED`, with lock-scoped quiesce, concrete unit/
+  config switch, daemon reload, health probing, and atomic commit.
+- Candidate health requires readiness within 20 seconds plus 20 consecutive
+  probes at 500 ms (10-second stability) for API `/api/health` and web
+  `/__dam-hopper/health`, including process identity, listener, and exact JSON
+  role/version checks.
+- `dam-hopper-recovery.service` runs `dam-hopper recover --boot` before the API
+  and web units. Interrupted transactions restore the previous release or the
+  first-install baseline; corrupt or unrecoverable state is blocked.
+- Automatic and manual rollback use recorded unit/config backups and the same
+  health gate. Retention removes only verified unreferenced release trees.
 
 **Functional Requirements:**
 
@@ -301,9 +323,18 @@ passed, and review scored 8.5/10 with no blocking findings.
 - Require an explicit role on fresh install; inherit a recorded role on
   upgrade; permit role changes only through `role set`. Keep web URL setup in
   the existing client-side server-profile flow.
-- Stage only a pending candidate. Do not switch the active release, alter
-  active/rollback metadata, install or start units, open listeners, or remove
-  current runtime state.
+- Stage only a pending candidate. `install` and `role set` must not switch the
+  active release, alter active/rollback metadata, install or start units, open
+  listeners, or remove current runtime state.
+- Make `start` the sole activation entrypoint. Advance only the durable state
+  machine `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED →
+  PROBING → COMMITTED`, under the deployment lock and with atomic state writes.
+- Require a 20-second startup deadline and a 10-second stability window of 20
+  consecutive 500 ms probes for each selected unit; check process identity,
+  executable, listener, and exact role/version health JSON.
+- Run `dam-hopper-recovery.service` before app units at boot. Automatically
+  restore interrupted transactions and support manual rollback through the same
+  health-gated transaction; fail closed as `RECOVERY_REQUIRED` when unsafe.
 
 **Acceptance Criteria:**
 
@@ -328,6 +359,19 @@ passed, and review scored 8.5/10 with no blocking findings.
   routes with no-store JSON responses.
 - [x] Web-root safety rejects symlink/traversal escapes; immutable hashed
   assets, root/index documents, and other assets receive distinct cache policy.
+- [x] Phase 05 durable state records generation, active/previous/pending
+  releases, transaction phase, hashes, and latest failure at
+  `/var/lib/dam-hopper-manager/state.json`; active `current` is repairable.
+- [x] State transitions enforce
+  `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING →
+  COMMITTED` and classify interrupted work for boot recovery.
+- [x] Candidate health enforces the 20-second startup deadline, 20 consecutive
+  500 ms probes, exact process/listener identity, and API/web role-version JSON.
+- [x] `dam-hopper-recovery.service` is ordered before API/web units and
+  `dam-hopper recover --boot` repairs safe interruptions or blocks unsafe state.
+- [x] Automatic candidate rollback, first-install baseline cleanup, manual
+  previous-release rollback, and verified unreferenced-tree retention are
+  implemented.
 - [x] Frontend runtime-origin validation is bounded, exact-origin based, and
   fail-closed; managed-profile precedence and token invalidation are covered.
 - [x] API router constructors default to API-only behavior; Docker's combined
@@ -340,13 +384,23 @@ passed, and review scored 8.5/10 with no blocking findings.
 **Technical Constraints:**
 
 - Keep release constants, version logic, manifest types, inventory validation,
-  CLI, acquisition, archive, layout, lock, and staging in focused
-  `server/src/linux_release/` modules.
+  CLI, acquisition, archive, layout, lock, staging, durable state, journal,
+  transaction, activation, rollback, recovery, health, and retention in
+  focused `server/src/linux_release/` modules.
 - Keep web-host routing, runtime-config validation, safe-path checks, and cache
   policy in focused `server/src/web_host/` modules; keep browser bootstrap and
   managed-profile reconciliation in the frontend API layer.
 - Treat the web root as immutable input: reject symlink roots/paths, bound
   runtime-config files at 4 KiB, and never derive the API origin from `Host`.
+- Persist state with same-directory temporary writes, file and parent-directory
+  sync, atomic rename/link replacement, and generation validation. Never treat
+  `/opt/dam-hopper/current` as authoritative.
+- Keep activation lock-scoped and phase-valid:
+  `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING →
+  COMMITTED`. Health probes must use the 20-second startup deadline and
+  10-second consecutive-probe window.
+- Order the root recovery oneshot before API/web units; recovery must fail
+  closed on corrupt, unowned, hash-mismatched, or unrestorable state.
 - Target prerequisites are the Fedora profile, public GitHub HTTPS access, and
   systemd; `gh` is optional only for attestation verification.
 - Use canonical UTF-8/LF JSON with deterministic field order and no

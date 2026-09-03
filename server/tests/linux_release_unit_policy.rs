@@ -115,11 +115,14 @@ fn test_stage_candidate_units_roles() {
     std::fs::create_dir_all(target_dir.join("web")).unwrap();
     let server_bin = target_dir.join("bin/dam-hopper-server");
     let web_bin = target_dir.join("bin/dam-hopper-web");
+    let mgr_bin = target_dir.join("bin/dam-hopper-manager");
     std::fs::write(&server_bin, "server").unwrap();
     std::fs::write(&web_bin, "web").unwrap();
+    std::fs::write(&mgr_bin, "manager").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&server_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&web_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&mgr_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Create dummy manifest
     let manifest = ReleaseManifest {
         schema_version: 1,
@@ -178,6 +181,7 @@ fn test_stage_candidate_units_roles() {
 
     let pending_units = layout.pending_units_dir();
     assert!(pending_units.join("dam-hopper-api.service").exists());
+    assert!(pending_units.join("dam-hopper-recovery.service").exists());
     assert!(!pending_units.join("dam-hopper-web.service").exists());
 
     let pending_cfg = load_host_public_config(&layout.pending_host_config_json_path())
