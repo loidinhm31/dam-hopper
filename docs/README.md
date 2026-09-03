@@ -30,6 +30,8 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
 - **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
+- **[Linux Release Manifest v1](./linux-release-manifest.md)** — Immutable Fedora 44 archive metadata, inventory, and role projections
+
 - Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
 
 Historical implementation plans are not indexed here; verify that a plan path
@@ -238,7 +240,8 @@ docs/
 ├── api-reference.md              # REST/WebSocket endpoints
 ├── configuration-guide.md        # dam-hopper.toml & setup
 ├── code-standards.md             # Patterns, testing, security
-└── codebase-summary.md           # Quick module reference
+├── codebase-summary.md           # Quick module reference
+└── linux-release-manifest.md     # Linux release archive contract v1
 ```
 
 Each file is self-contained but linked for cross-reference.
@@ -253,6 +256,7 @@ Docs are updated when:
 - Architecture changes (update system-architecture.md + code-standards.md)
 - Config schema changes (update configuration-guide.md)
 - New phases complete (update project-overview-pdr.md roadmap)
+- Release packaging contracts change (update `linux-release-manifest.md` and `system-architecture.md`)
 
 Always verify docs against actual code implementation before publishing.
 

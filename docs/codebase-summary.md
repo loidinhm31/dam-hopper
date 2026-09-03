@@ -8,8 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Structure**:
 
-- 274 total files
-- ~564K tokens
+- Repomix snapshot (2026-09-03): 1,475 files and 3,071,895 tokens packed; three security-sensitive files excluded from the compaction output
 - Predominantly Rust (server) and TypeScript/React (web)
 
 ## Current Frontend Shared Logic
@@ -54,6 +53,7 @@ This document provides a high-level overview of the current repository. Historic
 - **Agent Store**: Version-controlled agent configurations, skills, and templates
 - **Authentication**: JWT-based with dev-mode bypass; no-auth binds require a trusted development network
 - **WebSocket Transport**: Bi-directional communication for real-time updates
+- **Linux Release Contract**: `server/src/linux_release/` validates Manifest v1 identity, Fedora 44 profile, service/rollback invariants, normalized inventory, required assets, role projections, and bounded metadata
 
 ### Frontend (React + Vite)
 
@@ -267,6 +267,23 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 - BM25-based command search
 - Incremental imports and exports
 
+### Linux Release Contract (`server/src/linux_release/`)
+
+- `constants.rs` centralizes schema/profile/service/rollback values, archive
+  naming, and bounded parser limits.
+- `version.rs` validates stable SemVer, exact `vX.Y.Z` tags, and lowercase
+  commit/SHA-256 strings.
+- `manifest.rs` defines strict camelCase `serde` types and
+  `ReleaseManifest::parse_and_validate`.
+- `manifest_validation.rs` applies profile, archive, lockstep component,
+  service, rollback, and inventory invariants.
+- `inventory.rs`, `inventory_path.rs`, and `inventory_validation.rs` model
+  common/server/web projections, normalize paths, reject runtime files, and
+  require the release asset set.
+- `error.rs` keeps validation failures typed and bounded. The publisher schema
+  is `deploy/release/release-manifest.schema.json`; archive attestation and
+  extraction are later-phase responsibilities.
+
 ## Configuration
 
 ### Environment Variables
@@ -316,6 +333,10 @@ cargo test auth_no_auth    # Specific test module
 
 # Release build
 cargo build --release
+
+# Release manifest contract checks
+cargo test --test linux_release_manifest --test linux_release_manifest_errors
+cargo test linux_release
 ```
 
 ### Web Development
@@ -355,41 +376,32 @@ pnpm check        # Build web + native, lint, and run Rust tests
 
 ```
 dam-hopper/
-├── server/                    # Rust backend
+├── server/                         # Rust backend
 │   ├── src/
-│   │   ├── main.rs           # CLI entry point, production safety guards
-│   │   ├── state.rs          # AppState definition
-│   │   ├── api/
-│   │   │   ├── auth.rs       # Authentication handlers
-│   │   │   ├── ws.rs         # WebSocket transport
-│   │   │   └── mod.rs        # Router configuration
-│   │   ├── pty/              # Terminal management
-│   │   ├── fs/               # File system operations
-│   │   ├── agent_store/      # Agent store service
-│   │   └── lib.rs            # Library exports
-│   ├── tests/
-│   │   └── auth_no_auth.rs   # Auth bypass integration tests
-│   └── Cargo.toml            # Dependencies
+│   │   ├── main.rs                 # CLI entry point and bootstrap
+│   │   ├── api/                    # Axum REST/WebSocket handlers
+│   │   ├── linux_release/          # Manifest v1 types and validation
+│   │   ├── pty/                    # Terminal management
+│   │   ├── fs/                     # Filesystem operations/sandbox
+│   │   ├── agent_store/             # Agent-store service
+│   │   └── lib.rs                  # Library exports
+│   ├── tests/                      # Integration tests
+│   │   ├── linux_release_manifest.rs
+│   │   └── linux_release_manifest_errors.rs
+│   └── Cargo.toml                  # Server metadata/dependencies
+├── deploy/release/
+│   └── release-manifest.schema.json # Publisher schema v1
 ├── apps/
-│   ├── web/                  # Thin browser Vite host
-│   └── native/               # Tauri v2 host + src-tauri shell
+│   ├── web/                        # Thin browser Vite host
+│   ├── native/                     # Tauri v2 host and shell
+│   └── browser-extension/          # Browser debug extension
 ├── packages/
-│   ├── ui/                   # Shared React UI, hooks, stores, tests, styles
-│   └── shared/               # Shared logger and runtime helpers
-├── docs/                      # Documentation
-│   ├── codebase-summary.md   # This file
-│   ├── system-architecture.md
-│   ├── api-reference.md
-│   ├── code-standards.md
-│   └── phase-01-server-auth-bypass/
-│       ├── index.md
-│       └── implementation.md
-├── plans/                     # Feature plans and phases
-│   └── 20260416-multi-server-auth/
-│       ├── phase-01-server-auth-bypass.md
-│       ├── phase-02-multi-server-frontend.md
-│       └── phase-03-auth-integration.md
-└── CLAUDE.md                  # Development commands
+│   ├── ui/                         # Shared React UI and tests
+│   ├── shared/                     # Shared runtime utilities
+│   └── browser-bridge/             # Browser debug protocol
+├── docs/                           # Maintained documentation
+├── plans/                          # Feature plans and phase reports
+└── CLAUDE.md                       # Development commands
 ```
 
 ## Test Coverage
@@ -433,21 +445,34 @@ dam-hopper/
 - **Account Status**: Supports enabled/disabled flag
 - **Connection**: Pooled, support for MongoDB Atlas
 
+### Linux release manifest
+
+- Manifest v1 is validated by `server/src/linux_release/` before any future
+  extraction; the publisher schema is
+  `deploy/release/release-manifest.schema.json`.
+- One archive targets Fedora 44 x86_64 systemd and carries lockstep component
+  versions, service/rollback contracts, and a complete common/server/web
+  inventory.
+- Parsing is bounded at 1 MiB with at most 20,000 inventory entries and
+  255-byte normalized paths; links and runtime secret/config files are not
+  representable or allowed.
+
 ## Documentation Library
 
-| Document                                                       | Purpose                                       |
-| -------------------------------------------------------------- | --------------------------------------------- |
-| [system-architecture.md](./system-architecture.md)             | Component interactions, data flow             |
-| [api-reference.md](./api-reference.md)                         | HTTP endpoints, request/response schemas      |
-| [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
-| [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
-| [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
+| Document | Purpose |
+| --- | --- |
+| [system-architecture.md](./system-architecture.md) | Component interactions, data flow |
+| [api-reference.md](./api-reference.md) | HTTP endpoints, request/response schemas |
+| [code-standards.md](./code-standards.md) | Naming conventions, patterns, best practices |
+| [configuration-guide.md](./configuration-guide.md) | Setup, environment variables, config files |
+| [linux-release-manifest.md](./linux-release-manifest.md) | Linux release manifest v1 contract |
+| [native-browser-debug-support.md](./native-browser-debug-support.md) | Native Browser Debug platform gate and security boundaries |
 | [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
-| [ws-protocol-guide.md](./ws-protocol-guide.md)                 | WebSocket message types, terminal protocol    |
-| [project-roadmap.md](./project-roadmap.md)                     | Planned features and phases                   |
+| [ws-protocol-guide.md](./ws-protocol-guide.md) | WebSocket message types, terminal protocol |
+| [project-roadmap.md](./project-roadmap.md) | Planned features and phases |
 
 ---
 
-**Last Updated**: August 30, 2026
-**Phase Status**: Current support is tracked by feature and platform qualification; historical phase labels and evidence remain dated records.
-**Generated by**: Manual source-verified maintenance; a temporary Repomix refresh was attempted but blocked by the harness policy.
+**Last Updated**: September 3, 2026
+**Phase Status**: Phase 01 Linux release contract complete; acquisition, installer, attestation, and rollback consumers remain phase-scoped work.
+**Generated by**: Source review grounded in `repomix-output.xml` (Repomix 1.18.0); metrics reflect the compaction output and security exclusions.

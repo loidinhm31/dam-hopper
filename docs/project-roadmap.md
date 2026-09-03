@@ -2,6 +2,12 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Linux Release Installer Architecture (2026-09-03)
+
+- **Phase 01 — [COMPLETED 2026-09-03 16:07:45 +07:00]**: established the strict release-manifest v1 contract, lockstep `vX.Y.Z`/SemVer/component-version validation, Fedora 44 x86_64 systemd profile constants, role-scoped inventory projections, bounded canonical JSON, path/file-type/security exclusions, service/rollback invariants, and matching JSON Schema.
+- Validation: vendored all-target `cargo check` passed; focused manifest suites passed 20/20 and the `linux_release` filter passed 10/10 (30/30 executed test invocations); scoped code review approved 9.5/10 with no blocking findings.
+- Parent plan progress: **7% (10h/136h)**; Phase 01 complete, Phases 02–09 pending. [Plan](../plans/260903-0919-linux-release-installer-architecture/plan.md).
+
 ### Preserve Explorer Tree Expansion & Editor View Scroll Position (2026-08-31)
 
 - **Phases 01–03 — [COMPLETED 2026-08-31]**:

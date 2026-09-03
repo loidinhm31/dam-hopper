@@ -7,6 +7,14 @@ marker format 2; format-1 web-bearing installs remain accepted only for guarded
 reset/rollback cleanup. No command in this document performs a live reset or
 production mutation by itself.
 
+## Release manifest v1 boundary
+
+The [Linux Release Manifest v1](./linux-release-manifest.md) is the newer
+single-archive contract for Fedora 44 x86_64 role views. The guarded runner
+described here still uses its legacy format-2, server-only stage marker and
+does not yet consume the v1 archive or web inventory; keep those contracts
+separate until a later installer phase.
+
 If installation stops on a stale safety assignment and no managed service
 assets remain, run `pnpm linux:reset -- --runtime-only`. It preserves the
 existing server environment file, rewrites the current safety assignments, and
