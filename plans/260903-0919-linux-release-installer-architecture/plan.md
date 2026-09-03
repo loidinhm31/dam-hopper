@@ -14,14 +14,14 @@ created: 2026-09-03
 ## Outcome
 
 Replace the checkout-built format-2 Linux runner with one immutable, attested GitHub Release. A Rust manager stages a lockstep CLI/API/web release, independent API/web units run selected host roles, and explicit activation commits only after exact-version health remains stable.
-Progress: 7% (10h/136h; Phase 01 complete, Phases 02–09 pending).
+Progress: 21% (28h/136h; Phases 01–02 complete, Phases 03–09 pending).
 
 ## Fixed Decisions
 
 - Profile: Fedora 44 x86_64 GNU, glibc 2.43, systemd 259; direct API `4801`, web `4802`.
 - Assets: installer, one `.tar.gz`, strict manifest, SBOM, GitHub attestations; no npm/native-package authority.
-- Trust: GitHub attestation required before privilege; SHA-256 and exact inventory rechecked after root-owned copy. Detached signing key deferred.
-- CLI grammar: `fetch`, `install`, `role set`, `activate`, `status`, `rollback`, `recover`, `version`; bootstrap never activates.
+- Trust: SHA-256 and exact inventory are mandatory; GitHub attestation is published and optional to verify before privilege. Detached signing key deferred.
+- CLI grammar: `fetch`, `install`, `role set`, `start`, `status`, `rollback`, `recover`, `version`; bootstrap never activates.
 - Runtime: concrete per-release unit paths, authoritative durable metadata, active + previous + pending/latest-failed retention.
 - Health: 20s startup deadline, then 20 consecutive 500ms exact-version probes (10s stability).
 - Cutover: migrate only verified format-2 state; unknown or format-1 drift fails closed; remove old production scripts/unit after coverage lands.
@@ -31,7 +31,7 @@ Progress: 7% (10h/136h; Phase 01 complete, Phases 02–09 pending).
 | # | Phase | Status | Progress | Effort |
 |---|---|---|---:|---:|
 | 01 | [Contract, version, and manifest](./phase-01-contract-version-manifest.md) | DONE 2026-09-03 16:07:45 +07:00 | 100% | 10h |
-| 02 | [Rust CLI acquisition and staging](./phase-02-rust-cli-safe-acquisition-staging.md) | Pending | 0% | 18h |
+| 02 | [Rust CLI acquisition and staging](./phase-02-rust-cli-safe-acquisition-staging.md) | DONE 2026-09-03 | 100% | 18h |
 | 03 | [Dedicated web host and runtime origin](./phase-03-web-host-runtime-origin-health.md) | Pending | 0% | 14h |
 | 04 | [Role-aware systemd and ownership](./phase-04-role-aware-systemd-ownership.md) | Pending | 0% | 12h |
 | 05 | [Durable activation, rollback, and recovery](./phase-05-durable-activation-rollback-recovery.md) | Pending | 0% | 24h |
@@ -64,17 +64,17 @@ Accepted architecture: [brainstorm decision](../reports/brainstorm-260903-0919-l
 - Automatic legacy takeover supports only an exact, active, healthy format-2 installation. Format 1, drift, and ambiguity fail before mutation.
 - Published release artifacts must never contain or derive from any developer/CI host `.env`, `server.env`, `dam-hopper.toml`, MongoDB URI/database name, token, credential, SQLite file, or other machine-local runtime value. Each installed machine supplies and retains its own environment/config, including its own optional `MONGODB_URI` and `MONGODB_DATABASE`. Install, upgrade, start, and release rollback never copy runtime values between machines or replace/restore machine-local application data. Any future incompatible application-data migration requires a separate maintenance plan.
 
-### Required Plan Revisions Before Implementation
+### Remaining Plan Revisions Before Later Phases
 
-- [ ] Replace `activate` with the unified `start` contract across CLI, state-machine, bootstrap, tests, and docs phases.
-- [ ] Remove mandatory `gh`/attestation verification and the hard `gh` host prerequisite; retain published attestations as optional verification evidence and document the accepted checksum-only authenticity limit.
-- [ ] Remove install-time `--api-url`/managed runtime-profile generation; make existing UI server-profile setup the web bootstrap boundary.
-- [ ] Revise API unit, manifest identity, preflight, migration, security, and validation tasks for owner-directed `User=root`; remove false least-privilege claims and add explicit critical-risk evidence.
-- [ ] Enforce an allowlisted release inventory that excludes all runtime env/config/secrets/data; preserve each target machine's values byte-for-byte and require machine-local configuration when absent.
+- [ ] Propagate the unified `start` contract from the completed Phase 02 CLI through the remaining state-machine, bootstrap, tests, and docs phases.
+- [ ] Propagate optional GitHub attestation verification, mandatory SHA-256, and the accepted checksum-only authenticity limit through publisher/bootstrap phases.
+- [ ] Propagate the no-install-time-`--api-url` web bootstrap boundary through the remaining web, bootstrap, and docs phases.
+- [ ] Revise later API unit, manifest identity, preflight, migration, security, and validation tasks for owner-directed `User=root`; retain the explicit critical-risk evidence.
+- [ ] Propagate the runtime-value exclusion and machine-local configuration contract through publisher, migration, validation, and docs phases.
 - [ ] Recheck every phase dependency, success criterion, and failure test after these cross-cutting contract changes.
 
-**Readiness:** revise phase files before implementation. Current phase details still encode superseded decisions.
+**Readiness:** Phase 02 is implemented and reviewed. Revise remaining phase files before their implementation; they still contain superseded decisions.
 
 ## Unresolved Questions
 
-None. Required revisions reflect explicit owner decisions, not open choices.
+None. Remaining revisions are tracked above; no unresolved questions.

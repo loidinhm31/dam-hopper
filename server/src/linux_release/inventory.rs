@@ -23,7 +23,7 @@ pub enum ReleaseRole {
 }
 
 /// Target role selected during installation or runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum TargetRole {
     Server,
@@ -44,8 +44,21 @@ impl TargetRole {
             TargetRole::Both => true,
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TargetRole::Server => "server",
+            TargetRole::Web => "web",
+            TargetRole::Both => "both",
+        }
+    }
 }
 
+impl std::fmt::Display for TargetRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
 /// Single entry in the release inventory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -77,8 +90,9 @@ where
 
     match ModeValue::deserialize(deserializer)? {
         ModeValue::Int(n) => Ok(n),
-        ModeValue::Str(s) => u32::from_str_radix(s.trim_start_matches("0o"), 8)
-            .map_err(serde::de::Error::custom),
+        ModeValue::Str(s) => {
+            u32::from_str_radix(s.trim_start_matches("0o"), 8).map_err(serde::de::Error::custom)
+        }
     }
 }
 

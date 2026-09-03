@@ -8,8 +8,11 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Structure**:
 
-- Repomix snapshot (2026-09-03): 1,475 files and 3,071,895 tokens packed; three security-sensitive files excluded from the compaction output
-- Predominantly Rust (server) and TypeScript/React (web)
+- Repomix snapshot (2026-09-03): 1,499 files and 3,107,553 tokens packed into
+  `repomix-output.xml`; three security-sensitive files were excluded by the
+  compaction security check.
+- Predominantly Rust (server) and TypeScript/React (web). The Linux release
+  manager is a second Rust binary in the server package.
 
 ## Current Frontend Shared Logic
 
@@ -53,7 +56,13 @@ This document provides a high-level overview of the current repository. Historic
 - **Agent Store**: Version-controlled agent configurations, skills, and templates
 - **Authentication**: JWT-based with dev-mode bypass; no-auth binds require a trusted development network
 - **WebSocket Transport**: Bi-directional communication for real-time updates
-- **Linux Release Contract**: `server/src/linux_release/` validates Manifest v1 identity, Fedora 44 profile, service/rollback invariants, normalized inventory, required assets, role projections, and bounded metadata
+- **Linux Release Manager**: `server/src/bin/dam-hopper.rs` dispatches the
+  Phase 02 `fetch`, `install`, `role set`, `start`, `status`, `rollback`,
+  `recover`, and `version` grammar. `server/src/linux_release/` owns Fedora
+  profile checks, bounded GitHub acquisition, optional attestation, exact
+  inventory/archive validation, role projection, deployment locking, and
+  pending-candidate persistence. Activation and service lifecycle remain later
+  phase responsibilities.
 
 ### Frontend (React + Vite)
 
@@ -267,22 +276,34 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 - BM25-based command search
 - Incremental imports and exports
 
-### Linux Release Contract (`server/src/linux_release/`)
+### Linux Release Manager (`server/src/linux_release/`)
 
-- `constants.rs` centralizes schema/profile/service/rollback values, archive
-  naming, and bounded parser limits.
-- `version.rs` validates stable SemVer, exact `vX.Y.Z` tags, and lowercase
-  commit/SHA-256 strings.
-- `manifest.rs` defines strict camelCase `serde` types and
-  `ReleaseManifest::parse_and_validate`.
-- `manifest_validation.rs` applies profile, archive, lockstep component,
-  service, rollback, and inventory invariants.
-- `inventory.rs`, `inventory_path.rs`, and `inventory_validation.rs` model
-  common/server/web projections, normalize paths, reject runtime files, and
-  require the release asset set.
-- `error.rs` keeps validation failures typed and bounded. The publisher schema
-  is `deploy/release/release-manifest.schema.json`; archive attestation and
-  extraction are later-phase responsibilities.
+Phase 01's strict Manifest v1 contract and Phase 02's manager consumer share
+one focused module:
+
+- `constants.rs`, `version.rs`, `manifest.rs`, `manifest_validation.rs`,
+  `inventory.rs`, `inventory_path.rs`, and `inventory_validation.rs` enforce
+  profile, stable tag/SemVer, lockstep versions, normalized paths, role
+  projections, required assets, modes, digests, and runtime-file exclusions.
+- `cli.rs` plus `server/src/bin/dam-hopper.rs` define and dispatch the manager
+  grammar. `privilege.rs` enforces non-root `fetch`, root mutation commands,
+  and read-only `status`/`version`.
+- `platform.rs`, `origin.rs`, and `host_config.rs` gate Fedora 44/x86_64,
+  glibc/systemd requirements, exact web origins, and persistent role settings.
+- `acquire.rs`, `acquire_client.rs`, and `attestation.rs` resolve stable
+  GitHub releases, bound HTTPS requests, require archive SHA-256 equality, and
+  optionally run repository-bound `gh` attestation checks.
+- `archive.rs` and `archive_extract.rs` reject unsafe tar entries and extract
+  only the exact selected role projection.
+- `layout.rs`, `lock.rs`, `stage.rs`, and `stage_transaction.rs` provide
+  canonical `/opt`, `/etc`, `/var/lib`, and `/run/lock` paths, a nonblocking
+  deployment lock, root-private transaction staging, and fsync-backed
+  `PendingState` handoff.
+- `error.rs` keeps diagnostics typed and bounded. The publisher schema remains
+  `deploy/release/release-manifest.schema.json`.
+
+Phase 02 never activates `/opt/dam-hopper/current`, changes active/rollback
+state, or starts systemd units. The guarded format-2 runner remains separate.
 
 ## Configuration
 
@@ -314,6 +335,28 @@ registry-dir/
       └── cache/           # Cache directory
 ```
 
+The Linux release manager uses a separate host layout:
+
+```
+/opt/dam-hopper/
+  ├── .staging/<transaction-id>/       # root-private in-flight transaction
+  ├── releases/<tag>/<role>/           # unpacked role view
+  └── current                           # active-view link (later phase)
+/etc/dam-hopper/
+  ├── host.toml                         # role + exact allowed web origins
+  ├── server.env                        # machine-local API environment
+  └── web.env                           # machine-local web environment
+/var/lib/dam-hopper/
+  ├── pending.json                      # staged candidate handoff
+  ├── active.json                       # active metadata (later phase)
+  └── rollback.json                     # rollback metadata (later phase)
+/run/lock/dam-hopper/deploy.lock        # nonblocking deployment lock
+```
+
+Published release assets must not contain machine-local environment/config,
+tokens, credentials, or SQLite state. See [Linux Release Manager](./linux-release-manager.md)
+for ownership and transaction details.
+
 ## Development Commands
 
 ### Server Development
@@ -337,6 +380,17 @@ cargo build --release
 # Release manifest contract checks
 cargo test --test linux_release_manifest --test linux_release_manifest_errors
 cargo test linux_release
+```
+
+```bash
+# Inspect the manager grammar without mutating the host
+cargo run --bin dam-hopper -- version
+
+# Focused Linux release manager suites
+cargo test --test linux_release_cli --test linux_release_platform \
+  --test linux_release_archive --test linux_release_acquisition \
+  --test linux_release_staging --test linux_release_manifest \
+  --test linux_release_manifest_errors
 ```
 
 ### Web Development
@@ -378,17 +432,18 @@ pnpm check        # Build web + native, lint, and run Rust tests
 dam-hopper/
 ├── server/                         # Rust backend
 │   ├── src/
-│   │   ├── main.rs                 # CLI entry point and bootstrap
+│   │   ├── main.rs                 # Server bootstrap
+│   │   ├── bin/dam-hopper.rs       # Linux release manager binary
 │   │   ├── api/                    # Axum REST/WebSocket handlers
-│   │   ├── linux_release/          # Manifest v1 types and validation
+│   │   ├── linux_release/          # Manifest, acquisition, and staging
 │   │   ├── pty/                    # Terminal management
 │   │   ├── fs/                     # Filesystem operations/sandbox
 │   │   ├── agent_store/             # Agent-store service
 │   │   └── lib.rs                  # Library exports
 │   ├── tests/                      # Integration tests
-│   │   ├── linux_release_manifest.rs
-│   │   └── linux_release_manifest_errors.rs
-│   └── Cargo.toml                  # Server metadata/dependencies
+│   │   ├── linux_release_*.rs      # 7 focused release suites
+│   │   └── common/release_fixtures.rs
+│   └── Cargo.toml                  # Server and manager metadata
 ├── deploy/release/
 │   └── release-manifest.schema.json # Publisher schema v1
 ├── apps/
@@ -405,17 +460,22 @@ dam-hopper/
 ```
 
 ## Test Coverage
-
 ### Passing Tests
 
-- **Server**: 111 unit tests, 7 integration tests (auth)
-- **Web**: Component tests with Vitest, 80% coverage target
+- **Linux release Phase 02**: 45/45 focused tests across seven suites:
+  CLI/privilege, platform/origins, acquisition, archive, staging, and the two
+  Manifest v1 contract suites.
+- **Other server/frontend counts**: historical snapshots only; consult the
+  dated roadmap/changelog entries rather than treating them as a release gate.
 
-### Known Limitations (Pre-existing)
+### Known Limitations (Pre-existing or phase-scoped)
 
-- 8 platform-specific failures (Windows symlink privileges, path format)
-- Git worktree edge cases
-- Not phase-01-related
+- Linux release activation, systemd unit installation, health-gated cutover,
+  rollback, recovery, and format-2 migration are later phases.
+- The guarded format-2 systemd runner remains separate from Manifest v1 manager
+  staging.
+- Platform-specific Windows filesystem behavior and Git worktree edge cases
+  remain outside this phase.
 
 ## Performance Metrics
 
@@ -445,17 +505,28 @@ dam-hopper/
 - **Account Status**: Supports enabled/disabled flag
 - **Connection**: Pooled, support for MongoDB Atlas
 
-### Linux release manifest
+### Linux release manager
 
-- Manifest v1 is validated by `server/src/linux_release/` before any future
-  extraction; the publisher schema is
+- Manifest v1 is validated by `server/src/linux_release/` before archive
+  inspection; the publisher schema remains
   `deploy/release/release-manifest.schema.json`.
-- One archive targets Fedora 44 x86_64 systemd and carries lockstep component
-  versions, service/rollback contracts, and a complete common/server/web
-  inventory.
-- Parsing is bounded at 1 MiB with at most 20,000 inventory entries and
-  255-byte normalized paths; links and runtime secret/config files are not
-  representable or allowed.
+- The `dam-hopper` manager implements the Phase 02 grammar and privilege
+  policy. Non-root `fetch` downloads a stable GitHub release with bounded
+  HTTPS; root `install`/`role set` validates and stages a role view. `status`
+  and `version` are read-only; `start`, `rollback`, and `recover` are grammar
+  placeholders for later lifecycle phases.
+- Archive inspection requires exact common/server/web inventory equality,
+  normalized paths, regular files/directories, manifest modes, sizes, and
+  SHA-256 digests. Links, special entries, and disallowed runtime/config files
+  fail closed.
+- The deployment lock is `/run/lock/dam-hopper/deploy.lock`; transaction
+  extraction is under `/opt/dam-hopper/.staging/<transaction-id>`, role views
+  under `/opt/dam-hopper/releases/<tag>/<role>`, and pending metadata at
+  `/var/lib/dam-hopper/pending.json`. Phase 02 never switches the active link
+  or starts systemd units.
+- Published archives contain no machine-local `.env`, server config, token,
+  credentials, or SQLite state. API service identity is `root` by owner
+  decision for this MVP; web remains separately unprivileged.
 
 ## Documentation Library
 
@@ -466,6 +537,7 @@ dam-hopper/
 | [code-standards.md](./code-standards.md) | Naming conventions, patterns, best practices |
 | [configuration-guide.md](./configuration-guide.md) | Setup, environment variables, config files |
 | [linux-release-manifest.md](./linux-release-manifest.md) | Linux release manifest v1 contract |
+| [linux-release-manager.md](./linux-release-manager.md) | Phase 02 CLI, platform gate, acquisition, and safe staging |
 | [native-browser-debug-support.md](./native-browser-debug-support.md) | Native Browser Debug platform gate and security boundaries |
 | [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
 | [ws-protocol-guide.md](./ws-protocol-guide.md) | WebSocket message types, terminal protocol |
@@ -474,5 +546,5 @@ dam-hopper/
 ---
 
 **Last Updated**: September 3, 2026
-**Phase Status**: Phase 01 Linux release contract complete; acquisition, installer, attestation, and rollback consumers remain phase-scoped work.
+**Phase Status**: Phases 01–02 of the Linux Release Installer Architecture are complete and reviewed. Phase 02 manager acquisition and role staging are delivered; activation, health-gated cutover, rollback, recovery, and runner migration remain later phases.
 **Generated by**: Source review grounded in `repomix-output.xml` (Repomix 1.18.0); metrics reflect the compaction output and security exclusions.

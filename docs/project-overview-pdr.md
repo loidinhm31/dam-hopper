@@ -257,23 +257,35 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 See [Native Browser Debug Support](./native-browser-debug-support.md) for the platform matrix and rollback path.
 
-### PR-011: Linux Release Identity and Manifest v1
+### PR-011: Linux Release Identity, Manager, and Manifest v1
 
-**Status:** Phase 01 contract complete (2026-09-03). Acquisition, extraction,
-installation, activation, attestation, and rollback consumers remain later
-phases.
+**Status:** Phases 01–02 complete and reviewed (2026-09-03). Phase 01 defines
+the release metadata contract; Phase 02 adds the Rust manager's unprivileged
+acquisition and root-only role staging. Dedicated web packaging, systemd unit
+installation, activation, health checks, rollback, recovery, publisher
+bootstrap, and legacy-runner retirement remain later phases.
 
 **Functional Requirements:**
 
 - Publish one immutable `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz`
-  archive for the Fedora 44 x86_64 systemd profile.
-- Treat the protected `vX.Y.Z` Git tag as release authority and require stable
-  SemVer plus one matching version for `cli`, `api`, `webHost`, and `webAssets`.
-- Record the 40-character commit SHA, profile ABI requirements, archive size and
-  SHA-256, API/web service contracts, exact role-scoped inventory, and
-  `previousReleaseCompatible=true` / `stateCompatibility="n-1"`.
-- Reject unknown, duplicate, missing, ill-typed, unsafe, over-limit, or
-  non-canonical manifest data before extraction.
+  archive for Fedora 44 x86_64 systemd.
+- Treat protected `vX.Y.Z` as release authority and require stable SemVer plus
+  one matching version for `cli`, `api`, `webHost`, and `webAssets`.
+- Validate archive size/SHA-256, commit SHA, profile ABI requirements, exact
+  role-scoped inventory, API/web service contracts, and the `n-1` rollback
+  declaration before extraction.
+- Provide the manager grammar: `fetch`, `install`, `role set`, `start`,
+  `status`, `rollback`, `recover`, and `version`; `activate` and install-time
+  `--api-url` are not part of the contract.
+- Resolve `fetch --latest` once to a stable tag, download only the exact
+  manifest/archive assets, require archive SHA-256 equality, and optionally
+  verify GitHub attestations.
+- Require an explicit role on fresh install; inherit a recorded role on
+  upgrade; permit role changes only through `role set`. Keep web URL setup in
+  the existing client-side server-profile flow.
+- Stage only a pending candidate. Do not switch the active release, alter
+  active/rollback metadata, install or start units, open listeners, or remove
+  current runtime state.
 
 **Acceptance Criteria:**
 
@@ -281,24 +293,39 @@ phases.
 - [x] Manifest payloads are bounded at 1 MiB; inventories at 20,000 entries;
   normalized paths at 255 bytes.
 - [x] Stable tag/version, component equality, Fedora/systemd profile, archive,
-  service, rollback, required-path, role, mode, digest, and file-type rules are
-  validated.
-- [x] Publisher JSON Schema uses `additionalProperties: false`, constants,
-  enums, patterns, required fields, and matching numeric bounds.
-- [x] Server integration tests cover valid round trips, role projections,
-  malformed input, drift, unsafe paths, required assets, and secret-file
-  exclusions.
+  service, rollback, required-path, role, mode, digest, and file-type rules
+  are validated.
+- [x] `dam-hopper` Clap grammar and EUID matrix are implemented: non-root
+  `fetch`, root mutation commands, and read-only `status`/`version`.
+- [x] Platform checks cover Fedora 44, x86_64, glibc >= 2.43, systemd >= 259,
+  and an active system manager; exact web origins reject unsafe or duplicate
+  values.
+- [x] GitHub acquisition uses bounded HTTPS requests and mandatory archive
+  SHA-256 verification; attestation remains optional.
+- [x] Root staging uses a nonblocking deployment lock, no-follow bundle opens,
+  exact manifest inventory inspection, regular-file/directory extraction, role
+  projection, and fsync-backed pending metadata.
+- [x] Focused release suites pass 45/45 tests across seven suites; scoped
+  manager compile/check and review gates pass with no blocking findings.
 
 **Technical Constraints:**
 
-- Keep contract constants, version logic, manifest types, inventory logic, and
-  validation in the focused `server/src/linux_release/` modules.
-- Use canonical UTF-8, LF-terminated JSON with deterministic field order and no
-  credentials, mutable URLs, timestamps, or `latest` pointers.
-- Treat the Rust validator as authoritative for cross-field rules; keep
-  `deploy/release/release-manifest.schema.json` structurally in parity.
+- Keep release constants, version logic, manifest types, inventory validation,
+  CLI, acquisition, archive, layout, lock, and staging in focused
+  `server/src/linux_release/` modules.
+- Target prerequisites are the Fedora profile, public GitHub HTTPS access, and
+  systemd; `gh` is optional only for attestation verification.
+- Use canonical UTF-8/LF JSON with deterministic field order and no
+  credentials, mutable URLs, timestamps, `latest` pointers, or machine-local
+  runtime configuration in published assets.
+- Treat Rust validation as authoritative for cross-field rules; keep the
+  publisher JSON Schema structurally equivalent.
+- The API service runs as `root` for this MVP by owner direction; the web
+  service remains separately unprivileged. Record this as a critical accepted
+  risk rather than a least-privilege recommendation.
 
-See [Linux Release Manifest v1](./linux-release-manifest.md).
+See [Linux Release Manifest v1](./linux-release-manifest.md) and [Linux Release
+Manager](./linux-release-manager.md).
 
 ### PR-009: Host Resource Monitoring (Current Delivery)
 

@@ -30,10 +30,18 @@ pub fn create_valid_manifest() -> ReleaseManifest {
             sha256: sha.clone(),
         },
         components: ComponentsMeta {
-            cli: ComponentVersion { version: version.clone() },
-            api: ComponentVersion { version: version.clone() },
-            web_host: ComponentVersion { version: version.clone() },
-            web_assets: ComponentVersion { version: version.clone() },
+            cli: ComponentVersion {
+                version: version.clone(),
+            },
+            api: ComponentVersion {
+                version: version.clone(),
+            },
+            web_host: ComponentVersion {
+                version: version.clone(),
+            },
+            web_assets: ComponentVersion {
+                version: version.clone(),
+            },
         },
         inventory: vec![
             InventoryEntry {
@@ -145,24 +153,44 @@ fn test_role_projections() {
     let manifest = create_valid_manifest();
 
     let server_entries = manifest.project_role(TargetRole::Server);
-    assert!(server_entries.iter().any(|e| e.path == "bin/dam-hopper-manager"));
-    assert!(server_entries.iter().any(|e| e.path == "bin/dam-hopper-server"));
-    assert!(server_entries.iter().any(|e| e.path == "systemd/dam-hopper-api.service"));
+    assert!(server_entries
+        .iter()
+        .any(|e| e.path == "bin/dam-hopper-manager"));
+    assert!(server_entries
+        .iter()
+        .any(|e| e.path == "bin/dam-hopper-server"));
+    assert!(server_entries
+        .iter()
+        .any(|e| e.path == "systemd/dam-hopper-api.service"));
     assert!(server_entries.iter().any(|e| e.path == "LICENSE"));
-    assert!(!server_entries.iter().any(|e| e.path == "bin/dam-hopper-web"));
-    assert!(!server_entries.iter().any(|e| e.path == "systemd/dam-hopper-web.service"));
+    assert!(!server_entries
+        .iter()
+        .any(|e| e.path == "bin/dam-hopper-web"));
+    assert!(!server_entries
+        .iter()
+        .any(|e| e.path == "systemd/dam-hopper-web.service"));
     assert!(!server_entries.iter().any(|e| e.path == "web/index.html"));
 
     let web_entries = manifest.project_role(TargetRole::Web);
-    assert!(web_entries.iter().any(|e| e.path == "bin/dam-hopper-manager"));
+    assert!(web_entries
+        .iter()
+        .any(|e| e.path == "bin/dam-hopper-manager"));
     assert!(web_entries.iter().any(|e| e.path == "bin/dam-hopper-web"));
-    assert!(web_entries.iter().any(|e| e.path == "systemd/dam-hopper-web.service"));
-    assert!(web_entries.iter().any(|e| e.path == "sysusers.d/dam-hopper-web.conf"));
+    assert!(web_entries
+        .iter()
+        .any(|e| e.path == "systemd/dam-hopper-web.service"));
+    assert!(web_entries
+        .iter()
+        .any(|e| e.path == "sysusers.d/dam-hopper-web.conf"));
     assert!(web_entries.iter().any(|e| e.path == "web"));
     assert!(web_entries.iter().any(|e| e.path == "web/index.html"));
     assert!(web_entries.iter().any(|e| e.path == "LICENSE"));
-    assert!(!web_entries.iter().any(|e| e.path == "bin/dam-hopper-server"));
-    assert!(!web_entries.iter().any(|e| e.path == "systemd/dam-hopper-api.service"));
+    assert!(!web_entries
+        .iter()
+        .any(|e| e.path == "bin/dam-hopper-server"));
+    assert!(!web_entries
+        .iter()
+        .any(|e| e.path == "systemd/dam-hopper-api.service"));
 
     let both_entries = manifest.project_role(TargetRole::Both);
     assert_eq!(both_entries.len(), manifest.inventory.len());

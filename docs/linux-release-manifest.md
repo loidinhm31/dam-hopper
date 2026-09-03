@@ -1,9 +1,9 @@
 # Linux Release Manifest v1
 
-Status: Phase 01 contract complete (2026-09-03). This document describes the
-metadata contract consumed by the Linux release pipeline. It does not describe
-installer, extraction, activation, or rollback implementation; those are later
-phases.
+Status: Phase 02 implementation complete and reviewed (2026-09-03). This
+document defines the release metadata consumed by the manager's acquisition and
+staging paths. Activation, systemd unit installation, health checks, rollback,
+and recovery remain later phases.
 
 The Rust validator is the runtime authority. The publisher-facing JSON Schema
 must remain structurally equivalent to the Rust types and must reject anything
@@ -183,14 +183,37 @@ common + web paths, and a both view contains the complete inventory. Each view
 is immutable; a role change creates a new same-version view rather than
 mutating an existing one.
 
+The Phase 02 staging implementation preserves this post-commit view shape but
+replaces an existing same-tag/same-role destination before a repeated final
+rename; activation is still deferred and the active view is untouched.
+
+## Manager consumption (Phase 02)
+
+The Rust manager is the first runtime consumer of Manifest v1:
+
+- `fetch` resolves an exact stable tag, downloads `release-manifest.json` and
+  the one expected archive, and requires the archive SHA-256 to equal
+  `manifest.archive.sha256`.
+- `install` and `role set` parse and validate the manifest before any role-view
+  extraction. They inspect every archive entry against the exact inventory and
+  extract only `common` plus the selected role (`both` includes all entries).
+- The manager persists the manifest and archive digests in `pending.json` only
+  after the role view has been renamed into the release directory.
+
+The manager guide documents the command grammar, host profile gate, layout,
+transaction boundary, and deferred activation behavior:
+[Linux Release Manager](./linux-release-manager.md).
+
 ## Existing systemd runner boundary
 
 The current guarded systemd runner documented in
 [Linux systemd](./linux-systemd.md) still uses its legacy format-2 server-only
 stage marker. That marker (`format`, `nonce`, and local binary/unit hashes) is
-not the release manifest v1 contract and has no web inventory. Do not treat a
-format-2 stage as a v1 archive, or treat this Phase 01 document as evidence that
-installer behavior is already implemented.
+not the release manifest v1 contract and has no web inventory. Phase 02 adds
+manager acquisition and role-view staging for Manifest v1, but does not replace
+the runner, switch the active pointer, or start services. Do not treat a
+format-2 stage as a v1 archive, or this document as evidence that activation,
+rollback, or recovery is implemented.
 
 ## Verification
 
@@ -206,3 +229,17 @@ The suites cover round-trip parsing, role projections, bounds, unknown fields,
 version/profile/component drift, service and rollback invariants, duplicate and
 unsafe paths, required assets, file/directory metadata, and disallowed runtime
 files. The full server validation gate remains the release-owner responsibility.
+
+Phase 02 manager evidence:
+
+```bash
+cargo test --manifest-path server/Cargo.toml \
+  --test linux_release_cli --test linux_release_platform \
+  --test linux_release_acquisition --test linux_release_archive \
+  --test linux_release_staging --test linux_release_manifest \
+  --test linux_release_manifest_errors
+```
+
+The focused release suites passed 45/45 tests across seven suites. Manifest
+contract tests remain authoritative for metadata rules; CLI, platform,
+acquisition, archive, and staging suites cover the manager consumer boundary.
