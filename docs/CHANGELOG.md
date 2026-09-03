@@ -2,6 +2,19 @@
 
 - **Linux Release Installer Architecture — Phase 06: Central GitHub Publisher and Bootstrap [COMPLETED 2026-09-04 01:05:00 +07:00].** Stable `vX.Y.Z` publishing is isolated from desktop `desktop-v*` releases. The publisher validates version alignment, builds Rust/web inputs, compares two deterministic archives, emits external Manifest v1 plus SPDX 2.3 SBOM assets, applies the exact four-asset gate, attests all four subjects, and publishes only after the `linux-release` environment gate. `dam-hopper-install.sh` downloads as the caller, verifies archive integrity with optional manifest/archive attestations, extracts only the manager, and ends at `PENDING`; activation remains `sudo dam-hopper start`. See [Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md).
 - Validation: publisher contract tests **24/24**, `pnpm release:verify`, shell/Node syntax checks, and vendored all-target `cargo check` passed; Cycle 2 review approved **9.5/10** with no blocking findings. Fedora-host ABI evidence and mutable toolchain/cache action pins remain later release gates.
+- **Linux Release Installer Architecture — Phase 07: Format-2 Migration and
+  Runner Retirement [COMPLETED 2026-09-04].** The manager now accepts only the
+  exact read-only legacy format-2 layout for one-time migration, stages a
+  same-device sibling workspace, exchanges roots atomically with
+  `renameat2(RENAME_EXCHANGE)`, records an `imported-format-2` rollback source,
+  and restores the old root/unit/wants link/binary on rollback. The checkout
+  production/reset scripts, fixed `dam-hopper.service`, fixture, and
+  `linux:production`/`linux:reset` aliases are retired.
+- Validation: focused migration fixture/drift/exchange coverage passed **14/14**;
+  the Fedora rehearsal passed at fixture level; Cycle 2 review approved **9.0/10**
+  with no blocking findings. No production-host deployment claim is implied.
+  [Phase 07 plan](../plans/260903-0919-linux-release-installer-architecture/phase-07-format-2-migration-runner-retirement.md).
+
 
 # 2026-09-03
 

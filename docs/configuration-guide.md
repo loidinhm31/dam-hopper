@@ -658,32 +658,38 @@ The repository `Dockerfile` supplies this explicit flag in its `CMD`. Do not
 infer that systemd or direct API startup serves browser assets; systemd uses
 backend port `4801`, while the dedicated web host uses `4802`.
 
-### Linux systemd production service
+### Linux systemd release manager
 
-Use the guarded Linux production workflow to build, install, and start the
-systemd-owned service:
+Use the published bootstrap or packaged `dam-hopper` manager; checkout-built
+production/reset scripts are not supported:
 
 ```bash
-pnpm linux:production -- build
-pnpm linux:production -- install --staging /tmp/dam-hopper-production-stage.XXXXXX
-pnpm linux:production -- start
+bash dam-hopper-install.sh --version v0.2.0 --role server
+sudo dam-hopper start
 ```
 
-The selected source file controls the user-owned runtime configuration. The
-runner generates the production safety overrides and owns the installed unit;
-do not edit installed assets or start a second nohup process against the same
-databases.
+For an already downloaded bundle, `fetch` runs as the non-root caller and
+`install`/`role set` run as root:
 
-Common source settings include `DAM_HOPPER_CONFIG`,
-`DAM_HOPPER_CORS_ORIGINS` (comma-separated exact browser origins, optional),
-`DAM_HOPPER_HOST`, `DAM_HOPPER_PORT`, and `DAM_HOPPER_WORKSPACE` (legacy
-directory-discovery override, optional).
+```bash
+dam-hopper fetch --latest --output "$HOME/.cache/dam-hopper/latest"
+sudo dam-hopper install --bundle "$HOME/.cache/dam-hopper/latest" --role server
+sudo dam-hopper start
+```
 
-Production ownership and runtime state:
+`install` and `role set` stop at `PENDING`; `start` is the sole activation
+entrypoint. If the canonical root is a verified legacy format-2 installation,
+the manager performs the one-time side-staged migration and retires the old
+runner. Exact invariants, exchange, rollback, and recovery are documented in
+[Linux systemd](./linux-systemd.md).
 
-- Installed assets: `/opt/dam-hopper/`
-- Unit: `/etc/systemd/system/dam-hopper.service`
-- User runtime: `~/.config/dam-hopper/`
+Current systemd-owned paths are:
+
+- `/opt/dam-hopper/` — canonical release root and current/previous views
+- `/etc/systemd/system/dam-hopper-api.service`
+- `/etc/systemd/system/dam-hopper-web.service`
+- `/etc/systemd/system/dam-hopper-recovery.service`
+- `/var/lib/dam-hopper-manager/state.json` — durable manager state
 
 ## Browser origin and transport
 

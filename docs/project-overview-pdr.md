@@ -259,14 +259,15 @@ See [Native Browser Debug Support](./native-browser-debug-support.md) for the pl
 
 ### PR-011: Linux Release Identity, Manager, Manifest, and Publisher v1
 
-**Status:** Phases 01–06 complete and reviewed (2026-09-04). Phase 01 defines
+**Status:** Phases 01–07 complete and reviewed (2026-09-04). Phase 01 defines
 the release metadata contract; Phase 02 adds the Rust manager's unprivileged
 acquisition and root-only role staging; Phase 03 adds the dedicated web host,
 runtime-origin bootstrap, and API-only default; Phase 04 adds role-aware
 systemd units and ownership policy; Phase 05 adds durable activation, health
 gates, rollback, recovery, and retention; Phase 06 adds the central GitHub
 publisher, deterministic archive, manifest/SBOM generation, asset gate, and
-non-root bootstrap. Legacy format-2 runner migration remains later work.
+non-root bootstrap; Phase 07 adds one-time exact format-2 migration and
+checkout-built runner retirement.
 
 **Phase 03 delivery boundary:**
 
@@ -322,6 +323,23 @@ passed, and review scored 8.5/10 with no blocking findings.
 - Bootstrap downloads as the caller, optionally verifies manifest/archive
   attestations, extracts only the manager, and stops after root staging at
   `PENDING`; it does not accept `--api-url` or activate services.
+
+**Phase 07 delivery boundary:**
+
+- The manager performs read-only format-2 checks for the root, exact marker/bin
+  inventories, regular-file modes, four-line manifest, nonce/digest matches,
+  fixed unit directives, forbidden settings, and the wants-link target.
+- Format 1 and unknown layouts fail closed. Static staging uses the sibling
+  `/opt/.dam-hopper-migration.<tx_id>` workspace; it requires the same device
+  and exchanges roots with Linux `renameat2(RENAME_EXCHANGE)`, without a copy
+  fallback.
+- The migration record retains an `imported-format-2` previous source.
+  Rollback restores the old root/unit/wants link/binary; commit removes the
+  marker and redundant exchanged root. The old checkout scripts, fixed unit,
+  fixture, and package aliases are retired.
+- The separate live inspector can verify active service/process identity,
+  listeners, and API health when requested; fixture rehearsal is not
+  production deployment evidence.
 
 The implementation caveats are explicit: the current Rust build job runs on
 `ubuntu-latest` rather than a Fedora 44 image, and the workflow sets a fixed
@@ -406,6 +424,10 @@ stronger action pinning remain later release gates.
 - [x] Phase 06 central publisher DAG, exact four-asset gate, deterministic
   archive, SPDX SBOM, GitHub attestations, and bootstrap staging are delivered;
   focused publisher contract tests and syntax/alignment checks pass.
+- [x] Phase 07 exact format-2 verifier, sibling same-device staging,
+  `renameat2(RENAME_EXCHANGE)` cutover, rollback restoration, and
+  `imported-format-2` retention are delivered; old checkout runner scripts,
+  fixed unit, fixture, and package aliases are absent.
 
 **Technical Constraints:**
 

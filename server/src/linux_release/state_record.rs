@@ -27,7 +27,9 @@ pub struct ReleaseRecord {
 
 impl ReleaseRecord {
     pub fn validate(&self) -> Result<(), ReleaseError> {
-        validate_release_tag(&self.tag, &self.version)?;
+        if self.tag != "imported-format-2" {
+            validate_release_tag(&self.tag, &self.version)?;
+        }
         validate_sha256_hex(&self.manifest_sha256)?;
         validate_sha256_hex(&self.archive_sha256)?;
         if let Some(h) = &self.api_unit_sha256 {
@@ -116,6 +118,8 @@ pub struct TransactionRecord {
     pub config_backup_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_config_backup_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<MigrationRecord>,
 }
 
 impl TransactionRecord {
@@ -123,12 +127,29 @@ impl TransactionRecord {
         if self.tx_id.trim().is_empty() {
             return Err(ReleaseError::Config("transaction id cannot be empty".into()));
         }
-        validate_tag_format(&self.target_tag)?;
+        if self.target_tag != "imported-format-2" {
+            validate_tag_format(&self.target_tag)?;
+        }
         if let Some(prev) = &self.previous_tag {
-            validate_tag_format(prev)?;
+            if prev != "imported-format-2" {
+                validate_tag_format(prev)?;
+            }
         }
         Ok(())
     }
+}
+
+/// Durable metadata tracked during a legacy format-2 migration transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MigrationRecord {
+    pub legacy_root: String,
+    pub migration_root: String,
+    pub legacy_binary_sha256: String,
+    pub legacy_unit_sha256: String,
+    pub exchanged: bool,
+    pub old_unit_backup_path: String,
+    pub old_wants_link_path: String,
 }
 
 /// Record of the latest failure encounter.

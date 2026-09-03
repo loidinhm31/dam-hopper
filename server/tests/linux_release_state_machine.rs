@@ -123,6 +123,7 @@ fn test_recovery_classification() {
         units_backup_dir: None,
         config_backup_path: None,
         public_config_backup_path: None,
+        migration: None,
     });
     assert_eq!(classify_recovery(&state), RecoveryAction::RestorePrevious);
 
@@ -253,6 +254,7 @@ async fn test_recovery_and_activation_boundaries() {
         units_backup_dir: None,
         config_backup_path: None,
         public_config_backup_path: None,
+        migration: None,
     });
     save_manager_state(&layout.manager_state_path(), &mut state).unwrap();
 

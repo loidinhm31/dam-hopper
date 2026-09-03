@@ -160,3 +160,55 @@ pub fn atomic_symlink(target: &Path, link_path: &Path) -> Result<(), ReleaseErro
         ))
     }
 }
+
+/// Atomically exchange two directories on the same filesystem using renameat2(RENAME_EXCHANGE).
+pub fn atomic_exchange_directories(path_a: &Path, path_b: &Path) -> Result<(), ReleaseError> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let c_a = CString::new(path_a.as_os_str().as_bytes()).map_err(|e| ReleaseError::Io {
+            action: "convert path_a to CString",
+            details: e.to_string(),
+        })?;
+        let c_b = CString::new(path_b.as_os_str().as_bytes()).map_err(|e| ReleaseError::Io {
+            action: "convert path_b to CString",
+            details: e.to_string(),
+        })?;
+
+        let ret = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                c_a.as_ptr(),
+                libc::AT_FDCWD,
+                c_b.as_ptr(),
+                libc::RENAME_EXCHANGE,
+            )
+        };
+        if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(ReleaseError::ExchangeFailed {
+                action: "renameat2(RENAME_EXCHANGE)",
+                details: err.to_string(),
+            });
+        }
+
+        if let Some(p) = path_a.parent() {
+            let _ = sync_dir(p);
+        }
+        if let Some(p) = path_b.parent() {
+            let _ = sync_dir(p);
+        }
+
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (path_a, path_b);
+        Err(ReleaseError::ExchangeFailed {
+            action: "atomic_exchange_directories",
+            details: "RENAME_EXCHANGE is only supported on Linux".into(),
+        })
+    }
+}

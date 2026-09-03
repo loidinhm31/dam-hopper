@@ -7,8 +7,9 @@ use super::constants::SCHEMA_VERSION;
 use super::durable_fs::{atomic_write_json, copy_file_durable};
 use super::error::ReleaseError;
 use super::journal::DeploymentState;
-use super::state_record::{
-    FailureRecord, PendingCandidateRecord, ReleaseRecord, TransactionPhase, TransactionRecord,
+pub use super::state_record::{
+    FailureRecord, MigrationRecord, PendingCandidateRecord, ReleaseRecord, TransactionPhase,
+    TransactionRecord,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

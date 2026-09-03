@@ -46,6 +46,31 @@ impl ActivationTransaction {
         })
     }
 
+    /// Initialize an activation transaction with an existing transaction ID.
+    pub fn from_id(layout: &Layout, tx_id: &str) -> Result<Self, ReleaseError> {
+        let tx_id = tx_id.to_string();
+        let tx_dir = layout.transaction_staging_dir(&tx_id);
+        let backups_root = layout.var_lib_dir.join("backups").join(&tx_id);
+        let units_backup_dir = backups_root.join("units");
+        let config_backup_path = backups_root.join("host.toml");
+        let public_config_backup_path = backups_root.join("host-config.json");
+
+        if !units_backup_dir.exists() {
+            fs::create_dir_all(&units_backup_dir).map_err(|e| ReleaseError::Io {
+                action: "create transaction backup directory",
+                details: e.to_string(),
+            })?;
+        }
+
+        Ok(Self {
+            tx_id,
+            tx_dir,
+            units_backup_dir,
+            config_backup_path,
+            public_config_backup_path,
+        })
+    }
+
     /// Record a transaction phase change and durably persist the manager state.
     /// Derives current deployment state from the envelope and enforces transaction ownership.
     pub fn record_phase(
@@ -90,6 +115,7 @@ impl ActivationTransaction {
                     public_config_backup_path: Some(
                         self.public_config_backup_path.display().to_string(),
                     ),
+                    migration: None,
                 };
                 state.transaction = Some(record);
             }

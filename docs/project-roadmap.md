@@ -16,7 +16,17 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - Validation: vendored all-target `cargo check` passed; Phase 05 suites passed **19/19**; full `linux_release*` matrix passed **77/77**; Cycle 2 review approved **9.8/10** with no blocking findings. [Review report](../plans/reports/code-review-260903-2332-phase-05-durable-activation-rollback-recovery.md).
 - **Phase 06 — [COMPLETED 2026-09-04 01:05:00 +07:00]**: delivered the central stable-tag GitHub publisher, desktop/stable tag namespace split, deterministic archive assembly, external Manifest v1 and SPDX SBOM generation, exact four-asset local/draft gate, four-subject artifact attestations, and a non-root bootstrap that ends at pending staging. [Phase 06 plan](../plans/260903-0919-linux-release-installer-architecture/phase-06-central-github-publisher-bootstrap.md).
 - Validation: publisher contract tests passed **24/24**; `pnpm release:verify`, shell syntax, Node syntax, and vendored all-target `cargo check` passed with no warnings. Cycle 2 review approved **9.5/10** with no blocking findings. [Review report](../plans/reports/code-review-260904-0115-phase-06-central-github-publisher-bootstrap.md).
-- Parent plan progress: **69% (94h/136h)**; Phases 01–06 complete, Phases 07–09 pending. [Parent plan](../plans/260903-0919-linux-release-installer-architecture/plan.md).
+- **Phase 07 — [COMPLETED 2026-09-04]**: delivered exact read-only legacy
+  format-2 verification, same-device sibling staging at
+  `/opt/.dam-hopper-migration.<tx_id>`, Linux `renameat2(RENAME_EXCHANGE)`
+  cutover, rollback restoration, imported-format-2 retention, and retirement
+  of the checkout-built runner scripts, fixed unit, fixture, and aliases.
+  [Phase 07 plan](../plans/260903-0919-linux-release-installer-architecture/phase-07-format-2-migration-runner-retirement.md).
+- Validation: focused migration fixture/drift/exchange suites passed **14/14**;
+  the Fedora rehearsal passed at fixture level; Cycle 2 review approved **9.0/10**
+  with no blocking findings. No production-host deployment claim is implied.
+- Parent plan progress: **Phases 01–07 complete; Phases 08–09 pending**.
+  [Parent plan](../plans/260903-0919-linux-release-installer-architecture/plan.md).
 
 ### Preserve Explorer Tree Expansion & Editor View Scroll Position (2026-08-31)
 

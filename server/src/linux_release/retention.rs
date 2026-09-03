@@ -81,9 +81,14 @@ pub fn apply_retention(layout: &Layout, state: &ManagerState) -> Result<usize, R
 
         let name = entry.file_name();
         let tag_str = name.to_string_lossy();
-        validate_tag_format(&tag_str).map_err(|e| ReleaseError::Config(format!(
-            "invalid directory name in releases dir '{}': {e}", entry.path().display()
-        )))?;
+        if tag_str != "imported-format-2" {
+            validate_tag_format(&tag_str).map_err(|e| {
+                ReleaseError::Config(format!(
+                    "invalid directory name in releases dir '{}': {e}",
+                    entry.path().display()
+                ))
+            })?;
+        }
 
         if !referenced_tags.contains(tag_str.as_ref()) {
             let path = entry.path();
@@ -144,6 +149,19 @@ pub fn apply_retention(layout: &Layout, state: &ManagerState) -> Result<usize, R
 }
 
 fn verify_candidate_integrity(path: &Path) -> Result<(), ReleaseError> {
+    if path.file_name() == Some(std::ffi::OsStr::new("imported-format-2")) {
+        let bin = path.join("server").join("bin").join("dam-hopper-server");
+        let unit = path.join("server").join("systemd").join("dam-hopper.service");
+        if !bin.is_file() || !unit.is_file() {
+            return Err(ReleaseError::InvalidBundle {
+                path: path.display().to_string(),
+                reason: "imported legacy release missing expected server binary or unit".into(),
+            });
+        }
+        verify_release_ownership(path, false)?;
+        return Ok(());
+    }
+
     // Find release-manifest.json in the release tree
     let manifest_path = if path.join("release-manifest.json").exists() {
         path.join("release-manifest.json")

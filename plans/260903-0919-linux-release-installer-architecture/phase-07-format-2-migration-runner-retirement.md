@@ -15,9 +15,9 @@
 - **Date:** 2026-09-03
 - **Description:** Import one verified healthy format-2 server installation as rollback-capable previous state, then remove the checkout-built production path after migration coverage passes.
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
-- **Effort:** 14h
+- **Implementation status:** DONE 2026-09-04 02:40:00 +07:00
+- **Review status:** DONE 2026-09-04 02:40:00 +07:00 (Review Cycle 2 Passed; Score: 9.0/10)
+- **Progress:** 100% (11/11 implementation steps; 13/13 todo items)
 
 ## Key Insights
 
@@ -103,15 +103,21 @@ The management CLI remains at `/usr/local/bin/dam-hopper` during rollback becaus
 10. Plan compile/static proofs: `cargo check --manifest-path server/Cargo.toml --all-targets --features vendored`; `jq empty package.json`; `bash -n tests/deploy/fedora44-format2-migration.sh`.
 11. Submit to `evcrate-code-reviewer`; fix blocking findings and rerun proofs/migration tests before terminal approval.
 
-## Todo List
+## Todo List — DONE 2026-09-04 02:40:00 +07:00
 
-- [ ] Add exact read-only format-2 verification/import.
-- [ ] Add same-filesystem side-stage and atomic root exchange.
-- [ ] Add crash-safe old root/unit restoration.
-- [ ] Add real known-state/drift/migration coverage.
-- [ ] Rehearse upgrade and rollback on Fedora 44.
-- [ ] Delete old runner/reset/unit/fixture and package aliases only after gate.
-- [ ] Run compile/static checks and pass reviewer gate.
+- [x] Add exact read-only format-2 verification/import.
+- [x] Add same-filesystem side-stage and atomic root exchange.
+- [x] Add crash-safe old root/unit restoration.
+- [x] Add real known-state/drift/migration coverage.
+- [x] Rehearse upgrade and rollback on Fedora 44.
+- [x] Fix review findings:
+  - [x] Retention `validate_tag_format` rejection of `imported-format-2`
+  - [x] Activation transaction ID ownership conflict with staged migration
+  - [x] Rollback unit backup path referencing deleted destination instead of backup
+  - [x] Invariant enforcement: root/bin/marker inventory completeness, wants link target validation, and process UID/wildcard listener checks
+  - [x] Post-commit manual rollback binary availability at `/opt/dam-hopper/bin/dam-hopper-server`
+- [x] Delete old runner/reset/unit/fixture and package aliases only after gate.
+- [x] Run compile/static checks and pass reviewer gate (Review Cycle 2).
 
 ## Success Criteria
 
@@ -139,5 +145,7 @@ The management CLI remains at `/usr/local/bin/dam-hopper` during rollback becaus
 - Deletion occurs only after equivalence and unreferenced-state proof; ambiguity retains evidence.
 
 ## Next Steps
+Proceed to Phase 08 behavioral, security, and failure validation. Non-blocking Cycle 2 hardening suggestions remain follow-up items; the migration and legacy runner retirement gate is complete.
 
-Phase 08 proves both clean-host and migration journeys after the old path is removed. Phase 09 removes all operator documentation for deleted commands. Unresolved questions: none.
+### Unresolved Questions
+None.

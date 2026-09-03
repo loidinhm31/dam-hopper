@@ -17,8 +17,6 @@
     "dev:server": "cd server && cargo run -- --host 127.0.0.1 --port 4801",
     "dev:server:watch": "cd server && cargo watch -x \"run -- --host 127.0.0.1 --port 4801\"",
     "build:server": "cd server && cargo build --release",
-    "linux:reset": "deploy/reset-linux-production.sh",
-    "linux:production": "deploy/run-linux-production.sh",
     "serve": "cd server && cargo run --release",
     "lint": "eslint apps/ packages/",
     "format": "prettier --write .",

@@ -22,6 +22,12 @@ pub mod inventory;
 mod inventory_path;
 mod inventory_validation;
 pub mod journal;
+pub mod legacy_format2;
+pub mod legacy_format2_inspect;
+pub mod legacy_format2_manifest;
+pub mod legacy_format2_root;
+pub mod legacy_format2_unit;
+pub mod migration;
 pub mod layout;
 pub mod lock;
 pub mod manifest;
@@ -121,4 +127,9 @@ pub use systemd_backup::{
     backup_unit_files, install_unit_file, remove_unit_file, restore_unit_files,
 };
 pub use transaction::ActivationTransaction;
+pub use legacy_format2::{
+    import_legacy_format2_release, inspect_format2_installation, inspect_format2_root,
+    is_legacy_format2_root, validate_format2_unit, LegacyFormat2Evidence, LegacyFormat2Manifest,
+    LEGACY_FORMAT2_PORT, LEGACY_FORMAT2_TAG, LEGACY_FORMAT2_UNIT, LEGACY_FORMAT2_USER,
+};
 pub use unit::render_recovery_unit;

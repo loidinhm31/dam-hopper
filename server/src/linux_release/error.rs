@@ -214,6 +214,17 @@ pub enum ReleaseError {
     #[error("process inspection failed: {reason}")]
     ProcessInspectionFailed { reason: String },
 
+    #[error("legacy format 1 is unsupported for automatic migration: {0}")]
+    UnsupportedFormat1Migration(String),
+
+    #[error("legacy format-2 migration rejected: {reason}")]
+    LegacyMigrationRejected { reason: String },
+
+    #[error("atomic directory exchange failed during {action}: {details}")]
+    ExchangeFailed {
+        action: &'static str,
+        details: String,
+    },
     #[error("filesystem I/O error during {action}: {details}")]
     Io {
         action: &'static str,

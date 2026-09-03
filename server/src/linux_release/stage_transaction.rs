@@ -82,20 +82,31 @@ pub fn stage_release_bundle(
     let role = resolve_host_role(layout, requested_role, allow_origins, is_role_set)?;
 
     let tx_id = uuid::Uuid::new_v4().to_string();
-    let tx_dir = layout.transaction_staging_dir(&tx_id);
-    fs::create_dir_all(&tx_dir).map_err(|e| ReleaseError::Io {
-        action: "create staging transaction directory",
-        details: e.to_string(),
-    })?;
-    let _ = fs::set_permissions(&tx_dir, fs::Permissions::from_mode(0o700));
+    let (target_dir, pending_units_dir, migration_opt) = if super::legacy_format2::is_legacy_format2_root(&layout.opt_dir) {
+        let (t, u, m) = super::migration::stage_migration_candidate(
+            layout,
+            &tx_id,
+            &archive_path,
+            &manifest,
+            role,
+            allow_origins,
+        )?;
+        (t, u, Some(m))
+    } else {
+        let tx_dir = layout.transaction_staging_dir(&tx_id);
+        fs::create_dir_all(&tx_dir).map_err(|e| ReleaseError::Io {
+            action: "create staging transaction directory",
+            details: e.to_string(),
+        })?;
+        let _ = fs::set_permissions(&tx_dir, fs::Permissions::from_mode(0o700));
 
-    // Execute staging in a scope so cleanup runs on error
-    let result = execute_staging_transaction(layout, &tx_dir, &archive_path, &manifest, role);
-    let _ = fs::remove_dir_all(&tx_dir);
-    let target_dir = result?;
-    let pending_units_dir =
-        stage_candidate_units(layout, &target_dir, &manifest, role, allow_origins)?;
-
+        let result = execute_staging_transaction(layout, &tx_dir, &archive_path, &manifest, role);
+        let _ = fs::remove_dir_all(&tx_dir);
+        let target_dir = result?;
+        let pending_units_dir =
+            stage_candidate_units(layout, &target_dir, &manifest, role, allow_origins)?;
+        (target_dir, pending_units_dir, None)
+    };
     let manifest_sha256 = hex::encode(Sha256::digest(&manifest_bytes));
 
     let pending_record = super::state_record::PendingCandidateRecord {
@@ -120,8 +131,23 @@ pub fn stage_release_bundle(
 
     let mut mgr_state = super::state::load_or_init_manager_state(&layout.manager_state_path())?;
     mgr_state.pending = Some(pending_record.clone());
+    if let Some(mig) = migration_opt {
+        let tx_record = super::state_record::TransactionRecord {
+            tx_id: tx_id.clone(),
+            phase: super::state_record::TransactionPhase::Staged,
+            started_at: chrono::Utc::now().to_rfc3339(),
+            target_tag: manifest.release.tag.clone(),
+            target_role: role,
+            previous_tag: Some(super::legacy_format2::LEGACY_FORMAT2_TAG.to_string()),
+            previous_role: Some(TargetRole::Server),
+            units_backup_dir: Some(pending_units_dir.display().to_string()),
+            config_backup_path: None,
+            public_config_backup_path: None,
+            migration: Some(mig),
+        };
+        mgr_state.transaction = Some(tx_record);
+    }
     super::state::save_manager_state(&layout.manager_state_path(), &mut mgr_state)?;
-
     let pending = PendingState {
         tag: pending_record.tag,
         role: pending_record.role,
@@ -134,7 +160,7 @@ pub fn stage_release_bundle(
     Ok(pending)
 }
 
-fn execute_staging_transaction(
+pub(crate) fn execute_staging_transaction(
     layout: &Layout,
     tx_dir: &Path,
     archive_path: &Path,

@@ -1,11 +1,12 @@
 # Linux Release Manifest v1
 
-Status: Phases 01–06 implementation complete and reviewed (2026-09-04). This
-document defines the release metadata consumed by acquisition, staging, and
+Status: Phases 01–07 implementation complete and reviewed (2026-09-04). This
+document defines Manifest v1 metadata consumed by acquisition, staging, and
 durable activation. Phase 03 adds the dedicated web-host binary and
 runtime-origin contract; Phase 04 defines role-aware units; Phase 05 adds
 health-gated activation, rollback, and crash recovery; Phase 06 adds the
-central publisher and bootstrap boundary.
+central publisher and bootstrap boundary; Phase 07 keeps legacy format-2
+migration as a separate one-time compatibility boundary.
 
 The Rust validator is the runtime authority. The publisher-facing JSON Schema
 must remain structurally equivalent to the Rust types and must reject anything
@@ -228,7 +229,7 @@ replaces an existing same-tag/same-role destination before a repeated final
 rename. Phase 05 activates only the validated immutable view and records the
 result in the manager's authoritative state envelope.
 
-## Manager consumption (Phases 02–06)
+## Manager consumption (Phases 02–07)
 
 The Rust manager is the runtime consumer of Manifest v1:
 
@@ -250,16 +251,18 @@ The manager guide documents the command grammar, state machine, health gate,
 rollback semantics, recovery unit, and filesystem layout:
 [Linux Release Manager](./linux-release-manager.md).
 
-## Existing systemd runner boundary
+## Format-2 compatibility boundary
 
-The current guarded systemd runner documented in
-[Linux systemd](./linux-systemd.md) still uses its legacy format-2 server-only
-stage marker. That marker (`format`, `nonce`, and local binary/unit hashes) is
-not the release manifest v1 contract and has no web inventory. Manifest v1
-activation uses concrete role units plus `dam-hopper-recovery.service`; it does
-not automatically migrate or retire the legacy runner. Do not treat a format-2
-stage as a v1 archive, or this document as evidence that the legacy runner has
-been converted.
+The v1 release manifest is distinct from the legacy format-2 marker. Phase 07
+uses an exact read-only format-2 verifier for one-time migration only; its
+static/live checks, side staging workspace, atomic exchange, and rollback
+semantics are specified in [Linux systemd](./linux-systemd.md). Format 1 and
+unknown layouts fail closed.
+
+After a successful migration, the checkout-built runner, fixed legacy unit, and
+their package aliases are retired. An `imported-format-2` record may be kept as
+the previous rollback source, but it is not publisher input and must not be
+treated as a v1 archive or manifest.
 
 ## Verification
 

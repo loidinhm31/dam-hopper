@@ -8,8 +8,8 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Structure**:
 
-- Repomix snapshot (2026-09-04): 1,551 files and 3,200,156 tokens packed into
-  `repomix-output.xml`; five security-sensitive files were excluded by the
+- Repomix snapshot (2026-09-04): 1,562 files and 3,196,063 tokens packed into
+  `repomix-output.xml`; four security-sensitive files were excluded by the
   compaction security check.
 - Predominantly Rust (server) and TypeScript/React (web). The Linux release
   package includes the `dam-hopper` manager and `dam-hopper-web` binaries;
@@ -168,8 +168,9 @@ Infrastructure
   (`dam-hopper-web`, `4802`) candidates; Phase 05 installs them through the
   durable activation transaction and orders
   `dam-hopper-recovery.service` before both app units. Docker explicitly
-  combines both through `--web-dir /opt/dam-hopper/web` on port `4800`; the
-  legacy runner remains separate.
+  combines both through `--web-dir /opt/dam-hopper/web` on port `4800`; Phase
+  07 migrates eligible legacy format-2 roots via the manager and retires the
+  checkout runner after commit.
 
 - Web runtime origin is fetched at `/__dam-hopper/runtime-config.json` with `cache: "no-store"` and strict 4 KiB/schema/origin validation. Active user profiles outrank managed deployment profiles; a managed URL change clears only that profile's token.
 - Build-time origins for the extension are controlled by `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS`; changing them requires rebuilding and redistributing the extension. `VITE_DAM_HOPPER_LOG_LEVEL` controls web bootstrap logging, while `VITE_DAM_HOPPER_SERVER_URL` is forbidden for production builds.
@@ -306,9 +307,9 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 
 ### Linux Release Manager (`server/src/linux_release/`)
 
-Phase 01's strict Manifest v1 contract, Phase 02's manager consumer, Phase 03's
-web service metadata, Phase 04's role-aware systemd boundary, and Phase 05's
-durable lifecycle share one focused release module:
+Phases 01–06 define the release-manifest and manager lifecycle; Phase 07 adds
+one-time legacy format-2 migration and retires the checkout-built runner. All
+share one focused release module:
 
 - `constants.rs`, `version.rs`, `manifest.rs`, `manifest_validation.rs`,
   `inventory.rs`, `inventory_path.rs`, and `inventory_validation.rs` enforce
@@ -335,10 +336,12 @@ durable lifecycle share one focused release module:
 - `account.rs`, `ownership.rs`, `process.rs`, and `process_holders.rs` check
   the dedicated web account, release/state modes, process identity/executable/
   cgroup, 4800/4801/4802 listeners, and SQLite holder safety.
-- `layout.rs`, `lock.rs`, `stage.rs`, and `stage_transaction.rs` provide
-  canonical `/opt`, `/etc`, `/var/lib`, and `/run/lock` paths, a nonblocking
-  deployment lock, root-private transaction staging, role resolution, rendered
-  candidates, and fsync-backed pending handoff.
+- `layout.rs`, `lock.rs`, `stage.rs`, `stage_transaction.rs`,
+  `legacy_format2_root.rs`, `legacy_format2_manifest.rs`,
+  `legacy_format2_unit.rs`, and `legacy_format2_inspect.rs` provide canonical
+  paths, transaction staging, and exact read-only legacy-layout verification.
+  `migration.rs` stages a sibling workspace, imports the previous format-2
+  release, and coordinates atomic exchange/rollback.
 - `durable_fs.rs`, `state.rs`, `state_record.rs`, `journal.rs`, `transaction.rs`,
   and `systemd_backup.rs` persist the generation-numbered state envelope,
   enforce the deployment journal, retain unit/config backups, and make updates
@@ -387,8 +390,12 @@ failure or corrupt/unowned/hash-mismatched state becomes `RECOVERY_REQUIRED`.
 transactions, repairs committed pointers/enablement, and otherwise blocks all
 application units.
 
-The guarded format-2 runner remains separate; migration/retirement is outside
-Phase 05.
+Phase 07 validates the legacy root, marker, binary, unit, and wants-link
+invariants before staging under `/opt/.dam-hopper-migration.<tx_id>`. It requires
+the side root and canonical root to share a device, exchanges them with Linux
+`renameat2(RENAME_EXCHANGE)`, and records an `imported-format-2` previous source
+for rollback. Commit removes the migration marker and redundant exchanged root;
+the old checkout scripts, fixed unit, fixture, and package aliases are absent.
 
 ### Dedicated web host (`server/src/web_host/`)
 
@@ -609,6 +616,9 @@ dam-hopper/
   `linux_release_health`, and `linux_release_unit_policy` cover durable phase
   transitions, recovery classification, health identity/listener/JSON gates,
   candidate and rollback unit policy, and recovery-unit ordering.
+- **Linux release Phase 07**: format-2 fixture/drift/exchange suites cover
+  exact read-only verification, side-root exchange, rollback restoration, and
+  imported-format-2 retention; Fedora rehearsal remains fixture-level evidence.
 - **Compile proofs**: vendored all-target Cargo check plus UI and web builds
   exited `0` (recorded 2026-09-03).
 - **Other server/frontend counts**: historical snapshots only; consult the
@@ -616,10 +626,11 @@ dam-hopper/
 
 ### Known Limitations (Pre-existing or phase-scoped)
 
-- Phase 05 implements Linux release activation, unit installation/enablement,
-  health-gated cutover, rollback, and boot recovery. The guarded format-2
-  runner remains separate; its migration/retirement is later work, and no
-  broader distro-release evidence is implied by these module-level proofs.
+- Phase 07 completes the one-time format-2 migration and checkout-runner
+  retirement. Staging invokes static legacy-layout checks; the separate live
+  inspector covers active service/process/health evidence when requested.
+  Fedora rehearsal is fixture-level and does not imply production deployment
+  evidence or broader distro support.
 - The API candidate intentionally runs as `root` by owner decision; this broad
   privilege is an accepted v1 risk. The web candidate remains separately
   unprivileged and sandboxed.
@@ -727,7 +738,7 @@ dam-hopper/
 | [code-standards.md](./code-standards.md) | Naming conventions, patterns, best practices |
 | [configuration-guide.md](./configuration-guide.md) | Setup, environment variables, config files |
 | [linux-release-manifest.md](./linux-release-manifest.md) | Linux release manifest v1 contract |
-| [linux-release-manager.md](./linux-release-manager.md) | Phase 02 manager CLI, platform gate, acquisition, staging, Phase 03 web role handoff, Phase 04 units, Phase 05 activation/recovery, and Phase 06 bootstrap handoff |
+| [linux-release-manager.md](./linux-release-manager.md) | Phase 02 manager CLI, platform gate, acquisition, staging, Phase 03 web role handoff, Phase 04 units, Phase 05 activation/recovery, Phase 06 bootstrap handoff, and Phase 07 format-2 migration/runner retirement |
 | [linux-release-publisher-bootstrap.md](./linux-release-publisher-bootstrap.md) | Central GitHub publisher DAG, exact assets, reproducibility, SBOM, attestations, and bootstrap |
 | [native-browser-debug-support.md](./native-browser-debug-support.md) | Native Browser Debug platform gate and security boundaries |
 | [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
@@ -737,11 +748,10 @@ dam-hopper/
 ---
 
 **Last Updated**: September 4, 2026
-**Phase Status**: Phases 01–06 of the Linux Release Installer Architecture
-are complete and reviewed. Phase 06 adds the stable-tag publisher, deterministic
-archive/manifest/SBOM pipeline, exact asset gate, four-subject attestations,
-and non-root bootstrap; Fedora-host ABI evidence and runner migration remain
-later release gates.
+**Phase Status**: Phases 01–07 of the Linux Release Installer Architecture
+are complete and reviewed. Phase 07 adds exact format-2 migration with sibling
+staging, same-device atomic exchange, rollback restoration, and checkout-runner
+retirement; Phases 08–09 remain future release gates.
 **Generated by**: Source review grounded in `repomix-output.xml` (Repomix
-1.18.0); metrics reflect the 1,551-file/3,200,156-token compaction and five
+1.18.0); metrics reflect the 1,562-file/3,196,063-token compaction and four
 security exclusions.

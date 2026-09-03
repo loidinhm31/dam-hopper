@@ -1,9 +1,13 @@
 # Linux Nohup Setup (legacy, unsupported)
 
-The nohup launcher is retained only as rollback history. It is not a supported
-production owner, its package aliases are retired, and it must never run at the
-same time as `dam-hopper.service` or open the same SQLite files. Use the guarded
-[Linux systemd workflow](./linux-systemd.md) for current production operation.
+The nohup launcher is retained only for separately approved legacy rollback
+work. It is not a supported production owner, and it must never run alongside
+manager-installed `dam-hopper-api.service`, `dam-hopper-web.service`, or any
+process using the same SQLite files. The historical fixed
+`dam-hopper.service` and checkout-built production/reset runner are retired.
+Use the guarded [Linux systemd workflow](./linux-systemd.md) for current
+production operation.
+
 The current systemd workflow is backend-only. Phase 03 adds the separate
 `dam-hopper-web` host on `0.0.0.0:4802`; `dam-hopper-server` serves browser
 assets only when an explicit `--web-dir` (or `DAM_HOPPER_WEB_DIR`) is supplied.
