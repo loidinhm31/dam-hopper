@@ -3,6 +3,8 @@
 ## Context Links
 
 - [Parent plan](./plan.md)
+- [Phase 04 tester report](../reports/tester-260903-2024-phase-04-role-aware-systemd-ownership.md)
+- [Phase 04 code review](../reports/code-review-260903-2025-phase-04-role-aware-systemd-ownership.md)
 - [Phase 02 staging](./phase-02-rust-cli-safe-acquisition-staging.md)
 - [Phase 03 web host](./phase-03-web-host-runtime-origin-health.md)
 - [Systemd research](./research/researcher-02-systemd-transaction-runtime.md)
@@ -14,15 +16,15 @@
 - **Date:** 2026-09-03
 - **Description:** Render concrete independent API/web units, create the web identity, and enforce role-specific filesystem and privilege boundaries.
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
-- **Effort:** 12h
+- **Implementation status:** DONE 2026-09-03 20:57:20 +07:00
+- **Review status:** PASSED (9.0/10; no blocking findings)
+- **Progress:** 100% (10/10 implementation steps; 6/6 todo items)
 
 ## Key Insights
 
 - systemd supervises committed processes; the manager coordinates release readiness and rollback. Unit dependencies cannot express exact-version health.
-- API must initially remain `loidinh` because PTY, project, SSH, config, and SQLite access depend on that home identity.
-- `NoNewPrivileges=yes` would block legitimate `sudo` from managed interactive terminals. Preserve `false` for API with explicit rationale; use strong isolation for the non-interactive web service. This resolves the current docs/unit disagreement without pretending the broad API boundary is fixed.
+- Per owner directive (parent plan `plan.md` line 63), API service runs as `root` for MVP, overriding earlier `loidinh` identity. Web service runs strictly isolated under dedicated `dam-hopper-web` account.
+- `NoNewPrivileges=yes` would block legitimate `sudo` from managed interactive terminals. Preserve `false` for API with explicit rationale; use strong isolation for the non-interactive web service.
 - Units must execute concrete verified paths. `/opt/dam-hopper/current` is diagnostic convenience, never `ExecStart` authority.
 
 ## Requirements
@@ -42,7 +44,7 @@
 ### Non-functional
 
 - Root ownership/modes: release dirs/binaries `0755`, static files/templates `0644`, manager state `0700/0600`, units and public host config `0644`, management CLI `0755`.
-- API unit loads existing `server.env` then generated `server-safety.env`, pins config/home/host/port, runs non-root, uses graceful SIGTERM and `KillMode=mixed` so server shutdown orders PTY persistence before final cgroup kill.
+- API unit loads existing `server.env` then generated `server-safety.env`, pins config/home/host/port, runs as `root` per the accepted MVP owner directive, uses graceful SIGTERM and `KillMode=mixed` so server shutdown orders PTY persistence before final cgroup kill.
 - Web unit uses `Type=exec`, `NoNewPrivileges=yes`, empty capabilities, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, private devices, and read-only access only to its selected release and public host config.
 - Validate templates in an isolated root before pending; validate rendered units with `systemd-analyze verify` before switch.
 
@@ -85,26 +87,26 @@ API unit uses concrete `/opt/dam-hopper/releases/<tag>/<role>/bin/dam-hopper-ser
 3. Add sysusers preflight and creation. Verify resulting UID resolves to `dam-hopper-web`, has no home/login capability, and is not `loidinh`/root.
 4. Render candidate units and host config into root-private manager state; `fsync` files/directories before marking pending.
 5. Isolated-verify both templates using placeholder executables/config, then verify selected rendered units against actual candidate paths.
-6. Encode API contract: `Type=exec`, `User/Group=loidinh`, exact HOME/XDG/config/env order, API-only mode, bind/port, restart bounds, SIGTERM, `KillMode=mixed`, `TimeoutStopSec=20s`, `UMask=0077`, `NoNewPrivileges=false`, journald.
+6. Encode API contract: `Type=exec`, `User/Group=root` per the accepted MVP owner directive, exact HOME/XDG/config/env order, API-only mode, bind/port, restart bounds, SIGTERM, `KillMode=mixed`, `TimeoutStopSec=20s`, `UMask=0077`, `NoNewPrivileges=false`, journald.
 7. Encode web contract: fixed user/group, exact root/config/version/port, `Restart=on-failure`, cgroup cleanup, strict sandbox, no environment files, writable paths, network client/proxy settings, or home access.
 8. Add unit policy tests plus planned effective-property checks using `systemctl show` after Phase 08 activation.
 9. Plan compile proof: `cargo check --manifest-path server/Cargo.toml --all-targets --features vendored`; planned static unit proof: `systemd-analyze verify` against isolated rendered candidates.
 10. Submit to `evcrate-code-reviewer`; fix blocking findings and rerun compile/static proofs before approval.
 
-## Todo List
+## Todo List — DONE 2026-09-03 20:57:20 +07:00
 
-- [ ] Add API/web templates and web sysusers declaration.
-- [ ] Add strict unit rendering and role inventory.
-- [ ] Add account, ownership, process, and systemd adapters.
-- [ ] Preserve API runtime/env/graceful-shutdown requirements.
-- [ ] Enforce web least privilege and service independence.
-- [ ] Run compile/static checks and pass reviewer gate.
+- [x] Add API/web templates and web sysusers declaration.
+- [x] Add strict unit rendering and role inventory.
+- [x] Add account, ownership, process, and systemd adapters.
+- [x] Preserve API runtime/env/graceful-shutdown requirements.
+- [x] Enforce web least privilege and service independence.
+- [x] Run compile/static checks and pass scoped reviewer gate (66 tests passed; compile check passed; review approved 9.0/10 with no blocking findings).
 
 ## Success Criteria
 
 - Server/web/both candidate unit sets match the role matrix exactly; no mixed-version or unselected service can be installed/enabled.
 - Fresh install has no enabled or active selected unit and no `4800/4801/4802` listener.
-- Effective API process UID/GID is `loidinh`; effective web UID/GID is the fixed distinct account; neither service is root.
+- Effective API process UID/GID is `root` (per owner MVP directive in `plan.md`); effective web UID/GID is the fixed distinct `dam-hopper-web` account; web service is completely unprivileged.
 - API executable, web executable, static root, and runtime config resolve under one concrete `<tag>/<role>` release view, never `current`.
 - Stopping/crashing API does not stop web and vice versa; units have no coupling dependency.
 - Web effective sandbox cannot read `/home/loidinh`, API env/token/SQLite, projects, or manager state and cannot write its release tree.

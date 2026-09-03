@@ -20,6 +20,8 @@ pub struct PendingState {
     pub release_path: String,
     pub manifest_sha256: String,
     pub archive_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_units_path: Option<String>,
 }
 
 /// Load pending candidate metadata if present.

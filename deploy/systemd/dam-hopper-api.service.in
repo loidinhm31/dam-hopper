@@ -1,0 +1,31 @@
+[Unit]
+Description=DamHopper API Server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=root
+Group=root
+WorkingDirectory=/root
+Environment=HOME=/root
+Environment=XDG_CONFIG_HOME=/etc/dam-hopper
+Environment=RUST_LOG=info
+Environment=RUST_ENV=production
+Environment=DAM_HOPPER_CORS_ORIGINS=@API_ORIGINS@
+EnvironmentFile=-/etc/dam-hopper/server.env
+EnvironmentFile=-/etc/dam-hopper/server-safety.env
+ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config /etc/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=20s
+UMask=0077
+NoNewPrivileges=false
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dam-hopper-api
+
+[Install]
+WantedBy=multi-user.target

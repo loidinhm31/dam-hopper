@@ -1,25 +1,186 @@
 # Linux systemd system service
 
-Status: repository asset plus guarded administrator workflow. The supported
-systemd package is backend-only: it builds and installs the Rust server binary
-and unit, while any browser UI is built and hosted separately. Phase 03 also
-delivers the unprivileged `dam-hopper-web` binary, which serves an immutable
-web root on `0.0.0.0:4802`; this document does not install or start a web unit.
-New stages use marker format 2; format-1 web-bearing installs remain accepted
-only for guarded reset/rollback cleanup. No command in this document performs
+Status: Phase 04 role-aware unit rendering and ownership checks are implemented
+for the Manifest v1 release manager. The manager stages independent API and web
+unit candidates plus the dedicated web sysuser; Phase 05 still owns activation,
+enablement, health-gated cutover, rollback, and recovery. The guarded format-2
+runner documented later remains a separate legacy path until migration.
+
+The release deployment has two process roles:
+
+- `dam-hopper-api.service` runs the API as `root` for the v1 MVP owner decision.
+- `dam-hopper-web.service` runs the static host as the isolated
+  `dam-hopper-web` system account.
+
+No API/web unit is installed, enabled, or started merely by staging a release.
+Fresh installs therefore remain inactive. No command in this document performs
 a live reset or production mutation by itself.
 
 ## Release manifest v1 boundary
 
-The [Linux Release Manifest v1](./linux-release-manifest.md) is the newer
-single-archive contract for Fedora 44 x86_64 role views. Phase 02's
-`dam-hopper` manager consumes the v1 manifest for unprivileged acquisition
-and root-only role-view staging, writing a pending candidate without starting
-services. Phase 03 supplies the dedicated web-host binary and runtime-origin
-contract, but the guarded runner described here remains a separate legacy
-format-2, server-only stage-marker workflow and does not consume the v1 archive
-or web inventory. See [Linux Release Manager](./linux-release-manager.md) for
-the manager grammar and transaction boundary.
+The [Linux Release Manifest v1](./linux-release-manifest.md) is the immutable
+single-archive contract for Fedora 44 x86_64 role views. The `dam-hopper`
+manager consumes it for unprivileged acquisition and root-only role-view
+staging. Phase 04 renders selected service units from the attested release
+templates, validates them, and records pending unit/config paths without
+installing or starting services.
+
+The guarded systemd runner described below remains separate: it consumes the
+legacy format-2 server-only stage marker and does not consume the Manifest v1
+archive, role inventory, or rendered API/web units. See [Linux Release
+Manager](./linux-release-manager.md) for the manager grammar and transaction
+boundary.
+
+## Phase 04 role-aware units (Manifest v1)
+
+Phase 04 adds the unit and ownership boundary consumed by the release manager.
+It does not replace the guarded format-2 runner yet. A manager `install` or
+`role set` stages a release view and candidate service files; it does not copy
+those files into `/etc/systemd/system`, enable a unit, start a process, or
+switch `/opt/dam-hopper/current`. Activation remains a Phase 05 operation.
+
+### Role matrix
+
+Role projection is strict. `server` includes `common` and `server` inventory
+entries; `web` includes `common` and `web`; `both` includes the complete
+inventory.
+
+| Selected role | Candidate release contents | Unit eligible for activation | Listener |
+| --- | --- | --- | --- |
+| `server` | manager, API binary/template, common files | `dam-hopper-api.service` | `0.0.0.0:4801` |
+| `web` | manager, web binary/assets/template/sysuser, common files | `dam-hopper-web.service` | `0.0.0.0:4802` |
+| `both` | exact common + API + web projection | both units in one manager transaction | `4801` and `4802` |
+
+The manifest requires both service contracts and the web sysusers input even
+when the selected projection installs only one service. A fresh install must
+name a role explicitly. An upgrade inherits the recorded role; changing it
+requires `role set`, not `install --role`. A `both` candidate uses one release
+tag/version for both units. The legacy `4800` listener must be free before any
+future activation.
+
+### Templates and rendering
+
+Publisher assets are:
+
+- `deploy/systemd/dam-hopper-api.service.in`
+- `deploy/systemd/dam-hopper-web.service.in`
+- `deploy/sysusers.d/dam-hopper-web.conf`
+
+The unit renderer accepts only these placeholders:
+
+| Placeholder | Serialized value |
+| --- | --- |
+| `@RELEASE_ROOT@` | absolute `/opt/dam-hopper/releases/<tag>/<role>` view |
+| `@RELEASE_VERSION@` | validated stable release version |
+| `@PUBLIC_CONFIG@` | `/etc/dam-hopper/host-config.json` |
+| `@API_ORIGINS@` | validated exact origins joined for `DAM_HOPPER_CORS_ORIGINS` |
+
+`UnitRenderContext::new` rejects non-absolute paths, control characters, invalid
+SemVer, and invalid or duplicate web origins. `render_unit` rejects unknown or
+unresolved uppercase `@TOKEN@` values, so operator text is never interpreted as
+unit syntax. The rendered text is parsed by `ParsedUnit` and then checked by
+the API or web policy validator. `systemd-analyze verify` is invoked through a
+direct `Command` adapter, without a shell, for staged unit paths when the
+binary is available.
+
+### API unit
+
+`dam-hopper-api.service` is deliberately broad for this MVP because the owner
+decision makes the API service `root`; this is an accepted compromise, not a
+recommendation for arbitrary services:
+
+| Property | Contract |
+| --- | --- |
+| Identity | `User=root`, `Group=root`, `WorkingDirectory=/root` |
+| Command | concrete `<release-root>/bin/dam-hopper-server`; `--config /etc/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801` |
+| Environment | `HOME=/root`, `XDG_CONFIG_HOME=/etc/dam-hopper`, `RUST_LOG=info`, `RUST_ENV=production`, exact `DAM_HOPPER_CORS_ORIGINS` |
+| Environment files | optional `/etc/dam-hopper/server.env`, then optional generated `server-safety.env` |
+| Lifecycle | `Type=exec`, `Restart=on-failure`, `RestartSec=5s`, `KillSignal=SIGTERM`, `KillMode=mixed`, `TimeoutStopSec=20s` |
+| Hardening | `UMask=0077`, `NoNewPrivileges=false`, journald stdout/stderr |
+
+`NoNewPrivileges=false` is intentional: managed interactive PTY commands may
+need the existing `sudo` behavior. The API unit has no web dependency and no
+shared process or proxy. Its wildcard bind still requires host-firewall and
+Tailscale ACL controls, and production authentication remains enabled.
+
+### Isolated web unit
+
+`dam-hopper-web.service` is a separate, non-writing static host:
+
+- `Type=exec`, `User=dam-hopper-web`, and `Group=dam-hopper-web`.
+- `ExecStart` names the concrete matching release binary and web root:
+  `<release-root>/bin/dam-hopper-web --root <release-root>/web --host 0.0.0.0
+  --port 4802 --runtime-config /etc/dam-hopper/host-config.json
+  --release-version <version>`.
+- `Restart=on-failure`, `RestartSec=5s`, `KillSignal=SIGTERM`,
+  `KillMode=mixed`, `TimeoutStopSec=10s`, `UMask=0077`.
+- `NoNewPrivileges=true`, an empty capability/ambient-capability set,
+  `ProtectSystem=strict`, `ProtectHome=true`, `PrivateTmp=true`,
+  `PrivateDevices=true`, `ProtectKernelTunables=true`,
+  `ProtectControlGroups=true`, `ProtectKernelModules=true`,
+  `MemoryDenyWriteExecute=true`, `LockPersonality=true`,
+  `RestrictRealtime=true`, and `RestrictSUIDSGID=true`.
+- `ReadOnlyPaths` covers only the selected release root and public host config.
+  The policy rejects `EnvironmentFile` and `ReadWritePaths`; no API token,
+  environment, SQLite, project, manager-state, upload, or home path is granted.
+
+The web unit has no `Requires=`, `PartOf=`, `BindsTo=`, shared process, API
+proxy, or other API coupling. Stopping or restarting one role must not stop the
+other. The web process serves the already-validated immutable root; it does not
+write API state.
+
+### Web identity provisioning
+
+`deploy/sysusers.d/dam-hopper-web.conf` declares:
+
+```text
+u dam-hopper-web - "DamHopper Web Host" /nonexistent /sbin/nologin
+```
+
+The manager's `systemd_sysusers` adapter invokes `systemd-sysusers` directly.
+Before web activation, the account verifier resolves the passwd entry and
+rejects a missing account, UID 0, an interactive shell, or an unrestricted
+home. The declaration grants no supplementary groups, and the service uses the
+dedicated account as both user and primary group. Account persistence after
+rollback is harmless; deleting a shared system identity is not part of
+rollback.
+
+### Ownership, modes, and pending state
+
+Release bytes and machine-local state remain separate. The ownership verifier
+rejects symlinks and special files, optionally requires UID 0, and recursively
+expects release directories to be `0755`, binaries directly under `bin/` to be
+`0755`, and other regular release files to be `0644`. Rendered unit and sysusers
+files are written as `0644`; manager transaction/state boundaries use `0700`
+directories and `0600` private files.
+
+| Path | Phase 04 role |
+| --- | --- |
+| `/opt/dam-hopper/.staging/<transaction-id>/` | root-private extraction workspace (`0700`) |
+| `/opt/dam-hopper/releases/<tag>/<role>/` | immutable validated role view |
+| `/var/lib/dam-hopper/pending-units/` | rendered candidate `*.service` and web sysusers file |
+| `/var/lib/dam-hopper/pending-host-config.json` | fsynced candidate public web config |
+| `/var/lib/dam-hopper/pending.json` | fsynced tag/role/digests/release path and pending-unit path |
+| `/etc/dam-hopper/host.toml` | recorded role and exact allowed origins |
+| `/etc/dam-hopper/host-config.json` | active public runtime config path, read by the web unit |
+| `/etc/systemd/system/` | active unit destination, untouched by Phase 04 staging |
+
+The staging flow acquires the deployment lock, validates the manifest/archive,
+extracts one role view, renders only the selected unit set, writes candidate
+public config, and verifies unit syntax before saving `pending.json`. It never
+uses `/opt/dam-hopper/current` as `ExecStart` authority. `pending_units_path`
+is a handoff for the later activation transaction; it is not evidence that a
+unit is enabled or active.
+
+### Runtime evidence boundary
+
+The process adapter can query `systemctl show` for `MainPID`, read effective
+UID/GID and `/proc/<pid>/exe`, and inspect the cgroup. The port inspector reads
+`/proc/net/tcp` and `/proc/net/tcp6` and treats state `0A` as LISTEN. These
+checks support later activation and health gates; Phase 04 tests use temporary
+trees and do not claim a live systemd unit, account, SELinux label, or firewall
+configuration.
+
 
 If installation stops on a stale safety assignment and no managed service
 assets remain, run `pnpm linux:reset -- --runtime-only`. It preserves the
@@ -27,7 +188,7 @@ existing server environment file, rewrites the current safety assignments, and
 requires typing `PREPARE /home/loidinh/.config/dam-hopper` before install is
 retried.
 
-## Supported production runner
+## Legacy format-2 production runner (current operator path until migration)
 
 Run every command from any checkout of this repository as `loidinh`; the scripts
 resolve their repository root from their own location and accept any named
@@ -122,7 +283,7 @@ administrator acceptance checks after installing this unit.
 
 The service process is always `loidinh`. The system manager owns the unit and deployment assets, while runtime configuration, token, OPAQUE setup, session database, telemetry database, project files, and other private state remain owned by `loidinh`.
 
-## Unit invariants
+## Legacy format-2 unit invariants
 
 [`deploy/systemd/dam-hopper.service`](../deploy/systemd/dam-hopper.service) is intentionally small:
 
@@ -900,7 +1061,7 @@ the verified assets. An unknown manager status or changed asset aborts the rollb
 
 Restoring the legacy nohup launch is optional and requires a separate administrator decision. Do it only after checking that no process owns the live databases and that exactly one intended process will own the legacy `4800` listener. This repository does not perform that cutover.
 
-## Phase 03 verification status
+## Legacy runner verification status (historical)
 
 Repository evidence recorded on 2026-08-20 is non-privileged and does not establish live ownership:
 

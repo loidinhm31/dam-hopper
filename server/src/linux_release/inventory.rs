@@ -52,6 +52,14 @@ impl TargetRole {
             TargetRole::Both => "both",
         }
     }
+
+    pub fn includes_server(&self) -> bool {
+        matches!(self, TargetRole::Server | TargetRole::Both)
+    }
+
+    pub fn includes_web(&self) -> bool {
+        matches!(self, TargetRole::Web | TargetRole::Both)
+    }
 }
 
 impl std::fmt::Display for TargetRole {

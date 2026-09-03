@@ -59,6 +59,10 @@ fn test_staging_fresh_install_success() {
         .expect("loaded pending state");
     assert_eq!(loaded_pending, pending);
 
+
+    // Verify candidate unit was staged into pending-units
+    assert!(layout.pending_units_dir().join("dam-hopper-api.service").exists());
+    assert!(!layout.pending_units_dir().join("dam-hopper-web.service").exists());
     // Verify host.toml was saved
     let host_config = load_host_config(&layout.host_config_path())
         .unwrap()

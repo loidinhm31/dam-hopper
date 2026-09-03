@@ -14,7 +14,7 @@ created: 2026-09-03
 ## Outcome
 
 Replace the checkout-built format-2 Linux runner with one immutable, attested GitHub Release. A Rust manager stages a lockstep CLI/API/web release, independent API/web units run selected host roles, and explicit activation commits only after exact-version health remains stable.
-Progress: 31% (42h/136h; Phases 01–03 complete, Phases 04–09 pending).
+Progress: 40% (54h/136h; Phases 01–04 complete, Phases 05–09 pending).
 
 ## Fixed Decisions
 
@@ -33,7 +33,7 @@ Progress: 31% (42h/136h; Phases 01–03 complete, Phases 04–09 pending).
 | 01 | [Contract, version, and manifest](./phase-01-contract-version-manifest.md) | DONE 2026-09-03 16:07:45 +07:00 | 100% | 10h |
 | 02 | [Rust CLI acquisition and staging](./phase-02-rust-cli-safe-acquisition-staging.md) | DONE 2026-09-03 | 100% | 18h |
 | 03 | [Dedicated web host and runtime origin](./phase-03-web-host-runtime-origin-health.md) | DONE 2026-09-03 | 100% | 14h |
-| 04 | [Role-aware systemd and ownership](./phase-04-role-aware-systemd-ownership.md) | Pending | 0% | 12h |
+| 04 | [Role-aware systemd and ownership](./phase-04-role-aware-systemd-ownership.md) | DONE 2026-09-03 20:57:20 +07:00 | 100% | 12h |
 | 05 | [Durable activation, rollback, and recovery](./phase-05-durable-activation-rollback-recovery.md) | Pending | 0% | 24h |
 | 06 | [Central publisher and bootstrap](./phase-06-central-github-publisher-bootstrap.md) | Pending | 0% | 16h |
 | 07 | [Format-2 migration and runner retirement](./phase-07-format-2-migration-runner-retirement.md) | Pending | 0% | 14h |
@@ -73,7 +73,7 @@ Accepted architecture: [brainstorm decision](../reports/brainstorm-260903-0919-l
 - [ ] Propagate the runtime-value exclusion and machine-local configuration contract through publisher, migration, validation, and docs phases.
 - [ ] Recheck every phase dependency, success criterion, and failure test after these cross-cutting contract changes.
 
-**Readiness:** Phases 02–03 are implemented and reviewed. Revise remaining phase files before their implementation; they still contain superseded decisions.
+**Readiness:** Phases 02–04 are implemented and reviewed. Revise remaining phase files before their implementation; they still contain superseded decisions.
 
 ## Unresolved Questions
 
