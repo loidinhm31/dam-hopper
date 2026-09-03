@@ -256,6 +256,50 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Windows release evidence must pass the documented WebView2 gate; Linux build/package evidence is not runtime proof.
 
 See [Native Browser Debug Support](./native-browser-debug-support.md) for the platform matrix and rollback path.
+
+### PR-011: Linux Release Identity and Manifest v1
+
+**Status:** Phase 01 contract complete (2026-09-03). Acquisition, extraction,
+installation, activation, attestation, and rollback consumers remain later
+phases.
+
+**Functional Requirements:**
+
+- Publish one immutable `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz`
+  archive for the Fedora 44 x86_64 systemd profile.
+- Treat the protected `vX.Y.Z` Git tag as release authority and require stable
+  SemVer plus one matching version for `cli`, `api`, `webHost`, and `webAssets`.
+- Record the 40-character commit SHA, profile ABI requirements, archive size and
+  SHA-256, API/web service contracts, exact role-scoped inventory, and
+  `previousReleaseCompatible=true` / `stateCompatibility="n-1"`.
+- Reject unknown, duplicate, missing, ill-typed, unsafe, over-limit, or
+  non-canonical manifest data before extraction.
+
+**Acceptance Criteria:**
+
+- [x] Rust `ReleaseManifest` types use camelCase names and deny unknown fields.
+- [x] Manifest payloads are bounded at 1 MiB; inventories at 20,000 entries;
+  normalized paths at 255 bytes.
+- [x] Stable tag/version, component equality, Fedora/systemd profile, archive,
+  service, rollback, required-path, role, mode, digest, and file-type rules are
+  validated.
+- [x] Publisher JSON Schema uses `additionalProperties: false`, constants,
+  enums, patterns, required fields, and matching numeric bounds.
+- [x] Server integration tests cover valid round trips, role projections,
+  malformed input, drift, unsafe paths, required assets, and secret-file
+  exclusions.
+
+**Technical Constraints:**
+
+- Keep contract constants, version logic, manifest types, inventory logic, and
+  validation in the focused `server/src/linux_release/` modules.
+- Use canonical UTF-8, LF-terminated JSON with deterministic field order and no
+  credentials, mutable URLs, timestamps, or `latest` pointers.
+- Treat the Rust validator as authoritative for cross-field rules; keep
+  `deploy/release/release-manifest.schema.json` structurally in parity.
+
+See [Linux Release Manifest v1](./linux-release-manifest.md).
+
 ### PR-009: Host Resource Monitoring (Current Delivery)
 
 **Status:** Phase 07 completed on 2026-08-10 with release-owner approval after local packaging, soak, and browser validation. Phase 02 host-resource restoration alerts completed on 2026-08-11: additive thermal/disk current alerts, mixed history, validated compatible push events, and per-target recovery are now delivered. The still-unobserved Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are owner-authorized deferred follow-up work, not passed gates. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.

@@ -1,3 +1,8 @@
+# 2026-09-03
+
+- **Linux Release Installer Architecture — Phase 01: Contract, Version, and Manifest [COMPLETED 2026-09-03 16:07:45 +07:00].** Added the strict release-manifest v1 contract and matching JSON Schema, lockstep release tag/SemVer/component validation, Fedora 44 x86_64 systemd profile constants, role-scoped inventory projections, bounded canonical JSON parsing, path/file-type/security exclusions, and service/rollback invariants.
+- Validation: vendored all-target `cargo check` passed; focused manifest suites passed 20/20 and the `linux_release` filter passed 10/10 (30/30 executed test invocations); scoped review approved 9.5/10 with no blocking findings. Parent plan is 7% complete (10h/136h); Phases 02–09 remain pending. [See plan](../plans/260903-0919-linux-release-installer-architecture/plan.md).
+
 # 2026-08-31
 
 - **Preserve Explorer Tree Expansion & Editor View Scroll Position (Phases 01–03).**
