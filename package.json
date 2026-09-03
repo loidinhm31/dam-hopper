@@ -25,6 +25,11 @@
     "test": "cd server && cargo test",
     "test:all": "scripts/run-all-tests.sh",
     "test:run": "cd server && cargo test",
+    "release:check-version": "node deploy/release/check-version-alignment.mjs",
+    "release:archive": "deploy/release/build-release-archive.sh",
+    "release:manifest": "node deploy/release/generate-release-manifest.mjs",
+    "release:check-assets": "node deploy/release/check-release-assets.mjs",
+    "release:verify": "pnpm release:check-version && bash -n deploy/release/build-release-archive.sh deploy/release/dam-hopper-install.sh && node -c deploy/release/generate-release-manifest.mjs deploy/release/check-release-assets.mjs",
     "check": "pnpm build && pnpm build:native && pnpm lint && cd server && cargo test"
   },
   "engines": {

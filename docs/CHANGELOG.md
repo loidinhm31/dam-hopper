@@ -1,3 +1,8 @@
+# 2026-09-04
+
+- **Linux Release Installer Architecture — Phase 06: Central GitHub Publisher and Bootstrap [COMPLETED 2026-09-04 01:05:00 +07:00].** Stable `vX.Y.Z` publishing is isolated from desktop `desktop-v*` releases. The publisher validates version alignment, builds Rust/web inputs, compares two deterministic archives, emits external Manifest v1 plus SPDX 2.3 SBOM assets, applies the exact four-asset gate, attests all four subjects, and publishes only after the `linux-release` environment gate. `dam-hopper-install.sh` downloads as the caller, verifies archive integrity with optional manifest/archive attestations, extracts only the manager, and ends at `PENDING`; activation remains `sudo dam-hopper start`. See [Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md).
+- Validation: publisher contract tests **24/24**, `pnpm release:verify`, shell/Node syntax checks, and vendored all-target `cargo check` passed; Cycle 2 review approved **9.5/10** with no blocking findings. Fedora-host ABI evidence and mutable toolchain/cache action pins remain later release gates.
+
 # 2026-09-03
 
 - **Linux Release Installer Architecture — Phase 01: Contract, Version, and Manifest [COMPLETED 2026-09-03 16:07:45 +07:00].** Added the strict release-manifest v1 contract and matching JSON Schema, lockstep release tag/SemVer/component validation, Fedora 44 x86_64 systemd profile constants, role-scoped inventory projections, bounded canonical JSON parsing, path/file-type/security exclusions, and service/rollback invariants.

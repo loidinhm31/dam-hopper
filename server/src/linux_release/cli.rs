@@ -43,6 +43,9 @@ pub enum Commands {
     /// Recover active units after crash or unexpected failure.
     Recover(RecoverArgs),
 
+    /// Validate a release manifest and optional archive bundle against contract invariants.
+    Validate(ValidateArgs),
+
     /// Print detailed version information.
     Version,
 }
@@ -136,4 +139,16 @@ pub struct RecoverArgs {
     /// Run boot-time reconciliation one-shot before application units start.
     #[arg(long)]
     pub boot: bool,
+}
+
+/// Arguments for `validate` subcommand.
+#[derive(Debug, Args, Clone, PartialEq, Eq)]
+pub struct ValidateArgs {
+    /// Path to release-manifest.json to validate.
+    #[arg(long, required = true)]
+    pub manifest: PathBuf,
+
+    /// Optional path to release archive tar.gz to validate against manifest inventory.
+    #[arg(long)]
+    pub archive: Option<PathBuf>,
 }

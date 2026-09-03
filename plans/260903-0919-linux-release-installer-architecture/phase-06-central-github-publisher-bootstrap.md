@@ -15,9 +15,9 @@
 - **Date:** 2026-09-03
 - **Description:** Build Cargo and pnpm outputs once from a protected tag, assemble one reproducible Fedora archive, attest it, and publish one complete immutable public Release with a non-root bootstrap.
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
-- **Effort:** 16h
+- **Implementation status:** DONE 2026-09-04 01:05:00 +07:00
+- **Review status:** PASSED Review Cycle 2 (Score 9.5/10, report: `plans/reports/code-review-260904-0115-phase-06-central-github-publisher-bootstrap.md`)
+- **Progress:** 100% (12/12 implementation steps; 7/7 todo items)
 
 ## Key Insights
 
@@ -108,13 +108,13 @@ Attestation is the v1 authenticity boundary. Do not add detached Ed25519 keys, n
 
 ## Todo List
 
-- [ ] Isolate desktop and stable tag namespaces.
-- [ ] Add least-privileged stable publisher DAG.
-- [ ] Add deterministic archive/manifest/SBOM generation.
-- [ ] Add attestation and exact draft completeness gates.
-- [ ] Add bootstrap that ends pending without root network fetch.
-- [ ] Add publisher contract tests and compile/static checks.
-- [ ] Pass scoped reviewer gate.
+- [x] Isolate desktop and stable tag namespaces.
+- [x] Add least-privileged stable publisher DAG (fix GHA tag glob pattern `v*`).
+- [x] Add deterministic archive/manifest/SBOM generation (fix `tar --format=posix`, `--no-recursion`, intermediate directory exclusion in `build-release-archive.sh`).
+- [x] Add attestation and exact draft completeness gates.
+- [x] Add bootstrap that ends pending without root network fetch.
+- [x] Add publisher contract tests and compile/static checks.
+- [x] Pass scoped reviewer gate (resolve 4 critical packaging and workflow issues).
 
 ## Success Criteria
 
@@ -143,4 +143,6 @@ Attestation is the v1 authenticity boundary. Do not add detached Ed25519 keys, n
 
 ## Next Steps
 
-Phase 07 migrates a verified format-2 host and retires checkout-based entry points. Phase 08 exercises the actual published-shape artifacts without publishing a production release. Unresolved questions: none.
+1. All 4 critical packaging and workflow defects from Review Cycle 1 resolved and verified.
+2. 24/24 Rust integration contract tests and syntax/alignment verification suites passing.
+3. Proceed to Phase 07: Format 2 Migration and Runner Retirement (`phase-07-format-2-migration-runner-retirement.md`).

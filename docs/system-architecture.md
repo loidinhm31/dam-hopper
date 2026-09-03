@@ -129,7 +129,7 @@ authentication and OS privilege.
 
 The authenticated `/api/browser-debug/artifacts` routes provide ephemeral handoff storage for browser-debug tooling. `BrowserDebugArtifactManager` keeps metadata in memory and writes generated JSON/PNG paths beneath a temporary root; it exposes create, one-shot PNG upload, and delete only—there is intentionally no read/list route. Create accepts a live `terminalId` plus validated `selection` JSON (64 KiB request cap). PNG upload requires `image/png`, is capped at 4 MiB, and performs structural plus decoded-image verification before writing. Artifacts expire after 10 minutes, a 60-second sweeper removes expired files, and shutdown cleanup removes the root.
 
-### linux_release/ (Phases 01–05: manifest, acquisition, staging, activation, and recovery)
+### linux_release/ (Phases 01–06: publisher, manifest, acquisition, staging, activation, and recovery)
 
 `server/src/linux_release/` owns the strict Fedora 44 x86_64 systemd release
 profile and its manager. The module remains deliberately split so
@@ -140,9 +140,9 @@ security-sensitive boundaries stay reviewable:
   SemVer/tag identity, role projections, normalized paths, required assets,
   modes, and runtime-file exclusions.
 - `cli.rs` defines `fetch`, `install`, `role set`, `start`, `status`,
-  `rollback`, `recover`, and `version`; `privilege.rs` enforces the EUID
-  matrix. The binary at `server/src/bin/dam-hopper.rs` only parses, preflights,
-  dispatches, and reports outcomes.
+  `rollback`, `recover`, `validate`, and `version`; `privilege.rs` enforces the
+  EUID matrix. The binary at `server/src/bin/dam-hopper.rs` only parses,
+  preflights, dispatches, and reports outcomes.
 - `platform.rs`, `origin.rs`, and `host_config.rs` gate Fedora 44, x86_64,
   glibc/systemd requirements, exact browser origins, and recorded/public role
   configuration.
@@ -230,6 +230,24 @@ tests. The publisher schema remains at
 authoritative. See [Linux Release Manager](./linux-release-manager.md) for the
 CLI grammar, paths, and transaction flow, and the systemd section below for
 the role/ownership contracts.
+
+### Central publisher and bootstrap (Phase 06)
+
+The producer boundary is `.github/workflows/release-linux.yml`, not the runtime
+manager. Metadata validation fans out to Rust and web builds, then one package
+job assembles the archive twice and compares SHA-256 values before generating
+the external manifest, SPDX SBOM, and bootstrap. An attestation job covers all
+four final assets; only the environment-gated publish job has `contents: write`.
+The desktop workflow uses `desktop-v*` and cannot own stable `vX.Y.Z` releases.
+
+`deploy/release/build-release-archive.sh` is a fixed-input archive assembler;
+`generate-release-manifest.mjs` hashes and inventories its final bytes;
+`check-release-assets.mjs` enforces exact local and draft-release asset sets.
+`dam-hopper-install.sh` downloads as the caller, verifies archive integrity
+(and optional manifest/archive attestations), extracts only the manager, and
+stages through `sudo`; activation remains `sudo dam-hopper start`. See [Linux
+Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md) for
+the concrete DAG, artifact names, and known workflow boundaries.
 
 ### web_host/ (Phase 03: dedicated static host)
 

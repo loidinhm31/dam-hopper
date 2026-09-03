@@ -90,7 +90,8 @@ pub enum FsError {
     Unavailable,
 }
 ```
-### Linux release contract, manager, staging, and durable activation
+
+### Linux release publisher, contract, manager, staging, and durable activation
 
 `server/src/linux_release/` is a deliberately split Rust module. Keep fixed
 profile/service/rollback values and parser limits in `constants.rs`; stable
@@ -138,7 +139,6 @@ temp-file → write/sync → rename → parent-sync sequence for state, config, 
 symlink replacement. `transaction.rs` and `journal.rs` must validate the
 lock-scoped phase graph; do not skip phases or mutate durable state outside the
 transaction boundary.
-
 Valid forward activation is:
 
 `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING → COMMITTED`
@@ -179,6 +179,21 @@ The JSON Schema at `deploy/release/release-manifest.schema.json` covers
 structural constraints. Rust validation remains authoritative for cross-field
 equality and required-path rules. Any schema change requires matching Rust
 types, constants, validation, tests, and [the release-manifest guide](./linux-release-manifest.md).
+
+### Publisher boundary
+
+Keep release assembly in `deploy/release/`: the shell packager accepts only
+explicit binaries/web output and normalizes archive metadata; the Node
+manifest generator hashes final bytes and emits sorted inventory; the asset
+gate rejects missing, extra, empty, or inconsistent public files. The stable
+workflow must preserve the read-only build → attest → environment-approved
+publish order. Never package `.env*`, tokens, runtime TOML, credentials,
+SQLite/DB files, mutable URLs, or CI secrets. Keep bootstrap downloads
+unprivileged and end only at manager `PENDING`; activation belongs to
+`sudo dam-hopper start`.
+
+See [Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)
+for the concrete workflow and artifact contract.
 
 
 ### Dedicated web host and runtime-origin rules (Phase 03)

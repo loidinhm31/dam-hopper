@@ -2,7 +2,7 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
-### Linux Release Installer Architecture (2026-09-03)
+### Linux Release Installer Architecture (2026-09-04)
 
 - **Phase 01 — [COMPLETED 2026-09-03 16:07:45 +07:00]**: established the strict release-manifest v1 contract, lockstep `vX.Y.Z`/SemVer/component-version validation, Fedora 44 x86_64 systemd profile constants, role-scoped inventory projections, bounded canonical JSON, path/file-type/security exclusions, service/rollback invariants, and matching JSON Schema.
 - Validation: vendored all-target `cargo check` passed; focused manifest suites passed 20/20 and the `linux_release` filter passed 10/10 (30/30 executed test invocations); scoped code review approved 9.5/10 with no blocking findings.
@@ -14,7 +14,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - Validation: Linux release integration suites passed **66/66 across 10 suites**; vendored all-target `cargo check` passed with no warnings; scoped review approved **9.0/10** with no blocking findings. Non-blocking hardening recommendations remain recorded in the [review report](../plans/reports/code-review-260903-2025-phase-04-role-aware-systemd-ownership.md).
 - **Phase 05 — [COMPLETED 2026-09-03 23:45:08 +07:00]**: delivered durable state/journal records, fsync-backed activation transactions, exact process/listener/health stability probes, automatic/manual rollback, boot-time recovery, and reference-safe retention. [Phase 05 plan](../plans/260903-0919-linux-release-installer-architecture/phase-05-durable-activation-rollback-recovery.md).
 - Validation: vendored all-target `cargo check` passed; Phase 05 suites passed **19/19**; full `linux_release*` matrix passed **77/77**; Cycle 2 review approved **9.8/10** with no blocking findings. [Review report](../plans/reports/code-review-260903-2332-phase-05-durable-activation-rollback-recovery.md).
-- Parent plan progress: **57% (78h/136h)**; Phases 01–05 complete, Phases 06–09 pending. [Plan](../plans/260903-0919-linux-release-installer-architecture/plan.md).
+- **Phase 06 — [COMPLETED 2026-09-04 01:05:00 +07:00]**: delivered the central stable-tag GitHub publisher, desktop/stable tag namespace split, deterministic archive assembly, external Manifest v1 and SPDX SBOM generation, exact four-asset local/draft gate, four-subject artifact attestations, and a non-root bootstrap that ends at pending staging. [Phase 06 plan](../plans/260903-0919-linux-release-installer-architecture/phase-06-central-github-publisher-bootstrap.md).
+- Validation: publisher contract tests passed **24/24**; `pnpm release:verify`, shell syntax, Node syntax, and vendored all-target `cargo check` passed with no warnings. Cycle 2 review approved **9.5/10** with no blocking findings. [Review report](../plans/reports/code-review-260904-0115-phase-06-central-github-publisher-bootstrap.md).
+- Parent plan progress: **69% (94h/136h)**; Phases 01–06 complete, Phases 07–09 pending. [Parent plan](../plans/260903-0919-linux-release-installer-architecture/plan.md).
 
 ### Preserve Explorer Tree Expansion & Editor View Scroll Position (2026-08-31)
 
