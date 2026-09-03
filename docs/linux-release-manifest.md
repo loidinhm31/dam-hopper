@@ -109,17 +109,20 @@ role. A target projection includes:
 must be regular files or directories; links, devices, sockets, FIFOs, and other
 special entries cannot be represented.
 
-### Required paths
+### Required paths and activation assets
 
-The inventory must contain these paths with the stated role and kind. Executable
-binaries must have at least one execute bit.
+The inventory must contain the required release paths below with the stated
+role and kind. The recovery template is validated as a `common` asset when
+packaged; `stage_units.rs` always stages a recovery unit for activation and
+uses its checked-in template fallback when the archive omits that asset.
+Executable binaries must have at least one execute bit.
 
 | Path | Kind | Required role | Additional requirement |
 | --- | --- | --- | --- |
 | `bin/dam-hopper-manager` | file | `common` | executable |
 | `bin/dam-hopper-server` | file | `server` | executable |
 | `bin/dam-hopper-web` | file | `web` | executable |
-| `systemd/dam-hopper-recovery.service` | file | `common` | boot recovery unit template |
+| `systemd/dam-hopper-recovery.service` | file | `common` | boot recovery unit template when packaged |
 | `systemd/dam-hopper-api.service` | file | `server` | unit template |
 | `systemd/dam-hopper-web.service` | file | `web` | unit template |
 | `sysusers.d/dam-hopper-web.conf` | file | `web` | sysusers input |

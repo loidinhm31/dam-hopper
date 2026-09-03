@@ -11,6 +11,10 @@
 - **Linux Release Installer Architecture — Phase 05: Durable Activation, Rollback, and Recovery [COMPLETED 2026-09-03].** Added the generation-numbered `/var/lib/dam-hopper-manager/state.json` envelope, crash-durable state/config/link writes, lock-scoped activation phases, systemd unit/config backups, and verified release retention.
 - The unified `dam-hopper start` command now consumes pending candidates through `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING → COMMITTED`. Candidate health requires a 20-second startup deadline plus 20 consecutive 500 ms probes (10-second stability) with exact process, listener, and API/web JSON checks.
 - Added automatic and manual rollback through the same health gate, first-install baseline cleanup, and `dam-hopper-recovery.service` boot reconciliation before API/web units. Unsafe or unrestorable durable state is blocked as `RECOVERY_REQUIRED`. [See phase](../plans/260903-0919-linux-release-installer-architecture/phase-05-durable-activation-rollback-recovery.md).
+- Validation: Phase 05 implementation completed **13/13 steps and 7/7 todo items**;
+  Cycle 2 review approved **9.8/10** with no blocking findings. Focused
+  state-machine, health, and unit-policy evidence covers the durable lifecycle;
+  full host-specific rollback rehearsal remains a later deployment gate.
 
 
 # 2026-08-31
