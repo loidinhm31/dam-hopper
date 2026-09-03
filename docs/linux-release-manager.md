@@ -1,11 +1,12 @@
-# Linux Release Manager (Phases 02–06)
+# Linux Release Manager (Phases 02–07)
 
-Status: Phases 02–06 implementation complete and reviewed (2026-09-04). The
+Status: Phases 02–07 implementation complete and reviewed (2026-09-04). The
 manager provides unprivileged acquisition, root-only staging, durable
-activation, exact health gating, rollback, and crash recovery for the Fedora 44
-x86_64 systemd release profile. Phase 03 adds the separate `dam-hopper-web`
-binary; Phase 04 defines role-aware units and ownership; Phase 06 adds the
-central GitHub publisher and non-root bootstrap.
+activation, exact health gating, rollback, crash recovery, and the one-time
+format-2 migration from the retired checkout runner for the Fedora 44 x86_64
+systemd release profile. Phase 03 adds the separate `dam-hopper-web` binary;
+Phase 04 defines role-aware units and ownership; Phase 06 adds the central
+GitHub publisher and non-root bootstrap; Phase 07 retires the old runner.
 
 This guide documents the executable from downloaded bundle through committed
 release. The manifest field contract remains in [Linux Release Manifest v1](./linux-release-manifest.md).
@@ -41,9 +42,9 @@ Acquisition and installation have intentionally different privilege boundaries:
   the dedicated web unit uses the unprivileged `dam-hopper-web` identity. This
   is a release contract, not a general recommendation for host services.
 
-The existing guarded systemd runner and its format-2 server-only marker remain
-separate from this manager. See [Linux systemd](./linux-systemd.md) for that
-legacy deployment boundary.
+The one-time format-2 migration is part of this manager. It accepts only the
+verified legacy layout described in [Linux systemd](./linux-systemd.md), stages
+the new root beside `/opt/dam-hopper`, and retires the old runner after commit.
 
 ## Bootstrap handoff (Phase 06)
 
@@ -346,6 +347,67 @@ removes that destination before the final rename. Activation occurs only from
 the explicit `start` command; operators should treat the bundle and validated
 manifest as the source of truth for each staging attempt.
 
+## Format-2 migration (Phase 07)
+
+When `/opt/dam-hopper` is the exact known format-2 root, `install` creates a
+same-filesystem sibling named `/opt/.dam-hopper-migration.<tx_id>`. The
+canonical root remains untouched while the sibling receives:
+
+```text
+.migration-transaction
+releases/imported-format-2/server/bin/dam-hopper-server
+releases/imported-format-2/server/systemd/dam-hopper.service
+releases/vX.Y.Z/<role>/...
+```
+
+The read-only verifier accepts only this legacy shape:
+
+- root is an unlinked `0755` directory with exactly `.systemd-fresh-install`
+  and `bin`;
+- `bin/` is unlinked `0755` and contains only unlinked `0755`
+  `dam-hopper-server`;
+- marker is an unlinked `0700` directory containing only unlinked `0600`
+  `manifest` and `nonce`;
+- manifest has exactly four non-empty `key=value` lines, with
+  `format=2`, a 32-character lowercase-hex nonce, and matching lowercase
+  64-character binary/unit SHA-256 values;
+- marker nonce and binary hash match the recorded values;
+- `dam-hopper.service` is an unlinked UTF-8 `0644` file whose hash matches,
+  has the two ordered `/home/loidinh/.config/dam-hopper/{server.env,
+  server-safety.env}` environment files and required `loidinh` API directives,
+  and has no no-auth/web-dir override or `.service.d` drop-in; and
+- `multi-user.target.wants/dam-hopper.service` is a symlink ending in the
+  expected unit name.
+
+The live inspection path additionally checks an active `dam-hopper.service`,
+the `loidinh` process/executable, wildcard `0.0.0.0:4801`, free `4800`/`4802`,
+and successful API health. Format 1 (`format=1` or `web.sha256`) and any
+unknown, changed, partial, or ambiguous state fail closed. User runtime files,
+repositories, containers, MongoDB, and SQLite are never copied or purged.
+
+After `install`, manager state contains a `MigrationRecord` with both root
+paths, old binary/unit hashes, exchange flag, backup unit path, and wants-link
+path. Explicit `start` stops and proves the old service quiesced, sets the
+sibling to `0755`, and atomically exchanges the two directories with Linux
+`renameat2(RENAME_EXCHANGE)`. There is no copy/delete or cross-device fallback.
+The candidate unit/configuration is installed only after exchange; normal
+health-gated probing then commits the new release and records the imported
+legacy release as `previous` (`imported-format-2`).
+
+Failure or crash recovery exchanges the roots back when required, restores the
+old unit from the durable imported copy, restores the wants symlink when
+missing, reloads systemd, and starts the old service. Restoration failure is
+`RECOVERY_REQUIRED`; evidence is retained rather than guessed or deleted.
+Commit rechecks the imported binary hash, removes the migration marker, and
+deletes the redundant exchanged root only after equivalence verification.
+
+The old checkout runner is retired. `deploy/run-linux-production.sh`,
+`deploy/reset-linux-production.sh`, `deploy/systemd/dam-hopper.service`,
+`tests/deploy/linux-production-fixtures.sh`, and package aliases
+`linux:production`/`linux:reset` are absent. Use the manager commands and
+`tests/deploy/fedora44-format2-migration.sh`; do not restore those aliases.
+
+
 ## Failure handling and diagnostics
 
 Failures are returned as typed `ReleaseError` values. Diagnostics identify only
@@ -357,9 +419,9 @@ inventory mismatch, digest mismatch, acquisition failure, attestation failure,
 activation/probe failure, rollback failure, and `RECOVERY_REQUIRED`.
 
 A failed fetch may leave its caller-selected output directory for inspection;
-staging cleanup is transaction-scoped. If the `pending` field is absent after
-an install error, no candidate handoff was committed. The legacy systemd runner
-is not automatically migrated or stopped by this manager.
+staging cleanup is transaction-scoped. Migration failures retain the transaction
+record until rollback or recovery completes; no candidate handoff is committed
+unless `pending` records the staged release.
 
 ## Verification evidence
 

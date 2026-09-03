@@ -50,6 +50,22 @@ pub async fn rollback_activation_failure(layout: &Layout, reason: &str) -> Resul
     let mut state = load_or_init_manager_state(&layout.manager_state_path())?;
     // Case 1: First-install baseline restoration
     if state.active.is_none() {
+        if let Some(tx) = state.transaction.clone() {
+            if let Some(ref mig) = tx.migration {
+                stop_and_disable_units(ALL_SERVICE_UNITS, &layout.systemd_unit_dir)?;
+                super::migration::rollback_migration_exchange(layout, mig)?;
+                state.transaction = None;
+                state.latest_failure = Some(FailureRecord {
+                    failed_at: Utc::now().to_rfc3339(),
+                    tx_id: Some(tx.tx_id.clone()),
+                    target_tag: state.pending.as_ref().map(|p| p.tag.clone()),
+                    phase: "ROLLED_BACK_MIGRATION".into(),
+                    sanitized_error: reason.to_string(),
+                });
+                save_manager_state(&layout.manager_state_path(), &mut state)?;
+                return Ok(());
+            }
+        }
         stop_and_disable_units(ALL_SERVICE_UNITS, &layout.systemd_unit_dir)?;
         if layout.current_link().exists() {
             let _ = fs::remove_file(layout.current_link());
@@ -140,6 +156,39 @@ pub async fn execute_manual_rollback(layout: &Layout) -> Result<(), ReleaseError
     let prev = state.previous.clone().ok_or_else(|| {
         ReleaseError::Config("no previous release recorded for manual rollback".into())
     })?;
+
+    if prev.tag == super::legacy_format2::LEGACY_FORMAT2_TAG {
+        stop_and_disable_units(ALL_SERVICE_UNITS, &layout.systemd_unit_dir)?;
+        let legacy_unit_src = Path::new(&prev.release_path)
+            .join("systemd")
+            .join(super::legacy_format2::LEGACY_FORMAT2_UNIT);
+        let target_unit = layout.systemd_unit_dir.join(super::legacy_format2::LEGACY_FORMAT2_UNIT);
+        if legacy_unit_src.exists() {
+            copy_file_durable(&legacy_unit_src, &target_unit, Some(0o644))?;
+        }
+        let legacy_bin_src = Path::new(&prev.release_path)
+            .join("bin")
+            .join("dam-hopper-server");
+        let target_bin = layout.opt_dir.join("bin").join("dam-hopper-server");
+        if legacy_bin_src.exists() {
+            let bin_parent = layout.opt_dir.join("bin");
+            let _ = fs::create_dir_all(&bin_parent);
+            copy_file_durable(&legacy_bin_src, &target_bin, Some(0o755))?;
+        }
+        let target_wants = layout
+            .systemd_unit_dir
+            .join("multi-user.target.wants")
+            .join(super::legacy_format2::LEGACY_FORMAT2_UNIT);
+        if !target_wants.exists() {
+            let _ = std::os::unix::fs::symlink(&target_unit, &target_wants);
+        }
+        systemctl_daemon_reload()?;
+        let _ = systemctl_start(super::legacy_format2::LEGACY_FORMAT2_UNIT);
+        state.previous = state.active.take();
+        state.active = Some(prev);
+        save_manager_state(&layout.manager_state_path(), &mut state)?;
+        return Ok(());
+    }
 
     let cand = release_to_candidate(&prev);
     state.pending = Some(cand);
