@@ -1,9 +1,11 @@
-# Linux Release Manager (Phase 02)
+# Linux Release Manager (Phases 02–03)
 
-Status: Phase 02 implementation complete and reviewed (2026-09-03). The
+Status: Phases 01–03 implementation complete and reviewed (2026-09-03). The
 manager provides unprivileged acquisition and root-only validation/staging for
-the Fedora 44 x86_64 systemd release profile. Activation, unit installation,
-health checks, rollback, and crash recovery remain later-phase behavior.
+the Fedora 44 x86_64 systemd release profile. Phase 03 adds the separate
+unprivileged `dam-hopper-web` binary and runtime-origin contract; activation,
+unit installation, health orchestration, rollback, and crash recovery remain
+later-phase behavior.
 
 This guide documents the executable and the safe handoff between a downloaded
 bundle and a pending role view. The manifest field contract remains in
@@ -161,6 +163,25 @@ Phase 02 install only creates a pending candidate. It does **not**:
 The dispatcher prints the later `sudo dam-hopper start` handoff after a
 successful stage. The current `start`, `rollback`, and `recover` handlers are
 placeholders until their Phase 05 state machine lands.
+
+### Dedicated web-role handoff (Phase 03)
+
+A `web` or `both` role projection contains executable
+`bin/dam-hopper-web` and the required `web/` asset directory. The later
+activation layer must run the binary against the immutable role-view asset root,
+for example:
+
+```bash
+/opt/dam-hopper/releases/vX.Y.Z/web/bin/dam-hopper-web \
+  --root /opt/dam-hopper/releases/vX.Y.Z/web/web \
+  --port 4802
+```
+
+The binary defaults to `0.0.0.0:4802`, serves GET/HEAD static requests, and
+reports web-role health at `/__dam-hopper/health`. An optional machine-local
+runtime-config file supplies the exact API origin consumed by the browser; it
+is not packaged in the release archive. The manager currently stages this
+handoff only and does not start the web process or install its unit.
 
 ### Status and version
 

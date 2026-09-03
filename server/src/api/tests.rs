@@ -559,6 +559,40 @@ async fn package_router_serves_spa_without_masking_unknown_api_routes() {
 }
 
 #[tokio::test]
+async fn api_router_defaults_to_api_only_and_returns_404_for_web_routes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let router = build_router(make_state(&tmp));
+
+    for path in ["/", "/index.html", "/dashboard", "/assets/app.js", "/favicon.ico"] {
+        let res = router
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "path {path} should be 404");
+    }
+}
+
+#[tokio::test]
+async fn api_health_payload_contains_schema_and_role() {
+    let tmp = tempfile::tempdir().unwrap();
+    let router = build_router(make_state(&tmp));
+
+    let res = router
+        .oneshot(Request::builder().uri("/api/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["schemaVersion"], 1);
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(json["role"], "api");
+}
+
+#[tokio::test]
 async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);

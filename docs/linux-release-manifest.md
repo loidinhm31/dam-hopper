@@ -1,8 +1,9 @@
 # Linux Release Manifest v1
 
-Status: Phase 02 implementation complete and reviewed (2026-09-03). This
+Status: Phases 01–03 implementation complete and reviewed (2026-09-03). This
 document defines the release metadata consumed by the manager's acquisition and
-staging paths. Activation, systemd unit installation, health checks, rollback,
+staging paths. Phase 03 adds the dedicated web-host binary and runtime-origin
+contract. Activation, systemd unit installation, health orchestration, rollback,
 and recovery remain later phases.
 
 The Rust validator is the runtime authority. The publisher-facing JSON Schema
@@ -151,6 +152,22 @@ value, not a general recommendation to run arbitrary services as root.
   "previousReleaseCompatible": true,
   "stateCompatibility": "n-1"
 }
+
+## Phase 03 web runtime contract
+
+The `web` role carries `bin/dam-hopper-web` and the immutable `web/` asset
+directory. Its dedicated host defaults to `0.0.0.0:4802` and reserves:
+
+| Route | Contract |
+| --- | --- |
+| `GET /__dam-hopper/health` | `{ "schemaVersion": 1, "status": "ok", "version": "...", "role": "web" }` |
+| `GET /__dam-hopper/runtime-config.json` | `{ "schemaVersion": 1, "releaseVersion": "...", "profileId": "...", "apiUrl": "..." }` |
+
+Both responses are JSON with `Cache-Control: no-store`; HEAD responses carry no
+body. Static serving allows only GET/HEAD, rejects unsafe paths and symlinks,
+and applies no-cache to root/index, immutable one-year caching to content-
+hashed assets, and one-hour public caching to other assets. Runtime config is
+machine-local and bounded at 4 KiB; it is never included in the archive.
 ```
 
 ## Canonicalization and validation
@@ -187,7 +204,7 @@ The Phase 02 staging implementation preserves this post-commit view shape but
 replaces an existing same-tag/same-role destination before a repeated final
 rename; activation is still deferred and the active view is untouched.
 
-## Manager consumption (Phase 02)
+## Manager consumption (Phases 02–03)
 
 The Rust manager is the first runtime consumer of Manifest v1:
 
@@ -210,10 +227,11 @@ The current guarded systemd runner documented in
 [Linux systemd](./linux-systemd.md) still uses its legacy format-2 server-only
 stage marker. That marker (`format`, `nonce`, and local binary/unit hashes) is
 not the release manifest v1 contract and has no web inventory. Phase 02 adds
-manager acquisition and role-view staging for Manifest v1, but does not replace
-the runner, switch the active pointer, or start services. Do not treat a
-format-2 stage as a v1 archive, or this document as evidence that activation,
-rollback, or recovery is implemented.
+manager acquisition and role-view staging for Manifest v1; Phase 03 adds the
+dedicated web binary and runtime-origin contract but does not replace the
+runner, switch the active pointer, or start services. Do not treat a format-2
+stage as a v1 archive, or this document as evidence that activation, rollback,
+or recovery is implemented.
 
 ## Verification
 

@@ -5,7 +5,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
-    api::{build_router_with_origins, router::parse_cors_origins},
+    api::router::{build_router_with_web_dir_and_origins, parse_cors_origins},
     config::{
         global_config_path, global_registry_path, read_global_config_at, resolve_startup_config,
         ConfigResolutionInput, ConfigSource, DamHopperConfig,
@@ -51,6 +51,10 @@ struct Cli {
     /// Skip authentication (dev mode) — all requests bypass auth middleware
     #[arg(long, env = "DAM_HOPPER_NO_AUTH")]
     no_auth: bool,
+
+    /// Optional static web directory for combined API + UI serving (e.g. Docker)
+    #[arg(long, env = "DAM_HOPPER_WEB_DIR")]
+    web_dir: Option<PathBuf>,
 }
 
 const TOKEN_CAPACITY: usize = 512;
@@ -313,7 +317,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(proc_poll_loop(port_forward_manager));
 
     let telemetry_shutdown = state.telemetry_runtime.clone();
-    let router = build_router_with_origins(state, allowed_origins);
+    let router = build_router_with_web_dir_and_origins(state, allowed_origins, cli.web_dir);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
 

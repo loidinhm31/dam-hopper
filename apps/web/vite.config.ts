@@ -22,9 +22,9 @@ export default defineConfig(({ command, mode }) => {
   return {
     base: "./",
     define: {
-      // The packaged web build must stay on its serving origin. This also lets
-      // the shared server-profile code ignore stale localStorage endpoints.
-      __DAM_HOPPER_SAME_ORIGIN__: JSON.stringify(command === "build"),
+      __DAM_HOPPER_RELEASE_VERSION__: JSON.stringify(
+        process.env.npm_package_version || "0.1.0",
+      ),
     },
     plugins: [react(), tailwindcss(), fixBrokenXtermRequestMode()],
     resolve: {
@@ -42,6 +42,7 @@ export default defineConfig(({ command, mode }) => {
       },
     },
     build: {
+      target: "es2022",
       // Monaco is lazy-loaded, but its editor worker bundle exceeds Vite's web default.
       chunkSizeWarningLimit: 4500,
       rollupOptions: {
