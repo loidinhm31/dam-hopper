@@ -57,7 +57,11 @@ pub async fn execute_activation_locked(
 
     validate_candidate_preflight(layout, &candidate, &allowed_sqlite_pids)?;
 
-    let tx = ActivationTransaction::new(layout)?;
+    let tx = if let Some(ref existing) = state.transaction {
+        ActivationTransaction::from_id(layout, &existing.tx_id)?
+    } else {
+        ActivationTransaction::new(layout)?
+    };
     tx.record_phase(layout, &mut state, DeploymentState::Quiesced, TransactionPhase::Quiesced)?;
 
     // Entire sequence through durable commit is enclosed in the transactional rollback boundary
@@ -98,9 +102,35 @@ async fn execute_activation_pipeline(
             let _ = systemctl_stop(u);
         }
     }
+    if let Ok(true) = systemctl_is_active(super::legacy_format2::LEGACY_FORMAT2_UNIT) {
+        let _ = systemctl_stop(super::legacy_format2::LEGACY_FORMAT2_UNIT);
+    }
 
     backup_unit_files(ALL_SERVICE_UNITS, &layout.systemd_unit_dir, &tx.units_backup_dir)?;
+    let legacy_unit_path = layout.systemd_unit_dir.join(super::legacy_format2::LEGACY_FORMAT2_UNIT);
+    if legacy_unit_path.exists() {
+        let _ = copy_file_durable(
+            &legacy_unit_path,
+            &tx.units_backup_dir.join(super::legacy_format2::LEGACY_FORMAT2_UNIT),
+            Some(0o644),
+        );
+    }
 
+    let is_migration = state.transaction.as_ref().map(|t| t.migration.is_some()).unwrap_or(false);
+    if is_migration {
+        if let Some(ref mut tx_rec) = state.transaction {
+            if let Some(ref mut mig) = tx_rec.migration {
+                super::migration::execute_migration_exchange(layout, mig)?;
+            }
+        }
+        let _ = fs::remove_file(layout.systemd_unit_dir.join(super::legacy_format2::LEGACY_FORMAT2_UNIT));
+        let _ = fs::remove_file(
+            layout
+                .systemd_unit_dir
+                .join("multi-user.target.wants")
+                .join(super::legacy_format2::LEGACY_FORMAT2_UNIT),
+        );
+    }
     if let Some(ref units_path) = candidate.pending_units_path {
         let p = Path::new(units_path);
         if p.exists() {
@@ -155,12 +185,41 @@ async fn execute_activation_pipeline(
         systemctl_disable("dam-hopper-web.service")?;
     }
 
-    state.previous = state.active.take();
+    let mig_opt = state.transaction.as_ref().and_then(|t| t.migration.clone());
+    if let Some(ref mig) = mig_opt {
+        state.previous = Some(ReleaseRecord {
+            tag: super::legacy_format2::LEGACY_FORMAT2_TAG.to_string(),
+            version: "imported".to_string(),
+            role: super::inventory::TargetRole::Server,
+            release_path: layout
+                .releases_dir()
+                .join(super::legacy_format2::LEGACY_FORMAT2_TAG)
+                .join("server")
+                .display()
+                .to_string(),
+            manifest_sha256: mig.legacy_binary_sha256.clone(),
+            archive_sha256: mig.legacy_binary_sha256.clone(),
+            installed_at: candidate.staged_at.clone(),
+            committed_at: Utc::now().to_rfc3339(),
+            api_unit_sha256: Some(mig.legacy_unit_sha256.clone()),
+            web_unit_sha256: None,
+            host_config_sha256: None,
+        });
+    } else {
+        state.previous = state.active.take();
+    }
+
+    let canonical_release_path = layout
+        .releases_dir()
+        .join(&candidate.tag)
+        .join(candidate.role.to_string())
+        .display()
+        .to_string();
     state.active = Some(ReleaseRecord {
         tag: candidate.tag.clone(),
         version: candidate.tag.trim_start_matches('v').to_string(),
         role: candidate.role,
-        release_path: candidate.release_path.clone(),
+        release_path: canonical_release_path,
         manifest_sha256: candidate.manifest_sha256.clone(),
         archive_sha256: candidate.archive_sha256.clone(),
         installed_at: candidate.staged_at.clone(),
@@ -172,5 +231,10 @@ async fn execute_activation_pipeline(
     state.pending = None;
     state.transaction = None;
 
-    save_manager_state(&layout.manager_state_path(), state)
+    save_manager_state(&layout.manager_state_path(), state)?;
+
+    if let Some(ref mig) = mig_opt {
+        super::migration::commit_migration_cleanup(layout, mig)?;
+    }
+    Ok(())
 }

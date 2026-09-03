@@ -59,10 +59,12 @@ server/src/
 │   ├── process*.rs         # Process, listener, cgroup, and holder evidence
 │   ├── health.rs           # Exact service health and stability probes
 │   ├── activate*.rs        # Preflight and durable cutover
-│   ├── rollback.rs         # Automatic and manual rollback
+│   ├── rollback.rs         # Automatic, manual, and migration rollback
 │   ├── recovery.rs         # Boot-time reconciliation
 │   ├── retention.rs        # Verified release garbage collection
 │   ├── stage*.rs           # Transaction and pending handoff
+│   ├── legacy_format2_*.rs # Exact read-only legacy verifier
+│   ├── migration.rs        # Side-root exchange and rollback record
 │   └── error.rs            # Typed bounded diagnostics
 ├── web_host/         # Dedicated static web host, runtime origin, and health
 │   ├── mod.rs
@@ -91,7 +93,7 @@ pub enum FsError {
 }
 ```
 
-### Linux release publisher, contract, manager, staging, and durable activation
+### Linux release publisher, contract, manager, staging, durable activation, and format-2 migration
 
 `server/src/linux_release/` is a deliberately split Rust module. Keep fixed
 profile/service/rollback values and parser limits in `constants.rs`; stable
@@ -194,6 +196,29 @@ unprivileged and end only at manager `PENDING`; activation belongs to
 
 See [Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)
 for the concrete workflow and artifact contract.
+
+### Legacy format-2 migration and runner retirement (Phase 07)
+
+Keep `legacy_format2_root.rs`, `legacy_format2_manifest.rs`, and
+`legacy_format2_unit.rs` read-only: they verify the canonical root, exact
+marker/bin inventories, modes, four-line marker, nonce/digest matches, fixed
+unit directives, forbidden settings, and the wants-link target. The separate
+`legacy_format2_inspect.rs` live path may add active service/process identity,
+listener, and API-health evidence; static staging must not claim those checks.
+
+`migration.rs` must stage under the sibling
+`/opt/.dam-hopper-migration.<tx_id>` root with mode `0700`, verify the canonical
+and side roots share a device, and use Linux
+`renameat2(RENAME_EXCHANGE)` for the cutover. No copy-based exchange fallback is
+permitted. Persist `MigrationRecord` before exchange; rollback restores the
+legacy root, unit, wants link, and binary, while commit removes only the
+transaction marker and redundant exchanged root after hash verification.
+
+Do not reintroduce checkout-built production/reset scripts, the fixed
+`dam-hopper.service`, the legacy fixture, or `linux:production`/`linux:reset`
+aliases. `imported-format-2` is a rollback source, never a Manifest v1
+publisher input. Keep migration tests fixture-scoped and distinguish them from
+live Fedora deployment evidence.
 
 
 ### Dedicated web host and runtime-origin rules (Phase 03)

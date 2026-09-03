@@ -27,6 +27,39 @@ pub fn parse_proc_net_listening(content: &str, target_port: u16) -> bool {
     false
 }
 
+/// Parse `/proc/net/tcp` to detect if a specific port is in state 0A (LISTEN) on wildcard 0.0.0.0.
+pub fn parse_proc_net_wildcard_listening(content: &str, target_port: u16) -> bool {
+    let hex_port = format!("{target_port:04X}");
+    for line in content.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 4 && fields[3] == "0A" {
+            if let Some((ip_part, port_part)) = fields[1].split_once(':') {
+                if port_part.eq_ignore_ascii_case(&hex_port) && ip_part.chars().all(|c| c == '0') {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Inspect `/proc/net/tcp` and `/proc/net/tcp6` to see if a port is in wildcard LISTEN state.
+pub fn is_port_listening_wildcard(port: u16) -> Result<bool, ReleaseError> {
+    for proc_path in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        let p = Path::new(proc_path);
+        if p.exists() {
+            let content = fs::read_to_string(p).map_err(|e| ReleaseError::Io {
+                action: "read /proc/net/tcp",
+                details: e.to_string(),
+            })?;
+            if parse_proc_net_wildcard_listening(&content, port) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Inspect `/proc/net/tcp` and `/proc/net/tcp6` to see if a port is in LISTEN state.
 pub fn is_port_listening(port: u16) -> Result<bool, ReleaseError> {
     for proc_path in ["/proc/net/tcp", "/proc/net/tcp6"] {

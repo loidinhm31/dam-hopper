@@ -129,7 +129,7 @@ authentication and OS privilege.
 
 The authenticated `/api/browser-debug/artifacts` routes provide ephemeral handoff storage for browser-debug tooling. `BrowserDebugArtifactManager` keeps metadata in memory and writes generated JSON/PNG paths beneath a temporary root; it exposes create, one-shot PNG upload, and delete only—there is intentionally no read/list route. Create accepts a live `terminalId` plus validated `selection` JSON (64 KiB request cap). PNG upload requires `image/png`, is capped at 4 MiB, and performs structural plus decoded-image verification before writing. Artifacts expire after 10 minutes, a 60-second sweeper removes expired files, and shutdown cleanup removes the root.
 
-### linux_release/ (Phases 01–06: publisher, manifest, acquisition, staging, activation, and recovery)
+### linux_release/ (Phases 01–07: publisher, manifest, acquisition, staging, migration, activation, and recovery)
 
 `server/src/linux_release/` owns the strict Fedora 44 x86_64 systemd release
 profile and its manager. The module remains deliberately split so
@@ -2294,8 +2294,8 @@ Server bootstrap:
 Manifest v1 has two runtime layers. Phase 04 renders and validates role-aware
 unit candidates; Phase 05 is the manager's lock-scoped transaction coordinator
 that installs, probes, commits, rolls back, and reconciles those candidates.
-systemd supervises only the concrete units selected by the committed state. The
-guarded format-2 runner remains a separate legacy path until migration.
+Phase 07 adds a one-time migration boundary for the exact legacy format-2
+layout; the checkout-built runner is retired after a successful cutover.
 
 The owner decision intentionally makes the API service `root` for this MVP.
 The dedicated web service is isolated under `dam-hopper-web`; it must not gain
@@ -2509,15 +2509,22 @@ before quiesce. `health.rs` combines these observations with exact loopback
 JSON checks. Temporary-tree tests do not prove SELinux labels, firewall ACLs,
 or host-specific systemd/account policy.
 
-### Legacy format-2 runner (retained until migration)
+### Phase 07 format-2 migration and runner retirement
 
-`deploy/systemd/dam-hopper.service` and `pnpm linux:production` remain the
-guarded administrator path until migration/retirement. That path consumes an
-exact server-only format-2 marker, uses the historical `User=loidinh`
-identity and fixed `/opt/dam-hopper/bin` executable, and does not understand
-Manifest v1 role inventory or the API/web unit names. It must not share the
-`4800`/SQLite ownership with another launch. Full details and the historical
-evidence boundary are in [Linux systemd](./linux-systemd.md).
+`legacy_format2_root.rs`, `legacy_format2_manifest.rs`, and
+`legacy_format2_unit.rs` perform read-only checks for the canonical root,
+marker, binary, unit directives, and wants-link target. Static staging rejects
+format 1, unknown layouts, symlinks, inventory drift, digest/nonce mismatch,
+and forbidden unit settings. The separate live inspector can additionally
+prove active systemd/process identity, listeners, and API health when requested.
+
+`migration.rs` stages beside `/opt/dam-hopper` at
+`/opt/.dam-hopper-migration.<tx_id>`, requires the same filesystem device, and
+uses Linux `renameat2(RENAME_EXCHANGE)` with no copy fallback. The transaction
+retains an `imported-format-2` previous source; rollback exchanges the roots
+back and restores the old unit, wants link, and binary, while commit removes
+the marker and redundant exchanged root. The old checkout scripts, fixed unit,
+fixture, and `linux:production`/`linux:reset` aliases are absent.
 
 Phase 05 module proofs are covered by the focused state-machine, health, and
 unit-policy integration suites. Live distro evidence (systemd enablement,
@@ -3235,4 +3242,5 @@ See the maintained platform gate and rollback procedure in
 ownership is intentionally separate: Docker serves `/opt/dam-hopper/web` with
 the server on 4800 only when it passes explicit `--web-dir`; the dedicated
 `dam-hopper-web` serves an immutable root on 4802; systemd runs backend-only on
-4801; and legacy nohup remains loopback-only on 4800.
+4801; and unsupported legacy nohup remains loopback-only on 4800, separate from
+the retired production runner.

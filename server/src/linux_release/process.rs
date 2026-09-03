@@ -18,7 +18,7 @@ pub struct ServiceProcessEvidence {
 
 pub use super::process_holders::{
     check_ports_free, find_file_holders, get_cgroup_pids, is_port_listening,
-    parse_proc_net_listening, verify_no_foreign_sqlite_holders,
+    is_port_listening_wildcard, parse_proc_net_listening, verify_no_foreign_sqlite_holders,
 };
 
 /// Inspect the main process of a systemd service unit via `/proc/<pid>`.

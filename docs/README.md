@@ -23,18 +23,24 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
 - **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Central GitHub publisher DAG, four assets, reproducible archive, SBOM, gates, and bootstrap usage
-- **[Linux Release Manager](./linux-release-manager.md)** — Phase 02 CLI, host profile checks, acquisition, safe staging, and Phase 05–06 publisher/bootstrap plus durable activation/recovery
+- **[Linux Release Manager](./linux-release-manager.md)** — Phase 02 CLI,
+  host checks, acquisition, safe staging, Phase 05–06 publisher/bootstrap,
+  durable activation/recovery, and Phase 07 format-2 migration/runner retirement
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
 
 ## Deployment
 
 - **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
-- **[Linux systemd](./linux-systemd.md)** — API/web units, boot recovery ordering, durable activation, health gates, and rollback
-- **[Linux nohup](./linux-nohup.md)** — legacy/recovery server on loopback port 4800
-- **[Linux Release Manifest v1](./linux-release-manifest.md)** — immutable Fedora 44 archive metadata, inventory, and role projections
+- **[Linux systemd](./linux-systemd.md)** — API/web units, Phase 07 format-2
+  migration and runner retirement, boot recovery ordering, durable activation,
+  health gates, and rollback
+- **[Linux nohup](./linux-nohup.md)** — unsupported legacy/recovery server on
+  loopback port 4800; not a systemd production owner
+- **[Linux Release Manifest v1](./linux-release-manifest.md)** — immutable
+  Fedora 44 archive metadata, inventory, role projections, and format-2 boundary
 - **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Build, attest, gate, publish, and bootstrap the stable Fedora release
-- **[Linux Release Manager](./linux-release-manager.md)** — Rust manager commands, role selection, pending candidates, publisher/bootstrap handoff, durable activation, rollback, and boot recovery
+- **[Linux Release Manager](./linux-release-manager.md)** — Rust manager commands, role selection, pending candidates, publisher/bootstrap handoff, durable activation, rollback, boot recovery, and format-2 migration
 
 The dedicated `dam-hopper-web` host serves release SPA assets on port 4802.
 It is separate from the API process and exposes only static GET/HEAD plus the
@@ -59,6 +65,15 @@ activation restores the previous concrete units/configuration; first-install
 failure leaves application units stopped/disabled with no active release.
 `sudo dam-hopper rollback` promotes the recorded previous release through the
 same transaction rules. Recovery blocks unsafe or unrecoverable state.
+
+### Format-2 migration and runner retirement (Phase 07)
+
+The manager verifies the legacy format-2 root read-only, stages a sibling
+`/opt/.dam-hopper-migration.<tx_id>`, and uses same-device
+`renameat2(RENAME_EXCHANGE)` cutover with rollback restoration. Format 1 and
+unknown layouts fail closed. The old checkout runner scripts, fixed unit,
+fixture, and package aliases are retired; the exact invariant and evidence
+boundary are in [Linux systemd](./linux-systemd.md).
 
 Historical implementation plans are not indexed here; verify that a plan path
 exists before linking it from a new document.
@@ -319,8 +334,8 @@ Each file is self-contained but linked for cross-reference.
 
 Phase 01 of the Tauri shared-UI split is complete: the browser entrypoint now lives in
 `apps/web`, and the reusable UI surface lives in `packages/ui`. Linux Release
-Installer Phases 01–03 are complete; Phase 03's dedicated web host is ready for
-later role packaging and systemd activation.
+Installer Phases 01–07 are complete and reviewed; Phase 07's one-time format-2
+migration and checkout-runner retirement are documented in the deployment guides.
 
 ## Maintenance
 
