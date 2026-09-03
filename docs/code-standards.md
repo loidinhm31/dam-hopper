@@ -32,7 +32,15 @@ server/src/
 ├── pty/              # Terminal sessions
 ├── git/              # Git operations
 ├── agent_store/      # Item distribution
-└── commands/         # Command registry
+├── commands/         # Command registry
+└── linux_release/    # Versioned Linux release manifest contract
+    ├── constants.rs
+    ├── version.rs
+    ├── manifest.rs
+    ├── manifest_validation.rs
+    ├── inventory.rs
+    ├── inventory_path.rs
+    └── inventory_validation.rs
 ```
 
 ### Error Handling Pattern
@@ -64,6 +72,29 @@ pub enum AppError {
 ```
 
 API handlers map to HTTP status via `ApiError::from(AppError)`.
+
+### Release manifest validation
+
+`server/src/linux_release/` is a deliberately split Rust module. Keep fixed
+profile/service/rollback values and parser limits in `constants.rs`; keep
+stable SemVer, exact `vX.Y.Z` tag, and lowercase digest checks in `version.rs`;
+keep `serde` data shapes in `manifest.rs`; and keep cross-field rules in
+`manifest_validation.rs`. Inventory path normalization and required-asset
+checks belong in `inventory_path.rs` and `inventory_validation.rs`, not in
+archive extraction code.
+
+Manifest structs use camelCase wire names and `deny_unknown_fields`. Validate
+the 1 MiB manifest limit before deserialization, then enforce the 20,000-entry
+inventory limit, 255-byte normalized paths, regular file/directory metadata,
+role projections, required paths, service values, and rollback declaration.
+Use `ReleaseError` variants that identify only contract fields or normalized
+relative paths; never include credentials, headers, or arbitrary file content.
+
+The JSON Schema at
+`deploy/release/release-manifest.schema.json` covers structural constraints.
+Rust validation remains authoritative for cross-field equality and required-path
+rules. Any schema change requires matching Rust types, constants, validation,
+tests, and [the release-manifest guide](./linux-release-manifest.md).
 
 ### Async Patterns
 
@@ -866,6 +897,8 @@ Routes registered conditionally at router construction time.
 - [ ] Media ticket issuance requires authentication; actor/session-bound tickets preserve expiry, revocation, revalidation, and no-store responses
 - [ ] Auth cookies remain SameSite=Strict; media cookies remain host-only SameSite=Lax when used, with cleartext interception/modification risk documented
 - [ ] Error messages don't leak paths/credentials
+- [ ] Release manifest input is bounded before parsing; unknown fields, unsafe paths, links/special entries, and disallowed runtime files fail closed
+- [ ] Release inventory carries lowercase digests and role/mode metadata only; manifest diagnostics never echo credentials or arbitrary content
 
 ## Telemetry Privacy and Fault Boundaries
 
@@ -897,4 +930,4 @@ Routes registered conditionally at router construction time.
 - The iframe bridge is semantic DOM/ARIA metadata only; never transmit HTML, forms, secrets, or page content.
 - Profile, editor, transport-generation, and Encrypt persistence boundaries are metadata-only, profile-scoped, or memory-only as described in source.
 
-See [Native Browser Debug Support](./native-browser-debug-support.md) and [Configuration Guide](./configuration-guide.md).
+See [Native Browser Debug Support](./native-browser-debug-support.md), [Configuration Guide](./configuration-guide.md), and [Linux Release Manifest v1](./linux-release-manifest.md).
