@@ -1,10 +1,11 @@
-# Linux Release Manager (Phases 02–05)
+# Linux Release Manager (Phases 02–06)
 
-Status: Phases 01–05 implementation complete and reviewed (2026-09-03). The
+Status: Phases 02–06 implementation complete and reviewed (2026-09-04). The
 manager provides unprivileged acquisition, root-only staging, durable
 activation, exact health gating, rollback, and crash recovery for the Fedora 44
 x86_64 systemd release profile. Phase 03 adds the separate `dam-hopper-web`
-binary; Phase 04 defines role-aware units and ownership.
+binary; Phase 04 defines role-aware units and ownership; Phase 06 adds the
+central GitHub publisher and non-root bootstrap.
 
 This guide documents the executable from downloaded bundle through committed
 release. The manifest field contract remains in [Linux Release Manifest v1](./linux-release-manifest.md).
@@ -44,6 +45,27 @@ The existing guarded systemd runner and its format-2 server-only marker remain
 separate from this manager. See [Linux systemd](./linux-systemd.md) for that
 legacy deployment boundary.
 
+## Bootstrap handoff (Phase 06)
+
+The published `dam-hopper-install.sh` is a non-root wrapper around this
+manager. It accepts `--version vX.Y.Z` or `--latest`, requires
+`--role server|web|both`, and optionally accepts repeated `--allow-web-origin`
+and `--verify-attestation` flags. It downloads the manifest/archive before
+using `sudo`, verifies the archive SHA-256, optionally verifies GitHub
+attestations for those two files, extracts only `bin/dam-hopper-manager`, and
+invokes `install`. It never starts or activates services; successful handoff
+leaves the manager state at `PENDING`.
+
+```bash
+bash dam-hopper-install.sh --version v0.2.0 --role server
+sudo dam-hopper start
+```
+
+The current bootstrap grammar has no `--api-url`; web API origin setup remains
+the client-side server-profile flow. For the complete publisher DAG, exact
+asset set, reproducibility controls, and bootstrap security boundary, see
+[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md).
+
 ## Command grammar
 
 The packaged executable is invoked as `dam-hopper` (the release inventory names
@@ -65,6 +87,7 @@ dam-hopper status [--json]
 sudo dam-hopper rollback
 sudo dam-hopper recover
 dam-hopper version
+dam-hopper validate --manifest PATH [--archive PATH]
 ```
 
 `--version` and `--latest` conflict. The runtime requires one of them; omitting
@@ -83,6 +106,7 @@ both causes `fetch` to fail before a release is written. `--output` and
 | `rollback` | 0 | Activate the recorded previous release |
 | `recover` | 0 | Reconcile crash/boot state (`--boot` for systemd) |
 | `version` | any | Print manager version, profile, and schema |
+| `validate` | any | Validate manifest and optional archive without mutation |
 
 The parser has no `--api-url` or separate `activate` command. Web and both-role
 installs leave server URL setup to the existing client-side server-profile

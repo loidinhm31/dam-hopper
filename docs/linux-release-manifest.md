@@ -1,10 +1,11 @@
 # Linux Release Manifest v1
 
-Status: Phases 01–05 implementation complete and reviewed (2026-09-03). This
+Status: Phases 01–06 implementation complete and reviewed (2026-09-04). This
 document defines the release metadata consumed by acquisition, staging, and
 durable activation. Phase 03 adds the dedicated web-host binary and
 runtime-origin contract; Phase 04 defines role-aware units; Phase 05 adds
-health-gated activation, rollback, and crash recovery.
+health-gated activation, rollback, and crash recovery; Phase 06 adds the
+central publisher and bootstrap boundary.
 
 The Rust validator is the runtime authority. The publisher-facing JSON Schema
 must remain structurally equivalent to the Rust types and must reject anything
@@ -14,6 +15,24 @@ outside this specification:
 - Publisher schema: `deploy/release/release-manifest.schema.json`
 - Focused contract tests: `server/tests/linux_release_manifest.rs` and
   `server/tests/linux_release_manifest_errors.rs`
+
+## Publisher and bootstrap boundary (Phase 06)
+
+The central publisher emits four external, attested assets: the executable
+`dam-hopper-install.sh`, one profile archive, `release-manifest.json`, and the
+tag-specific SPDX 2.3 SBOM. The manifest stays outside the archive because it
+declares the archive's own size and SHA-256. The publisher assembles the archive
+with normalized modes, sorted paths, fixed ownership/mtime, POSIX tar headers,
+and timestamp-free gzip, then runs the Rust validator before publication.
+
+The bootstrap downloads the manifest and exact archive as the invoking user,
+checks the declared archive digest, optionally verifies GitHub attestations,
+extracts only `bin/dam-hopper-manager` into a private temporary directory, and
+invokes `install` through `sudo`. It requires an explicit `server`, `web`, or
+`both` role and stops at `PENDING`; `--api-url` is not a supported installer
+flag, and activation remains an explicit `sudo dam-hopper start`. See [Linux
+Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md) for
+the workflow DAG, artifact gate, reproducibility details, and exact grammar.
 
 ## Release identity
 
@@ -209,7 +228,7 @@ replaces an existing same-tag/same-role destination before a repeated final
 rename. Phase 05 activates only the validated immutable view and records the
 result in the manager's authoritative state envelope.
 
-## Manager consumption (Phases 02–05)
+## Manager consumption (Phases 02–06)
 
 The Rust manager is the runtime consumer of Manifest v1:
 
@@ -270,3 +289,9 @@ cargo test --manifest-path server/Cargo.toml \
 The focused release suites passed 45/45 tests across seven suites. Manifest
 contract tests remain authoritative for metadata rules; CLI, platform,
 acquisition, archive, and staging suites cover the manager consumer boundary.
+
+Phase 06 publisher evidence adds
+`cargo test --test linux_release_publisher_contract` (7/7 in the focused
+publisher suite) plus archive/manifest script syntax and alignment checks. The
+publisher guide records the broader 24/24 release-matrix result and workflow
+limitations; this document remains the runtime metadata authority.

@@ -42,10 +42,10 @@ pub fn inspect_and_validate_archive<R: Read>(
                 reason: e.to_string(),
             })?;
 
-        let path_str = raw_path
+        let raw_path_str = raw_path
             .to_str()
             .ok_or_else(|| ReleaseError::ArchiveEntryTraversal("non-UTF-8 path".to_string()))?;
-
+        let path_str = raw_path_str.trim_end_matches('/');
         normalize_inventory_path(path_str)?;
         check_disallowed_files(path_str)?;
         let normalized = path_str.to_string();

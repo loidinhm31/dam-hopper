@@ -1,0 +1,303 @@
+name: Release Linux (Fedora 44 x86_64)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run packaging without publishing"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  validate-metadata:
+    name: Validate release version and metadata
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.resolve.outputs.tag }}
+      release_version: ${{ steps.resolve.outputs.version }}
+      is_dry_run: ${{ steps.resolve.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "20"
+
+      - name: Resolve release tag and version
+        id: resolve
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Tag '${TAG}' does not match format vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          echo "dry_run=${DRY_RUN}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version alignment across Cargo and web packages
+        run: |
+          node deploy/release/check-version-alignment.mjs "${{ steps.resolve.outputs.tag }}"
+
+  build-rust:
+    name: Build Rust release binaries (x86_64-unknown-linux-gnu)
+    needs: validate-metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+
+      - name: Build all release binaries
+        run: |
+          cd server
+          cargo build --release --features vendored --target x86_64-unknown-linux-gnu --bins
+
+      - name: Verify compiled binary version output
+        run: |
+          server/target/x86_64-unknown-linux-gnu/release/dam-hopper --version
+          server/target/x86_64-unknown-linux-gnu/release/dam-hopper-server --version
+          server/target/x86_64-unknown-linux-gnu/release/dam-hopper-web --version
+
+      - name: Upload compiled Rust binaries
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: rust-binaries
+          path: |
+            server/target/x86_64-unknown-linux-gnu/release/dam-hopper
+            server/target/x86_64-unknown-linux-gnu/release/dam-hopper-server
+            server/target/x86_64-unknown-linux-gnu/release/dam-hopper-web
+          if-no-files-found: error
+          retention-days: 1
+
+  build-web:
+    name: Build web assets
+    needs: validate-metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+        with:
+          version: 9
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web application
+        run: pnpm --filter @dam-hopper/web build
+
+      - name: Verify web dist outputs
+        run: |
+          test -f apps/web/dist/index.html
+          if grep -rn "VITE_DAM_HOPPER_SERVER_URL" apps/web/dist/; then
+            echo "Error: Host-specific VITE_DAM_HOPPER_SERVER_URL found in built web dist" >&2
+            exit 1
+          fi
+
+      - name: Upload web dist
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: web-dist
+          path: apps/web/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  package-release:
+    name: Package deterministic archive, manifest, and SBOM
+    needs: [validate-metadata, build-rust, build-web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "20"
+
+      - name: Download Rust binaries
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: rust-binaries
+          path: artifacts/bin
+
+      - name: Download web dist
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: web-dist
+          path: apps/web/dist
+
+      - name: Make binaries executable
+        run: |
+          chmod +x artifacts/bin/dam-hopper artifacts/bin/dam-hopper-server artifacts/bin/dam-hopper-web
+
+      - name: Assemble deterministic archive (run 1)
+        env:
+          SOURCE_DATE_EPOCH: 1700000000
+        run: |
+          deploy/release/build-release-archive.sh \
+            --version "${{ needs.validate-metadata.outputs.release_tag }}" \
+            --target-dir "artifacts/bin" \
+            --web-dist "apps/web/dist" \
+            --output-dir "artifacts/run1" \
+            --source-date-epoch "${SOURCE_DATE_EPOCH}"
+
+      - name: Assemble deterministic archive (run 2 for reproducibility proof)
+        env:
+          SOURCE_DATE_EPOCH: 1700000000
+        run: |
+          deploy/release/build-release-archive.sh \
+            --version "${{ needs.validate-metadata.outputs.release_tag }}" \
+            --target-dir "artifacts/bin" \
+            --web-dist "apps/web/dist" \
+            --output-dir "artifacts/run2" \
+            --source-date-epoch "${SOURCE_DATE_EPOCH}"
+
+      - name: Verify bit-for-bit reproducibility
+        run: |
+          ARCHIVE_NAME="dam-hopper-${{ needs.validate-metadata.outputs.release_tag }}-fedora44-x86_64-systemd.tar.gz"
+          SHA1=$(sha256sum "artifacts/run1/${ARCHIVE_NAME}" | awk '{print $1}')
+          SHA2=$(sha256sum "artifacts/run2/${ARCHIVE_NAME}" | awk '{print $1}')
+          if [[ "${SHA1}" != "${SHA2}" ]]; then
+            echo "Error: Deterministic packaging failure! Digests differ between clean runs:" >&2
+            echo "  Run 1: ${SHA1}" >&2
+            echo "  Run 2: ${SHA2}" >&2
+            exit 1
+          fi
+          echo "✓ Reproducibility verified: SHA-256 is identical (${SHA1})"
+          mkdir -p artifacts/final
+          cp "artifacts/run1/${ARCHIVE_NAME}" "artifacts/final/${ARCHIVE_NAME}"
+
+      - name: Generate release manifest and SPDX SBOM
+        run: |
+          ARCHIVE_NAME="dam-hopper-${{ needs.validate-metadata.outputs.release_tag }}-fedora44-x86_64-systemd.tar.gz"
+          node deploy/release/generate-release-manifest.mjs \
+            --archive "artifacts/final/${ARCHIVE_NAME}" \
+            --tag "${{ needs.validate-metadata.outputs.release_tag }}" \
+            --commit "${{ github.sha }}" \
+            --output-dir "artifacts/final"
+
+      - name: Stage bootstrap installer script
+        run: |
+          cp deploy/release/dam-hopper-install.sh artifacts/final/dam-hopper-install.sh
+          chmod +x artifacts/final/dam-hopper-install.sh
+
+      - name: Run pre-publication release asset gate
+        run: |
+          node deploy/release/check-release-assets.mjs \
+            --dir "artifacts/final" \
+            --tag "${{ needs.validate-metadata.outputs.release_tag }}"
+
+      - name: Upload final release assets
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: dam-hopper-release-assets
+          path: artifacts/final/*
+          if-no-files-found: error
+          retention-days: 7
+
+  attest-release:
+    name: Generate GitHub artifact attestations
+    needs: [validate-metadata, package-release]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      - name: Download final release assets
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: dam-hopper-release-assets
+          path: artifacts/final
+
+      - name: Attest all four release subjects
+        uses: actions/attest-build-provenance@c074443f1a5fb4aee83904b08166100bc5042f6b # v2.2.3
+        with:
+          subject-path: |
+            artifacts/final/dam-hopper-install.sh
+            artifacts/final/dam-hopper-${{ needs.validate-metadata.outputs.release_tag }}-fedora44-x86_64-systemd.tar.gz
+            artifacts/final/release-manifest.json
+            artifacts/final/dam-hopper-${{ needs.validate-metadata.outputs.release_tag }}-fedora44-x86_64-systemd.spdx.json
+
+  publish-release:
+    name: Publish immutable GitHub release
+    needs: [validate-metadata, package-release, attest-release]
+    if: needs.validate-metadata.outputs.is_dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: linux-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "20"
+
+      - name: Download final release assets
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: dam-hopper-release-assets
+          path: artifacts/final
+
+      - name: Create draft release and upload assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.validate-metadata.outputs.release_tag }}
+        run: |
+          echo "Creating draft release for ${TAG}..."
+          gh release create "${TAG}" \
+            artifacts/final/* \
+            --draft \
+            --title "DamHopper ${TAG}" \
+            --notes "See release-manifest.json and dam-hopper-install.sh for verified installation instructions."
+
+      - name: Query draft release and verify exact 4 assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.validate-metadata.outputs.release_tag }}
+        run: |
+          RELEASE_ID=$(gh release view "${TAG}" --json databaseId --jq '.databaseId')
+          node deploy/release/check-release-assets.mjs \
+            --tag "${TAG}" \
+            --dir "artifacts/final" \
+            --release-id "${RELEASE_ID}" \
+            --repo "${GITHUB_REPOSITORY}"
+
+      - name: Publish release (undraft)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.validate-metadata.outputs.release_tag }}
+        run: |
+          echo "Publishing release ${TAG}..."
+          gh release edit "${TAG}" --draft=false
+          echo "✓ Successfully published release ${TAG}:"
+          gh release view "${TAG}" --json url --jq '.url'

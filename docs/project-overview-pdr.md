@@ -257,15 +257,16 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 See [Native Browser Debug Support](./native-browser-debug-support.md) for the platform matrix and rollback path.
 
-### PR-011: Linux Release Identity, Manager, and Manifest v1
+### PR-011: Linux Release Identity, Manager, Manifest, and Publisher v1
 
-**Status:** Phases 01–05 complete and reviewed (2026-09-03). Phase 01 defines
+**Status:** Phases 01–06 complete and reviewed (2026-09-04). Phase 01 defines
 the release metadata contract; Phase 02 adds the Rust manager's unprivileged
 acquisition and root-only role staging; Phase 03 adds the dedicated web host,
 runtime-origin bootstrap, and API-only default; Phase 04 adds role-aware
 systemd units and ownership policy; Phase 05 adds durable activation, health
-gates, rollback, recovery, and retention. Legacy format-2 runner migration
-remains later work.
+gates, rollback, recovery, and retention; Phase 06 adds the central GitHub
+publisher, deterministic archive, manifest/SBOM generation, asset gate, and
+non-root bootstrap. Legacy format-2 runner migration remains later work.
 
 **Phase 03 delivery boundary:**
 
@@ -304,6 +305,28 @@ passed, and review scored 8.5/10 with no blocking findings.
   first-install baseline; corrupt or unrecoverable state is blocked.
 - Automatic and manual rollback use recorded unit/config backups and the same
   health gate. Retention removes only verified unreferenced release trees.
+
+**Phase 06 delivery boundary:**
+
+- `release-linux.yml` is the stable `vX.Y.Z` publisher; `release.yml` is
+  desktop-only under `desktop-v*`.
+- The publisher builds three Rust binaries and the web dist, assembles one
+  deterministic profile archive twice, and blocks on differing SHA-256 values.
+- The four public assets are the executable bootstrap, archive,
+  `release-manifest.json`, and tag-specific SPDX 2.3 SBOM. All four receive
+  GitHub artifact attestations before draft upload and environment-approved
+  publication.
+- The local and draft-release asset gate requires the exact names and checks
+  manifest/archive metadata; the Rust manager revalidates inventory, role
+  projections, file metadata, and digests.
+- Bootstrap downloads as the caller, optionally verifies manifest/archive
+  attestations, extracts only the manager, and stops after root staging at
+  `PENDING`; it does not accept `--api-url` or activate services.
+
+The implementation caveats are explicit: the current Rust build job runs on
+`ubuntu-latest` rather than a Fedora 44 image, and the workflow sets a fixed
+`SOURCE_DATE_EPOCH` for archive reproducibility. Fedora-host/ABI evidence and
+stronger action pinning remain later release gates.
 
 **Functional Requirements:**
 
@@ -380,6 +403,9 @@ passed, and review scored 8.5/10 with no blocking findings.
   runtime-config/profile Vitest 72/72; scoped compile/build checks pass.
 - [x] Focused release suites pass 45/45 tests across seven suites; scoped
   manager compile/check and review gates pass with no blocking findings.
+- [x] Phase 06 central publisher DAG, exact four-asset gate, deterministic
+  archive, SPDX SBOM, GitHub attestations, and bootstrap staging are delivered;
+  focused publisher contract tests and syntax/alignment checks pass.
 
 **Technical Constraints:**
 
@@ -412,7 +438,8 @@ passed, and review scored 8.5/10 with no blocking findings.
   service remains separately unprivileged. Record this as a critical accepted
   risk rather than a least-privilege recommendation.
 
-See [Linux Release Manifest v1](./linux-release-manifest.md) and [Linux Release
+See [Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md),
+[Linux Release Manifest v1](./linux-release-manifest.md), and [Linux Release
 Manager](./linux-release-manager.md).
 
 ### PR-009: Host Resource Monitoring (Current Delivery)

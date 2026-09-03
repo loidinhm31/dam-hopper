@@ -181,6 +181,32 @@ async fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Commands::Validate(args) => {
+            println!("Validating release manifest '{}'...", args.manifest.display());
+            match dam_hopper_server::linux_release::validate_manifest_and_archive(
+                &args.manifest,
+                args.archive.as_deref(),
+            ) {
+                Ok(manifest) => {
+                    println!(
+                        "✓ Manifest '{}' is valid for release {}.",
+                        args.manifest.display(),
+                        manifest.release.tag
+                    );
+                    if let Some(archive) = args.archive {
+                        println!(
+                            "✓ Archive '{}' matches manifest inventory.",
+                            archive.display()
+                        );
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: validation failed: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         Commands::Version => {
             println!("dam-hopper {}", env!("CARGO_PKG_VERSION"));
             println!("profile: {}", dam_hopper_server::linux_release::PROFILE_ID);

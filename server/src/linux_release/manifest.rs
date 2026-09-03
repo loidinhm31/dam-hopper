@@ -109,3 +109,25 @@ impl ReleaseManifest {
             .collect()
     }
 }
+
+/// Validate a release manifest file from disk, and optionally validate an archive bundle against its inventory.
+pub fn validate_manifest_and_archive(
+    manifest_path: &std::path::Path,
+    archive_path: Option<&std::path::Path>,
+) -> Result<ReleaseManifest, ReleaseError> {
+    let raw = std::fs::read(manifest_path).map_err(|e| ReleaseError::Io {
+        action: "read release manifest",
+        details: e.to_string(),
+    })?;
+    let manifest = ReleaseManifest::parse_and_validate(&raw)?;
+
+    if let Some(arch_path) = archive_path {
+        let file = std::fs::File::open(arch_path).map_err(|e| ReleaseError::Io {
+            action: "open release archive",
+            details: e.to_string(),
+        })?;
+        super::archive::inspect_and_validate_archive(file, &manifest)?;
+    }
+
+    Ok(manifest)
+}
