@@ -1,15 +1,13 @@
-# Linux Release Manager (Phases 02–03)
+# Linux Release Manager (Phases 02–05)
 
-Status: Phases 01–03 implementation complete and reviewed (2026-09-03). The
-manager provides unprivileged acquisition and root-only validation/staging for
-the Fedora 44 x86_64 systemd release profile. Phase 03 adds the separate
-unprivileged `dam-hopper-web` binary and runtime-origin contract; activation,
-unit installation, health orchestration, rollback, and crash recovery remain
-later-phase behavior.
+Status: Phases 01–05 implementation complete and reviewed (2026-09-03). The
+manager provides unprivileged acquisition, root-only staging, durable
+activation, exact health gating, rollback, and crash recovery for the Fedora 44
+x86_64 systemd release profile. Phase 03 adds the separate `dam-hopper-web`
+binary; Phase 04 defines role-aware units and ownership.
 
-This guide documents the executable and the safe handoff between a downloaded
-bundle and a pending role view. The manifest field contract remains in
-[Linux Release Manifest v1](./linux-release-manifest.md).
+This guide documents the executable from downloaded bundle through committed
+release. The manifest field contract remains in [Linux Release Manifest v1](./linux-release-manifest.md).
 
 ## Prerequisites and trust boundary
 
@@ -75,15 +73,15 @@ both causes `fetch` to fail before a release is written. `--output` and
 
 ### Privilege matrix
 
-| Command | EUID | Phase 02 behavior |
+| Command | EUID | Behavior |
 | --- | --- | --- |
 | `fetch` | non-zero | Resolve/download/verify a release bundle |
 | `install` | 0 | Validate host, select/inherit role, stage a candidate |
 | `role set` | 0 | Change recorded role and stage that role's candidate |
-| `start` | 0 | Grammar exists; activation/start is deferred to Phase 05 |
-| `status` | any | Read host and pending metadata |
-| `rollback` | 0 | Grammar exists; rollback is deferred to Phase 05 |
-| `recover` | 0 | Grammar exists; recovery is deferred to Phase 05 |
+| `start` | 0 | Activate pending candidate or start committed role units |
+| `status` | any | Read host configuration and authoritative state |
+| `rollback` | 0 | Activate the recorded previous release |
+| `recover` | 0 | Reconcile crash/boot state (`--boot` for systemd) |
 | `version` | any | Print manager version, profile, and schema |
 
 The parser has no `--api-url` or separate `activate` command. Web and both-role
@@ -152,24 +150,23 @@ An origin must be an exact `http://` or `https://` origin. Userinfo, paths other
 than `/`, query strings, fragments, wildcards, empty hosts, invalid ports, and
 duplicates are rejected. Values are trimmed and normalized before persistence.
 
-Phase 02 install only creates a pending candidate. It does **not**:
+Install and role set stop at a durable pending candidate. They do **not**:
 
 - switch `/opt/dam-hopper/current`;
-- modify active or rollback metadata;
+- replace active/previous metadata;
 - install, enable, start, stop, or reload systemd units;
-- open listeners or perform health probes; or
+- open listeners or run health probes; or
 - remove the currently active release.
 
-The dispatcher prints the later `sudo dam-hopper start` handoff after a
-successful stage. The current `start`, `rollback`, and `recover` handlers are
-placeholders until their Phase 05 state machine lands.
+After staging, run `sudo dam-hopper start`. There is no separate `activate`
+command: `start` owns both pending-release activation and ordinary startup.
 
 ### Dedicated web-role handoff (Phase 03)
 
 A `web` or `both` role projection contains executable
-`bin/dam-hopper-web` and the required `web/` asset directory. The later
-activation layer must run the binary against the immutable role-view asset root,
-for example:
+`bin/dam-hopper-web` and the required `web/` asset directory. During `start`,
+the manager installs the concrete candidate unit and runs the binary against
+the immutable role-view asset root:
 
 ```bash
 /opt/dam-hopper/releases/vX.Y.Z/web/bin/dam-hopper-web \
@@ -178,10 +175,63 @@ for example:
 ```
 
 The binary defaults to `0.0.0.0:4802`, serves GET/HEAD static requests, and
-reports web-role health at `/__dam-hopper/health`. An optional machine-local
-runtime-config file supplies the exact API origin consumed by the browser; it
-is not packaged in the release archive. The manager currently stages this
-handoff only and does not start the web process or install its unit.
+reports web-role health at `/__dam-hopper/health`. The machine-local
+runtime-config file supplies the exact API origin; it is not packaged.
+
+## Durable activation, rollback, and recovery (Phase 05)
+
+The authoritative deployment state is one generation-numbered
+`/var/lib/dam-hopper-manager/state.json` envelope containing `active`,
+`previous`, `pending`, transaction phase/backup paths, and latest sanitized
+failure. The convenience symlink `/opt/dam-hopper/current` is repaired after
+commit and never decides which release is active.
+
+```text
+ABSENT | ACTIVE -> STAGED -> PENDING -> QUIESCED -> SWITCHED -> PROBING -> COMMITTED
+```
+
+`start` acquires the root deployment lock. With no pending candidate it starts
+the recorded active role units. With a pending candidate it validates the old
+and candidate views, stops the old/new role union, proves cgroups/listeners and
+runtime SQLite holders are clear, backs up exact installed units/config,
+installs candidate units, reloads systemd, starts the selected role, probes it,
+updates enablement, then commits active/previous/pending state and repairs
+`current`. Every durable boundary uses temp-file write, `fsync`, atomic rename,
+and parent-directory sync.
+
+### Health gate
+
+For each selected API/web unit, the manager allows **20 seconds** for initial
+readiness, then requires **20 consecutive 500 ms probes** (**10 seconds** of
+uninterrupted stability). Each probe checks active `MainPID`, expected
+executable/identity, exact listener (`4801` API or `4802` web), and loopback
+JSON health (`/api/health` or `/__dam-hopper/health`) with schema `1`, status
+`ok`, expected role/version, JSON content type, no redirects, and bounded body.
+Transient failures reset the consecutive count; fatal identity, executable,
+schema, role, or version mismatches fail immediately.
+
+### Recovery unit and crash classification
+
+`dam-hopper-recovery.service` is a root `Type=oneshot` unit running
+`dam-hopper-manager recover --boot` after `local-fs.target` and before both
+application units. API and web units require and follow this recovery unit.
+Inconsistent state fails closed and disables app units.
+
+| Durable point | Recovery result |
+| --- | --- |
+| `STAGED`/`PENDING` | Leave old active release; keep candidate disabled |
+| `QUIESCED`/`SWITCHED`/`PROBING` | Restore exact transaction backups and verify old release |
+| `COMMITTED` | Keep committed release; repair enablement and `current` |
+| Missing/corrupt state or hash/ownership disagreement | `RECOVERY_REQUIRED`; app units blocked |
+
+Automatic activation failure stops the candidate, restores transaction-owned
+units/config/state, and reruns the same health gate. First-install failure
+returns to no active release with app units disabled. Manual
+`sudo dam-hopper rollback` promotes `previous` through the same transaction;
+failure first attempts to restore the original active release, otherwise
+returns `RECOVERY_REQUIRED`. Retention keeps active, one previous known-good,
+pending/latest-failed, and transaction-referenced views, deleting only after
+manifest and ownership verification.
 
 ### Status and version
 
@@ -191,30 +241,32 @@ dam-hopper status --json
 dam-hopper version
 ```
 
-Human-readable status reports the recorded role/origins and pending tag/role/
-stage time. `status --json` emits only `hostConfig` and `pending` metadata; it
-must not expose environment files, tokens, archive contents, or command output.
-`version` reports the Cargo package version, `fedora44-x86_64-systemd` profile,
-and manifest schema version.
+Human-readable status reports the recorded role/origins and active, previous,
+pending, transaction, and failure state. `status --json` emits `hostConfig` and
+the authoritative `state` envelope; it must not expose environment files,
+tokens, archive contents, or command output. `version` reports the Cargo package
+version, `fedora44-x86_64-systemd` profile, and manifest schema version.
 
 ## Filesystem layout
 
 `Layout::new` uses the host root. Tests use `Layout::with_root` so all paths are
 under a temporary root and no host files are changed.
 
-| Path | Purpose | Phase 02 ownership/behavior |
-| --- | --- | --- |
-| `/opt/dam-hopper/` | Release installation root | Contains staging, views, and active link |
-| `/opt/dam-hopper/.staging/<tx-id>/` | Private transaction workspace | Fresh UUID directory; transaction mode is `0700` |
-| `/opt/dam-hopper/releases/<tag>/<role>/` | Unpacked role projection | Destination for the candidate view |
-| `/opt/dam-hopper/current` | Active-view symlink | Not touched by Phase 02 |
-| `/etc/dam-hopper/host.toml` | Recorded role and exact web origins | Atomically replaced by role resolution |
-| `/etc/dam-hopper/server.env` | Machine-local API environment | Reserved; never copied from a release bundle |
-| `/etc/dam-hopper/web.env` | Machine-local web environment | Reserved; never copied from a release bundle |
-| `/var/lib/dam-hopper/pending.json` | Pending candidate handoff | Written only after staged rename; file and parent are synced |
-| `/var/lib/dam-hopper/active.json` | Active release metadata | Reserved for activation phases |
-| `/var/lib/dam-hopper/rollback.json` | Previous-release metadata | Reserved for rollback phases |
-| `/run/lock/dam-hopper/deploy.lock` | Deployment serialization lock | Nonblocking exclusive `flock` held for staging |
+| Path | Purpose |
+| --- | --- |
+| `/opt/dam-hopper/` | Release installation root |
+| `/opt/dam-hopper/.staging/<tx-id>/` | Root-private staging workspace (`0700`) |
+| `/opt/dam-hopper/releases/<tag>/<role>/` | Immutable unpacked role view |
+| `/opt/dam-hopper/current` | Convenience active-view symlink |
+| `/etc/dam-hopper/host.toml` | Recorded role and exact web origins |
+| `/etc/dam-hopper/server.env` | Machine-local API environment |
+| `/etc/dam-hopper/web.env` | Machine-local web environment |
+| `/var/lib/dam-hopper-manager/pending-units/` | Rendered candidate units/sysusers |
+| `/var/lib/dam-hopper-manager/pending-host-config.json` | Candidate public config |
+| `/var/lib/dam-hopper-manager/state.json` | Authoritative state envelope |
+| `/var/lib/dam-hopper-manager/backups/<tx-id>/` | Transaction-owned restore backups |
+| `/etc/systemd/system/` | Concrete active unit destinations |
+| `/run/lock/dam-hopper/deploy.lock` | Nonblocking deployment serialization lock |
 
 The release path is derived only from the validated tag and selected role. A
 role view contains manifest entries with `common` plus the selected role; a
@@ -224,7 +276,7 @@ release archive.
 
 ## Safe acquisition and staging architecture
 
-The transaction boundary is deliberately narrow:
+The acquisition/staging transaction is deliberately separate from activation:
 
 ```text
 non-root fetch
@@ -241,7 +293,7 @@ root install / role set
   ├─ inspect every gzip/tar entry against exact manifest inventory
   ├─ extract only selected role to .staging/<tx-id>/release/
   ├─ rename transaction release to releases/<tag>/<role>
-  └─ fsync and atomically replace pending.json
+  └─ fsync and atomically update the `pending` field in state.json
 ```
 
 The archive inspector rejects normalized-path violations, duplicate entries,
@@ -258,16 +310,17 @@ then the staged copy is rewound for independent inventory inspection and role
 extraction. A failed transaction removes only its own transaction directory;
 it does not follow links or clean unrelated paths.
 
-`pending.json` records the exact tag, role, RFC 3339 stage time, release path,
-manifest SHA-256, and archive SHA-256. It is written through a same-directory
-temporary file, flushed and file-synced before rename, followed by a best-effort
-parent-directory sync. The current active pointer and service ownership remain
-unchanged until a later activation command commits them.
+The authoritative `state.json` envelope records the exact pending tag, role,
+RFC 3339 stage time, release path, manifest/archive digests, candidate unit
+paths, and later transaction/failure records. It is written through a
+same-directory temporary file, flushed and file-synced before rename, followed
+by parent-directory sync. Active service ownership remains unchanged until
+`start` runs the activation transaction.
 
 Repeated staging of an already-existing `<tag>/<role>` destination currently
-removes that destination before the final rename. Activation still does not
-occur, but operators should treat a bundle directory and its validated manifest
-as the source of truth for each staging attempt.
+removes that destination before the final rename. Activation occurs only from
+the explicit `start` command; operators should treat the bundle and validated
+manifest as the source of truth for each staging attempt.
 
 ## Failure handling and diagnostics
 
@@ -276,13 +329,13 @@ contract fields, normalized relative paths, operation names, and bounded values;
 they must not echo credentials, HTTP headers, or arbitrary file contents. Common
 failure classes include unsupported host profile, wrong EUID, invalid origin,
 missing role, role conflict, busy deployment lock, invalid bundle, archive
-inventory mismatch, digest mismatch, acquisition failure, and attestation
-failure.
+inventory mismatch, digest mismatch, acquisition failure, attestation failure,
+activation/probe failure, rollback failure, and `RECOVERY_REQUIRED`.
 
 A failed fetch may leave its caller-selected output directory for inspection;
-install cleanup is transaction-scoped. If `pending.json` is absent after an
-install error, no candidate handoff was committed. The legacy systemd runner is
-not automatically migrated or stopped by Phase 02.
+staging cleanup is transaction-scoped. If the `pending` field is absent after
+an install error, no candidate handoff was committed. The legacy systemd runner
+is not automatically migrated or stopped by this manager.
 
 ## Verification evidence
 

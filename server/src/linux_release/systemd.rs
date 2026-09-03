@@ -3,6 +3,10 @@
 use super::error::ReleaseError;
 use std::path::Path;
 use std::process::Command;
+pub use super::systemd_backup::{
+    backup_unit_files, install_unit_file, remove_unit_file, restore_unit_files,
+};
+
 
 /// Run `systemd-analyze verify` against the given unit file paths.
 pub fn systemd_analyze_verify<P: AsRef<Path>>(

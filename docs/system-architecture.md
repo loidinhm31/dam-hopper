@@ -71,7 +71,14 @@ serves the immutable frontend root and runtime metadata on `:4802`.
 combined serving with an explicit `--web-dir`; direct and systemd API launches
 do not silently serve frontend assets. The existing `4800` nohup service is a
 legacy launch outside this deployment and is not touched by its installer,
-validation, or rollback.
+validation, or rollback. Manifest v1 activation is coordinated by the
+`dam-hopper` manager: `dam-hopper-recovery.service` reconciles durable state
+before the API and web units are allowed to start.
+
+The manager's activation boundary is intentionally explicit. `install` and
+`role set` stage a candidate and stop at `PENDING`; the unified `dam-hopper
+start` command performs activation or starts/verifies the recorded committed
+role when no candidate is pending.
 
 ### Host resource monitoring and remediation (planned)
 
@@ -122,10 +129,10 @@ authentication and OS privilege.
 
 The authenticated `/api/browser-debug/artifacts` routes provide ephemeral handoff storage for browser-debug tooling. `BrowserDebugArtifactManager` keeps metadata in memory and writes generated JSON/PNG paths beneath a temporary root; it exposes create, one-shot PNG upload, and delete only—there is intentionally no read/list route. Create accepts a live `terminalId` plus validated `selection` JSON (64 KiB request cap). PNG upload requires `image/png`, is capped at 4 MiB, and performs structural plus decoded-image verification before writing. Artifacts expire after 10 minutes, a 60-second sweeper removes expired files, and shutdown cleanup removes the root.
 
-### linux_release/ (Phases 01–04: manifest, acquisition, staging, and units)
+### linux_release/ (Phases 01–05: manifest, acquisition, staging, activation, and recovery)
 
 `server/src/linux_release/` owns the strict Fedora 44 x86_64 systemd release
-profile and its first consumers. The module remains deliberately split so
+profile and its manager. The module remains deliberately split so
 security-sensitive boundaries stay reviewable:
 
 - `constants.rs`, `version.rs`, `manifest.rs`, `inventory.rs`, and the private
@@ -149,23 +156,73 @@ security-sensitive boundaries stay reviewable:
 - `unit.rs`, `unit_parser.rs`, and `unit_policy.rs` render the allowlisted
   release-root/version/public-config/origin placeholders, parse the result,
   and enforce independent API/web systemd contracts. `stage_units.rs` writes
-  selected units, web sysusers, and pending public config; `systemd.rs` invokes
-  systemd tools without a shell.
-- `account.rs`, `ownership.rs`, and `process.rs` validate the dedicated web
-  account, release/state modes, root ownership when required, effective
-  process identity/executable/cgroup, and 4800/4801/4802 listener evidence.
+  selected units, the recovery unit, web sysusers, and pending public config;
+  `systemd.rs` invokes systemd tools without a shell.
+- `account.rs`, `ownership.rs`, `process.rs`, and `process_holders.rs` validate
+  the dedicated web account, release/state modes, process identity/executable/
+  cgroup, listener evidence, and SQLite holder safety. `health.rs` performs
+  exact service, process, listener, and JSON health probes.
 - `layout.rs`, `lock.rs`, `stage.rs`, and `stage_transaction.rs` define the
   `/opt`, `/etc`, `/var/lib`, and `/run/lock` paths, nonblocking deployment
   lock, root-private transaction stage, role resolution, rendered-unit
   candidates, and fsync-backed pending handoff.
+- `durable_fs.rs`, `state.rs`, `state_record.rs`, `journal.rs`, `transaction.rs`,
+  and `systemd_backup.rs` persist the generation-numbered state envelope,
+  validate phase transitions, hold transaction backups, and make filesystem
+  updates crash durable.
+- `activate_preflight.rs`, `activate.rs`, `rollback.rs`, `recovery.rs`, and
+  `retention.rs` implement the lock-scoped cutover, health gate, automatic and
+  manual rollback, boot reconciliation, and fail-closed retention.
 
 Install and role change validate inputs and construct a role view under
 `/opt/dam-hopper/.staging/<transaction-id>` before renaming it to
-`/opt/dam-hopper/releases/<tag>/<role>`. Phase 04 then renders only the
-selected unit set into `/var/lib/dam-hopper/pending-units` and writes
-`pending-host-config.json`; `pending.json` is written after candidate staging.
-It does not switch `/opt/dam-hopper/current`, touch active/rollback state,
-install/enable/start units, or perform health probes.
+`/opt/dam-hopper/releases/<tag>/<role>`. They then render a pending candidate
+under `/var/lib/dam-hopper-manager/`; no active release changes until the
+explicit `dam-hopper start` command.
+
+#### Durable activation state machine
+
+The authoritative state envelope is
+`/var/lib/dam-hopper-manager/state.json`; it records generation, active and
+previous known-good releases, pending candidate, transaction phase, hashes,
+and the latest failure. The `/opt/dam-hopper/current` symlink is a repaired
+convenience pointer, not the source of truth. Valid forward activation is:
+
+`ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING → COMMITTED`
+
+`start` takes the deployment lock, validates old and candidate state, quiesces
+selected old units and proves cgroups/listeners/SQLite holders are clear,
+installs candidate units/configuration, daemon-reloads, starts the selected
+units, and enters `PROBING`. Each candidate must become active with the
+expected MainPID, executable, identity, listener, and exact JSON health
+contract. Initial readiness has a 20-second deadline, followed by 20
+consecutive probes at 500 ms (a 10-second stability window). Any transient
+probe failure resets the window; identity, listener, or contract mismatches
+fail the transaction.
+
+After the full window, the manager enables selected units, disables removed
+units, atomically records `active`/`previous`, clears `pending` and the
+transaction, repairs `current`, and garbage-collects only unreferenced,
+verified release trees. State writes use a same-directory temporary file,
+write/sync, rename, and parent-directory sync.
+
+#### Recovery and rollback
+
+`dam-hopper-recovery.service` is a root oneshot unit ordered after local
+filesystems and before `dam-hopper-api.service` and
+`dam-hopper-web.service`. It runs `dam-hopper recover --boot`, classifies the
+durable phase, and blocks inconsistent or unowned state instead of guessing.
+`STAGED`/`PENDING` leaves the old active release in place; `QUIESCED`,
+`SWITCHED`, and `PROBING` restore the previous release (or the first-install
+baseline); `COMMITTED` repairs pointers and enablement without rolling back
+the version.
+
+Candidate failure automatically stops the candidate and restores the recorded
+previous units, configuration, and state through the same health gate. First
+install failure leaves all application units stopped/disabled and no active
+release. Manual `rollback` promotes the recorded previous release through the
+same transaction rules; restoration failure is `RECOVERY_REQUIRED`, and
+retention deletes only verified, unreferenced trees.
 
 The module is exported from `server/src/lib.rs` for the manager and integration
 tests. The publisher schema remains at
@@ -2214,14 +2271,13 @@ Server bootstrap:
   `dam-hopper-web` binary owns the dedicated release web-host path.
 - Port binding + graceful shutdown
 
-## SYSTEMD SERVICE: role-aware units, ownership, and legacy runner
+## SYSTEMD SERVICE: role-aware units, durable activation, and recovery
 
-Phase 04 adds role-aware systemd unit rendering to the Manifest v1 release
-manager. The manager is the transaction coordinator; systemd supervises
-already-committed processes. Phase 04 stages and verifies candidates but does
-not install unit fragments, enable services, switch `/opt/dam-hopper/current`,
-start processes, or claim health-gated activation. Those lifecycle operations
-remain Phase 05 work.
+Manifest v1 has two runtime layers. Phase 04 renders and validates role-aware
+unit candidates; Phase 05 is the manager's lock-scoped transaction coordinator
+that installs, probes, commits, rolls back, and reconciles those candidates.
+systemd supervises only the concrete units selected by the committed state. The
+guarded format-2 runner remains a separate legacy path until migration.
 
 The owner decision intentionally makes the API service `root` for this MVP.
 The dedicated web service is isolated under `dam-hopper-web`; it must not gain
@@ -2232,29 +2288,32 @@ not a claim that the broad API identity is least privilege.
 
 Manifest inventory roles are algebraic:
 
-- `server` selects `common` plus `server` entries and renders only
+- `server` selects `common` plus `server` entries and renders
   `dam-hopper-api.service`.
-- `web` selects `common` plus `web` entries and renders only
+- `web` selects `common` plus `web` entries and renders
   `dam-hopper-web.service` plus its sysusers input.
-- `both` selects the complete inventory and renders both units for one exact
-  release tag/version and manager transaction.
+- `both` selects the complete inventory and renders both app units for one
+  exact release tag/version and manager transaction.
 
 The fixed service contracts are:
 
 | Service | Identity | Concrete executable | Bind |
 | --- | --- | --- | --- |
+| `dam-hopper-recovery.service` | `root:root` | `<release-root>/bin/dam-hopper-manager recover --boot` | no listener |
 | `dam-hopper-api.service` | `root:root` | `<release-root>/bin/dam-hopper-server` | `0.0.0.0:4801` |
 | `dam-hopper-web.service` | `dam-hopper-web:dam-hopper-web` | `<release-root>/bin/dam-hopper-web` | `0.0.0.0:4802` |
 
-API and web units have no `Requires=`, `PartOf=`, `BindsTo=`, shared process,
-proxy, or other coupling. Stopping or restarting one must not stop the other.
-The legacy `4800` listener must be free before a future activation, and the
-wildcard API/web binds remain subject to host firewall and Tailscale ACL policy.
+API and web units have no dependency on each other, shared process, proxy, or
+role coupling. Both require/follow the recovery unit. Stopping or restarting
+one application role must not stop the other. The legacy `4800` listener must
+be free before activation, and wildcard API/web binds remain subject to host
+firewall and Tailscale ACL policy.
 
 ### Unit templates and candidate pipeline
 
 The publisher ships these exact inventory paths:
 
+- `deploy/systemd/dam-hopper-recovery.service.in`
 - `deploy/systemd/dam-hopper-api.service.in`
 - `deploy/systemd/dam-hopper-web.service.in`
 - `deploy/sysusers.d/dam-hopper-web.conf`
@@ -2265,27 +2324,26 @@ The publisher ships these exact inventory paths:
 forbids control characters, validates stable SemVer and exact web origins, and
 serializes origins as one comma-separated `DAM_HOPPER_CORS_ORIGINS` value.
 Unknown and unresolved uppercase tokens fail closed. `unit_parser.rs` parses
-the rendered text; `unit_policy.rs` then enforces the service-specific
-properties before a candidate is accepted.
+rendered text; `unit_policy.rs` enforces service-specific properties before a
+candidate is accepted.
 
-The Phase 04 manager path is:
+The candidate path is:
 
 ```text
 validated archive + selected role
   -> /opt/dam-hopper/.staging/<transaction-id>/
   -> /opt/dam-hopper/releases/<tag>/<role>/
-  -> render selected unit(s) and web sysusers into
-     /var/lib/dam-hopper/pending-units/
-  -> write /var/lib/dam-hopper/pending-host-config.json
+  -> render selected app/recovery unit(s) and web sysusers into
+     /var/lib/dam-hopper-manager/pending-units/
+  -> write /var/lib/dam-hopper-manager/pending-host-config.json
   -> systemd-analyze verify (when available)
-  -> fsync /var/lib/dam-hopper/pending.json
+  -> persist pending in /var/lib/dam-hopper-manager/state.json
+  -> explicit start installs concrete files into /etc/systemd/system/
 ```
 
-The `systemd.rs` adapter invokes `systemd-analyze` and `systemd-sysusers`, and
-exposes direct `systemctl` operations for later activation, all through
-argument vectors and never a shell.
-Rendered files are candidates; `/etc/systemd/system/` is untouched until a
-later activation transaction.
+The `systemd.rs` adapter invokes `systemd-analyze`, `systemd-sysusers`, and
+`systemctl` through argument vectors, never a shell. Rendered files are
+candidates until `start` takes the deployment lock and switches them.
 
 ### API unit contract
 
@@ -2304,9 +2362,9 @@ later activation transaction.
 
 `NoNewPrivileges=false` is deliberate because API-managed interactive PTYs may
 need existing `sudo` behavior. The root identity gives the API broad host
-authority; that accepted residual risk must remain visible in later activation
-and release reviews. The unit has no `--no-auth` flag; production environment
-and exact CORS values remain explicit.
+authority; that accepted residual risk remains visible in release reviews. The
+unit has no `--no-auth` flag; production environment and exact CORS values
+remain explicit.
 
 ### Web unit contract and isolation
 
@@ -2326,9 +2384,9 @@ and exact CORS values remain explicit.
 - `ReadOnlyPaths` for only the selected release root and public host config.
 
 The policy rejects `EnvironmentFile` and `ReadWritePaths` in the web unit. The
-web process is static and GET/HEAD-only by implementation; it receives no API
-environment/token, SQLite, project, upload, home, or manager-state path and
-does not write its release tree.
+web process is static and GET/HEAD-only; it receives no API environment/token,
+SQLite, project, upload, home, or manager-state path and does not write its
+release tree.
 
 ### Web identity and ownership
 
@@ -2348,7 +2406,7 @@ persistence after rollback is intentional.
 check expects directories at `0755`, executable files directly under `bin/` at
 `0755`, and other regular release files at `0644`; with `require_root`, every
 checked path must have UID 0. Rendered unit/sysusers files are written at
-`0644`. Manager transaction directories are `0700`; private pending/lock files
+`0644`. Manager transaction directories are `0700`; private state/lock files
 are `0600`.
 
 The relevant mutable/immutable paths are:
@@ -2356,50 +2414,97 @@ The relevant mutable/immutable paths are:
 | Path | Meaning |
 | --- | --- |
 | `/opt/dam-hopper/releases/<tag>/<role>/` | root-owned immutable role view |
-| `/var/lib/dam-hopper/pending-units/` | rendered service/sysusers candidates |
-| `/var/lib/dam-hopper/pending-host-config.json` | candidate public web config |
-| `/var/lib/dam-hopper/pending.json` | tag/role/digests/release and candidate path |
+| `/var/lib/dam-hopper-manager/pending-units/` | rendered app/recovery/sysusers candidates |
+| `/var/lib/dam-hopper-manager/pending-host-config.json` | candidate public web config |
+| `/var/lib/dam-hopper-manager/backups/<tx-id>/` | transaction-owned unit/config backups |
+| `/var/lib/dam-hopper-manager/state.json` | authoritative state envelope |
 | `/etc/dam-hopper/host.toml` | recorded role and exact allowed origins |
-| `/etc/dam-hopper/host-config.json` | active public runtime config path |
-| `/etc/systemd/system/` | committed unit destination, not Phase 04 staging |
+| `/etc/dam-hopper/host-config.json` | active public runtime config |
+| `/etc/systemd/system/` | concrete unit destination |
+| `/opt/dam-hopper/current` | repaired active-view convenience link |
 
-`stage.rs` resolves a fresh-install role explicitly, rejects an `install --role`
-change against a recorded role, and permits an explicit `role set`. The
-candidate public config preserves an existing web profile UUID when available,
-validates release/version/origin fields, and is atomically written with file
-sync before rename. `pending.json` is written only after role extraction and
-unit staging complete.
+### Durable activation state machine
+
+The authoritative state envelope records generation, active/previous releases,
+pending candidate, transaction phase, hashes, and latest sanitized failure.
+The valid forward graph is:
+
+`ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING → COMMITTED`
+
+`install` and `role set` stop at `PENDING`. `start` owns the remainder under
+one root deployment lock:
+
+```text
+lock/reconcile -> validate old + candidate -> QUIESCED
+  -> stop/disable selected old units and prove cgroups/listeners/SQLite clear
+  -> install candidate units/config and daemon-reload -> SWITCHED
+  -> start selected candidate -> PROBING -> exact health stability
+  -> enable selected/disable removed -> atomic COMMITTED state
+  -> repair current -> collect only verified unreferenced trees
+```
+
+Each durable boundary uses a same-directory temporary file, write and sync,
+atomic rename, and parent-directory sync. `current` never decides which
+release is active.
+
+### Health stability gate
+
+For each selected service, the manager requires at most **20 seconds** for
+initial readiness, then **20 consecutive probes at 500 ms** (**10 seconds** of
+uninterrupted stability). Each probe checks active `MainPID`, expected
+executable/identity, exact listener (`4801` API or `4802` web), and loopback
+JSON health (`/api/health` or `/__dam-hopper/health`) with schema `1`,
+`status: "ok"`, expected role/version, JSON content type, no redirects, and a
+bounded body. Transient failures reset the count; identity, executable,
+listener, schema, role, or version mismatches fail immediately.
+
+### Recovery and rollback
+
+`dam-hopper-recovery.service` is a root `Type=oneshot` unit running
+`dam-hopper-manager recover --boot` after `local-fs.target` and before both
+application units. The app units require/follow it. Recovery classifies durable
+state instead of guessing:
+
+| Durable point | Recovery result |
+| --- | --- |
+| `STAGED`/`PENDING` | Leave old active release; keep candidate disabled |
+| `QUIESCED`/`SWITCHED`/`PROBING` | Restore exact transaction backups and verify old release |
+| `COMMITTED` | Keep committed release; repair enablement and `current` |
+| Missing/corrupt or unowned/hash-mismatched state | `RECOVERY_REQUIRED`; block app units |
+
+Automatic activation failure stops the candidate, restores transaction-owned
+units/config/state, and reruns the same health gate. First-install failure
+returns to no active release with app units disabled. Manual
+`sudo dam-hopper rollback` promotes `previous` through the same activation,
+probe, and commit rules; failure first attempts to restore the original active
+release, otherwise returns `RECOVERY_REQUIRED`. Retention keeps active, one
+previous known-good, pending/latest-failed, and transaction-referenced views;
+deletion occurs only after manifest and ownership verification.
 
 ### Runtime evidence boundary
 
 `process.rs` queries systemd `MainPID`, reads effective UID/GID and
 `/proc/<pid>/exe`, and records the process cgroup. Its listener parser checks
 `/proc/net/tcp` and `/proc/net/tcp6` for state `0A` (LISTEN), including ports
-4800, 4801, and 4802 for future activation preflight. These adapters provide
-evidence for later health/activation gates; temporary-tree tests do not prove
-live systemd enablement, SELinux labels, firewall ACLs, account provisioning,
-or effective runtime identity on a host.
+4800, 4801, and 4802. `process_holders.rs` rejects foreign SQLite holders
+before quiesce. `health.rs` combines these observations with exact loopback
+JSON checks. Temporary-tree tests do not prove SELinux labels, firewall ACLs,
+or host-specific systemd/account policy.
 
 ### Legacy format-2 runner (retained until migration)
 
 `deploy/systemd/dam-hopper.service` and `pnpm linux:production` remain the
-guarded administrator path until the later migration/retirement phases. That
-path consumes an exact server-only format-2 marker, uses the historical
-`User=loidinh` identity and fixed `/opt/dam-hopper/bin` executable, and does
-not understand Manifest v1 role inventory or the new API/web unit names. Its
-historical 2026-08-21 acceptance record predates the wildcard-bind and root
-API decision; it is not evidence for the Phase 04 candidates.
+guarded administrator path until migration/retirement. That path consumes an
+exact server-only format-2 marker, uses the historical `User=loidinh`
+identity and fixed `/opt/dam-hopper/bin` executable, and does not understand
+Manifest v1 role inventory or the API/web unit names. It must not share the
+`4800`/SQLite ownership with another launch. Full details and the historical
+evidence boundary are in [Linux systemd](./linux-systemd.md).
 
-The legacy runner still matters for bounded cleanup and migration: it must not
-share the `4800`/SQLite ownership with another launch, and its reset/rollback
-must fail closed on unknown or drifted marker assets. Full details and the
-historical evidence boundary are in [Linux systemd](./linux-systemd.md).
-
-Phase 04 static proof is covered by the focused
-`linux_release_unit_policy`, `linux_release_ownership`, and
-`linux_release_staging` integration suites plus isolated
-`systemd-analyze verify`; effective `systemctl show`, cgroup, listener, health,
-and rollback evidence belongs to later activation/release gates.
+Phase 05 module proofs are covered by the focused state-machine, health, and
+unit-policy integration suites. Live distro evidence (systemd enablement,
+SELinux labels, firewall ACLs, account provisioning, and rollback rehearsal)
+remains host/deployment-specific.
 
 ## Host resource monitoring (current delivery; remediation deferred)
 
