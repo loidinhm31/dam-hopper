@@ -106,10 +106,7 @@ export function TerminalTabBar({
                 onDoubleClick={() => onRenameSession?.(tab.sessionId)}
                 className="min-w-0 flex-1"
               >
-                <TerminalTitleText
-                  title={tab.title}
-                  className="font-mono"
-                />
+                <TerminalTitleText title={tab.title} className="font-mono" />
               </span>
               <button
                 type="button"

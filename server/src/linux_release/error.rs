@@ -74,6 +74,9 @@ pub enum ReleaseError {
     #[error("inventory exceeds maximum entry limit of {0}")]
     InventoryTooLarge(usize),
 
+    #[error("uncompressed archive data exceeds safety limit of {limit} bytes")]
+    ArchiveTooLarge { limit: u64 },
+
     #[error("inventory path violates normalization rules: '{0}'")]
     InvalidInventoryPath(String),
 

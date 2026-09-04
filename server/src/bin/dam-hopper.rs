@@ -101,19 +101,37 @@ async fn main() -> ExitCode {
                 }
             }
         },
-        Commands::Start(_) => match execute_activation(&layout).await {
-            Ok(()) => {
-                println!("Services successfully activated and verified.");
-                ExitCode::SUCCESS
+        Commands::Start(_) => {
+            if let Err(e) = dam_hopper_server::linux_release::verify_host_platform() {
+                eprintln!("host platform verification failed: {e}");
+                return ExitCode::from(1);
             }
-            Err(e) => {
-                eprintln!("error: activation failed: {e}");
-                ExitCode::from(1)
+            match execute_activation(&layout).await {
+                Ok(()) => {
+                    println!("Services successfully activated and verified.");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: activation failed: {e}");
+                    ExitCode::from(1)
+                }
             }
-        },
+        }
         Commands::Status(args) => {
-            let host_config = load_host_config(&layout.host_config_path()).ok().flatten();
-            let mgr_state = load_or_init_manager_state(&layout.manager_state_path()).ok();
+            let host_config = match load_host_config(&layout.host_config_path()) {
+                Ok(config) => config,
+                Err(e) => {
+                    eprintln!("error: failed to read host configuration: {e}");
+                    return ExitCode::from(1);
+                }
+            };
+            let mgr_state = match load_or_init_manager_state(&layout.manager_state_path()) {
+                Ok(state) => state,
+                Err(e) => {
+                    eprintln!("error: failed to read manager state: {e}");
+                    return ExitCode::from(1);
+                }
+            };
             if args.json {
                 let status_val = serde_json::json!({
                     "hostConfig": host_config,
@@ -128,59 +146,69 @@ async fn main() -> ExitCode {
                 } else {
                     println!("  (not configured)");
                 }
-                if let Some(ref state) = mgr_state {
-                    println!("Active Release:");
-                    if let Some(ref a) = state.active {
-                        println!("  Tag: {}", a.tag);
-                        println!("  Role: {}", a.role);
-                        println!("  Committed At: {}", a.committed_at);
-                    } else {
-                        println!("  (none)");
-                    }
-                    println!("Previous Release:");
-                    if let Some(ref p) = state.previous {
-                        println!("  Tag: {}", p.tag);
-                        println!("  Role: {}", p.role);
-                    } else {
-                        println!("  (none)");
-                    }
-                    println!("Pending Candidate:");
-                    if let Some(ref c) = state.pending {
-                        println!("  Tag: {}", c.tag);
-                        println!("  Role: {}", c.role);
-                        println!("  Staged At: {}", c.staged_at);
-                    } else {
-                        println!("  (none)");
-                    }
-                    if let Some(ref f) = state.latest_failure {
-                        println!("Latest Failure:");
-                        println!("  Phase: {}", f.phase);
-                        println!("  Error: {}", f.sanitized_error);
-                    }
+                println!("Active Release:");
+                if let Some(ref active) = mgr_state.active {
+                    println!("  Tag: {}", active.tag);
+                    println!("  Role: {}", active.role);
+                    println!("  Committed At: {}", active.committed_at);
+                } else {
+                    println!("  (none)");
+                }
+                println!("Previous Release:");
+                if let Some(ref previous) = mgr_state.previous {
+                    println!("  Tag: {}", previous.tag);
+                    println!("  Role: {}", previous.role);
+                } else {
+                    println!("  (none)");
+                }
+                println!("Pending Candidate:");
+                if let Some(ref candidate) = mgr_state.pending {
+                    println!("  Tag: {}", candidate.tag);
+                    println!("  Role: {}", candidate.role);
+                    println!("  Staged At: {}", candidate.staged_at);
+                } else {
+                    println!("  (none)");
+                }
+                if let Some(ref failure) = mgr_state.latest_failure {
+                    println!("Latest Failure:");
+                    println!("  Phase: {}", failure.phase);
+                    println!("  Error: {}", failure.sanitized_error);
                 }
             }
             ExitCode::SUCCESS
         }
-        Commands::Rollback(_) => match execute_manual_rollback(&layout).await {
-            Ok(()) => {
-                println!("Rollback completed and verified successfully.");
-                ExitCode::SUCCESS
+        Commands::Rollback(_) => {
+            if let Err(e) = dam_hopper_server::linux_release::verify_host_platform() {
+                eprintln!("host platform verification failed: {e}");
+                return ExitCode::from(1);
             }
-            Err(e) => {
-                eprintln!("error: rollback failed: {e}");
-                ExitCode::from(1)
+            match execute_manual_rollback(&layout).await {
+                Ok(()) => {
+                    println!("Rollback completed and verified successfully.");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: rollback failed: {e}");
+                    ExitCode::from(1)
+                }
             }
-        },
-        Commands::Recover(args) => match execute_recovery(&layout, args.boot).await {
-            Ok(()) => {
-                println!("Recovery reconciliation completed successfully.");
-                ExitCode::SUCCESS
+        }
+        Commands::Recover(args) => {
+            if let Err(e) = dam_hopper_server::linux_release::verify_host_platform() {
+                eprintln!("host platform verification failed: {e}");
+                return ExitCode::from(1);
             }
-            Err(e) => {
-                eprintln!("error: recovery reconciliation failed: {e}");
-                ExitCode::from(1)
+            match execute_recovery(&layout, args.boot).await {
+                Ok(()) => {
+                    println!("Recovery reconciliation completed successfully.");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: recovery reconciliation failed: {e}");
+                    ExitCode::from(1)
+                }
             }
-        },
+        }
         Commands::Validate(args) => {
             println!("Validating release manifest '{}'...", args.manifest.display());
             match dam_hopper_server::linux_release::validate_manifest_and_archive(

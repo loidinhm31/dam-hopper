@@ -246,15 +246,12 @@ export function useSshForwardPageController() {
     },
     [forwarding.pending],
   );
-  const openNewRule = useCallback(
-    (connection: SshConnectionProfile) => {
-      setNotice(null);
-      setRuleFormConnection(connection);
-      setRuleFormExisting(null);
-      setRuleFormOpen(true);
-    },
-    [],
-  );
+  const openNewRule = useCallback((connection: SshConnectionProfile) => {
+    setNotice(null);
+    setRuleFormConnection(connection);
+    setRuleFormExisting(null);
+    setRuleFormOpen(true);
+  }, []);
   const openEditRule = useCallback(
     (connection: SshConnectionProfile, rule: SshForwardRule) => {
       setNotice(null);
@@ -600,12 +597,7 @@ export function useSshForwardPageController() {
         ),
       );
     },
-    [
-      connectionGeneration,
-      forwarding,
-      ruleGeneration,
-      run,
-    ],
+    [connectionGeneration, forwarding, ruleGeneration, run],
   );
 
   const saveConnection = useCallback(

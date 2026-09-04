@@ -69,7 +69,9 @@ export function AgentCommandPatternEditorRow({
           />
         </label>
         <label className="space-y-1">
-          <span className="text-xs text-[var(--color-text-muted)]">Pattern</span>
+          <span className="text-xs text-[var(--color-text-muted)]">
+            Pattern
+          </span>
           <Input
             value={pattern.pattern}
             onChange={(event) => onChange({ pattern: event.target.value })}

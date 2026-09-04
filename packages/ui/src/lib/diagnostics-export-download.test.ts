@@ -126,9 +126,7 @@ describe("diagnostics-export download path", () => {
     });
     expect(createElement).toHaveBeenCalledWith("a");
     expect(anchor.href).toBe("blob:diagnostics");
-    expect(anchor.download).toBe(
-      "dam-hopper-diagnostics-20260707-182905.json",
-    );
+    expect(anchor.download).toBe("dam-hopper-diagnostics-20260707-182905.json");
     expect(click).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:diagnostics");
   });

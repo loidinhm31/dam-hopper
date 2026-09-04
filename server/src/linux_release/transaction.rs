@@ -7,7 +7,8 @@ use super::state::{save_manager_state, ManagerState};
 use super::state_record::{FailureRecord, TransactionPhase, TransactionRecord};
 use chrono::Utc;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::os::unix::fs::PermissionsExt;
 use uuid::Uuid;
 
 /// Transaction context managing in-flight deployment phases and backups.
@@ -20,6 +21,47 @@ pub struct ActivationTransaction {
     pub public_config_backup_path: PathBuf,
 }
 
+fn ensure_private_directory(path: &Path) -> Result<(), ReleaseError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode != 0o700 {
+                return Err(ReleaseError::OwnershipViolation {
+                    path: path.display().to_string(),
+                    expected: "0700 transaction directory".into(),
+                    got: format!("{mode:#o}"),
+                });
+            }
+        }
+        Ok(_) => {
+            return Err(ReleaseError::OwnershipViolation {
+                path: path.display().to_string(),
+                expected: "regular transaction directory".into(),
+                got: "symbolic link or non-directory".into(),
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(path).map_err(|e| ReleaseError::Io {
+                action: "create transaction directory",
+                details: e.to_string(),
+            })?;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|e| {
+                ReleaseError::Io {
+                    action: "set transaction directory permissions",
+                    details: e.to_string(),
+                }
+            })?;
+        }
+        Err(error) => {
+            return Err(ReleaseError::Io {
+                action: "inspect transaction directory",
+                details: error.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl ActivationTransaction {
     /// Initialize a new activation transaction with private backup and staging paths.
     pub fn new(layout: &Layout) -> Result<Self, ReleaseError> {
@@ -30,12 +72,8 @@ impl ActivationTransaction {
         let config_backup_path = backups_root.join("host.toml");
         let public_config_backup_path = backups_root.join("host-config.json");
 
-        if !units_backup_dir.exists() {
-            fs::create_dir_all(&units_backup_dir).map_err(|e| ReleaseError::Io {
-                action: "create transaction backup directory",
-                details: e.to_string(),
-            })?;
-        }
+        ensure_private_directory(&backups_root)?;
+        ensure_private_directory(&units_backup_dir)?;
 
         Ok(Self {
             tx_id,
@@ -55,12 +93,8 @@ impl ActivationTransaction {
         let config_backup_path = backups_root.join("host.toml");
         let public_config_backup_path = backups_root.join("host-config.json");
 
-        if !units_backup_dir.exists() {
-            fs::create_dir_all(&units_backup_dir).map_err(|e| ReleaseError::Io {
-                action: "create transaction backup directory",
-                details: e.to_string(),
-            })?;
-        }
+        ensure_private_directory(&backups_root)?;
+        ensure_private_directory(&units_backup_dir)?;
 
         Ok(Self {
             tx_id,

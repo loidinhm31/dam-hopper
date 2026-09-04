@@ -30,10 +30,7 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
   return (
     <div className={cn("flex items-center gap-1.5 min-w-0 flex-1", className)}>
       <Folder className="h-4 w-4 shrink-0 text-[var(--color-primary)] opacity-80" />
-      <Select
-        value={value}
-        onValueChange={(val) => setActiveProject(val)}
-      >
+      <Select value={value} onValueChange={(val) => setActiveProject(val)}>
         <SelectTrigger
           className={cn(
             "min-w-0 h-8 font-bold px-2 glass-input font-sans tracking-tight flex-1",

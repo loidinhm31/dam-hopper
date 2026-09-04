@@ -367,10 +367,7 @@ function PortRow({
                     <button
                       type="button"
                       onClick={() =>
-                        onOpenTunnelInBrowser(
-                          entry.tunnel!.url!,
-                          entry.tunnel!,
-                        )
+                        onOpenTunnelInBrowser(entry.tunnel!.url!, entry.tunnel!)
                       }
                       title={`Open ${entry.tunnel.url} in embedded Browser`}
                       aria-label={`Open ${entry.tunnel.url} in embedded Browser`}
@@ -470,8 +467,12 @@ function PortRow({
           <DialogHeader>
             <DialogTitle>Kill terminal session</DialogTitle>
             <DialogDescription>
-              Stop the terminal session for port <span className="font-mono text-[var(--color-text)]">:{entry.port}</span>
-              {entry.project ? ` in ${entry.project}` : ""}. This stops the terminal and its running process.
+              Stop the terminal session for port{" "}
+              <span className="font-mono text-[var(--color-text)]">
+                :{entry.port}
+              </span>
+              {entry.project ? ` in ${entry.project}` : ""}. This stops the
+              terminal and its running process.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

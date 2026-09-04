@@ -16,10 +16,7 @@ import {
   type ImagePreviewTicket,
 } from "@/api/image-tickets.js";
 import { Button } from "@/components/atoms/Button.js";
-import {
-  isProjectTargetError,
-  type ProjectTargetRef,
-} from "@/api/client.js";
+import { isProjectTargetError, type ProjectTargetRef } from "@/api/client.js";
 import {
   getProfileChangeVersion,
   subscribeToProfileChanges,
@@ -193,7 +190,12 @@ export function ImagePreview({
           error && typeof error === "object" && "code" in error
             ? String((error as { code?: unknown }).code ?? "")
             : undefined;
-        if (isProjectTargetError(code, error instanceof Error ? error.message : undefined)) {
+        if (
+          isProjectTargetError(
+            code,
+            error instanceof Error ? error.message : undefined,
+          )
+        ) {
           onTargetUnavailableRef.current?.();
         }
         setTicketErrorCode(mediaTicketErrorCode(error));

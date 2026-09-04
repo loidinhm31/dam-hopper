@@ -52,6 +52,11 @@ fn test_staging_fresh_install_success() {
     let role_dir = layout.release_role_dir(&manifest.release.tag, "server");
     assert!(role_dir.join("bin/dam-hopper-server").exists());
     assert!(!role_dir.join("bin/dam-hopper-web").exists());
+    let persisted_manifest = fs::read(role_dir.join("release-manifest.json")).unwrap();
+    assert_eq!(
+        persisted_manifest,
+        serde_json::to_vec_pretty(&manifest).unwrap()
+    );
 
     // Verify pending.json was durably written
     let loaded_pending = load_pending_state(&layout.pending_state_path())
@@ -59,10 +64,11 @@ fn test_staging_fresh_install_success() {
         .expect("loaded pending state");
     assert_eq!(loaded_pending, pending);
 
-
-    // Verify candidate unit was staged into pending-units
-    assert!(layout.pending_units_dir().join("dam-hopper-api.service").exists());
-    assert!(!layout.pending_units_dir().join("dam-hopper-web.service").exists());
+    // Verify candidate units are isolated to this transaction.
+    let pending_units =
+        std::path::PathBuf::from(pending.pending_units_path.as_deref().unwrap());
+    assert!(pending_units.join("dam-hopper-api.service").exists());
+    assert!(!pending_units.join("dam-hopper-web.service").exists());
     // Verify host.toml was saved
     let host_config = load_host_config(&layout.host_config_path())
         .unwrap()

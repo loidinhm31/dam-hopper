@@ -146,7 +146,10 @@ export function GitDirtyCheckoutDialog({
   onClose,
 }: GitDirtyCheckoutDialogProps) {
   return (
-    <Dialog open={targetBranch !== null} onOpenChange={(open) => !open && onClose()}>
+    <Dialog
+      open={targetBranch !== null}
+      onOpenChange={(open) => !open && onClose()}
+    >
       <DialogContent className="sm:max-w-[460px]">
         <DialogHeader>
           <DialogTitle>Local changes detected</DialogTitle>
@@ -179,7 +182,12 @@ export function GitDirtyCheckoutDialog({
           >
             Force checkout
           </Button>
-          <Button type="button" variant="ghost" onClick={onClose} disabled={isPending}>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+            disabled={isPending}
+          >
             Cancel
           </Button>
         </div>

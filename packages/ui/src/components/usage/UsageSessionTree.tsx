@@ -92,7 +92,11 @@ export function UsageSessionTree({
                   <p className="font-medium text-[var(--color-text)]">
                     {model.model || "Model unavailable"}
                   </p>
-                  <UsageSessionTokens tokens={model.tokens} compact className="mt-1" />
+                  <UsageSessionTokens
+                    tokens={model.tokens}
+                    compact
+                    className="mt-1"
+                  />
                 </li>
               ))}
             </ul>

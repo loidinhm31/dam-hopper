@@ -6,25 +6,49 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion", "release", "profile", "archive",
-    "components", "inventory", "services", "rollback"
+    "schemaVersion",
+    "release",
+    "profile",
+    "archive",
+    "components",
+    "inventory",
+    "services",
+    "rollback"
   ],
   "properties": {
-    "schemaVersion": { "type": "integer", "const": 1, "description": "Schema version (must be 1)." },
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version (must be 1)."
+    },
     "release": {
       "type": "object",
       "additionalProperties": false,
       "required": ["tag", "version", "commitSha"],
       "properties": {
-        "tag": { "type": "string", "pattern": "^v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$" },
-        "version": { "type": "string", "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$" },
+        "tag": {
+          "type": "string",
+          "pattern": "^v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
+        },
         "commitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
       }
     },
     "profile": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "osId", "osVersion", "arch", "target", "glibcMin", "systemdMin"],
+      "required": [
+        "id",
+        "osId",
+        "osVersion",
+        "arch",
+        "target",
+        "glibcMin",
+        "systemdMin"
+      ],
       "properties": {
         "id": { "type": "string", "const": "fedora44-x86_64-systemd" },
         "osId": { "type": "string", "const": "fedora" },
@@ -40,7 +64,10 @@
       "additionalProperties": false,
       "required": ["name", "size", "sha256"],
       "properties": {
-        "name": { "type": "string", "pattern": "^dam-hopper-v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)-fedora44-x86_64-systemd\\.tar\\.gz$" },
+        "name": {
+          "type": "string",
+          "pattern": "^dam-hopper-v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)-fedora44-x86_64-systemd\\.tar\\.gz$"
+        },
         "size": { "type": "integer", "minimum": 1 },
         "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
@@ -78,7 +105,11 @@
         },
         "if": { "properties": { "kind": { "const": "file" } } },
         "then": { "required": ["size", "sha256"] },
-        "else": { "not": { "anyOf": [{ "required": ["size"] }, { "required": ["sha256"] }] } }
+        "else": {
+          "not": {
+            "anyOf": [{ "required": ["size"] }, { "required": ["sha256"] }]
+          }
+        }
       }
     },
     "services": {
@@ -89,7 +120,13 @@
         "api": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["unitName", "identity", "bindHost", "port", "healthPath"],
+          "required": [
+            "unitName",
+            "identity",
+            "bindHost",
+            "port",
+            "healthPath"
+          ],
           "properties": {
             "unitName": { "type": "string", "const": "dam-hopper-api.service" },
             "identity": { "type": "string", "const": "root" },
@@ -101,7 +138,13 @@
         "web": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["unitName", "identity", "bindHost", "port", "healthPath"],
+          "required": [
+            "unitName",
+            "identity",
+            "bindHost",
+            "port",
+            "healthPath"
+          ],
           "properties": {
             "unitName": { "type": "string", "const": "dam-hopper-web.service" },
             "identity": { "type": "string", "const": "dam-hopper-web" },
@@ -128,7 +171,10 @@
       "additionalProperties": false,
       "required": ["version"],
       "properties": {
-        "version": { "type": "string", "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$" }
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
+        }
       }
     }
   }
