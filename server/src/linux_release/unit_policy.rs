@@ -18,10 +18,17 @@ pub fn validate_api_unit_policy(
         });
     }
 
+    if ctx.api_user == "root" {
+        return Err(ReleaseError::UnitPolicyViolation {
+            unit: name.into(),
+            reason: "API unit must not run as root".into(),
+        });
+    }
+
     assert_eq_prop(unit, name, "Service", "Type", "exec")?;
-    assert_eq_prop(unit, name, "Service", "User", "root")?;
-    assert_eq_prop(unit, name, "Service", "Group", "root")?;
-    assert_eq_prop(unit, name, "Service", "WorkingDirectory", "/root")?;
+    assert_eq_prop(unit, name, "Service", "User", &ctx.api_user)?;
+    assert_eq_prop(unit, name, "Service", "Group", &ctx.api_group)?;
+    assert_eq_prop(unit, name, "Service", "WorkingDirectory", &ctx.api_home)?;
     assert_eq_prop(unit, name, "Service", "Restart", "on-failure")?;
     assert_eq_prop(unit, name, "Service", "KillSignal", "SIGTERM")?;
     assert_eq_prop(unit, name, "Service", "KillMode", "mixed")?;
@@ -31,8 +38,9 @@ pub fn validate_api_unit_policy(
     assert_eq_prop(unit, name, "Service", "SyslogIdentifier", "dam-hopper-api")?;
 
     let env_entries = unit.get_all_values("Service", "Environment");
+    let exp_home = format!("HOME={}", ctx.api_home);
     let required_envs = [
-        "HOME=/root",
+        exp_home.as_str(),
         "XDG_CONFIG_HOME=/etc/dam-hopper",
         "RUST_LOG=info",
         "RUST_ENV=production",

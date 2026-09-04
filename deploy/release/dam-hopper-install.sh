@@ -18,6 +18,7 @@ LATEST=0
 ROLE=""
 ALLOW_ORIGINS=()
 VERIFY_ATTESTATION=0
+SERVICE_USER=""
 
 usage() {
     cat <<EOF
@@ -28,6 +29,7 @@ Options:
   --latest                Resolve and install the latest stable release
   --role <role>           Target host role: 'server', 'web', or 'both' [required]
   --allow-web-origin <url> Allowed web origin for CORS (may be specified multiple times)
+  --service-user <user>   Dedicated non-root user to run the API service
   --verify-attestation    Verify GitHub artifact attestations using the 'gh' CLI
   -h, --help              Show this help message
 EOF
@@ -50,6 +52,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --allow-web-origin)
             ALLOW_ORIGINS+=("$2")
+            shift 2
+            ;;
+        --service-user)
+            SERVICE_USER="$2"
             shift 2
             ;;
         --verify-attestation)
@@ -242,7 +248,9 @@ fi
 for origin in "${ALLOW_ORIGINS[@]}"; do
     INSTALL_CMD+=("--allow-web-origin" "${origin}")
 done
-
+if [[ -n "${SERVICE_USER}" ]]; then
+    INSTALL_CMD+=("--service-user" "${SERVICE_USER}")
+fi
 echo ""
 echo "============================================================"
 echo "Staging release ${TAG} for role '${ROLE}' (requires sudo)..."
