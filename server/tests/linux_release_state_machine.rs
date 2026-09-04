@@ -296,3 +296,18 @@ async fn test_recovery_and_activation_boundaries() {
     let rec_res3 = execute_recovery(&layout, true).await;
     assert!(rec_res3.is_err(), "corrupt/failed transaction must trigger RECOVERY_REQUIRED error");
 }
+
+#[test]
+fn test_disable_if_enabled_on_nonexistent_unit() {
+    let res = disable_if_enabled("dam-hopper-nonexistent-unit-12345.service");
+    assert!(res.is_ok(), "disable_if_enabled on nonexistent unit must succeed cleanly");
+}
+#[test]
+fn test_systemctl_disable_idempotent_on_nonexistent_unit() {
+    if current_euid() != 0 {
+        // Non-root systemctl disable fails with Access Denied before inspecting unit existence.
+        return;
+    }
+    let res = systemctl_disable("dam-hopper-nonexistent-unit-12345.service");
+    assert!(res.is_ok(), "systemctl_disable on nonexistent unit must treat missing unit as already disabled");
+}

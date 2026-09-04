@@ -122,7 +122,7 @@ create_mock_release_bundle() {
     printf 'MIT License\n' > "$out_dir/staging/LICENSE"
     chmod 644 "$out_dir/staging/systemd/"* "$out_dir/staging/sysusers.d/"* "$out_dir/staging/web/"* "$out_dir/staging/LICENSE"
 
-    local archive_name="dam-hopper-${tag}-fedora44-x86_64-systemd.tar.gz"
+    local archive_name="dam-hopper-${tag}-linux-x86_64-systemd.tar.gz"
     local archive_path="$out_dir/${archive_name}"
 
     tar --sort=name --mtime='@1700000000' --owner=0 --group=0 --numeric-owner \
@@ -156,13 +156,13 @@ create_mock_release_bundle() {
     "commitSha": "0123456789abcdef0123456789abcdef01234567"
   },
   "profile": {
-    "id": "fedora44-x86_64-systemd",
-    "osId": "fedora",
-    "osVersion": "44",
+    "id": "linux-x86_64-systemd",
+    "osId": "linux",
+    "osVersion": "any",
     "arch": "x86_64",
     "target": "x86_64-unknown-linux-gnu",
-    "glibcMin": "2.43",
-    "systemdMin": 259
+    "glibcMin": "2.39",
+    "systemdMin": 245
   },
   "archive": {
     "name": "$archive_name",
@@ -215,7 +215,7 @@ EOF
     chmod 755 "$out_dir/dam-hopper-install.sh"
 
     # Dummy SBOM
-    printf '{"spdxVersion":"SPDX-2.3","name":"dam-hopper","version":"%s"}\n' "$ver" > "$out_dir/dam-hopper-${tag}-fedora44-x86_64-systemd.spdx.json"
+    printf '{"spdxVersion":"SPDX-2.3","name":"dam-hopper","version":"%s"}\n' "$ver" > "$out_dir/dam-hopper-${tag}-linux-x86_64-systemd.spdx.json"
 
     rm -rf "$out_dir/staging"
     log "Generated valid mock bundle in $out_dir for $tag"

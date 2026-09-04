@@ -187,19 +187,19 @@ pub fn load_or_init_manager_state(path: &Path) -> Result<ManagerState, ReleaseEr
     Ok(state)
 }
 
-/// Durably persist the authoritative manager state envelope with mode 0600.
+/// Durably persist the authoritative manager state envelope with mode 0644.
 pub fn save_manager_state(path: &Path, state: &mut ManagerState) -> Result<(), ReleaseError> {
     state.generation = state.generation.saturating_add(1);
     state.updated_at = Utc::now().to_rfc3339();
     state.validate()?;
-    atomic_write_json(path, state, Some(0o600))
+    atomic_write_json(path, state, Some(0o644))
 }
 
 /// Backup the current state file to a specific destination path.
 pub fn backup_state_file(state_path: &Path, backup_path: &Path) -> Result<(), ReleaseError> {
     match fs::symlink_metadata(state_path) {
         Ok(metadata) if metadata.file_type().is_file() => {
-            copy_file_durable(state_path, backup_path, Some(0o600))?;
+            copy_file_durable(state_path, backup_path, Some(0o644))?;
         }
         Ok(_) => {
             return Err(ReleaseError::OwnershipViolation {

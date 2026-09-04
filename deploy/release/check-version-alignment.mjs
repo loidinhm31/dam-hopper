@@ -19,19 +19,48 @@ const SEMVER_BARE_REGEX = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  let expectedTag =
-    process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME || null;
+  let expectedTag = null;
   const binaries = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--bin" && i + 1 < args.length) {
+    if (arg === "--help" || arg === "-h") {
+      console.log(
+        "Usage: node check-version-alignment.mjs [vX.Y.Z] [--tag <vX.Y.Z>] [--bin <path>]",
+      );
+      process.exit(0);
+    } else if (arg === "--bin" && i + 1 < args.length) {
       binaries.push(args[++i]);
+    } else if (arg === "--tag" && i + 1 < args.length) {
+      if (expectedTag) {
+        console.error(`Duplicate tag argument provided: ${args[i + 1]}`);
+        process.exit(1);
+      }
+      expectedTag = args[++i];
+    } else if (arg.startsWith("--tag=")) {
+      if (expectedTag) {
+        console.error(`Duplicate tag argument provided: ${arg}`);
+        process.exit(1);
+      }
+      expectedTag = arg.slice("--tag=".length);
     } else if (!arg.startsWith("--") && !expectedTag) {
       expectedTag = arg;
     } else {
       console.error(`Unknown or unexpected argument: ${arg}`);
       process.exit(1);
+    }
+  }
+
+  if (!expectedTag) {
+    if (process.env.RELEASE_TAG) {
+      expectedTag = process.env.RELEASE_TAG;
+    } else if (
+      process.env.GITHUB_REF_TYPE === "tag" ||
+      (process.env.GITHUB_REF_NAME &&
+        (SEMVER_TAG_REGEX.test(process.env.GITHUB_REF_NAME) ||
+          SEMVER_BARE_REGEX.test(process.env.GITHUB_REF_NAME)))
+    ) {
+      expectedTag = process.env.GITHUB_REF_NAME;
     }
   }
 

@@ -58,6 +58,7 @@ fn ensure_directory(path: &Path, action: &'static str) -> Result<(), ReleaseErro
                 action,
                 details: e.to_string(),
             })?;
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
             match fs::symlink_metadata(path) {
                 Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
                 Ok(_) => Err(ReleaseError::OwnershipViolation {

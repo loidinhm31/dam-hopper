@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DamHopper Browser Debug",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Enables DamHopper element selection in framed development apps.",
   "content_scripts": [
     {

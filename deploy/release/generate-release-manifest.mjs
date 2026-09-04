@@ -153,7 +153,7 @@ function main() {
   let tag = userTag;
   if (!tag) {
     const match = archiveName.match(
-      /^dam-hopper-(v[0-9]+\.[0-9]+\.[0-9]+)-fedora44-x86_64-systemd\.tar\.gz$/,
+      /^dam-hopper-(v[0-9]+\.[0-9]+\.[0-9]+)-(?:linux|fedora44)-x86_64-systemd\.tar\.gz$/,
     );
     if (match) {
       tag = match[1];
@@ -270,13 +270,13 @@ function main() {
         commitSha,
       },
       profile: {
-        id: "fedora44-x86_64-systemd",
-        osId: "fedora",
-        osVersion: "44",
+        id: archiveName.includes("linux-x86_64-systemd") ? "linux-x86_64-systemd" : "fedora44-x86_64-systemd",
+        osId: archiveName.includes("linux-x86_64-systemd") ? "linux" : "fedora",
+        osVersion: archiveName.includes("linux-x86_64-systemd") ? "any" : "44",
         arch: "x86_64",
         target: "x86_64-unknown-linux-gnu",
-        glibcMin: "2.43",
-        systemdMin: 259,
+        glibcMin: "2.39",
+        systemdMin: 245,
       },
       archive: {
         name: archiveName,
@@ -377,7 +377,7 @@ function main() {
       ],
     };
 
-    const sbomName = `dam-hopper-${tag}-fedora44-x86_64-systemd.spdx.json`;
+    const sbomName = archiveName.replace(/\.tar\.gz$/, ".spdx.json");
     const sbomPath = resolve(outDir, sbomName);
     writeFileSync(sbomPath, JSON.stringify(sbom, null, 2) + "\n", "utf8");
 

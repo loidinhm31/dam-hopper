@@ -13,6 +13,7 @@ use super::manifest::ReleaseManifest;
 use super::ownership::{verify_path_permissions, verify_release_ownership};
 use super::process::{is_port_listening, verify_no_foreign_sqlite_holders};
 use super::state_record::PendingCandidateRecord;
+use super::unit_parser::ParsedUnit;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;
@@ -219,34 +220,41 @@ fn validate_preflight(
         None
     };
 
-    let recovery_digest = manifest
-        .inventory
-        .iter()
-        .find(|entry| entry.path == "systemd/dam-hopper-recovery.service")
-        .and_then(|entry| entry.sha256.as_ref())
-        .ok_or_else(|| {
-            ReleaseError::Config(
-                "release manifest has no recovery service digest".to_string(),
-            )
-        })?;
     verify_candidate_file(
         &units_path.join(RECOVERY_SERVICE_UNIT),
         0o644,
-        Some(recovery_digest),
+        None,
     )?;
+    let recovery_content = fs::read_to_string(units_path.join(RECOVERY_SERVICE_UNIT)).map_err(
+        |e| ReleaseError::Io {
+            action: "read candidate recovery unit",
+            details: e.to_string(),
+        },
+    )?;
+    let parsed_recovery = ParsedUnit::parse(&recovery_content)?;
+    let expected_recovery_exec = format!(
+        "{}/bin/dam-hopper-manager recover --boot",
+        candidate.release_path
+    );
+    let actual_recovery_exec = parsed_recovery
+        .get_value("Service", "ExecStart")
+        .ok_or_else(|| ReleaseError::UnitPolicyViolation {
+            unit: RECOVERY_SERVICE_UNIT.into(),
+            reason: "missing ExecStart in recovery unit".into(),
+        })?;
+    if actual_recovery_exec != expected_recovery_exec {
+        return Err(ReleaseError::UnitPolicyViolation {
+            unit: RECOVERY_SERVICE_UNIT.into(),
+            reason: format!(
+                "ExecStart mismatch: expected '{expected_recovery_exec}', got '{actual_recovery_exec}'"
+            ),
+        });
+    }
     if candidate.role.includes_server() {
-        verify_candidate_unit(
-            units_path,
-            API_SERVICE_UNIT,
-            candidate.api_unit_sha256.as_ref(),
-        )?;
+        verify_candidate_file(&units_path.join(API_SERVICE_UNIT), 0o644, None)?;
     }
     if candidate.role.includes_web() {
-        verify_candidate_unit(
-            units_path,
-            WEB_SERVICE_UNIT,
-            candidate.web_unit_sha256.as_ref(),
-        )?;
+        verify_candidate_file(&units_path.join(WEB_SERVICE_UNIT), 0o644, None)?;
         if pending_artifacts {
             verify_candidate_file(&units_path.join("dam-hopper-web.conf"), 0o644, None)?;
         } else {
@@ -274,7 +282,7 @@ fn validate_preflight(
     verify_candidate_file(
         host_config_path,
         0o644,
-        candidate.host_config_sha256.as_ref(),
+        None,
     )?;
     let public_config = load_host_public_config(host_config_path)?
         .ok_or_else(|| ReleaseError::Config("public host configuration is missing".to_string()))?;
@@ -316,16 +324,6 @@ fn is_migration_release_path(layout: &Layout, release_dir: &Path) -> bool {
             .is_ok_and(|metadata| metadata.file_type().is_file())
 }
 
-fn verify_candidate_unit(
-    units_path: &Path,
-    name: &str,
-    expected_hash: Option<&String>,
-) -> Result<(), ReleaseError> {
-    let expected_hash = expected_hash.ok_or_else(|| ReleaseError::Config(format!(
-        "pending candidate has no digest for required unit '{name}'"
-    )))?;
-    verify_candidate_file(&units_path.join(name), 0o644, Some(expected_hash))
-}
 
 fn verify_candidate_file(
     path: &Path,

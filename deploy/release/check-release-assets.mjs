@@ -72,12 +72,14 @@ function parseArgs() {
   };
 }
 
-function getExpectedAssetNames(tag) {
+function getExpectedAssetNames(tag, dir) {
+  const isLegacy = dir && existsSync(resolve(dir, `dam-hopper-${tag}-fedora44-x86_64-systemd.tar.gz`));
+  const suffix = isLegacy ? "fedora44-x86_64-systemd" : "linux-x86_64-systemd";
   return [
     "dam-hopper-install.sh",
-    `dam-hopper-${tag}-fedora44-x86_64-systemd.tar.gz`,
+    `dam-hopper-${tag}-${suffix}.tar.gz`,
     "release-manifest.json",
-    `dam-hopper-${tag}-fedora44-x86_64-systemd.spdx.json`,
+    `dam-hopper-${tag}-${suffix}.spdx.json`,
   ].sort();
 }
 
@@ -133,7 +135,10 @@ function checkLocalDirectory(dir, tag, expectedNames) {
     );
   }
 
-  const archiveName = `dam-hopper-${tag}-fedora44-x86_64-systemd.tar.gz`;
+  const isLegacy = existsSync(resolve(dir, `dam-hopper-${tag}-fedora44-x86_64-systemd.tar.gz`));
+  const archiveName = isLegacy
+    ? `dam-hopper-${tag}-fedora44-x86_64-systemd.tar.gz`
+    : `dam-hopper-${tag}-linux-x86_64-systemd.tar.gz`;
   if (manifest.archive.name !== archiveName) {
     throw new Error(
       `Manifest archive.name '${manifest.archive.name}' does not match expected '${archiveName}'`,
@@ -163,7 +168,9 @@ function checkLocalDirectory(dir, tag, expectedNames) {
   }
 
   // Verify SBOM is valid JSON and references tag
-  const sbomName = `dam-hopper-${tag}-fedora44-x86_64-systemd.spdx.json`;
+  const sbomName = isLegacy
+    ? `dam-hopper-${tag}-fedora44-x86_64-systemd.spdx.json`
+    : `dam-hopper-${tag}-linux-x86_64-systemd.spdx.json`;
   const sbom = JSON.parse(readFileSync(resolve(dir, sbomName), "utf8"));
   if (sbom.spdxVersion !== "SPDX-2.3") {
     throw new Error(`SBOM spdxVersion '${sbom.spdxVersion}' is not SPDX-2.3`);
@@ -244,7 +251,7 @@ function checkGitHubReleaseAssets(
 
 function main() {
   const { tag, dir, releaseId, repo, assetsJsonPath } = parseArgs();
-  const expectedNames = getExpectedAssetNames(tag);
+  const expectedNames = getExpectedAssetNames(tag, dir);
 
   let localDigests = null;
   if (dir) {
