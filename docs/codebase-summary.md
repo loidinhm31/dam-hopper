@@ -6,7 +6,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **DamHopper** is a workspace management system for agent-based development. It combines a Rust backend server with split frontend hosts (`apps/web` for browser, `apps/native` for Tauri) that both reuse a shared React UI package (`packages/ui`) to provide an integrated environment for workspaces, agents, terminals, file operations, and optional Browser Debug.
 
-**Repository Structure**:
+**Repository Snapshot**:
 
 - Repomix snapshot (2026-09-04): 1,580 files and 3,279,350 tokens packed into
   `repomix-output.xml`; four security-sensitive files were excluded by the
@@ -52,6 +52,8 @@ This document provides a high-level overview of the current repository. Historic
 - **Git VCS Roots**: `WorkspaceGitPanel` now loads server-reported VCS roots, scopes branch/history queries by selected root, groups local changes by `rootId`, and blocks mixed-root commits in the UI.
 - **Browser Debug**: `BrowserDebugKeepAliveHost` preserves one iframe across workspace surfaces; the extension bridge accepts only exact origin/source/nonce/request matches and returns bounded DOM/ARIA metadata. Optional user-mediated browser capture or manual PNG/JPEG input remains local until explicit attach; the authenticated server artifact API stores capped JSON/PNG outside project roots for 10 minutes, exposes no read/list route, and inserts only generated paths into a live PTY without auto-submit.
 - **Usage Session Audit**: `UsagePage` adds a Sessions tab backed by aggregate list/detail transport calls. It uses derived HMAC session identities, dynamic provider-qualified models, flat token summaries bounded by detail retention, cursor and URL deep links, and 15-second polling only for visible documents. Primary token totals exclude cached input; raw commands/content/storage data are not exposed. Paused summaries remain readable and deletion is explicit. Browser and native hosts share the behavior.
+- **Workflow Client Types and Query State (Phase 04)**: `packages/ui/src/api/workflow-dto-types.ts` defines explicit camelCase workflow DTOs and closed unions; `workflow-domain-helpers.ts` keeps Plan-first validation, factual progress, timestamp, duration, attention, and ordering rules pure; `workflow-types.ts` re-exports both. `client.ts` exposes the typed `api.workflow` facade, `ws-transport.ts` maps 13 channels to protected REST, and `workflow-queries.ts` owns generation-aware overview/events hooks plus success-only mutation invalidation. Host QueryClients use profile-scoped hashes; workflow data is memory-only.
+- **WorkspacePage and shell integration (Phase 06)**: `WorkspacePage` composes one `workflowToolbarActions` node and passes it through the existing `toolbarActions` companion row on `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell`. No workflow route, activity-bar tool, mobile surface, TopNav item, or duplicate PTY lifecycle is introduced.
 
 ## Key Features
 
@@ -62,6 +64,9 @@ This document provides a high-level overview of the current repository. Historic
 - **Agent Store**: Version-controlled agent configurations, skills, and templates
 - **Authentication**: JWT-based with dev-mode bypass; no-auth binds require a trusted development network
 - **WebSocket Transport**: Bi-directional communication for real-time updates
+- **Workflow Store**: Domain-first Plan/Phase/Task hierarchy, scoped sessions,
+  terminal/agent resource links, notes, events, and bounded overview queries
+  persisted in the additive migration-010 SQLite tables.
 - **Linux Release Manager and Publisher**: `server/src/bin/dam-hopper.rs`
   dispatches `fetch`, `install`, `role set`, `start`, `status`, `rollback`,
   `recover`, `validate`, and `version`. `server/src/linux_release/` owns Fedora
@@ -83,6 +88,10 @@ This document provides a high-level overview of the current repository. Historic
 - **Terminal Emulator**: Multi-session xterm terminal management with color support and active-pane client-side find
 - **Workspace Navigation**: Multi-workspace switching, project discovery
 - **Real-time Sync**: TanStack Query for efficient data synchronization
+- **Workflow Client State**: Shared DTOs/helpers and typed `api.workflow`
+  methods feed generation-aware overview/events queries. Profile-scoped
+  `queryKeyHashFn` partitions cache entries, and workflow mutations invalidate
+  the `['workflow']` root only after successful writes.
 - **Git Integration**: Diff viewer, commit history, merge conflict handling
 
 ### Development Features
@@ -91,6 +100,194 @@ This document provides a high-level overview of the current repository. Historic
 - **Agent Store Inventory**: Browse, ship, and manage agent templates
 - **Configuration Management**: Workspace and global configuration editors
 - **Search**: Command search (BM25 index), file search with fuzzy matching
+
+### Workflow Tracking Service, REST API, and Lifecycle Correlation (Phases 01–03)
+
+The workflow subsystem is a domain-first Rust service over the shared SQLite
+session database:
+
+- `model/enums.rs`: closed domain enums for item kind/status, session status,
+  resource type/observation state, provenance, and event classification.
+- `model/types.rs`: camelCase-serialized workspace, item, session, link, note,
+  event, project-summary, progress, and overview structures; canonical
+  workspace locators are not serialized.
+- `model/validation.rs`: title/note/resource/payload bounds, item/session
+  transitions, timestamps, and Plan-first hierarchy validation.
+- `store/`: synchronous scoped SQLite repositories. Mutations use transaction
+  helpers and optional same-transaction events; reads provide bounded filters,
+  keyset history, retention purge, and tree/progress aggregation.
+- `observation.rs`: closed terminal-only observation enum, clone-cheap recorder,
+  bounded `sync_channel(256)` worker, and incarnation-aware link updates.
+- `reconcile.rs`: startup reconciliation of persisted terminal links against
+  restored live `(sessionId, incarnation)` identities.
+- `service.rs`: current config/workspace scope, target resolution,
+  `spawn_blocking` store dispatch, retention orchestration, and reconciliation.
+- `api/workflow/`: strict DTOs, mapping/cursor helpers, protected overview,
+  event, item, session/link, note, and purge handlers.
+- `persistence/migrations/010_workflow_tracking.sql`: additive six-table
+  schema with foreign-key cascades, checks, uniqueness, and query indexes.
+
+`AppState.workflow` is an optional `Arc<WorkflowService>` constructed from the
+existing `SessionStore::connection()`. A missing workflow store returns a
+workflow-only `503`; terminal and IDE APIs remain available. Every workflow
+route is protected by the existing auth layer and has a focused 32 KiB body
+limit. Mutations require UUID `requestId`, use `camelCase`, and return
+`{ resource, replayed, eventId }`; PATCH/DELETE item and note/link operations
+also enforce optimistic `updatedAt` concurrency.
+
+The service validates the current configured project and registered worktree
+before writes. Overview is one bounded response (workspace/projects,
+Plan/Phase/Task trees, standalone Tasks, notes, running sessions, factual
+Task progress, recent events, and `truncated`). Event history uses opaque
+keyset cursors. Terminal links are checked against live PTY target metadata and
+incarnation. Agent links are manual and carry only bounded `harnessLabel` and
+`runId`; no automatic harness producer ships in Phase 03.
+
+The PTY manager emits only allowlisted lifecycle metadata through a
+non-blocking `try_send` to `sync_channel(256)`. The worker is the only
+observation path that writes workflow SQLite, so queue-full or storage errors
+cannot block terminal input/output/restart paths. Payloads exclude command
+lines, arguments, CWD, environment, prompts, output, and arbitrary adapter
+data. Link states are `attached`, `stale`, `exited`, `crashed`, or `detached`;
+older incarnations cannot regress newer state, and duplicate events are
+suppressed by deterministic IDs. Observation/reconciliation updates never
+change manual session status or `startedAt`/`endedAt`; a final exit/removal may
+only provide a suggested end time.
+
+Startup restores PTYs first, collects live identities, then reconciles workflow
+terminal links. Direct Plan sessions need no Phase/Task children, and manual
+session timestamps remain user-controlled.
+
+The 14 domain/store tests in `server/src/workflow/tests.rs` plus the 8 API
+integration tests in `server/tests/workflow_api.rs` cover the Phase 01–02
+contract. Phase 03 lifecycle coverage is in
+`server/src/workflow/observation_tests.rs`; the dated Phase 03 review reports
+28 workflow tests and 907 full-server tests passing.
+
+### Workflow Client Types, Transport, and Query State (Phase 04)
+
+The Phase 04 shared UI layer is a typed, transport-agnostic client over the
+protected REST surface:
+
+- `workflow-dto-types.ts` mirrors response/request DTOs and closed field unions;
+  `workflow-types.ts` re-exports the public contract.
+- `workflow-domain-helpers.ts` keeps Plan-first child validation, status and
+  resource-attention predicates, factual tracked-Task labels, timestamp/elapsed
+  handling, and item ordering pure and reusable.
+- `client.ts` adds `api.workflow` methods for overview/events, item CRUD,
+  session lifecycle, resource links, notes, and history purge.
+- `ws-transport.ts` maps 13 channel names to exact REST methods and paths,
+  URL-encodes dynamic IDs/cursors, and preserves typed request bodies.
+- `workflow-queries.ts` uses `['workflow']` keys, includes transport generation
+  in overview keys, and invalidates the root only after successful mutations.
+`queries.ts` re-exports `workflow-queries.ts` so existing shared query imports
+can consume the focused workflow hooks.
+- `query-client.ts` supplies the host-level profile-aware key hash. Workflow
+  query data is memory-only; presentation state stays local to components.
+
+Profile switches replace/destroy the active transport and advance its generation.
+The profile hash and generation key keep old responses in their prior scope,
+while the server remains authoritative for validation, target ownership,
+timestamps, and idempotent replay.
+
+Targeted Phase 04 tests cover helper semantics, all workflow REST mappings, and
+query/cache behavior (51/51 passed in the dated test report). Details and the
+operation table are in [Workflow Client State](./workflow-client-state.md).
+
+### Workflow Context Surface (Phase 05)
+
+The shared UI now exposes one responsive workflow context surface for browser
+and native hosts:
+
+- `WorkflowContextSurface` calls `useWorkflowOverview`, applies target/active/
+  attention selectors, owns local selection/open state and one visible
+  one-second elapsed timer, then chooses the desktop deck or compact sheet.
+- `WorkflowContextRibbon` provides the ambient project/worktree and active
+  Plan/standalone-Task summary, status, duration, latest note/progress,
+  loading/error/retry, and live-region text.
+- `WorkflowContextDeck` is a non-modal `role="region"` with a 320–440px height
+  range and responsive project/work/execution panes. `WorkflowContextSheet`
+  provides Projects, Plans & Work, and Execution segments at current
+  `35dvh`/`90dvh` collapsed/expanded heights.
+- `WorkflowProjectList`, `WorkflowItemList`/`WorkflowItemRow`,
+  `WorkflowQuickCapture`, `WorkflowExecutionList`, and
+  `WorkflowSessionCard` provide target switching, Plan-first hierarchy,
+  minimal capture, explicit session timestamps/Now/abandon, and manual Agent
+  Harness/Agent Run linking.
+- `workflow-focus.ts` owns the `Mod+Shift+KeyW` shortcut guard for editable,
+  Monaco, xterm, dialog, and explicitly suppressed/native-input surfaces.
+  `use-workflow-surface-actions.ts` maps UI actions to request-ID-bearing
+  `api.workflow` mutations.
+
+Selectors use exact project/worktree matching, prefer active descendants before
+status/update ordering, and expose factual tracked-Task labels. Query data
+remains memory-only; presentation state is not persisted. Current resource
+attention fields remain false/zero, and several item-list action callbacks are
+accepted but not rendered as controls. Browser geometry, touch/safe-area, focus
+continuity and host-integration qualification were completed in Phase 07; see
+the verification section below.
+
+### WorkspacePage and shell integration (Phase 06)
+
+`WorkspacePage` is the integration owner for the Phase 06 workflow surface. It
+builds one memoized `workflowToolbarActions` node around
+`WorkflowContextSurface` and passes that node through the existing
+`toolbarActions` seam on all three shell branches:
+
+- `IdeShell` and `TerminalWorkspaceShell` render the surface trigger in a
+  40px companion row above their existing content.
+- `MobileWorkspaceShell` renders the same action in its safe-area-aware inline
+  row; compact surface selection remains owned by the existing shell.
+
+Navigation callbacks preserve existing workspace ownership:
+
+- `onOpenTerminal` uses pure `resolveWorkflowTerminalReveal` from
+  `workflow-workspace-integration.ts` to reject blank, profile-mismatched, or
+  unknown IDs, then calls the existing `handleSelectTerminal`. Compact mode
+  requests the existing Terminal surface; it does not change workspace mode,
+  add URL parameters, or create a second terminal lookup path.
+- `onSelectTarget` uses pure `resolveWorkflowTargetSelection` to require a
+  configured project and available worktree, then calls `setActiveProject` and
+  `useProjectTargetStore.selectTarget`. Unavailable historical targets remain
+  display-only.
+- `deriveWorkflowTerminalCandidates` merges stable-ID observations from
+  `sessionMap` and `mountedSessions`, carries project/worktree/alive/incarnation
+  state, and marks unavailable targets. Candidate data excludes command, CWD,
+  and terminal output.
+
+`onOpenTerminal` is drilled from `WorkflowContextSurface` through
+`WorkflowContextDeck` / `WorkflowContextSheet`, `WorkflowExecutionList`, and
+`WorkflowSessionCard`; `onSelectTarget` flows through the surface, deck/sheet,
+and `WorkflowProjectList`. `WorkflowSessionCard` invokes the terminal callback
+only for an explicit linked-terminal click. `WorkflowContextSurface` is keyed
+by `activeProfileId`, so a profile switch remounts only workflow presentation
+state (open state, selections, mobile segment, drafts, and elapsed clock);
+terminal/editor and Browser keep-alive state remain outside that key boundary.
+Observed terminal state and suggested end times remain read-only until an
+explicit workflow mutation.
+
+Phase 06 verification: targeted UI tests 62/62, full UI suite 1,515/1,515,
+relevant Chromium smoke 8/8, Rust tests 907/907 executed (2 ignored), and UI
+TypeScript compilation passed. Formal source coverage remains unavailable.
+
+### Verification, rollout, observability, and docs (Phase 07)
+
+Phase 07 closes the workflow release gates. The additive migration 010 survives
+restart and rollback; older binaries ignore workflow tables, and rollback keeps
+workflow data. `DiagnosticStore` records fixed-cardinality operation duration,
+queue-drop, reconciliation, and storage-error metrics without IDs, paths,
+notes, commands, CWD, environment, prompts, or output. A profile-scoped
+overview 404 maps to feature-unavailable, suppresses query retries, and hides
+workflow controls while authentication and 5xx failures remain explicit errors.
+Keyboard/focus handling returns focus on Escape, preserves terminal/editor
+ownership, enforces 44px controls, safe-area/35–90dvh sheets, reduced motion,
+and no horizontal overflow.
+
+Phase 07 validation: focused Rust gates 134/134 passed (one PTY test ignored),
+focused UI Vitest 122/122 passed across 13 files, and real-server Chromium
+browser 4/4 passed against the actual no-auth backend. See the
+[Phase 07 plan](../plans/260901-0919-workflow-tracking-notes/phase-07-verification-rollout-observability-and-docs.md)
+and [Workflow API](./workflow-api.md).
 
 ## Architecture Layers
 
@@ -119,11 +316,18 @@ Backend BFF/API (server/)
   └── WebSocket Handler
          ↓
 Service Layer (server/)
+  ├── WorkflowService (scope, target validation, retention, reconcile)
   ├── PTY Session Manager
+  │    └── WorkflowObservationRecorder (non-blocking lifecycle handoff)
   ├── Agent Store Service
   ├── File System Subsystem
   ├── Command Registry (BM25)
   └── SSH Credential Store
+         ↓
+Persistence
+  ├── SessionStore (`sessions.db`)
+  ├── Workflow observation worker (`sync_channel(256)`)
+  └── WorkflowStore (workflow tables, shared connection)
          ↓
 Infrastructure
   ├── MongoDB (user auth, optional)
@@ -296,6 +500,60 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 - Signal handling (SIGTERM, SIGHUP)
 - Binary and UTF-8 support
 - Shell lifecycle integration for Bash, Zsh, and Fish with optional exit status
+
+### Workflow Tracking Service and REST API (Phases 01–03)
+
+- `WorkflowService` (`server/src/workflow/service.rs`) owns the
+  current-profile/workspace boundary and composes `WorkflowStore`,
+  configuration, `WorkspaceTargetResolver`, workspace coordination, and the
+  PTY manager used to validate live terminal links and startup reconciliation.
+- `service.scope()` copies the current config locator, workspace name, and
+  project paths; `service.workspace()` lazily gets or creates the workflow
+  workspace entity. `resolve_target()` maps a project plus optional
+  `worktreePath` to a server-authorized configured root or registered Git
+  worktree.
+- Synchronous SQLite methods run through `WorkflowService::store_call()` and
+  `tokio::task::spawn_blocking`; configuration/target locks are not held
+  across database work.
+- `server/src/api/workflow/` separates route concerns into strict DTOs,
+  timestamp/target mapping, cursor encoding, overview/events, item mutations,
+  session/link lifecycle, note mutations, and purge. The protected router
+  mounts `/api/workflow/overview`, `/events`, `/items`, `/sessions`, `/notes`,
+  and `/history`.
+- Item PATCH/DELETE and note/link DELETE require the current `updatedAt`;
+  stale writes map to a sanitized `workflow_conflict`. Every domain mutation
+  can append its typed activity event in the same transaction, and retries
+  return `replayed: true`.
+- Resource links are terminal/agent correlations. Terminal links are checked
+  against a live PTY and matching project/worktree/incarnation; agent links
+  carry only manually supplied bounded harness/run metadata.
+- `server/src/workflow/observation.rs` defines the closed terminal observation
+  enum and non-blocking `BoundedObservationRecorder`. PTY create, pending
+  restart, successful restart, final exit, and removal facts enter a
+  `sync_channel(256)`; the worker updates only resource-link health and
+  appends deterministic, replay-safe events.
+- Observation payloads contain only terminal ID, incarnation, configured
+  project, validated target, server time, exit/restart metadata, and action.
+  Command lines, arguments, CWD, env, prompts, output, and arbitrary adapter
+  payloads are excluded.
+`server/src/workflow/reconcile.rs` runs after restored PTYs are known:
+live links become `attached`; missing/dead links transition to `detached` only
+when their persisted state is `attached` or `stale`, while final
+`exited`/`crashed` outcomes remain unchanged. Manual session
+status/timestamps remain unchanged. Older incarnations are ignored; final
+exit/removal can set only a suggested end time.
+- Overview reads are bounded to 100 projects, 500 items, and 100 running
+  sessions; event pages default to 50 and cap at 100. The API exposes factual
+  descendant-Task counts without fabricated percentages.
+- `main.rs` starts the observer when workflow storage is available, restores
+  PTYs, then reconciles live terminal identities before serving normal traffic.
+  Retention purge still runs at startup and daily; event constructors currently
+  use the 90-day default expiry directly.
+
+Workflow tables share `sessions.db` (migration 010); no second workflow
+database is opened. Domain/store implementation details remain in
+`persistence/`, `workflow/model/`, `workflow/store/`, `workflow/observation.rs`,
+and `workflow/reconcile.rs`.
 
 ### Agent Store (`server/src/agent_store/`)
 
@@ -572,22 +830,39 @@ dam-hopper/
 │   │   ├── main.rs                 # API bootstrap (API-only by default)
 │   │   ├── bin/dam-hopper.rs       # Linux release manager binary
 │   │   ├── bin/dam-hopper-web.rs   # Dedicated static web host binary
-│   │   ├── web_host/               # Web routes, paths, cache, runtime config
-│   │   ├── api/                    # Axum REST/WebSocket handlers
+│   │   ├── web_host/      
+│   │   ├── state.rs           # AppState definition
+│   │   ├── api/
+│   │   │   ├── workflow/      # Protected workflow REST handlers and DTOs
+│   │   │   ├── auth.rs        # Authentication handlers
+│   │   │   ├── ws.rs          # WebSocket transport
+│   │   │   └── router.rs      # Axum route registration
 │   │   ├── linux_release/          # Manifest, acquisition, and staging
-│   │   ├── pty/                    # Terminal management
+│   │   ├── pty/               # Terminal management
 │   │   ├── fs/                     # Filesystem operations/sandbox
-│   │   ├── agent_store/            # Agent-store service
-│   │   └── lib.rs                  # Library exports
+│   │   ├── persistence/       # SQLite store, worker, restore, migrations
+│   │   │   └── migrations/010_workflow_tracking.sql
+│   │   ├── workflow/          # Workflow service, models, observation, store
+│   │   │   ├── model/
+│   │   │   ├── store/
+│   │   │   ├── observation.rs
+│   │   │   ├── reconcile.rs
+│   │   │   ├── service.rs
+│   │   │   ├── tests.rs
+│   │   │   └── observation_tests.rs
+│   │   ├── agent_store/       # Agent store service
+│   │   └── lib.rs             # Library exports
 │   ├── tests/
+│   │   ├── workflow_api.rs    # Workflow REST integration tests
+│   │   ├── auth_no_auth.rs    # Auth bypass integration tests
 │   │   ├── linux_release_*.rs      # Focused release suites
 │   │   └── common/release_fixtures.rs
-│   └── Cargo.toml                  # Server and binary metadata
+│   └── Cargo.toml             # Dependencies
 ├── deploy/release/
 │   └── release-manifest.schema.json # Publisher schema v1
 ├── apps/
-│   ├── web/                        # Thin browser Vite host
-│   ├── native/                     # Tauri v2 host and shell
+│   ├── web/                  # Thin browser Vite host
+│   ├── native/               # Tauri v2 host + src-tauri shell
 │   └── browser-extension/          # Browser debug extension
 ├── packages/
 │   ├── ui/                         # Shared React UI and tests
@@ -595,7 +870,7 @@ dam-hopper/
 │   └── browser-bridge/             # Browser debug protocol
 ├── docs/                           # Maintained documentation
 ├── plans/                          # Feature plans and phase reports
-└── CLAUDE.md                       # Development commands
+└── CLAUDE.md                  # Development commands
 ```
 
 ## Test Coverage
@@ -628,7 +903,34 @@ dam-hopper/
 - **Other server/frontend counts**: historical snapshots only; consult the
   dated roadmap/changelog entries rather than treating them as a release gate.
 ### Known Limitations (Pre-existing or phase-scoped)
+- **Server**: Rust unit/integration coverage is tracked per target. The dated
+  Phase 03 review reports 28 workflow tests and 907 full-server tests passing;
+  the workflow lifecycle cases are in `server/src/workflow/observation_tests.rs`.
+- **Workflow API**: `server/tests/workflow_api.rs` covers auth, overview,
+  Plan-first hierarchy, replay/CAS, sessions, links, notes, limits, event
+  pagination, and history purge.
+- **Workflow lifecycle**: observation tests cover terminal state mapping,
+  incarnation ordering, duplicate suppression, startup reconciliation, bounded
+  queue overflow, direct Plan/manual harness links, manual timestamp
+  preservation, and real PTY observation delivery.
+- **Workflow client**: `workflow-types.test.ts` covers pure helper semantics;
+  `ws-transport.test.ts` covers all 13 workflow channel mappings and URL
+  encoding; `workflow-queries.test.tsx` covers profile hash isolation,
+  transport-generation keys, query behavior, request IDs, invalidation, and
+  failure preservation. The dated Phase 04 report records 51/51 targeted
+  assertions passing.
+- **WorkspacePage and shell integration**: Phase 06 targeted UI 62/62,
+  full UI 1,515/1,515, relevant Chromium smoke 8/8, Rust 907/907 executed
+  (2 ignored), and UI TypeScript compilation passed. The focused breakdown is
+  13 pure-helper, 26 WorkspacePage, 6 IdeShell, 12 TerminalWorkspaceShell,
+  and 5 MobileWorkspaceShell assertions.
+- **Web**: Component tests with Vitest, 80% coverage target
 
+### Known Limitations (Pre-existing)
+
+- 8 platform-specific failures (Windows symlink privileges, path format)
+- Git worktree edge cases
+- Not workflow-phase-related
 - Phase 07 completes the one-time format-2 migration and checkout-runner
   retirement. Staging invokes static legacy-layout checks; the separate live
   inspector covers active service/process/health evidence when requested.
@@ -734,19 +1036,24 @@ dam-hopper/
 
 ## Documentation Library
 
-| Document                                                                       | Purpose                                                                                                                                                                                                           |
-| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [system-architecture.md](./system-architecture.md)                             | Component interactions, data flow                                                                                                                                                                                 |
-| [api-reference.md](./api-reference.md)                                         | HTTP endpoints, request/response schemas                                                                                                                                                                          |
-| [code-standards.md](./code-standards.md)                                       | Naming conventions, patterns, best practices                                                                                                                                                                      |
+| Document                                                       | Purpose                                       |
+| -------------------------------------------------------------- | --------------------------------------------- |
+| [system-architecture.md](./system-architecture.md)             | Component interactions, data flow             |
+| [api-reference.md](./api-reference.md)                         | HTTP endpoints, request/response schemas      |
+| [workflow-api.md](./workflow-api.md)                            | Phase 02–03 workflow REST and lifecycle contract |
+| [workflow-client-state.md](./workflow-client-state.md)          | Phase 04 shared UI DTO, transport, and query contract |
+| [frontend-components.md](./frontend-components.md)                | Shared React components and shell integration |
+| [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
+| [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
 | [configuration-guide.md](./configuration-guide.md)                             | Setup, environment variables, config files                                                                                                                                                                        |
 | [linux-release-manifest.md](./linux-release-manifest.md)                       | Linux release manifest v1 contract                                                                                                                                                                                |
 | [linux-release-manager.md](./linux-release-manager.md)                         | Phase 02 manager CLI, platform gate, acquisition, staging, Phase 03 web role handoff, Phase 04 units, Phase 05 activation/recovery, Phase 06 bootstrap handoff, and Phase 07 format-2 migration/runner retirement |
 | [linux-release-publisher-bootstrap.md](./linux-release-publisher-bootstrap.md) | Central GitHub publisher DAG, exact assets, reproducibility, SBOM, attestations, and bootstrap                                                                                                                    |
-| [native-browser-debug-support.md](./native-browser-debug-support.md)           | Native Browser Debug platform gate and security boundaries                                                                                                                                                        |
-| [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md)   | Profile storage, switching, and cross-origin policy                                                                                                                                                               |
-| [ws-protocol-guide.md](./ws-protocol-guide.md)                                 | WebSocket message types, terminal protocol                                                                                                                                                                        |
-| [project-roadmap.md](./project-roadmap.md)                                     | Planned features and phases                                                                                                                                                                                       |
+| [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
+| [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
+| [ws-protocol-guide.md](./ws-protocol-guide.md)                 | WebSocket message types, terminal protocol    |
+| [project-roadmap.md](./project-roadmap.md)                     | Planned features and phases                   |
+| [CHANGELOG.md](./CHANGELOG.md)                               | Dated implementation and release notes           |
 
 ---
 

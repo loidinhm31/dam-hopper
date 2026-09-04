@@ -40,6 +40,93 @@
   state-machine, health, and unit-policy evidence covers the durable lifecycle;
   full host-specific rollback rehearsal remains a later deployment gate.
 
+# 2026-09-02
+
+- **Phase 01: Workflow tracking domain and relational persistence.** Added the
+  additive `010_workflow_tracking.sql` migration for workspace identities,
+  Plan/Phase/Task items, manual sessions, terminal/agent resource links,
+  durable notes, and append-only activity events. Existing terminal-session
+  tables remain unchanged and all workflow tables share the configured
+  `sessions.db`.
+- Added serializable workflow models and closed enums for item kind/status,
+  session lifecycle, resource observations, provenance, and event types.
+  Validation enforces bounded titles/bodies/identifiers/payloads, timestamps,
+  transitions, and the Plan-first hierarchy (Plan root → Phase → Task, with
+  standalone or Plan-level tasks).
+- Added `WorkflowStore` repositories for workspace/item/session/resource/note/
+  event CRUD, bounded overview aggregation, keyset history, and retention.
+  Mutations use SQLite transactions; optional audit events commit atomically,
+  event IDs are retry-idempotent, and resource observations never rewrite
+  session lifecycle state.
+- `server/src/workflow/tests.rs` covers model rules, migration preservation,
+  hierarchy/scope checks, idempotency, overlapping sessions, note retention,
+  overview progress, pagination, and purge. Workflow HTTP/WebSocket routes
+  remain outside this phase. [See phase plan](../plans/260901-0919-workflow-tracking-notes/phase-01-domain-and-relational-persistence.md).
+- **Phase 02: Workflow service and REST API.** Added the profile/workspace-
+  scoped `WorkflowService` and protected `/api/workflow/*` routes for bounded
+  overview/history, Plan-first item CRUD, manual session lifecycle,
+  terminal/agent links, durable notes, and explicit history purge.
+- REST mutations use strict camelCase DTOs, UUID request replay keys,
+  optimistic `updatedAt` CAS for item/note/link updates, typed sanitized
+  workflow errors, and a focused 32 KiB body limit. Events use opaque keyset
+  cursors; automatic retention purges in bounded batches.
+- Added API integration coverage in `server/tests/workflow_api.rs` for auth,
+  hierarchy, overview, replay/CAS, sessions, links, notes, pagination, limits,
+  invalid transitions, and purge. [See workflow API reference](./workflow-api.md).
+- **Phase 03: Terminal lifecycle correlation and agent adapter.** Added the
+  closed `WorkflowObservation` contract and clone-cheap PTY recorder. A bounded
+  `sync_channel(256)` worker keeps workflow SQLite off PTY input/output/restart
+  hot paths; queue-full and storage failures are counted/logged without
+  blocking terminal operation.
+- Lifecycle payloads are strictly allowlisted (terminal ID, incarnation,
+  configured project, validated worktree target, server time, exit/restart
+  metadata, and action). Command lines, arguments, CWD, environment, prompts,
+  output, and arbitrary adapter payloads are excluded.
+- Terminal links transition through `attached`, `stale`, `exited`, `crashed`,
+  and `detached` with incarnation ordering and deterministic replay
+  suppression. Final exit/removal may suggest an end time but never changes
+  manual session status or `startedAt`/`endedAt`.
+- Startup restores PTYs before reconciling persisted terminal links against
+  live `(sessionId, incarnation)` identities. Agent links remain bounded manual
+  `harnessLabel`/`runId` metadata; no automatic harness producer or generic
+  observation endpoint was added. Direct Plan sessions do not synthesize
+  Phase/Task children.
+- Phase 03 review reports 28 workflow tests and 907 full-server tests passing;
+  review approved 9.8/10. [Code review](../plans/reports/code-reviewer-260902-0420-phase-03-terminal-lifecycle-correlation.md).
+- **Phase 04: Client types, transport, and query state.** Added strict shared-UI workflow DTOs and domain helpers, all 13 protected REST operation mappings, profile/transport-generation-isolated React Query hooks, mutation invalidation and request-ID replay handling, and manual timestamp/resource-observation helpers. Existing terminal navigation and localStorage state remain unchanged.
+- Validation: Targeted Phase 04 UI tests 51/51, full UI suite 1,452/1,452, and Rust server 907/907 executed tests passed (2 ignored); code review approved 10/10. Formal source coverage was not generated because the UI coverage provider is unavailable, and the existing React `act(...)` warning is non-blocking. [Test report](../plans/reports/tester-260902-1139-phase-04-client-types-transport-query-state.md) · [Review report](../plans/reports/code-reviewer-260902-1144-phase-04-client-types-transport-query-state.md) · [Phase plan](../plans/260901-0919-workflow-tracking-notes/phase-04-client-types-transport-and-query-state.md).
+- **Phase 05: Responsive workflow context surface.** Added the Plan-first ambient context ribbon, responsive desktop deck, mobile segmented safe-area sheet, optional Phase/Task capture, direct notes/sessions/execution links, manual timestamp/**Now** controls, observed terminal suggestions, focus-safe shortcut ownership, and loading/error/empty states.
+- Validation: targeted Phase 05 UI tests passed 62/62 (100%), full UI suite passed 1,493/1,493 (100%), and Rust server executed tests passed 907/907 (2 ignored). Review approved 9.8/10. Responsive browser geometry, safe-area, and terminal/editor continuity remain Phase 07 validation work. [Test report](../plans/reports/tester-260902-1243-phase-05-responsive-workflow-context-surface.md) · [Review report](../plans/reports/code-reviewer-260902-1245-phase-05-responsive-workflow-context-surface.md) · [Phase plan](../plans/260901-0919-workflow-tracking-notes/phase-05-responsive-workflow-context-surface.md).
+- **Phase 06: WorkspacePage and shell integration.** Complete / DONE
+  2026-09-02. Mounted one `WorkflowContextSurface` through the existing
+  `toolbarActions` companion row in `IdeShell`, `TerminalWorkspaceShell`, and
+  `MobileWorkspaceShell`; no route, activity-bar tool, mobile surface, TopNav
+  item, or duplicate PTY lifecycle.
+- Added pure `packages/ui/src/lib/workflow-workspace-integration.ts` decisions:
+  `deriveWorkflowTerminalCandidates` merges mounted/session-map observations
+  with target-unavailable state without command, CWD, or output;
+  `resolveWorkflowTerminalReveal` rejects missing/profile-mismatched/stale IDs,
+  reuses `handleSelectTerminal`, and requests the compact Terminal surface only
+  in compact mode; `resolveWorkflowTargetSelection` validates configured
+  project/worktree availability before using existing workspace and
+  project-target stores.
+- Wired `onOpenTerminal` through `WorkflowContextSurface`,
+  `WorkflowContextDeck`, `WorkflowContextSheet`, `WorkflowExecutionList`, and
+  `WorkflowSessionCard`; wired `onSelectTarget` through the surface,
+  deck/sheet, and `WorkflowProjectList`. Keyed the surface by
+  `activeProfileId` so profile changes reset workflow presentation state while
+  terminal/editor/Browser keep-alive state remains mounted.
+- Validation: targeted UI 62/62, full UI 1,515/1,515, relevant Chromium
+  smoke 8/8, Rust 907/907 executed (2 ignored), and UI TypeScript compilation
+  passed; review approved 9.8/10. [Test report](../plans/reports/tester-260902-1430-phase-06-workspace-page-and-shell-integration.md) · [Review report](../plans/reports/code-reviewer-260902-1440-phase-06-workspace-page-and-shell-integration.md) · [Phase plan](../plans/260901-0919-workflow-tracking-notes/phase-06-workspace-page-and-shell-integration.md).
+- **Phase 07: Verification, rollout, observability, and docs.** Completed the additive migration/restart/rollback rehearsal, privacy-safe workflow diagnostics, old-server compatibility, responsive accessibility contracts, real-terminal continuity, and documentation gates. Migration 010 remains additive; rollback retains workflow tables/data, and older binaries ignore them.
+- Added fixed-cardinality workflow diagnostics in `DiagnosticStore`: `workflow_operation_duration_seconds` (duration capped at 60 seconds), `workflow_queue_dropped_total` (non-blocking 256-entry observation queue drops), `workflow_reconciliation_total` (attached/detached counts capped at 1,000), and `workflow_storage_errors_total` (bounded store-failure outcomes). Operation/result dimensions are enums; duration, row, event, and count fields are bounded. No IDs, projects, paths, notes, external runs, commands, CWD, environment, prompts, or output are recorded.
+- Older servers that return HTTP 404 for `GET /api/workflow/overview` now produce a profile-scoped feature-unavailable state, suppress query retries, close/hide workflow controls, and announce the unavailable state. Authentication and 5xx failures remain explicit errors with retry behavior; other workflow 404s retain their API semantics.
+- Keyboard/focus contracts preserve editor and xterm ownership, return focus to the workflow trigger on Escape, expose named regions and status text, enforce 44px touch targets, bound the desktop deck and mobile 35/90dvh sheet, honor safe-area and reduced-motion behavior, and prevent horizontal overflow.
+- Validation: focused Rust gates **134/134 passed**, focused UI Vitest **122/122 passed** across 13 files, and real-server Chromium browser **4/4 passed** against the actual no-auth backend, covering workflow state/actions, responsive keyboard/focus behavior, unavailable fallback, and terminal continuity. [Phase 07 plan](../plans/260901-0919-workflow-tracking-notes/phase-07-verification-rollout-observability-and-docs.md).
+- **Workflow note and summary multiline Textarea improvement.** Added the shared `Textarea` atom primitive (`packages/ui/src/components/ui/Textarea.tsx`) matching the `glass-input` design tokens and focus ring styling. Updated `WorkflowSelectedItemBar` to use `Textarea` for note drafting with multiline input, autoFocus, explicit `aria-label="Note content"`, Ctrl+Enter / Meta+Enter submission, and Escape cancellation. Updated `WorkflowQuickCapture` summary region to use `Textarea` for multiline item summary descriptions.
+
+
 # 2026-08-31
 
 - **Preserve Explorer Tree Expansion & Editor View Scroll Position (Phases 01–03).**

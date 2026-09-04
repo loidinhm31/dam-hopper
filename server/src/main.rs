@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -248,6 +249,10 @@ async fn main() -> anyhow::Result<()> {
         load_or_create_server_setup().expect("Failed to load or create OPAQUE server setup");
 
     // AppState::new() performs production safety validation for no-auth mode
+    let workflow_store = session_store
+        .as_ref()
+        .map(|store| dam_hopper_server::workflow::WorkflowStore::new(store.connection()));
+    // AppState::new() performs production safety validation for no-auth mode
     let state = AppState::new(
         workspace_dir.clone(),
         config,
@@ -264,7 +269,39 @@ async fn main() -> anyhow::Result<()> {
         opaque_server_setup,
         diagnostics,
         telemetry_runtime.clone(),
-    )?;
+    )?.with_workflow_store(workflow_store.clone());
+    if let Some(workflow_store_for_obs) = workflow_store.clone() {
+        let (recorder, _dropped, _worker_handle) =
+            dam_hopper_server::workflow::observation::start_observation_worker_with_diagnostics(
+                workflow_store_for_obs,
+                state.diagnostics.clone(),
+            );
+        state.pty_manager.set_workflow_recorder(Arc::new(recorder));
+    }
+    if let Some(workflow) = state.workflow.clone() {
+        let startup = workflow.clone();
+        tokio::spawn(async move {
+            if let Err(error) = startup.purge_expired().await {
+                tracing::warn!(
+                    outcome = error.api_code(),
+                    "Workflow retention purge failed"
+                );
+            }
+        });
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(86_400));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if let Err(error) = workflow.purge_expired().await {
+                    tracing::warn!(
+                        outcome = error.api_code(),
+                        "Workflow retention purge failed"
+                    );
+                }
+            }
+        });
+    }
 
     state.pty_manager.set_target_context(PtyTargetContext::new(
         state.fs.clone(),
@@ -289,6 +326,23 @@ async fn main() -> anyhow::Result<()> {
                     .await;
                 if seeded > 0 {
                     tracing::info!(seeded, "Seeded persisted port candidates");
+                }
+                if let Some(workflow) = &state.workflow {
+                    match workflow.reconcile_terminal_links(live_sessions.clone()).await {
+                        Ok((attached, detached)) => {
+                            tracing::info!(
+                                attached = attached.min(1_000),
+                                detached = detached.min(1_000),
+                                "Reconciled workflow terminal links"
+                            );
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                outcome = error.api_code(),
+                                "Failed to reconcile workflow terminal links"
+                            );
+                        }
+                    }
                 }
             }
             Err(e) => {

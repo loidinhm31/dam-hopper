@@ -810,3 +810,302 @@ describe("WsTransport diagnostics", () => {
     transport.destroy();
   });
 });
+
+describe("WsTransport workflow operations", () => {
+  it("maps workflow:overview to GET /api/workflow/overview", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Response(
+          JSON.stringify({ workspace: { id: "ws1", name: "ws" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("workflow:overview");
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/workflow/overview",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET" });
+    transport.destroy();
+  });
+
+  it("maps workflow:events with and without query params", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Response(JSON.stringify({ events: [], nextCursor: null }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("workflow:events");
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/workflow/events",
+    );
+
+    await transport.invoke("workflow:events", {
+      cursor: "cur/sor",
+      limit: 25,
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://localhost:4800/api/workflow/events?cursor=cur%2Fsor&limit=25",
+    );
+    transport.destroy();
+  });
+
+  it("maps workflow item operations (create, patch, delete)", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Response(
+          JSON.stringify({
+            resource: {},
+            replayed: false,
+            eventId: "e1",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    // Create
+    await transport.invoke("workflow:createItem", {
+      requestId: "r1",
+      target: { project: "p1" },
+      kind: "task",
+      title: "Task 1",
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/workflow/items",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        requestId: "r1",
+        target: { project: "p1" },
+        kind: "task",
+        title: "Task 1",
+      }),
+    });
+
+    // Patch
+    await transport.invoke("workflow:patchItem", {
+      id: "item/1",
+      requestId: "r2",
+      updatedAt: "2026-09-02T10:00:00.000Z",
+      title: "Updated",
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://localhost:4800/api/workflow/items/item%2F1",
+    );
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "PATCH",
+      body: JSON.stringify({
+        requestId: "r2",
+        updatedAt: "2026-09-02T10:00:00.000Z",
+        title: "Updated",
+      }),
+    });
+
+    // Delete
+    await transport.invoke("workflow:deleteItem", {
+      id: "item/1",
+      requestId: "r3",
+      updatedAt: "2026-09-02T10:00:00.000Z",
+    });
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      "http://localhost:4800/api/workflow/items/item%2F1",
+    );
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({
+      method: "DELETE",
+      body: JSON.stringify({
+        requestId: "r3",
+        updatedAt: "2026-09-02T10:00:00.000Z",
+      }),
+    });
+    transport.destroy();
+  });
+
+  it("maps workflow session operations (create, end, abandon, link, unlink)", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Response(
+          JSON.stringify({
+            resource: {},
+            replayed: false,
+            eventId: "e1",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    // Create session
+    await transport.invoke("workflow:createSession", {
+      requestId: "r1",
+      target: { project: "p1" },
+      startedAt: "2026-09-02T10:00:00.000Z",
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/workflow/sessions",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
+
+    // End session
+    await transport.invoke("workflow:endSession", {
+      id: "sess/1",
+      requestId: "r2",
+      endedAt: "2026-09-02T11:00:00.000Z",
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://localhost:4800/api/workflow/sessions/sess%2F1/end",
+    );
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        requestId: "r2",
+        endedAt: "2026-09-02T11:00:00.000Z",
+      }),
+    });
+
+    // Abandon session
+    await transport.invoke("workflow:abandonSession", {
+      id: "sess/1",
+      requestId: "r3",
+    });
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      "http://localhost:4800/api/workflow/sessions/sess%2F1/abandon",
+    );
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ requestId: "r3" }),
+    });
+
+    // Link resource
+    await transport.invoke("workflow:linkResource", {
+      sessionId: "sess/1",
+      requestId: "r4",
+      resourceType: "terminal",
+      externalId: "term-1",
+    });
+    expect(fetchMock.mock.calls[3][0]).toBe(
+      "http://localhost:4800/api/workflow/sessions/sess%2F1/links",
+    );
+    expect(fetchMock.mock.calls[3][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        requestId: "r4",
+        resourceType: "terminal",
+        externalId: "term-1",
+      }),
+    });
+
+    // Unlink resource
+    await transport.invoke("workflow:unlinkResource", {
+      sessionId: "sess/1",
+      requestId: "r5",
+      updatedAt: "2026-09-02T10:00:00.000Z",
+      resourceType: "terminal",
+      externalId: "term-1",
+    });
+    expect(fetchMock.mock.calls[4][0]).toBe(
+      "http://localhost:4800/api/workflow/sessions/sess%2F1/links",
+    );
+    expect(fetchMock.mock.calls[4][1]).toMatchObject({
+      method: "DELETE",
+      body: JSON.stringify({
+        requestId: "r5",
+        updatedAt: "2026-09-02T10:00:00.000Z",
+        resourceType: "terminal",
+        externalId: "term-1",
+      }),
+    });
+    transport.destroy();
+  });
+
+  it("maps workflow notes and purge operations", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Response(
+          JSON.stringify({
+            resource: {},
+            replayed: false,
+            eventId: "e1",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    // Create note
+    await transport.invoke("workflow:createNote", {
+      requestId: "r1",
+      body: "My note",
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/workflow/notes",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ requestId: "r1", body: "My note" }),
+    });
+
+    // Delete note
+    await transport.invoke("workflow:deleteNote", {
+      id: "note/1",
+      requestId: "r2",
+      updatedAt: "2026-09-02T10:00:00.000Z",
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://localhost:4800/api/workflow/notes/note%2F1",
+    );
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "DELETE",
+      body: JSON.stringify({
+        requestId: "r2",
+        updatedAt: "2026-09-02T10:00:00.000Z",
+      }),
+    });
+
+    // Purge history
+    await transport.invoke("workflow:purgeHistory", {
+      requestId: "r3",
+      before: "2026-09-02T10:00:00.000Z",
+    });
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      "http://localhost:4800/api/workflow/history",
+    );
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({
+      method: "DELETE",
+      body: JSON.stringify({
+        requestId: "r3",
+        before: "2026-09-02T10:00:00.000Z",
+      }),
+    });
+    transport.destroy();
+  });
+});

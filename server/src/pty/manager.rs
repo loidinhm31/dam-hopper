@@ -555,6 +555,8 @@ pub struct PtySessionManager {
     /// Backend diagnostics store — set after construction via `set_diagnostics`.
     /// Reader threads and lifecycle methods record terminal events here (Phase 03).
     diagnostics: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
+    /// Workflow observation recorder — set after construction via `set_workflow_recorder`.
+    workflow_recorder: Arc<std::sync::RwLock<Arc<dyn crate::workflow::WorkflowObservationRecorder>>>,
     /// Target validation and lifecycle guard shared by automatic respawns.
     target_context: Arc<std::sync::RwLock<Option<PtyTargetContext>>>,
     /// Number of reader threads that can still enqueue final persistence
@@ -906,6 +908,9 @@ impl PtySessionManager {
             port_forward_manager: Arc::new(std::sync::RwLock::new(None)),
             diagnostics: Arc::new(std::sync::RwLock::new(None)),
             target_context: Arc::new(std::sync::RwLock::new(None)),
+            workflow_recorder: Arc::new(std::sync::RwLock::new(Arc::new(
+                crate::workflow::NoopWorkflowObservationRecorder,
+            ))),
             active_reader_count: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             respawn_test_hook: Arc::new(RespawnTestHook::new()),
@@ -922,6 +927,7 @@ impl PtySessionManager {
         let diag_cell = Arc::clone(&manager.diagnostics);
         let target_context_cell = Arc::clone(&manager.target_context);
         let active_reader_count = Arc::clone(&manager.active_reader_count);
+        let workflow_recorder_cell = Arc::clone(&manager.workflow_recorder);
         let lifecycle_gate = Arc::clone(&manager.lifecycle_gate);
         let persistence_gate = Arc::clone(&manager.persistence_gate);
         let readers = Arc::clone(&manager.readers);
@@ -940,6 +946,7 @@ impl PtySessionManager {
             diag_cell,
             target_context_cell,
             active_reader_count,
+            workflow_recorder_cell,
             lifecycle_gate,
             persistence_gate,
             readers,
@@ -989,6 +996,17 @@ impl PtySessionManager {
     #[cfg(test)]
     pub(crate) fn test_is_disposing(&self) -> bool {
         self.lifecycle_gate.is_disposing()
+    }
+
+    /// Wire the workflow observation recorder after construction (Phase 03).
+    pub fn set_workflow_recorder(&self, recorder: Arc<dyn crate::workflow::WorkflowObservationRecorder>) {
+        let mut cell = self.workflow_recorder.write().unwrap();
+        *cell = recorder;
+    }
+
+    fn record_workflow_obs(&self, obs: crate::workflow::WorkflowObservation) {
+        let recorder = self.workflow_recorder.read().unwrap().clone();
+        recorder.record(obs);
     }
 
     /// Wire the backend diagnostics store after construction (Phase 03).
@@ -1314,6 +1332,7 @@ impl PtySessionManager {
         let rt_handle = tokio::runtime::Handle::try_current().ok();
         let diag_store = self.diagnostics.read().unwrap().clone();
         self.active_reader_count.fetch_add(1, Ordering::AcqRel);
+        let workflow_recorder = self.workflow_recorder.read().unwrap().clone();
         let active_reader_count = Arc::clone(&self.active_reader_count);
         let reader_handle = std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
@@ -1339,6 +1358,7 @@ impl PtySessionManager {
                     lifecycle,
                     published_editing,
                     active_reader_count,
+                    workflow_recorder,
                 );
             })
             .map_err(|e| {
@@ -1366,6 +1386,13 @@ impl PtySessionManager {
             .finish_replacement(&opts.id, incarnation);
 
         self.sink.send_terminal_changed();
+        self.record_workflow_obs(crate::workflow::WorkflowObservation::TerminalCreated {
+            session_id: meta.id.clone(),
+            incarnation: meta.incarnation,
+            project: meta.project.clone(),
+            worktree_path: meta.worktree_path.as_ref().map(PathBuf::from),
+            observed_at: crate::workflow::now_ms(),
+        });
         info!(id = %opts.id, "PTY session created");
 
         Ok(meta)
@@ -1681,6 +1708,11 @@ impl PtySessionManager {
             ]),
         );
         self.sink.send_terminal_changed();
+        self.record_workflow_obs(crate::workflow::WorkflowObservation::TerminalRemoved {
+            session_id: id.to_string(),
+            incarnation: removed_incarnation,
+            observed_at: crate::workflow::now_ms(),
+        });
         Ok(removed_incarnation)
     }
 
@@ -2332,6 +2364,7 @@ fn reader_thread(
     lifecycle: Option<Arc<Mutex<ShellLifecycle>>>,
     published_editing: Arc<std::sync::atomic::AtomicBool>,
     active_reader_count: Arc<AtomicUsize>,
+    workflow_recorder: Arc<dyn crate::workflow::WorkflowObservationRecorder>,
 ) {
     let _reader_guard = ReaderGuard(active_reader_count);
     // Local helper to record a terminal lifecycle event from the reader thread.
@@ -2555,6 +2588,24 @@ fn reader_thread(
             tombstone.restart_in_ms = restart_in_ms;
             inner_guard.dead.insert(session_id.clone(), tombstone);
 
+            if will_restart {
+                workflow_recorder.record(crate::workflow::WorkflowObservation::TerminalExitPendingRestart {
+                    session_id: session_id.clone(),
+                    incarnation,
+                    exit_code: Some(exit_code),
+                    restart_count,
+                    restart_in_ms,
+                    observed_at: crate::workflow::now_ms(),
+                });
+            } else {
+                workflow_recorder.record(crate::workflow::WorkflowObservation::TerminalFinalExit {
+                    session_id: session_id.clone(),
+                    incarnation,
+                    exit_code: Some(exit_code),
+                    restart_count,
+                    observed_at: crate::workflow::now_ms(),
+                });
+            }
             // Record exit + restart decision for diagnostics (Phase 03).
             record_diag(
                 "terminal.exit",
@@ -2772,6 +2823,7 @@ async fn supervisor_loop(
     diag_cell: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
     target_context_cell: Arc<std::sync::RwLock<Option<PtyTargetContext>>>,
     active_reader_count: Arc<AtomicUsize>,
+    workflow_recorder_cell: Arc<std::sync::RwLock<Arc<dyn crate::workflow::WorkflowObservationRecorder>>>,
     lifecycle_gate: Arc<LifecycleGate>,
     persistence_gate: Arc<Mutex<()>>,
     readers: Arc<ReaderRegistry>,
@@ -2784,6 +2836,8 @@ async fn supervisor_loop(
         let restart_policy = format!("{:?}", cmd.respawn_opts.restart_policy);
         let project = cmd.respawn_opts.project.clone();
         let target_path = cmd.respawn_opts.worktree_path.clone();
+        let prev_exit_code = cmd._prev_exit_code;
+        let restart_count = cmd.restart_count;
 
         // Wait for backoff delay.
         if cmd.delay_ms > 0 {
@@ -2814,6 +2868,7 @@ async fn supervisor_loop(
         let diag_store = diag_cell.read().unwrap().clone();
         let target_context = target_context_cell.read().unwrap().clone();
         let mut cmd = cmd;
+        let workflow_recorder = workflow_recorder_cell.read().unwrap().clone();
         let source_incarnation = cmd.incarnation;
         let mut target_unavailable = false;
         let respawn_result = if let Some(context) = target_context {
@@ -2856,6 +2911,7 @@ async fn supervisor_loop(
                         Arc::clone(&lifecycle_gate),
                         Arc::clone(&persistence_gate),
                         Arc::clone(&readers),
+                        workflow_recorder.clone(),
                         #[cfg(test)]
                         Arc::clone(&respawn_test_hook),
                         #[cfg(test)]
@@ -2887,6 +2943,7 @@ async fn supervisor_loop(
                 Arc::clone(&lifecycle_gate),
                 Arc::clone(&persistence_gate),
                 Arc::clone(&readers),
+                workflow_recorder.clone(),
                 #[cfg(test)]
                 Arc::clone(&respawn_test_hook),
                 #[cfg(test)]
@@ -2896,6 +2953,14 @@ async fn supervisor_loop(
         };
         if let Err(e) = respawn_result {
             warn!(id = %session_id, error = %e, "Respawn failed");
+            let recorder = workflow_recorder.clone();
+            recorder.record(crate::workflow::WorkflowObservation::TerminalFinalExit {
+                session_id: session_id.clone(),
+                incarnation: source_incarnation,
+                exit_code: Some(prev_exit_code),
+                restart_count,
+                observed_at: crate::workflow::now_ms(),
+            });
             let failure_state = {
                 let _persistence_guard = persistence_gate.lock().unwrap();
                 finish_respawn_source_failure(
@@ -2943,6 +3008,16 @@ async fn supervisor_loop(
                 }
                 store.record_terminal_event("pty", "terminal.respawn_failed", fields);
             }
+        } else if let Ok(Some(ref meta)) = respawn_result {
+            let recorder = workflow_recorder.clone();
+            recorder.record(crate::workflow::WorkflowObservation::TerminalRestarted {
+                session_id: meta.id.clone(),
+                incarnation: meta.incarnation,
+                restart_count: meta.restart_count,
+                previous_exit_code: Some(prev_exit_code),
+                observed_at: crate::workflow::now_ms(),
+            });
+            sink.send_terminal_changed();
         } else {
             sink.send_terminal_changed();
         }
@@ -3492,9 +3567,10 @@ async fn respawn_internal(
     lifecycle_gate: Arc<LifecycleGate>,
     persistence_gate: Arc<Mutex<()>>,
     readers: Arc<ReaderRegistry>,
+    workflow_recorder: Arc<dyn crate::workflow::WorkflowObservationRecorder>,
     #[cfg(test)] respawn_test_hook: Arc<RespawnTestHook>,
     #[cfg(test)] spawn_test_hook: Arc<SpawnTestHook>,
-) -> Result<(), AppError> {
+) -> Result<Option<SessionMeta>, AppError> {
     let source_incarnation = cmd.incarnation;
 
     // Reserve before slow PTY setup so a newer request invalidates this one.
@@ -3533,7 +3609,7 @@ async fn respawn_internal(
             .lock()
             .unwrap()
             .finish_replacement(session_id, replacement_incarnation);
-        return Ok(());
+        return Ok(None);
     };
     // Check before opening a PTY, then repeat the check immediately before
     // publishing the new session. dispose() can race with either phase.
@@ -3550,7 +3626,7 @@ async fn respawn_internal(
             .lock()
             .unwrap()
             .finish_replacement(session_id, replacement_incarnation);
-        return Ok(());
+        return Ok(None);
     }
 
     #[cfg(test)]
@@ -3721,7 +3797,7 @@ async fn respawn_internal(
                 .finish_replacement(session_id, incarnation);
             session.terminate();
             info!(id = %session_id, "Respawn cancelled before publish");
-            return Ok(());
+            return Ok(None);
         }
         if let Some(source) = inner_guard.dead.get(session_id) {
             if source.incarnation == source_incarnation {
@@ -3803,6 +3879,7 @@ async fn respawn_internal(
                 lifecycle,
                 published_editing,
                 active_reader_count_for_reader,
+                workflow_recorder,
             );
         })
         .map_err(|error| {
@@ -3832,7 +3909,7 @@ async fn respawn_internal(
         .finish_replacement(session_id, incarnation);
 
     info!(id = %session_id, restart_count = meta.restart_count, "Session restarted");
-    Ok(())
+    Ok(Some(meta))
 }
 
 fn is_eof_error(e: &std::io::Error) -> bool {

@@ -9,6 +9,30 @@ import type {
 import type { CommandHistoryEntry } from "@/lib/command-history.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 export { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
+import type {
+  AbandonSessionRequest,
+  CreateItemRequest,
+  CreateNoteRequest,
+  CreateSessionRequest,
+  DeleteItemRequest,
+  DeleteNoteRequest,
+  EndSessionRequest,
+  EventsDto,
+  EventsQuery,
+  ItemDto,
+  LinkDto,
+  LinkResourceRequest,
+  MutationDto,
+  NoteDto,
+  OverviewDto,
+  PatchItemRequest,
+  PurgeDto,
+  PurgeHistoryRequest,
+  SessionDto,
+  TombstoneDto,
+  UnlinkResourceRequest,
+} from "./workflow-types.js";
+export * from "./workflow-types.js";
 
 export class ApiRequestError extends Error {
   constructor(
@@ -1723,5 +1747,62 @@ export const api = {
         );
       return upload.call(getTransport(), artifactId, png);
     },
+  },
+  workflow: {
+    overview: () => getTransport().invoke<OverviewDto>("workflow:overview"),
+    events: (query: EventsQuery = {}) =>
+      getTransport().invoke<EventsDto>("workflow:events", query),
+    createItem: (req: CreateItemRequest) =>
+      getTransport().invoke<MutationDto<ItemDto>>("workflow:createItem", req),
+    patchItem: (id: string, req: PatchItemRequest) =>
+      getTransport().invoke<MutationDto<ItemDto>>("workflow:patchItem", {
+        id,
+        ...req,
+      }),
+    deleteItem: (id: string, req: DeleteItemRequest) =>
+      getTransport().invoke<MutationDto<TombstoneDto>>("workflow:deleteItem", {
+        id,
+        ...req,
+      }),
+    createSession: (req: CreateSessionRequest) =>
+      getTransport().invoke<MutationDto<SessionDto>>(
+        "workflow:createSession",
+        req,
+      ),
+    endSession: (id: string, req: EndSessionRequest) =>
+      getTransport().invoke<MutationDto<SessionDto>>("workflow:endSession", {
+        id,
+        ...req,
+      }),
+    abandonSession: (id: string, req: AbandonSessionRequest) =>
+      getTransport().invoke<MutationDto<SessionDto>>(
+        "workflow:abandonSession",
+        {
+          id,
+          ...req,
+        },
+      ),
+    linkResource: (sessionId: string, req: LinkResourceRequest) =>
+      getTransport().invoke<MutationDto<LinkDto>>("workflow:linkResource", {
+        sessionId,
+        ...req,
+      }),
+    unlinkResource: (sessionId: string, req: UnlinkResourceRequest) =>
+      getTransport().invoke<MutationDto<TombstoneDto>>(
+        "workflow:unlinkResource",
+        {
+          sessionId,
+          ...req,
+        },
+      ),
+    createNote: (req: CreateNoteRequest) =>
+      getTransport().invoke<MutationDto<NoteDto>>("workflow:createNote", req),
+    deleteNote: (id: string, req: DeleteNoteRequest) =>
+      getTransport().invoke<MutationDto<TombstoneDto>>("workflow:deleteNote", {
+        id,
+        ...req,
+      }),
+    purgeHistory: (req: PurgeHistoryRequest) =>
+      getTransport().invoke<PurgeDto>("workflow:purgeHistory", req),
   },
 };
