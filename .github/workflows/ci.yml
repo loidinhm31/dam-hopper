@@ -29,10 +29,27 @@ jobs:
   build-linux:
     name: Build (linux-x86_64)
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, web]
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download web build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -44,10 +61,10 @@ jobs:
 
       - name: Validate release scripts and version alignment
         run: |
-          bash -n deploy/release/build-release-archive.sh deploy/release/dam-hopper-install.sh
-          node -c deploy/release/generate-release-manifest.mjs deploy/release/check-release-assets.mjs deploy/release/check-version-alignment.mjs
+          bash -n deploy/release/build-release-archive.sh deploy/release/dam-hopper-install.sh tests/deploy/*.sh
+          node -c deploy/release/generate-release-manifest.mjs deploy/release/check-release-assets.mjs deploy/release/check-version-alignment.mjs tests/deploy/linux-release-evidence-check.mjs
           node deploy/release/check-version-alignment.mjs --bin server/target/release/dam-hopper --bin server/target/release/dam-hopper-server --bin server/target/release/dam-hopper-web
-
+          pnpm test:deploy
       - uses: actions/upload-artifact@v4
         with:
           name: dam-hopper-linux-x86_64-binaries

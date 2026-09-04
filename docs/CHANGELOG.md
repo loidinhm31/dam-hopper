@@ -1,5 +1,7 @@
 # 2026-09-04
 
+- **Linux Release Installer Architecture — Phase 08: Behavioral, Security, and Failure-Injection Validation [COMPLETED 2026-09-04 13:30:00 +07:00].** Delivered comprehensive automated validation and failure injection: deterministic contract coverage (1,018 Rust tests, 1,447 UI tests), deterministic package-twice archive byte matching, unprivileged dual-process rootless smoke (real web host + API server on dynamic ports with health and graceful SIGTERM), modular deployment test journeys across 6 scripts (clean-install 3 roles, upgrade-rollback 4 steps, crash recovery across 3 boundaries, unit sandboxing/secret exclusion, web contract, and Fedora 44 format-2 migration rehearsal). Released GitHub Actions Fedora 44 runtime evidence workflow and commit-bound evidence schema check.
+- Validation: all 8 verification commands passed; terminal tester report verified zero failures; code review approved 9.8/10 with all findings remediated. Parent plan progress: **Phases 01–08 complete (94%); Phase 09 pending**. [See Phase 08 plan](../plans/260903-0919-linux-release-installer-architecture/phase-08-behavioral-security-failure-validation.md).
 - **Linux Release Installer Architecture — Phase 06: Central GitHub Publisher and Bootstrap [COMPLETED 2026-09-04 01:05:00 +07:00].** Stable `vX.Y.Z` publishing is isolated from desktop `desktop-v*` releases. The publisher validates version alignment, builds Rust/web inputs, compares two deterministic archives, emits external Manifest v1 plus SPDX 2.3 SBOM assets, applies the exact four-asset gate, attests all four subjects, and publishes only after the `linux-release` environment gate. `dam-hopper-install.sh` downloads as the caller, verifies archive integrity with optional manifest/archive attestations, extracts only the manager, and ends at `PENDING`; activation remains `sudo dam-hopper start`. See [Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md).
 - Validation: publisher contract tests **24/24**, `pnpm release:verify`, shell/Node syntax checks, and vendored all-target `cargo check` passed; Cycle 2 review approved **9.5/10** with no blocking findings. Fedora-host ABI evidence and mutable toolchain/cache action pins remain later release gates.
 - **Linux Release Installer Architecture — Phase 07: Format-2 Migration and
@@ -14,7 +16,6 @@
   the Fedora rehearsal passed at fixture level; Cycle 2 review approved **9.0/10**
   with no blocking findings. No production-host deployment claim is implied.
   [Phase 07 plan](../plans/260903-0919-linux-release-installer-architecture/phase-07-format-2-migration-runner-retirement.md).
-
 
 # 2026-09-03
 
@@ -33,7 +34,6 @@
   Cycle 2 review approved **9.8/10** with no blocking findings. Focused
   state-machine, health, and unit-policy evidence covers the durable lifecycle;
   full host-specific rollback rehearsal remains a later deployment gate.
-
 
 # 2026-08-31
 
@@ -210,7 +210,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   through a bounded non-blocking telemetry sink. The default path is no-op and
   non-durable; `ChannelTelemetrySink` is reserved as the Phase 03 durable-worker
   boundary.
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+  and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
