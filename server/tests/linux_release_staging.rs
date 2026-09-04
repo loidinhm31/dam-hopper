@@ -23,7 +23,7 @@ fn test_staging_fresh_install_requires_role() {
     let bundle_dir = tempdir().unwrap();
     prepare_bundle(bundle_dir.path());
 
-    let res = stage_release_bundle(&layout, bundle_dir.path(), None, &[], false, false);
+    let res = stage_release_bundle(&layout, bundle_dir.path(), None, &[], false, false, false);
     assert!(matches!(res, Err(ReleaseError::MissingRole)));
 }
 
@@ -40,6 +40,7 @@ fn test_staging_fresh_install_success() {
         bundle_dir.path(),
         Some(TargetRole::Server),
         &origins,
+        false,
         false,
         false,
     )
@@ -65,8 +66,7 @@ fn test_staging_fresh_install_success() {
     assert_eq!(loaded_pending, pending);
 
     // Verify candidate units are isolated to this transaction.
-    let pending_units =
-        std::path::PathBuf::from(pending.pending_units_path.as_deref().unwrap());
+    let pending_units = std::path::PathBuf::from(pending.pending_units_path.as_deref().unwrap());
     assert!(pending_units.join("dam-hopper-api.service").exists());
     assert!(!pending_units.join("dam-hopper-web.service").exists());
     // Verify host.toml was saved
@@ -84,12 +84,12 @@ fn test_staging_upgrade_role_conflict() {
     let bundle_dir = tempdir().unwrap();
     prepare_bundle(bundle_dir.path());
 
-    // First install as server
     stage_release_bundle(
         &layout,
         bundle_dir.path(),
         Some(TargetRole::Server),
         &[],
+        false,
         false,
         false,
     )
@@ -101,6 +101,7 @@ fn test_staging_upgrade_role_conflict() {
         bundle_dir.path(),
         Some(TargetRole::Web),
         &[],
+        false,
         false,
         false,
     );
@@ -118,6 +119,7 @@ fn test_staging_upgrade_role_conflict() {
         &[],
         false,
         true,
+        false,
     );
     assert!(res.is_ok());
     let host_config = load_host_config(&layout.host_config_path())
@@ -158,6 +160,66 @@ fn test_staging_bundle_symlink_rejection() {
         &[],
         false,
         false,
+        false,
     );
     assert!(matches!(res, Err(ReleaseError::InvalidBundle { .. })));
+}
+
+#[test]
+fn test_staging_reinstall_overwrites_active_destination() {
+    let root = tempdir().unwrap();
+    let layout = Layout::with_root(root.path());
+    let bundle_dir = tempdir().unwrap();
+    let (_manifest, _) = prepare_bundle(bundle_dir.path());
+
+    let pending = stage_release_bundle(
+        &layout,
+        bundle_dir.path(),
+        Some(TargetRole::Server),
+        &[],
+        false,
+        false,
+        false,
+    )
+    .unwrap();
+
+    let mut state = load_or_init_manager_state(&layout.manager_state_path()).unwrap();
+    state.active = Some(ReleaseRecord {
+        tag: pending.tag.clone(),
+        version: "0.2.0".into(),
+        role: TargetRole::Server,
+        release_path: pending.release_path.clone(),
+        manifest_sha256: pending.manifest_sha256.clone(),
+        archive_sha256: pending.archive_sha256.clone(),
+        installed_at: pending.staged_at.clone(),
+        committed_at: "now".into(),
+        api_unit_sha256: None,
+        web_unit_sha256: None,
+        host_config_sha256: None,
+    });
+    save_manager_state(&layout.manager_state_path(), &mut state).unwrap();
+
+    let res_no_reinstall = stage_release_bundle(
+        &layout,
+        bundle_dir.path(),
+        Some(TargetRole::Server),
+        &[],
+        false,
+        false,
+        false,
+    );
+    assert!(
+        matches!(res_no_reinstall, Err(ReleaseError::InvalidBundle { ref reason, .. }) if reason.contains("cannot overwrite"))
+    );
+
+    let res_reinstall = stage_release_bundle(
+        &layout,
+        bundle_dir.path(),
+        Some(TargetRole::Server),
+        &[],
+        false,
+        false,
+        true,
+    );
+    assert!(res_reinstall.is_ok());
 }

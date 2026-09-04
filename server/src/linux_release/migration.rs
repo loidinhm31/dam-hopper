@@ -38,9 +38,10 @@ pub fn verify_same_device(path_a: &Path, path_b: &Path) -> Result<(), ReleaseErr
 
 /// Create side-staging migration workspace beside the canonical root on the same device.
 pub fn create_migration_workspace(layout: &Layout, tx_id: &str) -> Result<PathBuf, ReleaseError> {
-    let parent = layout.opt_dir.parent().ok_or_else(|| ReleaseError::Config(
-        "canonical opt_dir has no parent directory".into(),
-    ))?;
+    let parent = layout
+        .opt_dir
+        .parent()
+        .ok_or_else(|| ReleaseError::Config("canonical opt_dir has no parent directory".into()))?;
     verify_same_device(&layout.opt_dir, parent)?;
 
     let migration_root = parent.join(format!(".dam-hopper-migration.{tx_id}"));
@@ -79,7 +80,11 @@ pub fn create_migration_workspace(layout: &Layout, tx_id: &str) -> Result<PathBu
         "role": "migration_root",
         "stagedAt": Utc::now().to_rfc3339(),
     });
-    atomic_write_file(&marker_path, marker_json.to_string().as_bytes(), Some(0o600))?;
+    atomic_write_file(
+        &marker_path,
+        marker_json.to_string().as_bytes(),
+        Some(0o600),
+    )?;
 
     Ok(migration_root)
 }
@@ -97,9 +102,15 @@ pub fn stage_migration_candidate(
     let api_version = super::legacy_format2::verify_format2_live_preflight(layout)?;
     let manifest_info = super::legacy_format2::inspect_format2_root(&layout.opt_dir, false)?;
     let unit_path = layout.systemd_unit_dir.join(LEGACY_FORMAT2_UNIT);
-    let unit_content =
-        super::legacy_format2::validate_format2_unit(&unit_path, &manifest_info.unit_sha256, false)?;
-    let wants_link = layout.systemd_unit_dir.join("multi-user.target.wants").join(LEGACY_FORMAT2_UNIT);
+    let unit_content = super::legacy_format2::validate_format2_unit(
+        &unit_path,
+        &manifest_info.unit_sha256,
+        false,
+    )?;
+    let wants_link = layout
+        .systemd_unit_dir
+        .join("multi-user.target.wants")
+        .join(LEGACY_FORMAT2_UNIT);
     let wants_meta = fs::symlink_metadata(&wants_link).map_err(|e| ReleaseError::Io {
         action: "stat format-2 wants link",
         details: e.to_string(),
@@ -113,7 +124,10 @@ pub fn stage_migration_candidate(
         action: "read format-2 wants link target",
         details: e.to_string(),
     })?;
-    if !wants_target.to_string_lossy().ends_with(LEGACY_FORMAT2_UNIT) {
+    if !wants_target
+        .to_string_lossy()
+        .ends_with(LEGACY_FORMAT2_UNIT)
+    {
         return Err(ReleaseError::LegacyMigrationRejected {
             reason: format!("format-2 wants link does not target {LEGACY_FORMAT2_UNIT}"),
         });
@@ -169,6 +183,7 @@ pub fn stage_migration_candidate(
         manifest_bytes,
         manifest,
         role,
+        false,
     ) {
         Ok(target_dir) => target_dir,
         Err(error) => {
@@ -495,12 +510,12 @@ fn cleanup_migration_workspace(path: &Path) -> Result<(), ReleaseError> {
 
 fn cleanup_dir_if_present(path: &Path, action: &'static str) -> Result<(), ReleaseError> {
     match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_dir() => fs::remove_dir_all(path).map_err(|e| {
-            ReleaseError::Io {
+        Ok(meta) if meta.file_type().is_dir() => {
+            fs::remove_dir_all(path).map_err(|e| ReleaseError::Io {
                 action,
                 details: format!("{}: {e}", path.display()),
-            }
-        }),
+            })
+        }
         Ok(_) => Err(ReleaseError::LegacyMigrationRejected {
             reason: format!("cleanup path is not a directory: {}", path.display()),
         }),
@@ -514,12 +529,12 @@ fn cleanup_dir_if_present(path: &Path, action: &'static str) -> Result<(), Relea
 
 fn cleanup_file_if_present(path: &Path, action: &'static str) -> Result<(), ReleaseError> {
     match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_file() => fs::remove_file(path).map_err(|e| {
-            ReleaseError::Io {
+        Ok(meta) if meta.file_type().is_file() => {
+            fs::remove_file(path).map_err(|e| ReleaseError::Io {
                 action,
                 details: format!("{}: {e}", path.display()),
-            }
-        }),
+            })
+        }
         Ok(_) => Err(ReleaseError::LegacyMigrationRejected {
             reason: format!("cleanup path is not a regular file: {}", path.display()),
         }),

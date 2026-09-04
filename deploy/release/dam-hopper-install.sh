@@ -19,6 +19,7 @@ ROLE=""
 ALLOW_ORIGINS=()
 VERIFY_ATTESTATION=0
 SERVICE_USER=""
+REINSTALL=0
 
 usage() {
     cat <<EOF
@@ -28,6 +29,7 @@ Options:
   --version <tag>         Exact release version tag to install (e.g. v0.1.0)
   --latest                Resolve and install the latest stable release
   --role <role>           Target host role: 'server', 'web', or 'both' [required]
+  --reinstall             Stop running services and overwrite existing installation for this version
   --allow-web-origin <url> Allowed web origin for CORS (may be specified multiple times)
   --service-user <user>   Dedicated non-root user to run the API service
   --verify-attestation    Verify GitHub artifact attestations using the 'gh' CLI
@@ -49,6 +51,10 @@ while [[ $# -gt 0 ]]; do
         --role)
             ROLE="$2"
             shift 2
+            ;;
+        --reinstall)
+            REINSTALL=1
+            shift
             ;;
         --allow-web-origin)
             ALLOW_ORIGINS+=("$2")
@@ -250,6 +256,14 @@ for origin in "${ALLOW_ORIGINS[@]}"; do
 done
 if [[ -n "${SERVICE_USER}" ]]; then
     INSTALL_CMD+=("--service-user" "${SERVICE_USER}")
+fi
+if [[ ${REINSTALL} -eq 1 ]]; then
+    INSTALL_CMD+=("--reinstall")
+    echo "Stopping existing services and clearing old release directory for clean reinstall..."
+    systemctl stop dam-hopper-api dam-hopper-web dam-hopper-recovery 2>/dev/null || sudo systemctl stop dam-hopper-api dam-hopper-web dam-hopper-recovery 2>/dev/null || true
+    if [[ -d "/opt/dam-hopper/releases/${TAG}/${ROLE}" ]]; then
+        rm -rf "/opt/dam-hopper/releases/${TAG}/${ROLE}" 2>/dev/null || sudo rm -rf "/opt/dam-hopper/releases/${TAG}/${ROLE}" 2>/dev/null || true
+    fi
 fi
 echo ""
 echo "============================================================"

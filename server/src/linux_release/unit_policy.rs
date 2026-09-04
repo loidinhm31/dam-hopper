@@ -39,9 +39,10 @@ pub fn validate_api_unit_policy(
 
     let env_entries = unit.get_all_values("Service", "Environment");
     let exp_home = format!("HOME={}", ctx.api_home);
+    let exp_xdg = format!("XDG_CONFIG_HOME={}/.config", ctx.api_home);
     let required_envs = [
         exp_home.as_str(),
-        "XDG_CONFIG_HOME=/etc/dam-hopper",
+        exp_xdg.as_str(),
         "RUST_LOG=info",
         "RUST_ENV=production",
     ];
@@ -125,7 +126,8 @@ pub fn validate_web_unit_policy(
     let read_only_paths = unit.get_all_values("Service", "ReadOnlyPaths");
     let exp_root = ctx.release_root.display().to_string();
     let exp_cfg = ctx.public_config.display().to_string();
-    if !read_only_paths.contains(&exp_root.as_str()) || !read_only_paths.contains(&exp_cfg.as_str()) {
+    if !read_only_paths.contains(&exp_root.as_str()) || !read_only_paths.contains(&exp_cfg.as_str())
+    {
         return Err(ReleaseError::UnitPolicyViolation {
             unit: name.into(),
             reason: format!("ReadOnlyPaths must include '{exp_root}' and '{exp_cfg}'"),
