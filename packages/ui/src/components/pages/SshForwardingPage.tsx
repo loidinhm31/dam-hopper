@@ -185,8 +185,8 @@ export function SshForwardingPage() {
               No SSH connections in this DamHopper scope.
             </p>
             <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-              Add a reviewed credential-free endpoint and forwarding rules,
-              then Connect to verify trust and authentication.
+              Add a reviewed credential-free endpoint and forwarding rules, then
+              Connect to verify trust and authentication.
             </p>
             <Button
               className="mt-4"

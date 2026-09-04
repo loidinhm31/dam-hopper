@@ -1,9 +1,10 @@
 //! Archive extraction and role projection to destination directory.
 
+use super::archive::{bounded_gzip_reader, map_archive_read_error, map_entry_error};
 use super::error::ReleaseError;
 use super::inventory::{check_disallowed_files, normalize_inventory_path, TargetRole};
 use super::manifest::ReleaseManifest;
-use flate2::read::GzDecoder;
+use super::constants::MAX_ARCHIVE_ENTRY_BYTES;
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -17,28 +18,20 @@ pub fn extract_role_projection<R: Read>(
     role: TargetRole,
     dest_dir: &Path,
 ) -> Result<(), ReleaseError> {
-    let gz = GzDecoder::new(reader);
+    let gz = bounded_gzip_reader(reader);
     let mut archive = Archive::new(gz);
     archive.set_ignore_zeros(false);
 
-    let entries = archive.entries().map_err(|e| ReleaseError::Io {
-        action: "read archive entries for extraction",
-        details: e.to_string(),
-    })?;
+    let entries = archive
+        .entries()
+        .map_err(|e| map_archive_read_error("read archive entries for extraction", e.to_string()))?;
 
     for entry_result in entries {
-        let mut entry = entry_result.map_err(|e| ReleaseError::ArchiveEntryInvalid {
-            path: "unknown".to_string(),
-            reason: e.to_string(),
-        })?;
+        let mut entry = entry_result.map_err(|e| map_entry_error("unknown", e.to_string()))?;
 
         let raw_path = entry
             .path()
-            .map_err(|e| ReleaseError::ArchiveEntryInvalid {
-                path: "unknown".to_string(),
-                reason: e.to_string(),
-            })?;
-
+            .map_err(|e| map_entry_error("unknown", e.to_string()))?;
         let raw_path_str = raw_path
             .to_str()
             .ok_or_else(|| ReleaseError::ArchiveEntryTraversal("non-UTF-8 path".to_string()))?;
@@ -46,6 +39,13 @@ pub fn extract_role_projection<R: Read>(
         normalize_inventory_path(path_str)?;
         check_disallowed_files(path_str)?;
         let normalized = path_str.to_string();
+
+        let entry_size = entry.header().size().unwrap_or(0);
+        if entry_size > MAX_ARCHIVE_ENTRY_BYTES {
+            return Err(ReleaseError::ArchiveTooLarge {
+                limit: MAX_ARCHIVE_ENTRY_BYTES,
+            });
+        }
 
         let inv_entry = manifest
             .inventory
@@ -90,8 +90,11 @@ pub fn extract_role_projection<R: Read>(
                         details: e.to_string(),
                     })?;
 
-                std::io::copy(&mut entry, &mut out_file).map_err(|e| ReleaseError::Io {
-                    action: "extract regular file content",
+                std::io::copy(&mut entry, &mut out_file).map_err(|e| {
+                    map_archive_read_error("extract regular file content", e.to_string())
+                })?;
+                out_file.sync_all().map_err(|e| ReleaseError::Io {
+                    action: "fsync extracted file",
                     details: e.to_string(),
                 })?;
 

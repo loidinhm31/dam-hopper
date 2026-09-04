@@ -568,7 +568,13 @@ export default function WorkspacePage() {
         current: activeTab === sessionId,
       };
     });
-  }, [activeTab, mountedSessions, registeredTerminalIds, sessionMap, terminalTabs]);
+  }, [
+    activeTab,
+    mountedSessions,
+    registeredTerminalIds,
+    sessionMap,
+    terminalTabs,
+  ]);
   const activeBrowserTerminalTarget = useMemo(
     () =>
       browserTerminalTargets.find(
@@ -671,10 +677,10 @@ export default function WorkspacePage() {
     terminalDiagnosticsMenuTarget !== null &&
     Boolean(
       terminalDiagnosticsTargetSession ??
-        mountedSessions.find(
-          (session) =>
-            session.sessionId === terminalDiagnosticsMenuTarget.sessionId,
-        ),
+      mountedSessions.find(
+        (session) =>
+          session.sessionId === terminalDiagnosticsMenuTarget.sessionId,
+      ),
     );
   const openTerminalDiagnosticsMenu = useCallback(
     (sessionId: string, x: number, y: number) => {

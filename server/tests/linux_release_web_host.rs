@@ -45,7 +45,7 @@ impl TestFixture {
                 schema_version: 1,
                 release_version: "1.0.0".to_string(),
                 profile_id: "c7325e68-07e1-4e44-8d96-b333a4658cf9".to_string(),
-                api_url: "http://127.0.0.1:4801".to_string(),
+                api_url: Some("http://127.0.0.1:4801".to_string()),
             }))
         } else {
             None

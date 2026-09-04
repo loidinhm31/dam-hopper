@@ -24,10 +24,7 @@ export function TerminalTitleText({
       >
         {title.baseLabel}
       </span>
-      <span
-        aria-hidden="true"
-        className={cn("shrink-0", suffixClassName)}
-      >
+      <span aria-hidden="true" className={cn("shrink-0", suffixClassName)}>
         {` #${title.ordinal}`}
       </span>
     </span>

@@ -12,7 +12,7 @@ describe("FileDecorationIcon", () => {
 
     expect(markup).toContain("text-cyan-300");
     expect(markup).toContain("h-4 w-4");
-    expect(markup).toContain("aria-hidden=\"true\"");
+    expect(markup).toContain('aria-hidden="true"');
   });
 
   it("supports exact-name environment variants", () => {

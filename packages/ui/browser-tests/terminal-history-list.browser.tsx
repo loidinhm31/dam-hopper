@@ -68,9 +68,9 @@ describe("TerminalHistoryList in Chromium", () => {
     const search = document.querySelector<HTMLInputElement>(
       'input[placeholder="Type to filter commands"]',
     );
-    const use = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent === "Use" && !button.disabled,
-    );
+    const use = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Use" && !button.disabled);
 
     expect(dialog).not.toBeNull();
     expect(search?.labels?.[0]?.textContent).toContain("Search history");
@@ -85,8 +85,9 @@ describe("TerminalHistoryList in Chromium", () => {
   it("does not permit a multi-line command to be inserted", async () => {
     await act(async () => root.render(<HistoryFixture onUse={vi.fn()} />));
 
-    const disabledUse = [...document.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Use" && button.disabled);
+    const disabledUse = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Use" && button.disabled);
     expect(disabledUse).toBeDefined();
     expect(disabledUse?.getAttribute("aria-describedby")).toBe(
       "terminal-history-multiline-note",
@@ -105,9 +106,9 @@ describe("TerminalHistoryList in Chromium", () => {
     const onUse = vi.fn();
     await act(async () => root.render(<HistoryFixture onUse={onUse} />));
 
-    const copy = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent === "Copy",
-    );
+    const copy = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Copy");
     await act(async () => copy?.click());
 
     expect(writeText).toHaveBeenCalledWith("git status --short");

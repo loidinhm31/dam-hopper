@@ -11,7 +11,10 @@ interface FilePathLabelProps {
 }
 
 export function getFilePathParts(path: string) {
-  const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const separatorIndex = Math.max(
+    path.lastIndexOf("/"),
+    path.lastIndexOf("\\"),
+  );
   if (separatorIndex < 0) {
     return { fileName: path, dirPath: "" };
   }

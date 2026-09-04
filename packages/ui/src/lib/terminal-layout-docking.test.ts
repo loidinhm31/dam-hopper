@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { dockSessionInLayout } from "./terminal-layout-docking.js";
-import type { DockEdge, LayoutNode, PaneNode } from "@/types/terminal-layout.js";
+import type {
+  DockEdge,
+  LayoutNode,
+  PaneNode,
+} from "@/types/terminal-layout.js";
 
 function pane(
   id: string,
@@ -39,7 +43,12 @@ describe("dockSessionInLayout", () => {
   });
 
   it("moves a tab to another pane center and collapses an empty source pane", () => {
-    const root = split("root", "horizontal", pane("left", ["s1"]), pane("right", ["s2"]));
+    const root = split(
+      "root",
+      "horizontal",
+      pane("left", ["s1"]),
+      pane("right", ["s2"]),
+    );
     const result = dockSessionInLayout(root, "s1", "left", {
       kind: "pane-center",
       paneId: "right",
@@ -57,7 +66,12 @@ describe("dockSessionInLayout", () => {
   ] satisfies [DockEdge, "horizontal" | "vertical", 0 | 1][])(
     "splits a pane on %s edge with predictable child ordering",
     (edge, direction, dockedIndex) => {
-      const root = split("root", "horizontal", pane("source", ["s1"]), pane("target", ["s2"]));
+      const root = split(
+        "root",
+        "horizontal",
+        pane("source", ["s1"]),
+        pane("target", ["s2"]),
+      );
       const result = dockSessionInLayout(root, "s1", "source", {
         kind: "pane-edge",
         paneId: "target",
@@ -70,13 +84,16 @@ describe("dockSessionInLayout", () => {
         direction,
       });
 
-      const children = (result.root as Extract<LayoutNode, { type: "split" }>).children;
+      const children = (result.root as Extract<LayoutNode, { type: "split" }>)
+        .children;
       expect(children[dockedIndex]).toMatchObject({
         type: "pane",
         sessionIds: ["s1"],
         activeSessionId: "s1",
       });
-      expect(children[dockedIndex === 0 ? 1 : 0]).toEqual(pane("target", ["s2"]));
+      expect(children[dockedIndex === 0 ? 1 : 0]).toEqual(
+        pane("target", ["s2"]),
+      );
     },
   );
 
@@ -116,7 +133,12 @@ describe("dockSessionInLayout", () => {
   });
 
   it("keeps an empty target pane usable", () => {
-    const root = split("root", "horizontal", pane("left", ["s1"]), pane("empty", [], null));
+    const root = split(
+      "root",
+      "horizontal",
+      pane("left", ["s1"]),
+      pane("empty", [], null),
+    );
     const result = dockSessionInLayout(root, "s1", "left", {
       kind: "pane-center",
       paneId: "empty",

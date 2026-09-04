@@ -13,7 +13,11 @@ export function useBrowserContextMenuSuppression(): void {
       event.preventDefault();
     };
 
-    document.addEventListener("contextmenu", suppressNativeContextMenu, options);
+    document.addEventListener(
+      "contextmenu",
+      suppressNativeContextMenu,
+      options,
+    );
     return () =>
       document.removeEventListener(
         "contextmenu",

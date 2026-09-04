@@ -85,6 +85,14 @@ pub fn create_valid_manifest() -> ReleaseManifest {
                 sha256: Some(sha.clone()),
             },
             InventoryEntry {
+                path: "systemd/dam-hopper-recovery.service".to_string(),
+                kind: EntryKind::File,
+                roles: vec![ReleaseRole::Common],
+                mode: 0o644,
+                size: Some(512),
+                sha256: Some(sha.clone()),
+            },
+            InventoryEntry {
                 path: "sysusers.d/dam-hopper-web.conf".to_string(),
                 kind: EntryKind::File,
                 roles: vec![ReleaseRole::Web],

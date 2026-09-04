@@ -48,9 +48,9 @@ describe("terminal target ownership", () => {
   });
 
   it("does not treat a POSIX literal backslash as a directory separator", () => {
-    expect(
-      isPathWithinTarget("/repo/feature\\name/src", "/repo/feature"),
-    ).toBe(false);
+    expect(isPathWithinTarget("/repo/feature\\name/src", "/repo/feature")).toBe(
+      false,
+    );
   });
 
   it("counts only live sessions owned by the exact project target", () => {

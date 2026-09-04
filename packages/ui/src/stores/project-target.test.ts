@@ -89,9 +89,9 @@ describe("project target helpers", () => {
     expect(
       normalizeWorktreePath(String.raw`\\?\UNC\server\share\feature`),
     ).toBe("//server/share/feature");
-    expect(
-      normalizeWorktreePath(String.raw`\\?\C:\Worktrees\Feature`),
-    ).toBe("c:/worktrees/feature");
+    expect(normalizeWorktreePath(String.raw`\\?\C:\Worktrees\Feature`)).toBe(
+      "c:/worktrees/feature",
+    );
   });
 
   it("keeps selections isolated per project and resets only the chosen project", () => {

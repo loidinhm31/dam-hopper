@@ -15,8 +15,16 @@ import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import "@/index.css";
 
 const baseTabs = [
-  { sessionId: "session-a", label: "Terminal (starting…)", project: "project-a" },
-  { sessionId: "session-b", label: "Terminal (starting…)", project: "project-b" },
+  {
+    sessionId: "session-a",
+    label: "Terminal (starting…)",
+    project: "project-a",
+  },
+  {
+    sessionId: "session-b",
+    label: "Terminal (starting…)",
+    project: "project-b",
+  },
 ];
 const displayTab: DisplayTabEntry = {
   sessionId: "session-a",
@@ -60,9 +68,21 @@ function TitleFixture() {
 }
 function ProjectOrdinalFixture() {
   const [tabs, setTabs] = useState([
-    { sessionId: "project-a-1", label: "project-a:duplicate", project: "project-a" },
-    { sessionId: "project-b-1", label: "project-b:duplicate", project: "project-b" },
-    { sessionId: "project-a-2", label: "project-a:duplicate", project: "project-a" },
+    {
+      sessionId: "project-a-1",
+      label: "project-a:duplicate",
+      project: "project-a",
+    },
+    {
+      sessionId: "project-b-1",
+      label: "project-b:duplicate",
+      project: "project-b",
+    },
+    {
+      sessionId: "project-a-2",
+      label: "project-a:duplicate",
+      project: "project-a",
+    },
   ]);
   const projected = applyTerminalTitleOrdinals(tabs);
   return (
@@ -91,7 +111,6 @@ function ProjectOrdinalFixture() {
 }
 
 const HANDOFF_BASE = "A very long terminal command title for browser handoff";
-
 
 function HandoffFixture() {
   const [open] = applyTerminalTitleOrdinals([
@@ -183,7 +202,9 @@ describe("terminal title ordinals in Chromium", () => {
     const hosts = [...container.querySelectorAll<HTMLElement>("span.flex")];
     expect(hosts.length).toBeGreaterThanOrEqual(2);
     for (const host of hosts) {
-      const visual = host.querySelectorAll<HTMLElement>("span[aria-hidden='true']");
+      const visual = host.querySelectorAll<HTMLElement>(
+        "span[aria-hidden='true']",
+      );
       const base = visual[0];
       const suffix = visual[1];
       expect(host.querySelector(".sr-only")?.textContent).toMatch(/#\d/);
@@ -219,7 +240,9 @@ describe("terminal title ordinals in Chromium", () => {
   it("mounts split, legacy, runtime, and active title consumers", async () => {
     await act(async () => root.render(<ConsumerFixture />));
     expect(container.textContent).toContain("Terminal (starting…) #1");
-    expect(container.querySelectorAll(".sr-only").length).toBeGreaterThanOrEqual(4);
+    expect(
+      container.querySelectorAll(".sr-only").length,
+    ).toBeGreaterThanOrEqual(4);
     expect(
       container.querySelector('button[aria-label="Pin terminal"]'),
     ).not.toBeNull();
@@ -259,5 +282,4 @@ describe("terminal title ordinals in Chromium", () => {
       suffix?.getBoundingClientRect().bottom ?? 0,
     );
   });
-
 });

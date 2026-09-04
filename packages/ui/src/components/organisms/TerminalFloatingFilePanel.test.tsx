@@ -146,9 +146,7 @@ describe("TerminalFloatingFilePanel", () => {
     const explorer = document.querySelector('[data-content="explorer"]');
     expect(explorer).not.toBeNull();
     await act(async () => {
-      explorer?.dispatchEvent(
-        new Event("pointerdown", { bubbles: true }),
-      );
+      explorer?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     });
     expect(onActivate).toHaveBeenCalledOnce();
 

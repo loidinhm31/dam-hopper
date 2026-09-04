@@ -79,7 +79,9 @@ describe("BrowserDebugTerminalHandoff", () => {
     expect(container.textContent).not.toContain("Choose a live terminal");
     expect(container.querySelector("input[type=radio]")).toBeNull();
 
-    await act(async () => button(container, "Create reviewable artifact")?.click());
+    await act(async () =>
+      button(container, "Create reviewable artifact")?.click(),
+    );
     expect(onPrepare).toHaveBeenCalledWith("shell:demo");
     expect(onInsert).not.toHaveBeenCalled();
 
@@ -105,7 +107,9 @@ describe("BrowserDebugTerminalHandoff", () => {
     );
 
     await act(async () => root.render(render()));
-    await act(async () => button(container, "Create reviewable artifact")?.click());
+    await act(async () =>
+      button(container, "Create reviewable artifact")?.click(),
+    );
     await act(async () => root.render(render(otherTarget)));
     await act(async () => button(container, "Review & insert")?.click());
     await act(async () => button(document.body, "Insert reference")?.click());
@@ -129,7 +133,9 @@ describe("BrowserDebugTerminalHandoff", () => {
     });
 
     expect(container.textContent).toContain("Disconnected");
-    expect(button(container, "Create reviewable artifact")?.disabled).toBe(true);
+    expect(button(container, "Create reviewable artifact")?.disabled).toBe(
+      true,
+    );
   });
 
   it("discards an artifact that finishes after the selection changes", async () => {
@@ -142,13 +148,19 @@ describe("BrowserDebugTerminalHandoff", () => {
           mode="active"
           target={target}
           targets={[target]}
-          onPrepare={() => new Promise((resolve) => { resolvePrepare = resolve; })}
+          onPrepare={() =>
+            new Promise((resolve) => {
+              resolvePrepare = resolve;
+            })
+          }
           onDiscard={onDiscard}
           onInsert={vi.fn()}
         />,
       );
     });
-    await act(async () => button(container, "Create reviewable artifact")?.click());
+    await act(async () =>
+      button(container, "Create reviewable artifact")?.click(),
+    );
     await act(async () => {
       root.render(
         <BrowserDebugTerminalHandoff
@@ -188,7 +200,9 @@ describe("BrowserDebugTerminalHandoff", () => {
     await act(async () =>
       container.querySelector<HTMLInputElement>("input[type=radio]")?.click(),
     );
-    await act(async () => button(container, "Create reviewable artifact")?.click());
+    await act(async () =>
+      button(container, "Create reviewable artifact")?.click(),
+    );
     expect(onPrepare).toHaveBeenCalledWith("shell:demo");
   });
 
@@ -206,7 +220,9 @@ describe("BrowserDebugTerminalHandoff", () => {
     );
 
     await act(async () => root.render(render()));
-    await act(async () => button(container, "Create reviewable artifact")?.click());
+    await act(async () =>
+      button(container, "Create reviewable artifact")?.click(),
+    );
     await act(async () => root.render(render([{ ...target, alive: false }])));
 
     expect(button(container, "Review & insert")?.disabled).toBe(true);

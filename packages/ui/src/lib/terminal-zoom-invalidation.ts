@@ -20,7 +20,9 @@ export function subscribeToTerminalAppZoomChanges(
 ): () => void {
   const eventTarget =
     target ??
-    (typeof window === "undefined" ? undefined : (window as AppZoomEventTarget));
+    (typeof window === "undefined"
+      ? undefined
+      : (window as AppZoomEventTarget));
   if (!eventTarget) return () => {};
 
   const handleChange: EventListener = () => {

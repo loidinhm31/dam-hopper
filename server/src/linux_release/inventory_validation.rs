@@ -78,6 +78,7 @@ struct RequiredPathsTracker {
     has_web: bool,
     has_api_unit: bool,
     has_web_unit: bool,
+    has_recovery_unit: bool,
     has_web_sysusers: bool,
     has_web_payload: bool,
     has_license_or_notices: bool,
@@ -142,6 +143,7 @@ impl RequiredPathsTracker {
                         path: "systemd/dam-hopper-recovery.service",
                     });
                 }
+                self.has_recovery_unit = true;
             }
             "sysusers.d/dam-hopper-web.conf" => {
                 if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Web) {
@@ -173,6 +175,10 @@ impl RequiredPathsTracker {
             (self.has_web, "bin/dam-hopper-web"),
             (self.has_api_unit, "systemd/dam-hopper-api.service"),
             (self.has_web_unit, "systemd/dam-hopper-web.service"),
+            (
+                self.has_recovery_unit,
+                "systemd/dam-hopper-recovery.service",
+            ),
             (self.has_web_sysusers, "sysusers.d/dam-hopper-web.conf"),
             (self.has_web_payload, "web"),
             (self.has_license_or_notices, "LICENSE"),

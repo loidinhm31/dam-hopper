@@ -621,20 +621,28 @@ describe("editor store view state persistence and hydration", () => {
 
     const mockViewState = {
       cursorState: [{ position: { lineNumber: 42, column: 10 } }],
-      viewState: { scrollLeft: 0, firstPosition: { lineNumber: 35, column: 1 } },
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 35, column: 1 },
+      },
     };
 
     useEditorStore.getState().saveViewState(tab1.key, mockViewState);
 
     const tabs = useEditorStore.getState().tabs;
-    expect(tabs.find((t) => t.key === tab1.key)?.viewState).toEqual(mockViewState);
+    expect(tabs.find((t) => t.key === tab1.key)?.viewState).toEqual(
+      mockViewState,
+    );
     expect(tabs.find((t) => t.key === tab2.key)?.viewState).toBeUndefined();
   });
 
   it("migrateEditorState preserves viewState from persisted storage", () => {
     const sampleViewState = {
       cursorState: [{ position: { lineNumber: 120, column: 5 } }],
-      viewState: { scrollLeft: 0, firstPosition: { lineNumber: 110, column: 1 } },
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 110, column: 1 },
+      },
     };
 
     const persisted = {
@@ -698,7 +706,10 @@ describe("editor store view state persistence and hydration", () => {
   it("retains viewState after loadContent executes on a hydrated tab", async () => {
     const sampleViewState = {
       cursorState: [{ position: { lineNumber: 88, column: 1 } }],
-      viewState: { scrollLeft: 0, firstPosition: { lineNumber: 80, column: 1 } },
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 80, column: 1 },
+      },
     };
 
     const tab: Tab = {

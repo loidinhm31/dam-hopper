@@ -103,7 +103,11 @@ describe("BrowserNotificationService", () => {
     const close = vi.fn();
     const factory = vi.fn(() => ({
       addEventListener: vi.fn(
-        (type: string, listener: () => void, options?: AddEventListenerOptions) => {
+        (
+          type: string,
+          listener: () => void,
+          options?: AddEventListenerOptions,
+        ) => {
           expect(type).toBe("click");
           expect(options).toEqual({ once: true });
           clickListener = listener;

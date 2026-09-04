@@ -40,7 +40,9 @@ export function comparePathSearchMatches(
   a: PathSearchMatch,
   b: PathSearchMatch,
 ): number {
-  return compareOptionalText(a.project, b.project) || a.path.localeCompare(b.path);
+  return (
+    compareOptionalText(a.project, b.project) || a.path.localeCompare(b.path)
+  );
 }
 
 export function sortContentSearchMatches(
@@ -91,8 +93,9 @@ export function findNextContentSearchMatch(
   if (!afterMatch) return matches[0] ?? null;
 
   return (
-    matches.find((match) => compareContentSearchMatches(match, afterMatch) > 0) ??
-    null
+    matches.find(
+      (match) => compareContentSearchMatches(match, afterMatch) > 0,
+    ) ?? null
   );
 }
 

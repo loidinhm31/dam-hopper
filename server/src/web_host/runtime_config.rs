@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
 
+use crate::linux_release::host_config::HostPublicConfig;
 use crate::linux_release::origin::validate_web_origin;
 use crate::linux_release::version::validate_version;
 
@@ -34,12 +35,13 @@ pub enum WebHostConfigError {
 
 /// Strict public runtime configuration returned at `/__dam-hopper/runtime-config.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WebRuntimeConfig {
     pub schema_version: u32,
     pub release_version: String,
     pub profile_id: String,
-    pub api_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
 }
 
 impl WebRuntimeConfig {
@@ -59,23 +61,26 @@ impl WebRuntimeConfig {
             return Err(WebHostConfigError::InvalidProfileId(self.profile_id.clone()));
         }
 
-        validate_web_origin(&self.api_url)
-            .map_err(|e| WebHostConfigError::InvalidApiUrl(self.api_url.clone(), e.to_string()))?;
+        if let Some(api_url) = &self.api_url {
+            validate_web_origin(api_url).map_err(|e| {
+                WebHostConfigError::InvalidApiUrl(api_url.clone(), e.to_string())
+            })?;
+        }
 
         Ok(())
     }
 
-    /// Load, bound-check, and validate runtime config from disk without following symlinks.
+    /// Load the machine-local `HostPublicConfig`, then expose only the strict
+    /// runtime fields to the web process. Runtime settings are never packaged.
     pub fn load_from_file(path: &Path) -> Result<Self, WebHostConfigError> {
         let display = path.display().to_string();
-        let meta = std::fs::symlink_metadata(path)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    WebHostConfigError::NotFound(display.clone())
-                } else {
-                    WebHostConfigError::Io(display.clone(), e)
-                }
-            })?;
+        let meta = std::fs::symlink_metadata(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                WebHostConfigError::NotFound(display.clone())
+            } else {
+                WebHostConfigError::Io(display.clone(), e)
+            }
+        })?;
 
         if meta.file_type().is_symlink() {
             return Err(WebHostConfigError::SymlinkRejected(display));
@@ -91,8 +96,14 @@ impl WebRuntimeConfig {
             return Err(WebHostConfigError::TooLarge(display, bytes.len()));
         }
 
-        let config: Self = serde_json::from_slice(&bytes)
+        let host_config: HostPublicConfig = serde_json::from_slice(&bytes)
             .map_err(|e| WebHostConfigError::Json(display, e))?;
+        let config = Self {
+            schema_version: host_config.schema_version,
+            release_version: host_config.release_version,
+            profile_id: host_config.profile_id,
+            api_url: host_config.api_url,
+        };
         config.validate()?;
         Ok(config)
     }
@@ -129,9 +140,22 @@ mod tests {
             schema_version: 1,
             release_version: "0.1.0".to_string(),
             profile_id: "c7325e68-07e1-4e44-8d96-b333a4658cf9".to_string(),
-            api_url: "http://127.0.0.1:4801".to_string(),
+            api_url: Some("http://127.0.0.1:4801".to_string()),
         };
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_valid_runtime_config_without_api_url() {
+        let cfg = WebRuntimeConfig {
+            schema_version: 1,
+            release_version: "0.1.0".to_string(),
+            profile_id: "c7325e68-07e1-4e44-8d96-b333a4658cf9".to_string(),
+            api_url: None,
+        };
+        assert!(cfg.validate().is_ok());
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(!json.contains("apiUrl"));
     }
 
     #[test]
@@ -140,7 +164,7 @@ mod tests {
             schema_version: 2,
             release_version: "0.1.0".to_string(),
             profile_id: "c7325e68-07e1-4e44-8d96-b333a4658cf9".to_string(),
-            api_url: "http://127.0.0.1:4801".to_string(),
+            api_url: Some("http://127.0.0.1:4801".to_string()),
         };
         assert!(cfg.validate().is_err());
     }
@@ -151,7 +175,7 @@ mod tests {
             schema_version: 1,
             release_version: "0.1.0".to_string(),
             profile_id: "not-a-uuid".to_string(),
-            api_url: "http://127.0.0.1:4801".to_string(),
+            api_url: Some("http://127.0.0.1:4801".to_string()),
         };
         assert!(cfg.validate().is_err());
     }
@@ -162,9 +186,42 @@ mod tests {
             schema_version: 1,
             release_version: "0.1.0".to_string(),
             profile_id: "c7325e68-07e1-4e44-8d96-b333a4658cf9".to_string(),
-            api_url: "http://user:pass@127.0.0.1:4801/subpath?query=1#frag".to_string(),
+            api_url: Some(
+                "http://user:pass@127.0.0.1:4801/subpath?query=1#frag".to_string(),
+            ),
         };
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_rejects_unknown_runtime_config_fields() {
+        let result = serde_json::from_str::<WebRuntimeConfig>(
+            r#"{"schemaVersion":1,"releaseVersion":"0.1.0","profileId":"c7325e68-07e1-4e44-8d96-b333a4658cf9","unexpected":true}"#,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_projects_serialized_host_public_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("host-config.json");
+        let host_config = HostPublicConfig::new(
+            crate::linux_release::TargetRole::Both,
+            "0.1.0".to_string(),
+            "c7325e68-07e1-4e44-8d96-b333a4658cf9".to_string(),
+            None,
+            vec!["http://localhost:4802".to_string()],
+        )
+        .unwrap();
+        std::fs::write(&path, serde_json::to_vec(&host_config).unwrap()).unwrap();
+
+        let runtime = WebRuntimeConfig::load_from_file(&path).unwrap();
+        assert_eq!(runtime.api_url, None);
+        let output: serde_json::Value = serde_json::to_value(runtime).unwrap();
+        let object = output.as_object().unwrap();
+        assert_eq!(object.len(), 3);
+        assert!(!object.contains_key("role"));
+        assert!(!object.contains_key("allowedWebOrigins"));
     }
 
     #[test]

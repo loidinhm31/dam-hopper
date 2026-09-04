@@ -190,7 +190,7 @@ jobs:
           retention-days: 7
 
   native-windows:
-    name: Native Windows build gate (runtime evidence required separately)
+    name: Native Windows build gate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

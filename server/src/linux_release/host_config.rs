@@ -1,13 +1,59 @@
 //! Host deployment configuration, role assignment, and storage.
 
+use super::durable_fs::atomic_write_file;
 use super::error::ReleaseError;
 use super::inventory::TargetRole;
-use super::origin::validate_web_origins;
+use super::origin::{validate_web_origin, validate_web_origins};
 use super::version::validate_version;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
+use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+
+const MAX_HOST_CONFIG_BYTES: usize = 64 * 1024;
+
+fn read_config_file(path: &Path) -> Result<Option<Vec<u8>>, ReleaseError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(ReleaseError::Io {
+                action: "inspect host configuration",
+                details: error.to_string(),
+            });
+        }
+    };
+    if !metadata.file_type().is_file() {
+        return Err(ReleaseError::OwnershipViolation {
+            path: path.display().to_string(),
+            expected: "regular host configuration file".into(),
+            got: "symbolic link or non-regular file".into(),
+        });
+    }
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| ReleaseError::Io {
+            action: "open host configuration with no-follow",
+            details: error.to_string(),
+        })?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(MAX_HOST_CONFIG_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| ReleaseError::Io {
+            action: "read host configuration",
+            details: error.to_string(),
+        })?;
+    if bytes.len() > MAX_HOST_CONFIG_BYTES {
+        return Err(ReleaseError::Config(format!(
+            "host configuration exceeds maximum size of {MAX_HOST_CONFIG_BYTES} bytes"
+        )));
+    }
+    Ok(Some(bytes))
+}
 
 /// Host configuration stored persistently in `/etc/dam-hopper/host.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,13 +80,14 @@ impl HostConfig {
 /// Load host configuration from a given file path.
 /// Returns `None` if the file does not exist.
 pub fn load_host_config(path: &Path) -> Result<Option<HostConfig>, ReleaseError> {
-    if !path.exists() {
+    let Some(bytes) = read_config_file(path)? else {
         return Ok(None);
-    }
-
-    let content = fs::read_to_string(path).map_err(|e| ReleaseError::Io {
-        action: "read host config",
-        details: e.to_string(),
+    };
+    let content = String::from_utf8(bytes).map_err(|error| {
+        ReleaseError::Config(format!(
+            "host config at '{}' is not valid UTF-8: {error}",
+            path.display()
+        ))
     })?;
 
     let config: HostConfig = toml::from_str(&content).map_err(|e| {
@@ -58,40 +105,22 @@ pub fn load_host_config(path: &Path) -> Result<Option<HostConfig>, ReleaseError>
 pub fn save_host_config(path: &Path, config: &HostConfig) -> Result<(), ReleaseError> {
     validate_web_origins(&config.allowed_web_origins)?;
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ReleaseError::Io {
-            action: "create host config directory",
-            details: e.to_string(),
-        })?;
-    }
-
     let serialized = toml::to_string_pretty(config)
         .map_err(|e| ReleaseError::Config(format!("failed to serialize host config: {e}")))?;
-
-    let temp_path = path.with_extension(format!("tmp.{}", std::process::id()));
-    fs::write(&temp_path, serialized).map_err(|e| ReleaseError::Io {
-        action: "write temporary host config",
-        details: e.to_string(),
-    })?;
-
-    fs::rename(&temp_path, path).map_err(|e| ReleaseError::Io {
-        action: "rename host config into place",
-        details: e.to_string(),
-    })?;
-
-    Ok(())
+    atomic_write_file(path, serialized.as_bytes(), Some(0o644))
 }
 
 /// Public host configuration stored in `/etc/dam-hopper/host-config.json`
 /// and candidate `/var/lib/dam-hopper/pending-host-config.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostPublicConfig {
     pub schema_version: u32,
     pub role: TargetRole,
     pub release_version: String,
     pub profile_id: String,
-    pub api_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_web_origins: Vec<String>,
 }
@@ -101,7 +130,7 @@ impl HostPublicConfig {
         role: TargetRole,
         release_version: String,
         profile_id: String,
-        api_url: String,
+        api_url: Option<String>,
         allowed_web_origins: Vec<String>,
     ) -> Result<Self, ReleaseError> {
         let validated_origins = validate_web_origins(&allowed_web_origins)?;
@@ -112,6 +141,10 @@ impl HostPublicConfig {
             return Err(ReleaseError::Config(format!(
                 "invalid profile_id '{profile_id}': must be UUID v4"
             )));
+        }
+
+        if let Some(api_url) = &api_url {
+            validate_web_origin(api_url)?;
         }
 
         Ok(Self {
@@ -127,16 +160,11 @@ impl HostPublicConfig {
 
 /// Load public host configuration JSON from a given file path.
 pub fn load_host_public_config(path: &Path) -> Result<Option<HostPublicConfig>, ReleaseError> {
-    if !path.exists() {
+    let Some(bytes) = read_config_file(path)? else {
         return Ok(None);
-    }
+    };
 
-    let content = fs::read_to_string(path).map_err(|e| ReleaseError::Io {
-        action: "read public host config",
-        details: e.to_string(),
-    })?;
-
-    let config: HostPublicConfig = serde_json::from_str(&content).map_err(|e| {
+    let config: HostPublicConfig = serde_json::from_slice(&bytes).map_err(|e| {
         ReleaseError::Config(format!(
             "failed to parse public host config at '{}': {e}",
             path.display()
@@ -144,6 +172,9 @@ pub fn load_host_public_config(path: &Path) -> Result<Option<HostPublicConfig>, 
     })?;
 
     validate_web_origins(&config.allowed_web_origins)?;
+    if let Some(api_url) = &config.api_url {
+        validate_web_origin(api_url)?;
+    }
     Ok(Some(config))
 }
 
@@ -151,48 +182,7 @@ pub fn load_host_public_config(path: &Path) -> Result<Option<HostPublicConfig>, 
 pub fn save_host_public_config(path: &Path, config: &HostPublicConfig) -> Result<(), ReleaseError> {
     validate_web_origins(&config.allowed_web_origins)?;
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ReleaseError::Io {
-            action: "create public host config directory",
-            details: e.to_string(),
-        })?;
-    }
-
     let serialized = serde_json::to_string_pretty(config)
         .map_err(|e| ReleaseError::Config(format!("failed to serialize public host config: {e}")))?;
-
-    let temp_path = path.with_extension(format!("tmp.{}", std::process::id()));
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&temp_path)
-        .map_err(|e| ReleaseError::Io {
-            action: "open temporary public host config",
-            details: e.to_string(),
-        })?;
-
-    let mut writer = std::io::BufWriter::new(file);
-    writer.write_all(serialized.as_bytes()).map_err(|e| ReleaseError::Io {
-        action: "write serialized public host config",
-        details: e.to_string(),
-    })?;
-    writer.flush().map_err(|e| ReleaseError::Io {
-        action: "flush public host config",
-        details: e.to_string(),
-    })?;
-    let file = writer.into_inner().map_err(|e| ReleaseError::Io {
-        action: "extract file writer for public host config",
-        details: e.to_string(),
-    })?;
-    file.sync_all().map_err(|e| ReleaseError::Io {
-        action: "fsync public host config",
-        details: e.to_string(),
-    })?;
-    fs::rename(&temp_path, path).map_err(|e| ReleaseError::Io {
-        action: "rename public host config into place",
-        details: e.to_string(),
-    })?;
-
-    Ok(())
+    atomic_write_file(path, serialized.as_bytes(), Some(0o644))
 }

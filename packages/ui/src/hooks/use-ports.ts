@@ -45,11 +45,7 @@ export function acceptsDetectedPortEvent(port: DetectedPort): boolean {
     !!port &&
     typeof port.session_id === "string" &&
     Number.isSafeInteger(port.incarnation) &&
-    acceptsTerminalPortIncarnation(
-      port.session_id,
-      port.port,
-      port.incarnation,
-    )
+    acceptsTerminalPortIncarnation(port.session_id, port.port, port.incarnation)
   );
 }
 

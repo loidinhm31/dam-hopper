@@ -103,10 +103,7 @@ export function SshForwardScopeBridge({ children }: { children: ReactNode }) {
     let openClient: Promise<
       Awaited<ReturnType<SshForwardHost["openClient"]>>
     > | null = null;
-    const ensureOpenClient = (
-      refresh = false,
-      scopes?: KnownScopes,
-    ) => {
+    const ensureOpenClient = (refresh = false, scopes?: KnownScopes) => {
       if (refresh || !openClient) {
         const nextOpenClient = host.openClient(scopes ?? knownScopes());
         let guardedOpenClient!: typeof nextOpenClient;

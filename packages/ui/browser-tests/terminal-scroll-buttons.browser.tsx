@@ -263,8 +263,9 @@ describe("Terminal scroll buttons in Chromium", () => {
       terminal.open(host);
       await new Promise<void>((resolve) => {
         terminal?.write(
-          Array.from({ length: 200 }, (_, index) =>
-            "line " + index + "\r\n",
+          Array.from(
+            { length: 200 },
+            (_, index) => "line " + index + "\r\n",
           ).join(""),
           resolve,
         );
@@ -282,7 +283,9 @@ describe("Terminal scroll buttons in Chromium", () => {
       surface?.dispatchEvent(createTouchEvent("touchstart", surface, 100));
       const move = createTouchEvent("touchmove", surface, 160);
       surface?.dispatchEvent(move);
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
 
       expect(terminal.buffer.active.viewportY).toBeLessThan(before);
       expect(move.defaultPrevented).toBe(false);
@@ -290,7 +293,9 @@ describe("Terminal scroll buttons in Chromium", () => {
       terminal.scrollToTop();
       surface?.dispatchEvent(createTouchEvent("touchstart", surface, 100));
       surface?.dispatchEvent(createTouchEvent("touchmove", surface, 160));
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
       expect(terminal.buffer.active.viewportY).toBe(0);
       surface?.dispatchEvent(createTouchEvent("touchend", surface, 160));
     } finally {

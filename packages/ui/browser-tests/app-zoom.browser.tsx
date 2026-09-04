@@ -76,14 +76,8 @@ function BrowserGeometryHarness() {
   return (
     <BrowserDebugHostProvider host={host} environment={{ kind: "native" }}>
       <TopNavAppZoomControls />
-      <div
-        ref={viewportStageRef}
-        style={{ height: "400px", width: "600px" }}
-      >
-        <div
-          ref={viewportRef}
-          style={{ height: "180px", width: "320px" }}
-        />
+      <div ref={viewportStageRef} style={{ height: "400px", width: "600px" }}>
+        <div ref={viewportRef} style={{ height: "180px", width: "320px" }} />
       </div>
       <BrowserDebugKeepAliveHost
         browser={browser}

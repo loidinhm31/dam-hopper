@@ -83,7 +83,8 @@ export function UsageCoveragePanel({
             aria-hidden="true"
             className="h-3.5 w-3.5 shrink-0 text-[var(--color-danger)]"
           />
-          {formatUsageNumber(health.writerErrors)} writer errors · {formatUsageNumber(health.rejectedEvents)} rejected events
+          {formatUsageNumber(health.writerErrors)} writer errors ·{" "}
+          {formatUsageNumber(health.rejectedEvents)} rejected events
         </p>
       ) : (
         <p className="mt-3 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">

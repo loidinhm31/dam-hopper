@@ -490,7 +490,8 @@ export function TerminalPanel({
 
     unsubExitEnhanced =
       transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
-        const currentIncarnation = latestTerminalSessionIncarnation(safeSessionId);
+        const currentIncarnation =
+          latestTerminalSessionIncarnation(safeSessionId);
         if (
           exitEvent.incarnation === undefined
             ? currentIncarnation !== undefined

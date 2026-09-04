@@ -106,7 +106,10 @@ export class AgentActivityTracker {
   onTitleChange(title: string): void {
     if (!this.tracked || this.currentState === "finished") return;
 
-    const activity = detectTerminalAgentTitleActivity(this.tracked.agent, title);
+    const activity = detectTerminalAgentTitleActivity(
+      this.tracked.agent,
+      title,
+    );
     if (activity === null) return;
     if (activity.kind === "working") {
       this.hasSeenWorkingTitle = true;
@@ -115,7 +118,10 @@ export class AgentActivityTracker {
       this.clearQuietTimer();
       return;
     }
-    if (!this.hasSeenWorkingTitle || this.currentState === "attention_notified") {
+    if (
+      !this.hasSeenWorkingTitle ||
+      this.currentState === "attention_notified"
+    ) {
       return;
     }
     if (
@@ -131,15 +137,19 @@ export class AgentActivityTracker {
     this.hasSeenWorkingTitle = false;
     this.expectedReadyTitle = null;
     this.notify(
-      createTerminalAgentNotification("tui-ready", {
-        ...this.session,
-        agent: this.tracked.agent,
-        now: this.now,
-      }, {
-        title: `${agentName} is ready`,
-        body: `${agentName} is waiting in ${this.session.project ?? this.session.sessionId}.`,
-        status: "needs-attention",
-      }),
+      createTerminalAgentNotification(
+        "tui-ready",
+        {
+          ...this.session,
+          agent: this.tracked.agent,
+          now: this.now,
+        },
+        {
+          title: `${agentName} is ready`,
+          body: `${agentName} is waiting in ${this.session.project ?? this.session.sessionId}.`,
+          status: "needs-attention",
+        },
+      ),
     );
   }
 
@@ -160,14 +170,18 @@ export class AgentActivityTracker {
     if (this.settings.terminalAgentNotificationsEnabled === false) return;
 
     this.notify(
-      createTerminalAgentNotification("terminal-exit", {
-        ...this.session,
-        agent: this.tracked.agent,
-        now: this.now,
-      }, {
-        title: `${formatAgentName(this.tracked.agent, this.tracked.label)} finished`,
-        status: "finished",
-      }),
+      createTerminalAgentNotification(
+        "terminal-exit",
+        {
+          ...this.session,
+          agent: this.tracked.agent,
+          now: this.now,
+        },
+        {
+          title: `${formatAgentName(this.tracked.agent, this.tracked.label)} finished`,
+          status: "finished",
+        },
+      ),
     );
   }
 
@@ -195,15 +209,19 @@ export class AgentActivityTracker {
       this.currentState = "attention_notified";
       const target = this.session.project ?? this.session.sessionId;
       this.notify(
-        createTerminalAgentNotification("quiet", {
-          ...this.session,
-          agent: this.tracked.agent,
-          now: this.now,
-        }, {
-          title: `${formatAgentName(this.tracked.agent, this.tracked.label)} may need attention`,
-          body: `No terminal output for ${Math.round(timeoutMs / 1000)}s in ${target}.`,
-          status: "needs-attention",
-        }),
+        createTerminalAgentNotification(
+          "quiet",
+          {
+            ...this.session,
+            agent: this.tracked.agent,
+            now: this.now,
+          },
+          {
+            title: `${formatAgentName(this.tracked.agent, this.tracked.label)} may need attention`,
+            body: `No terminal output for ${Math.round(timeoutMs / 1000)}s in ${target}.`,
+            status: "needs-attention",
+          },
+        ),
       );
     }, timeoutMs);
   }

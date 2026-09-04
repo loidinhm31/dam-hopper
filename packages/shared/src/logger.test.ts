@@ -93,7 +93,10 @@ describe("logger", () => {
     removeSink();
     logger.warn("fanout", "second");
 
-    expect(primaryEntries.map((entry) => entry.message)).toEqual(["first", "second"]);
+    expect(primaryEntries.map((entry) => entry.message)).toEqual([
+      "first",
+      "second",
+    ]);
     expect(primaryEntries[0].metadata).toEqual({ token: "[REDACTED]" });
     expect(diagnosticsEntries).toHaveLength(1);
     expect(diagnosticsEntries[0].metadata).toEqual({ token: "[REDACTED]" });

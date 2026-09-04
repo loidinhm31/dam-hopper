@@ -46,7 +46,8 @@ export function TerminalTabInsertionZone({
       <div
         className={cn(
           "h-4 w-px rounded-full bg-transparent transition-all",
-          isOver && "h-5 w-1 bg-sky-300 shadow-[0_0_0_1px_rgba(125,211,252,0.8)]",
+          isOver &&
+            "h-5 w-1 bg-sky-300 shadow-[0_0_0_1px_rgba(125,211,252,0.8)]",
         )}
       />
     </div>
