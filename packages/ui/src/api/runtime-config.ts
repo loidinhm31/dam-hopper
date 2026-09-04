@@ -13,8 +13,15 @@ export interface RuntimeConfig {
   schemaVersion: 1;
   releaseVersion: string;
   profileId: string;
-  apiUrl: string;
+  apiUrl?: string;
 }
+
+const RUNTIME_CONFIG_KEYS: Record<string, true> = {
+  schemaVersion: true,
+  releaseVersion: true,
+  profileId: true,
+  apiUrl: true,
+};
 
 /**
  * Validate a candidate runtime configuration object against strict security rules.
@@ -25,6 +32,10 @@ export function validateRuntimeConfig(data: unknown): RuntimeConfig | null {
   }
 
   const candidate = data as Record<string, unknown>;
+
+  if (Object.keys(candidate).some((key) => RUNTIME_CONFIG_KEYS[key] !== true)) {
+    return null;
+  }
 
   if (candidate.schemaVersion !== 1) {
     return null;
@@ -44,21 +55,27 @@ export function validateRuntimeConfig(data: unknown): RuntimeConfig | null {
     return null;
   }
 
-  if (typeof candidate.apiUrl !== "string") {
-    return null;
+  let normalizedApiUrl: string | undefined;
+  if (Object.hasOwn(candidate, "apiUrl")) {
+    if (typeof candidate.apiUrl !== "string") {
+      return null;
+    }
+    const validated = validateAndNormalizeApiUrl(candidate.apiUrl);
+    if (!validated) {
+      return null;
+    }
+    normalizedApiUrl = validated;
   }
 
-  const normalizedApiUrl = validateAndNormalizeApiUrl(candidate.apiUrl);
-  if (!normalizedApiUrl) {
-    return null;
-  }
-
-  return {
+  const result: RuntimeConfig = {
     schemaVersion: 1,
     releaseVersion: candidate.releaseVersion.trim(),
     profileId: candidate.profileId.toLowerCase(),
-    apiUrl: normalizedApiUrl,
   };
+  if (normalizedApiUrl) {
+    result.apiUrl = normalizedApiUrl;
+  }
+  return result;
 }
 
 /**
@@ -123,7 +140,10 @@ export async function fetchRuntimeConfig(
     }
 
     const contentLength = response.headers.get("content-length");
-    if (contentLength && parseInt(contentLength, 10) > MAX_RUNTIME_CONFIG_BYTES) {
+    if (
+      contentLength &&
+      parseInt(contentLength, 10) > MAX_RUNTIME_CONFIG_BYTES
+    ) {
       return null;
     }
 
