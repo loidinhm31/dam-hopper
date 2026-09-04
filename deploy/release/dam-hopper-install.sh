@@ -179,15 +179,34 @@ if [[ ${VERIFY_ATTESTATION} -eq 1 ]]; then
     fi
 fi
 
-# Extract manager binary to execute staging
+# Extract only the manager member, without honoring archive ownership,
+# permissions, recursive directory contents, or directory symlinks.
 MGR_EXTRACT_DIR="${TMP_DIR}/mgr"
 mkdir -p "${MGR_EXTRACT_DIR}"
 echo "Extracting release manager..."
-tar -xzf "${ARCHIVE_FILE}" -C "${MGR_EXTRACT_DIR}" bin/dam-hopper-manager
+tar --extract --gzip --file "${ARCHIVE_FILE}" \
+    --directory "${MGR_EXTRACT_DIR}" \
+    --no-same-owner --no-same-permissions --no-recursion \
+    --keep-directory-symlink \
+    -- "bin/dam-hopper-manager"
 
 MANAGER_BIN="${MGR_EXTRACT_DIR}/bin/dam-hopper-manager"
+if [[ -L "${MGR_EXTRACT_DIR}/bin" || ! -d "${MGR_EXTRACT_DIR}/bin" ]]; then
+    echo "Error: Archive extracted a non-directory manager parent" >&2
+    exit 1
+fi
+if [[ -L "${MANAGER_BIN}" || ! -f "${MANAGER_BIN}" ]]; then
+    echo "Error: Extracted manager binary is not a regular file: ${MANAGER_BIN}" >&2
+    exit 1
+fi
+chmod 0755 "${MANAGER_BIN}"
 if [[ ! -x "${MANAGER_BIN}" ]]; then
     echo "Error: Extracted manager binary is not executable: ${MANAGER_BIN}" >&2
+    exit 1
+fi
+MANAGER_MODE="$(stat -c '%a' "${MANAGER_BIN}" 2>/dev/null || stat -f '%Lp' "${MANAGER_BIN}")"
+if [[ "${MANAGER_MODE}" != "755" ]]; then
+    echo "Error: Extracted manager binary has unsafe mode ${MANAGER_MODE}" >&2
     exit 1
 fi
 
@@ -207,8 +226,12 @@ echo "============================================================"
 
 if [[ $EUID -eq 0 ]]; then
     "${INSTALL_CMD[@]}"
+    mkdir -p -m 0755 /usr/local/bin
+    install -m 0755 "${MANAGER_BIN}" /usr/local/bin/dam-hopper
 else
     sudo "${INSTALL_CMD[@]}"
+    sudo mkdir -p -m 0755 /usr/local/bin
+    sudo install -m 0755 "${MANAGER_BIN}" /usr/local/bin/dam-hopper
 fi
 
 echo ""

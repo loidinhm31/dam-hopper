@@ -176,6 +176,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Diagnostics export from Settings > Maintenance with canonical frontend snapshot payload and capped terminal tails.
 
 **Acceptance Criteria:**
+
 - ✓ Native image/video streams require an opaque ticket bound to an authenticated actor/session
 - ✓ Ticket clients require `session-cookie-v1` and a credentialed successful `HEAD` before native source/download exposure
 - ✓ Profile change/logout revokes the bounded media session before credential removal, including stale dialog profiles
@@ -242,7 +243,6 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Sensitive metadata is redacted before sink delivery unless local diagnostics explicitly disable it
 - ✓ Shared logger is used by the high-value UI surfaces noted above
 
-
 ### PR-010: Browser Debug and Native Child WebView
 
 **Status:** Windows v1 runtime-supported behind `VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG`; Linux child/relay implementation exists but runtime and permission behavior are unverified; macOS is deferred; Android uses iframe fallback.
@@ -259,7 +259,7 @@ See [Native Browser Debug Support](./native-browser-debug-support.md) for the pl
 
 ### PR-011: Linux Release Identity, Manager, Manifest, and Publisher v1
 
-**Status:** Phases 01–07 complete and reviewed (2026-09-04). Phase 01 defines
+**Status:** Phases 01–08 complete and reviewed (2026-09-04); Phase 09 documentation and release cutover in progress. Phase 01 defines
 the release metadata contract; Phase 02 adds the Rust manager's unprivileged
 acquisition and root-only role staging; Phase 03 adds the dedicated web host,
 runtime-origin bootstrap, and API-only default; Phase 04 adds role-aware
@@ -267,8 +267,8 @@ systemd units and ownership policy; Phase 05 adds durable activation, health
 gates, rollback, recovery, and retention; Phase 06 adds the central GitHub
 publisher, deterministic archive, manifest/SBOM generation, asset gate, and
 non-root bootstrap; Phase 07 adds one-time exact format-2 migration and
-checkout-built runner retirement.
-
+checkout-built runner retirement; Phase 08 delivers comprehensive behavioral,
+security, and failure-injection validation.
 **Phase 03 delivery boundary:**
 
 - `dam-hopper-web` serves a selected immutable web root independently, defaults
@@ -295,7 +295,7 @@ passed, and review scored 8.5/10 with no blocking findings.
   generation, active/previous/pending releases, transaction phase, hashes, and
   latest failure; `/opt/dam-hopper/current` is a repairable convenience link.
 - Valid activation is `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED →
-  SWITCHED → PROBING → COMMITTED`, with lock-scoped quiesce, concrete unit/
+SWITCHED → PROBING → COMMITTED`, with lock-scoped quiesce, concrete unit/
   config switch, daemon reload, health probing, and atomic commit.
 - Candidate health requires readiness within 20 seconds plus 20 consecutive
   probes at 500 ms (10-second stability) for API `/api/health` and web
@@ -369,7 +369,7 @@ stronger action pinning remain later release gates.
   listeners, or remove current runtime state.
 - Make `start` the sole activation entrypoint. Advance only the durable state
   machine `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED →
-  PROBING → COMMITTED`, under the deployment lock and with atomic state writes.
+PROBING → COMMITTED`, under the deployment lock and with atomic state writes.
 - Require a 20-second startup deadline and a 10-second stability window of 20
   consecutive 500 ms probes for each selected unit; check process identity,
   executable, listener, and exact role/version health JSON.
@@ -381,53 +381,53 @@ stronger action pinning remain later release gates.
 
 - [x] Rust `ReleaseManifest` types use camelCase names and deny unknown fields.
 - [x] Manifest payloads are bounded at 1 MiB; inventories at 20,000 entries;
-  normalized paths at 255 bytes.
+      normalized paths at 255 bytes.
 - [x] Stable tag/version, component equality, Fedora/systemd profile, archive,
-  service, rollback, required-path, role, mode, digest, and file-type rules
-  are validated.
+      service, rollback, required-path, role, mode, digest, and file-type rules
+      are validated.
 - [x] `dam-hopper` Clap grammar and EUID matrix are implemented: non-root
-  `fetch`, root mutation commands, and read-only `status`/`version`.
+      `fetch`, root mutation commands, and read-only `status`/`version`.
 - [x] Platform checks cover Fedora 44, x86_64, glibc >= 2.43, systemd >= 259,
-  and an active system manager; exact web origins reject unsafe or duplicate
-  values.
+      and an active system manager; exact web origins reject unsafe or duplicate
+      values.
 - [x] GitHub acquisition uses bounded HTTPS requests and mandatory archive
-  SHA-256 verification; attestation remains optional.
+      SHA-256 verification; attestation remains optional.
 - [x] Root staging uses a nonblocking deployment lock, no-follow bundle opens,
-  exact manifest inventory inspection, regular-file/directory extraction, role
-  projection, and fsync-backed pending metadata.
+      exact manifest inventory inspection, regular-file/directory extraction, role
+      projection, and fsync-backed pending metadata.
 - [x] `dam-hopper-web` binds independently on the documented web port, serves
-  only GET/HEAD static requests, and exposes reserved health/runtime-config
-  routes with no-store JSON responses.
+      only GET/HEAD static requests, and exposes reserved health/runtime-config
+      routes with no-store JSON responses.
 - [x] Web-root safety rejects symlink/traversal escapes; immutable hashed
-  assets, root/index documents, and other assets receive distinct cache policy.
+      assets, root/index documents, and other assets receive distinct cache policy.
 - [x] Phase 05 durable state records generation, active/previous/pending
-  releases, transaction phase, hashes, and latest failure at
-  `/var/lib/dam-hopper-manager/state.json`; active `current` is repairable.
+      releases, transaction phase, hashes, and latest failure at
+      `/var/lib/dam-hopper-manager/state.json`; active `current` is repairable.
 - [x] State transitions enforce
-  `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING →
-  COMMITTED` and classify interrupted work for boot recovery.
+      `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING →
+COMMITTED` and classify interrupted work for boot recovery.
 - [x] Candidate health enforces the 20-second startup deadline, 20 consecutive
-  500 ms probes, exact process/listener identity, and API/web role-version JSON.
+      500 ms probes, exact process/listener identity, and API/web role-version JSON.
 - [x] `dam-hopper-recovery.service` is ordered before API/web units and
-  `dam-hopper recover --boot` repairs safe interruptions or blocks unsafe state.
+      `dam-hopper recover --boot` repairs safe interruptions or blocks unsafe state.
 - [x] Automatic candidate rollback, first-install baseline cleanup, manual
-  previous-release rollback, and verified unreferenced-tree retention are
-  implemented.
+      previous-release rollback, and verified unreferenced-tree retention are
+      implemented.
 - [x] Frontend runtime-origin validation is bounded, exact-origin based, and
-  fail-closed; managed-profile precedence and token invalidation are covered.
+      fail-closed; managed-profile precedence and token invalidation are covered.
 - [x] API router constructors default to API-only behavior; Docker's combined
-  mode passes an explicit `--web-dir`.
+      mode passes an explicit `--web-dir`.
 - [x] Phase 03 focused suites pass: web host 8/8, API health/router 2/2, and
-  runtime-config/profile Vitest 72/72; scoped compile/build checks pass.
+      runtime-config/profile Vitest 72/72; scoped compile/build checks pass.
 - [x] Focused release suites pass 45/45 tests across seven suites; scoped
-  manager compile/check and review gates pass with no blocking findings.
+      manager compile/check and review gates pass with no blocking findings.
 - [x] Phase 06 central publisher DAG, exact four-asset gate, deterministic
-  archive, SPDX SBOM, GitHub attestations, and bootstrap staging are delivered;
-  focused publisher contract tests and syntax/alignment checks pass.
+      archive, SPDX SBOM, GitHub attestations, and bootstrap staging are delivered;
+      focused publisher contract tests and syntax/alignment checks pass.
 - [x] Phase 07 exact format-2 verifier, sibling same-device staging,
-  `renameat2(RENAME_EXCHANGE)` cutover, rollback restoration, and
-  `imported-format-2` retention are delivered; old checkout runner scripts,
-  fixed unit, fixture, and package aliases are absent.
+      `renameat2(RENAME_EXCHANGE)` cutover, rollback restoration, and
+      `imported-format-2` retention are delivered; old checkout runner scripts,
+      fixed unit, fixture, and package aliases are absent.
 
 **Technical Constraints:**
 
@@ -445,7 +445,7 @@ stronger action pinning remain later release gates.
   `/opt/dam-hopper/current` as authoritative.
 - Keep activation lock-scoped and phase-valid:
   `ABSENT | ACTIVE → STAGED → PENDING → QUIESCED → SWITCHED → PROBING →
-  COMMITTED`. Health probes must use the 20-second startup deadline and
+COMMITTED`. Health probes must use the 20-second startup deadline and
   10-second consecutive-probe window.
 - Order the root recovery oneshot before API/web units; recovery must fail
   closed on corrupt, unowned, hash-mismatched, or unrestorable state.
