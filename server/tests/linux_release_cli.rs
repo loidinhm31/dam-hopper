@@ -127,14 +127,32 @@ fn test_cli_start_status_rollback_grammar() {
         _ => panic!("expected Start command"),
     }
 
-    let cli = Cli::try_parse_from(["dam-hopper", "start", "--service-user", "dam-hopper", "--non-interactive"])
-        .expect("start command with user");
+    let cli = Cli::try_parse_from([
+        "dam-hopper",
+        "start",
+        "--service-user",
+        "dam-hopper",
+        "--non-interactive",
+    ])
+    .expect("start command with user");
     match cli.command {
         Commands::Start(start) => {
             assert_eq!(start.service_user, Some("dam-hopper".to_string()));
             assert!(start.non_interactive);
         }
         _ => panic!("expected Start command"),
+    }
+
+    let cli = Cli::try_parse_from(["dam-hopper", "stop"]).expect("stop command");
+    match cli.command {
+        Commands::Stop(stop) => assert!(!stop.clean),
+        _ => panic!("expected Stop command"),
+    }
+
+    let cli = Cli::try_parse_from(["dam-hopper", "stop", "--clean"]).expect("stop clean command");
+    match cli.command {
+        Commands::Stop(stop) => assert!(stop.clean),
+        _ => panic!("expected Stop command"),
     }
 
     let cli = Cli::try_parse_from(["dam-hopper", "status", "--json"]).expect("status command");
@@ -175,6 +193,7 @@ fn test_privilege_enforcement_matrix() {
         allow_web_origins: vec![],
         verify_attestation: false,
         service_user: None,
+        reinstall: false,
     });
     // install must run as root
     assert!(matches!(
@@ -194,6 +213,7 @@ fn test_privilege_enforcement_matrix() {
             allow_web_origins: vec![],
             verify_attestation: false,
             service_user: None,
+            reinstall: false,
         }),
     };
     assert!(verify_privileges(&role_set_cmd, 1000).is_err());
@@ -202,6 +222,10 @@ fn test_privilege_enforcement_matrix() {
     let start_cmd = Commands::Start(Default::default());
     assert!(verify_privileges(&start_cmd, 1000).is_err());
     assert!(verify_privileges(&start_cmd, 0).is_ok());
+
+    let stop_cmd = Commands::Stop(Default::default());
+    assert!(verify_privileges(&stop_cmd, 1000).is_err());
+    assert!(verify_privileges(&stop_cmd, 0).is_ok());
 
     let rollback_cmd = Commands::Rollback(Default::default());
     assert!(verify_privileges(&rollback_cmd, 1000).is_err());
@@ -224,8 +248,15 @@ fn test_cli_missing_required_bundle() {
 
 #[test]
 fn test_cli_invalid_role_fails() {
-    let err = Cli::try_parse_from(["dam-hopper", "install", "--bundle", "/tmp", "--role", "invalid_role"])
-        .expect_err("invalid role must fail");
+    let err = Cli::try_parse_from([
+        "dam-hopper",
+        "install",
+        "--bundle",
+        "/tmp",
+        "--role",
+        "invalid_role",
+    ])
+    .expect_err("invalid role must fail");
     assert!(err.to_string().contains("invalid value 'invalid_role'"));
 }
 
@@ -262,7 +293,9 @@ fn test_verify_api_service_account_rejects_root() {
     assert!(matches!(res, Err(ReleaseError::Config(ref msg)) if msg.contains("cannot be root")));
 
     let res_empty = verify_api_service_account("   ");
-    assert!(matches!(res_empty, Err(ReleaseError::Config(ref msg)) if msg.contains("cannot be empty")));
+    assert!(
+        matches!(res_empty, Err(ReleaseError::Config(ref msg)) if msg.contains("cannot be empty"))
+    );
 }
 
 #[test]

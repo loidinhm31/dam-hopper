@@ -25,7 +25,10 @@ fn test_render_api_unit_success() {
     assert!(rendered.contains("Group=dam-hopper"));
     assert!(rendered.contains("WorkingDirectory=/var/lib/dam-hopper"));
     assert!(rendered.contains("Environment=HOME=/var/lib/dam-hopper"));
-    assert!(rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server"));
+    assert!(rendered.contains("Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config"));
+    assert!(
+        rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server")
+    );
     assert!(rendered.contains("Environment=DAM_HOPPER_CORS_ORIGINS=http://localhost:4802"));
     assert!(rendered.contains("SyslogIdentifier=dam-hopper-api"));
     assert!(!rendered.contains('@'));
@@ -69,11 +72,18 @@ fn test_reject_unresolved_or_unknown_tokens() {
 
     let unknown_token_template = "[Unit]\nDescription=@UNKNOWN_TOKEN@\n";
     let res = render_api_unit(unknown_token_template, &ctx);
-    assert!(matches!(res, Err(ReleaseError::TemplateTokenInjection { .. })));
+    assert!(matches!(
+        res,
+        Err(ReleaseError::TemplateTokenInjection { .. })
+    ));
 
-    let leftover_token_template = "[Unit]\nDescription=@RELEASE_ROOT@\n[Service]\nUser=@LEFTOVER@\n";
+    let leftover_token_template =
+        "[Unit]\nDescription=@RELEASE_ROOT@\n[Service]\nUser=@LEFTOVER@\n";
     let res = render_api_unit(leftover_token_template, &ctx);
-    assert!(matches!(res, Err(ReleaseError::TemplateTokenInjection { .. })));
+    assert!(matches!(
+        res,
+        Err(ReleaseError::TemplateTokenInjection { .. })
+    ));
 }
 
 #[test]
@@ -84,7 +94,10 @@ fn test_reject_control_char_injection_in_context() {
         PathBuf::from("/etc/dam-hopper/host-config.json"),
         vec![],
     );
-    assert!(matches!(res, Err(ReleaseError::TemplateTokenInjection { .. })));
+    assert!(matches!(
+        res,
+        Err(ReleaseError::TemplateTokenInjection { .. })
+    ));
 }
 
 #[test]
@@ -159,10 +172,18 @@ fn test_stage_candidate_units_roles() {
             sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
         },
         components: ComponentsMeta {
-            cli: ComponentVersion { version: "0.2.0".to_string() },
-            api: ComponentVersion { version: "0.2.0".to_string() },
-            web_host: ComponentVersion { version: "0.2.0".to_string() },
-            web_assets: ComponentVersion { version: "0.2.0".to_string() },
+            cli: ComponentVersion {
+                version: "0.2.0".to_string(),
+            },
+            api: ComponentVersion {
+                version: "0.2.0".to_string(),
+            },
+            web_host: ComponentVersion {
+                version: "0.2.0".to_string(),
+            },
+            web_assets: ComponentVersion {
+                version: "0.2.0".to_string(),
+            },
         },
         inventory: vec![],
         services: ServicesMeta {
@@ -189,8 +210,14 @@ fn test_stage_candidate_units_roles() {
 
     // Stage for Server role
     let origins = vec!["http://localhost:4802".to_string()];
-    stage_candidate_units(&layout, &target_dir, &manifest, TargetRole::Server, &origins)
-        .expect("stage candidate units for server");
+    stage_candidate_units(
+        &layout,
+        &target_dir,
+        &manifest,
+        TargetRole::Server,
+        &origins,
+    )
+    .expect("stage candidate units for server");
 
     let pending_units = layout.pending_units_dir();
     assert!(pending_units.join("dam-hopper-api.service").exists());

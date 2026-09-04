@@ -2,10 +2,10 @@
 
 use clap::Parser;
 use dam_hopper_server::linux_release::{
-    acquire_release, current_euid, execute_activation_with_args, execute_manual_rollback,
-    execute_recovery, load_host_config, load_or_init_manager_state, save_host_config,
-    stage_release_bundle, verify_api_service_account, verify_privileges, Cli, Commands, HostConfig,
-    Layout, RoleCommands,
+    ALL_SERVICE_UNITS, Cli, Commands, HostConfig, Layout, RoleCommands, acquire_release,
+    current_euid, execute_activation_with_args, execute_manual_rollback, execute_recovery,
+    load_host_config, load_or_init_manager_state, save_host_config, stage_release_bundle,
+    verify_api_service_account, verify_privileges,
 };
 use std::process::ExitCode;
 
@@ -55,7 +55,8 @@ async fn main() -> ExitCode {
                     .flatten()
                     .unwrap_or_else(|| {
                         HostConfig::new(
-                            args.role.unwrap_or(dam_hopper_server::linux_release::TargetRole::Both),
+                            args.role
+                                .unwrap_or(dam_hopper_server::linux_release::TargetRole::Both),
                             args.allow_web_origins.clone(),
                         )
                         .unwrap()
@@ -74,6 +75,7 @@ async fn main() -> ExitCode {
                 &args.allow_web_origins,
                 args.verify_attestation,
                 false,
+                args.reinstall,
             ) {
                 Ok(pending) => {
                     println!("Successfully staged candidate release '{}'", pending.tag);
@@ -120,6 +122,7 @@ async fn main() -> ExitCode {
                     &args.allow_web_origins,
                     args.verify_attestation,
                     true,
+                    args.reinstall,
                 ) {
                     Ok(pending) => {
                         println!("Successfully staged candidate role view '{}'", pending.role);
@@ -149,6 +152,41 @@ async fn main() -> ExitCode {
                     ExitCode::from(1)
                 }
             }
+        }
+        Commands::Stop(args) => {
+            if let Err(e) = dam_hopper_server::linux_release::verify_host_platform() {
+                eprintln!("host platform verification failed: {e}");
+                return ExitCode::from(1);
+            }
+            println!("Stopping DamHopper services...");
+            for &unit in ALL_SERVICE_UNITS {
+                if let Ok(true) = dam_hopper_server::linux_release::systemctl_is_active(unit) {
+                    if let Err(e) = dam_hopper_server::linux_release::systemctl_stop(unit) {
+                        eprintln!("warning: failed to stop {unit}: {e}");
+                    } else {
+                        println!("  Stopped {unit}");
+                    }
+                }
+            }
+            if args.clean {
+                println!("Cleaning active release state and symlinks...");
+                let _ = std::fs::remove_file(layout.current_link());
+                if let Ok(mut state) = dam_hopper_server::linux_release::load_or_init_manager_state(
+                    &layout.manager_state_path(),
+                ) {
+                    if let Some(active) = state.active.take() {
+                        let _ = std::fs::remove_dir_all(&active.release_path);
+                    }
+                    state.pending = None;
+                    let _ = dam_hopper_server::linux_release::save_manager_state(
+                        &layout.manager_state_path(),
+                        &mut state,
+                    );
+                }
+                println!("Cleaned release state for rebuild.");
+            }
+            println!("Services stopped successfully.");
+            ExitCode::SUCCESS
         }
         Commands::Status(args) => {
             let host_config = match load_host_config(&layout.host_config_path()) {
@@ -243,7 +281,10 @@ async fn main() -> ExitCode {
             }
         }
         Commands::Validate(args) => {
-            println!("Validating release manifest '{}'...", args.manifest.display());
+            println!(
+                "Validating release manifest '{}'...",
+                args.manifest.display()
+            );
             match dam_hopper_server::linux_release::validate_manifest_and_archive(
                 &args.manifest,
                 args.archive.as_deref(),

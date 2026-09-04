@@ -50,6 +50,15 @@ pub fn verify_privileges(command: &Commands, euid: u32) -> Result<(), ReleaseErr
                 });
             }
         }
+        Commands::Stop(_) => {
+            if euid != 0 {
+                return Err(ReleaseError::PrivilegeRequired {
+                    operation: "stop",
+                    expected_euid: 0,
+                    actual_euid: euid,
+                });
+            }
+        }
         Commands::Rollback(_) => {
             if euid != 0 {
                 return Err(ReleaseError::PrivilegeRequired {

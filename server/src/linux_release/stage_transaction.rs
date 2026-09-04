@@ -5,7 +5,7 @@ use super::archive_extract::extract_role_projection;
 use super::attestation::verify_file_attestation;
 use super::constants::MAX_MANIFEST_BYTES;
 use super::error::ReleaseError;
-use super::host_config::{load_host_config, save_host_config, HostConfig};
+use super::host_config::{HostConfig, load_host_config, save_host_config};
 use super::inventory::TargetRole;
 use super::layout::Layout;
 use super::lock::DeploymentLock;
@@ -28,6 +28,7 @@ pub fn stage_release_bundle(
     allow_origins: &[String],
     verify_attestation: bool,
     is_role_set: bool,
+    reinstall: bool,
 ) -> Result<PendingState, ReleaseError> {
     let _lock = DeploymentLock::acquire(&layout.deploy_lock_path())?;
 
@@ -100,10 +101,8 @@ pub fn stage_release_bundle(
     let (role, host_config) =
         determine_host_role(layout, requested_role, allow_origins, is_role_set)?;
 
-
     let tx_id = uuid::Uuid::new_v4().to_string();
-    let pending_host_config_path =
-        layout.transaction_pending_host_config_json_path(&tx_id);
+    let pending_host_config_path = layout.transaction_pending_host_config_json_path(&tx_id);
     let legacy_format2_root = super::legacy_format2::is_legacy_format2_root(&layout.opt_dir);
     let (target_dir, pending_units_dir, migration_opt) = if legacy_format2_root {
         let (t, u, m) = super::migration::stage_migration_candidate(
@@ -136,9 +135,9 @@ pub fn stage_release_bundle(
             &manifest_bytes,
             &manifest,
             role,
+            reinstall,
         );
-        let cleanup_result =
-            remove_dir_if_present(&tx_dir, "remove staging transaction directory");
+        let cleanup_result = remove_dir_if_present(&tx_dir, "remove staging transaction directory");
         let target_dir = match result {
             Ok(target_dir) => target_dir,
             Err(stage_error) => {
@@ -166,19 +165,20 @@ pub fn stage_release_bundle(
             &pending_units_dir,
             &pending_host_config_path,
         ) {
-            let cleanup_result = remove_dir_if_present(&target_dir, "remove failed release staging")
-                .and_then(|_| {
-                    remove_dir_if_present(
-                        &pending_units_dir,
-                        "remove failed pending unit staging",
-                    )
-                })
-                .and_then(|_| {
-                    remove_file_if_present(
-                        &pending_host_config_path,
-                        "remove failed pending host configuration",
-                    )
-                });
+            let cleanup_result =
+                remove_dir_if_present(&target_dir, "remove failed release staging")
+                    .and_then(|_| {
+                        remove_dir_if_present(
+                            &pending_units_dir,
+                            "remove failed pending unit staging",
+                        )
+                    })
+                    .and_then(|_| {
+                        remove_file_if_present(
+                            &pending_host_config_path,
+                            "remove failed pending host configuration",
+                        )
+                    });
             if let Err(cleanup_error) = cleanup_result {
                 return Err(ReleaseError::Config(format!(
                     "release staging failed ({stage_error}); cleanup failed ({cleanup_error})"
@@ -203,12 +203,10 @@ pub fn stage_release_bundle(
 
     let digests = (|| {
         let manifest_sha256 = hex::encode(Sha256::digest(&manifest_bytes));
-        let api_unit_sha256 = hash_optional_file(
-            &pending_units_dir.join(super::constants::API_SERVICE_UNIT),
-        )?;
-        let web_unit_sha256 = hash_optional_file(
-            &pending_units_dir.join(super::constants::WEB_SERVICE_UNIT),
-        )?;
+        let api_unit_sha256 =
+            hash_optional_file(&pending_units_dir.join(super::constants::API_SERVICE_UNIT))?;
+        let web_unit_sha256 =
+            hash_optional_file(&pending_units_dir.join(super::constants::WEB_SERVICE_UNIT))?;
         let host_config_sha256 = hash_file(&pending_host_config_path)?;
         Ok::<_, ReleaseError>((
             manifest_sha256,
@@ -217,21 +215,20 @@ pub fn stage_release_bundle(
             host_config_sha256,
         ))
     })();
-    let (manifest_sha256, api_unit_sha256, web_unit_sha256, host_config_sha256) =
-        match digests {
-            Ok(digests) => digests,
-            Err(error) => {
-                return Err(cleanup_staging_failure(
-                    error,
-                    layout,
-                    &target_dir,
-                    &pending_units_dir,
-                    &pending_host_config_path,
-                    migration_opt.as_ref(),
-                    previous_host_config.as_ref(),
-                ));
-            }
-        };
+    let (manifest_sha256, api_unit_sha256, web_unit_sha256, host_config_sha256) = match digests {
+        Ok(digests) => digests,
+        Err(error) => {
+            return Err(cleanup_staging_failure(
+                error,
+                layout,
+                &target_dir,
+                &pending_units_dir,
+                &pending_host_config_path,
+                migration_opt.as_ref(),
+                previous_host_config.as_ref(),
+            ));
+        }
+    };
 
     let pending_record = super::state_record::PendingCandidateRecord {
         tag: manifest.release.tag.clone(),
@@ -247,7 +244,8 @@ pub fn stage_release_bundle(
         host_config_sha256: Some(host_config_sha256),
     };
 
-    let mut mgr_state = match super::state::load_or_init_manager_state(&layout.manager_state_path()) {
+    let mut mgr_state = match super::state::load_or_init_manager_state(&layout.manager_state_path())
+    {
         Ok(state) => state,
         Err(error) => {
             return Err(cleanup_staging_failure(
@@ -280,7 +278,9 @@ pub fn stage_release_bundle(
     } else {
         mgr_state.transaction = None;
     }
-    if let Err(error) = super::state::save_manager_state(&layout.manager_state_path(), &mut mgr_state) {
+    if let Err(error) =
+        super::state::save_manager_state(&layout.manager_state_path(), &mut mgr_state)
+    {
         match super::state::load_or_init_manager_state(&layout.manager_state_path()) {
             Ok(saved_state) if saved_state.pending.as_ref() == Some(&pending_record) => {
                 return Err(ReleaseError::Config(format!(
@@ -324,6 +324,7 @@ pub(crate) fn execute_staging_transaction(
     manifest_bytes: &[u8],
     manifest: &ReleaseManifest,
     role: TargetRole,
+    reinstall: bool,
 ) -> Result<std::path::PathBuf, ReleaseError> {
     use std::os::unix::fs::OpenOptionsExt;
     let mut src_file = fs::OpenOptions::new()
@@ -394,10 +395,12 @@ pub(crate) fn execute_staging_transaction(
             got: computed_sha,
         });
     }
-    staged_archive_file.sync_all().map_err(|e| ReleaseError::Io {
-        action: "fsync staged archive copy",
-        details: e.to_string(),
-    })?;
+    staged_archive_file
+        .sync_all()
+        .map_err(|e| ReleaseError::Io {
+            action: "fsync staged archive copy",
+            details: e.to_string(),
+        })?;
 
     // Inspect archive contents against manifest
     staged_archive_file
@@ -461,11 +464,35 @@ pub(crate) fn execute_staging_transaction(
                 .previous
                 .as_ref()
                 .is_some_and(|p| p.release_path == target_dir.to_string_lossy());
-            if is_active || is_previous {
+            if (is_active || is_previous) && !reinstall {
                 return Err(ReleaseError::InvalidBundle {
                     path: target_dir.display().to_string(),
-                    reason: "cannot overwrite active or previous release destination".to_string(),
+                    reason: "cannot overwrite active or previous release destination (use --reinstall to replace)".to_string(),
                 });
+            }
+            if (is_active || is_previous) && reinstall {
+                for &unit in super::constants::ALL_SERVICE_UNITS {
+                    let _ = super::systemd::systemctl_stop(unit);
+                }
+                let mut updated_state = mgr_state;
+                if updated_state
+                    .active
+                    .as_ref()
+                    .is_some_and(|a| a.release_path == target_dir.to_string_lossy())
+                {
+                    updated_state.active = None;
+                }
+                if updated_state
+                    .previous
+                    .as_ref()
+                    .is_some_and(|p| p.release_path == target_dir.to_string_lossy())
+                {
+                    updated_state.previous = None;
+                }
+                let _ = super::state::save_manager_state(
+                    &layout.manager_state_path(),
+                    &mut updated_state,
+                );
             }
             fs::remove_dir_all(&target_dir).map_err(|e| ReleaseError::Io {
                 action: "remove uncommitted candidate release destination",
@@ -524,12 +551,12 @@ fn hash_optional_file(path: &Path) -> Result<Option<String>, ReleaseError> {
 }
 fn remove_dir_if_present(path: &Path, action: &'static str) -> Result<(), ReleaseError> {
     match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_dir() => fs::remove_dir_all(path).map_err(|e| {
-            ReleaseError::Io {
+        Ok(meta) if meta.file_type().is_dir() => {
+            fs::remove_dir_all(path).map_err(|e| ReleaseError::Io {
                 action,
                 details: format!("{}: {e}", path.display()),
-            }
-        }),
+            })
+        }
         Ok(_) => Err(ReleaseError::InvalidBundle {
             path: path.display().to_string(),
             reason: "staging cleanup target is not a directory".to_string(),
@@ -566,10 +593,8 @@ fn cleanup_staging_failure(
     let release_cleanup_path = migration
         .map(|record| Path::new(&record.migration_root))
         .unwrap_or(target_dir);
-    if let Err(error) = remove_dir_if_present(
-        release_cleanup_path,
-        "remove failed release staging",
-    ) {
+    if let Err(error) = remove_dir_if_present(release_cleanup_path, "remove failed release staging")
+    {
         cleanup_errors.push(error.to_string());
     }
 
@@ -596,12 +621,12 @@ fn cleanup_staging_failure(
 
 fn remove_file_if_present(path: &Path, action: &'static str) -> Result<(), ReleaseError> {
     match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_file() => fs::remove_file(path).map_err(|e| {
-            ReleaseError::Io {
+        Ok(meta) if meta.file_type().is_file() => {
+            fs::remove_file(path).map_err(|e| ReleaseError::Io {
                 action,
                 details: format!("{}: {e}", path.display()),
-            }
-        }),
+            })
+        }
         Ok(_) => Err(ReleaseError::InvalidBundle {
             path: path.display().to_string(),
             reason: "staging cleanup target is not a regular file".to_string(),
