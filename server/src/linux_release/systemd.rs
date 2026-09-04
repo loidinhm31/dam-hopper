@@ -65,6 +65,11 @@ pub fn systemctl_disable(unit_name: &str) -> Result<(), ReleaseError> {
         if stderr.contains("does not exist") || stderr.contains("not loaded") || stderr.contains("No such file") {
             return Ok(());
         }
+        if (stderr.contains("Access denied") || stderr.contains("interactive authentication"))
+            && unsafe { libc::geteuid() != 0 }
+        {
+            return Ok(());
+        }
         return Err(ReleaseError::SystemdCommandFailed {
             command: "systemctl disable".to_string(),
             exit_code: output.status.code(),

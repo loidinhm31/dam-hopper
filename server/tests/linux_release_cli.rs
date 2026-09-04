@@ -119,7 +119,23 @@ fn test_cli_role_set_grammar() {
 #[test]
 fn test_cli_start_status_rollback_grammar() {
     let cli = Cli::try_parse_from(["dam-hopper", "start"]).expect("start command");
-    assert!(matches!(cli.command, Commands::Start(_)));
+    match cli.command {
+        Commands::Start(start) => {
+            assert_eq!(start.service_user, None);
+            assert!(!start.non_interactive);
+        }
+        _ => panic!("expected Start command"),
+    }
+
+    let cli = Cli::try_parse_from(["dam-hopper", "start", "--service-user", "dam-hopper", "--non-interactive"])
+        .expect("start command with user");
+    match cli.command {
+        Commands::Start(start) => {
+            assert_eq!(start.service_user, Some("dam-hopper".to_string()));
+            assert!(start.non_interactive);
+        }
+        _ => panic!("expected Start command"),
+    }
 
     let cli = Cli::try_parse_from(["dam-hopper", "status", "--json"]).expect("status command");
     match cli.command {
@@ -158,6 +174,7 @@ fn test_privilege_enforcement_matrix() {
         role: Some(TargetRole::Both),
         allow_web_origins: vec![],
         verify_attestation: false,
+        service_user: None,
     });
     // install must run as root
     assert!(matches!(
@@ -176,6 +193,7 @@ fn test_privilege_enforcement_matrix() {
             bundle: PathBuf::from("/tmp"),
             allow_web_origins: vec![],
             verify_attestation: false,
+            service_user: None,
         }),
     };
     assert!(verify_privileges(&role_set_cmd, 1000).is_err());
@@ -236,4 +254,22 @@ fn test_cli_recover_privilege_enforcement() {
     let recover_cmd = Commands::Recover(Default::default());
     assert!(verify_privileges(&recover_cmd, 1000).is_err());
     assert!(verify_privileges(&recover_cmd, 0).is_ok());
+}
+
+#[test]
+fn test_verify_api_service_account_rejects_root() {
+    let res = verify_api_service_account("root");
+    assert!(matches!(res, Err(ReleaseError::Config(ref msg)) if msg.contains("cannot be root")));
+
+    let res_empty = verify_api_service_account("   ");
+    assert!(matches!(res_empty, Err(ReleaseError::Config(ref msg)) if msg.contains("cannot be empty")));
+}
+
+#[test]
+fn test_resolve_service_user_explicit_and_root_rejection() {
+    let res_root = resolve_service_user(Some("root"), true);
+    assert!(res_root.is_err());
+
+    let res_nonexistent = resolve_service_user(Some("definitely_nonexistent_user_99999"), true);
+    assert!(res_nonexistent.is_err());
 }

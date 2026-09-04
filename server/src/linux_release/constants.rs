@@ -22,8 +22,10 @@ pub const PROFILE_SYSTEMD_MIN: u32 = 245;
 
 /// Systemd unit name for the API server.
 pub const API_SERVICE_UNIT: &str = "dam-hopper-api.service";
-/// Systemd Execution user for the API server (per owner direction for MVP).
+/// Systemd execution user for the API server (manifest identity contract).
 pub const API_SERVICE_IDENTITY: &str = "root";
+/// Default fallback system user for the API server.
+pub const DEFAULT_API_SERVICE_USER: &str = "dam-hopper";
 /// Default bind host for the API server.
 pub const API_SERVICE_BIND_HOST: &str = "0.0.0.0";
 /// Dedicated port for the API server.

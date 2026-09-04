@@ -64,6 +64,9 @@ pub struct HostConfig {
     /// Exact allowed browser origins for the API server (CORS).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_web_origins: Vec<String>,
+    /// Dedicated system user for the API service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_user: Option<String>,
 }
 
 impl HostConfig {
@@ -73,7 +76,14 @@ impl HostConfig {
         Ok(Self {
             role,
             allowed_web_origins: validated_origins,
+            service_user: None,
         })
+    }
+
+    /// Set service user for this host config.
+    pub fn with_service_user(mut self, service_user: Option<String>) -> Self {
+        self.service_user = service_user;
+        self
     }
 }
 

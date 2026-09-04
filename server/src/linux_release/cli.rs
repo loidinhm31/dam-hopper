@@ -88,6 +88,10 @@ pub struct InstallArgs {
     /// Optionally verify GitHub attestations using `gh` CLI if available.
     #[arg(long)]
     pub verify_attestation: bool,
+
+    /// Dedicated system user to run dam-hopper-api (cannot be root).
+    #[arg(long = "service-user", alias = "user")]
+    pub service_user: Option<String>,
 }
 
 /// Role management commands.
@@ -115,13 +119,23 @@ pub struct RoleSetArgs {
     /// Optionally verify GitHub attestations using `gh` CLI if available.
     #[arg(long)]
     pub verify_attestation: bool,
+
+    /// Dedicated system user to run dam-hopper-api (cannot be root).
+    #[arg(long = "service-user", alias = "user")]
+    pub service_user: Option<String>,
 }
 
 /// Arguments for `start` subcommand.
 #[derive(Debug, Args, Clone, PartialEq, Eq, Default)]
-pub struct StartArgs {}
+pub struct StartArgs {
+    /// Dedicated system user to run dam-hopper-api (cannot be root).
+    #[arg(long = "service-user", alias = "user")]
+    pub service_user: Option<String>,
 
-/// Arguments for `status` subcommand.
+    /// Fail if interactive confirmation is required in non-interactive mode.
+    #[arg(long = "non-interactive")]
+    pub non_interactive: bool,
+}
 #[derive(Debug, Args, Clone, PartialEq, Eq, Default)]
 pub struct StatusArgs {
     /// Output machine-readable JSON status.

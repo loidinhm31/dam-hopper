@@ -25,13 +25,28 @@ use std::fs;
 use std::path::Path;
 
 pub async fn execute_activation(layout: &Layout) -> Result<(), ReleaseError> {
+    execute_activation_with_args(layout, &super::cli::StartArgs::default()).await
+}
+
+pub async fn execute_activation_with_args(
+    layout: &Layout,
+    args: &super::cli::StartArgs,
+) -> Result<(), ReleaseError> {
     let lock = DeploymentLock::acquire(&layout.deploy_lock_path())?;
-    execute_activation_locked(layout, &lock).await
+    execute_activation_locked_with_args(layout, &lock, args).await
 }
 
 pub async fn execute_activation_locked(
     layout: &Layout,
+    lock: &DeploymentLock,
+) -> Result<(), ReleaseError> {
+    execute_activation_locked_with_args(layout, lock, &super::cli::StartArgs::default()).await
+}
+
+pub async fn execute_activation_locked_with_args(
+    layout: &Layout,
     _lock: &DeploymentLock,
+    args: &super::cli::StartArgs,
 ) -> Result<(), ReleaseError> {
     let mut state = load_or_init_manager_state(&layout.manager_state_path())?;
 
@@ -102,6 +117,50 @@ pub async fn execute_activation_locked(
             return Ok(());
         }
     };
+    let mut candidate = candidate;
+    if candidate.role.includes_server() {
+        let host_config = super::host_config::load_host_config(&layout.host_config_path())?;
+        let user_candidate = if let Some(u) = &args.service_user {
+            Some(u.as_str())
+        } else {
+            host_config.as_ref().and_then(|c| c.service_user.as_deref())
+        };
+
+        let user_name = super::account::resolve_service_user(user_candidate, args.non_interactive)?;
+        let user_info = super::account::verify_api_service_account(&user_name)?;
+        let group_name = super::account::get_group_by_gid(user_info.gid).unwrap_or_else(|| user_name.clone());
+
+        let mut config_to_save = host_config.unwrap_or_else(|| super::host_config::HostConfig::new(candidate.role, vec![]).unwrap());
+        if config_to_save.service_user.as_deref() != Some(&user_name) {
+            config_to_save.service_user = Some(user_name.clone());
+            super::host_config::save_host_config(&layout.host_config_path(), &config_to_save)?;
+        }
+
+        if let Some(ref units_path_str) = candidate.pending_units_path {
+            let units_dir = std::path::Path::new(units_path_str);
+            let api_unit_path = units_dir.join(API_SERVICE_UNIT);
+            if api_unit_path.exists() {
+                let unit_content = fs::read_to_string(&api_unit_path).map_err(|e| ReleaseError::Io {
+                    action: "read pending api unit",
+                    details: e.to_string(),
+                })?;
+                let updated = update_unit_service_identity(
+                    &unit_content,
+                    &user_name,
+                    &group_name,
+                    &user_info.home,
+                )?;
+                fs::write(&api_unit_path, updated.as_bytes()).map_err(|e| ReleaseError::Io {
+                    action: "write updated pending api unit",
+                    details: e.to_string(),
+                })?;
+                let new_hash = hash_optional_file(&api_unit_path)?;
+                candidate.api_unit_sha256 = new_hash;
+                state.pending = Some(candidate.clone());
+                save_manager_state(&layout.manager_state_path(), &mut state)?;
+            }
+        }
+    }
 
     validate_candidate_preflight(layout, &candidate, &allowed_sqlite_pids)?;
 
@@ -435,4 +494,105 @@ async fn execute_activation_pipeline(
 
 
     Ok(())
+}
+
+fn update_unit_service_identity(
+    unit_content: &str,
+    user: &str,
+    group: &str,
+    home: &str,
+) -> Result<String, ReleaseError> {
+    let mut lines = Vec::new();
+    let mut in_service = false;
+    let mut has_user = false;
+    let mut has_group = false;
+    let mut has_workdir = false;
+    let mut has_home_env = false;
+
+    for line in unit_content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[Service]" {
+            in_service = true;
+            lines.push(line.to_string());
+            continue;
+        } else if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if in_service {
+                if !has_user {
+                    lines.push(format!("User={user}"));
+                }
+                if !has_group {
+                    lines.push(format!("Group={group}"));
+                }
+                if !has_workdir {
+                    lines.push(format!("WorkingDirectory={home}"));
+                }
+                if !has_home_env {
+                    lines.push(format!("Environment=HOME={home}"));
+                }
+                in_service = false;
+            }
+            lines.push(line.to_string());
+            continue;
+        }
+
+        if in_service {
+            if trimmed.starts_with("User=") {
+                lines.push(format!("User={user}"));
+                has_user = true;
+                continue;
+            } else if trimmed.starts_with("Group=") {
+                lines.push(format!("Group={group}"));
+                has_group = true;
+                continue;
+            } else if trimmed.starts_with("WorkingDirectory=") {
+                lines.push(format!("WorkingDirectory={home}"));
+                has_workdir = true;
+                continue;
+            } else if trimmed.starts_with("Environment=HOME=") {
+                lines.push(format!("Environment=HOME={home}"));
+                has_home_env = true;
+                continue;
+            }
+        }
+        lines.push(line.to_string());
+    }
+
+    if in_service {
+        if !has_user {
+            lines.push(format!("User={user}"));
+        }
+        if !has_group {
+            lines.push(format!("Group={group}"));
+        }
+        if !has_workdir {
+            lines.push(format!("WorkingDirectory={home}"));
+        }
+        if !has_home_env {
+            lines.push(format!("Environment=HOME={home}"));
+        }
+    }
+
+    Ok(lines.join("\n") + "\n")
+}
+
+fn hash_optional_file(path: &Path) -> Result<Option<String>, ReleaseError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => {
+            let bytes = fs::read(path).map_err(|e| ReleaseError::Io {
+                action: "read file for hash",
+                details: e.to_string(),
+            })?;
+            use sha2::{Digest, Sha256};
+            Ok(Some(format!("{:x}", Sha256::digest(&bytes))))
+        }
+        Ok(_) => Err(ReleaseError::InvalidBundle {
+            path: path.display().to_string(),
+            reason: "staged unit path is not a regular file".to_string(),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ReleaseError::Io {
+            action: "inspect staged unit file",
+            details: error.to_string(),
+        }),
+    }
 }

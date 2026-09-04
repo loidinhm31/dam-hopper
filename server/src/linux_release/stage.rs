@@ -63,7 +63,8 @@ pub fn determine_host_role(
         if !allow_origins.is_empty() {
             origins = allow_origins.to_vec();
         }
-        return Ok((role, HostConfig::new(role, origins)?));
+        let existing_service_user = existing_config.as_ref().and_then(|c| c.service_user.clone());
+        return Ok((role, HostConfig::new(role, origins)?.with_service_user(existing_service_user)));
     }
 
     match existing_config {
@@ -82,7 +83,8 @@ pub fn determine_host_role(
             } else {
                 allow_origins.to_vec()
             };
-            Ok((role, HostConfig::new(role, origins)?))
+            let existing_service_user = config.service_user.clone();
+            Ok((role, HostConfig::new(role, origins)?.with_service_user(existing_service_user)))
         }
         None => {
             let role = requested_role.ok_or(ReleaseError::MissingRole)?;

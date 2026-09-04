@@ -77,3 +77,100 @@ pub fn verify_web_sysuser_account(username: &str) -> Result<UserInfo, ReleaseErr
 
     Ok(user)
 }
+
+/// Retrieve group name by GID.
+pub fn get_group_by_gid(gid: u32) -> Option<String> {
+    let grp = unsafe { libc::getgrgid(gid) };
+    if grp.is_null() {
+        return None;
+    }
+    let grp_ref = unsafe { &*grp };
+    Some(unsafe {
+        std::ffi::CStr::from_ptr(grp_ref.gr_name)
+            .to_string_lossy()
+            .into_owned()
+    })
+}
+
+/// Verify that the API service account exists and is not root.
+pub fn verify_api_service_account(username: &str) -> Result<UserInfo, ReleaseError> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return Err(ReleaseError::Config("service user cannot be empty".into()));
+    }
+    let user = get_user_by_name(trimmed).ok_or_else(|| ReleaseError::Config(
+        format!("system user '{trimmed}' does not exist"),
+    ))?;
+
+    if user.uid == 0 || trimmed == "root" {
+        return Err(ReleaseError::Config(
+            format!("service user '{trimmed}' cannot be root (UID 0)"),
+        ));
+    }
+
+    Ok(user)
+}
+
+/// Interactively prompt or automatically resolve the service user for dam-hopper-api.
+pub fn resolve_service_user(
+    explicit: Option<&str>,
+    non_interactive: bool,
+) -> Result<String, ReleaseError> {
+    if let Some(user) = explicit {
+        let trimmed = user.trim();
+        verify_api_service_account(trimmed)?;
+        return Ok(trimmed.to_string());
+    }
+
+    let sudo_user = std::env::var("SUDO_USER").ok().filter(|u| !u.trim().is_empty());
+    let default_candidate = if let Some(su) = &sudo_user {
+        if su != "root" && get_user_by_name(su).map(|u| u.uid != 0).unwrap_or(false) {
+            Some(su.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let default_user = default_candidate
+        .or_else(|| {
+            if get_user_by_name("dam-hopper").map(|u| u.uid != 0).unwrap_or(false) {
+                Some("dam-hopper".to_string())
+            } else {
+                None
+            }
+        });
+
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() && !non_interactive {
+        let prompt_default = default_user.as_deref().unwrap_or("dam-hopper");
+        eprintln!("Select the system user to run dam-hopper-api (cannot be root):");
+        eprint!("Service user [{prompt_default}]: ");
+        use std::io::Write;
+        let _ = std::io::stderr().flush();
+
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| ReleaseError::Io {
+                action: "read service user from stdin",
+                details: e.to_string(),
+            })?;
+        let chosen = input.trim();
+        let final_user = if chosen.is_empty() {
+            prompt_default
+        } else {
+            chosen
+        };
+        verify_api_service_account(final_user)?;
+        Ok(final_user.to_string())
+    } else if let Some(user) = default_user {
+        verify_api_service_account(&user)?;
+        Ok(user)
+    } else {
+        Err(ReleaseError::Config(
+            "service user must be specified via --service-user in non-interactive mode (cannot be root)".into()
+        ))
+    }
+}
