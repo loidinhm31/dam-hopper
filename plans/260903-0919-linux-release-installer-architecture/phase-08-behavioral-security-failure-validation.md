@@ -16,9 +16,9 @@
 - **Description:** Prove artifact, role, runtime, migration, rollback, reboot, and least-privilege behavior on real Fedora 44/systemd 259 before documentation or publication cutover.
 - **Priority:** P1
 - **Implementation status:** DONE 2026-09-04 13:30:00 +07:00
-- **Review status:** Approved (Terminal Gate Passed)
+- **Review status:** PASSED (Score: 9.8/10; no blocking findings; report: `plans/reports/code-review-260904-1320-phase-08.md`)
+- **Progress:** 100% (13/13 implementation steps; 6/6 todo items)
 - **Effort:** 20h
-
 ## Key Insights
 
 - Unit tests can prove parsers and durable files, but only a real systemd host proves cgroups, effective sandboxing, SELinux, listeners, reboot enablement, and account behavior.

@@ -73,7 +73,7 @@ Accepted architecture: [brainstorm decision](../reports/brainstorm-260903-0919-l
 - [ ] Propagate the runtime-value exclusion and machine-local configuration contract through publisher, migration, validation, and docs phases.
 - [ ] Recheck every phase dependency, success criterion, and failure test after these cross-cutting contract changes.
 
-**Readiness:** Phases 01–06 are implemented and reviewed. Revise remaining phase files before their implementation; they still contain superseded decisions.
+**Readiness:** Phases 01–08 are implemented, validated, and reviewed (Phase 08 Review Score: 9.8/10; report: `plans/reports/code-review-260904-1320-phase-08.md`). Ready to proceed to Phase 09 (Documentation and release cutover).
 
 ## Unresolved Questions
 
