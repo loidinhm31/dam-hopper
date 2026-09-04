@@ -16,7 +16,7 @@ use super::rollback::rollback_activation_failure;
 use super::state::{load_or_init_manager_state, save_manager_state, ManagerState};
 use super::state_record::{PendingCandidateRecord, ReleaseRecord, TransactionPhase};
 use super::systemd::{
-    backup_unit_files, install_unit_file, systemctl_daemon_reload, systemctl_disable,
+    backup_unit_files, disable_if_enabled, install_unit_file, systemctl_daemon_reload,
     systemctl_enable, systemctl_is_active, systemctl_start, systemctl_stop, systemd_sysusers,
 };
 use super::transaction::ActivationTransaction;
@@ -356,10 +356,10 @@ async fn execute_activation_pipeline(
     tx.record_phase(layout, state, DeploymentState::Switched, TransactionPhase::Switched)?;
 
     if candidate.role.includes_server() {
-        systemctl_start("dam-hopper-api.service")?;
+        systemctl_start(API_SERVICE_UNIT)?;
     }
     if candidate.role.includes_web() {
-        systemctl_start("dam-hopper-web.service")?;
+        systemctl_start(WEB_SERVICE_UNIT)?;
     }
 
     tx.record_phase(layout, state, DeploymentState::Probing, TransactionPhase::Probing)?;
@@ -369,17 +369,17 @@ async fn execute_activation_pipeline(
 
     // Enable/disable units, propagating any failure
     if candidate.role.includes_server() {
-        systemctl_enable("dam-hopper-api.service")?;
+        systemctl_enable(API_SERVICE_UNIT)?;
     } else {
-        systemctl_disable("dam-hopper-api.service")?;
+        disable_if_enabled(API_SERVICE_UNIT)?;
     }
     systemctl_enable(RECOVERY_SERVICE_UNIT)?;
 
 
     if candidate.role.includes_web() {
-        systemctl_enable("dam-hopper-web.service")?;
+        systemctl_enable(WEB_SERVICE_UNIT)?;
     } else {
-        systemctl_disable("dam-hopper-web.service")?;
+        disable_if_enabled(WEB_SERVICE_UNIT)?;
     }
 
     let mig_opt = state.transaction.as_ref().and_then(|t| t.migration.clone());

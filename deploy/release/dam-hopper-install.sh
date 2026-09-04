@@ -94,13 +94,27 @@ for cmd in curl sha256sum tar; do
     fi
 done
 
+# Host ABI check
+if command -v getconf >/dev/null 2>&1; then
+    GLIBC_VER_STR="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+    GLIBC_VER="${GLIBC_VER_STR#glibc }"
+    if [[ "${GLIBC_VER}" =~ ^([0-9]+)\.([0-9]+) ]]; then
+        MAJOR="${BASH_REMATCH[1]}"
+        MINOR="${BASH_REMATCH[2]}"
+        if (( MAJOR < 2 || (MAJOR == 2 && MINOR < 39) )); then
+            echo "Error: glibc version '${GLIBC_VER}' is too low (minimum required: 2.39)" >&2
+            exit 1
+        fi
+    fi
+fi
+
 # Resolve release tag
 TAG=""
 if [[ ${LATEST} -eq 1 ]]; then
     echo "Resolving latest stable release for ${REPO_OWNER}/${REPO_NAME}..."
     LATEST_JSON=$(curl -fsSL -H "Accept: application/vnd.github+json" "${API_BASE}/releases/latest" 2>/dev/null || true)
     if [[ -n "${LATEST_JSON}" ]]; then
-        TAG=$(echo "${LATEST_JSON}" | grep -o '"tag_name": *"[^"]*"' | head -n1 | cut -d'"' -f4)
+        TAG=$(echo "${LATEST_JSON}" | awk -F'"' '/"tag_name":/ { print $4; exit }')
     fi
     if [[ -z "${TAG}" ]]; then
         echo "Error: Could not resolve latest stable release tag from GitHub API" >&2
@@ -116,7 +130,7 @@ if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 1
 fi
 
-ARCHIVE_NAME="dam-hopper-${TAG}-fedora44-x86_64-systemd.tar.gz"
+ARCHIVE_NAME="dam-hopper-${TAG}-linux-x86_64-systemd.tar.gz"
 DOWNLOAD_URL_BASE="${GITHUB_BASE}/releases/download/${TAG}"
 
 TMP_DIR="$(mktemp -d -t dam-hopper-bootstrap-XXXXXXXX)"
@@ -139,12 +153,22 @@ fi
 echo "Downloading release archive: ${ARCHIVE_NAME}..."
 if ! curl -fsSL --connect-timeout 15 --max-time 300 \
     "${DOWNLOAD_URL_BASE}/${ARCHIVE_NAME}" -o "${ARCHIVE_FILE}"; then
-    echo "Error: Failed to download ${ARCHIVE_NAME}" >&2
-    exit 1
+    FALLBACK_ARCHIVE="dam-hopper-${TAG}-fedora44-x86_64-systemd.tar.gz"
+    echo "Primary archive not found, trying fallback: ${FALLBACK_ARCHIVE}..."
+    ARCHIVE_NAME="${FALLBACK_ARCHIVE}"
+    ARCHIVE_FILE="${BUNDLE_DIR}/${ARCHIVE_NAME}"
+    if ! curl -fsSL --connect-timeout 15 --max-time 300 \
+        "${DOWNLOAD_URL_BASE}/${ARCHIVE_NAME}" -o "${ARCHIVE_FILE}"; then
+        echo "Error: Failed to download release archive for ${TAG}" >&2
+        exit 1
+    fi
 fi
 
 # Parse expected sha256 from manifest
-EXPECTED_SHA=$(grep -o '"sha256": *"[^"]*"' "${MANIFEST_FILE}" | head -n1 | cut -d'"' -f4)
+EXPECTED_SHA=$(awk -F'"' '/"archive"/,/\}/ { if ($2 == "sha256") { print $4; exit } }' "${MANIFEST_FILE}")
+if [[ -z "${EXPECTED_SHA}" ]]; then
+    EXPECTED_SHA=$(awk -F'"' '/"sha256":/ { print $4; exit }' "${MANIFEST_FILE}")
+fi
 if [[ -z "${EXPECTED_SHA}" || ${#EXPECTED_SHA} -ne 64 ]]; then
     echo "Error: Could not extract valid archive SHA-256 from release-manifest.json" >&2
     exit 1
@@ -223,6 +247,24 @@ echo ""
 echo "============================================================"
 echo "Staging release ${TAG} for role '${ROLE}' (requires sudo)..."
 echo "============================================================"
+
+if [[ ! -f /etc/dam-hopper/dam-hopper.toml ]]; then
+    if [[ $EUID -eq 0 ]]; then
+        mkdir -p -m 0755 /etc/dam-hopper
+        cat > /etc/dam-hopper/dam-hopper.toml <<'EOF'
+[workspace]
+name = "default"
+EOF
+        chmod 0644 /etc/dam-hopper/dam-hopper.toml
+    else
+        sudo mkdir -p -m 0755 /etc/dam-hopper
+        sudo tee /etc/dam-hopper/dam-hopper.toml >/dev/null <<'EOF'
+[workspace]
+name = "default"
+EOF
+        sudo chmod 0644 /etc/dam-hopper/dam-hopper.toml
+    fi
+fi
 
 if [[ $EUID -eq 0 ]]; then
     "${INSTALL_CMD[@]}"

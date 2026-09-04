@@ -26,6 +26,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --) shift ;;
         --version) VERSION="${2:?missing value for --version}"; shift 2 ;;
         --target-dir) TARGET_DIR="${2:?missing value for --target-dir}"; shift 2 ;;
         --web-dist) WEB_DIST="${2:?missing value for --web-dist}"; shift 2 ;;
@@ -67,7 +68,7 @@ trap 'rm -rf -- "$TEST_ROOT"' EXIT
 
 build_archive() {
     local run_dir="$1"
-    "$REPO_ROOT/deploy/release/build-release-archive.sh" \
+    bash "$REPO_ROOT/deploy/release/build-release-archive.sh" \
         --version "$VERSION" \
         --target-dir "$TARGET_DIR" \
         --web-dist "$WEB_DIST" \
@@ -77,7 +78,7 @@ build_archive() {
 
 build_archive "$TEST_ROOT/run1"
 build_archive "$TEST_ROOT/run2"
-ARCHIVE_NAME="dam-hopper-${VERSION}-fedora44-x86_64-systemd.tar.gz"
+ARCHIVE_NAME="dam-hopper-${VERSION}-linux-x86_64-systemd.tar.gz"
 ARCHIVE_ONE="$TEST_ROOT/run1/$ARCHIVE_NAME"
 ARCHIVE_TWO="$TEST_ROOT/run2/$ARCHIVE_NAME"
 

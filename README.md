@@ -22,12 +22,12 @@ A web-based app for managing multi-project development environments. Manage git 
 
 ## Installation
 
-### Quickstart: Linux Release Installer (Fedora 44 x86_64)
+### Quickstart: Linux Release Installer (x86_64 systemd)
 
-DamHopper releases are published as immutable, attested GitHub release bundles for Fedora 44 x86_64 systemd hosts. Target hosts do not require a compiler, Node.js, or Rust toolchain.
+DamHopper releases are published as immutable, attested GitHub release bundles for Linux x86_64 systemd hosts (Ubuntu, Debian, Fedora, Arch, CentOS/RHEL, etc.). Target hosts do not require a compiler, Node.js, or Rust toolchain.
 
 **Prerequisites:**
-- Fedora 44 x86_64 (glibc >= 2.43, systemd >= 259)
+- Linux x86_64 with systemd (Ubuntu 24.04+, Fedora, Arch, etc.; glibc >= 2.39, systemd >= 245)
 - `curl`, `tar`, `sha256sum`, `sudo`
 - Optional: `gh` CLI (for GitHub artifact attestation verification)
 

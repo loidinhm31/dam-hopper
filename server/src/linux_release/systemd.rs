@@ -54,7 +54,33 @@ pub fn systemctl_enable(unit_name: &str) -> Result<(), ReleaseError> {
 pub fn systemctl_disable(unit_name: &str) -> Result<(), ReleaseError> {
     let mut cmd = Command::new("systemctl");
     cmd.args(["disable", unit_name]);
-    execute_cmd(cmd, "systemctl disable")
+    let output = cmd.output().map_err(|e| ReleaseError::Io {
+        action: "execute systemctl disable",
+        details: e.to_string(),
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // Idempotent: if unit file does not exist, consider it already disabled
+        if stderr.contains("does not exist") || stderr.contains("not loaded") || stderr.contains("No such file") {
+            return Ok(());
+        }
+        return Err(ReleaseError::SystemdCommandFailed {
+            command: "systemctl disable".to_string(),
+            exit_code: output.status.code(),
+            stderr,
+        });
+    }
+
+    Ok(())
+}
+
+/// Disable a systemd service unit only if it is currently enabled.
+pub fn disable_if_enabled(unit_name: &str) -> Result<(), ReleaseError> {
+    if systemctl_is_enabled(unit_name)? {
+        systemctl_disable(unit_name)?;
+    }
+    Ok(())
 }
 
 /// Start a systemd service unit.

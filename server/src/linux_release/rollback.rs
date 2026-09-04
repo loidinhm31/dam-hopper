@@ -506,6 +506,7 @@ pub async fn rollback_activation_failure(layout: &Layout, reason: &str) -> Resul
                 });
             }
         }
+        state.transaction = None;
         state.latest_failure = Some(FailureRecord {
             failed_at: Utc::now().to_rfc3339(),
             tx_id: None,

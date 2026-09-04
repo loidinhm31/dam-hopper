@@ -18,7 +18,7 @@ use super::lock::DeploymentLock;
 use super::rollback::rollback_activation_failure;
 use super::state::{load_or_init_manager_state, save_manager_state};
 use super::systemd::{
-    systemctl_disable, systemctl_enable, systemctl_is_active, systemctl_is_enabled,
+    disable_if_enabled, systemctl_enable, systemctl_is_active,
     systemctl_stop,
 };
 use std::path::Path;
@@ -119,13 +119,6 @@ fn repair_active_pointers(
         }
     }
     atomic_symlink(release_path, &layout.current_link())?;
-    Ok(())
-}
-
-fn disable_if_enabled(unit: &str) -> Result<(), ReleaseError> {
-    if systemctl_is_enabled(unit)? {
-        systemctl_disable(unit)?;
-    }
     Ok(())
 }
 

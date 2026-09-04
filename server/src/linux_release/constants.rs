@@ -4,19 +4,21 @@
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Target profile identifier.
-pub const PROFILE_ID: &str = "fedora44-x86_64-systemd";
+pub const PROFILE_ID: &str = "linux-x86_64-systemd";
+/// Legacy target profile identifier.
+pub const LEGACY_PROFILE_ID: &str = "fedora44-x86_64-systemd";
 /// Target Linux distribution identifier.
-pub const PROFILE_OS_ID: &str = "fedora";
+pub const PROFILE_OS_ID: &str = "linux";
 /// Target Linux distribution release version.
-pub const PROFILE_OS_VERSION: &str = "44";
+pub const PROFILE_OS_VERSION: &str = "any";
 /// Target CPU architecture.
 pub const PROFILE_ARCH: &str = "x86_64";
 /// Rust compilation target triple.
 pub const PROFILE_TARGET: &str = "x86_64-unknown-linux-gnu";
 /// Minimum glibc version required on target.
-pub const PROFILE_GLIBC_MIN: &str = "2.43";
+pub const PROFILE_GLIBC_MIN: &str = "2.39";
 /// Minimum systemd version required on target.
-pub const PROFILE_SYSTEMD_MIN: u32 = 259;
+pub const PROFILE_SYSTEMD_MIN: u32 = 245;
 
 /// Systemd unit name for the API server.
 pub const API_SERVICE_UNIT: &str = "dam-hopper-api.service";

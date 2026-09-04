@@ -6,7 +6,7 @@ readonly REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
 
 API_BIN="${DAM_HOPPER_API_BIN:-}"
 WEB_BIN="${DAM_HOPPER_WEB_BIN:-}"
-RELEASE_VERSION="${DAM_HOPPER_RELEASE_VERSION:-0.1.0}"
+RELEASE_VERSION="${DAM_HOPPER_RELEASE_VERSION:-0.2.0}"
 
 resolve_binary() {
     local requested="$1"

@@ -145,7 +145,7 @@ for req_file in "${API_SERVICE_IN}" "${WEB_SERVICE_IN}" "${RECOVERY_SERVICE_IN}"
     fi
 done
 
-ARCHIVE_NAME="dam-hopper-${TAG}-fedora44-x86_64-systemd.tar.gz"
+ARCHIVE_NAME="dam-hopper-${TAG}-linux-x86_64-systemd.tar.gz"
 mkdir -p "${OUTPUT_DIR}"
 
 TMP_STAGE="$(mktemp -d -t dam-hopper-stage-XXXXXXXX)"
