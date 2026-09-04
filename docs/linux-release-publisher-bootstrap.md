@@ -13,13 +13,13 @@ stable `MAJOR.MINOR.PATCH`; optional `--bin` checks also require each compiled
 binary's `--version` output to contain that version. The product profile declared
 by the generated manifest is:
 
-| Field | Value |
-| --- | --- |
-| Archive | `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz` |
-| Target | `x86_64-unknown-linux-gnu` |
-| OS/ABI contract | Fedora 44, glibc >= 2.43, systemd >= 259 |
-| Roles | `server`, `web`, `both` projections |
-| Authority | protected `vX.Y.Z` tag; no `latest` asset or mutable pointer |
+| Field           | Value                                                        |
+| --------------- | ------------------------------------------------------------ |
+| Archive         | `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz`           |
+| Target          | `x86_64-unknown-linux-gnu`                                   |
+| OS/ABI contract | Fedora 44, glibc >= 2.43, systemd >= 259                     |
+| Roles           | `server`, `web`, `both` projections                          |
+| Authority       | protected `vX.Y.Z` tag; no `latest` asset or mutable pointer |
 
 The desktop workflow is isolated under `desktop-v*`. It may create a desktop
 draft release, but it is not the stable Linux publisher. The stable workflow
@@ -68,12 +68,12 @@ and immutable releases; the workflow does not itself change those settings.
 The draft and public release must contain exactly these non-empty files, sorted by
 name by `check-release-assets.mjs`:
 
-| Name | Contents | Provenance |
-| --- | --- | --- |
-| `dam-hopper-install.sh` | caller-side bootstrap script | attested subject |
-| `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz` | one immutable runtime archive | attested subject |
-| `release-manifest.json` | external Manifest v1 metadata | attested subject |
-| `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.spdx.json` | SPDX 2.3 SBOM | attested subject |
+| Name                                                  | Contents                      | Provenance       |
+| ----------------------------------------------------- | ----------------------------- | ---------------- |
+| `dam-hopper-install.sh`                               | caller-side bootstrap script  | attested subject |
+| `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz`    | one immutable runtime archive | attested subject |
+| `release-manifest.json`                               | external Manifest v1 metadata | attested subject |
+| `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.spdx.json` | SPDX 2.3 SBOM                 | attested subject |
 
 The manifest is intentionally outside the archive. It contains the archive
 filename, size, and digest, so embedding it would create a digest cycle. GitHub

@@ -129,7 +129,7 @@ authentication and OS privilege.
 
 The authenticated `/api/browser-debug/artifacts` routes provide ephemeral handoff storage for browser-debug tooling. `BrowserDebugArtifactManager` keeps metadata in memory and writes generated JSON/PNG paths beneath a temporary root; it exposes create, one-shot PNG upload, and delete only—there is intentionally no read/list route. Create accepts a live `terminalId` plus validated `selection` JSON (64 KiB request cap). PNG upload requires `image/png`, is capped at 4 MiB, and performs structural plus decoded-image verification before writing. Artifacts expire after 10 minutes, a 60-second sweeper removes expired files, and shutdown cleanup removes the root.
 
-### linux_release/ (Phases 01–07: publisher, manifest, acquisition, staging, migration, activation, and recovery)
+### linux_release/ (Linux Release Installer Architecture: publisher, manifest, acquisition, staging, migration, activation, and recovery)
 
 `server/src/linux_release/` owns the strict Fedora 44 x86_64 systemd release
 profile and its manager. The module remains deliberately split so
@@ -2315,11 +2315,11 @@ Manifest inventory roles are algebraic:
 
 The fixed service contracts are:
 
-| Service | Identity | Concrete executable | Bind |
-| --- | --- | --- | --- |
-| `dam-hopper-recovery.service` | `root:root` | `<release-root>/bin/dam-hopper-manager recover --boot` | no listener |
-| `dam-hopper-api.service` | `root:root` | `<release-root>/bin/dam-hopper-server` | `0.0.0.0:4801` |
-| `dam-hopper-web.service` | `dam-hopper-web:dam-hopper-web` | `<release-root>/bin/dam-hopper-web` | `0.0.0.0:4802` |
+| Service                       | Identity                        | Concrete executable                                    | Bind           |
+| ----------------------------- | ------------------------------- | ------------------------------------------------------ | -------------- |
+| `dam-hopper-recovery.service` | `root:root`                     | `<release-root>/bin/dam-hopper-manager recover --boot` | no listener    |
+| `dam-hopper-api.service`      | `root:root`                     | `<release-root>/bin/dam-hopper-server`                 | `0.0.0.0:4801` |
+| `dam-hopper-web.service`      | `dam-hopper-web:dam-hopper-web` | `<release-root>/bin/dam-hopper-web`                    | `0.0.0.0:4802` |
 
 API and web units have no dependency on each other, shared process, proxy, or
 role coupling. Both require/follow the recovery unit. Stopping or restarting
@@ -2352,8 +2352,8 @@ validated archive + selected role
   -> /opt/dam-hopper/.staging/<transaction-id>/
   -> /opt/dam-hopper/releases/<tag>/<role>/
   -> render selected app/recovery unit(s) and web sysusers into
-     /var/lib/dam-hopper-manager/pending-units/
-  -> write /var/lib/dam-hopper-manager/pending-host-config.json
+     /var/lib/dam-hopper-manager/pending-units-<tx_id>/
+  -> write /var/lib/dam-hopper-manager/pending-host-config-<tx_id>.json
   -> systemd-analyze verify (when available)
   -> persist pending in /var/lib/dam-hopper-manager/state.json
   -> explicit start installs concrete files into /etc/systemd/system/
@@ -2373,7 +2373,7 @@ candidates until `start` takes the deployment lock and switches them.
 - optional `EnvironmentFile=-/etc/dam-hopper/server.env` followed by optional
   generated `server-safety.env`;
 - `ExecStart=<release-root>/bin/dam-hopper-server --config
-  /etc/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801`;
+/etc/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801`;
 - `Restart=on-failure`, `RestartSec=5s`, `KillSignal=SIGTERM`,
   `KillMode=mixed`, and `TimeoutStopSec=20s`; and
 - `UMask=0077`, `NoNewPrivileges=false`, and journald stdout/stderr.
@@ -2391,7 +2391,7 @@ remain explicit.
 - `Type=exec`, `User=dam-hopper-web`, `Group=dam-hopper-web`;
 - a concrete matching release command:
   `.../bin/dam-hopper-web --root .../web --host 0.0.0.0 --port 4802
-  --runtime-config /etc/dam-hopper/host-config.json --release-version <version>`;
+--runtime-config /etc/dam-hopper/host-config.json --release-version <version>`;
 - `Restart=on-failure`, `RestartSec=5s`, `KillSignal=SIGTERM`,
   `KillMode=mixed`, `TimeoutStopSec=10s`, and `UMask=0077`;
 - `NoNewPrivileges=true`, empty capability and ambient-capability sets,
@@ -2429,17 +2429,17 @@ are `0600`.
 
 The relevant mutable/immutable paths are:
 
-| Path | Meaning |
-| --- | --- |
-| `/opt/dam-hopper/releases/<tag>/<role>/` | root-owned immutable role view |
-| `/var/lib/dam-hopper-manager/pending-units/` | rendered app/recovery/sysusers candidates |
-| `/var/lib/dam-hopper-manager/pending-host-config.json` | candidate public web config |
-| `/var/lib/dam-hopper-manager/backups/<tx-id>/` | transaction-owned unit/config backups |
-| `/var/lib/dam-hopper-manager/state.json` | authoritative state envelope |
-| `/etc/dam-hopper/host.toml` | recorded role and exact allowed origins |
-| `/etc/dam-hopper/host-config.json` | active public runtime config |
-| `/etc/systemd/system/` | concrete unit destination |
-| `/opt/dam-hopper/current` | repaired active-view convenience link |
+| Path                                                   | Meaning                                   |
+| ------------------------------------------------------ | ----------------------------------------- |
+| `/opt/dam-hopper/releases/<tag>/<role>/`               | root-owned immutable role view            |
+| `/var/lib/dam-hopper-manager/pending-units-<tx_id>/`           | rendered app/recovery/sysusers candidates |
+| `/var/lib/dam-hopper-manager/pending-host-config-<tx_id>.json` | candidate public web config               |
+| `/var/lib/dam-hopper-manager/backups/<tx-id>/`         | transaction-owned unit/config backups     |
+| `/var/lib/dam-hopper-manager/state.json`               | authoritative state envelope              |
+| `/etc/dam-hopper/host.toml`                            | recorded role and exact allowed origins   |
+| `/etc/dam-hopper/host-config.json`                     | active public runtime config              |
+| `/etc/systemd/system/`                                 | concrete unit destination                 |
+| `/opt/dam-hopper/current`                              | repaired active-view convenience link     |
 
 ### Durable activation state machine
 
@@ -2483,12 +2483,12 @@ listener, schema, role, or version mismatches fail immediately.
 application units. The app units require/follow it. Recovery classifies durable
 state instead of guessing:
 
-| Durable point | Recovery result |
-| --- | --- |
-| `STAGED`/`PENDING` | Leave old active release; keep candidate disabled |
-| `QUIESCED`/`SWITCHED`/`PROBING` | Restore exact transaction backups and verify old release |
-| `COMMITTED` | Keep committed release; repair enablement and `current` |
-| Missing/corrupt or unowned/hash-mismatched state | `RECOVERY_REQUIRED`; block app units |
+| Durable point                                    | Recovery result                                          |
+| ------------------------------------------------ | -------------------------------------------------------- |
+| `STAGED`/`PENDING`                               | Leave old active release; keep candidate disabled        |
+| `QUIESCED`/`SWITCHED`/`PROBING`                  | Restore exact transaction backups and verify old release |
+| `COMMITTED`                                      | Keep committed release; repair enablement and `current`  |
+| Missing/corrupt or unowned/hash-mismatched state | `RECOVERY_REQUIRED`; block app units                     |
 
 Automatic activation failure stops the candidate, restores transaction-owned
 units/config/state, and reruns the same health gate. First-install failure

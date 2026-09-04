@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Structure**:
 
-- Repomix snapshot (2026-09-04): 1,562 files and 3,196,063 tokens packed into
+- Repomix snapshot (2026-09-04): 1,580 files and 3,279,350 tokens packed into
   `repomix-output.xml`; four security-sensitive files were excluded by the
   compaction security check.
 - Predominantly Rust (server) and TypeScript/React (web). The Linux release
@@ -138,8 +138,8 @@ Infrastructure
 
 - **Language**: Rust (deployment pins Rust 1.97.1)
 - **Runtime**: Tokio (async/await)
-- **Web Framework**: Axum 0.7
-- **WebSocket**: Tokio-TungsteniteWebSocket, tower-http
+- **Web Framework**: Axum 0.8
+- **WebSocket**: Axum's WebSocket extractor (`axum::extract::ws`) + Tokio, tower-http
 - **Authentication**: JWT (jsonwebtoken), bcrypt
 - **Database**: MongoDB (optional), SQLite (internal)
 - **Build**: Cargo, Docker
@@ -307,9 +307,9 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
 
 ### Linux Release Manager (`server/src/linux_release/`)
 
-Phases 01–06 define the release-manifest and manager lifecycle; Phase 07 adds
-one-time legacy format-2 migration and retires the checkout-built runner. All
-share one focused release module:
+Phases 01–08 define the release-manifest and manager lifecycle, one-time legacy
+format-2 migration, checkout-runner retirement, and comprehensive validation.
+All share one focused release module:
 
 - `constants.rs`, `version.rs`, `manifest.rs`, `manifest_validation.rs`,
   `inventory.rs`, `inventory_path.rs`, and `inventory_validation.rs` enforce
@@ -456,8 +456,8 @@ The Linux release manager uses a separate host layout:
   ├── server.env                        # machine-local API environment
   └── web.env                           # reserved machine-local web environment
 /var/lib/dam-hopper-manager/
-  ├── pending-units/                    # candidate API/web/recovery units + sysusers
-  ├── pending-host-config.json          # candidate public web config
+  ├── pending-units-<tx_id>/                # candidate API/web/recovery units + sysusers
+  ├── pending-host-config-<tx_id>.json      # candidate public web config
   ├── backups/<transaction-id>/         # unit/config rollback backups
   └── state.json                        # authoritative generation/state envelope
 /etc/systemd/system/
@@ -510,8 +510,7 @@ cargo run --bin dam-hopper-web -- \
 ```
 
 `--root` is required and must be a real directory, not a symlink. Omit
-`--runtime-config` for a static-only host; the reserved endpoint then returns
-404. Runtime JSON is public, bounded to 4 KiB, and contains no credentials.
+`--runtime-config` for a static-only host; the reserved endpoint then returns 404. Runtime JSON is public, bounded to 4 KiB, and contains no credentials.
 
 The API server does not serve static files unless an explicit `--web-dir` is
 passed. Docker is the supported combined-mode example:
@@ -600,6 +599,7 @@ dam-hopper/
 ```
 
 ## Test Coverage
+
 ### Passing Tests
 
 - **Linux release Phase 02**: 45/45 focused tests across seven suites:
@@ -619,11 +619,14 @@ dam-hopper/
 - **Linux release Phase 07**: format-2 fixture/drift/exchange suites cover
   exact read-only verification, side-root exchange, rollback restoration, and
   imported-format-2 retention; Fedora rehearsal remains fixture-level evidence.
+- **Linux release Phase 08**: comprehensive validation passed across 1,018 Rust
+  tests (31 suites), 1,447 UI tests, deterministic package-twice archive digest
+  verification, unprivileged rootless dual-process smoke, and 6 deployment test
+  journeys. Review approved 9.8/10.
 - **Compile proofs**: vendored all-target Cargo check plus UI and web builds
-  exited `0` (recorded 2026-09-03).
+  exited `0` (recorded 2026-09-04).
 - **Other server/frontend counts**: historical snapshots only; consult the
   dated roadmap/changelog entries rather than treating them as a release gate.
-
 ### Known Limitations (Pre-existing or phase-scoped)
 
 - Phase 07 completes the one-time format-2 migration and checkout-runner
@@ -731,27 +734,27 @@ dam-hopper/
 
 ## Documentation Library
 
-| Document | Purpose |
-| --- | --- |
-| [system-architecture.md](./system-architecture.md) | Component interactions, data flow |
-| [api-reference.md](./api-reference.md) | HTTP endpoints, request/response schemas |
-| [code-standards.md](./code-standards.md) | Naming conventions, patterns, best practices |
-| [configuration-guide.md](./configuration-guide.md) | Setup, environment variables, config files |
-| [linux-release-manifest.md](./linux-release-manifest.md) | Linux release manifest v1 contract |
-| [linux-release-manager.md](./linux-release-manager.md) | Phase 02 manager CLI, platform gate, acquisition, staging, Phase 03 web role handoff, Phase 04 units, Phase 05 activation/recovery, Phase 06 bootstrap handoff, and Phase 07 format-2 migration/runner retirement |
-| [linux-release-publisher-bootstrap.md](./linux-release-publisher-bootstrap.md) | Central GitHub publisher DAG, exact assets, reproducibility, SBOM, attestations, and bootstrap |
-| [native-browser-debug-support.md](./native-browser-debug-support.md) | Native Browser Debug platform gate and security boundaries |
-| [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
-| [ws-protocol-guide.md](./ws-protocol-guide.md) | WebSocket message types, terminal protocol |
-| [project-roadmap.md](./project-roadmap.md) | Planned features and phases |
+| Document                                                                       | Purpose                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [system-architecture.md](./system-architecture.md)                             | Component interactions, data flow                                                                                                                                                                                 |
+| [api-reference.md](./api-reference.md)                                         | HTTP endpoints, request/response schemas                                                                                                                                                                          |
+| [code-standards.md](./code-standards.md)                                       | Naming conventions, patterns, best practices                                                                                                                                                                      |
+| [configuration-guide.md](./configuration-guide.md)                             | Setup, environment variables, config files                                                                                                                                                                        |
+| [linux-release-manifest.md](./linux-release-manifest.md)                       | Linux release manifest v1 contract                                                                                                                                                                                |
+| [linux-release-manager.md](./linux-release-manager.md)                         | Phase 02 manager CLI, platform gate, acquisition, staging, Phase 03 web role handoff, Phase 04 units, Phase 05 activation/recovery, Phase 06 bootstrap handoff, and Phase 07 format-2 migration/runner retirement |
+| [linux-release-publisher-bootstrap.md](./linux-release-publisher-bootstrap.md) | Central GitHub publisher DAG, exact assets, reproducibility, SBOM, attestations, and bootstrap                                                                                                                    |
+| [native-browser-debug-support.md](./native-browser-debug-support.md)           | Native Browser Debug platform gate and security boundaries                                                                                                                                                        |
+| [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md)   | Profile storage, switching, and cross-origin policy                                                                                                                                                               |
+| [ws-protocol-guide.md](./ws-protocol-guide.md)                                 | WebSocket message types, terminal protocol                                                                                                                                                                        |
+| [project-roadmap.md](./project-roadmap.md)                                     | Planned features and phases                                                                                                                                                                                       |
 
 ---
 
 **Last Updated**: September 4, 2026
-**Phase Status**: Phases 01–07 of the Linux Release Installer Architecture
-are complete and reviewed. Phase 07 adds exact format-2 migration with sibling
-staging, same-device atomic exchange, rollback restoration, and checkout-runner
-retirement; Phases 08–09 remain future release gates.
+**Phase Status**: Phases 01–08 of the Linux Release Installer Architecture
+are complete and reviewed; Phase 08 delivers comprehensive behavioral, security,
+and failure-injection validation. Phase 09 documentation and release cutover is
+currently in progress.
 **Generated by**: Source review grounded in `repomix-output.xml` (Repomix
 1.18.0); metrics reflect the 1,562-file/3,196,063-token compaction and four
 security exclusions.

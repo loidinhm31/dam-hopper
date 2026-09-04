@@ -22,61 +22,74 @@ A web-based app for managing multi-project development environments. Manage git 
 
 ## Installation
 
-### Build from source
+### Quickstart: Linux Release Installer (Fedora 44 x86_64)
+
+DamHopper releases are published as immutable, attested GitHub release bundles for Fedora 44 x86_64 systemd hosts. Target hosts do not require a compiler, Node.js, or Rust toolchain.
+
+**Prerequisites:**
+- Fedora 44 x86_64 (glibc >= 2.43, systemd >= 259)
+- `curl`, `tar`, `sha256sum`, `sudo`
+- Optional: `gh` CLI (for GitHub artifact attestation verification)
+
+1. **Download the bootstrap installer:**
+   ```bash
+   curl -fsSLO https://github.com/loidinhm31/dam-hopper/releases/latest/download/dam-hopper-install.sh
+   chmod +x dam-hopper-install.sh
+   ```
+
+2. **Stage a candidate release (unprivileged fetch + staged candidate):**
+   ```bash
+   # API server role (0.0.0.0:4801)
+   ./dam-hopper-install.sh --latest --role server
+
+   # Dedicated static web host role (0.0.0.0:4802)
+   ./dam-hopper-install.sh --latest --role web
+
+   # Both roles in lockstep
+   ./dam-hopper-install.sh --latest --role both --allow-web-origin http://localhost:4802
+   ```
+   *Note:* The bootstrap installer stages candidate files, installs the CLI to `/usr/local/bin/dam-hopper`, and stops at `PENDING`. It never starts or activates services automatically.
+
+3. **Inspect status:**
+   ```bash
+   dam-hopper status
+   # Or JSON format:
+   dam-hopper status --json
+   ```
+
+4. **Explicitly activate the release:**
+   ```bash
+   sudo dam-hopper start
+   ```
+   `start` installs concrete systemd units, reloads the daemon, starts configured units, and enforces a strict health gate (20s startup deadline + 20 consecutive 500ms probes / 10s stability window).
+
+5. **Rollback & Recovery:**
+   ```bash
+   # Roll back to the recorded previous release
+   sudo dam-hopper rollback
+
+   # Reconcile crash or interrupted transaction
+   sudo dam-hopper recover
+   ```
+
+For complete operator instructions, systemd unit definitions, security boundaries, and format-2 migration, see [Linux systemd guide](./docs/linux-systemd.md).
+
+### Build from source (Contributors)
 
 ```bash
-git clone <repo>
+git clone https://github.com/loidinhm31/dam-hopper.git
 cd dam-hopper
 
-# Build Rust server
-cd server && cargo build --release
+# Install dependencies and build web assets
+pnpm install
+pnpm build
 
-# Build web and extension assets; Docker copies the SPA to /opt/dam-hopper/web
-cd .. && pnpm install && pnpm build
-
+# Build Rust release server
+pnpm build:server
 
 # Run the backend directly (default 0.0.0.0:4800)
 ./server/target/release/dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml
-# For systemd production, use the guarded workflow below: backend-only 0.0.0.0:4801
 ```
-
-### Linux systemd production service
-
-Linux production ownership is systemd on `0.0.0.0:4801`; the service runs as
-`loidinh` and is the only supported production owner. The guarded reset is an
-administrator-approved operation that must receive a user-owned dotenv source
-outside the runtime purge target:
-
-```bash
-pnpm linux:reset -- --env-file /secure/path/production-settings
-```
-
-Build and stage without privilege, then install and start as separate explicit
-operations. Capture the `staging_dir` printed by `build`:
-
-```bash
-pnpm linux:production -- build
-pnpm linux:production -- install --staging /tmp/dam-hopper-production-stage.XXXXXX
-pnpm linux:production -- status
-pnpm linux:production -- start
-```
-
-`install` never starts or rebuilds; it validates unit policy and syntax before
-enabling. `start` validates the installed marker and private runtime environment
-files, then checks ownership, ports, processes, and database holders before
-starting. Use `rollback --dry-run` first; an actual
-rollback requires the marker-backed confirmation and preserves user runtime
-state. See [Linux systemd setup](./docs/linux-systemd.md).
-
-### Linux release manager (Phase 02)
-
-The Fedora 44 x86_64 release manager downloads the immutable Manifest v1
-bundle as an unprivileged user, then validates and stages a selected role as
-root. It leaves activation, systemd unit installation, health checks, rollback,
-and recovery to later phases. See
-[Linux release manager](docs/linux-release-manager.md) and
-[Manifest v1](docs/linux-release-manifest.md).
-
 ## Configuration
 
 Create `~/.config/dam-hopper/dam-hopper.toml`:

@@ -1,7 +1,8 @@
 ---
 title: "Linux Release Installer Architecture"
 description: "Deliver one attested Fedora 44 release, role-selected systemd deployment, and health-gated rollback without target-host builds."
-status: in-progress
+status: completed
+completed: 2026-09-04
 priority: P1
 effort: 136h
 branch: autoresearch/session-20260903
@@ -14,7 +15,7 @@ created: 2026-09-03
 ## Outcome
 
 Replace the checkout-built format-2 Linux runner with one immutable, attested GitHub Release. A Rust manager stages a lockstep CLI/API/web release, independent API/web units run selected host roles, and explicit activation commits only after exact-version health remains stable.
-Progress: 94% (128h/136h; Phases 01–08 complete, Phase 09 pending).
+Progress: 100% (136h/136h; Phases 01–09 complete).
 
 ## Fixed Decisions
 
@@ -38,7 +39,7 @@ Progress: 94% (128h/136h; Phases 01–08 complete, Phase 09 pending).
 | 06 | [Central publisher and bootstrap](./phase-06-central-github-publisher-bootstrap.md) | DONE 2026-09-04 01:05:00 +07:00 | 100% | 16h |
 | 07 | [Format-2 migration and runner retirement](./phase-07-format-2-migration-runner-retirement.md) | DONE 2026-09-04 02:40:00 +07:00 | 100% | 14h |
 | 08 | [Behavioral, security, and failure validation](./phase-08-behavioral-security-failure-validation.md) | DONE 2026-09-04 13:30:00 +07:00 | 100% | 20h |
-| 09 | [Documentation and release cutover](./phase-09-documentation-roadmap-changelog-cutover.md) | Pending | 0% | 8h |
+| 09 | [Documentation and release cutover](./phase-09-documentation-roadmap-changelog-cutover.md) | DONE 2026-09-04 | 100% | 8h |
 
 ## Dependency Chain
 
@@ -64,17 +65,17 @@ Accepted architecture: [brainstorm decision](../reports/brainstorm-260903-0919-l
 - Automatic legacy takeover supports only an exact, active, healthy format-2 installation. Format 1, drift, and ambiguity fail before mutation.
 - Published release artifacts must never contain or derive from any developer/CI host `.env`, `server.env`, `dam-hopper.toml`, MongoDB URI/database name, token, credential, SQLite file, or other machine-local runtime value. Each installed machine supplies and retains its own environment/config, including its own optional `MONGODB_URI` and `MONGODB_DATABASE`. Install, upgrade, start, and release rollback never copy runtime values between machines or replace/restore machine-local application data. Any future incompatible application-data migration requires a separate maintenance plan.
 
-### Remaining Plan Revisions Before Later Phases
+### Cross-Cutting Contract Revisions — COMPLETED 2026-09-04
 
-- [ ] Propagate the unified `start` contract from the completed Phase 02 CLI through the remaining state-machine, bootstrap, tests, and docs phases.
-- [ ] Propagate optional GitHub attestation verification, mandatory SHA-256, and the accepted checksum-only authenticity limit through publisher/bootstrap phases.
-- [ ] Propagate the no-install-time-`--api-url` web bootstrap boundary through the remaining web, bootstrap, and docs phases.
-- [ ] Revise later API unit, manifest identity, preflight, migration, security, and validation tasks for owner-directed `User=root`; retain the explicit critical-risk evidence.
-- [ ] Propagate the runtime-value exclusion and machine-local configuration contract through publisher, migration, validation, and docs phases.
-- [ ] Recheck every phase dependency, success criterion, and failure test after these cross-cutting contract changes.
+- [x] Propagate the unified `start` contract from the completed Phase 02 CLI through the state machine, bootstrap, tests, and maintained docs.
+- [x] Propagate optional GitHub attestation verification, mandatory SHA-256, and the accepted checksum-only authenticity limit through publisher/bootstrap phases.
+- [x] Propagate the no-install-time-`--api-url` web bootstrap boundary through the web, bootstrap, validation, and docs phases.
+- [x] Revise API unit, manifest identity, preflight, migration, security, and validation tasks for owner-directed `User=root`; retain the explicit critical-risk evidence.
+- [x] Propagate the runtime-value exclusion and machine-local configuration contract through publisher, migration, validation, and docs phases.
+- [x] Recheck every phase dependency, success criterion, and failure test after these cross-cutting contract changes.
 
-**Readiness:** Phases 01–08 are implemented, validated, and reviewed (Phase 08 Review Score: 9.8/10; report: `plans/reports/code-review-260904-1320-phase-08.md`). Ready to proceed to Phase 09 (Documentation and release cutover).
+**Completion:** Phases 01–09 are implemented, validated, documented, and reviewed. Phase 09 documentation and release cutover completed 2026-09-04.
 
 ## Unresolved Questions
 
-None. Remaining revisions are tracked above; no unresolved questions.
+None. All tracked revisions are complete; no unresolved questions.

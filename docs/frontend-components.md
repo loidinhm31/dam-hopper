@@ -915,6 +915,7 @@ snapshot.
 **Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views. The Explorer header area also hosts `GitBranchControl` so users can switch or create branches without leaving the file browser.
 
 **Persistent Tree Expansion:** Directory open/closed states are managed by `useExplorerTreeStore` (`packages/ui/src/stores/explorer-tree.ts`) and persisted in `localStorage` under `dam-hopper:explorer-tree-state`. This ensures that expanded folders survive sidebar tool switching (e.g. Explorer ↔ Search), sidebar collapses, workspace mode transitions (IDE ↔ Terminal), and full browser page reloads.
+
 - **Target scoping:** Scoped per project target via `explorerTreeScopeKey(target)` (`${normalized.project}::${projectTargetCacheKey(normalized)}`), isolating regular project trees and worktree targets.
 - **Initial open state & toggle:** `FileTree` supplies `initialOpenState={openMap}` to `react-arborist` and synchronizes toggle events via `onToggle` and `setFolderOpen`. Toggling closed removes the key to keep persisted storage compact.
 - **Cascading child auto-hydration:** When mounting with persisted open folders, `FileTree` scans for open folders with unloaded children (`children === null`) and automatically triggers `loadChildren(id)`. If loading fails (e.g. directory deleted externally), `prunePath` cleans up the invalid path.

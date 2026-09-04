@@ -15,15 +15,15 @@ release. The manifest field contract remains in [Linux Release Manifest v1](./li
 
 The v1 target profile is fixed:
 
-| Requirement | Value |
-| --- | --- |
-| Operating system | Fedora 44 (`ID=fedora`, `VERSION_ID=44`) |
-| CPU | x86_64 |
-| GNU target | `x86_64-unknown-linux-gnu` |
-| glibc | 2.43 or newer |
-| systemd | 259 or newer, running as the system manager (PID 1) |
-| Network | HTTPS access to the public DamHopper GitHub release |
-| Optional tool | `gh` for GitHub attestation verification only |
+| Requirement      | Value                                               |
+| ---------------- | --------------------------------------------------- |
+| Operating system | Fedora 44 (`ID=fedora`, `VERSION_ID=44`)            |
+| CPU              | x86_64                                              |
+| GNU target       | `x86_64-unknown-linux-gnu`                          |
+| glibc            | 2.43 or newer                                       |
+| systemd          | 259 or newer, running as the system manager (PID 1) |
+| Network          | HTTPS access to the public DamHopper GitHub release |
+| Optional tool    | `gh` for GitHub attestation verification only       |
 
 A target host does not need the repository checkout, Node.js, pnpm, Cargo, or
 Rust. The manager contains the HTTP, gzip/tar, manifest, and SHA-256 logic. The
@@ -97,17 +97,17 @@ both causes `fetch` to fail before a release is written. `--output` and
 
 ### Privilege matrix
 
-| Command | EUID | Behavior |
-| --- | --- | --- |
-| `fetch` | non-zero | Resolve/download/verify a release bundle |
-| `install` | 0 | Validate host, select/inherit role, stage a candidate |
-| `role set` | 0 | Change recorded role and stage that role's candidate |
-| `start` | 0 | Activate pending candidate or start committed role units |
-| `status` | any | Read host configuration and authoritative state |
-| `rollback` | 0 | Activate the recorded previous release |
-| `recover` | 0 | Reconcile crash/boot state (`--boot` for systemd) |
-| `version` | any | Print manager version, profile, and schema |
-| `validate` | any | Validate manifest and optional archive without mutation |
+| Command    | EUID     | Behavior                                                 |
+| ---------- | -------- | -------------------------------------------------------- |
+| `fetch`    | non-zero | Resolve/download/verify a release bundle                 |
+| `install`  | 0        | Validate host, select/inherit role, stage a candidate    |
+| `role set` | 0        | Change recorded role and stage that role's candidate     |
+| `start`    | 0        | Activate pending candidate or start committed role units |
+| `status`   | any      | Read host configuration and authoritative state          |
+| `rollback` | 0        | Activate the recorded previous release                   |
+| `recover`  | 0        | Reconcile crash/boot state (`--boot` for systemd)        |
+| `version`  | any      | Print manager version, profile, and schema               |
+| `validate` | any      | Validate manifest and optional archive without mutation  |
 
 The parser has no `--api-url` or separate `activate` command. Web and both-role
 installs leave server URL setup to the existing client-side server-profile
@@ -242,12 +242,12 @@ schema, role, or version mismatches fail immediately.
 application units. API and web units require and follow this recovery unit.
 Inconsistent state fails closed and disables app units.
 
-| Durable point | Recovery result |
-| --- | --- |
-| `STAGED`/`PENDING` | Leave old active release; keep candidate disabled |
-| `QUIESCED`/`SWITCHED`/`PROBING` | Restore exact transaction backups and verify old release |
-| `COMMITTED` | Keep committed release; repair enablement and `current` |
-| Missing/corrupt state or hash/ownership disagreement | `RECOVERY_REQUIRED`; app units blocked |
+| Durable point                                        | Recovery result                                          |
+| ---------------------------------------------------- | -------------------------------------------------------- |
+| `STAGED`/`PENDING`                                   | Leave old active release; keep candidate disabled        |
+| `QUIESCED`/`SWITCHED`/`PROBING`                      | Restore exact transaction backups and verify old release |
+| `COMMITTED`                                          | Keep committed release; repair enablement and `current`  |
+| Missing/corrupt state or hash/ownership disagreement | `RECOVERY_REQUIRED`; app units blocked                   |
 
 Automatic activation failure stops the candidate, restores transaction-owned
 units/config/state, and reruns the same health gate. First-install failure
@@ -277,21 +277,21 @@ version, `fedora44-x86_64-systemd` profile, and manifest schema version.
 `Layout::new` uses the host root. Tests use `Layout::with_root` so all paths are
 under a temporary root and no host files are changed.
 
-| Path | Purpose |
-| --- | --- |
-| `/opt/dam-hopper/` | Release installation root |
-| `/opt/dam-hopper/.staging/<tx-id>/` | Root-private staging workspace (`0700`) |
-| `/opt/dam-hopper/releases/<tag>/<role>/` | Immutable unpacked role view |
-| `/opt/dam-hopper/current` | Convenience active-view symlink |
-| `/etc/dam-hopper/host.toml` | Recorded role and exact web origins |
-| `/etc/dam-hopper/server.env` | Machine-local API environment |
-| `/etc/dam-hopper/web.env` | Machine-local web environment |
-| `/var/lib/dam-hopper-manager/pending-units/` | Rendered candidate units/sysusers |
-| `/var/lib/dam-hopper-manager/pending-host-config.json` | Candidate public config |
-| `/var/lib/dam-hopper-manager/state.json` | Authoritative state envelope |
-| `/var/lib/dam-hopper-manager/backups/<tx-id>/` | Transaction-owned restore backups |
-| `/etc/systemd/system/` | Concrete active unit destinations |
-| `/run/lock/dam-hopper/deploy.lock` | Nonblocking deployment serialization lock |
+| Path                                                   | Purpose                                   |
+| ------------------------------------------------------ | ----------------------------------------- |
+| `/opt/dam-hopper/`                                     | Release installation root                 |
+| `/opt/dam-hopper/.staging/<tx-id>/`                    | Root-private staging workspace (`0700`)   |
+| `/opt/dam-hopper/releases/<tag>/<role>/`               | Immutable unpacked role view              |
+| `/opt/dam-hopper/current`                              | Convenience active-view symlink           |
+| `/etc/dam-hopper/host.toml`                            | Recorded role and exact web origins       |
+| `/etc/dam-hopper/server.env`                           | Machine-local API environment             |
+| `/etc/dam-hopper/web.env`                              | Machine-local web environment             |
+| `/var/lib/dam-hopper-manager/pending-units-<tx_id>/`           | Rendered candidate units/sysusers         |
+| `/var/lib/dam-hopper-manager/pending-host-config-<tx_id>.json` | Candidate public config                   |
+| `/var/lib/dam-hopper-manager/state.json`                       | Authoritative state envelope (mode 0600)  |
+| `/var/lib/dam-hopper-manager/backups/<tx-id>/`         | Transaction-owned restore backups         |
+| `/etc/systemd/system/`                                 | Concrete active unit destinations         |
+| `/run/lock/dam-hopper/deploy.lock`                     | Nonblocking deployment serialization lock |
 
 The release path is derived only from the validated tag and selected role. A
 role view contains manifest entries with `common` plus the selected role; a
@@ -374,7 +374,7 @@ The read-only verifier accepts only this legacy shape:
 - marker nonce and binary hash match the recorded values;
 - `dam-hopper.service` is an unlinked UTF-8 `0644` file whose hash matches,
   has the two ordered `/home/loidinh/.config/dam-hopper/{server.env,
-  server-safety.env}` environment files and required `loidinh` API directives,
+server-safety.env}` environment files and required `loidinh` API directives,
   and has no no-auth/web-dir override or `.service.d` drop-in; and
 - `multi-user.target.wants/dam-hopper.service` is a symlink ending in the
   expected unit name.
@@ -406,7 +406,6 @@ The old checkout runner is retired. `deploy/run-linux-production.sh`,
 `tests/deploy/linux-production-fixtures.sh`, and package aliases
 `linux:production`/`linux:reset` are absent. Use the manager commands and
 `tests/deploy/fedora44-format2-migration.sh`; do not restore those aliases.
-
 
 ## Failure handling and diagnostics
 
