@@ -21,13 +21,26 @@ fn test_render_api_unit_success() {
     let ctx = create_valid_context();
     let rendered = render_api_unit(API_TEMPLATE, &ctx).expect("api unit render should succeed");
 
-    assert!(rendered.contains("Type=exec"));
-    assert!(rendered.contains("User=root"));
-    assert!(rendered.contains("Group=root"));
+    assert!(rendered.contains("User=dam-hopper"));
+    assert!(rendered.contains("Group=dam-hopper"));
+    assert!(rendered.contains("WorkingDirectory=/var/lib/dam-hopper"));
+    assert!(rendered.contains("Environment=HOME=/var/lib/dam-hopper"));
     assert!(rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server"));
     assert!(rendered.contains("Environment=DAM_HOPPER_CORS_ORIGINS=http://localhost:4802"));
     assert!(rendered.contains("SyslogIdentifier=dam-hopper-api"));
     assert!(!rendered.contains('@'));
+}
+
+#[test]
+fn test_render_api_unit_rejects_root() {
+    let ctx = create_valid_context()
+        .with_api_identity("root".into(), "root".into(), "/root".into())
+        .expect("valid identity params");
+    let res = render_api_unit(API_TEMPLATE, &ctx);
+    assert!(matches!(
+        res,
+        Err(ReleaseError::UnitPolicyViolation { ref reason, .. }) if reason.contains("API unit must not run as root")
+    ));
 }
 
 #[test]

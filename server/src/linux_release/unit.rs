@@ -11,12 +11,18 @@ pub const TOKEN_RELEASE_ROOT: &str = "@RELEASE_ROOT@";
 pub const TOKEN_RELEASE_VERSION: &str = "@RELEASE_VERSION@";
 pub const TOKEN_PUBLIC_CONFIG: &str = "@PUBLIC_CONFIG@";
 pub const TOKEN_API_ORIGINS: &str = "@API_ORIGINS@";
+pub const TOKEN_API_USER: &str = "@API_USER@";
+pub const TOKEN_API_GROUP: &str = "@API_GROUP@";
+pub const TOKEN_API_HOME: &str = "@API_HOME@";
 
 pub const ALLOWED_TOKENS: &[&str] = &[
     TOKEN_RELEASE_ROOT,
     TOKEN_RELEASE_VERSION,
     TOKEN_PUBLIC_CONFIG,
     TOKEN_API_ORIGINS,
+    TOKEN_API_USER,
+    TOKEN_API_GROUP,
+    TOKEN_API_HOME,
 ];
 
 /// Execution context required to render candidate unit files.
@@ -26,8 +32,10 @@ pub struct UnitRenderContext {
     pub release_version: String,
     pub public_config: PathBuf,
     pub api_origins: Vec<String>,
+    pub api_user: String,
+    pub api_group: String,
+    pub api_home: String,
 }
-
 impl UnitRenderContext {
     pub fn new(
         release_root: PathBuf,
@@ -45,7 +53,25 @@ impl UnitRenderContext {
             release_version,
             public_config,
             api_origins: validated_origins,
+            api_user: "dam-hopper".to_string(),
+            api_group: "dam-hopper".to_string(),
+            api_home: "/var/lib/dam-hopper".to_string(),
         })
+    }
+
+    pub fn with_api_identity(
+        mut self,
+        user: String,
+        group: String,
+        home: String,
+    ) -> Result<Self, ReleaseError> {
+        validate_ident_param("api_user", &user)?;
+        validate_ident_param("api_group", &group)?;
+        validate_path_param("api_home", Path::new(&home))?;
+        self.api_user = user;
+        self.api_group = group;
+        self.api_home = home;
+        Ok(self)
     }
 }
 
@@ -67,6 +93,23 @@ fn validate_path_param(name: &'static str, path: &Path) -> Result<(), ReleaseErr
 
     Ok(())
 }
+fn validate_ident_param(name: &'static str, val: &str) -> Result<(), ReleaseError> {
+    if val.is_empty()
+        || val.contains('\n')
+        || val.contains('\r')
+        || val.contains('\0')
+        || val.contains('\t')
+        || val.contains(' ')
+        || val.contains('@')
+    {
+        return Err(ReleaseError::TemplateTokenInjection {
+            token: name.into(),
+            details: format!("identity value contains forbidden characters: '{val}'"),
+        });
+    }
+    Ok(())
+}
+
 
 /// Substitute allowlisted placeholders into unit template.
 pub fn render_unit(template: &str, ctx: &UnitRenderContext) -> Result<String, ReleaseError> {
@@ -97,7 +140,9 @@ pub fn render_unit(template: &str, ctx: &UnitRenderContext) -> Result<String, Re
     rendered = rendered.replace(TOKEN_RELEASE_VERSION, &ctx.release_version);
     rendered = rendered.replace(TOKEN_PUBLIC_CONFIG, &ctx.public_config.to_string_lossy());
     rendered = rendered.replace(TOKEN_API_ORIGINS, &ctx.api_origins.join(","));
-
+    rendered = rendered.replace(TOKEN_API_USER, &ctx.api_user);
+    rendered = rendered.replace(TOKEN_API_GROUP, &ctx.api_group);
+    rendered = rendered.replace(TOKEN_API_HOME, &ctx.api_home);
     // Ensure no unresolved @TOKEN@ placeholders remain
     for line in rendered.lines() {
         let mut rest = line;

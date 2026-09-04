@@ -5,10 +5,10 @@ After=network-online.target
 
 [Service]
 Type=exec
-User=root
-Group=root
-WorkingDirectory=/root
-Environment=HOME=/root
+User=@API_USER@
+Group=@API_GROUP@
+WorkingDirectory=@API_HOME@
+Environment=HOME=@API_HOME@
 Environment=XDG_CONFIG_HOME=/etc/dam-hopper
 Environment=RUST_LOG=info
 Environment=RUST_ENV=production

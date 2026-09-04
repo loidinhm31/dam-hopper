@@ -118,13 +118,30 @@ fn stage_candidate_units_inner(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let api_url = existing_public_config.and_then(|config| config.api_url);
 
+    let host_config = super::host_config::load_host_config(&layout.host_config_path())?;
+    let (service_user, service_group, service_home) = if let Some(config) = &host_config {
+        if let Some(user_name) = &config.service_user {
+            if let Some(user) = super::account::get_user_by_name(user_name) {
+                let group = super::account::get_group_by_gid(user.gid)
+                    .unwrap_or_else(|| user_name.clone());
+                (user_name.clone(), group, user.home)
+            } else {
+                (user_name.clone(), user_name.clone(), format!("/home/{user_name}"))
+            }
+        } else {
+            resolve_staging_service_identity()
+        }
+    } else {
+        resolve_staging_service_identity()
+    };
+
     let ctx = UnitRenderContext::new(
         render_root.to_path_buf(),
         manifest.release.version.clone(),
         layout.host_config_json_path(),
         allow_origins.to_vec(),
-    )?;
-
+    )?
+    .with_api_identity(service_user, service_group, service_home)?;
     let mut staged_unit_paths = Vec::new();
 
     let recovery_template = load_release_template(
@@ -312,4 +329,31 @@ fn which_bin_exists(bin: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+fn resolve_staging_service_identity() -> (String, String, String) {
+    if let Ok(su) = std::env::var("SUDO_USER") {
+        let trimmed = su.trim();
+        if !trimmed.is_empty() && trimmed != "root" {
+            if let Some(user) = super::account::get_user_by_name(trimmed) {
+                if user.uid != 0 {
+                    let group = super::account::get_group_by_gid(user.gid)
+                        .unwrap_or_else(|| trimmed.to_string());
+                    return (trimmed.to_string(), group, user.home);
+                }
+            }
+        }
+    }
+    if let Some(user) = super::account::get_user_by_name("dam-hopper") {
+        if user.uid != 0 {
+            let group = super::account::get_group_by_gid(user.gid)
+                .unwrap_or_else(|| "dam-hopper".to_string());
+            return ("dam-hopper".to_string(), group, user.home);
+        }
+    }
+    (
+        "dam-hopper".to_string(),
+        "dam-hopper".to_string(),
+        "/var/lib/dam-hopper".to_string(),
+    )
 }

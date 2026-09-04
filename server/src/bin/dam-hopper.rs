@@ -2,9 +2,10 @@
 
 use clap::Parser;
 use dam_hopper_server::linux_release::{
-    acquire_release, current_euid, execute_activation, execute_manual_rollback, execute_recovery,
-    load_host_config, load_or_init_manager_state, stage_release_bundle, verify_privileges, Cli,
-    Commands, Layout, RoleCommands,
+    acquire_release, current_euid, execute_activation_with_args, execute_manual_rollback,
+    execute_recovery, load_host_config, load_or_init_manager_state, save_host_config,
+    stage_release_bundle, verify_api_service_account, verify_privileges, Cli, Commands, HostConfig,
+    Layout, RoleCommands,
 };
 use std::process::ExitCode;
 
@@ -44,6 +45,24 @@ async fn main() -> ExitCode {
                 eprintln!("host platform verification failed: {e}");
                 return ExitCode::from(1);
             }
+            if let Some(user) = &args.service_user {
+                if let Err(e) = verify_api_service_account(user) {
+                    eprintln!("invalid service user: {e}");
+                    return ExitCode::from(1);
+                }
+                let mut host_cfg = load_host_config(&layout.host_config_path())
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        HostConfig::new(
+                            args.role.unwrap_or(dam_hopper_server::linux_release::TargetRole::Both),
+                            args.allow_web_origins.clone(),
+                        )
+                        .unwrap()
+                    });
+                host_cfg.service_user = Some(user.clone());
+                let _ = save_host_config(&layout.host_config_path(), &host_cfg);
+            }
             println!(
                 "Installing release bundle from '{}'...",
                 args.bundle.display()
@@ -75,6 +94,20 @@ async fn main() -> ExitCode {
                     eprintln!("host platform verification failed: {e}");
                     return ExitCode::from(1);
                 }
+                if let Some(user) = &args.service_user {
+                    if let Err(e) = verify_api_service_account(user) {
+                        eprintln!("invalid service user: {e}");
+                        return ExitCode::from(1);
+                    }
+                    let mut host_cfg = load_host_config(&layout.host_config_path())
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| {
+                            HostConfig::new(args.role, args.allow_web_origins.clone()).unwrap()
+                        });
+                    host_cfg.service_user = Some(user.clone());
+                    let _ = save_host_config(&layout.host_config_path(), &host_cfg);
+                }
                 println!(
                     "Switching deployment role to '{}' using bundle '{}'...",
                     args.role,
@@ -101,12 +134,12 @@ async fn main() -> ExitCode {
                 }
             }
         },
-        Commands::Start(_) => {
+        Commands::Start(args) => {
             if let Err(e) = dam_hopper_server::linux_release::verify_host_platform() {
                 eprintln!("host platform verification failed: {e}");
                 return ExitCode::from(1);
             }
-            match execute_activation(&layout).await {
+            match execute_activation_with_args(&layout, &args).await {
                 Ok(()) => {
                     println!("Services successfully activated and verified.");
                     ExitCode::SUCCESS

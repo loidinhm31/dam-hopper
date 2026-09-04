@@ -53,12 +53,18 @@ pub mod unit;
 pub mod unit_parser;
 pub mod unit_policy;
 pub mod version;
-pub use account::{get_user_by_name, verify_web_sysuser_account, UserInfo};
+pub use account::{
+    get_group_by_gid, get_user_by_name, resolve_service_user, verify_api_service_account,
+    verify_web_sysuser_account, UserInfo,
+};
 pub use acquire::{acquire_release, AcquisitionRecord};
 pub use archive::inspect_and_validate_archive;
 pub use archive_extract::extract_role_projection;
 pub use attestation::verify_file_attestation;
-pub use cli::{Cli, Commands, FetchArgs, InstallArgs, RoleCommands, RoleSetArgs, ValidateArgs};
+pub use cli::{
+    Cli, Commands, FetchArgs, InstallArgs, RoleCommands, RoleSetArgs, StartArgs, StatusArgs,
+    ValidateArgs,
+};
 pub use constants::*;
 pub use error::ReleaseError;
 pub use host_config::{
@@ -98,14 +104,18 @@ pub use systemd::{
     systemctl_start, systemctl_stop, systemd_analyze_verify, systemd_sysusers,
 };
 pub use unit::{
-    render_api_unit, render_unit, render_web_unit, UnitRenderContext, TOKEN_API_ORIGINS,
-    TOKEN_PUBLIC_CONFIG, TOKEN_RELEASE_ROOT, TOKEN_RELEASE_VERSION,
+    render_api_unit, render_unit, render_web_unit, UnitRenderContext, TOKEN_API_GROUP,
+    TOKEN_API_HOME, TOKEN_API_ORIGINS, TOKEN_API_USER, TOKEN_PUBLIC_CONFIG,
+    TOKEN_RELEASE_ROOT, TOKEN_RELEASE_VERSION,
 };
 pub use unit_parser::ParsedUnit;
 pub use version::{
     validate_commit_sha, validate_release_tag, validate_sha256_hex, validate_version,
 };
-pub use activate::{execute_activation, execute_activation_locked};
+pub use activate::{
+    execute_activation, execute_activation_locked, execute_activation_locked_with_args,
+    execute_activation_with_args,
+};
 pub use durable_fs::{
     atomic_symlink, atomic_write_file, atomic_write_json, copy_file_durable, sync_dir,
 };

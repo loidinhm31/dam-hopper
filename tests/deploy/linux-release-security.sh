@@ -30,9 +30,12 @@ for directive in "ProtectSystem=strict" "ProtectHome=true" "PrivateTmp=true" "No
     fi
 done
 
-# API service unit runs as root per confirmed decision
-if ! grep -q "User=root" "$API_UNIT"; then
-    fail "API unit template must declare User=root per confirmed MVP decision"
+# API service unit runs as non-root user via @API_USER@ token
+if grep -q "User=root" "$API_UNIT"; then
+    fail "API unit template must not hardcode User=root (must use @API_USER@)"
+fi
+if ! grep -q "User=@API_USER@" "$API_UNIT"; then
+    fail "API unit template must declare User=@API_USER@"
 fi
 
 # 2. Check for accidental leakage of secret/runtime files in release assets or repo
