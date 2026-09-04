@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  explorerTreeScopeKey,
-  useExplorerTreeStore,
-} from "./explorer-tree.js";
+import { explorerTreeScopeKey, useExplorerTreeStore } from "./explorer-tree.js";
 
 function resetStore() {
   useExplorerTreeStore.setState({

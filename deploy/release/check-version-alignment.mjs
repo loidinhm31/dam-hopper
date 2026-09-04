@@ -5,28 +5,29 @@
  * Optionally verifies compiled binaries if passed via --bin.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { readFileSync, existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const REPO_ROOT = resolve(__dirname, '../..');
+const REPO_ROOT = resolve(__dirname, "../..");
 
 const SEMVER_TAG_REGEX = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SEMVER_BARE_REGEX = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  let expectedTag = process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME || null;
+  let expectedTag =
+    process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME || null;
   const binaries = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--bin' && i + 1 < args.length) {
+    if (arg === "--bin" && i + 1 < args.length) {
       binaries.push(args[++i]);
-    } else if (!arg.startsWith('--') && !expectedTag) {
+    } else if (!arg.startsWith("--") && !expectedTag) {
       expectedTag = arg;
     } else {
       console.error(`Unknown or unexpected argument: ${arg}`);
@@ -38,8 +39,10 @@ function parseArgs() {
 }
 
 function getCargoVersion(cargoPath) {
-  const content = readFileSync(cargoPath, 'utf8');
-  const packageMatch = content.match(/\[package\][^\[]*?version\s*=\s*"([^"]+)"/s);
+  const content = readFileSync(cargoPath, "utf8");
+  const packageMatch = content.match(
+    /\[package\][^\[]*?version\s*=\s*"([^"]+)"/s,
+  );
   if (!packageMatch) {
     throw new Error(`Could not extract [package].version from ${cargoPath}`);
   }
@@ -47,7 +50,7 @@ function getCargoVersion(cargoPath) {
 }
 
 function getWebVersion(pkgJsonPath) {
-  const content = readFileSync(pkgJsonPath, 'utf8');
+  const content = readFileSync(pkgJsonPath, "utf8");
   const parsed = JSON.parse(content);
   if (!parsed.version) {
     throw new Error(`Could not extract version from ${pkgJsonPath}`);
@@ -58,8 +61,8 @@ function getWebVersion(pkgJsonPath) {
 function main() {
   const { expectedTag, binaries } = parseArgs();
 
-  const cargoPath = resolve(REPO_ROOT, 'server/Cargo.toml');
-  const webPkgPath = resolve(REPO_ROOT, 'apps/web/package.json');
+  const cargoPath = resolve(REPO_ROOT, "server/Cargo.toml");
+  const webPkgPath = resolve(REPO_ROOT, "apps/web/package.json");
 
   if (!existsSync(cargoPath)) {
     console.error(`Cargo.toml not found at: ${cargoPath}`);
@@ -74,11 +77,15 @@ function main() {
   const webVersion = getWebVersion(webPkgPath);
 
   if (!SEMVER_BARE_REGEX.test(cargoVersion)) {
-    console.error(`server/Cargo.toml version '${cargoVersion}' does not match SemVer format MAJOR.MINOR.PATCH`);
+    console.error(
+      `server/Cargo.toml version '${cargoVersion}' does not match SemVer format MAJOR.MINOR.PATCH`,
+    );
     process.exit(1);
   }
   if (!SEMVER_BARE_REGEX.test(webVersion)) {
-    console.error(`apps/web/package.json version '${webVersion}' does not match SemVer format MAJOR.MINOR.PATCH`);
+    console.error(
+      `apps/web/package.json version '${webVersion}' does not match SemVer format MAJOR.MINOR.PATCH`,
+    );
     process.exit(1);
   }
 
@@ -99,7 +106,9 @@ function main() {
     } else if (SEMVER_BARE_REGEX.test(expectedTag)) {
       normalizedExpectedVersion = expectedTag;
     } else {
-      console.error(`Invalid tag/version argument '${expectedTag}'. Must be vX.Y.Z or X.Y.Z`);
+      console.error(
+        `Invalid tag/version argument '${expectedTag}'. Must be vX.Y.Z or X.Y.Z`,
+      );
       process.exit(1);
     }
 
@@ -119,9 +128,13 @@ function main() {
       process.exit(1);
     }
     try {
-      const output = execFileSync(fullBinPath, ['--version'], { encoding: 'utf8' });
+      const output = execFileSync(fullBinPath, ["--version"], {
+        encoding: "utf8",
+      });
       if (!output.includes(canonicalVersion)) {
-        console.error(`Binary '${binPath}' --version output does not contain '${canonicalVersion}':\n${output}`);
+        console.error(
+          `Binary '${binPath}' --version output does not contain '${canonicalVersion}':\n${output}`,
+        );
         process.exit(1);
       }
     } catch (err) {
@@ -130,7 +143,9 @@ function main() {
     }
   }
 
-  console.log(`✓ Release version alignment verified: ${canonicalTag} (${canonicalVersion})`);
+  console.log(
+    `✓ Release version alignment verified: ${canonicalTag} (${canonicalVersion})`,
+  );
 }
 
 main();

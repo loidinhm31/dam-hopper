@@ -75,7 +75,7 @@ fn test_host_public_config_validation_and_roundtrip() {
         TargetRole::Both,
         "0.2.0".to_string(),
         uuid_v4.clone(),
-        "http://127.0.0.1:4801".to_string(),
+        Some("http://127.0.0.1:4801".to_string()),
         vec!["http://localhost:4802".to_string()],
     )
     .expect("valid public config");
@@ -97,7 +97,7 @@ fn test_host_public_config_invalid_profile_id() {
         TargetRole::Server,
         "0.2.0".to_string(),
         "not-a-uuid".to_string(),
-        "http://127.0.0.1:4801".to_string(),
+        Some("http://127.0.0.1:4801".to_string()),
         vec![],
     );
     assert!(res.is_err());
@@ -107,7 +107,7 @@ fn test_host_public_config_invalid_profile_id() {
         TargetRole::Server,
         "0.2.0".to_string(),
         uuid::Uuid::nil().to_string(),
-        "http://127.0.0.1:4801".to_string(),
+        Some("http://127.0.0.1:4801".to_string()),
         vec![],
     );
     assert!(res.is_err());

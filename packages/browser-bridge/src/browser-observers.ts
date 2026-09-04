@@ -41,7 +41,9 @@ function boundedMessage(args: unknown[]): string {
 }
 
 /** Observes history changes in the target document without changing navigation. */
-export function observeNavigation(onNavigate: (url: string) => void): () => void {
+export function observeNavigation(
+  onNavigate: (url: string) => void,
+): () => void {
   const publish = () => onNavigate(window.location.href);
   const originalPushState = history.pushState;
   const originalReplaceState = history.replaceState;

@@ -3,7 +3,9 @@ import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
 export const FREE_TRADITIONAL_TERMINAL_GROUP_ID = "free-terminals";
 
-export interface TraditionalTerminalProjectGroup<T extends TabEntry = TabEntry> {
+export interface TraditionalTerminalProjectGroup<
+  T extends TabEntry = TabEntry,
+> {
   id: string;
   projectName: string | null;
   label: string;
@@ -50,9 +52,8 @@ export function firstRemainingTraditionalTerminalId<T extends TabEntry>(
   group: Pick<TraditionalTerminalProjectGroup<T>, "terminalTabs">,
   closedSessionId: string,
 ): string | undefined {
-  return group.terminalTabs.find(
-    (tab) => tab.sessionId !== closedSessionId,
-  )?.sessionId;
+  return group.terminalTabs.find((tab) => tab.sessionId !== closedSessionId)
+    ?.sessionId;
 }
 
 export function traditionalTerminalLayoutStorageKey(groupId: string): string {

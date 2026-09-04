@@ -17,8 +17,22 @@ use tempfile::Builder;
 
 /// Sync directory metadata and entries to disk.
 pub fn sync_dir(dir: &Path) -> Result<(), ReleaseError> {
-    if !dir.exists() {
-        return Ok(());
+    match fs::symlink_metadata(dir) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => {
+            return Err(ReleaseError::OwnershipViolation {
+                path: dir.display().to_string(),
+                expected: "regular directory".into(),
+                got: "symbolic link or non-directory".into(),
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(ReleaseError::Io {
+                action: "inspect directory for sync",
+                details: error.to_string(),
+            });
+        }
     }
     let f = File::open(dir).map_err(|e| ReleaseError::Io {
         action: "open directory for sync",
@@ -29,6 +43,39 @@ pub fn sync_dir(dir: &Path) -> Result<(), ReleaseError> {
         details: e.to_string(),
     })?;
     Ok(())
+}
+
+fn ensure_directory(path: &Path, action: &'static str) -> Result<(), ReleaseError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(ReleaseError::OwnershipViolation {
+            path: path.display().to_string(),
+            expected: "regular directory".into(),
+            got: "symbolic link or non-directory".into(),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(path).map_err(|e| ReleaseError::Io {
+                action,
+                details: e.to_string(),
+            })?;
+            match fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+                Ok(_) => Err(ReleaseError::OwnershipViolation {
+                    path: path.display().to_string(),
+                    expected: "regular directory".into(),
+                    got: "symbolic link or non-directory".into(),
+                }),
+                Err(error) => Err(ReleaseError::Io {
+                    action,
+                    details: error.to_string(),
+                }),
+            }
+        }
+        Err(error) => Err(ReleaseError::Io {
+            action,
+            details: error.to_string(),
+        }),
+    }
 }
 
 /// Atomically and durably write data to `path`.
@@ -42,13 +89,7 @@ pub fn atomic_write_file(
         details: format!("no parent for {}", path.display()),
     })?;
 
-    if !parent.exists() {
-        fs::create_dir_all(parent).map_err(|e| ReleaseError::Io {
-            action: "create parent directory",
-            details: e.to_string(),
-        })?;
-        sync_dir(parent)?;
-    }
+    ensure_directory(parent, "create parent directory")?;
 
     let mut temp = Builder::new()
         .prefix(".tmp-durable-")
@@ -99,6 +140,17 @@ pub fn atomic_write_json<T: Serialize>(
 
 /// Durably copy a file from `src` to `dst` via tempfile and fsync.
 pub fn copy_file_durable(src: &Path, dst: &Path, mode: Option<u32>) -> Result<(), ReleaseError> {
+    let source_meta = fs::symlink_metadata(src).map_err(|e| ReleaseError::Io {
+        action: "inspect source file for durable copy",
+        details: e.to_string(),
+    })?;
+    if source_meta.file_type().is_symlink() || !source_meta.is_file() {
+        return Err(ReleaseError::OwnershipViolation {
+            path: src.display().to_string(),
+            expected: "regular source file".into(),
+            got: "symbolic link or non-regular file".into(),
+        });
+    }
     let bytes = fs::read(src).map_err(|e| ReleaseError::Io {
         action: "read source file for durable copy",
         details: e.to_string(),
@@ -106,7 +158,7 @@ pub fn copy_file_durable(src: &Path, dst: &Path, mode: Option<u32>) -> Result<()
     let target_mode = mode.or_else(|| {
         #[cfg(unix)]
         {
-            fs::metadata(src).ok().map(|m| m.permissions().mode())
+            Some(source_meta.permissions().mode())
         }
         #[cfg(not(unix))]
         {
@@ -123,13 +175,7 @@ pub fn atomic_symlink(target: &Path, link_path: &Path) -> Result<(), ReleaseErro
         details: format!("no parent for {}", link_path.display()),
     })?;
 
-    if !parent.exists() {
-        fs::create_dir_all(parent).map_err(|e| ReleaseError::Io {
-            action: "create parent directory for symlink",
-            details: e.to_string(),
-        })?;
-        sync_dir(parent)?;
-    }
+    ensure_directory(parent, "create parent directory for symlink")?;
 
     #[cfg(unix)]
     {
@@ -195,10 +241,10 @@ pub fn atomic_exchange_directories(path_a: &Path, path_b: &Path) -> Result<(), R
         }
 
         if let Some(p) = path_a.parent() {
-            let _ = sync_dir(p);
+            sync_dir(p)?;
         }
         if let Some(p) = path_b.parent() {
-            let _ = sync_dir(p);
+            sync_dir(p)?;
         }
 
         Ok(())

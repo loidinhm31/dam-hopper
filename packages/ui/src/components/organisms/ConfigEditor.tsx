@@ -571,20 +571,20 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
   const isDirty = JSON.stringify(draft) !== JSON.stringify(config);
 
   useEffect(() => {
-  isDirtyRef.current = isDirty;
+    isDirtyRef.current = isDirty;
   }, [isDirty]);
 
   // C1: Detect external config changes while editor is open
   useEffect(() => {
     queueMicrotask(() => {
-    if (!isDirtyRef.current) {
+      if (!isDirtyRef.current) {
         // No unsaved changes — silently update draft to match new config.
-      setDraft(structuredClone(config));
-      setExternalChange(false);
-    } else {
+        setDraft(structuredClone(config));
+        setExternalChange(false);
+      } else {
         // Has unsaved changes — warn user.
-      setExternalChange(true);
-    }
+        setExternalChange(true);
+      }
     });
   }, [config]);
 

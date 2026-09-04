@@ -124,8 +124,17 @@ pub struct TransactionRecord {
 
 impl TransactionRecord {
     pub fn validate(&self) -> Result<(), ReleaseError> {
-        if self.tx_id.trim().is_empty() {
-            return Err(ReleaseError::Config("transaction id cannot be empty".into()));
+        if self.tx_id.trim().is_empty()
+            || self.tx_id.len() > 64
+            || !self
+                .tx_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(ReleaseError::Config(
+                "transaction id must contain only ASCII letters, digits, '-' or '_' and be at most 64 bytes"
+                    .into(),
+            ));
         }
         if self.target_tag != "imported-format-2" {
             validate_tag_format(&self.target_tag)?;
@@ -147,6 +156,8 @@ pub struct MigrationRecord {
     pub migration_root: String,
     pub legacy_binary_sha256: String,
     pub legacy_unit_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_api_version: Option<String>,
     pub exchanged: bool,
     pub old_unit_backup_path: String,
     pub old_wants_link_path: String,

@@ -110,8 +110,8 @@ pub use durable_fs::{
     atomic_symlink, atomic_write_file, atomic_write_json, copy_file_durable, sync_dir,
 };
 pub use health::{
-    wait_for_health_stability, HealthProbeTarget, DEFAULT_PROBE_INTERVAL,
-    DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_STARTUP_DEADLINE,
+    probe_http_endpoint, wait_for_health_stability, HealthProbeTarget, HttpProbeOutcome,
+    DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_STARTUP_DEADLINE,
 };
 pub use journal::{classify_recovery, validate_transition, DeploymentState, RecoveryAction};
 pub use recovery::execute_recovery;

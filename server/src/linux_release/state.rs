@@ -3,7 +3,7 @@
 //! Stored in `/var/lib/dam-hopper-manager/state.json` with permissions `0600`.
 //! Monotonic generation increments with every durable commit or boundary.
 
-use super::constants::SCHEMA_VERSION;
+use super::constants::{MAX_STATE_BYTES, SCHEMA_VERSION};
 use super::durable_fs::{atomic_write_json, copy_file_durable};
 use super::error::ReleaseError;
 use super::journal::DeploymentState;
@@ -14,6 +14,7 @@ pub use super::state_record::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 /// Authoritative manager state envelope persisted to `/var/lib/dam-hopper-manager/state.json`.
@@ -133,14 +134,50 @@ impl ManagerState {
 
 /// Load the authoritative manager state envelope or initialize a default.
 pub fn load_or_init_manager_state(path: &Path) -> Result<ManagerState, ReleaseError> {
-    if !path.exists() {
-        return Ok(ManagerState::new());
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ManagerState::new());
+        }
+        Err(error) => {
+            return Err(ReleaseError::Io {
+                action: "inspect authoritative state",
+                details: error.to_string(),
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(ReleaseError::OwnershipViolation {
+            path: path.display().to_string(),
+            expected: "regular authoritative state file".into(),
+            got: "symbolic link or non-regular file".into(),
+        });
     }
-    let content = fs::read_to_string(path).map_err(|e| ReleaseError::Io {
-        action: "read authoritative state",
-        details: e.to_string(),
-    })?;
-    let state: ManagerState = serde_json::from_str(&content).map_err(|e| {
+
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|e| ReleaseError::Io {
+            action: "open authoritative state with no-follow",
+            details: e.to_string(),
+        })?;
+    let mut content = Vec::new();
+    file.by_ref()
+        .take(MAX_STATE_BYTES as u64 + 1)
+        .read_to_end(&mut content)
+        .map_err(|e| ReleaseError::Io {
+            action: "read authoritative state",
+            details: e.to_string(),
+        })?;
+    if content.len() > MAX_STATE_BYTES {
+        return Err(ReleaseError::Config(format!(
+            "authoritative state exceeds maximum size of {MAX_STATE_BYTES} bytes"
+        )));
+    }
+
+    let state: ManagerState = serde_json::from_slice(&content).map_err(|e| {
         ReleaseError::Config(format!(
             "failed to parse authoritative state file {}: {e}",
             path.display()
@@ -160,8 +197,24 @@ pub fn save_manager_state(path: &Path, state: &mut ManagerState) -> Result<(), R
 
 /// Backup the current state file to a specific destination path.
 pub fn backup_state_file(state_path: &Path, backup_path: &Path) -> Result<(), ReleaseError> {
-    if state_path.exists() {
-        copy_file_durable(state_path, backup_path, Some(0o600))?;
+    match fs::symlink_metadata(state_path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            copy_file_durable(state_path, backup_path, Some(0o600))?;
+        }
+        Ok(_) => {
+            return Err(ReleaseError::OwnershipViolation {
+                path: state_path.display().to_string(),
+                expected: "regular state file".into(),
+                got: "symbolic link or non-regular file".into(),
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(ReleaseError::Io {
+                action: "inspect state file before backup",
+                details: error.to_string(),
+            });
+        }
     }
     Ok(())
 }

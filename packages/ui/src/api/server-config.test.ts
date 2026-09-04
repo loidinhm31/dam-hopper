@@ -177,9 +177,9 @@ describe("server profile migration", () => {
     expect(getExistingNativeScopeId("legacy-profile")).toBeNull();
     expect(getNativeScopeId("legacy-profile")).toBe(secondNativeId);
 
-    expect(
-      completeNativeScopeDeletion("legacy-profile", firstNativeId),
-    ).toBe(true);
+    expect(completeNativeScopeDeletion("legacy-profile", firstNativeId)).toBe(
+      true,
+    );
     expect(getNativeScopeId("legacy-profile")).toBe(secondNativeId);
   });
 
@@ -402,31 +402,53 @@ describe("server profile migration", () => {
   });
 
   it("reports unavailable profile reads rather than an authoritative empty list", () => {
-    vi.spyOn(localStorage, "getItem").mockImplementation(() => { throw new Error("unavailable"); });
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new Error("unavailable");
+    });
     expect(readServerProfiles()).toEqual({ status: "unavailable" });
   });
 
   it("emits distinct profile-list, active, and deleted events after delete commits", () => {
     const events: unknown[] = [];
-    const unsubscribe = subscribeToProfileChanges((event) => events.push(event));
-    const profile = { id: "profile-a", name: "A", url: "http://a.test", authType: "basic" as const, createdAt: 1 };
+    const unsubscribe = subscribeToProfileChanges((event) =>
+      events.push(event),
+    );
+    const profile = {
+      id: "profile-a",
+      name: "A",
+      url: "http://a.test",
+      authType: "basic" as const,
+      createdAt: 1,
+    };
     saveProfiles([profile]);
     expect(events).toContainEqual({ type: "profileListChanged" });
     setActiveProfile(profile.id);
-    expect(events).toContainEqual({ type: "activeChanged", activeProfileId: profile.id });
+    expect(events).toContainEqual({
+      type: "activeChanged",
+      activeProfileId: profile.id,
+    });
     expect(deleteProfile(profile.id)).toBe(true);
-    expect(events).toContainEqual({ type: "deleted", deletedProfileId: profile.id, knownProfileIds: { status: "available", ids: [] } });
+    expect(events).toContainEqual({
+      type: "deleted",
+      deletedProfileId: profile.id,
+      knownProfileIds: { status: "available", ids: [] },
+    });
     unsubscribe();
   });
 
   it("emits data changes without presenting them as active-profile changes", () => {
     const events: unknown[] = [];
-    const unsubscribe = subscribeToProfileChanges((event) => events.push(event));
+    const unsubscribe = subscribeToProfileChanges((event) =>
+      events.push(event),
+    );
 
     setAuthToken("token", "profile-a");
 
     expect(events.at(-1)).toEqual({ type: "dataChanged" });
-    expect(events).not.toContainEqual({ type: "activeChanged", activeProfileId: null });
+    expect(events).not.toContainEqual({
+      type: "activeChanged",
+      activeProfileId: null,
+    });
     unsubscribe();
   });
 
@@ -501,7 +523,11 @@ describe("managed runtime profile reconciliation", () => {
 
     expect(managed).not.toBeNull();
     expect(getActiveProfile()?.id).toBe("user-selected-profile");
-    expect(getProfiles().some((p) => p.id === "c7325e68-07e1-4e44-8d96-b333a4658cf9")).toBe(true);
+    expect(
+      getProfiles().some(
+        (p) => p.id === "c7325e68-07e1-4e44-8d96-b333a4658cf9",
+      ),
+    ).toBe(true);
   });
 
   it("clears token when managed profile URL changes", () => {
@@ -538,5 +564,38 @@ describe("managed runtime profile reconciliation", () => {
     });
 
     expect(getAuthToken(managedId)).toBe("stable-token");
+  });
+
+  it("enforces strict per-profile token isolation", () => {
+    const profileA = "c7325e68-07e1-4e44-8d96-b333a4658cf9";
+    const profileB = "d8436f79-18f2-4f55-9e07-c444b5769da0";
+
+    setAuthToken("token-secret-a", profileA);
+    setAuthToken("token-secret-b", profileB);
+
+    expect(getAuthToken(profileA)).toBe("token-secret-a");
+    expect(getAuthToken(profileB)).toBe("token-secret-b");
+
+    clearAuthToken(profileA);
+    expect(getAuthToken(profileA)).toBeNull();
+    expect(getAuthToken(profileB)).toBe("token-secret-b");
+  });
+
+  it("fails safely and returns null when given invalid or malformed managed profile config", () => {
+    // Empty profileId
+    expect(
+      reconcileManagedProfile({
+        profileId: "   ",
+        apiUrl: "http://127.0.0.1:4801",
+      }),
+    ).toBeNull();
+
+    // Empty API URL
+    expect(
+      reconcileManagedProfile({
+        profileId: "c7325e68-07e1-4e44-8d96-b333a4658cf9",
+        apiUrl: "   ",
+      }),
+    ).toBeNull();
   });
 });

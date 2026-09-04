@@ -212,9 +212,7 @@ describe("PaneContainer terminal accessory placement in Chromium", () => {
       ),
     ).toHaveLength(1);
     expect(
-      browserPane?.querySelector(
-        '[aria-label="Show terminal scroll buttons"]',
-      ),
+      browserPane?.querySelector('[aria-label="Show terminal scroll buttons"]'),
     ).toBeNull();
     expect(scrollTrigger?.parentElement?.getAttribute("style")).toContain(
       "6.25rem",
@@ -253,7 +251,9 @@ describe("PaneContainer terminal accessory placement in Chromium", () => {
         ?.click(),
     );
     expect(
-      terminalArea?.querySelector('[data-testid="mobile-terminal-accessory-panel"]'),
+      terminalArea?.querySelector(
+        '[data-testid="mobile-terminal-accessory-panel"]',
+      ),
     ).toBeNull();
     expect(
       terminalArea?.querySelectorAll(

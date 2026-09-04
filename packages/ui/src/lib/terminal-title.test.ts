@@ -59,12 +59,9 @@ describe("applyTerminalTitleOrdinals", () => {
       { sessionId: "empty", label: "same", project: "" },
     ];
 
-    expect(applyTerminalTitleOrdinals(tabs).map((tab) => tab.title.ordinal)).toEqual([
-      1,
-      1,
-      2,
-      2,
-    ]);
+    expect(
+      applyTerminalTitleOrdinals(tabs).map((tab) => tab.title.ordinal),
+    ).toEqual([1, 1, 2, 2]);
     expect(
       applyTerminalTitleOrdinals([tabs[2]!, tabs[0]!]).map(
         (tab) => tab.title.ordinal,

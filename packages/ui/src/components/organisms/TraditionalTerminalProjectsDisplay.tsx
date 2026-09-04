@@ -42,10 +42,7 @@ export interface TraditionalTerminalProjectsDisplayProps {
   onNewFreeTerminal?: () => void;
   onSelectTab?: (sessionId: string) => void;
   onToggleTabPin?: (sessionId: string) => void;
-  onCloseTab?: (
-    sessionId: string,
-    preferredFallbackSessionId?: string,
-  ) => void;
+  onCloseTab?: (sessionId: string, preferredFallbackSessionId?: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onRenameSession?: (sessionId: string) => void;
   onVisibleSessionIdsChange?: (sessionIds: ReadonlySet<string>) => void;
@@ -153,9 +150,7 @@ export function TraditionalTerminalProjectsDisplay({
     );
     onCloseTab?.(
       sessionId,
-      group
-        ? firstRemainingTraditionalTerminalId(group, sessionId)
-        : undefined,
+      group ? firstRemainingTraditionalTerminalId(group, sessionId) : undefined,
     );
   }
 

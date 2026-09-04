@@ -81,7 +81,8 @@ export function SettingsUsageInsightsSection() {
     disabled:
       "Codex Usage is off on this machine. Enable it to collect local response telemetry.",
     paused: "Codex Usage is paused. Existing usage data remains available.",
-    active: "Codex Usage is active; new response completions will be collected.",
+    active:
+      "Codex Usage is active; new response completions will be collected.",
     unavailable:
       "The local Codex receiver is unavailable. Retry while DamHopper is running.",
   }[usageState];

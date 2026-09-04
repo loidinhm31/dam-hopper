@@ -96,7 +96,10 @@ export function TerminalDiagnosticsContextMenu({
             <Pencil className="h-3.5 w-3.5 shrink-0" />
             Rename
           </ContextMenu.Item>
-          <ContextMenu.Item disabled={isPending || !isAlive} onSelect={onExport}>
+          <ContextMenu.Item
+            disabled={isPending || !isAlive}
+            onSelect={onExport}
+          >
             <Download className="h-3.5 w-3.5 shrink-0" />
             {isPending ? "Exporting…" : "Export Diagnostics"}
           </ContextMenu.Item>

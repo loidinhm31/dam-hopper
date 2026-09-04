@@ -10,6 +10,7 @@ use dam_hopper_server::linux_release::migration::{
     rollback_migration_exchange,
 };
 use dam_hopper_server::linux_release::state_record::MigrationRecord;
+use dam_hopper_server::linux_release::ReleaseError;
 use std::fs;
 use std::path::Path;
 use std::os::unix::fs::PermissionsExt;
@@ -65,6 +66,7 @@ fn test_import_and_atomic_exchange_lifecycle() {
         migration_root: mig_root.display().to_string(),
         legacy_binary_sha256: f.binary_hash.clone(),
         legacy_unit_sha256: f.unit_hash.clone(),
+        legacy_api_version: None,
         exchanged: false,
         old_unit_backup_path: f.layout.systemd_unit_dir.join(LEGACY_FORMAT2_UNIT).display().to_string(),
         old_wants_link_path: f.layout.systemd_unit_dir.join("multi-user.target.wants").join(LEGACY_FORMAT2_UNIT).display().to_string(),
@@ -98,6 +100,7 @@ fn test_atomic_exchange_rollback_restores_original_root() {
         migration_root: mig_root.display().to_string(),
         legacy_binary_sha256: f.binary_hash.clone(),
         legacy_unit_sha256: f.unit_hash.clone(),
+        legacy_api_version: None,
         exchanged: false,
         old_unit_backup_path: f.layout.systemd_unit_dir.join(LEGACY_FORMAT2_UNIT).display().to_string(),
         old_wants_link_path: f.layout.systemd_unit_dir.join("multi-user.target.wants").join(LEGACY_FORMAT2_UNIT).display().to_string(),
@@ -107,7 +110,13 @@ fn test_atomic_exchange_rollback_restores_original_root() {
     assert!(f.layout.opt_dir.join("releases").exists());
 
     // Rollback
-    rollback_migration_exchange(&f.layout, &mig_record).unwrap();
+    let rollback_result = rollback_migration_exchange(&f.layout, &mig_record);
+    if let Err(error) = rollback_result {
+        assert!(
+            matches!(error, ReleaseError::SystemdCommandFailed { .. }),
+            "rollback failed for an unexpected reason: {error}"
+        );
+    }
 
     // Canonical opt_dir is back to the exact format-2 root!
     assert!(!f.layout.opt_dir.join("releases").exists());

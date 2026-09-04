@@ -8,9 +8,12 @@
 //! - No redirects, bounded response body (<=64KB), fail immediately on version mismatch
 
 use super::error::ReleaseError;
-use super::process::{inspect_service_process, is_port_listening, verify_service_identity_and_exe};
+use super::process::{
+    inspect_service_process, is_port_listening_wildcard, verify_service_identity_and_exe,
+};
 use super::systemd::systemctl_is_active;
 use reqwest::Client;
+use futures_util::StreamExt;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -28,11 +31,12 @@ pub struct HealthProbeTarget {
     pub path: String,
     pub expected_version: String,
     pub expected_uid: u32,
+    pub expected_gid: u32,
     pub expected_exe_prefix: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HealthPayload {
     pub schema_version: u32,
     pub status: String,
@@ -40,11 +44,14 @@ struct HealthPayload {
     pub role: String,
 }
 
-enum ProbeOutcome {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HttpProbeOutcome {
     Success,
     Transient(String),
     Fatal(String),
 }
+
+pub use HttpProbeOutcome as ProbeOutcome;
 
 async fn probe_target(client: &Client, target: &HealthProbeTarget) -> ProbeOutcome {
     match systemctl_is_active(&target.unit_name) {
@@ -53,34 +60,50 @@ async fn probe_target(client: &Client, target: &HealthProbeTarget) -> ProbeOutco
         Err(e) => return ProbeOutcome::Fatal(format!("systemctl is-active failed: {e}")),
     }
 
-    match inspect_service_process(&target.unit_name) {
-        Ok(Some(evidence)) => {
-            if let Err(e) = verify_service_identity_and_exe(
-                &evidence,
-                target.expected_uid,
-                &target.expected_exe_prefix,
-            ) {
-                return ProbeOutcome::Fatal(format!("process identity check failed: {e}"));
-            }
-        }
+    let evidence = match inspect_service_process(&target.unit_name) {
+        Ok(Some(evidence)) => evidence,
         Ok(None) => return ProbeOutcome::Transient("main pid is zero or absent".into()),
         Err(e) => return ProbeOutcome::Fatal(format!("inspect process failed: {e}")),
+    };
+
+    if let Err(e) = verify_service_identity_and_exe(
+        &evidence,
+        target.expected_uid,
+        &target.expected_exe_prefix,
+    ) {
+        return ProbeOutcome::Fatal(format!("process identity check failed: {e}"));
+    }
+    if evidence.gid != target.expected_gid {
+        return ProbeOutcome::Fatal(format!(
+            "service '{}' effective GID mismatch: expected {}, got {}",
+            target.unit_name, target.expected_gid, evidence.gid
+        ));
     }
 
-    match is_port_listening(target.port) {
+    match is_port_listening_wildcard(target.port) {
         Ok(true) => {}
-        Ok(false) => return ProbeOutcome::Transient(format!("port {} not listening", target.port)),
+        Ok(false) => return ProbeOutcome::Transient(format!("port {} not listening on wildcard", target.port)),
         Err(e) => return ProbeOutcome::Fatal(format!("port check error: {e}")),
     }
 
     let url = format!("http://127.0.0.1:{}{}", target.port, target.path);
-    let resp = match client.get(&url).send().await {
+    probe_http_endpoint(client, &url, &target.role, &target.expected_version).await
+}
+
+/// Probe an HTTP health endpoint directly and validate its JSON payload and contract invariants.
+pub async fn probe_http_endpoint(
+    client: &Client,
+    url: &str,
+    expected_role: &str,
+    expected_version: &str,
+) -> HttpProbeOutcome {
+    let resp = match client.get(url).send().await {
         Ok(r) => r,
-        Err(e) => return ProbeOutcome::Transient(format!("HTTP request error: {e}")),
+        Err(e) => return HttpProbeOutcome::Transient(format!("HTTP request error: {e}")),
     };
 
     if !resp.status().is_success() {
-        return ProbeOutcome::Transient(format!("HTTP status: {}", resp.status()));
+        return HttpProbeOutcome::Transient(format!("HTTP status: {}", resp.status()));
     }
 
     let ctype = resp
@@ -89,39 +112,55 @@ async fn probe_target(client: &Client, target: &HealthProbeTarget) -> ProbeOutco
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     if !ctype.contains("application/json") {
-        return ProbeOutcome::Fatal(format!("unexpected Content-Type '{ctype}', expected JSON"));
+        return HttpProbeOutcome::Fatal(format!("unexpected Content-Type '{ctype}', expected JSON"));
     }
 
-    let bytes = match resp.bytes().await {
-        Ok(b) if b.len() > MAX_HEALTH_BODY_BYTES => {
-            return ProbeOutcome::Fatal(format!("health body exceeds {MAX_HEALTH_BODY_BYTES} bytes"))
+    if resp
+        .content_length()
+        .is_some_and(|length| length > MAX_HEALTH_BODY_BYTES as u64)
+    {
+        return HttpProbeOutcome::Fatal(format!("health body exceeds {MAX_HEALTH_BODY_BYTES} bytes"));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                return HttpProbeOutcome::Transient(format!(
+                    "failed to read response bytes: {error}"
+                ));
+            }
+        };
+        if bytes.len().saturating_add(chunk.len()) > MAX_HEALTH_BODY_BYTES {
+            return HttpProbeOutcome::Fatal(format!("health body exceeds {MAX_HEALTH_BODY_BYTES} bytes"));
         }
-        Ok(b) => b,
-        Err(e) => return ProbeOutcome::Transient(format!("failed to read response bytes: {e}")),
-    };
+        bytes.extend_from_slice(&chunk);
+    }
 
     let body: HealthPayload = match serde_json::from_slice(&bytes) {
         Ok(b) => b,
-        Err(e) => return ProbeOutcome::Fatal(format!("failed to parse health JSON: {e}")),
+        Err(e) => return HttpProbeOutcome::Fatal(format!("failed to parse health JSON: {e}")),
     };
 
     if body.schema_version != 1 {
-        return ProbeOutcome::Fatal(format!("schemaVersion {}, expected 1", body.schema_version));
+        return HttpProbeOutcome::Fatal(format!("schemaVersion {}, expected 1", body.schema_version));
     }
     if body.status != "ok" {
-        return ProbeOutcome::Fatal(format!("status '{}', expected 'ok'", body.status));
+        return HttpProbeOutcome::Fatal(format!("status '{}', expected 'ok'", body.status));
     }
-    if body.role != target.role {
-        return ProbeOutcome::Fatal(format!("role '{}', expected '{}'", body.role, target.role));
+    if body.role != expected_role {
+        return HttpProbeOutcome::Fatal(format!("role '{}', expected '{}'", body.role, expected_role));
     }
-    if body.version != target.expected_version {
-        return ProbeOutcome::Fatal(format!(
+    if body.version != expected_version {
+        return HttpProbeOutcome::Fatal(format!(
             "version '{}', expected '{}'",
-            body.version, target.expected_version
+            body.version, expected_version
         ));
     }
 
-    ProbeOutcome::Success
+    HttpProbeOutcome::Success
 }
 
 /// Run health probes: up to `startup_deadline` to reach first readiness,
@@ -146,7 +185,7 @@ pub async fn wait_for_health_stability(
     let mut consecutive = 0;
     let mut initial_readiness_achieved = false;
     let mut last_error = String::new();
-    let overall_deadline = startup_deadline + Duration::from_secs(30);
+    let overall_deadline = startup_deadline + interval * required_consecutive as u32;
 
     loop {
         if start.elapsed() > overall_deadline {

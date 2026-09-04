@@ -48,7 +48,9 @@ export function TerminalRuntimeNavigator({
   onOpenTunnelInBrowser,
 }: Props) {
   const [dragState, setDragState] = useState<
-    { type: "group"; id: string } | { type: "item"; id: string; groupId: string } | null
+    | { type: "group"; id: string }
+    | { type: "item"; id: string; groupId: string }
+    | null
   >(null);
 
   return (

@@ -57,10 +57,17 @@ pub const ROLLBACK_STATE_COMPATIBILITY: &str = "n-1";
 
 /// Maximum allowed manifest payload size in bytes (1 MiB).
 pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+/// Maximum authoritative state payload size.
+pub const MAX_STATE_BYTES: usize = 1024 * 1024;
 /// Maximum allowed inventory entries in a single manifest.
 pub const MAX_INVENTORY_ENTRIES: usize = 20_000;
 /// Maximum length of an inventory path in bytes.
 pub const MAX_PATH_LENGTH: usize = 255;
+
+/// Maximum uncompressed bytes consumed while inspecting or extracting a bundle.
+pub const MAX_ARCHIVE_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+/// Maximum uncompressed bytes declared by any one regular archive entry.
+pub const MAX_ARCHIVE_ENTRY_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Expected archive name template given a version tag (e.g. `v0.2.0`).
 pub fn expected_archive_name(tag: &str) -> String {

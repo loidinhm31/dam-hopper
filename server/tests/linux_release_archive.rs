@@ -99,3 +99,76 @@ fn test_archive_tampering_and_attack_rejection() {
         Err(ReleaseError::ArchiveEntryNotRegularFileOrDir { .. })
     ));
 }
+
+#[test]
+fn test_archive_hardlink_and_special_files_rejection() {
+    let (manifest, _) = create_test_manifest_and_archive();
+
+    // Hardlink entry
+    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+    {
+        let mut tar = Builder::new(&mut enc);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Link);
+        header.set_mode(0o755);
+        header.set_size(0);
+        header.set_link_name("bin/dam-hopper-server").unwrap();
+        tar.append_data(&mut header, "bin/dam-hopper-manager", &[][..])
+            .unwrap();
+    }
+    let hardlink_archive = enc.finish().unwrap();
+    assert!(matches!(
+        inspect_and_validate_archive(&hardlink_archive[..], &manifest),
+        Err(ReleaseError::ArchiveEntryNotRegularFileOrDir { .. })
+    ));
+
+    // FIFO entry
+    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+    {
+        let mut tar = Builder::new(&mut enc);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Fifo);
+        header.set_mode(0o755);
+        header.set_size(0);
+        tar.append_data(&mut header, "bin/dam-hopper-manager", &[][..])
+            .unwrap();
+    }
+    let fifo_archive = enc.finish().unwrap();
+    assert!(matches!(
+        inspect_and_validate_archive(&fifo_archive[..], &manifest),
+        Err(ReleaseError::ArchiveEntryNotRegularFileOrDir { .. })
+    ));
+}
+
+#[test]
+fn test_archive_inventory_discrepancies() {
+    let (manifest, _archive_bytes) = create_test_manifest_and_archive();
+
+    // Missing entry from archive (manifest has entries not in archive)
+    let bad_bytes = build_archive(&[("bin/dam-hopper-manager", false, b"manager binary content", 0o755)]);
+    assert!(matches!(
+        inspect_and_validate_archive(&bad_bytes[..], &manifest),
+        Err(ReleaseError::ArchiveInventoryMismatch { .. })
+    ));
+
+    // Unexpected extra entry in archive
+    let extra_archive = build_archive(&[("unexpected.txt", false, b"unexpected payload", 0o644)]);
+    assert!(matches!(
+        inspect_and_validate_archive(&extra_archive[..], &manifest),
+        Err(ReleaseError::ArchiveInventoryMismatch { .. })
+    ));
+
+    // Mode mismatch in archive
+    let mode_mismatch_archive = build_archive(&[("bin/dam-hopper-manager", false, b"manager binary content", 0o644)]);
+    assert!(matches!(
+        inspect_and_validate_archive(&mode_mismatch_archive[..], &manifest),
+        Err(ReleaseError::ArchiveEntryInvalid { .. })
+    ));
+
+    // Disallowed runtime file in archive
+    let disallowed_archive = build_archive(&[(".env", false, b"SECRET=1\n", 0o600)]);
+    assert!(matches!(
+        inspect_and_validate_archive(&disallowed_archive[..], &manifest),
+        Err(ReleaseError::DisallowedRuntimeFile { .. })
+    ));
+}

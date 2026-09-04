@@ -118,7 +118,8 @@ export function useTerminalSuggestions(
     [controller],
   );
   const accept = useCallback(
-    (kind: TerminalSuggestionAcceptKind): string | null => controller.accept(kind),
+    (kind: TerminalSuggestionAcceptKind): string | null =>
+      controller.accept(kind),
     [controller],
   );
   const openExplicitList = useCallback(

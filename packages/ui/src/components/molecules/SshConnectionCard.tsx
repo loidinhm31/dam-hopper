@@ -344,7 +344,9 @@ export function SshConnectionCard({
                 onEdit={() => onEditRule(rule)}
                 onDelete={() => onDeleteRule(rule)}
                 onBlockedAction={() =>
-                  onBlockedAction("Disable the rule before editing or deleting it.")
+                  onBlockedAction(
+                    "Disable the rule before editing or deleting it.",
+                  )
                 }
               />
             ))}

@@ -73,11 +73,9 @@ async fn test_health_rejection_on_wrong_version_or_role() {
 
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{port}/api/health");
-    let resp = client.get(&url).send().await.unwrap();
-    let bytes = resp.bytes().await.unwrap();
-    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    // Verify version mismatch is observable
-    assert_ne!(body["version"], "2.0.0");
+    // Expected version 2.0.0, but server returned 1.0.0 -> must be Fatal outcome
+    let outcome = probe_http_endpoint(&client, &url, "api", "2.0.0").await;
+    assert!(matches!(outcome, HttpProbeOutcome::Fatal(msg) if msg.contains("version")));
 }
 
 #[tokio::test]
@@ -97,9 +95,8 @@ async fn test_health_rejection_on_html_content_type() {
 
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{port}/api/health");
-    let resp = client.get(&url).send().await.unwrap();
-    let ctype = resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap().to_str().unwrap();
-    assert!(!ctype.contains("application/json"));
+    let outcome = probe_http_endpoint(&client, &url, "api", "1.0.0").await;
+    assert!(matches!(outcome, HttpProbeOutcome::Fatal(msg) if msg.contains("Content-Type")));
 }
 
 #[test]
@@ -125,4 +122,75 @@ fn test_sqlite_holders_fail_closed() {
     // With allowed PIDs not containing 9999, it MUST fail!
     let res = dam_hopper_server::linux_release::process_holders::verify_no_foreign_sqlite_holders_in(&mock_proc, &db_path, &[my_pid]);
     assert!(res.is_err(), "foreign process holding DB must trigger error");
+}
+
+#[tokio::test]
+async fn test_health_rejection_on_schema_version_and_status() {
+    // 1. Schema version != 1
+    let app = Router::new().route(
+        "/api/health",
+        get(|| async {
+            Json(serde_json::json!({
+                "schemaVersion": 2,
+                "status": "ok",
+                "version": "1.0.0",
+                "role": "api"
+            }))
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{port}/api/health");
+    let outcome = probe_http_endpoint(&client, &url, "api", "1.0.0").await;
+    assert!(matches!(outcome, HttpProbeOutcome::Fatal(msg) if msg.contains("schemaVersion")));
+    // 2. Status != ok
+    let app_degraded = Router::new().route(
+        "/api/health",
+        get(|| async {
+            Json(serde_json::json!({
+                "schemaVersion": 1,
+                "status": "degraded",
+                "version": "1.0.0",
+                "role": "api"
+            }))
+        }),
+    );
+    let listener2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port2 = listener2.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener2, app_degraded).await.unwrap();
+    });
+    let outcome2 = probe_http_endpoint(&client, &format!("http://127.0.0.1:{port2}/api/health"), "api", "1.0.0").await;
+    assert!(matches!(outcome2, HttpProbeOutcome::Fatal(msg) if msg.contains("status")));
+}
+
+#[tokio::test]
+async fn test_health_rejection_on_oversized_payload() {
+    // Response body > 64KB
+    let app = Router::new().route(
+        "/api/health",
+        get(|| async {
+            let large_padding = "x".repeat(70_000);
+            Json(serde_json::json!({
+                "schemaVersion": 1,
+                "status": "ok",
+                "version": "1.0.0",
+                "role": "api",
+                "padding": large_padding
+            }))
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{port}/api/health");
+    let outcome = probe_http_endpoint(&client, &url, "api", "1.0.0").await;
+    assert!(matches!(outcome, HttpProbeOutcome::Fatal(msg) if msg.contains("exceeds")));
 }

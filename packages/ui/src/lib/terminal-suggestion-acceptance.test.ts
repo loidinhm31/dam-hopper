@@ -28,26 +28,33 @@ function snapshot(
 
 describe("getTerminalSuggestionSuffix", () => {
   it("returns only the suffix for a full acceptance", () => {
-    expect(getTerminalSuggestionSuffix(snapshot("git ", "git status"), "full")).toBe(
-      "status",
-    );
+    expect(
+      getTerminalSuggestionSuffix(snapshot("git ", "git status"), "full"),
+    ).toBe("status");
   });
 
   it("returns the remainder of the current token", () => {
-    expect(getTerminalSuggestionSuffix(snapshot("gi", "git status"), "token")).toBe(
-      "t",
-    );
+    expect(
+      getTerminalSuggestionSuffix(snapshot("gi", "git status"), "token"),
+    ).toBe("t");
   });
 
   it("includes required leading whitespace with the next token", () => {
-    expect(getTerminalSuggestionSuffix(snapshot("git", "git status --short"), "token")).toBe(
-      " status",
-    );
+    expect(
+      getTerminalSuggestionSuffix(
+        snapshot("git", "git status --short"),
+        "token",
+      ),
+    ).toBe(" status");
   });
 
   it("fails closed for a stale, non-prefix, or multiline candidate", () => {
-    expect(getTerminalSuggestionSuffix(snapshot("git x", "git status"), "full")).toBeNull();
-    expect(getTerminalSuggestionSuffix(snapshot("git", "git\nstatus"), "full")).toBeNull();
+    expect(
+      getTerminalSuggestionSuffix(snapshot("git x", "git status"), "full"),
+    ).toBeNull();
+    expect(
+      getTerminalSuggestionSuffix(snapshot("git", "git\nstatus"), "full"),
+    ).toBeNull();
     expect(
       getTerminalSuggestionSuffix(
         { ...snapshot("git", "git status"), state: "opaque" },

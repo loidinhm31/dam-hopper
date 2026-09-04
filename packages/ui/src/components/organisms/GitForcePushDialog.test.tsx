@@ -7,9 +7,9 @@ import {
 
 describe("GitForcePushDialog", () => {
   it("builds destructive copy for the selected project and root", () => {
-    expect(
-      buildForcePushDialogDescription("dam-hopper", "Project root"),
-    ).toBe("Overwrite the upstream history for dam-hopper on Project root.");
+    expect(buildForcePushDialogDescription("dam-hopper", "Project root")).toBe(
+      "Overwrite the upstream history for dam-hopper on Project root.",
+    );
     expect(buildForcePushDialogWarning()).toContain("This is destructive.");
   });
 

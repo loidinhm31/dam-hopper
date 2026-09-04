@@ -148,9 +148,7 @@ describe("language explorer navigation in Chromium", () => {
     expect(container.textContent).toContain("Filter Explorer by language");
     expect(container.querySelector("[role=menu]")).toBeNull();
 
-    const srcRow = container.querySelector<HTMLElement>(
-      '[role="treeitem"]',
-    );
+    const srcRow = container.querySelector<HTMLElement>('[role="treeitem"]');
     expect(srcRow).not.toBeNull();
     await act(async () => srcRow?.click());
     expect(container.textContent).toContain("main.rs");
@@ -194,8 +192,9 @@ describe("language explorer navigation in Chromium", () => {
     await act(async () => root?.render(<FileTree project="demo" />));
 
     expect(container.textContent).toContain("Scan project to show Rust files");
-    const scan = [...container.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Scan");
+    const scan = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Scan");
     await act(async () => scan?.click());
     expect(harness.scanReset).toHaveBeenCalledOnce();
     expect(harness.scanMutate).toHaveBeenCalledOnce();
@@ -210,7 +209,9 @@ describe("language explorer navigation in Chromium", () => {
     harness.scanError = new Error("network unavailable");
     await act(async () => root?.render(<FileTree project="demo" />));
     expect(container.textContent).toContain("Results may be outdated");
-    expect(container.textContent).toContain("Showing first 20,000 matching files");
+    expect(container.textContent).toContain(
+      "Showing first 20,000 matching files",
+    );
     expect(container.textContent).toContain("network unavailable");
     expect(container.textContent).toContain("Rescan");
   });
@@ -220,9 +221,8 @@ describe("language explorer navigation in Chromium", () => {
     document.body.append(container);
     root = createRoot(container);
     await act(async () => root?.render(<FileTree project="demo" />));
-    const firstTreeItem = container.querySelector<HTMLElement>(
-      '[role="treeitem"]',
-    );
+    const firstTreeItem =
+      container.querySelector<HTMLElement>('[role="treeitem"]');
     expect(firstTreeItem).not.toBeNull();
 
     harness.cache = {

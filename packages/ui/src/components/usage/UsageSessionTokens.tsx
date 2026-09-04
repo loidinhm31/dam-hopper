@@ -38,13 +38,19 @@ export function UsageSessionTokens({
         <div>
           <dt className="sr-only">Responses</dt>
           <dd>
-            Responses: <span className="tabular-nums text-[var(--color-text)]">{tokens.responseCount ?? "—"}</span>
+            Responses:{" "}
+            <span className="tabular-nums text-[var(--color-text)]">
+              {tokens.responseCount ?? "—"}
+            </span>
           </dd>
         </div>
         <div>
           <dt className="sr-only">Response duration</dt>
           <dd>
-            Duration: <span className="tabular-nums text-[var(--color-text)]">{formatDuration(tokens.durationMs)}</span>
+            Duration:{" "}
+            <span className="tabular-nums text-[var(--color-text)]">
+              {formatDuration(tokens.durationMs)}
+            </span>
           </dd>
         </div>
       </dl>
@@ -52,34 +58,53 @@ export function UsageSessionTokens({
   }
 
   return (
-    <dl className={cn("grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] leading-4", className)}>
+    <dl
+      className={cn(
+        "grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] leading-4",
+        className,
+      )}
+    >
       <div>
         <dt className="text-[var(--color-text-muted)]">Total tokens</dt>
-        <dd className="font-medium tabular-nums text-[var(--color-text)]">{formatTokenTotal(tokens)}</dd>
+        <dd className="font-medium tabular-nums text-[var(--color-text)]">
+          {formatTokenTotal(tokens)}
+        </dd>
       </div>
       <div>
         <dt className="text-[var(--color-text-muted)]">Responses</dt>
-        <dd className="tabular-nums text-[var(--color-text)]">{tokens.responseCount ?? "—"}</dd>
+        <dd className="tabular-nums text-[var(--color-text)]">
+          {tokens.responseCount ?? "—"}
+        </dd>
       </div>
       <div>
         <dt className="text-[var(--color-text-muted)]">Response time</dt>
-        <dd className="tabular-nums text-[var(--color-text)]">{formatDuration(tokens.durationMs)}</dd>
+        <dd className="tabular-nums text-[var(--color-text)]">
+          {formatDuration(tokens.durationMs)}
+        </dd>
       </div>
       <div>
         <dt className="text-[var(--color-text-muted)]">Cached input</dt>
-        <dd className="tabular-nums text-[var(--color-text)]">{formatCompactUsageNumber(tokens.cachedInputTokens)}</dd>
+        <dd className="tabular-nums text-[var(--color-text)]">
+          {formatCompactUsageNumber(tokens.cachedInputTokens)}
+        </dd>
       </div>
       <div>
         <dt className="text-[var(--color-text-muted)]">Input</dt>
-        <dd className="tabular-nums text-[var(--color-text)]">{formatUsageNumber(tokens.inputTokens)}</dd>
+        <dd className="tabular-nums text-[var(--color-text)]">
+          {formatUsageNumber(tokens.inputTokens)}
+        </dd>
       </div>
       <div>
         <dt className="text-[var(--color-text-muted)]">Output</dt>
-        <dd className="tabular-nums text-[var(--color-text)]">{formatUsageNumber(tokens.outputTokens)}</dd>
+        <dd className="tabular-nums text-[var(--color-text)]">
+          {formatUsageNumber(tokens.outputTokens)}
+        </dd>
       </div>
       <div>
         <dt className="text-[var(--color-text-muted)]">Reasoning</dt>
-        <dd className="tabular-nums text-[var(--color-text)]">{formatUsageNumber(tokens.reasoningTokens)}</dd>
+        <dd className="tabular-nums text-[var(--color-text)]">
+          {formatUsageNumber(tokens.reasoningTokens)}
+        </dd>
       </div>
     </dl>
   );

@@ -34,11 +34,12 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
     let f1_data = b"manager binary content";
     let f2_data = b"server binary content";
     let f3_data = b"web binary content";
-    let f4_data = b"[Unit]\nDescription=API\n";
-    let f5_data = b"[Unit]\nDescription=Web\n";
-    let f6_data = b"u dam-hopper-web - \"DamHopper\"\n";
-    let f7_data = b"<!doctype html><html>web</html>";
-    let f8_data = b"MIT License";
+    let f4_data = include_bytes!("../../../deploy/systemd/dam-hopper-api.service.in");
+    let f5_data = include_bytes!("../../../deploy/systemd/dam-hopper-web.service.in");
+    let f6_data = include_bytes!("../../../deploy/systemd/dam-hopper-recovery.service.in");
+    let f7_data = include_bytes!("../../../deploy/sysusers.d/dam-hopper-web.conf");
+    let f8_data = b"<!doctype html><html>web</html>";
+    let f9_data = b"MIT License";
 
     let entries = vec![
         ("bin/dam-hopper-manager", false, &f1_data[..], 0o755),
@@ -46,10 +47,11 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
         ("bin/dam-hopper-web", false, &f3_data[..], 0o755),
         ("systemd/dam-hopper-api.service", false, &f4_data[..], 0o644),
         ("systemd/dam-hopper-web.service", false, &f5_data[..], 0o644),
-        ("sysusers.d/dam-hopper-web.conf", false, &f6_data[..], 0o644),
+        ("systemd/dam-hopper-recovery.service", false, &f6_data[..], 0o644),
+        ("sysusers.d/dam-hopper-web.conf", false, &f7_data[..], 0o644),
         ("web", true, &[][..], 0o755),
-        ("web/index.html", false, &f7_data[..], 0o644),
-        ("LICENSE", false, &f8_data[..], 0o644),
+        ("web/index.html", false, &f8_data[..], 0o644),
+        ("LICENSE", false, &f9_data[..], 0o644),
     ];
 
     let archive_bytes = build_archive(&entries);
@@ -97,12 +99,20 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             sha256: Some(hex::encode(Sha256::digest(f5_data))),
         },
         InventoryEntry {
+            path: "systemd/dam-hopper-recovery.service".to_string(),
+            kind: EntryKind::File,
+            roles: vec![ReleaseRole::Common],
+            mode: 0o644,
+            size: Some(f6_data.len() as u64),
+            sha256: Some(hex::encode(Sha256::digest(f6_data))),
+        },
+        InventoryEntry {
             path: "sysusers.d/dam-hopper-web.conf".to_string(),
             kind: EntryKind::File,
             roles: vec![ReleaseRole::Web],
             mode: 0o644,
-            size: Some(f6_data.len() as u64),
-            sha256: Some(hex::encode(Sha256::digest(f6_data))),
+            size: Some(f7_data.len() as u64),
+            sha256: Some(hex::encode(Sha256::digest(f7_data))),
         },
         InventoryEntry {
             path: "web".to_string(),
@@ -117,16 +127,16 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             kind: EntryKind::File,
             roles: vec![ReleaseRole::Web],
             mode: 0o644,
-            size: Some(f7_data.len() as u64),
-            sha256: Some(hex::encode(Sha256::digest(f7_data))),
+            size: Some(f8_data.len() as u64),
+            sha256: Some(hex::encode(Sha256::digest(f8_data))),
         },
         InventoryEntry {
             path: "LICENSE".to_string(),
             kind: EntryKind::File,
             roles: vec![ReleaseRole::Common],
             mode: 0o644,
-            size: Some(f8_data.len() as u64),
-            sha256: Some(hex::encode(Sha256::digest(f8_data))),
+            size: Some(f9_data.len() as u64),
+            sha256: Some(hex::encode(Sha256::digest(f9_data))),
         },
     ];
 

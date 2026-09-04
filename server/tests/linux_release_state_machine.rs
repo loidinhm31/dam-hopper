@@ -59,6 +59,41 @@ fn test_state_envelope_lifecycle_and_generations() {
     assert_eq!(reloaded.active.unwrap().tag, "v1.0.0");
 }
 
+#[cfg(unix)]
+#[test]
+fn test_state_loader_rejects_symlink() {
+    let root = tempdir().unwrap();
+    let real_path = root.path().join("real-state.json");
+    let link_path = root.path().join("state.json");
+    let mut state = ManagerState::new();
+    save_manager_state(&real_path, &mut state).unwrap();
+    std::os::unix::fs::symlink(&real_path, &link_path).unwrap();
+
+    assert!(matches!(
+        load_or_init_manager_state(&link_path),
+        Err(ReleaseError::OwnershipViolation { .. })
+    ));
+}
+
+#[test]
+fn test_transaction_id_rejects_path_traversal() {
+    let transaction = TransactionRecord {
+        tx_id: "../escape".into(),
+        phase: TransactionPhase::Staged,
+        started_at: "2026-09-03T00:00:00Z".into(),
+        target_tag: "v1.0.0".into(),
+        target_role: TargetRole::Server,
+        previous_tag: None,
+        previous_role: None,
+        units_backup_dir: None,
+        config_backup_path: None,
+        public_config_backup_path: None,
+        migration: None,
+    };
+
+    assert!(transaction.validate().is_err());
+}
+
 #[test]
 fn test_transition_graph_strict_boundaries() {
     use DeploymentState::*;

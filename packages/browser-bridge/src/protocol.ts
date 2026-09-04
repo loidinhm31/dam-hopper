@@ -40,12 +40,7 @@ export type BrowserBridgeEventType =
   | "dam-hopper:console"
   | "dam-hopper:error";
 
-export type BrowserConsoleLevel =
-  | "debug"
-  | "log"
-  | "info"
-  | "warn"
-  | "error";
+export type BrowserConsoleLevel = "debug" | "log" | "info" | "warn" | "error";
 
 export type BrowserBridgeCapability = "navigation" | "console";
 
@@ -200,8 +195,8 @@ function isBrowserBridgeCapabilities(
   return (
     Array.isArray(value) &&
     value.length <= 2 &&
-    value.every((capability) =>
-      capability === "navigation" || capability === "console",
+    value.every(
+      (capability) => capability === "navigation" || capability === "console",
     )
   );
 }

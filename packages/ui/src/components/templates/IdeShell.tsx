@@ -229,8 +229,8 @@ export function IdeShell({
     // Request props bridge WorkspacePage events into local panel state after
     // the committing render, avoiding a synchronous effect-state cascade.
     queueMicrotask(() => {
-    setActiveLeftTopId(activateLeftTopToolRequest.toolId);
-    setBottomMaximized((v) => (v ? false : v));
+      setActiveLeftTopId(activateLeftTopToolRequest.toolId);
+      setBottomMaximized((v) => (v ? false : v));
     });
   }, [activateLeftTopToolRequest, leftTools]);
 
@@ -241,12 +241,12 @@ export function IdeShell({
     );
     if (!requestedTool || requestedTool.position !== "bottom") return;
     queueMicrotask(() => {
-    if (leftTools.includes(requestedTool)) {
-      setActiveLeftBottomId(requestedTool.id);
-    } else {
-      setActiveRightBottomId(requestedTool.id);
-    }
-    setBottomMaximized((v) => (v ? false : v));
+      if (leftTools.includes(requestedTool)) {
+        setActiveLeftBottomId(requestedTool.id);
+      } else {
+        setActiveRightBottomId(requestedTool.id);
+      }
+      setBottomMaximized((v) => (v ? false : v));
     });
   }, [activateBottomToolRequest, leftTools, rightTools]);
 
@@ -273,16 +273,16 @@ export function IdeShell({
         bottomMaximized,
       });
       queueMicrotask(() => {
-      setActiveLeftBottomId(outcome.nextActiveLeftBottomId);
-      setActiveRightTopId(outcome.nextActiveRightTopId);
-      setBottomMaximized(outcome.nextBottomMaximized);
+        setActiveLeftBottomId(outcome.nextActiveLeftBottomId);
+        setActiveRightTopId(outcome.nextActiveRightTopId);
+        setBottomMaximized(outcome.nextBottomMaximized);
       });
       return;
     }
 
     queueMicrotask(() => {
-    setActiveRightTopId(activateRightTopToolRequest.toolId);
-    setBottomMaximized((v) => (v ? false : v));
+      setActiveRightTopId(activateRightTopToolRequest.toolId);
+      setBottomMaximized((v) => (v ? false : v));
     });
   }, [
     activateRightTopToolRequest,
@@ -313,9 +313,9 @@ export function IdeShell({
       bottomMaximized,
     });
     queueMicrotask(() => {
-    setActiveLeftBottomId(outcome.nextActiveLeftBottomId);
-    setActiveRightTopId(outcome.nextActiveRightTopId);
-    setBottomMaximized(outcome.nextBottomMaximized);
+      setActiveLeftBottomId(outcome.nextActiveLeftBottomId);
+      setActiveRightTopId(outcome.nextActiveRightTopId);
+      setBottomMaximized(outcome.nextBottomMaximized);
     });
   }, [
     activateBottomToolRequest,
