@@ -132,6 +132,17 @@ fn try_workspace_candidate(
 }
 
 fn load_config_at(path: &Path, source: ConfigSource) -> Result<ConfigResolution, AppError> {
+    if !path.exists() {
+        tracing::warn!(
+            path = %path.display(),
+            source = source.as_str(),
+            "Explicit config path does not exist — falling back to empty config"
+        );
+        let parent = path.parent().unwrap_or(path).to_path_buf();
+        let mut resolution = empty_resolution(parent);
+        resolution.config.config_path = path.to_path_buf();
+        return Ok(resolution);
+    }
     let config = read_config(path)?;
     Ok(build_resolution(config, source, path))
 }

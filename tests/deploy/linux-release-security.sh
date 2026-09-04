@@ -40,7 +40,7 @@ BUNDLE_DIR="$TEST_ROOT/bundle"
 mkdir -p "$BUNDLE_DIR"
 create_mock_release_bundle "v0.1.0" "$BUNDLE_DIR"
 
-ARCHIVE_TAR="$BUNDLE_DIR/dam-hopper-v0.1.0-fedora44-x86_64-systemd.tar.gz"
+ARCHIVE_TAR="$BUNDLE_DIR/dam-hopper-v0.1.0-linux-x86_64-systemd.tar.gz"
 assert_file_exists "$ARCHIVE_TAR"
 
 # Verify archive does NOT contain sensitive files matching check_disallowed_files contract

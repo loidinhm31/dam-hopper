@@ -32,10 +32,34 @@ pub fn validate_manifest_invariants(m: &ReleaseManifest) -> Result<(), ReleaseEr
 
 fn validate_profile(m: &ReleaseManifest) -> Result<(), ReleaseError> {
     let p = &m.profile;
+    let id_valid = p.id == PROFILE_ID || p.id == LEGACY_PROFILE_ID;
+    if !id_valid {
+        return Err(ReleaseError::ProfileMismatch {
+            field: "id",
+            expected: format!("{PROFILE_ID} or {LEGACY_PROFILE_ID}"),
+            got: p.id.clone(),
+        });
+    }
+
+    let os_id_valid = p.os_id == PROFILE_OS_ID || p.os_id == "fedora";
+    if !os_id_valid {
+        return Err(ReleaseError::ProfileMismatch {
+            field: "osId",
+            expected: format!("{PROFILE_OS_ID} or fedora"),
+            got: p.os_id.clone(),
+        });
+    }
+
+    let os_ver_valid = p.os_version == PROFILE_OS_VERSION || p.os_version == "44";
+    if !os_ver_valid {
+        return Err(ReleaseError::ProfileMismatch {
+            field: "osVersion",
+            expected: format!("{PROFILE_OS_VERSION} or 44"),
+            got: p.os_version.clone(),
+        });
+    }
+
     let checks = [
-        ("id", p.id.as_str(), PROFILE_ID),
-        ("osId", p.os_id.as_str(), PROFILE_OS_ID),
-        ("osVersion", p.os_version.as_str(), PROFILE_OS_VERSION),
         ("arch", p.arch.as_str(), PROFILE_ARCH),
         ("target", p.target.as_str(), PROFILE_TARGET),
         ("glibcMin", p.glibc_min.as_str(), PROFILE_GLIBC_MIN),
@@ -60,7 +84,8 @@ fn validate_profile(m: &ReleaseManifest) -> Result<(), ReleaseError> {
 
 fn validate_archive(m: &ReleaseManifest) -> Result<(), ReleaseError> {
     let expected_name = expected_archive_name(&m.release.tag);
-    if m.archive.name != expected_name {
+    let legacy_name = format!("dam-hopper-{}-{LEGACY_PROFILE_ID}.tar.gz", m.release.tag);
+    if m.archive.name != expected_name && m.archive.name != legacy_name {
         return Err(ReleaseError::ArchiveNameMismatch {
             expected: expected_name,
             got: m.archive.name.clone(),

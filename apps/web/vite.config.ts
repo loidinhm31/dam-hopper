@@ -23,7 +23,7 @@ export default defineConfig(({ command, mode }) => {
     base: "./",
     define: {
       __DAM_HOPPER_RELEASE_VERSION__: JSON.stringify(
-        process.env.npm_package_version || "0.1.0",
+        process.env.npm_package_version || "0.2.0",
       ),
     },
     plugins: [react(), tailwindcss(), fixBrokenXtermRequestMode()],

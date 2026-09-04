@@ -50,13 +50,13 @@
         "systemdMin"
       ],
       "properties": {
-        "id": { "type": "string", "const": "fedora44-x86_64-systemd" },
-        "osId": { "type": "string", "const": "fedora" },
-        "osVersion": { "type": "string", "const": "44" },
+        "id": { "type": "string", "enum": ["linux-x86_64-systemd", "fedora44-x86_64-systemd"] },
+        "osId": { "type": "string" },
+        "osVersion": { "type": "string" },
         "arch": { "type": "string", "const": "x86_64" },
         "target": { "type": "string", "const": "x86_64-unknown-linux-gnu" },
-        "glibcMin": { "type": "string", "const": "2.43" },
-        "systemdMin": { "type": "integer", "minimum": 259 }
+        "glibcMin": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+        "systemdMin": { "type": "integer", "minimum": 245 }
       }
     },
     "archive": {
@@ -66,7 +66,7 @@
       "properties": {
         "name": {
           "type": "string",
-          "pattern": "^dam-hopper-v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)-fedora44-x86_64-systemd\\.tar\\.gz$"
+          "pattern": "^dam-hopper-v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)-(linux|fedora44)-x86_64-systemd\\.tar\\.gz$"
         },
         "size": { "type": "integer", "minimum": 1 },
         "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }

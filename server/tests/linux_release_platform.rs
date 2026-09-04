@@ -17,29 +17,36 @@ PRETTY_NAME="Fedora Linux 44 (Container Image)"
     assert_eq!(parsed.id, "fedora");
     assert_eq!(parsed.version_id, "44");
     assert!(verify_os_release(&parsed).is_ok());
-
     let ubuntu = r#"
 NAME="Ubuntu"
 ID=ubuntu
 VERSION_ID="24.04"
 "#;
     let parsed = parse_os_release(ubuntu);
-    assert!(matches!(
-        verify_os_release(&parsed),
-        Err(ReleaseError::UnsupportedOs { ref expected, ref got }) if expected == "fedora" && got == "ubuntu"
-    ));
+    assert_eq!(parsed.id, "ubuntu");
+    assert_eq!(parsed.version_id, "24.04");
+    assert!(verify_os_release(&parsed).is_ok());
 
-    let fedora43 = r#"
-ID="fedora"
-VERSION_ID="43"
+    let debian = r#"
+NAME="Debian GNU/Linux"
+ID="debian"
+VERSION_ID="12"
 "#;
-    let parsed = parse_os_release(fedora43);
+    let parsed = parse_os_release(debian);
+    assert_eq!(parsed.id, "debian");
+    assert_eq!(parsed.version_id, "12");
+    assert!(verify_os_release(&parsed).is_ok());
+
+    let empty_id = r#"
+NAME="Unknown Linux"
+VERSION_ID="1.0"
+"#;
+    let parsed = parse_os_release(empty_id);
     assert!(matches!(
         verify_os_release(&parsed),
-        Err(ReleaseError::UnsupportedOsVersion { ref expected, ref got }) if expected == "44" && got == "43"
+        Err(ReleaseError::UnsupportedOs { .. })
     ));
 }
-
 #[test]
 fn test_architecture_validation() {
     assert!(verify_arch("x86_64").is_ok());
@@ -55,15 +62,16 @@ fn test_architecture_validation() {
 
 #[test]
 fn test_glibc_version_validation() {
+    assert!(verify_glibc_version("2.39").is_ok());
     assert!(verify_glibc_version("2.43").is_ok());
     assert!(verify_glibc_version("2.44").is_ok());
     assert!(verify_glibc_version("2.50").is_ok());
     assert!(matches!(
-        verify_glibc_version("2.42"),
+        verify_glibc_version("2.38"),
         Err(ReleaseError::GlibcVersionTooLow { .. })
     ));
     assert!(matches!(
-        verify_glibc_version("2.34"),
+        verify_glibc_version("2.35"),
         Err(ReleaseError::GlibcVersionTooLow { .. })
     ));
     assert!(matches!(
@@ -74,20 +82,20 @@ fn test_glibc_version_validation() {
 
 #[test]
 fn test_systemd_version_validation() {
-    let output = "systemd 259 (259.1-1.fc44)\n+PAM +AUDIT +SELINUX";
+    let output = "systemd 255 (255.4-1ubuntu8.4)\n+PAM +AUDIT +SELINUX";
     let ver = parse_systemd_version(output).expect("parsed systemd version");
-    assert_eq!(ver, 259);
+    assert_eq!(ver, 255);
     assert!(verify_systemd_version(ver).is_ok());
+    assert!(verify_systemd_version(245).is_ok());
     assert!(verify_systemd_version(260).is_ok());
     assert!(matches!(
-        verify_systemd_version(258),
+        verify_systemd_version(244),
         Err(ReleaseError::SystemdVersionTooLow {
-            expected: 259,
-            got: 258
+            expected: 245,
+            got: 244
         })
     ));
 }
-
 #[test]
 fn test_web_origin_validation() {
     assert_eq!(

@@ -1,8 +1,7 @@
 [Unit]
 Description=DamHopper Static Web Host
 Wants=network-online.target
-Requires=dam-hopper-recovery.service
-After=network-online.target dam-hopper-recovery.service
+After=network-online.target
 
 [Service]
 Type=exec

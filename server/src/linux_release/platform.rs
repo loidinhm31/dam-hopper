@@ -1,8 +1,6 @@
 //! Target platform and host profile verification for Fedora 44.
 
-use super::constants::{
-    PROFILE_ARCH, PROFILE_GLIBC_MIN, PROFILE_OS_ID, PROFILE_OS_VERSION, PROFILE_SYSTEMD_MIN,
-};
+use super::constants::{PROFILE_ARCH, PROFILE_GLIBC_MIN, PROFILE_SYSTEMD_MIN};
 use super::error::ReleaseError;
 use std::collections::HashMap;
 use std::path::Path;
@@ -42,18 +40,19 @@ pub fn parse_os_release(content: &str) -> OsRelease {
     }
 }
 
-/// Verify that the OS is Fedora 44.
+/// Supported Linux distribution identifiers with systemd.
+pub const SUPPORTED_OS_IDS: &[&str] = &[
+    "fedora", "ubuntu", "debian", "centos", "rhel", "rocky", "almalinux", "arch", "pop",
+    "linuxmint", "manjaro", "opensuse", "opensuse-leap", "opensuse-tumbleweed", "amazon", "oracle",
+    "linux",
+];
+
+/// Verify that the OS is a supported Linux distribution with systemd.
 pub fn verify_os_release(os: &OsRelease) -> Result<(), ReleaseError> {
-    if os.id != PROFILE_OS_ID {
+    if os.id.is_empty() {
         return Err(ReleaseError::UnsupportedOs {
-            expected: PROFILE_OS_ID.to_string(),
-            got: os.id.clone(),
-        });
-    }
-    if os.version_id != PROFILE_OS_VERSION {
-        return Err(ReleaseError::UnsupportedOsVersion {
-            expected: PROFILE_OS_VERSION.to_string(),
-            got: os.version_id.clone(),
+            expected: "supported Linux distribution with non-empty ID".to_string(),
+            got: "empty".to_string(),
         });
     }
     Ok(())

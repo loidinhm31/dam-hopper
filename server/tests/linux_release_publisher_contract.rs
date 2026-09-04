@@ -190,7 +190,7 @@ fn test_publisher_end_to_end_scripts_and_manager_validation() {
         .expect("run build-release-archive.sh");
     assert!(status.success(), "build-release-archive.sh failed");
 
-    let archive_path = out_dir.join("dam-hopper-v0.1.0-fedora44-x86_64-systemd.tar.gz");
+    let archive_path = out_dir.join(expected_archive_name("v0.1.0"));
     assert!(archive_path.exists(), "archive was not created");
 
     let status = std::process::Command::new("node")

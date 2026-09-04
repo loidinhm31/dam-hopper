@@ -277,6 +277,8 @@ pub fn stage_release_bundle(
             migration: Some(mig.clone()),
         };
         mgr_state.transaction = Some(tx_record);
+    } else {
+        mgr_state.transaction = None;
     }
     if let Err(error) = super::state::save_manager_state(&layout.manager_state_path(), &mut mgr_state) {
         match super::state::load_or_init_manager_state(&layout.manager_state_path()) {
@@ -450,10 +452,25 @@ pub(crate) fn execute_staging_transaction(
     let target_dir = layout.release_role_dir(&manifest.release.tag, role.as_str());
     match fs::symlink_metadata(&target_dir) {
         Ok(_) => {
-            return Err(ReleaseError::InvalidBundle {
-                path: target_dir.display().to_string(),
-                reason: "release destination already exists and is immutable".to_string(),
-            });
+            let mgr_state = super::state::load_or_init_manager_state(&layout.manager_state_path())?;
+            let is_active = mgr_state
+                .active
+                .as_ref()
+                .is_some_and(|a| a.release_path == target_dir.to_string_lossy());
+            let is_previous = mgr_state
+                .previous
+                .as_ref()
+                .is_some_and(|p| p.release_path == target_dir.to_string_lossy());
+            if is_active || is_previous {
+                return Err(ReleaseError::InvalidBundle {
+                    path: target_dir.display().to_string(),
+                    reason: "cannot overwrite active or previous release destination".to_string(),
+                });
+            }
+            fs::remove_dir_all(&target_dir).map_err(|e| ReleaseError::Io {
+                action: "remove uncommitted candidate release destination",
+                details: e.to_string(),
+            })?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {

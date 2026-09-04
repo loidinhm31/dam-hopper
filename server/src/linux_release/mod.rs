@@ -93,9 +93,9 @@ pub use stage::{load_pending_state, resolve_host_role, PendingState};
 pub use stage_transaction::stage_release_bundle;
 pub use stage_units::stage_candidate_units;
 pub use systemd::{
-    systemctl_daemon_reload, systemctl_disable, systemctl_enable, systemctl_is_active,
-    systemctl_is_enabled, systemctl_restart, systemctl_show_property, systemctl_start,
-    systemctl_stop, systemd_analyze_verify, systemd_sysusers,
+    disable_if_enabled, systemctl_daemon_reload, systemctl_disable, systemctl_enable,
+    systemctl_is_active, systemctl_is_enabled, systemctl_restart, systemctl_show_property,
+    systemctl_start, systemctl_stop, systemd_analyze_verify, systemd_sysusers,
 };
 pub use unit::{
     render_api_unit, render_unit, render_web_unit, UnitRenderContext, TOKEN_API_ORIGINS,
