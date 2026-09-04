@@ -287,23 +287,23 @@ server share a filesystem; remote/container agents need a future resource API.
 
 The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, Codex terminal notification settings, terminal project switching, and the host-resource storage presentation preference.
 
-| Field                                        | Type   | Default               | Notes                                                                                      |
-| -------------------------------------------- | ------ | --------------------- | ------------------------------------------------------------------------------------------ |
-| terminal_workspace_shortcut                  | string | `Mod+Shift+Backquote` | Global IDE/terminal mode toggle shortcut                                                   |
-| git_panel_shortcut                           | string | `Mod+Shift+KeyG`      | Toggle the Git panel in IDE or Terminal mode                                               |
-| project_panel_shortcut                       | string | `Mod+Shift+KeyZ`      | Toggle the Project panel in IDE or Terminal mode                                           |
-| ports_panel_shortcut                         | string | `Mod+Shift+KeyP`      | Toggle the Ports panel in IDE or Terminal mode                                             |
-| fleet_terminal_shortcut                      | string | `Mod+Shift+KeyM`      | Toggle the Fleet Terminal panel in IDE or Terminal mode                                    |
-| terminal_suggestions_enabled                 | bool   | `true`                | Kill switch for automatic suggestions and lifecycle-driven history writes                  |
-| terminal_scroll_buttons_enabled              | bool   | `false`               | Show the expandable floating terminal scroll control                                       |
-| terminal_auto_switch_project_enabled         | bool   | `true`                | Switch the active project when selecting a project-assigned terminal                       |
-| terminal_codex_notifications_enabled         | bool   | `false`               | Master switch for Codex OSC 9 notifications and Codex TUI synchronization                  |
-| terminal_codex_notification_toast_enabled    | bool   | `true`                | Persisted preference for transient in-app toasts; notification history remains independent |
-| terminal_codex_browser_notifications_enabled | bool   | `true`                | Persisted preference for native browser popups; browser permission remains runtime-only    |
-| terminal_codex_notification_sound_enabled    | bool   | `true`                | Persisted preference for the in-app chime                                                  |
-| terminal_codex_notification_sound_volume     | u8     | `100`                 | In-app chime volume, from `0` to `100`                                                     |
-| terminal_codex_notification_sound_pattern    | string | `"default"`           | One of `"default"`, `"soft"`, `"two-tone"`, or `"urgent"`                                  |
-| host_resource_pinned_mount                   | string or null | `null`          | Optional exact mount point for the host-resource storage row; UTF-8 length 1–4096 bytes    |
+| Field                                        | Type           | Default               | Notes                                                                                      |
+| -------------------------------------------- | -------------- | --------------------- | ------------------------------------------------------------------------------------------ |
+| terminal_workspace_shortcut                  | string         | `Mod+Shift+Backquote` | Global IDE/terminal mode toggle shortcut                                                   |
+| git_panel_shortcut                           | string         | `Mod+Shift+KeyG`      | Toggle the Git panel in IDE or Terminal mode                                               |
+| project_panel_shortcut                       | string         | `Mod+Shift+KeyZ`      | Toggle the Project panel in IDE or Terminal mode                                           |
+| ports_panel_shortcut                         | string         | `Mod+Shift+KeyP`      | Toggle the Ports panel in IDE or Terminal mode                                             |
+| fleet_terminal_shortcut                      | string         | `Mod+Shift+KeyM`      | Toggle the Fleet Terminal panel in IDE or Terminal mode                                    |
+| terminal_suggestions_enabled                 | bool           | `true`                | Kill switch for automatic suggestions and lifecycle-driven history writes                  |
+| terminal_scroll_buttons_enabled              | bool           | `false`               | Show the expandable floating terminal scroll control                                       |
+| terminal_auto_switch_project_enabled         | bool           | `true`                | Switch the active project when selecting a project-assigned terminal                       |
+| terminal_codex_notifications_enabled         | bool           | `false`               | Master switch for Codex OSC 9 notifications and Codex TUI synchronization                  |
+| terminal_codex_notification_toast_enabled    | bool           | `true`                | Persisted preference for transient in-app toasts; notification history remains independent |
+| terminal_codex_browser_notifications_enabled | bool           | `true`                | Persisted preference for native browser popups; browser permission remains runtime-only    |
+| terminal_codex_notification_sound_enabled    | bool           | `true`                | Persisted preference for the in-app chime                                                  |
+| terminal_codex_notification_sound_volume     | u8             | `100`                 | In-app chime volume, from `0` to `100`                                                     |
+| terminal_codex_notification_sound_pattern    | string         | `"default"`           | One of `"default"`, `"soft"`, `"two-tone"`, or `"urgent"`                                  |
+| host_resource_pinned_mount                   | string or null | `null`                | Optional exact mount point for the host-resource storage row; UTF-8 length 1–4096 bytes    |
 
 Example:
 
@@ -542,24 +542,25 @@ path = "/tmp/test-workspace"
 
 ## Environment Variables
 
-| Var | Type | Purpose |
-| --- | --- | --- |
-| `DAM_HOPPER_CONFIG` | path | Load an exact `dam-hopper.toml` registry file |
-| `DAM_HOPPER_WORKSPACE` | path | Legacy workspace path/discovery fallback |
-| `DAM_HOPPER_PORT` | number | API listen port (direct/Docker default 4800; systemd sets 4801) |
-| `DAM_HOPPER_HOST` | string | API bind address (default `0.0.0.0`) |
-| `DAM_HOPPER_CORS_ORIGINS` | string | Comma-separated exact HTTP(S) origins for credentialed API/WS CORS |
-| `DAM_HOPPER_WEB_DIR` | path | Explicit API combined-mode static root; Docker sets `/opt/dam-hopper/web` |
-| `DAM_HOPPER_NO_AUTH` | boolean | Development-only API auth bypass |
-| `DAM_HOPPER_WEB_ROOT` | path | Dedicated `dam-hopper-web` static root |
-| `DAM_HOPPER_WEB_HOST` | string | Dedicated web bind address (default `0.0.0.0`) |
-| `DAM_HOPPER_WEB_PORT` | number | Dedicated web listen port (default `4802`) |
-| `DAM_HOPPER_WEB_RUNTIME_CONFIG` | path | Optional public runtime-config JSON file |
-| `DAM_HOPPER_WEB_RELEASE_VERSION` | string | Optional web health release-version override |
-| `VITE_DAM_HOPPER_LOG_LEVEL` | string | Web bootstrap log level, embedded at build time |
-| `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` | string | Exact extension parent origins, embedded at build time |
-| `RUST_LOG` | string | Rust logging filter |
-| `MONGODB_URI` / `MONGODB_DATABASE` | string | Optional API authentication database |
+| Var                                        | Type    | Purpose                                                                   |
+| ------------------------------------------ | ------- | ------------------------------------------------------------------------- |
+| `DAM_HOPPER_CONFIG`                        | path    | Load an exact `dam-hopper.toml` registry file                             |
+| `DAM_HOPPER_WORKSPACE`                     | path    | Legacy workspace path/discovery fallback                                  |
+| `DAM_HOPPER_PORT`                          | number  | API listen port (direct/Docker default 4800; systemd sets 4801)           |
+| `DAM_HOPPER_HOST`                          | string  | API bind address (default `0.0.0.0`)                                      |
+| `DAM_HOPPER_CORS_ORIGINS`                  | string  | Comma-separated exact HTTP(S) origins for credentialed API/WS CORS        |
+| `DAM_HOPPER_WEB_DIR`                       | path    | Explicit API combined-mode static root; Docker sets `/opt/dam-hopper/web` |
+| `DAM_HOPPER_NO_AUTH`                       | boolean | Development-only API auth bypass                                          |
+| `DAM_HOPPER_WEB_ROOT`                      | path    | Dedicated `dam-hopper-web` static root                                    |
+| `DAM_HOPPER_WEB_HOST`                      | string  | Dedicated web bind address (default `0.0.0.0`)                            |
+| `DAM_HOPPER_WEB_PORT`                      | number  | Dedicated web listen port (default `4802`)                                |
+| `DAM_HOPPER_WEB_RUNTIME_CONFIG`            | path    | Optional public runtime-config JSON file                                  |
+| `DAM_HOPPER_WEB_RELEASE_VERSION`           | string  | Optional web health release-version override                              |
+| `VITE_DAM_HOPPER_LOG_LEVEL`                | string  | Web bootstrap log level, embedded at build time                           |
+| `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` | string  | Exact extension parent origins, embedded at build time                    |
+| `RUST_LOG`                                 | string  | Rust logging filter                                                       |
+| `MONGODB_URI` / `MONGODB_DATABASE`         | string  | Optional API authentication database                                      |
+
 `VITE_*` values require a web rebuild. `VITE_DAM_HOPPER_SERVER_URL` is not
 allowed for production builds; production API origin is runtime config.
 Changing extension parent origins also requires redistributing its generated ZIP.
@@ -633,9 +634,9 @@ cargo build --release --manifest-path server/Cargo.toml
 `--root` (or `DAM_HOPPER_WEB_ROOT`) is required. The host rejects missing,
 non-directory, or symlink roots. `--runtime-config` is optional; without it the
 reserved endpoint returns `404`. Runtime config is public but startup-validated,
-contains only `schemaVersion`, `releaseVersion`, `profileId`, and `apiUrl`, and
-is capped at 4 KiB. `apiUrl` must be an exact HTTP(S) origin without credentials,
-path, query, or fragment.
+contains `schemaVersion`, `releaseVersion`, `profileId`, and optional `apiUrl` (omitted
+when unset), and is capped at 4 KiB. When present, `apiUrl` must be an exact HTTP(S)
+origin without credentials, path, query, or fragment.
 
 The host serves only GET/HEAD. Health and runtime config are reserved
 `/__dam-hopper/*` routes with JSON and `Cache-Control: no-store`; static files
@@ -713,7 +714,6 @@ The equivalent API CLI option is `--cors-origins
 `http://` or `https://` origin with no path, query, fragment, credentials, or
 wildcard. Values are trimmed; duplicate or ambiguous origins are rejected at
 startup. Restart the API after changing the setting.
-
 
 Each allowlisted origin may call authenticated APIs with credentials. CORS does
 not make media public: media ticket issuance still requires the authenticated

@@ -5,7 +5,7 @@ work. It is not a supported production owner, and it must never run alongside
 manager-installed `dam-hopper-api.service`, `dam-hopper-web.service`, or any
 process using the same SQLite files. The historical fixed
 `dam-hopper.service` and checkout-built production/reset runner are retired.
-Use the guarded [Linux systemd workflow](./linux-systemd.md) for current
+Use the authoritative [Linux systemd workflow](./linux-systemd.md) for current
 production operation.
 
 The current systemd workflow is backend-only. Phase 03 adds the separate
@@ -167,6 +167,6 @@ remediation capability.
 ```bash
 deploy/run-linux-nohup.sh stop
 ```
-
-Do not recursively remove the runtime tree as part of legacy recovery; the
-guarded reset owns the exact purge boundary.
+Do not recursively remove the runtime tree as part of legacy recovery;
+user configuration, databases, and application data must be preserved.
+The release manager does not purge runtime directories.
