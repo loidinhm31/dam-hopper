@@ -34,6 +34,9 @@ pub enum Commands {
     /// Activate pending candidate release and start configured role units.
     Start(StartArgs),
 
+    /// Stop running DamHopper systemd services.
+    Stop(StopArgs),
+
     /// Query current installation, role, version, and unit status.
     Status(StatusArgs),
 
@@ -88,10 +91,13 @@ pub struct InstallArgs {
     /// Optionally verify GitHub attestations using `gh` CLI if available.
     #[arg(long)]
     pub verify_attestation: bool,
-
     /// Dedicated system user to run dam-hopper-api (cannot be root).
     #[arg(long = "service-user", alias = "user")]
     pub service_user: Option<String>,
+
+    /// Stop and overwrite existing active or previous release destination for rebuilds.
+    #[arg(long)]
+    pub reinstall: bool,
 }
 
 /// Role management commands.
@@ -123,6 +129,10 @@ pub struct RoleSetArgs {
     /// Dedicated system user to run dam-hopper-api (cannot be root).
     #[arg(long = "service-user", alias = "user")]
     pub service_user: Option<String>,
+
+    /// Stop and overwrite existing active or previous release destination for rebuilds.
+    #[arg(long)]
+    pub reinstall: bool,
 }
 
 /// Arguments for `start` subcommand.
@@ -135,6 +145,14 @@ pub struct StartArgs {
     /// Fail if interactive confirmation is required in non-interactive mode.
     #[arg(long = "non-interactive")]
     pub non_interactive: bool,
+}
+
+/// Arguments for `stop` subcommand.
+#[derive(Debug, Args, Clone, PartialEq, Eq, Default)]
+pub struct StopArgs {
+    /// Also clean active release state, symlinks, and release directory for rebuilds.
+    #[arg(long)]
+    pub clean: bool,
 }
 #[derive(Debug, Args, Clone, PartialEq, Eq, Default)]
 pub struct StatusArgs {

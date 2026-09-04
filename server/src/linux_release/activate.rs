@@ -1,19 +1,24 @@
 //! Orchestration engine for candidate release activation and ordinary startup.
 
+use super::account::verify_web_sysuser_account;
 use super::activate_preflight::{
     build_candidate_health_targets, validate_active_preflight, validate_candidate_preflight,
 };
-use super::account::verify_web_sysuser_account;
-use super::constants::{ALL_SERVICE_UNITS, API_SERVICE_UNIT, RECOVERY_SERVICE_UNIT, WEB_SERVICE_UNIT};
+use super::constants::{
+    ALL_SERVICE_UNITS, API_SERVICE_UNIT, RECOVERY_SERVICE_UNIT, WEB_SERVICE_UNIT,
+};
 use super::durable_fs::{atomic_symlink, copy_file_durable};
 use super::error::ReleaseError;
-use super::health::{wait_for_health_stability, DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_STARTUP_DEADLINE};
+use super::health::{
+    DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_STARTUP_DEADLINE,
+    wait_for_health_stability,
+};
 use super::journal::DeploymentState;
 use super::layout::Layout;
 use super::lock::DeploymentLock;
 use super::process::inspect_service_process;
 use super::rollback::rollback_activation_failure;
-use super::state::{load_or_init_manager_state, save_manager_state, ManagerState};
+use super::state::{ManagerState, load_or_init_manager_state, save_manager_state};
 use super::state_record::{PendingCandidateRecord, ReleaseRecord, TransactionPhase};
 use super::systemd::{
     backup_unit_files, disable_if_enabled, install_unit_file, systemctl_daemon_reload,
@@ -84,12 +89,8 @@ pub async fn execute_activation_locked_with_args(
                 )
                 .await?;
                 systemctl_start(super::legacy_format2::LEGACY_FORMAT2_UNIT)?;
-                super::rollback::inspect_imported_legacy_installation(
-                    layout,
-                    &active_record,
-                    true,
-                )
-                .await?;
+                super::rollback::inspect_imported_legacy_installation(layout, &active_record, true)
+                    .await?;
                 return Ok(());
             }
             validate_active_preflight(layout, &active_candidate, &allowed_sqlite_pids)?;
@@ -97,13 +98,8 @@ pub async fn execute_activation_locked_with_args(
                 systemctl_start("dam-hopper-api.service")?;
             }
             if active_candidate.role.includes_web() {
-                super::systemd::systemd_sysusers(
-                    &layout.sysusers_conf_path(),
-                    None,
-                )?;
-                super::account::verify_web_sysuser_account(
-                    super::constants::WEB_SERVICE_IDENTITY,
-                )?;
+                super::systemd::systemd_sysusers(&layout.sysusers_conf_path(), None)?;
+                super::account::verify_web_sysuser_account(super::constants::WEB_SERVICE_IDENTITY)?;
                 systemctl_start("dam-hopper-web.service")?;
             }
             let targets = build_candidate_health_targets(&active_candidate)?;
@@ -128,22 +124,38 @@ pub async fn execute_activation_locked_with_args(
 
         let user_name = super::account::resolve_service_user(user_candidate, args.non_interactive)?;
         let user_info = super::account::verify_api_service_account(&user_name)?;
-        let group_name = super::account::get_group_by_gid(user_info.gid).unwrap_or_else(|| user_name.clone());
+        let group_name =
+            super::account::get_group_by_gid(user_info.gid).unwrap_or_else(|| user_name.clone());
 
-        let mut config_to_save = host_config.unwrap_or_else(|| super::host_config::HostConfig::new(candidate.role, vec![]).unwrap());
+        let mut config_to_save = host_config.unwrap_or_else(|| {
+            super::host_config::HostConfig::new(candidate.role, vec![]).unwrap()
+        });
         if config_to_save.service_user.as_deref() != Some(&user_name) {
             config_to_save.service_user = Some(user_name.clone());
             super::host_config::save_host_config(&layout.host_config_path(), &config_to_save)?;
+        }
+        let user_config_dir = std::path::PathBuf::from(&user_info.home)
+            .join(".config")
+            .join("dam-hopper");
+        if let Ok(()) = fs::create_dir_all(&user_config_dir) {
+            #[cfg(unix)]
+            if let Ok(c_path) = std::ffi::CString::new(user_config_dir.to_string_lossy().as_bytes())
+            {
+                unsafe {
+                    libc::chown(c_path.as_ptr(), user_info.uid, user_info.gid);
+                }
+            }
         }
 
         if let Some(ref units_path_str) = candidate.pending_units_path {
             let units_dir = std::path::Path::new(units_path_str);
             let api_unit_path = units_dir.join(API_SERVICE_UNIT);
             if api_unit_path.exists() {
-                let unit_content = fs::read_to_string(&api_unit_path).map_err(|e| ReleaseError::Io {
-                    action: "read pending api unit",
-                    details: e.to_string(),
-                })?;
+                let unit_content =
+                    fs::read_to_string(&api_unit_path).map_err(|e| ReleaseError::Io {
+                        action: "read pending api unit",
+                        details: e.to_string(),
+                    })?;
                 let updated = update_unit_service_identity(
                     &unit_content,
                     &user_name,
@@ -169,7 +181,12 @@ pub async fn execute_activation_locked_with_args(
     } else {
         ActivationTransaction::new(layout)?
     };
-    tx.record_phase(layout, &mut state, DeploymentState::Quiesced, TransactionPhase::Quiesced)?;
+    tx.record_phase(
+        layout,
+        &mut state,
+        DeploymentState::Quiesced,
+        TransactionPhase::Quiesced,
+    )?;
     let migration = state
         .transaction
         .as_ref()
@@ -195,7 +212,9 @@ pub async fn execute_activation_locked_with_args(
             }
             Err(rollback_err) => {
                 let record_suffix = failure_record_error
-                    .map(|record_error| format!("; failure state persistence also failed ({record_error})"))
+                    .map(|record_error| {
+                        format!("; failure state persistence also failed ({record_error})")
+                    })
                     .unwrap_or_default();
                 return Err(ReleaseError::Config(format!(
                     "CRITICAL: activation failed ({err_msg}) AND rollback failed ({rollback_err}){record_suffix}: RECOVERY_REQUIRED"
@@ -227,7 +246,9 @@ pub async fn execute_activation_locked_with_args(
     let active_release_path = state
         .active
         .as_ref()
-        .ok_or_else(|| ReleaseError::Config("activation committed without an active release".into()))?
+        .ok_or_else(|| {
+            ReleaseError::Config("activation committed without an active release".into())
+        })?
         .release_path
         .clone();
     atomic_symlink(Path::new(&active_release_path), &layout.current_link())?;
@@ -260,12 +281,19 @@ async fn execute_activation_pipeline(
         systemctl_stop(super::legacy_format2::LEGACY_FORMAT2_UNIT)?;
     }
 
-    backup_unit_files(ALL_SERVICE_UNITS, &layout.systemd_unit_dir, &tx.units_backup_dir)?;
-    let legacy_unit_path = layout.systemd_unit_dir.join(super::legacy_format2::LEGACY_FORMAT2_UNIT);
+    backup_unit_files(
+        ALL_SERVICE_UNITS,
+        &layout.systemd_unit_dir,
+        &tx.units_backup_dir,
+    )?;
+    let legacy_unit_path = layout
+        .systemd_unit_dir
+        .join(super::legacy_format2::LEGACY_FORMAT2_UNIT);
     match fs::symlink_metadata(&legacy_unit_path) {
         Ok(_) => copy_file_durable(
             &legacy_unit_path,
-            &tx.units_backup_dir.join(super::legacy_format2::LEGACY_FORMAT2_UNIT),
+            &tx.units_backup_dir
+                .join(super::legacy_format2::LEGACY_FORMAT2_UNIT),
             Some(0o644),
         )?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -342,10 +370,14 @@ async fn execute_activation_pipeline(
             details: e.to_string(),
         })?;
         let path = entry.path();
-        if !entry.file_type().map_err(|e| ReleaseError::Io {
-            action: "inspect pending unit entry",
-            details: e.to_string(),
-        })?.is_file() {
+        if !entry
+            .file_type()
+            .map_err(|e| ReleaseError::Io {
+                action: "inspect pending unit entry",
+                details: e.to_string(),
+            })?
+            .is_file()
+        {
             return Err(ReleaseError::InvalidBundle {
                 path: path.display().to_string(),
                 reason: "pending unit entry must be a regular file".to_string(),
@@ -387,9 +419,12 @@ async fn execute_activation_pipeline(
         }
     }
 
-    let config_path = candidate.pending_host_config_path.as_deref().ok_or_else(|| {
-        ReleaseError::Config("pending candidate has no public host configuration".to_string())
-    })?;
+    let config_path = candidate
+        .pending_host_config_path
+        .as_deref()
+        .ok_or_else(|| {
+            ReleaseError::Config("pending candidate has no public host configuration".to_string())
+        })?;
     match fs::symlink_metadata(config_path) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -412,7 +447,12 @@ async fn execute_activation_pipeline(
     )?;
 
     systemctl_daemon_reload()?;
-    tx.record_phase(layout, state, DeploymentState::Switched, TransactionPhase::Switched)?;
+    tx.record_phase(
+        layout,
+        state,
+        DeploymentState::Switched,
+        TransactionPhase::Switched,
+    )?;
 
     if candidate.role.includes_server() {
         systemctl_start(API_SERVICE_UNIT)?;
@@ -421,10 +461,21 @@ async fn execute_activation_pipeline(
         systemctl_start(WEB_SERVICE_UNIT)?;
     }
 
-    tx.record_phase(layout, state, DeploymentState::Probing, TransactionPhase::Probing)?;
+    tx.record_phase(
+        layout,
+        state,
+        DeploymentState::Probing,
+        TransactionPhase::Probing,
+    )?;
 
     let targets = build_candidate_health_targets(candidate)?;
-    wait_for_health_stability(&targets, DEFAULT_STARTUP_DEADLINE, DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_PROBE_INTERVAL).await?;
+    wait_for_health_stability(
+        &targets,
+        DEFAULT_STARTUP_DEADLINE,
+        DEFAULT_REQUIRED_CONSECUTIVE,
+        DEFAULT_PROBE_INTERVAL,
+    )
+    .await?;
 
     // Enable/disable units, propagating any failure
     if candidate.role.includes_server() {
@@ -433,7 +484,6 @@ async fn execute_activation_pipeline(
         disable_if_enabled(API_SERVICE_UNIT)?;
     }
     systemctl_enable(RECOVERY_SERVICE_UNIT)?;
-
 
     if candidate.role.includes_web() {
         systemctl_enable(WEB_SERVICE_UNIT)?;
@@ -492,7 +542,6 @@ async fn execute_activation_pipeline(
 
     save_manager_state(&layout.manager_state_path(), state)?;
 
-
     Ok(())
 }
 
@@ -508,6 +557,7 @@ fn update_unit_service_identity(
     let mut has_group = false;
     let mut has_workdir = false;
     let mut has_home_env = false;
+    let mut has_xdg_env = false;
 
     for line in unit_content.lines() {
         let trimmed = line.trim();
@@ -528,6 +578,9 @@ fn update_unit_service_identity(
                 }
                 if !has_home_env {
                     lines.push(format!("Environment=HOME={home}"));
+                }
+                if !has_xdg_env {
+                    lines.push(format!("Environment=XDG_CONFIG_HOME={home}/.config"));
                 }
                 in_service = false;
             }
@@ -552,6 +605,10 @@ fn update_unit_service_identity(
                 lines.push(format!("Environment=HOME={home}"));
                 has_home_env = true;
                 continue;
+            } else if trimmed.starts_with("Environment=XDG_CONFIG_HOME=") {
+                lines.push(format!("Environment=XDG_CONFIG_HOME={home}/.config"));
+                has_xdg_env = true;
+                continue;
             }
         }
         lines.push(line.to_string());
@@ -569,6 +626,9 @@ fn update_unit_service_identity(
         }
         if !has_home_env {
             lines.push(format!("Environment=HOME={home}"));
+        }
+        if !has_xdg_env {
+            lines.push(format!("Environment=XDG_CONFIG_HOME={home}/.config"));
         }
     }
 
