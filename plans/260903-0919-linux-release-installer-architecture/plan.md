@@ -14,7 +14,7 @@ created: 2026-09-03
 ## Outcome
 
 Replace the checkout-built format-2 Linux runner with one immutable, attested GitHub Release. A Rust manager stages a lockstep CLI/API/web release, independent API/web units run selected host roles, and explicit activation commits only after exact-version health remains stable.
-Progress: 79% (108h/136h; Phases 01–07 complete, Phases 08–09 pending).
+Progress: 94% (128h/136h; Phases 01–08 complete, Phase 09 pending).
 
 ## Fixed Decisions
 
@@ -37,7 +37,7 @@ Progress: 79% (108h/136h; Phases 01–07 complete, Phases 08–09 pending).
 | 05 | [Durable activation, rollback, and recovery](./phase-05-durable-activation-rollback-recovery.md) | DONE 2026-09-03 23:45:08 +07:00 | 100% | 24h |
 | 06 | [Central publisher and bootstrap](./phase-06-central-github-publisher-bootstrap.md) | DONE 2026-09-04 01:05:00 +07:00 | 100% | 16h |
 | 07 | [Format-2 migration and runner retirement](./phase-07-format-2-migration-runner-retirement.md) | DONE 2026-09-04 02:40:00 +07:00 | 100% | 14h |
-| 08 | [Behavioral, security, and failure validation](./phase-08-behavioral-security-failure-validation.md) | Pending | 0% | 20h |
+| 08 | [Behavioral, security, and failure validation](./phase-08-behavioral-security-failure-validation.md) | DONE 2026-09-04 13:30:00 +07:00 | 100% | 20h |
 | 09 | [Documentation and release cutover](./phase-09-documentation-roadmap-changelog-cutover.md) | Pending | 0% | 8h |
 
 ## Dependency Chain

@@ -142,6 +142,10 @@ jobs:
         with:
           node-version: "20"
 
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+        with:
+          version: 9
+
       - name: Download Rust binaries
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
@@ -158,62 +162,16 @@ jobs:
         run: |
           chmod +x artifacts/bin/dam-hopper artifacts/bin/dam-hopper-server artifacts/bin/dam-hopper-web
 
-      - name: Assemble deterministic archive (run 1)
+      - name: Package archive twice and validate exact release subjects
         env:
           SOURCE_DATE_EPOCH: 1700000000
+          RELEASE_COMMIT: ${{ github.sha }}
         run: |
-          deploy/release/build-release-archive.sh \
+          pnpm release:package-twice -- \
             --version "${{ needs.validate-metadata.outputs.release_tag }}" \
             --target-dir "artifacts/bin" \
             --web-dist "apps/web/dist" \
-            --output-dir "artifacts/run1" \
-            --source-date-epoch "${SOURCE_DATE_EPOCH}"
-
-      - name: Assemble deterministic archive (run 2 for reproducibility proof)
-        env:
-          SOURCE_DATE_EPOCH: 1700000000
-        run: |
-          deploy/release/build-release-archive.sh \
-            --version "${{ needs.validate-metadata.outputs.release_tag }}" \
-            --target-dir "artifacts/bin" \
-            --web-dist "apps/web/dist" \
-            --output-dir "artifacts/run2" \
-            --source-date-epoch "${SOURCE_DATE_EPOCH}"
-
-      - name: Verify bit-for-bit reproducibility
-        run: |
-          ARCHIVE_NAME="dam-hopper-${{ needs.validate-metadata.outputs.release_tag }}-fedora44-x86_64-systemd.tar.gz"
-          SHA1=$(sha256sum "artifacts/run1/${ARCHIVE_NAME}" | awk '{print $1}')
-          SHA2=$(sha256sum "artifacts/run2/${ARCHIVE_NAME}" | awk '{print $1}')
-          if [[ "${SHA1}" != "${SHA2}" ]]; then
-            echo "Error: Deterministic packaging failure! Digests differ between clean runs:" >&2
-            echo "  Run 1: ${SHA1}" >&2
-            echo "  Run 2: ${SHA2}" >&2
-            exit 1
-          fi
-          echo "✓ Reproducibility verified: SHA-256 is identical (${SHA1})"
-          mkdir -p artifacts/final
-          cp "artifacts/run1/${ARCHIVE_NAME}" "artifacts/final/${ARCHIVE_NAME}"
-
-      - name: Generate release manifest and SPDX SBOM
-        run: |
-          ARCHIVE_NAME="dam-hopper-${{ needs.validate-metadata.outputs.release_tag }}-fedora44-x86_64-systemd.tar.gz"
-          node deploy/release/generate-release-manifest.mjs \
-            --archive "artifacts/final/${ARCHIVE_NAME}" \
-            --tag "${{ needs.validate-metadata.outputs.release_tag }}" \
-            --commit "${{ github.sha }}" \
             --output-dir "artifacts/final"
-
-      - name: Stage bootstrap installer script
-        run: |
-          cp deploy/release/dam-hopper-install.sh artifacts/final/dam-hopper-install.sh
-          chmod +x artifacts/final/dam-hopper-install.sh
-
-      - name: Run pre-publication release asset gate
-        run: |
-          node deploy/release/check-release-assets.mjs \
-            --dir "artifacts/final" \
-            --tag "${{ needs.validate-metadata.outputs.release_tag }}"
 
       - name: Upload final release assets
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
@@ -247,9 +205,73 @@ jobs:
             artifacts/final/release-manifest.json
             artifacts/final/dam-hopper-${{ needs.validate-metadata.outputs.release_tag }}-fedora44-x86_64-systemd.spdx.json
 
+  fedora-runtime-evidence:
+    name: Collect Fedora 44 runtime evidence
+    needs: [validate-metadata, package-release, attest-release]
+    if: needs.validate-metadata.outputs.is_dry_run != 'true'
+    uses: ./.github/workflows/linux-release-runtime-evidence.yml
+    with:
+      tag: ${{ needs.validate-metadata.outputs.release_tag }}
+      publish: false
+
+  verify-runtime-evidence:
+    name: Verify protected Fedora 44 runtime evidence
+    needs:
+      [
+        validate-metadata,
+        package-release,
+        attest-release,
+        fedora-runtime-evidence,
+      ]
+    if: needs.validate-metadata.outputs.is_dry_run != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "20"
+
+      - name: Download final release assets for digest verification
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: dam-hopper-release-assets
+          path: artifacts/final
+
+      - name: Download runtime evidence artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: dam-hopper-linux-release-evidence
+          path: evidence
+
+      - name: Verify runtime evidence gate
+        env:
+          TAG: ${{ needs.validate-metadata.outputs.release_tag }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          ARCHIVE_NAME="dam-hopper-${TAG}-fedora44-x86_64-systemd.tar.gz"
+          ARCHIVE_DIGEST=$(sha256sum "artifacts/final/${ARCHIVE_NAME}" | awk '{print $1}')
+          echo "Verifying runtime evidence gate for ${TAG} (${COMMIT_SHA}) with digest ${ARCHIVE_DIGEST}..."
+          EVIDENCE_FILE="evidence/evidence.json"
+          if [[ ! -f "${EVIDENCE_FILE}" ]]; then
+            echo "Error: Required Fedora 44 runtime evidence (${EVIDENCE_FILE}) not found for commit ${COMMIT_SHA}. Release publication blocked." >&2
+            exit 1
+          fi
+          node tests/deploy/linux-release-evidence-check.mjs \
+            --evidence "${EVIDENCE_FILE}" \
+            --expected-commit "${COMMIT_SHA}" \
+            --expected-tag "${TAG}" \
+            --expected-archive-digest "${ARCHIVE_DIGEST}"
+          echo "✓ Runtime evidence gate successfully verified for release publication."
   publish-release:
     name: Publish immutable GitHub release
-    needs: [validate-metadata, package-release, attest-release]
+    needs:
+      [
+        validate-metadata,
+        package-release,
+        attest-release,
+        verify-runtime-evidence,
+      ]
     if: needs.validate-metadata.outputs.is_dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: linux-release

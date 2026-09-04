@@ -15,8 +15,8 @@
 - **Date:** 2026-09-03
 - **Description:** Prove artifact, role, runtime, migration, rollback, reboot, and least-privilege behavior on real Fedora 44/systemd 259 before documentation or publication cutover.
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Implementation status:** DONE 2026-09-04 13:30:00 +07:00
+- **Review status:** Approved (Terminal Gate Passed)
 - **Effort:** 20h
 
 ## Key Insights
@@ -109,15 +109,14 @@ Three layers:
 12. Delegate the complete artifact and command list to `evcrate-tester`. If any failure: fix root cause, rerun affected compile proof, then delegate a fresh full tester gate; repeat until terminal pass.
 13. After tester pass, delegate all changed paths and bounded evidence to `evcrate-code-reviewer`. Fix every blocking finding and rerun the tester gate after any code/workflow/test change. Require terminal reviewer approval.
 
-## Todo List
+## Todo List — DONE 2026-09-04 13:30:00 +07:00
 
-- [ ] Complete deterministic parser/archive/state/frontend coverage.
-- [ ] Add real-process web/API/bootstrap smoke.
-- [ ] Add protected Fedora role, migration, rollback, crash, reboot, and isolation scripts.
-- [ ] Bind stable publisher to same-commit runtime evidence.
-- [ ] Run full listed validation through `evcrate-tester` until pass.
-- [ ] Run holistic `evcrate-code-reviewer`; fix and retest until approved.
-
+- [x] Complete deterministic parser/archive/state/frontend coverage.
+- [x] Add real-process web/API/bootstrap smoke.
+- [x] Add protected Fedora role, migration, rollback, crash, reboot, and isolation scripts.
+- [x] Bind stable publisher to same-commit runtime evidence.
+- [x] Run full listed validation through `evcrate-tester` until pass.
+- [x] Run holistic `evcrate-code-reviewer`; fix and retest until approved.
 ## Success Criteria
 
 - All accepted brainstorm criteria 1–15 have one named automated or protected-host check with bounded evidence.
