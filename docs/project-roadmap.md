@@ -25,7 +25,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - Validation: focused migration fixture/drift/exchange suites passed **14/14**;
   the Fedora rehearsal passed at fixture level; Cycle 2 review approved **9.0/10**
   with no blocking findings. No production-host deployment claim is implied.
-- Parent plan progress: **Phases 01–07 complete; Phases 08–09 pending**.
+- **Phase 08 — [COMPLETED 2026-09-04 13:30:00 +07:00]**: delivered comprehensive behavioral, security, and failure-injection validation across deterministic contracts, reproducible packaging, rootless real-process dual smoke, modular deployment scripts, crash-recovery boundary reconciliation, reboot state-machine matrix, and format-2 migration cutover.
+- Validation: Rust test suite passed **1,018/1,018 across 31 suites**; UI contract tests passed **1,447/1,447**; UI/web builds passed; shell syntax checked across 11 files; `release:package-twice` verified deterministic SHA-256 byte-for-byte; rootless dual-process smoke passed; deployment test journeys passed across 6 scripts; review approved **9.8/10** with zero critical issues. [Review report](../plans/reports/code-review-260904-1320-phase-08.md).
+- Parent plan progress: **Phases 01–08 complete; Phase 09 pending**.
   [Parent plan](../plans/260903-0919-linux-release-installer-architecture/plan.md).
 
 ### Preserve Explorer Tree Expansion & Editor View Scroll Position (2026-08-31)
@@ -93,7 +95,6 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ### Terminal Touch Keyboard and Smooth Scroll (2026-08-28)
 
 - **Phases 01–02 — [COMPLETED 2026-08-29 16:48:06 +07:00]**: terminal scroll controls no longer focus xterm input or open the soft keyboard; xterm v6 coarse-pointer touch scrolling uses buffered custom `scrollLines` handling with bounded fling, plus explicit `touch-action: none` and contained overscroll/momentum CSS. Validation: UI TypeScript build PASS; full UI Vitest 1347/1347; focused terminal browser regressions 10/10; Chromium mobile-emulation swipe moved the xterm scrollbar from 280px to 158px. Physical Android hardware validation remains a release follow-up. [Plan](../plans/260828-1430-terminal-touch-keyboard-and-smooth-scroll/plan.md).
-
 
 ### Terminal Floating Controls UX (2026-08-29)
 
@@ -219,11 +220,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] Loopback-only authenticated binary receiver with bounded decoding and retry-safe dedupe
 - [x] Field-level forward compatibility with partial/unavailable token coverage
 - [x] Explicit managed local exporter setup with exact ownership/conflict protection, atomic
-  `0600` writes, no bearer disclosure; Codex restart remains a separate user action
+      `0600` writes, no bearer disclosure; Codex restart remains a separate user action
 
 **Phase 06: Usage UI and Compact Navigation — [COMPLETED 2026-07-26; APPROVED]**
 
-- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls *(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)*
+- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls _(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)_
 - [x] Explicit all/range deletion confirmation and no-cost/no-productivity interpretation copy
 
 **Phase 07: Security, Fault, Performance, Documentation — [VALIDATED; REVIEW APPROVED 2026-07-26; PLATFORM CHECKS PENDING]**
