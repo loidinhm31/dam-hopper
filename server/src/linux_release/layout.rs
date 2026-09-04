@@ -129,6 +129,18 @@ impl Layout {
         self.var_lib_dir.join("pending-units")
     }
 
+    /// Transaction-scoped directory holding candidate rendered systemd units.
+    pub fn transaction_pending_units_dir(&self, tx_id: &str) -> PathBuf {
+        self.var_lib_dir
+            .join(format!("pending-units-{tx_id}"))
+    }
+
+    /// Transaction-scoped candidate public host configuration.
+    pub fn transaction_pending_host_config_json_path(&self, tx_id: &str) -> PathBuf {
+        self.var_lib_dir
+            .join(format!("pending-host-config-{tx_id}.json"))
+    }
+
     /// Public host configuration JSON file:
     /// `/etc/dam-hopper/host-config.json`
     pub fn host_config_json_path(&self) -> PathBuf {

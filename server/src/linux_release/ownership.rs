@@ -45,17 +45,30 @@ pub fn verify_path_permissions(
     Ok(())
 }
 
-/// Recursively verify release directory permissions:
-/// directories 0755, binaries in bin/ 0755, other regular files 0644.
+/// Recursively verify release directory ownership and permissions.
 pub fn verify_release_ownership(
     release_dir: &Path,
     require_root: bool,
 ) -> Result<(), ReleaseError> {
-    if !release_dir.exists() {
+    let metadata = fs::symlink_metadata(release_dir).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ReleaseError::OwnershipViolation {
+                path: release_dir.display().to_string(),
+                expected: "directory to exist".into(),
+                got: "path does not exist".into(),
+            }
+        } else {
+            ReleaseError::Io {
+                action: "inspect release directory",
+                details: error.to_string(),
+            }
+        }
+    })?;
+    if !metadata.file_type().is_dir() {
         return Err(ReleaseError::OwnershipViolation {
             path: release_dir.display().to_string(),
-            expected: "directory to exist".into(),
-            got: "path does not exist".into(),
+            expected: "regular release directory".into(),
+            got: "symbolic link or non-directory".into(),
         });
     }
 
@@ -108,24 +121,35 @@ pub fn verify_manager_state_permissions(
     require_root: bool,
 ) -> Result<(), ReleaseError> {
     let staging = layout.staging_dir();
-    if staging.exists() {
+    if path_exists(&staging)? {
         verify_path_permissions(&staging, 0o700, require_root)?;
     }
 
     let pending = layout.pending_state_path();
-    if pending.exists() {
+    if path_exists(&pending)? {
         verify_path_permissions(&pending, 0o600, require_root)?;
     }
 
     let host_config = layout.host_config_path();
-    if host_config.exists() {
+    if path_exists(&host_config)? {
         verify_path_permissions(&host_config, 0o644, require_root)?;
     }
 
     let lock = layout.deploy_lock_path();
-    if lock.exists() {
+    if path_exists(&lock)? {
         verify_path_permissions(&lock, 0o600, require_root)?;
     }
 
     Ok(())
+}
+
+fn path_exists(path: &Path) -> Result<bool, ReleaseError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(ReleaseError::Io {
+            action: "inspect manager state path",
+            details: format!("{}: {error}", path.display()),
+        }),
+    }
 }

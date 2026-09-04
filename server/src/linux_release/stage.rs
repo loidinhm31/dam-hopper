@@ -45,13 +45,13 @@ pub fn load_pending_state(path: &Path) -> Result<Option<PendingState>, ReleaseEr
     }))
 }
 
-/// Resolve and update the host role configuration.
-pub fn resolve_host_role(
+/// Resolve the requested role without mutating the host configuration.
+pub fn determine_host_role(
     layout: &Layout,
     requested_role: Option<TargetRole>,
     allow_origins: &[String],
     is_role_set: bool,
-) -> Result<TargetRole, ReleaseError> {
+) -> Result<(TargetRole, HostConfig), ReleaseError> {
     let existing_config = load_host_config(&layout.host_config_path())?;
 
     if is_role_set {
@@ -63,13 +63,11 @@ pub fn resolve_host_role(
         if !allow_origins.is_empty() {
             origins = allow_origins.to_vec();
         }
-        let config = HostConfig::new(role, origins)?;
-        save_host_config(&layout.host_config_path(), &config)?;
-        return Ok(role);
+        return Ok((role, HostConfig::new(role, origins)?));
     }
 
     match existing_config {
-        Some(mut config) => {
+        Some(config) => {
             if let Some(requested) = requested_role {
                 if requested != config.role {
                     return Err(ReleaseError::RoleConflict {
@@ -78,17 +76,35 @@ pub fn resolve_host_role(
                     });
                 }
             }
-            if !allow_origins.is_empty() {
-                config.allowed_web_origins = allow_origins.to_vec();
-                save_host_config(&layout.host_config_path(), &config)?;
-            }
-            Ok(config.role)
+            let role = config.role;
+            let origins = if allow_origins.is_empty() {
+                config.allowed_web_origins
+            } else {
+                allow_origins.to_vec()
+            };
+            Ok((role, HostConfig::new(role, origins)?))
         }
         None => {
             let role = requested_role.ok_or(ReleaseError::MissingRole)?;
-            let config = HostConfig::new(role, allow_origins.to_vec())?;
-            save_host_config(&layout.host_config_path(), &config)?;
-            Ok(role)
+            Ok((role, HostConfig::new(role, allow_origins.to_vec())?))
         }
     }
+}
+
+/// Persist a previously validated host role configuration.
+pub fn persist_host_role(layout: &Layout, config: &HostConfig) -> Result<(), ReleaseError> {
+    save_host_config(&layout.host_config_path(), config)
+}
+
+/// Resolve and update the host role configuration.
+pub fn resolve_host_role(
+    layout: &Layout,
+    requested_role: Option<TargetRole>,
+    allow_origins: &[String],
+    is_role_set: bool,
+) -> Result<TargetRole, ReleaseError> {
+    let (role, config) =
+        determine_host_role(layout, requested_role, allow_origins, is_role_set)?;
+    persist_host_role(layout, &config)?;
+    Ok(role)
 }

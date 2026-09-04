@@ -10,7 +10,7 @@ describe("repairBrokenXtermRequestMode", () => {
 
     expect(result.patched).toBe(true);
     expect(result.code).toContain("requestMode(e,i8){let r;");
-    expect(result.code).toContain('(r||(r={}))');
+    expect(result.code).toContain("(r||(r={}))");
     expect(result.code).not.toContain("void 0||(r={})");
   });
 

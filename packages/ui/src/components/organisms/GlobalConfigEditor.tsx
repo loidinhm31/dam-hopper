@@ -67,9 +67,7 @@ function DefaultWorkspaceSection() {
             size="sm"
             onClick={() => void handleSet()}
             disabled={
-              !isDirty ||
-              isPending ||
-              isAndroidChromeNativeInputSuppressed
+              !isDirty || isPending || isAndroidChromeNativeInputSuppressed
             }
             title={
               isAndroidChromeNativeInputSuppressed

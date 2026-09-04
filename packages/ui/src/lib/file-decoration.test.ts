@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { getDisplayLanguage, getFileDecoration, getMonacoLanguage } from "./file-decoration.js";
+import {
+  getDisplayLanguage,
+  getFileDecoration,
+  getMonacoLanguage,
+} from "./file-decoration.js";
 import { mimeToLanguage, mimeToMonacoLanguage } from "./mime-to-language.js";
 
 const ENV_FILE_NAME = `.${"env"}`;
@@ -88,18 +92,20 @@ describe("getFileDecoration", () => {
   });
 
   it("falls back to MIME when the extension is missing or unknown", () => {
-    expect(getFileDecoration("untitled", { mime: "text/markdown" })).toMatchObject({
+    expect(
+      getFileDecoration("untitled", { mime: "text/markdown" }),
+    ).toMatchObject({
       badge: "MD",
       displayLanguage: "Markdown",
       monacoLanguage: "markdown",
     });
-    expect(getFileDecoration("vector", { mime: "image/svg+xml" })).toMatchObject(
-      {
-        badge: "SVG",
-        displayLanguage: "SVG",
-        monacoLanguage: "xml",
-      },
-    );
+    expect(
+      getFileDecoration("vector", { mime: "image/svg+xml" }),
+    ).toMatchObject({
+      badge: "SVG",
+      displayLanguage: "SVG",
+      monacoLanguage: "xml",
+    });
     expect(getFileDecoration("notes", { mime: "text/plain" })).toMatchObject({
       badge: "TXT",
       displayLanguage: "Plain Text",

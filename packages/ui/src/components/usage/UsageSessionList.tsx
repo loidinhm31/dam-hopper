@@ -22,18 +22,17 @@ const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
 
 function sessionTimeRange(session: UsageSessionSummary): string {
   const started = dateTimeFormatter.format(new Date(session.startedAtUtcMs));
-  const ended = session.endedAtUtcMs !== null
-    ? dateTimeFormatter.format(new Date(session.endedAtUtcMs))
-    : "Active";
+  const ended =
+    session.endedAtUtcMs !== null
+      ? dateTimeFormatter.format(new Date(session.endedAtUtcMs))
+      : "Active";
   return `${started} – ${ended}`;
 }
 
 function modelSummaryCopy(session: UsageSessionSummary): string {
   if (session.models.length === 0) return "Unavailable";
   return session.models
-    .map(
-      (model) => `${model.model || "Unknown"} ×${model.responseCount}`,
-    )
+    .map((model) => `${model.model || "Unknown"} ×${model.responseCount}`)
     .join(", ");
 }
 

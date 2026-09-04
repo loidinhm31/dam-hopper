@@ -1,4 +1,9 @@
-import type { LayoutNode, PaneNode, PersistedLayout, SplitNode } from "@/types/terminal-layout.js";
+import type {
+  LayoutNode,
+  PaneNode,
+  PersistedLayout,
+  SplitNode,
+} from "@/types/terminal-layout.js";
 import { generateUUID } from "@/lib/utils.js";
 
 function normalizeActiveSessionId(
@@ -29,7 +34,9 @@ export function isValidNode(node: unknown): boolean {
     return (
       typeof candidate.id === "string" &&
       Array.isArray(candidate.sessionIds) &&
-      candidate.sessionIds.every((sessionId) => typeof sessionId === "string") &&
+      candidate.sessionIds.every(
+        (sessionId) => typeof sessionId === "string",
+      ) &&
       (candidate.activeSessionId === null ||
         typeof candidate.activeSessionId === "string")
     );
@@ -67,7 +74,10 @@ export function loadPersistedLayout(raw: string | null): LayoutNode | null {
 
 export function collectPaneIds(node: LayoutNode): string[] {
   if (node.type === "pane") return [node.id];
-  return [...collectPaneIds(node.children[0]), ...collectPaneIds(node.children[1])];
+  return [
+    ...collectPaneIds(node.children[0]),
+    ...collectPaneIds(node.children[1]),
+  ];
 }
 
 export function collectPanes(node: LayoutNode): PaneNode[] {
@@ -91,7 +101,10 @@ export function pruneDeadSessions(
     return {
       ...node,
       sessionIds,
-      activeSessionId: normalizeActiveSessionId(sessionIds, node.activeSessionId),
+      activeSessionId: normalizeActiveSessionId(
+        sessionIds,
+        node.activeSessionId,
+      ),
     };
   }
   return {
@@ -128,7 +141,10 @@ export function replaceNode(
   return null;
 }
 
-export function removePane(tree: LayoutNode, paneId: string): LayoutNode | null {
+export function removePane(
+  tree: LayoutNode,
+  paneId: string,
+): LayoutNode | null {
   if (tree.type === "pane") {
     return tree.id === paneId ? null : tree;
   }

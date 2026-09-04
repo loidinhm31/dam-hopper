@@ -275,9 +275,9 @@ describe("handleTerminalTargetUnavailable", () => {
       handleTerminalTargetUnavailable({ ...target, incarnation: 100 }),
     ).toBe(true);
     resetTransportListeners();
-    expect(
-      handleTerminalTargetUnavailable({ ...target, incarnation: 1 }),
-    ).toBe(true);
+    expect(handleTerminalTargetUnavailable({ ...target, incarnation: 1 })).toBe(
+      true,
+    );
     expect(markTargetUnavailable).toHaveBeenCalledTimes(2);
     markTargetUnavailable.mockRestore();
   });

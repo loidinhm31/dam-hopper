@@ -1,8 +1,8 @@
 //! Read-only format-2 verification and legacy import model.
 
 pub use super::legacy_format2_inspect::{
-    inspect_format2_installation, LegacyFormat2Evidence, LEGACY_FORMAT2_PORT, LEGACY_FORMAT2_TAG,
-    LEGACY_FORMAT2_UNIT, LEGACY_FORMAT2_USER,
+    inspect_format2_installation, verify_format2_live_preflight, LegacyFormat2Evidence,
+    LEGACY_FORMAT2_PORT, LEGACY_FORMAT2_TAG, LEGACY_FORMAT2_UNIT, LEGACY_FORMAT2_USER,
 };
 pub use super::legacy_format2_manifest::{parse_format2_manifest, LegacyFormat2Manifest};
 pub use super::legacy_format2_root::inspect_format2_root;
@@ -17,11 +17,17 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
-/// Check if a path appears to be a legacy format-2 root (exists, has marker directory).
 pub fn is_legacy_format2_root(root_dir: &Path) -> bool {
-    root_dir.is_dir()
-        && !root_dir.join("releases").exists()
-        && root_dir.join(".systemd-fresh-install").join("manifest").is_file()
+    let Ok(root_meta) = fs::symlink_metadata(root_dir) else {
+        return false;
+    };
+    if root_meta.file_type().is_symlink() || !root_meta.is_dir() {
+        return false;
+    }
+    let Ok(marker_meta) = fs::symlink_metadata(root_dir.join(".systemd-fresh-install").join("manifest")) else {
+        return false;
+    };
+    marker_meta.file_type().is_file()
 }
 
 /// Copy and verify legacy format-2 binary and unit evidence into an imported release directory.

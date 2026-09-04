@@ -197,3 +197,43 @@ fn test_privilege_enforcement_matrix() {
     assert!(verify_privileges(&version_cmd, 1000).is_ok());
     assert!(verify_privileges(&version_cmd, 0).is_ok());
 }
+
+#[test]
+fn test_cli_missing_required_bundle() {
+    let err = Cli::try_parse_from(["dam-hopper", "install"]).expect_err("missing bundle must fail");
+    assert!(err.to_string().contains("--bundle"));
+}
+
+#[test]
+fn test_cli_invalid_role_fails() {
+    let err = Cli::try_parse_from(["dam-hopper", "install", "--bundle", "/tmp", "--role", "invalid_role"])
+        .expect_err("invalid role must fail");
+    assert!(err.to_string().contains("invalid value 'invalid_role'"));
+}
+
+#[test]
+fn test_cli_validate_grammar() {
+    let cli = Cli::try_parse_from([
+        "dam-hopper",
+        "validate",
+        "--manifest",
+        "/tmp/manifest.json",
+        "--archive",
+        "/tmp/archive.tar.gz",
+    ])
+    .expect("validate command");
+    match cli.command {
+        Commands::Validate(val) => {
+            assert_eq!(val.manifest, PathBuf::from("/tmp/manifest.json"));
+            assert_eq!(val.archive, Some(PathBuf::from("/tmp/archive.tar.gz")));
+        }
+        _ => panic!("expected Validate command"),
+    }
+}
+
+#[test]
+fn test_cli_recover_privilege_enforcement() {
+    let recover_cmd = Commands::Recover(Default::default());
+    assert!(verify_privileges(&recover_cmd, 1000).is_err());
+    assert!(verify_privileges(&recover_cmd, 0).is_ok());
+}

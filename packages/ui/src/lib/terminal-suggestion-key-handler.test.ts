@@ -40,14 +40,17 @@ describe("terminal suggestion key handler", () => {
     ).toBe(true);
   });
 
-  it.each(["\t", "\r", "Escape", "\x12", "ArrowLeft"]) (
+  it.each(["\t", "\r", "Escape", "\x12", "ArrowLeft"])(
     "passes native terminal input unchanged: %s",
     (keyValue) => {
       expect(
-        handleTerminalSuggestionKeyEvent(key({ key: keyValue, code: keyValue }), {
-          accept: vi.fn(() => "suffix"),
-          openHistory: vi.fn(() => false),
-        }),
+        handleTerminalSuggestionKeyEvent(
+          key({ key: keyValue, code: keyValue }),
+          {
+            accept: vi.fn(() => "suffix"),
+            openHistory: vi.fn(() => false),
+          },
+        ),
       ).toBe(true);
     },
   );
@@ -55,10 +58,13 @@ describe("terminal suggestion key handler", () => {
   it(`opens explicit history with ${TERMINAL_HISTORY_SHORTCUT}`, () => {
     const openHistory = vi.fn(() => true);
     expect(
-      handleTerminalSuggestionKeyEvent(key({ code: "KeyH", key: "h", ctrlKey: true, altKey: true }), {
-        accept: vi.fn(() => null),
-        openHistory,
-      }),
+      handleTerminalSuggestionKeyEvent(
+        key({ code: "KeyH", key: "h", ctrlKey: true, altKey: true }),
+        {
+          accept: vi.fn(() => null),
+          openHistory,
+        },
+      ),
     ).toBe(false);
     expect(openHistory).toHaveBeenCalledOnce();
   });
