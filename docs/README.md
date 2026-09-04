@@ -78,7 +78,6 @@ boundary are in [Linux systemd](./linux-systemd.md).
 Historical implementation plans are not indexed here; verify that a plan path
 exists before linking it from a new document.
 
-
 ## Key Sections
 
 ### Understanding the System
@@ -147,8 +146,8 @@ as a non-writing static host on `4802`.
 - Health: `GET`/`HEAD /__dam-hopper/health` returns `schemaVersion`, `status`,
   release `version`, and `role: "web"` with `Cache-Control: no-store`.
 - Runtime origin: `GET`/`HEAD /__dam-hopper/runtime-config.json` returns a
-  bounded `{schemaVersion, releaseVersion, profileId, apiUrl}` document, also
-  `no-store`; a missing document is a normal 404 for development/Pages.
+  bounded `{schemaVersion, releaseVersion, profileId [, apiUrl]}` document, also
+  `no-store` (with `apiUrl` omitted when unset); a missing document is a normal 404 for development/Pages.
 - Static policy: only GET/HEAD, safe regular files, MIME detection, SPA fallback
   for extensionless HTML navigation, one-year immutable hashed assets,
   `index.html` `no-cache`, and other assets one-hour cache.
@@ -171,7 +170,7 @@ See token at `~/.config/dam-hopper/server-token`.
 
 ### Understand a Component
 
-1. Find component in `packages/web/src/components/`
+1. Find the component in `packages/ui/src/components/` (the browser host is `apps/web`)
 2. Check [Frontend Components](./frontend-components.md) for architecture overview
 3. Review event subscriptions via [WebSocket Protocol Guide](./ws-protocol-guide.md)
 4. Trace shared UI types in `packages/ui/src/api/client.ts`
@@ -185,7 +184,7 @@ Terminal lifecycle follows six main states:
 - **crashed** — Exited non-zero, no restart (🔴 red dot)
 - **exited** — Exited zero, no restart (⚪ gray dot)
 
-See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle) for detailed flow.
+See [Frontend Components](./frontend-components.md#session-status-helpers) for detailed flow.
 
 ## Recent Changes
 
@@ -284,17 +283,19 @@ pnpm --filter @dam-hopper/web build
 ## Architecture at a Glance
 
 ```
+
 Browser (React SPA, served separately in release mode)
-    ├─ fetch(/api/*) + WebSocket(/ws) → API server :4801
-    └─ GET /__dam-hopper/runtime-config.json → web host :4802
+├─ fetch(/api/\*) + WebSocket(/ws) → API server :4801
+└─ GET /\_\_dam-hopper/runtime-config.json → web host :4802
 Rust API Server (Axum; API-only by default)
-    ├─ AppState (config, PTY manager, FS subsystem, auth)
-    ├─ Router (REST/WebSocket; explicit --web-dir only for combined mode)
-    └─ Services (PtySessionManager, FsSubsystem, AgentStoreService)
+├─ AppState (config, PTY manager, FS subsystem, auth)
+├─ Router (REST/WebSocket; explicit --web-dir only for combined mode)
+└─ Services (PtySessionManager, FsSubsystem, AgentStoreService)
 Dedicated Web Host (dam-hopper-web; static, non-writing)
-    ├─ Reserved health/runtime routes
-    ├─ Safe file + HTML fallback routing
-    └─ Cache policy by response kind
+├─ Reserved health/runtime routes
+├─ Safe file + HTML fallback routing
+└─ Cache policy by response kind
+
 ```
 
 Key patterns:
@@ -310,23 +311,25 @@ See [System Architecture](./system-architecture.md) for detailed breakdown.
 ## File Structure
 
 ```
+
 apps/
-├── web/                          # Thin Vite browser host
+├── web/ # Thin Vite browser host
 packages/
-├── ui/                           # Shared React UI package
+├── ui/ # Shared React UI package
 server/
-├── src/bin/dam-hopper-web.rs     # Dedicated release static host
-├── src/web_host/                 # Safe routes, paths, cache, runtime config
+├── src/bin/dam-hopper-web.rs # Dedicated release static host
+├── src/web_host/ # Safe routes, paths, cache, runtime config
 docs/
-├── README.md                     # This file
-├── project-overview-pdr.md       # Product requirements & roadmap
-├── system-architecture.md        # Module breakdown & data flow
-├── api-reference.md              # REST/WebSocket endpoints
-├── configuration-guide.md        # dam-hopper.toml & deployment modes
-├── code-standards.md             # Patterns, testing, security
-├── codebase-summary.md           # Quick module reference
-├── linux-release-manifest.md     # Linux release archive contract v1
-└── linux-release-manager.md      # Release manager CLI and staging
+├── README.md # This file
+├── project-overview-pdr.md # Product requirements & roadmap
+├── system-architecture.md # Module breakdown & data flow
+├── api-reference.md # REST/WebSocket endpoints
+├── configuration-guide.md # dam-hopper.toml & deployment modes
+├── code-standards.md # Patterns, testing, security
+├── codebase-summary.md # Quick module reference
+├── linux-release-manifest.md # Linux release archive contract v1
+└── linux-release-manager.md # Release manager CLI and staging
+
 ```
 
 Each file is self-contained but linked for cross-reference.
@@ -364,3 +367,4 @@ Always verify docs against actual code implementation before publishing.
 - Review code comments (// or /// in Rust/TypeScript)
 - Run tests: `cd server && cargo test`
 - Check logs: `RUST_LOG=dam_hopper=debug cargo run ...`
+```

@@ -8,6 +8,7 @@
 - [Repository README](../../README.md)
 - [Linux systemd guide](../../docs/linux-systemd.md)
 - [System architecture](../../docs/system-architecture.md)
+- [Phase 09 docs-manager report](../reports/docs-manager-260904-1601-phase-09-documentation-release-cutover.md)
 - [Roadmap](../../docs/project-roadmap.md)
 - [Changelog](../../docs/CHANGELOG.md)
 
@@ -16,9 +17,10 @@
 - **Date:** 2026-09-03
 - **Description:** Cut all maintained documentation to the attested release installer, record verified support and breaking changes, and remove obsolete checkout-runner guidance.
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Implementation status:** DONE 2026-09-04
+- **Review status:** PASSED 2026-09-04 (documentation scope; report: `../reports/docs-manager-260904-1601-phase-09-documentation-release-cutover.md`)
 - **Effort:** 8h
+- **Progress:** 100% (13/13 implementation steps; 7/7 todo items)
 
 ## Key Insights
 
@@ -101,17 +103,17 @@ No duplicate deployment guide is created. Historical details useful for archaeol
 10. Search all maintained docs/package/workflows for `linux:production`, `linux:reset`, `run-linux-production.sh`, `reset-linux-production.sh`, `dam-hopper.service`, format-1 install commands, implicit `/opt/dam-hopper/web`, musl portability, and old port claims. Every occurrence must be removed or clearly historical/non-runnable.
 11. Validate relative links, Markdown structure, CLI examples against `--help`, asset names against manifest, and `docs/linux-systemd.md` line count `<800`.
 12. Verify the terminal `evcrate-docs-manager` report and changed-file scope. If docs change a contract rather than reflect code, return to owning code phase; never resolve drift by documenting an unimplemented behavior.
-13. Run final focused reviewer/docs verification. Mark plan/phase status completed only after actual implementation evidence and owner workflow permits it; this planning delivery remains pending.
+13. Run final focused reviewer/docs verification. Mark plan/phase status completed only after actual implementation evidence and owner workflow permits it; this phase is now complete.
 
-## Todo List
+## Todo List — DONE 2026-09-04
 
-- [ ] Gather exact Phase 08 evidence and implemented CLI/asset contracts.
-- [ ] Delegate and wait for terminal docs-manager result.
-- [ ] Rewrite the authoritative Linux operator guide in place.
-- [ ] Update architecture, API/config/profile, standards/summary/PDR docs.
-- [ ] Update roadmap and changelog from observed evidence.
-- [ ] Remove stale/deleted command references and validate links/examples/line count.
-- [ ] Pass final documentation review.
+- [x] Gather exact Phase 08 evidence and implemented CLI/asset contracts.
+- [x] Delegate and wait for terminal docs-manager result.
+- [x] Rewrite the authoritative Linux operator guide in place.
+- [x] Update architecture, API/config/profile, standards/summary/PDR docs.
+- [x] Update roadmap and changelog from observed evidence.
+- [x] Remove stale/deleted command references and validate links/examples/line count.
+- [x] Pass final documentation review.
 
 ## Success Criteria
 
@@ -139,4 +141,4 @@ No duplicate deployment guide is created. Historical details useful for archaeol
 
 ## Next Steps
 
-After docs-manager and final review pass, the owner may approve an actual protected-tag release. Multi-architecture, package repositories, detached keys, auto-update, TLS/proxy/firewall automation, API service-account migration, and breaking DB migrations require separate plans. Unresolved questions: none.
+Phase 09 is complete after the docs-manager and final documentation review passed. The owner may approve an actual protected-tag release. Multi-architecture, package repositories, detached keys, auto-update, TLS/proxy/firewall automation, API service-account migration, and breaking DB migrations require separate plans. Unresolved questions: none.

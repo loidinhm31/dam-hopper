@@ -49,11 +49,11 @@ are not independent version channels.
 
 `release` contains:
 
-| Field | Contract |
-| --- | --- |
-| `tag` | `v` followed by stable SemVer, for example `v0.2.0` |
-| `version` | Stable `MAJOR.MINOR.PATCH` SemVer, without prerelease or build metadata |
-| `commitSha` | Exactly 40 lowercase hexadecimal characters |
+| Field       | Contract                                                                |
+| ----------- | ----------------------------------------------------------------------- |
+| `tag`       | `v` followed by stable SemVer, for example `v0.2.0`                     |
+| `version`   | Stable `MAJOR.MINOR.PATCH` SemVer, without prerelease or build metadata |
+| `commitSha` | Exactly 40 lowercase hexadecimal characters                             |
 
 The four component versions (`cli`, `api`, `webHost`, `webAssets`) must all
 exactly equal `release.version`. A version or tag drift is a release failure,
@@ -63,16 +63,16 @@ not a warning.
 
 The root object uses camelCase JSON names and has exactly these required fields:
 
-| Field | Contents |
-| --- | --- |
-| `schemaVersion` | Integer `1` |
-| `release` | Tag, stable version, and commit SHA |
-| `profile` | Target operating-system and service profile |
-| `archive` | Archive filename, positive byte size, and lowercase SHA-256 |
-| `components` | Lockstep versions for CLI, API, web host, and web assets |
-| `inventory` | Every packaged directory and regular file |
-| `services` | API and web systemd contracts |
-| `rollback` | Previous-release and state compatibility declaration |
+| Field           | Contents                                                    |
+| --------------- | ----------------------------------------------------------- |
+| `schemaVersion` | Integer `1`                                                 |
+| `release`       | Tag, stable version, and commit SHA                         |
+| `profile`       | Target operating-system and service profile                 |
+| `archive`       | Archive filename, positive byte size, and lowercase SHA-256 |
+| `components`    | Lockstep versions for CLI, API, web host, and web assets    |
+| `inventory`     | Every packaged directory and regular file                   |
+| `services`      | API and web systemd contracts                               |
+| `rollback`      | Previous-release and state compatibility declaration        |
 
 All objects reject unknown fields. Required fields are not optional. Duplicate
 JSON fields, absent fields, wrong scalar types, unsupported enum values, and
@@ -82,15 +82,15 @@ non-canonical values must fail before an archive is extracted.
 
 The v1 profile is fixed to Fedora 44 on x86_64:
 
-| Field | Required value |
-| --- | --- |
-| `id` | `fedora44-x86_64-systemd` |
-| `osId` | `fedora` |
-| `osVersion` | `44` |
-| `arch` | `x86_64` |
-| `target` | `x86_64-unknown-linux-gnu` |
-| `glibcMin` | `2.43` |
-| `systemdMin` | At least `259` |
+| Field        | Required value             |
+| ------------ | -------------------------- |
+| `id`         | `fedora44-x86_64-systemd`  |
+| `osId`       | `fedora`                   |
+| `osVersion`  | `44`                       |
+| `arch`       | `x86_64`                   |
+| `target`     | `x86_64-unknown-linux-gnu` |
+| `glibcMin`   | `2.43`                     |
+| `systemdMin` | At least `259`             |
 
 ### Archive metadata
 
@@ -119,11 +119,11 @@ pass the publisher schema.
 Roles are the set `{common, server, web}`. An entry must have at least one
 role. A target projection includes:
 
-| Target role | Included entries |
-| --- | --- |
-| `server` | `common` or `server` |
-| `web` | `common` or `web` |
-| `both` | All inventory entries |
+| Target role | Included entries      |
+| ----------- | --------------------- |
+| `server`    | `common` or `server`  |
+| `web`       | `common` or `web`     |
+| `both`      | All inventory entries |
 
 `both` is a projection, not a separately versioned component. Archive entries
 must be regular files or directories; links, devices, sockets, FIFOs, and other
@@ -137,17 +137,17 @@ packaged; `stage_units.rs` always stages a recovery unit for activation and
 uses its checked-in template fallback when the archive omits that asset.
 Executable binaries must have at least one execute bit.
 
-| Path | Kind | Required role | Additional requirement |
-| --- | --- | --- | --- |
-| `bin/dam-hopper-manager` | file | `common` | executable |
-| `bin/dam-hopper-server` | file | `server` | executable |
-| `bin/dam-hopper-web` | file | `web` | executable |
-| `systemd/dam-hopper-recovery.service` | file | `common` | boot recovery unit template when packaged |
-| `systemd/dam-hopper-api.service` | file | `server` | unit template |
-| `systemd/dam-hopper-web.service` | file | `web` | unit template |
-| `sysusers.d/dam-hopper-web.conf` | file | `web` | sysusers input |
-| `web` | directory | `web` | web payload has `web` role |
-| `LICENSE` or `NOTICES` | file | `common` | at least one is required |
+| Path                                  | Kind      | Required role | Additional requirement                    |
+| ------------------------------------- | --------- | ------------- | ----------------------------------------- |
+| `bin/dam-hopper-manager`              | file      | `common`      | executable                                |
+| `bin/dam-hopper-server`               | file      | `server`      | executable                                |
+| `bin/dam-hopper-web`                  | file      | `web`         | executable                                |
+| `systemd/dam-hopper-recovery.service` | file      | `common`      | boot recovery unit template when packaged |
+| `systemd/dam-hopper-api.service`      | file      | `server`      | unit template                             |
+| `systemd/dam-hopper-web.service`      | file      | `web`         | unit template                             |
+| `sysusers.d/dam-hopper-web.conf`      | file      | `web`         | sysusers input                            |
+| `web`                                 | directory | `web`         | web payload has `web` role                |
+| `LICENSE` or `NOTICES`                | file      | `common`      | at least one is required                  |
 
 The publisher must compute exact inventory set equality for each projection; a
 prefix check is not sufficient. Runtime/configuration material is forbidden,
@@ -161,10 +161,10 @@ matching as applicable).
 Both service objects are required even when a role projection will not install
 the corresponding service.
 
-| Service | `unitName` | `identity` | `bindHost` | `port` | `healthPath` |
-| --- | --- | --- | --- | ---: | --- |
-| `api` | `dam-hopper-api.service` | `root` | `0.0.0.0` | `4801` | `/api/health` |
-| `web` | `dam-hopper-web.service` | `dam-hopper-web` | `0.0.0.0` | `4802` | `/__dam-hopper/health` |
+| Service | `unitName`               | `identity`       | `bindHost` | `port` | `healthPath`           |
+| ------- | ------------------------ | ---------------- | ---------- | -----: | ---------------------- |
+| `api`   | `dam-hopper-api.service` | `root`           | `0.0.0.0`  | `4801` | `/api/health`          |
+| `web`   | `dam-hopper-web.service` | `dam-hopper-web` | `0.0.0.0`  | `4802` | `/__dam-hopper/health` |
 
 The API identity is `root` for the v1 MVP owner decision. This is a contract
 value, not a general recommendation to run arbitrary services as root.
@@ -183,9 +183,9 @@ value, not a general recommendation to run arbitrary services as root.
 The `web` role carries `bin/dam-hopper-web` and the immutable `web/` asset
 directory. Its dedicated host defaults to `0.0.0.0:4802` and reserves:
 
-| Route | Contract |
-| --- | --- |
-| `GET /__dam-hopper/health` | `{ "schemaVersion": 1, "status": "ok", "version": "...", "role": "web" }` |
+| Route                                   | Contract                                                                               |
+| --------------------------------------- | -------------------------------------------------------------------------------------- |
+| `GET /__dam-hopper/health`              | `{ "schemaVersion": 1, "status": "ok", "version": "...", "role": "web" }`              |
 | `GET /__dam-hopper/runtime-config.json` | `{ "schemaVersion": 1, "releaseVersion": "...", "profileId": "...", "apiUrl": "..." }` |
 
 Both responses are JSON with `Cache-Control: no-store`; HEAD responses carry no

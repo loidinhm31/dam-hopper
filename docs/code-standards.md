@@ -220,7 +220,6 @@ aliases. `imported-format-2` is a rollback source, never a Manifest v1
 publisher input. Keep migration tests fixture-scoped and distinguish them from
 live Fedora deployment evidence.
 
-
 ### Dedicated web host and runtime-origin rules (Phase 03)
 
 Keep `server/src/web_host/` independent from API `AppState`. `mod.rs` owns
@@ -247,8 +246,6 @@ thin CLI that supplies root, host, port, and optional runtime-config paths.
 - Frontend startup fetches the relative runtime-config endpoint before
   transport creation, preserves an active user profile, and clears a managed
   profile token when its API URL changes.
-
-
 
 ### Async Patterns
 
@@ -999,16 +996,16 @@ Types: feat, fix, refactor, test, docs, perf, ci, chore.
 
 **Rust:**
 
-- Release: `server/target/release/dam-hopper-server`
-- Binary includes all dependencies (musl-libc for portability)
+- Release binaries:
+  - `server/target/release/dam-hopper` (Linux release manager CLI)
+  - `server/target/release/dam-hopper-server` (Axum + Tokio backend API)
+  - `server/target/release/dam-hopper-web` (Dedicated static web host)
+- Target profile: Fedora 44 GNU glibc (glibc >= 2.43) with vendored C libraries (`openssl`, `libgit2` vendored features); not musl-libc.
 
 **Web:**
 
 - Vite output: `apps/web/dist/`
-- Dedicated release web assets are served by `server/target/release/dam-hopper-web`
-  from an immutable root; API static serving is enabled only with explicit
-  `--web-dir` (the Docker image uses that combined mode).
-
+- Dedicated release web assets are served by `dam-hopper-web` from an immutable root; API static serving is enabled only with explicit `--web-dir` (the Docker image uses that combined mode).
 ## Dependency Policy
 
 **Rust:**

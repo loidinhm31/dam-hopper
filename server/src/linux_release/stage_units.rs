@@ -1,6 +1,7 @@
 //! Staging and isolated verification of candidate systemd units and public host config.
 
 use super::error::ReleaseError;
+use super::durable_fs::atomic_write_file;
 use super::host_config::{load_host_public_config, save_host_public_config, HostPublicConfig};
 use super::inventory::TargetRole;
 use super::layout::Layout;
@@ -22,13 +23,103 @@ pub fn stage_candidate_units(
     allow_origins: &[String],
 ) -> Result<PathBuf, ReleaseError> {
     let pending_units_dir = layout.pending_units_dir();
-    fs::create_dir_all(&pending_units_dir).map_err(|e| ReleaseError::Io {
+    stage_candidate_units_inner(
+        layout,
+        target_dir,
+        target_dir,
+        manifest,
+        role,
+        allow_origins,
+        &pending_units_dir,
+        &layout.pending_host_config_json_path(),
+        true,
+        false,
+    )
+}
+
+
+/// Stage release-owned units with transaction-scoped unit and public-config paths.
+pub(crate) fn stage_candidate_units_for_release_with_render_root_and_config(
+    layout: &Layout,
+    target_dir: &Path,
+    render_root: &Path,
+    manifest: &ReleaseManifest,
+    role: TargetRole,
+    allow_origins: &[String],
+    pending_units_dir: &Path,
+    pending_host_config_path: &Path,
+) -> Result<PathBuf, ReleaseError> {
+    stage_candidate_units_inner(
+        layout,
+        target_dir,
+        render_root,
+        manifest,
+        role,
+        allow_origins,
+        pending_units_dir,
+        pending_host_config_path,
+        false,
+        true,
+    )
+}
+
+
+fn stage_candidate_units_inner(
+    layout: &Layout,
+    target_dir: &Path,
+    render_root: &Path,
+    manifest: &ReleaseManifest,
+    role: TargetRole,
+    allow_origins: &[String],
+    pending_units_dir: &Path,
+    pending_host_config_path: &Path,
+    allow_checked_in_fallback: bool,
+    require_systemd_validation: bool,
+) -> Result<PathBuf, ReleaseError> {
+    match fs::symlink_metadata(pending_units_dir) {
+        Ok(meta) if meta.file_type().is_dir() => {
+            fs::remove_dir_all(pending_units_dir).map_err(|e| ReleaseError::Io {
+                action: "clear pending units directory",
+                details: e.to_string(),
+            })?;
+        }
+        Ok(_) => {
+            return Err(ReleaseError::OwnershipViolation {
+                path: pending_units_dir.display().to_string(),
+                expected: "0700 regular directory".into(),
+                got: "non-directory or symbolic link".into(),
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(ReleaseError::Io {
+                action: "inspect pending units directory",
+                details: error.to_string(),
+            });
+        }
+    }
+    fs::create_dir_all(pending_units_dir).map_err(|e| ReleaseError::Io {
         action: "create pending-units directory",
         details: e.to_string(),
     })?;
+    fs::set_permissions(
+        pending_units_dir,
+        fs::Permissions::from_mode(0o700),
+    )
+    .map_err(|e| ReleaseError::Io {
+        action: "set pending-units directory permissions",
+        details: e.to_string(),
+    })?;
+
+    let existing_public_config = load_host_public_config(&layout.host_config_json_path())?;
+    let profile_id = existing_public_config
+        .as_ref()
+        .map(|config| config.profile_id.clone())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let api_url = existing_public_config.and_then(|config| config.api_url);
 
     let ctx = UnitRenderContext::new(
-        target_dir.to_path_buf(),
+        render_root.to_path_buf(),
         manifest.release.version.clone(),
         layout.host_config_json_path(),
         allow_origins.to_vec(),
@@ -36,53 +127,77 @@ pub fn stage_candidate_units(
 
     let mut staged_unit_paths = Vec::new();
 
-    // 0. Stage Recovery service unit (required dependency of app units)
-    let recovery_template = load_template(target_dir, "systemd/dam-hopper-recovery.service.in")
-        .or_else(|_| load_template(target_dir, "systemd/dam-hopper-recovery.service"))?;
+    let recovery_template = load_release_template(
+        target_dir,
+        "systemd/dam-hopper-recovery.service.in",
+        "systemd/dam-hopper-recovery.service",
+        allow_checked_in_fallback,
+    )?;
     let rendered_recovery = render_recovery_unit(&recovery_template, &ctx)?;
     let recovery_unit_path = pending_units_dir.join("dam-hopper-recovery.service");
     write_file_with_mode(&recovery_unit_path, rendered_recovery.as_bytes(), 0o644)?;
     staged_unit_paths.push(recovery_unit_path);
 
-    // 1. Stage API service unit if role includes Server
     if role.includes_server() {
-        let template = load_template(target_dir, "systemd/dam-hopper-api.service.in")
-            .or_else(|_| load_template(target_dir, "systemd/dam-hopper-api.service"))?;
+        let template = load_release_template(
+            target_dir,
+            "systemd/dam-hopper-api.service.in",
+            "systemd/dam-hopper-api.service",
+            allow_checked_in_fallback,
+        )?;
         let rendered = render_api_unit(&template, &ctx)?;
         let unit_path = pending_units_dir.join("dam-hopper-api.service");
         write_file_with_mode(&unit_path, rendered.as_bytes(), 0o644)?;
         staged_unit_paths.push(unit_path);
     }
 
-    // 2. Stage Web service unit and sysusers if role includes Web
     if role.includes_web() {
-        let template = load_template(target_dir, "systemd/dam-hopper-web.service.in")
-            .or_else(|_| load_template(target_dir, "systemd/dam-hopper-web.service"))?;
+        let template = load_release_template(
+            target_dir,
+            "systemd/dam-hopper-web.service.in",
+            "systemd/dam-hopper-web.service",
+            allow_checked_in_fallback,
+        )?;
         let rendered = render_web_unit(&template, &ctx)?;
         let unit_path = pending_units_dir.join("dam-hopper-web.service");
         write_file_with_mode(&unit_path, rendered.as_bytes(), 0o644)?;
         staged_unit_paths.push(unit_path);
 
-        // Stage sysusers.d config
         let sysusers_src = target_dir.join("sysusers.d/dam-hopper-web.conf");
-        let sysusers_content = if sysusers_src.exists() {
-            fs::read_to_string(&sysusers_src).map_err(|e| ReleaseError::Io {
-                action: "read sysusers.d config from release",
-                details: e.to_string(),
-            })?
-        } else {
-            include_str!("../../../deploy/sysusers.d/dam-hopper-web.conf").to_string()
+        let sysusers_content = match fs::symlink_metadata(&sysusers_src) {
+            Ok(meta) if meta.file_type().is_file() => {
+                fs::read_to_string(&sysusers_src).map_err(|e| ReleaseError::Io {
+                    action: "read sysusers.d config from release",
+                    details: e.to_string(),
+                })?
+            }
+            Ok(_) => {
+                return Err(ReleaseError::InvalidBundle {
+                    path: sysusers_src.display().to_string(),
+                    reason: "sysusers.d config must be a regular file".to_string(),
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if allow_checked_in_fallback {
+                    include_str!("../../../deploy/sysusers.d/dam-hopper-web.conf").to_string()
+                } else {
+                    return Err(ReleaseError::InvalidBundle {
+                        path: sysusers_src.display().to_string(),
+                        reason: "missing required sysusers.d config".to_string(),
+                    });
+                }
+            }
+            Err(error) => {
+                return Err(ReleaseError::Io {
+                    action: "inspect sysusers.d config in release",
+                    details: error.to_string(),
+                });
+            }
         };
         let sysusers_dest = pending_units_dir.join("dam-hopper-web.conf");
         write_file_with_mode(&sysusers_dest, sysusers_content.as_bytes(), 0o644)?;
     }
 
-    // 3. Stage candidate host-config.json
-    let profile_id = match load_host_public_config(&layout.host_config_json_path())? {
-        Some(existing) => existing.profile_id,
-        None => uuid::Uuid::new_v4().to_string(),
-    };
-    let api_url = "http://127.0.0.1:4801".to_string();
     let host_public_config = HostPublicConfig::new(
         role,
         manifest.release.version.clone(),
@@ -90,25 +205,80 @@ pub fn stage_candidate_units(
         api_url,
         allow_origins.to_vec(),
     )?;
-    save_host_public_config(&layout.pending_host_config_json_path(), &host_public_config)?;
 
-    // 4. Verify candidate units with systemd-analyze if binary exists
-    if which_bin_exists("systemd-analyze") && !staged_unit_paths.is_empty() {
-        systemd_analyze_verify(&staged_unit_paths, None)?;
+    if !staged_unit_paths.is_empty() {
+        if require_systemd_validation && !which_bin_exists("systemd-analyze") {
+            return Err(ReleaseError::Config(
+                "systemd-analyze is required for production unit validation".to_string(),
+            ));
+        }
+        if which_bin_exists("systemd-analyze") {
+            systemd_analyze_verify(&staged_unit_paths, None)?;
+        }
     }
 
-    Ok(pending_units_dir)
+    save_host_public_config(pending_host_config_path, &host_public_config)?;
+
+    Ok(pending_units_dir.to_path_buf())
 }
 
-fn load_template(release_dir: &Path, rel_path: &str) -> Result<String, ReleaseError> {
+fn load_release_template(
+    release_dir: &Path,
+    template_path: &str,
+    plain_path: &str,
+    allow_checked_in_fallback: bool,
+) -> Result<String, ReleaseError> {
+    match load_template(release_dir, template_path, allow_checked_in_fallback) {
+        Ok(template) => Ok(template),
+        Err(ReleaseError::InvalidBundle { path, reason })
+            if reason.starts_with("missing required unit template") =>
+        {
+            load_template(release_dir, plain_path, allow_checked_in_fallback).map_err(|error| {
+                match error {
+                    ReleaseError::InvalidBundle {
+                        path: fallback_path,
+                        reason: fallback_reason,
+                    } => ReleaseError::InvalidBundle {
+                        path: format!("{path} (fallback {fallback_path})"),
+                        reason: fallback_reason,
+                    },
+                    other => other,
+                }
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn load_template(
+    release_dir: &Path,
+    rel_path: &str,
+    allow_checked_in_fallback: bool,
+) -> Result<String, ReleaseError> {
     let path = release_dir.join(rel_path);
-    if path.exists() {
-        fs::read_to_string(&path).map_err(|e| ReleaseError::Io {
-            action: "read unit template from release",
-            details: e.to_string(),
-        })
-    } else {
-        // Fallback to checked-in template if not present in release directory
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_file() => {
+            return fs::read_to_string(&path).map_err(|e| ReleaseError::Io {
+                action: "read unit template from release",
+                details: e.to_string(),
+            });
+        }
+        Ok(_) => {
+            return Err(ReleaseError::InvalidBundle {
+                path: path.display().to_string(),
+                reason: "unit template must be a regular file".to_string(),
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(ReleaseError::Io {
+                action: "inspect unit template in release",
+                details: error.to_string(),
+            });
+        }
+    }
+
+    if allow_checked_in_fallback {
         let fallback = match rel_path {
             p if p.contains("dam-hopper-recovery") => {
                 include_str!("../../../deploy/systemd/dam-hopper-recovery.service.in")
@@ -122,23 +292,18 @@ fn load_template(release_dir: &Path, rel_path: &str) -> Result<String, ReleaseEr
             _ => "",
         };
         if !fallback.is_empty() {
-            Ok(fallback.to_string())
-        } else {
-            Err(ReleaseError::InvalidBundle {
-                path: path.display().to_string(),
-                reason: format!("missing required unit template '{rel_path}'"),
-            })
+            return Ok(fallback.to_string());
         }
     }
+
+    Err(ReleaseError::InvalidBundle {
+        path: path.display().to_string(),
+        reason: format!("missing required unit template '{rel_path}'"),
+    })
 }
 
 fn write_file_with_mode(path: &Path, content: &[u8], mode: u32) -> Result<(), ReleaseError> {
-    fs::write(path, content).map_err(|e| ReleaseError::Io {
-        action: "write staged unit file",
-        details: e.to_string(),
-    })?;
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode));
-    Ok(())
+    atomic_write_file(path, content, Some(mode))
 }
 
 fn which_bin_exists(bin: &str) -> bool {
