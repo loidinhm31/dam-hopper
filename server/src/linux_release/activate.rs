@@ -127,6 +127,7 @@ pub async fn execute_activation_locked_with_args(
                     }
                     ensure_user_config_ownership(&user_info.home, user_info.uid, user_info.gid);
                 }
+                ensure_etc_config_permissions(layout);
                 systemctl_start("dam-hopper-api.service")?;
             }
             if active_candidate.role.includes_web() {
@@ -167,6 +168,7 @@ pub async fn execute_activation_locked_with_args(
             super::host_config::save_host_config(&layout.host_config_path(), &config_to_save)?;
         }
         ensure_user_config_ownership(&user_info.home, user_info.uid, user_info.gid);
+        ensure_etc_config_permissions(layout);
 
         if let Some(ref units_path_str) = candidate.pending_units_path {
             let units_dir = std::path::Path::new(units_path_str);
@@ -474,6 +476,7 @@ async fn execute_activation_pipeline(
         DeploymentState::Switched,
         TransactionPhase::Switched,
     )?;
+    ensure_etc_config_permissions(layout);
 
     if candidate.role.includes_server() {
         systemctl_start(API_SERVICE_UNIT)?;
@@ -721,6 +724,28 @@ fn chown_recursive(path: &std::path::Path, uid: u32, gid: u32) {
             } else {
                 chown_single(&p, uid, gid);
             }
+        }
+    }
+}
+
+fn ensure_etc_config_permissions(layout: &Layout) {
+    let etc_dir = &layout.etc_dir;
+    let _ = fs::create_dir_all(etc_dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(etc_dir, fs::Permissions::from_mode(0o755));
+        let toml_path = etc_dir.join("dam-hopper.toml");
+        if toml_path.exists() {
+            let _ = fs::set_permissions(&toml_path, fs::Permissions::from_mode(0o644));
+        }
+        let host_toml = layout.host_config_path();
+        if host_toml.exists() {
+            let _ = fs::set_permissions(&host_toml, fs::Permissions::from_mode(0o644));
+        }
+        let host_json = layout.host_config_json_path();
+        if host_json.exists() {
+            let _ = fs::set_permissions(&host_json, fs::Permissions::from_mode(0o644));
         }
     }
 }
