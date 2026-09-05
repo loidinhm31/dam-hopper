@@ -14,8 +14,8 @@
 - Date: 2026-08-24
 - Description: Add an incarnation-aware, content-free PTY fleet watch seam and startup-owned coordinator with ordered live timing updates, tested only with fake/unavailable execution.
 - Priority: P1
-- Implementation status: Pending
-- Review status: Pending backend concurrency/security review
+- Implementation status: Done (2026-09-05)
+- Review status: Approved (Code Review 10/10, Advisor ADVICE_READY)
 
 ## Key Insights
 
@@ -102,15 +102,15 @@
 
 ## Todo list
 
-- [ ] Add content-free fleet snapshot/watch seam
-- [ ] Add create and incarnation-safe reservations
-- [ ] Make exit-to-restart-pending atomic
-- [ ] Cover kill/remove/failure/dispose transitions
-- [ ] Add atomic final handoff admission gate
-- [ ] Add ordered timing mutation transaction and conflict result
-- [ ] Implement epoch/state coordinator with fake executor
-- [ ] Wire startup-after-restore and shutdown-before-PTY ordering
-- [ ] Add fake-clock race/state tests
+- [x] Add content-free fleet snapshot/watch seam
+- [x] Add create and incarnation-safe reservations
+- [x] Make exit-to-restart-pending atomic
+- [x] Cover kill/remove/failure/dispose transitions
+- [x] Add atomic final handoff admission gate
+- [x] Add ordered timing mutation transaction and conflict result
+- [x] Implement epoch/state coordinator with fake executor
+- [x] Wire startup-after-restore and shutdown-before-PTY ordering
+- [x] Add fake-clock race/state tests
 
 ## Success Criteria
 
