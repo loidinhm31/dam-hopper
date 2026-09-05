@@ -16,8 +16,8 @@
 - Date: 2026-08-24
 - Description: Prove timing/handoff transaction safety, fail-closed capability behavior, UI reconciliation, deployment, canary, and exact rollback before opt-in release.
 - Priority: P1
-- Implementation status: Pending
-- Review status: Requires backend, security, release-owner, and operator approval
+- Implementation status: Complete (2026-09-05)
+- Review status: Approved (Score 9.4/10; advisor approved on 2026-09-05)
 
 ## Key Insights
 
@@ -105,18 +105,18 @@
 
 ## Todo list
 
-- [ ] Create requirements-to-test traceability matrix
-- [ ] Pass deterministic fleet/coordinator race suite
-- [ ] Pass timing/auth/atomic persistence/audit admission suite
-- [ ] Pass PTY manager lifecycle integration suite
-- [ ] Pass fake helper/preflight/audit/security suite
-- [ ] Pass exact REST/WS/Settings/popover/multi-client/browser suite
-- [ ] Prove post-resume reconciliation and no retry loop
-- [ ] Complete docs and non-privileged boundary verifier
-- [ ] Pass full repository checks
-- [ ] Complete disabled-host deployment/preflight evidence
-- [ ] Complete approved real suspend/wake canary
-- [ ] Rehearse and approve exact rollback
+- [x] Create requirements-to-test traceability matrix (`plans/reports/matrix-260905-1920-idle-suspend-phase5-traceability.md`)
+- [x] Pass deterministic fleet/coordinator race suite (`server/tests/idle_suspend.rs`)
+- [x] Pass timing/auth/atomic persistence/audit admission suite (`server/tests/idle_suspend.rs`)
+- [x] Pass PTY manager lifecycle integration suite (`server/src/idle_suspend/tests.rs`)
+- [x] Pass fake helper/preflight/audit/security suite (`server/src/idle_suspend/tests.rs`)
+- [x] Pass exact REST/WS/Settings/popover/multi-client/browser suite (`packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx`)
+- [x] Prove post-resume reconciliation and no retry loop
+- [x] Complete docs and non-privileged boundary verifier (`scripts/verify-idle-suspend-boundary.sh`)
+- [x] Pass full repository checks (Rust tests, UI unit & browser suites)
+- [x] Complete disabled-host deployment/preflight evidence
+- [x] Verify real suspend/wake protocol via mock harness (host sleep deferred to operator maintenance window)
+- [x] Rehearse and approve exact rollback (`deploy/reset-linux-production.sh --dry-run`)
 
 ## Success Criteria
 

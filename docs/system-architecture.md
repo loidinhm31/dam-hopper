@@ -44,6 +44,7 @@
 │  │  ├─ /api/workspace/* → Config switching                │
 │  │  ├─ /api/workflow/* → WorkflowService REST boundary  │
 │  │  ├─ /api/browser-debug/* → Ephemeral artifacts         │
+│  │  ├─ /api/system/idle-suspend/v1/* → Status/timing pair │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
@@ -55,9 +56,54 @@
 │     ├─ AgentStoreService (symlink distribution)           │
 │     ├─ WorkflowService → WorkflowStore + startup reconcile │
 │     ├─ CommandRegistry (BM25 search)                      │
+│     ├─ IdleSuspendCoordinator (fleet quiescence & timing) │
+│     │  └─ SystemdIdleSuspendExecutor → socket-activated   │
 │     └─ Broadcast channels (PTY output, git progress)      │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## Server-Authoritative Terminal Idle Suspend Architecture
+
+The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automation backed by authoritative PTY fleet state, single-flight idle epochs, bounded authenticated timing mutations, and hardened socket-activated helper execution.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Browser UI                                                 │
+│  ├─ SettingsIdleSuspendTimingSection (PATCH /timing)        │
+│  ├─ HostResourcePopover / HostIdleSuspendStatus (read-only) │
+│  └─ WsTransport ← host:idleSuspendChanged revision hint    │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ REST (GET /status, PATCH /timing)
+┌──────────────────────▼──────────────────────────────────────┐
+│  dam-hopper-server (Axum, Tokio)                            │
+│  ├─ IdleSuspendCoordinator (Async state machine)            │
+│  │  ├─ PtyFleetWatcher (quiescent when live+creating+restart=0)
+│  │  ├─ IdleSuspendTimingStore (atomic TOML pair write)      │
+│  │  ├─ IdleSuspendTimingAudit (server-side mode 0600 log)   │
+│  │  └─ BroadcastEventSink (isolated revision hint channel)  │
+│  └─ SystemdIdleSuspendExecutor (Unix domain socket client) │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ /run/dam-hopper/idle-suspend.sock (SO_PEERCRED)
+┌──────────────────────▼──────────────────────────────────────┐
+│  dam-hopper-idle-suspend-helper (Root-owned Systemd Helper) │
+│  ├─ Peer auth verification (UID matching server, MainPID)   │
+│  ├─ SysfsPreflightChecker (/sys/class/rtc/rtc0/wakealarm)   │
+│  ├─ Active inhibitor check (org.freedesktop.login1)         │
+│  ├─ RTC wakealarm programming (/sys/class/rtc/rtc0/wakealarm)
+│  ├─ Logind D-Bus suspend (org.freedesktop.login1.Manager)   │
+│  └─ HelperAudit (/var/log/dam-hopper/idle-suspend-helper.jsonl)
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Invariants
+1. **Fleet Quiescence & Latching**:
+   The coordinator arms only after transitioning from active to empty fleet. It remains single-flight: exactly one suspend execution occurs per empty period; resume or failure reconciles state and will never re-trigger suspend while the fleet stays empty.
+2. **Admission & Handoff Order**:
+   A timing update received while armed cancels the arm deadline, commits both values to canonical TOML and memory, and re-evaluates the fleet. Once a handoff claim is accepted (`CoordinatorState::HandedOff`), incoming timing updates immediately return `409 idleSuspendHandoffInProgress` with zero memory or disk mutation until resume reconciliation.
+3. **Non-blocking In-Flight Handoff**:
+   The coordinator event loop manages the in-flight suspend future concurrently with the command receiver, ensuring timing requests during suspend are responded to immediately with `409` rather than blocking the server.
+4. **Root & Server Audit Separation**:
+   Privileged helper operations are recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`). Server timing mutations are recorded to `/var/log/dam-hopper/idle-suspend-timing.jsonl` (mode `0600`). No tokens, credentials, or terminal contents are ever audited.
 
 The overview names both launch modes for context. The systemd deployment uses
 `0.0.0.0:4801` for Tailscale access; the host firewall and Tailscale ACLs must
