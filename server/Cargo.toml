@@ -27,6 +27,10 @@ path = "src/bin/dam-hopper.rs"
 name = "dam-hopper-web"
 path = "src/bin/dam-hopper-web.rs"
 
+[[bin]]
+name = "dam-hopper-idle-suspend-helper"
+path = "src/bin/dam-hopper-idle-suspend-helper.rs"
+
 [features]
 # Bundle libgit2 + openssl statically — used for portable release binaries in CI
 vendored = ["git2/vendored-libgit2", "git2/vendored-openssl"]

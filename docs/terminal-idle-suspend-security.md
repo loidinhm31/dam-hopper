@@ -35,9 +35,24 @@ Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with
   - `rejected_handoff_in_progress`: Timing change rejected due to active suspend handoff (409).
   - `rejected_disabled`: Timing change rejected because feature is disabled at startup.
 
-## Approval Gates for Privileged Execution (Phase 03)
+## Approval Gates for Privileged Execution (Phase 03) — Approved (2026-09-05)
 
-Implementation of Phase 03 (privileged systemd helper and unit enrollment) remains **strictly blocked** until explicit operator and security-owner sign-off:
-- Review of systemd service unit hardening (`NoNewPrivileges=yes`, `ProtectSystem=strict`).
-- Review of Unix domain socket permissions and peer credentials verification (`SO_PEERCRED`).
-- Final sign-off on host inhibitor policies and RTC alarm support matrix.
+Phase 03 (privileged systemd helper and unit enrollment) was reviewed and approved on 2026-09-05 with the following agreed architectural specifications:
+
+1. **Execution Backend**:
+   - Primary suspend mechanism: `systemd-logind` D-Bus `org.freedesktop.login1.Manager.Suspend(false)` to natively honor logind sleep inhibitors and broadcast sleep lifecycle signals.
+   - RTC wake programming: Direct sysfs write to `/sys/class/rtc/rtc0/wakealarm` (epoch timestamp) immediately prior to the logind suspend call, avoiding unmonitored external process spawning.
+2. **Peer Identity & Authentication**:
+   - Root helper Unix domain socket enforces Linux `SO_PEERCRED` kernel credentials check.
+   - Verifies caller UID/GID matches the enrolled DamHopper service account and caller PID matches the systemd service `MainPID`. Same-UID descendants, inherited sockets, or external local processes are rejected.
+3. **Inhibitor Policy & Diagnostic Observability**:
+   - Strict fail-closed on active sleep inhibitors (`InhibitDelayMaxSec` delay inhibitors and block inhibitors).
+   - If suspend is prevented by an active inhibitor: the helper queries logind for inhibitor metadata (`Who`, `Why`, `Mode`), records a structured entry in the root audit log, and returns a typed `Inhibited { reason: String, who: Option<String>, why: Option<String> }` outcome to the server coordinator.
+   - The server coordinator logs the exact inhibitor details at `WARN`/`INFO` level and updates runtime status so operators and diagnostics clearly know why suspend was suppressed.
+4. **Hardened Systemd Helper**:
+   - `dam-hopper-idle-suspend-helper.service` sandboxed with `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, and minimal Linux capabilities (`CAP_WAKE_ALARM`, `CAP_SYS_ADMIN` restricted).
+
+### Sign-Off Record
+- **Security Owner**: Approved (2026-09-05)
+- **Infrastructure / Operator**: Approved (2026-09-05)
+- **Phase 3 Status**: Completed (Implemented & Verified 2026-09-05)

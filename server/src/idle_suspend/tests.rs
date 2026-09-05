@@ -7,13 +7,31 @@ use crate::config::{
     MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
     MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
 };
-use crate::idle_suspend::executor::{FakeExecutor, IdleSuspendExecutor, UnavailableExecutor};
+use crate::idle_suspend::executor::{
+    FakeExecutor, IdleSuspendExecutor, SystemdIdleSuspendExecutor, UnavailableExecutor,
+};
+use crate::idle_suspend::helper_client::HelperClient;
+use crate::idle_suspend::helper_server::HelperServer;
 use crate::idle_suspend::policy::{
     validate_timing_pair, RuntimeIdleSuspendTiming, StartupIdleSuspendPolicy,
 };
 use crate::idle_suspend::protocol::{
+    decode_frame, encode_frame, read_frame_async, validate_request_id, write_frame_async,
+    HelperRequestFrame, HelperRequestPayload, HelperResponseFrame, HelperResponsePayload,
     IdleSuspendErrorCode, IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse,
-    SuspendOutcome, SuspendWithRtcWakeRequest,
+    ProtocolError, RequestDeduplicator, SuspendOutcome, SuspendWithRtcWakeRequest,
+    HELPER_PROTOCOL_VERSION, MAX_HELPER_FRAME_BYTES,
+};
+use crate::idle_suspend::peer_auth::{EnrolledPeerPolicy, PeerAuthError, PeerCredentials};
+use crate::idle_suspend::preflight::{
+    ActiveInhibitor, FakeInhibitorProvider, FakePreflightChecker, PreflightChecker, PreflightError,
+    SysfsPreflightChecker,
+};
+use crate::idle_suspend::audit::{
+    HelperAudit, HelperAuditError, HelperAuditRecord, HelperAuditRecordType,
+};
+use crate::idle_suspend::backend::{
+    FakeActionBackend, SuspendActionBackend, SystemdLogindBackend,
 };
 use crate::idle_suspend::timing_audit::{
     AuditError, IdleSuspendTimingAudit, TimingAuditRecord, TimingAuditResult,
@@ -630,4 +648,608 @@ async fn test_coordinator_timing_update_validation_and_audit_failure() {
     }
 
     coordinator.shutdown().await;
+}
+
+#[test]
+fn test_helper_protocol_probe_roundtrip() {
+    let frame = HelperRequestFrame::new_probe();
+    assert!(frame.validate().is_ok());
+    let encoded = encode_frame(&frame).unwrap();
+    assert!(encoded.len() > 4);
+    let decoded: HelperRequestFrame = decode_frame(&encoded).unwrap();
+    assert_eq!(decoded.version, HELPER_PROTOCOL_VERSION);
+    assert_eq!(decoded.payload, HelperRequestPayload::ProbeCapability);
+}
+
+#[test]
+fn test_helper_protocol_suspend_roundtrip() {
+    let req = SuspendWithRtcWakeRequest {
+        request_id: "tx-epoch-42".to_string(),
+        wake_after_seconds: 600,
+    };
+    let frame = HelperRequestFrame::new_suspend(req).unwrap();
+    assert!(frame.validate().is_ok());
+    let encoded = encode_frame(&frame).unwrap();
+    let decoded: HelperRequestFrame = decode_frame(&encoded).unwrap();
+    assert_eq!(decoded.version, HELPER_PROTOCOL_VERSION);
+    match decoded.payload {
+        HelperRequestPayload::SuspendWithRtcWake(r) => {
+            assert_eq!(r.request_id, "tx-epoch-42");
+            assert_eq!(r.wake_after_seconds, 600);
+        }
+        other => panic!("Unexpected payload: {other:?}"),
+    }
+}
+
+#[test]
+fn test_helper_protocol_response_roundtrip() {
+    // Capability response
+    let cap_frame = HelperResponseFrame::new(HelperResponsePayload::Capability {
+        supported: true,
+        detail: "logind+sysfs rtc0".to_string(),
+    });
+    let enc = encode_frame(&cap_frame).unwrap();
+    let dec: HelperResponseFrame = decode_frame(&enc).unwrap();
+    assert_eq!(dec.payload, cap_frame.payload);
+
+    // Outcome response with inhibitor metadata
+    let outcome_frame = HelperResponseFrame::new(HelperResponsePayload::SuspendOutcome(
+        SuspendOutcome::BlockedByInhibitor {
+            request_id: "req-1".to_string(),
+            inhibitor: "backup.service (in-flight backup)".to_string(),
+            who: Some("backup.service".to_string()),
+            why: Some("in-flight backup".to_string()),
+        },
+    ));
+    let enc = encode_frame(&outcome_frame).unwrap();
+    let dec: HelperResponseFrame = decode_frame(&enc).unwrap();
+    assert_eq!(dec.payload, outcome_frame.payload);
+}
+
+#[test]
+fn test_helper_protocol_request_id_validation() {
+    // Valid request IDs
+    assert!(validate_request_id("epoch-1").is_ok());
+    assert!(validate_request_id("req_123-abc").is_ok());
+    assert!(validate_request_id("a".repeat(64).as_str()).is_ok());
+
+    // Invalid: empty
+    assert!(validate_request_id("").is_err());
+    // Invalid: too long (> 64)
+    assert!(validate_request_id("a".repeat(65).as_str()).is_err());
+    // Invalid: spaces, slashes, control chars
+    assert!(validate_request_id("has space").is_err());
+    assert!(validate_request_id("path/traversal").is_err());
+    assert!(validate_request_id("semi;colon").is_err());
+    assert!(validate_request_id("newline\n").is_err());
+}
+
+#[test]
+fn test_helper_protocol_wake_seconds_bounds() {
+    let req_low = SuspendWithRtcWakeRequest {
+        request_id: "valid".to_string(),
+        wake_after_seconds: 59, // min is 60
+    };
+    assert!(HelperRequestFrame::new_suspend(req_low).is_err());
+
+    let req_high = SuspendWithRtcWakeRequest {
+        request_id: "valid".to_string(),
+        wake_after_seconds: 86401, // max is 86400
+    };
+    assert!(HelperRequestFrame::new_suspend(req_high).is_err());
+}
+
+#[test]
+fn test_helper_protocol_framing_errors() {
+    // 1. Truncated header (< 4 bytes)
+    let truncated_hdr = [0u8, 0, 1];
+    match decode_frame::<HelperRequestFrame>(&truncated_hdr) {
+        Err(ProtocolError::UnexpectedEofHeader) => {}
+        other => panic!("Expected UnexpectedEofHeader, got: {other:?}"),
+    }
+
+    // 2. Empty frame (0 bytes length)
+    let empty_frame = [0u8, 0, 0, 0];
+    match decode_frame::<HelperRequestFrame>(&empty_frame) {
+        Err(ProtocolError::EmptyFrame) => {}
+        other => panic!("Expected EmptyFrame, got: {other:?}"),
+    }
+
+    // 3. Oversized frame length (> 4096 bytes)
+    let oversized_len = (MAX_HELPER_FRAME_BYTES + 1) as u32;
+    let mut oversized_hdr = oversized_len.to_be_bytes().to_vec();
+    oversized_hdr.extend_from_slice(b"{}");
+    match decode_frame::<HelperRequestFrame>(&oversized_hdr) {
+        Err(ProtocolError::FrameTooLarge(len, max)) => {
+            assert_eq!(len, MAX_HELPER_FRAME_BYTES + 1);
+            assert_eq!(max, MAX_HELPER_FRAME_BYTES);
+        }
+        other => panic!("Expected FrameTooLarge, got: {other:?}"),
+    }
+
+    // 4. Truncated payload (header claims 50 bytes, only 10 provided)
+    let mut truncated_payload = 50u32.to_be_bytes().to_vec();
+    truncated_payload.extend_from_slice(b"short payload");
+    match decode_frame::<HelperRequestFrame>(&truncated_payload) {
+        Err(ProtocolError::UnexpectedEofPayload) => {}
+        other => panic!("Expected UnexpectedEofPayload, got: {other:?}"),
+    }
+
+    // 5. Trailing data detected after frame
+    let mut trailing_data = 2u32.to_be_bytes().to_vec();
+    trailing_data.extend_from_slice(b"{}");
+    trailing_data.extend_from_slice(b"extra_garbage");
+    match decode_frame::<serde_json::Value>(&trailing_data) {
+        Err(ProtocolError::TrailingData(extra)) => {
+            assert_eq!(extra, 13);
+        }
+        other => panic!("Expected TrailingData, got: {other:?}"),
+    }
+
+    // 6. Malformed JSON payload
+    let bad_json = b"not json at all!";
+    let mut malformed_frame = (bad_json.len() as u32).to_be_bytes().to_vec();
+    malformed_frame.extend_from_slice(bad_json);
+    match decode_frame::<HelperRequestFrame>(&malformed_frame) {
+        Err(ProtocolError::JsonError(_)) => {}
+        other => panic!("Expected JsonError, got: {other:?}"),
+    }
+
+    // 7. Unknown fields (deny_unknown_fields)
+    let unknown_field_json = br#"{"version":1,"payload":{"type":"probeCapability"},"timestampMs":123,"injectedField":"exploit"}"#;
+    let mut unknown_frame = (unknown_field_json.len() as u32).to_be_bytes().to_vec();
+    unknown_frame.extend_from_slice(unknown_field_json);
+    match decode_frame::<HelperRequestFrame>(&unknown_frame) {
+        Err(ProtocolError::JsonError(e)) => {
+            assert!(e.to_string().contains("unknown field `injectedField`"));
+        }
+        other => panic!("Expected JsonError for unknown field, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_helper_protocol_async_stream_io() {
+    let (mut client, mut server) = tokio::io::duplex(1024);
+
+    let req = HelperRequestFrame::new_probe();
+    let client_task = tokio::spawn(async move {
+        write_frame_async(&mut client, &req).await.unwrap();
+        let resp: HelperResponseFrame = read_frame_async(&mut client).await.unwrap();
+        resp
+    });
+
+    let server_task = tokio::spawn(async move {
+        let received: HelperRequestFrame = read_frame_async(&mut server).await.unwrap();
+        assert_eq!(received.payload, HelperRequestPayload::ProbeCapability);
+        let resp = HelperResponseFrame::new(HelperResponsePayload::Capability {
+            supported: true,
+            detail: "test".to_string(),
+        });
+        write_frame_async(&mut server, &resp).await.unwrap();
+    });
+
+    let (resp, _) = tokio::join!(client_task, server_task);
+    let resp = resp.unwrap();
+    match resp.payload {
+        HelperResponsePayload::Capability { supported, detail } => {
+            assert!(supported);
+            assert_eq!(detail, "test");
+        }
+        other => panic!("Unexpected response payload: {other:?}"),
+    }
+}
+
+#[test]
+fn test_helper_request_deduplication() {
+    let mut dedup = RequestDeduplicator::new(3);
+    assert!(dedup.check_and_record("req-1").is_ok());
+    assert!(dedup.check_and_record("req-2").is_ok());
+    assert!(dedup.check_and_record("req-3").is_ok());
+
+    // Replay of existing ID is rejected
+    match dedup.check_and_record("req-2") {
+        Err(ProtocolError::DuplicateRequestId(id)) => assert_eq!(id, "req-2"),
+        other => panic!("Expected DuplicateRequestId, got: {other:?}"),
+    }
+
+    // Adding a 4th evicts the oldest (req-1)
+    assert!(dedup.check_and_record("req-4").is_ok());
+    // req-1 is evicted so it can be re-added
+    assert!(dedup.check_and_record("req-1").is_ok());
+    // req-3 is still in set
+    assert!(dedup.check_and_record("req-3").is_err());
+}
+
+#[test]
+fn test_peer_credentials_and_policy_verification() {
+    let policy = EnrolledPeerPolicy::new_exact(1000, 4321);
+
+    // Valid credentials matching both UID and PID
+    let valid_cred = PeerCredentials::new(4321, 1000, 1000);
+    assert!(policy.verify_credentials(&valid_cred).is_ok());
+
+    // UID mismatch
+    let bad_uid = PeerCredentials::new(4321, 1001, 1001);
+    match policy.verify_credentials(&bad_uid) {
+        Err(PeerAuthError::UidMismatch { expected, actual }) => {
+            assert_eq!(expected, 1000);
+            assert_eq!(actual, 1001);
+        }
+        other => panic!("Expected UidMismatch, got: {other:?}"),
+    }
+
+    // PID mismatch (e.g. descendant process with same UID)
+    let bad_pid = PeerCredentials::new(4322, 1000, 1000);
+    match policy.verify_credentials(&bad_pid) {
+        Err(PeerAuthError::PidMismatch { expected, actual }) => {
+            assert_eq!(expected, 4321);
+            assert_eq!(actual, 4322);
+        }
+        other => panic!("Expected PidMismatch, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_peer_policy_with_dynamic_pid_file() {
+    let tmp = tempdir().unwrap();
+    let pid_file = tmp.path().join("server.pid");
+    fs::write(&pid_file, "9876\n").unwrap();
+
+    let policy = EnrolledPeerPolicy::new_with_pid_file(1000, &pid_file);
+
+    let cred = PeerCredentials::new(9876, 1000, 1000);
+    assert!(policy.verify_credentials(&cred).is_ok());
+
+    // If PID file changes
+    fs::write(&pid_file, "9877\n").unwrap();
+    assert!(policy.verify_credentials(&cred).is_err());
+    let new_cred = PeerCredentials::new(9877, 1000, 1000);
+    assert!(policy.verify_credentials(&new_cred).is_ok());
+
+    // Invalid PID file content
+    fs::write(&pid_file, "not_a_number").unwrap();
+    match policy.verify_credentials(&new_cred) {
+        Err(PeerAuthError::InvalidPidFile(_)) => {}
+        other => panic!("Expected InvalidPidFile, got: {other:?}"),
+    }
+
+    // Missing PID file
+    let missing_file = tmp.path().join("missing.pid");
+    let missing_policy = EnrolledPeerPolicy::new_with_pid_file(1000, &missing_file);
+    match missing_policy.verify_credentials(&new_cred) {
+        Err(PeerAuthError::PidFileReadError(..)) => {}
+        other => panic!("Expected PidFileReadError, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_preflight_checks_fake_and_sysfs() {
+    // 1. Fake preflight passing
+    let mut fake = FakePreflightChecker::new_passing();
+    assert!(fake.run_all().is_ok());
+
+    // 2. Suspend mode missing
+    fake.suspend_ok = false;
+    match fake.run_all() {
+        Err(PreflightError::UnsupportedSuspend(msg)) => {
+            assert!(msg.contains("suspend"));
+        }
+        other => panic!("Expected UnsupportedSuspend, got: {other:?}"),
+    }
+    fake.suspend_ok = true;
+
+    // 3. RTC missing
+    fake.rtc_ok = false;
+    match fake.run_all() {
+        Err(PreflightError::UnsupportedRtc(msg)) => {
+            assert!(msg.contains("RTC"));
+        }
+        other => panic!("Expected UnsupportedRtc, got: {other:?}"),
+    }
+    fake.rtc_ok = true;
+
+    // 4. Inhibitor active
+    fake.active_inhibitor = Some(ActiveInhibitor::new(
+        "backup-agent",
+        "nightly backup running",
+        "block",
+    ));
+    match fake.run_all() {
+        Err(PreflightError::Inhibited(desc, who, why)) => {
+            assert!(desc.contains("backup-agent"));
+            assert_eq!(who.as_deref(), Some("backup-agent"));
+            assert_eq!(why.as_deref(), Some("nightly backup running"));
+        }
+        other => panic!("Expected Inhibited, got: {other:?}"),
+    }
+
+    // 5. SysfsPreflightChecker with temporary files
+    let tmp = tempdir().unwrap();
+    let power_state = tmp.path().join("power_state");
+    let rtc_alarm = tmp.path().join("wakealarm");
+
+    fs::write(&power_state, "freeze mem disk\n").unwrap();
+    fs::write(&rtc_alarm, "0\n").unwrap();
+
+    let fake_inhibitor = Box::new(FakeInhibitorProvider {
+        inhibitor: None,
+        error: None,
+    });
+    let sysfs = SysfsPreflightChecker::with_paths(&power_state, &rtc_alarm, "mem", fake_inhibitor);
+    assert!(sysfs.run_all().is_ok());
+
+    // Mode mismatch in power_state
+    fs::write(&power_state, "freeze standby\n").unwrap();
+    let fake_inhibitor2 = Box::new(FakeInhibitorProvider {
+        inhibitor: None,
+        error: None,
+    });
+    let sysfs2 = SysfsPreflightChecker::with_paths(&power_state, &rtc_alarm, "mem", fake_inhibitor2);
+    match sysfs2.run_all() {
+        Err(PreflightError::UnsupportedSuspend(msg)) => {
+            assert!(msg.contains("not in available modes"));
+        }
+        other => panic!("Expected UnsupportedSuspend, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_helper_audit_record_and_fail_closed() {
+    let tmp = tempdir().unwrap();
+    let audit_file = tmp.path().join("audit.jsonl");
+
+    let audit = HelperAudit::new(&audit_file, 10);
+
+    let intent = HelperAuditRecord::new_intent("tx-100", 600, 1234, 1000);
+    assert!(audit.record(&intent).is_ok());
+
+    let completion = HelperAuditRecord::new_completed(
+        "tx-100",
+        600,
+        1234,
+        1000,
+        SuspendOutcome::ResumedSuccessfully {
+            request_id: "tx-100".to_string(),
+            elapsed_seconds: 598,
+        },
+    );
+    assert!(audit.record(&completion).is_ok());
+
+    let records = audit.read_all_records().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].record_type, HelperAuditRecordType::AcceptedIntent);
+    assert_eq!(records[0].request_id, "tx-100");
+    assert_eq!(records[0].wake_after_seconds, Some(600));
+    assert_eq!(records[0].peer_pid, 1234);
+    assert_eq!(records[1].record_type, HelperAuditRecordType::ExecutionCompleted);
+
+    // On Unix, verify file mode is 0600
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::metadata(&audit_file).unwrap();
+        assert_eq!(meta.mode() & 0o777, 0o600);
+    }
+
+    // Fail-closed test on invalid directory path
+    let bad_audit = HelperAudit::new("/nonexistent_forbidden_dir/audit.log", 10);
+    let rec = HelperAuditRecord::new_intent("tx-fail", 600, 1, 0);
+    assert!(bad_audit.record(&rec).is_err());
+}
+
+#[test]
+fn test_helper_audit_bounded_pruning() {
+    let tmp = tempdir().unwrap();
+    let audit_file = tmp.path().join("prune_audit.jsonl");
+
+    let audit = HelperAudit::new(&audit_file, 10);
+    for i in 0..15 {
+        let rec = HelperAuditRecord::new_intent(format!("tx-{i}"), 600, 1000 + i, 1000);
+        audit.record(&rec).unwrap();
+    }
+
+    let records = audit.read_all_records().unwrap();
+    // Max was 10, when exceeded it pruned to keep half (5) plus subsequent entries
+    assert!(records.len() <= 10);
+    // Ensure newest record is present
+    assert_eq!(records.last().unwrap().request_id, "tx-14");
+}
+
+#[test]
+fn test_action_backend_fake_and_sysfs() {
+    // 1. FakeActionBackend
+    let fake_backend = FakeActionBackend::with_elapsed(300);
+    assert!(fake_backend.program_rtc_wake(600).is_ok());
+    assert_eq!(*fake_backend.programmed_wake.lock().unwrap(), Some(600));
+    let elapsed = fake_backend.trigger_suspend().unwrap();
+    assert_eq!(elapsed, 300);
+    assert!(*fake_backend.suspend_called.lock().unwrap());
+
+    // Test simulated failures
+    fake_backend.set_fail_rtc(Some("RTC busy".to_string()));
+    assert!(fake_backend.program_rtc_wake(600).is_err());
+    fake_backend.set_fail_rtc(None);
+
+    fake_backend.set_fail_suspend(Some("logind permission denied".to_string()));
+    assert!(fake_backend.trigger_suspend().is_err());
+
+    // 2. SystemdLogindBackend RTC alarm write test with tempfile
+    let tmp = tempdir().unwrap();
+    let fake_wakealarm = tmp.path().join("fake_wakealarm");
+    let fake_systemctl = tmp.path().join("fake_systemctl");
+
+    let backend = SystemdLogindBackend::with_paths(&fake_wakealarm, &fake_systemctl);
+    assert!(backend.program_rtc_wake(300).is_ok());
+
+    let written_content = fs::read_to_string(&fake_wakealarm).unwrap();
+    let written_epoch: u64 = written_content.trim().parse().unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // Target should be approximately now + 300
+    assert!(written_epoch >= now + 290 && written_epoch <= now + 310);
+}
+
+#[tokio::test]
+async fn test_helper_server_client_ipc_success_and_audit() {
+    let tmp = tempdir().unwrap();
+    let socket_path = tmp.path().join("helper.sock");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let policy = EnrolledPeerPolicy::new_test_permissive();
+    let preflight = Arc::new(FakePreflightChecker::new_passing());
+    let backend = Arc::new(FakeActionBackend::with_elapsed(590));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let server = Arc::new(HelperServer::new(policy, preflight, backend, Arc::clone(&audit), 100));
+
+    let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+    let server_handle = {
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let srv = Arc::clone(&server);
+                tokio::spawn(async move {
+                    let cred = PeerCredentials::new(std::process::id(), 1000, 1000);
+                    let _ = srv.handle_connection(&mut stream, cred).await;
+                });
+            }
+        })
+    };
+
+    let executor = SystemdIdleSuspendExecutor::new(&socket_path);
+
+    // 1. Probe capability
+    assert!(executor.check_capability().await);
+
+    // 2. Execute suspend
+    let req = SuspendWithRtcWakeRequest {
+        request_id: "test-epoch-1".to_string(),
+        wake_after_seconds: 600,
+    };
+    let outcome = executor.execute_suspend(req).await;
+    match outcome {
+        SuspendOutcome::ResumedSuccessfully { request_id, elapsed_seconds } => {
+            assert_eq!(request_id, "test-epoch-1");
+            assert_eq!(elapsed_seconds, 590);
+        }
+        other => panic!("Expected ResumedSuccessfully, got: {other:?}"),
+    }
+
+    // 3. Verify audit log
+    let records = audit.read_all_records().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].record_type, HelperAuditRecordType::AcceptedIntent);
+    assert_eq!(records[0].request_id, "test-epoch-1");
+    assert_eq!(records[0].wake_after_seconds, Some(600));
+    assert_eq!(records[1].record_type, HelperAuditRecordType::ExecutionCompleted);
+    assert_eq!(records[1].request_id, "test-epoch-1");
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_helper_server_client_inhibitor_and_deduplication() {
+    let tmp = tempdir().unwrap();
+    let socket_path = tmp.path().join("helper2.sock");
+    let audit_path = tmp.path().join("audit2.jsonl");
+
+    let policy = EnrolledPeerPolicy::new_test_permissive();
+    let mut preflight_inner = FakePreflightChecker::new_passing();
+    preflight_inner.active_inhibitor = Some(ActiveInhibitor::new(
+        "backup-svc",
+        "system backup in progress",
+        "block",
+    ));
+    let preflight = Arc::new(preflight_inner);
+    let backend = Arc::new(FakeActionBackend::with_elapsed(300));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let server = Arc::new(HelperServer::new(policy, preflight, backend, audit, 100));
+
+    let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+    let server_handle = {
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let srv = Arc::clone(&server);
+                tokio::spawn(async move {
+                    let cred = PeerCredentials::new(std::process::id(), 1000, 1000);
+                    let _ = srv.handle_connection(&mut stream, cred).await;
+                });
+            }
+        })
+    };
+
+    let executor = SystemdIdleSuspendExecutor::new(&socket_path);
+
+    // Blocked by inhibitor
+    let req = SuspendWithRtcWakeRequest {
+        request_id: "test-inhibited".to_string(),
+        wake_after_seconds: 300,
+    };
+    let outcome = executor.execute_suspend(req).await;
+    match outcome {
+        SuspendOutcome::BlockedByInhibitor { request_id, inhibitor, who, why } => {
+            assert_eq!(request_id, "test-inhibited");
+            assert!(inhibitor.contains("backup-svc"));
+            assert_eq!(who.as_deref(), Some("backup-svc"));
+            assert_eq!(why.as_deref(), Some("system backup in progress"));
+        }
+        other => panic!("Expected BlockedByInhibitor, got: {other:?}"),
+    }
+
+    // Replaying same request ID yields duplicate rejection
+    let req_duplicate = SuspendWithRtcWakeRequest {
+        request_id: "test-inhibited".to_string(),
+        wake_after_seconds: 300,
+    };
+    let outcome2 = executor.execute_suspend(req_duplicate).await;
+    match outcome2 {
+        SuspendOutcome::ExecutionFailed { error, .. } => {
+            assert!(error.contains("duplicateRequestId") || error.contains("Duplicate"));
+        }
+        other => panic!("Expected ExecutionFailed with duplicate, got: {other:?}"),
+    }
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_helper_server_peer_auth_rejection() {
+    let tmp = tempdir().unwrap();
+    let socket_path = tmp.path().join("helper3.sock");
+    let audit_path = tmp.path().join("audit3.jsonl");
+
+    // Require UID 2000 and PID 9999
+    let policy = EnrolledPeerPolicy::new_exact(2000, 9999);
+    let preflight = Arc::new(FakePreflightChecker::new_passing());
+    let backend = Arc::new(FakeActionBackend::new());
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let server = Arc::new(HelperServer::new(policy, preflight, backend, Arc::clone(&audit), 100));
+
+    let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+    let server_handle = {
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let srv = Arc::clone(&server);
+                tokio::spawn(async move {
+                    // Caller presents unauthorized UID 1000
+                    let cred = PeerCredentials::new(1234, 1000, 1000);
+                    let _ = srv.handle_connection(&mut stream, cred).await;
+                });
+            }
+        })
+    };
+
+    let executor = SystemdIdleSuspendExecutor::new(&socket_path);
+    // Capability probe fails closed
+    assert!(!executor.check_capability().await);
+
+    // Rejected audit was logged
+    let records = audit.read_all_records().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].record_type, HelperAuditRecordType::ExecutionRejected);
+
+    server_handle.abort();
 }
