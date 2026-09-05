@@ -92,7 +92,9 @@ pub fn check_ports_free(ports: &[u16]) -> Result<(), ReleaseError> {
 /// List all PIDs in a systemd cgroup path, failing closed on unreadable or corrupt procs.
 pub fn get_cgroup_pids(cgroup_slice: &str) -> Result<Vec<u32>, ReleaseError> {
     let rel_path = cgroup_slice.trim_start_matches('/');
-    let procs_path = Path::new("/sys/fs/cgroup").join(rel_path).join("cgroup.procs");
+    let procs_path = Path::new("/sys/fs/cgroup")
+        .join(rel_path)
+        .join("cgroup.procs");
     if !procs_path.exists() {
         return Ok(Vec::new());
     }
@@ -106,11 +108,14 @@ pub fn get_cgroup_pids(cgroup_slice: &str) -> Result<Vec<u32>, ReleaseError> {
         if trimmed.is_empty() {
             continue;
         }
-        let pid = trimmed.parse::<u32>().map_err(|_| {
-            ReleaseError::ProcessInspectionFailed {
-                reason: format!("malformed cgroup PID '{trimmed}' in {}", procs_path.display()),
-            }
-        })?;
+        let pid = trimmed
+            .parse::<u32>()
+            .map_err(|_| ReleaseError::ProcessInspectionFailed {
+                reason: format!(
+                    "malformed cgroup PID '{trimmed}' in {}",
+                    procs_path.display()
+                ),
+            })?;
         pids.push(pid);
     }
     Ok(pids)
@@ -150,10 +155,12 @@ pub fn find_file_holders_in(proc_dir: &Path, target_file: &Path) -> Result<Vec<u
         let entry = match entry_res {
             Ok(e) => e,
             Err(e) if e.kind() == ErrorKind::NotFound => continue,
-            Err(e) => return Err(ReleaseError::Io {
-                action: "iterate /proc entry",
-                details: e.to_string(),
-            }),
+            Err(e) => {
+                return Err(ReleaseError::Io {
+                    action: "iterate /proc entry",
+                    details: e.to_string(),
+                });
+            }
         };
 
         if let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() {
@@ -162,10 +169,12 @@ pub fn find_file_holders_in(proc_dir: &Path, target_file: &Path) -> Result<Vec<u
                 Ok(e) => e,
                 Err(e) if e.kind() == ErrorKind::NotFound => continue,
                 Err(e) if e.kind() == ErrorKind::PermissionDenied && !is_root => continue,
-                Err(e) => return Err(ReleaseError::Io {
-                    action: "read /proc/<pid>/fd entries",
-                    details: format!("pid {pid}: {e}"),
-                }),
+                Err(e) => {
+                    return Err(ReleaseError::Io {
+                        action: "read /proc/<pid>/fd entries",
+                        details: format!("pid {pid}: {e}"),
+                    });
+                }
             };
 
             for fd_res in fd_entries {
@@ -173,10 +182,12 @@ pub fn find_file_holders_in(proc_dir: &Path, target_file: &Path) -> Result<Vec<u
                     Ok(f) => f,
                     Err(e) if e.kind() == ErrorKind::NotFound => continue,
                     Err(e) if e.kind() == ErrorKind::PermissionDenied && !is_root => continue,
-                    Err(e) => return Err(ReleaseError::Io {
-                        action: "inspect fd entry",
-                        details: format!("pid {pid}: {e}"),
-                    }),
+                    Err(e) => {
+                        return Err(ReleaseError::Io {
+                            action: "inspect fd entry",
+                            details: format!("pid {pid}: {e}"),
+                        });
+                    }
                 };
 
                 if let Ok(link) = fs::read_link(fd_entry.path()) {
@@ -222,6 +233,97 @@ pub fn verify_no_foreign_sqlite_holders_in(
                         target.display()
                     ),
                 });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Terminate any lingering/orphaned server or web release processes listening on the given ports.
+pub fn terminate_stray_listeners(ports: &[u16]) -> Result<(), ReleaseError> {
+    let my_pid = std::process::id();
+    for &port in ports {
+        if !is_port_listening(port)? {
+            continue;
+        }
+        // Scan /proc for dam-hopper-server or dam-hopper-web processes
+        if let Ok(entries) = fs::read_dir("/proc") {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                let Ok(pid) = name_str.parse::<u32>() else {
+                    continue;
+                };
+                if pid == my_pid {
+                    continue;
+                }
+                let proc_path = entry.path();
+                let is_match = fs::read_link(proc_path.join("exe"))
+                    .ok()
+                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                    .map(|n| n == "dam-hopper-server" || n == "dam-hopper-web")
+                    .unwrap_or(false)
+                    || fs::read_to_string(proc_path.join("cmdline"))
+                        .map(|c| c.contains("dam-hopper-server") || c.contains("dam-hopper-web"))
+                        .unwrap_or(false);
+
+                if is_match {
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                }
+            }
+        }
+
+        // Wait up to 1 second for graceful exit, then force kill
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_millis(1000) {
+            if !is_port_listening(port)? {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        if is_port_listening(port)? {
+            // Force kill if still listening
+            if let Ok(entries) = fs::read_dir("/proc") {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    let Ok(pid) = name_str.parse::<u32>() else {
+                        continue;
+                    };
+                    if pid == my_pid {
+                        continue;
+                    }
+                    let proc_path = entry.path();
+                    let is_match = fs::read_link(proc_path.join("exe"))
+                        .ok()
+                        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                        .map(|n| n == "dam-hopper-server" || n == "dam-hopper-web")
+                        .unwrap_or(false)
+                        || fs::read_to_string(proc_path.join("cmdline"))
+                            .map(|c| {
+                                c.contains("dam-hopper-server") || c.contains("dam-hopper-web")
+                            })
+                            .unwrap_or(false);
+
+                    if is_match {
+                        #[cfg(unix)]
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGKILL);
+                        }
+                    }
+                }
+            }
+            // Wait another 500ms
+            let kill_start = std::time::Instant::now();
+            while kill_start.elapsed() < std::time::Duration::from_millis(500) {
+                if !is_port_listening(port)? {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
     }
