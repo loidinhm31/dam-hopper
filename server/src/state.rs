@@ -195,13 +195,14 @@ impl AppState {
             return Arc::clone(existing);
         }
 
-        let coordinator = Arc::new(crate::idle_suspend::IdleSuspendCoordinator::start(
+        let coordinator = Arc::new(crate::idle_suspend::IdleSuspendCoordinator::start_with_sink(
             (*self.idle_suspend_policy).clone(),
             Arc::clone(&self.idle_suspend_timing),
             Some((*self.idle_suspend_store).clone()),
             Some((*self.idle_suspend_audit).clone()),
             executor,
             self.pty_manager.clone(),
+            Some(Arc::new(self.event_sink.clone())),
         ));
         *guard = Some(Arc::clone(&coordinator));
         coordinator

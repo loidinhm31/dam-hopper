@@ -6217,3 +6217,183 @@ enrollment_reference = "systemd:fake"
     assert_eq!(current_cfg.server.idle_suspend.quiet_period_seconds, 900); // Startup default
     assert_eq!(current_cfg.server.idle_suspend.wake_after_seconds, 600); // Startup default
 }
+#[tokio::test]
+async fn idle_suspend_status_requires_auth() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let resp = get_without_auth(state, "/api/system/idle-suspend/v1/status").await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn idle_suspend_status_returns_authoritative_snapshot_with_no_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let resp = get(state, "/api/system/idle-suspend/v1/status").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("cache-control").unwrap(),
+        "no-store"
+    );
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["enabled"], false);
+    assert_eq!(json["quietPeriodSeconds"], 900);
+    assert_eq!(json["wakeAfterSeconds"], 600);
+    assert_eq!(json["minQuietPeriodSeconds"], 60);
+    assert_eq!(json["maxQuietPeriodSeconds"], 86400);
+    assert_eq!(json["minWakeAfterSeconds"], 60);
+    assert_eq!(json["maxWakeAfterSeconds"], 86400);
+    assert_eq!(json["timingMutable"], false);
+    assert_eq!(json["timingMutableReason"], "disabled");
+}
+
+#[tokio::test]
+async fn idle_suspend_timing_patch_guards() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    // 1. Unauthenticated -> 401
+    let unauth_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/system/idle-suspend/v1/timing")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "quietPeriodSeconds": 300,
+                    "wakeAfterSeconds": 600
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(unauth_resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 2. Non-JSON Content-Type -> 415 invalidContentType
+    let non_json_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/system/idle-suspend/v1/timing")
+            .header("Content-Type", "text/plain")
+            .header("Cookie", auth_cookie())
+            .body(Body::from("quiet=300"))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(non_json_resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let body = axum::body::to_bytes(non_json_resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "invalidContentType");
+
+    // 3. Cross-origin cookie request -> 403 invalidOrigin
+    let bad_origin_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/system/idle-suspend/v1/timing")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie())
+            .header("Origin", "https://evil.attacker.com")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "quietPeriodSeconds": 300,
+                    "wakeAfterSeconds": 600
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(bad_origin_resp.status(), StatusCode::FORBIDDEN);
+    let body = axum::body::to_bytes(bad_origin_resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "invalidOrigin");
+
+    // 4. Missing DB authentication -> 503 authenticationUnavailable
+    let no_db_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/system/idle-suspend/v1/timing")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie())
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "quietPeriodSeconds": 300,
+                    "wakeAfterSeconds": 600
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(no_db_resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(no_db_resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "authenticationUnavailable");
+
+    // 5. No-auth mode -> 403 idleSuspendTimingDisabledNoAuth
+    let mut no_auth_state = state.clone();
+    no_auth_state.no_auth = true;
+    let no_auth_resp = {
+        let router = build_router(no_auth_state);
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/system/idle-suspend/v1/timing")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie())
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "quietPeriodSeconds": 300,
+                    "wakeAfterSeconds": 600
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(no_auth_resp.status(), StatusCode::FORBIDDEN);
+    let body = axum::body::to_bytes(no_auth_resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "idleSuspendTimingDisabledNoAuth");
+}
+
+#[tokio::test]
+async fn idle_suspend_broadcast_hint_delivered_on_coordinator_publish() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let mut hint_rx = state.event_sink.subscribe_idle_suspend();
+
+    let coord = state
+        .start_idle_suspend_coordinator(std::sync::Arc::new(
+            crate::idle_suspend::UnavailableExecutor::default(),
+        ))
+        .await;
+
+    // A change to fleet or timing notifies the broadcast subscriber
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), hint_rx.recv())
+        .await
+        .expect("broadcast hint arrived within timeout")
+        .expect("channel not closed");
+
+    let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+    assert_eq!(parsed["kind"], "host:idleSuspendChanged");
+    assert_eq!(parsed["payload"]["version"], 1);
+    assert_eq!(parsed["payload"]["revision"], coord.status().status_revision);
+}

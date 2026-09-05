@@ -15,8 +15,8 @@
 - Date: 2026-08-24
 - Description: Expose authoritative live status, the sole bounded authenticated timing mutation, reconciliation hints, Settings controls, and read-only host-popover state.
 - Priority: P1
-- Implementation status: Pending; revised design awaits second validation
-- Review status: Pending API, authentication, persistence, UI accessibility, and security review
+- Implementation status: Done (2026-09-05)
+- Review status: Approved (Code Review 10/10, Advisor ADVICE_READY)
 
 ## Key Insights
 
@@ -101,14 +101,14 @@
 
 ## Todo list
 
-- [ ] Freeze status, timing, error, and revision contracts
-- [ ] Add protected GET and guarded PATCH routes
-- [ ] Map coordinator outcomes and close alternate config paths
-- [ ] Add bounded revision hint channel/pump
-- [ ] Add client types/query/no-retry mutation
-- [ ] Add accessible Settings timing controls
-- [ ] Add read-only host-popover status
-- [ ] Add REST/WS/UI/auth/cache tests and API docs
+- [x] Freeze status, timing, error, and revision contracts
+- [x] Add protected GET and guarded PATCH routes
+- [x] Map coordinator outcomes and close alternate config paths
+- [x] Add bounded revision hint channel/pump
+- [x] Add client types/query/no-retry mutation
+- [x] Add accessible Settings timing controls
+- [x] Add read-only host-popover status
+- [x] Add REST/WS/UI/auth/cache tests and API docs
 
 ## Success Criteria
 

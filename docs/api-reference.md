@@ -358,6 +358,65 @@ client then invalidates snapshot and history queries. An explicit
 `currentAlerts: []` from the authoritative snapshot clears retained resource
 incidents, while an omitted additive field preserves them for old-server
 compatibility until REST establishes current state.
+### Terminal idle suspend
+
+Server-authoritative, fail-closed terminal idle suspend subsystem with protected status, bounded authenticated timing settings, out-of-band push hints, and read-only host-resource popover status.
+
+#### GET /api/system/idle-suspend/v1/status
+
+Returns the immutable authoritative `IdleSuspendStatusV1` snapshot.
+- **Auth**: Protected route (requires valid session cookie or Bearer token).
+- **Headers**: `Cache-Control: no-store`.
+- **Response**:
+  - `version`: integer (always 1)
+  - `statusRevision`: integer (monotonic revision)
+  - `state`: enum (`"disabled"`, `"watching"`, `"armed"`, `"finalCheck"`, `"handedOff"`, `"suppressed"`, `"failed"`, `"resumed"`)
+  - `enabled`: boolean (operator startup policy)
+  - `timingMutable`: boolean (`true` when enabled and not currently handed off)
+  - `timingMutableReason`: optional string (e.g. `"disabled"`, `"handoffInProgress"`)
+  - `capabilityCode`: string (e.g. `"unavailable"`, `"fake"`, `"systemd"`)
+  - `currentEpoch`: integer (idle epoch counter)
+  - `quietPeriodSeconds`: integer (active quiet period duration)
+  - `wakeAfterSeconds`: integer (active scheduled RTC wake timer duration)
+  - `minQuietPeriodSeconds`: integer (approved lower bound, 60)
+  - `maxQuietPeriodSeconds`: integer (approved upper bound, 86400)
+  - `minWakeAfterSeconds`: integer (approved lower bound, 60)
+  - `maxWakeAfterSeconds`: integer (approved upper bound, 86400)
+  - `fleetSnapshot`: content-free counts (`liveCount`, `creatingCount`, `restartPendingCount`, `generation`, `quiescent`, `disposing`, `handoffActive`)
+  - `armDeadlineMs`: optional integer (epoch timestamp when armed grace period expires)
+  - `lastOutcome`: optional typed outcome object
+  - `detail`: optional string
+  - `timestampMs`: integer
+
+#### PATCH /api/system/idle-suspend/v1/timing
+
+Protected, atomic timing pair mutation endpoint. Accepts only the complete bounded quiet/wake pair from an authenticated, enabled operator account with database authentication.
+- **Auth**: Requires valid session cookie or Bearer token; rejected under `--no-auth` (`403 idleSuspendTimingDisabledNoAuth`) and without database authentication (`503 authenticationUnavailable`).
+- **Guards**: Requires `Content-Type: application/json` (`415 invalidContentType`); cookie-authenticated requests enforce same-origin check (`403 invalidOrigin`). Request body limited to 16 KB.
+- **Body**:
+  ```json
+  {
+    "quietPeriodSeconds": 300,
+    "wakeAfterSeconds": 600
+  }
+  ```
+- **Responses**:
+  - `200 OK`: Returns `IdleSuspendTimingPatchResponse` (`{ "version": 1, "changed": bool, "statusRevision": int, "quietPeriodSeconds": int, "wakeAfterSeconds": int }`).
+  - `400 Bad Request`: Validation failure (`invalidIdleSuspendTiming`).
+  - `409 Conflict`: Returned when helper handoff is actively in progress (`idleSuspendHandoffInProgress`). Performs zero memory or disk mutation. Not auto-retried.
+  - `503 Service Unavailable`: Subsystem or persistence unavailable (`idleSuspendTimingUnavailable`, `idleSuspendTimingAuditUnavailable`, `idleSuspendTimingPersistenceUnavailable`).
+
+#### `host:idleSuspendChanged` transport event
+
+Out-of-band revision-only push hint broadcast over a dedicated event channel isolated from terminal output pressure.
+- **Payload**:
+  ```json
+  {
+    "version": 1,
+    "revision": 42
+  }
+  ```
+- **Behavior**: Client validates `version: 1` and integer `revision`, then invalidates `['system', 'idle-suspend', 'v1', 'status']` query cache. Reconnects and broadcast lag reconcile automatically via REST status GET.
 
 ### Deferred remediation backlog
 

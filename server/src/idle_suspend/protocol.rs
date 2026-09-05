@@ -37,6 +37,23 @@ impl IdleSuspendTimingPatchResponse {
         }
     }
 }
+/// Push event payload for `host:idleSuspendChanged`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdleSuspendChangedPayload {
+    pub version: u32,
+    pub revision: u64,
+}
+
+impl IdleSuspendChangedPayload {
+    pub fn new(revision: u64) -> Self {
+        Self {
+            version: 1,
+            revision,
+        }
+    }
+}
+
 
 /// Standard error code strings for idle suspend operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

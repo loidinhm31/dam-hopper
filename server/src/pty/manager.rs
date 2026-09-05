@@ -980,6 +980,11 @@ impl PtySessionManager {
     pub fn fleet_snapshot(&self) -> crate::pty::fleet_state::PtyFleetSnapshot {
         self.inner.lock().unwrap().fleet.snapshot()
     }
+    /// Event sink for broadcasting terminal and host lifecycle events.
+    pub fn sink(&self) -> Arc<dyn EventSink> {
+        Arc::clone(&self.sink)
+    }
+
 
     pub fn try_claim_handoff(
         &self,

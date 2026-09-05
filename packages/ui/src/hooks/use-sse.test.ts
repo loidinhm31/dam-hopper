@@ -17,6 +17,7 @@ import {
   subscribeIpc,
   handleWorkspaceChanged,
   handleTerminalTargetUnavailable,
+  asHostIdleSuspendChangedEvent,
 } from "./use-sse.js";
 
 function validAlertEvent() {
@@ -528,5 +529,41 @@ describe("invalidateHostResourceQueries", () => {
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["system", "resource-alerts"],
     });
+  });
+});
+describe("host:idleSuspendChanged event validation", () => {
+  it("accepts valid version 1 revision hint", () => {
+    const valid = asHostIdleSuspendChangedEvent({
+      type: "host:idleSuspendChanged",
+      timestamp: 100,
+      data: { version: 1, revision: 42 },
+    });
+    expect(valid).not.toBeNull();
+    expect(valid?.data.version).toBe(1);
+    expect(valid?.data.revision).toBe(42);
+  });
+
+  it("rejects non-integer, missing, or mismatched version payloads", () => {
+    expect(
+      asHostIdleSuspendChangedEvent({
+        type: "host:idleSuspendChanged",
+        timestamp: 100,
+        data: { version: 2, revision: 42 },
+      }),
+    ).toBeNull();
+    expect(
+      asHostIdleSuspendChangedEvent({
+        type: "host:idleSuspendChanged",
+        timestamp: 100,
+        data: { version: 1, revision: "bad" },
+      }),
+    ).toBeNull();
+    expect(
+      asHostIdleSuspendChangedEvent({
+        type: "other:event",
+        timestamp: 100,
+        data: { version: 1, revision: 42 },
+      }),
+    ).toBeNull();
   });
 });
