@@ -564,6 +564,7 @@ pub struct PtySessionManager {
     /// commands. Shutdown waits for this to reach zero before closing the
     /// persistence worker.
     active_reader_count: Arc<AtomicUsize>,
+    fleet_watcher: crate::pty::fleet_state::PtyFleetWatcher,
     #[cfg(test)]
     respawn_test_hook: Arc<RespawnTestHook>,
     #[cfg(test)]
@@ -573,6 +574,7 @@ pub struct PtySessionManager {
 }
 
 struct Inner {
+    fleet: crate::pty::fleet_state::PtyFleetState,
     live: HashMap<String, LiveSession>,
     dead: HashMap<String, DeadSession>,
     /// Target-scoped creates that failed before an in-memory tombstone could
@@ -633,8 +635,9 @@ impl From<&PtyCreateOpts> for FailedReplacementPersistence {
 }
 
 impl Inner {
-    fn new() -> Self {
+    fn new(fleet: crate::pty::fleet_state::PtyFleetState) -> Self {
         Self {
+            fleet,
             live: HashMap::new(),
             dead: HashMap::new(),
             failed_replacements: HashMap::new(),
@@ -645,6 +648,12 @@ impl Inner {
             suppress_exit_counts: HashMap::new(),
             pending_replacements: HashMap::new(),
         }
+    }
+
+    #[cfg(test)]
+    fn new_test() -> Self {
+        let (fleet, _) = crate::pty::fleet_state::PtyFleetState::new();
+        Self::new(fleet)
     }
 
     fn allocate_incarnation(&mut self) -> u64 {
@@ -889,7 +898,8 @@ impl PtySessionManager {
         let persist_tx_clone = persist_tx.clone();
         let session_store_clone = session_store.clone();
 
-        let mut initial_inner = Inner::new();
+        let (fleet_state, fleet_watcher) = crate::pty::fleet_state::PtyFleetState::new();
+        let mut initial_inner = Inner::new(fleet_state);
         if let Some(store) = &session_store {
             match store.max_session_incarnation() {
                 Ok(maximum) => initial_inner.advance_past(maximum),
@@ -913,6 +923,7 @@ impl PtySessionManager {
                 crate::workflow::NoopWorkflowObservationRecorder,
             ))),
             active_reader_count: Arc::new(AtomicUsize::new(0)),
+            fleet_watcher,
             #[cfg(test)]
             respawn_test_hook: Arc::new(RespawnTestHook::new()),
             #[cfg(test)]
@@ -958,6 +969,36 @@ impl PtySessionManager {
         ));
 
         manager
+    }
+
+    pub fn fleet_watcher(&self) -> crate::pty::fleet_state::PtyFleetWatcher {
+        let mut watcher = self.fleet_watcher.clone();
+        watcher.mark_seen();
+        watcher
+    }
+
+    pub fn fleet_snapshot(&self) -> crate::pty::fleet_state::PtyFleetSnapshot {
+        self.inner.lock().unwrap().fleet.snapshot()
+    }
+
+    pub fn try_claim_handoff(
+        &self,
+        expected_generation: u64,
+    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError> {
+        self.inner.lock().unwrap().fleet.try_claim_handoff(expected_generation)
+    }
+
+    pub fn release_handoff(&self) {
+        self.inner.lock().unwrap().fleet.release_handoff();
+    }
+
+    #[cfg(test)]
+    pub fn with_fleet_for_test<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut crate::pty::fleet_state::PtyFleetState) -> R,
+    {
+        let mut inner = self.inner.lock().unwrap();
+        f(&mut inner.fleet)
     }
 
     pub fn set_target_context(&self, context: PtyTargetContext) {
@@ -1048,6 +1089,17 @@ impl PtySessionManager {
         let _lifecycle_permit = self.lifecycle_gate.begin()?;
         let _persistence_guard = self.persistence_gate.lock().unwrap();
 
+        {
+            let inner = self.inner.lock().unwrap();
+            if inner.fleet.is_handoff_active() {
+                return Err(AppError::IdleSuspendHandoffInProgress(
+                    "Cannot create terminal while host suspend is in progress".into(),
+                ));
+            }
+            if inner.closing {
+                return Err(AppError::Unavailable("PTY manager is shutting down".into()));
+            }
+        }
         let (retrying_unavailable_target, retry_buffer) = {
             let inner = self.inner.lock().unwrap();
             inner
@@ -1071,7 +1123,9 @@ impl PtySessionManager {
         // their persistence commands must never be able to mutate this one.
         let incarnation = {
             let mut inner = self.inner.lock().unwrap();
-            inner.begin_replacement(&opts.id)
+            let incarnation = inner.begin_replacement(&opts.id);
+            inner.fleet.begin_create(&opts.id, incarnation)?;
+            incarnation
         };
         let mut failure_meta = SessionMeta::new_with_target(
             opts.id.clone(),
@@ -1217,6 +1271,7 @@ impl PtySessionManager {
         let generation = {
             let mut inner = self.inner.lock().unwrap();
             if !inner.replacement_is_current(&opts.id, incarnation) {
+                inner.fleet.cancel_create(&opts.id, incarnation);
                 drop(inner);
                 session.terminate();
                 return Err(AppError::PtyError(
@@ -1227,6 +1282,7 @@ impl PtySessionManager {
                 || inner.closing
                 || inner.generation != creation_generation
             {
+                inner.fleet.cancel_create(&opts.id, incarnation);
                 drop(inner);
                 session.terminate();
                 return Err(AppError::Unavailable(
@@ -1246,6 +1302,7 @@ impl PtySessionManager {
             // This ensures create() is fully idempotent across race conditions.
             inner.killed.remove(&opts.id);
             inner.live.insert(opts.id.clone(), session);
+            inner.fleet.publish_live(&opts.id, incarnation);
             creation_generation
         };
 
@@ -1689,6 +1746,7 @@ impl PtySessionManager {
             inner.pending_replacements.remove(id);
             inner.failed_replacements.remove(id);
             inner.killed.insert(id.to_string());
+            inner.fleet.remove_all_for_id(id);
             let was_live = if let Some(session) = inner.live.remove(id) {
                 session.terminate();
                 true
@@ -1818,6 +1876,7 @@ impl PtySessionManager {
         inner.pending_replacements.remove(&id);
         inner.failed_replacements.remove(&id);
         inner.killed.remove(&id);
+        inner.fleet.remove_all_for_id(&id);
         inner
             .dead
             .insert(id, DeadSession::target_unavailable(meta, incarnation));
@@ -2023,6 +2082,7 @@ impl PtySessionManager {
 
             inner.pending_replacements.remove(id);
             inner.killed.insert(id.to_string());
+            inner.fleet.remove_all_for_id(id);
             let session = live_matches.then(|| inner.live.remove(id).unwrap());
             if dead_matches {
                 inner.dead.remove(id);
@@ -2050,6 +2110,11 @@ impl PtySessionManager {
             let mut inner = self.inner.lock().unwrap();
             info!(count = inner.live.len(), "Disposing all PTY sessions");
             inner.closing |= closing;
+            if closing {
+                inner.fleet.mark_closing(true);
+            } else {
+                inner.fleet.mark_disposing(true);
+            }
             let previous_generation = inner.generation;
             inner.generation = inner.generation.wrapping_add(1);
             let mut identities = inner
@@ -2148,6 +2213,9 @@ impl PtySessionManager {
                 pfm.unregister_session(&id, incarnation);
             }
         }
+        if !closing {
+            self.inner.lock().unwrap().fleet.mark_disposing(false);
+        }
         Ok(())
     }
 
@@ -2158,6 +2226,7 @@ impl PtySessionManager {
         let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
         {
             let mut inner = self.inner.lock().unwrap();
+            inner.fleet.mark_closing(true);
             let sessions = inner
                 .live
                 .iter()
@@ -2290,6 +2359,7 @@ impl PtySessionManager {
         // Mark as killed BEFORE removing from live — reader thread checks this.
         inner.killed.insert(id.to_string());
         inner.pending_replacements.remove(id);
+        inner.fleet.remove_all_for_id(id);
         let removed_incarnation = if let Some(session) = inner.live.remove(id) {
             if suppress_exit {
                 *inner
@@ -2573,6 +2643,11 @@ fn reader_thread(
                 (false, None)
             };
 
+            if will_restart {
+                inner_guard.fleet.transition_live_to_restart_pending(&session_id, incarnation);
+            } else {
+                inner_guard.fleet.remove_live(&session_id, incarnation);
+            }
             // Reset restart_count to 0 if this was a clean exit after a previous restart.
             let next_restart_count = if exit_code == 0 && restart_count > 0 {
                 0
@@ -2762,6 +2837,7 @@ fn reader_thread(
                 error = %e,
                 "Respawn queue full — supervisor may be dead/slow, dropping restart request"
             );
+            inner.lock().unwrap().fleet.cancel_restart_pending(&session_id, incarnation);
         }
     }
 
@@ -2854,11 +2930,12 @@ async fn supervisor_loop(
 
         // Check if session was killed during backoff.
         {
-            let inner_guard = inner.lock().unwrap();
+            let mut inner_guard = inner.lock().unwrap();
             if !inner_guard.respawn_source_is_current(&session_id, cmd.incarnation)
                 || inner_guard.generation != cmd.generation
                 || inner_guard.killed.contains(&session_id)
             {
+                inner_guard.fleet.cancel_restart_pending(&session_id, cmd.incarnation);
                 info!(id = %session_id, "Session killed during backoff — skipping restart");
                 continue;
             }
@@ -3132,6 +3209,7 @@ fn finish_failed_replacement_locked(
         if !guard.replacement_is_current(session_id, replacement_incarnation) {
             return;
         }
+        guard.fleet.cancel_create(session_id, replacement_incarnation);
 
         let live_is_current = guard
             .live
@@ -3585,9 +3663,20 @@ async fn respawn_internal(
     let (replacement_incarnation, preserve_target_unavailable, source_buffer) = {
         let mut guard = inner.lock().unwrap();
         if !guard.respawn_source_is_current(session_id, source_incarnation) {
+            guard.fleet.cancel_restart_pending(session_id, source_incarnation);
             return Err(AppError::PtyError(
                 "PTY respawn was superseded by a newer request".into(),
             ));
+        }
+        if guard.fleet.is_handoff_active() {
+            guard.fleet.cancel_restart_pending(session_id, source_incarnation);
+            return Err(AppError::IdleSuspendHandoffInProgress(
+                "Cannot restart terminal while host suspend is in progress".into(),
+            ));
+        }
+        if guard.closing {
+            guard.fleet.cancel_restart_pending(session_id, source_incarnation);
+            return Err(AppError::Unavailable("PTY manager is shutting down".into()));
         }
         // A rename may have occurred after the reader queued this command.
         // The dead tombstone is authoritative for the replacement.
@@ -3603,8 +3692,10 @@ async fn respawn_internal(
             .dead
             .get(session_id)
             .and_then(|session| session.buffer.as_ref().map(Arc::clone));
+        let inc = guard.begin_replacement(session_id);
+        guard.fleet.transition_restart_pending_to_creating(session_id, source_incarnation, inc)?;
         (
-            guard.begin_replacement(session_id),
+            inc,
             preserve_target_unavailable,
             source_buffer,
         )
@@ -3613,20 +3704,25 @@ async fn respawn_internal(
 
     let Some(_lifecycle_permit) = lifecycle_gate.try_begin() else {
         info!(id = %session_id, "Respawn skipped while PTY manager is disposing");
-        inner
-            .lock()
-            .unwrap()
-            .finish_replacement(session_id, replacement_incarnation);
+        let mut guard = inner.lock().unwrap();
+        guard.fleet.cancel_create(session_id, replacement_incarnation);
+        guard.finish_replacement(session_id, replacement_incarnation);
         return Ok(None);
     };
     // Check before opening a PTY, then repeat the check immediately before
     // publishing the new session. dispose() can race with either phase.
 
     let stale = {
-        let inner_guard = inner.lock().unwrap();
-        lifecycle_gate.is_disposing()
+        let mut inner_guard = inner.lock().unwrap();
+        if lifecycle_gate.is_disposing()
             || inner_guard.generation != cmd.generation
             || inner_guard.killed.contains(session_id)
+        {
+            inner_guard.fleet.cancel_create(session_id, replacement_incarnation);
+            true
+        } else {
+            false
+        }
     };
     if stale {
         info!(id = %session_id, "Stale respawn request — skipping restart");
@@ -3784,6 +3880,7 @@ async fn respawn_internal(
         let mut inner_guard = inner.lock().unwrap();
         if !inner_guard.respawn_replacement_is_current(session_id, source_incarnation, incarnation)
         {
+            inner_guard.fleet.cancel_create(session_id, incarnation);
             drop(inner_guard);
             inner
                 .lock()
@@ -3798,6 +3895,7 @@ async fn respawn_internal(
             || inner_guard.generation != cmd.generation
             || inner_guard.killed.contains(session_id)
         {
+            inner_guard.fleet.cancel_create(session_id, incarnation);
             drop(inner_guard);
             inner
                 .lock()
@@ -3819,6 +3917,7 @@ async fn respawn_internal(
         inner_guard.killed.remove(session_id);
         inner_guard.dead.remove(session_id);
         inner_guard.live.insert(session_id.to_string(), session);
+        inner_guard.fleet.publish_live(session_id, incarnation);
     }
 
     if let Some(pfm) = &port_forward_manager {
@@ -4433,7 +4532,7 @@ mod tests {
 
     #[test]
     fn stale_respawn_reservation_cannot_publish_after_newer_replacement() {
-        let mut inner = Inner::new();
+        let mut inner = Inner::new_test();
         let source_incarnation = 41;
         let meta = SessionMeta::new(
             "terminal:race".to_string(),
@@ -4467,7 +4566,7 @@ mod tests {
     fn incarnation_event_sink_drops_output_after_replacement_starts() {
         let (sink, mut receiver) = crate::pty::BroadcastEventSink::new(8);
         let sink: Arc<dyn EventSink> = Arc::new(sink);
-        let inner = Arc::new(Mutex::new(Inner::new()));
+        let inner = Arc::new(Mutex::new(Inner::new_test()));
         let id = "terminal:event-race";
         let meta = SessionMeta::new(
             id.to_string(),
@@ -4500,7 +4599,7 @@ mod tests {
     fn incarnation_event_sink_drops_stale_target_loss_notifications() {
         let (sink, mut receiver) = crate::pty::BroadcastEventSink::new(8);
         let sink: Arc<dyn EventSink> = Arc::new(sink);
-        let inner = Arc::new(Mutex::new(Inner::new()));
+        let inner = Arc::new(Mutex::new(Inner::new_test()));
         let id = "terminal:target-event-race";
         let mut meta = SessionMeta::new(
             id.to_string(),
@@ -4533,7 +4632,7 @@ mod tests {
 
     #[test]
     fn source_respawn_failure_cannot_mutate_a_newer_pending_replacement() {
-        let inner = Arc::new(Mutex::new(Inner::new()));
+        let inner = Arc::new(Mutex::new(Inner::new_test()));
         let id = "terminal:source-failure-race";
         let meta = SessionMeta::new(
             id.to_string(),
@@ -4795,7 +4894,7 @@ mod tests {
 
     #[test]
     fn failed_replacement_retains_source_buffer_fallback() {
-        let inner = Arc::new(Mutex::new(Inner::new()));
+        let inner = Arc::new(Mutex::new(Inner::new_test()));
         let id = "terminal:respawn-buffer-fallback";
         let source_buffer = Arc::new(Mutex::new(crate::pty::buffer::ScrollbackBuffer::new(1024)));
         source_buffer.lock().unwrap().push(b"previous output\n");
@@ -5175,7 +5274,7 @@ mod tests {
     }
     #[test]
     fn cleanup_prunes_orphaned_killed_markers() {
-        let mut inner = Inner::new();
+        let mut inner = Inner::new_test();
         inner.killed.extend([
             "orphaned".to_string(),
             "dead-session".to_string(),

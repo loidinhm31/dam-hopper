@@ -2305,3 +2305,205 @@ mod pty_tests {
         );
     }
 }
+#[cfg(test)]
+mod fleet_state_tests {
+    use std::sync::Arc;
+    use crate::error::AppError;
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::fleet_state::{HandoffClaimError, PtyFleetState};
+    use crate::pty::manager::{PtyCreateOpts, PtySessionManager};
+
+    #[test]
+    fn test_pty_fleet_snapshot_content_free_and_quiescence() {
+        let (state, watcher) = PtyFleetState::new();
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 1);
+        assert_eq!(snap.live_count, 0);
+        assert_eq!(snap.creating_count, 0);
+        assert_eq!(snap.restart_pending_count, 0);
+        assert!(!snap.disposing);
+        assert!(!snap.closing);
+        assert!(!snap.handoff_active);
+        assert!(snap.is_quiescent());
+        assert_eq!(snap.running_count(), 0);
+        assert_eq!(state.generation(), 1);
+    }
+
+    #[test]
+    fn test_pty_fleet_state_transitions_monotonic_generation() {
+        let (mut state, watcher) = PtyFleetState::new();
+
+        // 1. Begin create -> creating count 1, non-quiescent
+        state.begin_create("t1", 100).expect("begin_create");
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 2);
+        assert_eq!(snap.creating_count, 1);
+        assert_eq!(snap.live_count, 0);
+        assert!(!snap.is_quiescent());
+
+        // 2. Publish live -> creating 0, live 1, non-quiescent
+        state.publish_live("t1", 100);
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 3);
+        assert_eq!(snap.creating_count, 0);
+        assert_eq!(snap.live_count, 1);
+        assert!(!snap.is_quiescent());
+
+        // 3. Exit with restart -> atomically transitions live -> restart_pending
+        // INVARIANT: never emits a quiescent observation between exit and restart!
+        state.transition_live_to_restart_pending("t1", 100);
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 4);
+        assert_eq!(snap.live_count, 0);
+        assert_eq!(snap.restart_pending_count, 1);
+        assert!(!snap.is_quiescent());
+
+        // 4. Respawn begins -> atomically transitions restart_pending -> creating
+        state
+            .transition_restart_pending_to_creating("t1", 100, 101)
+            .expect("restart to creating");
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 5);
+        assert_eq!(snap.restart_pending_count, 0);
+        assert_eq!(snap.creating_count, 1);
+        assert!(!snap.is_quiescent());
+
+        // 5. Publish replacement live
+        state.publish_live("t1", 101);
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 6);
+        assert_eq!(snap.creating_count, 0);
+        assert_eq!(snap.live_count, 1);
+        assert!(!snap.is_quiescent());
+
+        // 6. Exit without restart -> remove live -> quiescent
+        state.remove_live("t1", 101);
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 7);
+        assert_eq!(snap.live_count, 0);
+        assert!(snap.is_quiescent());
+    }
+
+    #[test]
+    fn test_stale_incarnations_are_no_ops() {
+        let (mut state, _) = PtyFleetState::new();
+        state.begin_create("t1", 200).unwrap();
+        let gen_after_create = state.generation();
+
+        // Stale publish with different incarnation
+        state.publish_live("t1", 199);
+        assert_eq!(state.generation(), gen_after_create);
+        assert_eq!(state.snapshot().creating_count, 1);
+        assert_eq!(state.snapshot().live_count, 0);
+
+        // Stale cancel with different incarnation
+        state.cancel_create("t1", 199);
+        assert_eq!(state.generation(), gen_after_create);
+        assert_eq!(state.snapshot().creating_count, 1);
+
+        // Correct cancel
+        state.cancel_create("t1", 200);
+        assert_eq!(state.snapshot().creating_count, 0);
+        assert!(state.is_quiescent());
+    }
+
+    #[test]
+    fn test_handoff_gate_admission_and_conflict() {
+        let (mut state, _) = PtyFleetState::new();
+        let expected_gen = state.generation();
+
+        // Claim succeeds when quiescent and generation matches
+        let claim = state.try_claim_handoff(expected_gen).expect("claim handoff");
+        assert!(claim.generation > expected_gen);
+        assert!(state.is_handoff_active());
+        assert!(!state.is_quiescent());
+
+        // Second claim fails
+        let second_claim = state.try_claim_handoff(state.generation());
+        assert_eq!(second_claim, Err(HandoffClaimError::HandoffAlreadyActive));
+
+        // Create is rejected while handoff in flight
+        let create_res = state.begin_create("t2", 300);
+        assert!(matches!(create_res, Err(AppError::IdleSuspendHandoffInProgress(_))));
+
+        // Respawn transition is rejected while handoff in flight
+        let respawn_res = state.transition_restart_pending_to_creating("t2", 300, 301);
+        assert!(matches!(respawn_res, Err(AppError::IdleSuspendHandoffInProgress(_))));
+
+        // Release handoff
+        state.release_handoff();
+        assert!(!state.is_handoff_active());
+        assert!(state.is_quiescent());
+
+        // Now create succeeds
+        state.begin_create("t2", 300).expect("create after release");
+        assert_eq!(state.snapshot().creating_count, 1);
+    }
+
+    #[test]
+    fn test_disposal_and_shutdown_invariants() {
+        let (mut state, _) = PtyFleetState::new();
+
+        // Disposing makes is_quiescent false
+        state.mark_disposing(true);
+        assert!(!state.is_quiescent());
+        state.mark_disposing(false);
+        assert!(state.is_quiescent());
+
+        // Closing makes is_quiescent false and rejects create
+        state.mark_closing(true);
+        assert!(!state.is_quiescent());
+        let res = state.begin_create("t3", 400);
+        assert!(matches!(res, Err(AppError::Unavailable(_))));
+    }
+
+    #[tokio::test]
+    async fn test_pty_session_manager_fleet_handoff_gate_rejection() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let watcher = manager.fleet_watcher();
+        assert!(watcher.snapshot().is_quiescent());
+
+        // Claim handoff on manager
+        let gen = manager.fleet_snapshot().generation;
+        let claim = manager.try_claim_handoff(gen).expect("claim handoff on manager");
+        assert!(claim.generation > gen);
+
+        // Session creation is rejected with typed error without spawning process
+        let create_opts = PtyCreateOpts {
+            id: "blocked-pty".to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: std::collections::HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: crate::config::schema::RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+
+        let err = manager.create(create_opts).expect_err("create should fail during handoff");
+        assert!(matches!(err, AppError::IdleSuspendHandoffInProgress(_)));
+        assert_eq!(err.api_code(), Some("idleSuspendHandoffInProgress"));
+        assert_eq!(err.status_code(), 409);
+
+        // Release handoff
+        manager.release_handoff();
+        assert!(manager.fleet_snapshot().is_quiescent());
+    }
+
+    #[tokio::test]
+    async fn test_watcher_channel_changed() {
+        let (mut state, watcher) = PtyFleetState::new();
+        state.begin_create("t1", 1).unwrap();
+        state.publish_live("t1", 1);
+
+        let mut cloned_watcher = watcher.clone();
+        cloned_watcher.mark_seen();
+
+        state.remove_live("t1", 1);
+        assert!(cloned_watcher.changed().await.is_ok());
+        assert!(cloned_watcher.snapshot().is_quiescent());
+    }
+}

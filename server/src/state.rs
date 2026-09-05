@@ -119,6 +119,9 @@ pub struct AppState {
     pub idle_suspend_store: Arc<crate::idle_suspend::IdleSuspendTimingStore>,
     /// Server-private audit log for idle suspend timing mutations.
     pub idle_suspend_audit: Arc<crate::idle_suspend::IdleSuspendTimingAudit>,
+    /// Active idle suspend coordinator, initialized after persistence restoration.
+    pub idle_suspend_coordinator:
+        Arc<RwLock<Option<Arc<crate::idle_suspend::IdleSuspendCoordinator>>>>,
 }
 
 impl AppState {
@@ -181,6 +184,40 @@ impl AppState {
             .ok_or(AppError::WorkspaceTarget(
                 WorkspaceTargetError::UnknownProject,
             ))
+    }
+
+    pub async fn start_idle_suspend_coordinator(
+        &self,
+        executor: Arc<dyn crate::idle_suspend::IdleSuspendExecutor>,
+    ) -> Arc<crate::idle_suspend::IdleSuspendCoordinator> {
+        let mut guard = self.idle_suspend_coordinator.write().await;
+        if let Some(existing) = &*guard {
+            return Arc::clone(existing);
+        }
+
+        let coordinator = Arc::new(crate::idle_suspend::IdleSuspendCoordinator::start(
+            (*self.idle_suspend_policy).clone(),
+            Arc::clone(&self.idle_suspend_timing),
+            Some((*self.idle_suspend_store).clone()),
+            Some((*self.idle_suspend_audit).clone()),
+            executor,
+            self.pty_manager.clone(),
+        ));
+        *guard = Some(Arc::clone(&coordinator));
+        coordinator
+    }
+
+    pub async fn get_idle_suspend_coordinator(
+        &self,
+    ) -> Option<Arc<crate::idle_suspend::IdleSuspendCoordinator>> {
+        self.idle_suspend_coordinator.read().await.clone()
+    }
+
+    pub async fn shutdown_idle_suspend_coordinator(&self) {
+        let coordinator = self.idle_suspend_coordinator.write().await.take();
+        if let Some(coord) = coordinator {
+            coord.shutdown().await;
+        }
     }
 
     /// Create new AppState with production safety validation for no-auth mode.
@@ -323,6 +360,7 @@ impl AppState {
             idle_suspend_timing,
             idle_suspend_store,
             idle_suspend_audit,
+            idle_suspend_coordinator: Arc::new(RwLock::new(None)),
         })
     }
     /// Attach the optional workflow repository using the existing session DB connection.

@@ -364,6 +364,14 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Start idle-suspend coordinator after persistence restore completes.
+    // In Phase 02, the production executor uses UnavailableExecutor until Phase 03 operator sign-off.
+    state
+        .start_idle_suspend_coordinator(Arc::new(
+            dam_hopper_server::idle_suspend::UnavailableExecutor::default(),
+        ))
+        .await;
+
     let host_resource_monitor_shutdown = state.host_resource_monitor.clone();
     state.host_resource_monitor.start();
 
@@ -384,7 +392,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(proc_poll_loop(port_forward_manager));
 
     let telemetry_shutdown = state.telemetry_runtime.clone();
-    let router = build_router_with_web_dir_and_origins(state, allowed_origins, cli.web_dir);
+    let router = build_router_with_web_dir_and_origins(state.clone(), allowed_origins, cli.web_dir);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
 
@@ -418,6 +426,7 @@ async fn main() -> anyhow::Result<()> {
     .with_graceful_shutdown(shutdown_signal)
     .await;
 
+    state.shutdown_idle_suspend_coordinator().await;
     host_resource_monitor_shutdown.shutdown().await;
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
     tunnel_manager_shutdown.dispose_all().await;

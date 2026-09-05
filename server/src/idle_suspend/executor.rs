@@ -1,22 +1,24 @@
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 
 use crate::idle_suspend::protocol::{SuspendOutcome, SuspendWithRtcWakeRequest};
 
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
 /// Trait defining the privileged execution seam for host suspend with RTC wake.
 pub trait IdleSuspendExecutor: Send + Sync {
     /// Check whether the executor capability is supported and available on this host.
-    fn check_capability(&self) -> impl Future<Output = bool> + Send;
+    fn check_capability(&self) -> BoxFuture<'_, bool>;
 
     /// Execute the fixed suspend request.
     fn execute_suspend(
         &self,
         request: SuspendWithRtcWakeRequest,
-    ) -> impl Future<Output = SuspendOutcome> + Send;
+    ) -> BoxFuture<'_, SuspendOutcome>;
 }
-
 /// Production executor used in Phase 01 and Phase 02 before Phase 03 operator sign-off.
 ///
 /// Always fails closed: capability returns false, and execution returns `UnsupportedCapability`.
@@ -40,15 +42,18 @@ impl Default for UnavailableExecutor {
 }
 
 impl IdleSuspendExecutor for UnavailableExecutor {
-    async fn check_capability(&self) -> bool {
-        false
+    fn check_capability(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
     }
 
-    async fn execute_suspend(&self, request: SuspendWithRtcWakeRequest) -> SuspendOutcome {
-        SuspendOutcome::UnsupportedCapability {
-            request_id: request.request_id,
-            detail: self.reason.clone(),
-        }
+    fn execute_suspend(&self, request: SuspendWithRtcWakeRequest) -> BoxFuture<'_, SuspendOutcome> {
+        let reason = self.reason.clone();
+        Box::pin(async move {
+            SuspendOutcome::UnsupportedCapability {
+                request_id: request.request_id,
+                detail: reason,
+            }
+        })
     }
 }
 
@@ -89,11 +94,12 @@ impl FakeExecutor {
 }
 
 impl IdleSuspendExecutor for FakeExecutor {
-    async fn check_capability(&self) -> bool {
-        self.capability_available.load(Ordering::SeqCst)
+    fn check_capability(&self) -> BoxFuture<'_, bool> {
+        let available = self.capability_available.load(Ordering::SeqCst);
+        Box::pin(async move { available })
     }
 
-    async fn execute_suspend(&self, request: SuspendWithRtcWakeRequest) -> SuspendOutcome {
+    fn execute_suspend(&self, request: SuspendWithRtcWakeRequest) -> BoxFuture<'_, SuspendOutcome> {
         let outcome = self
             .configured_outcome
             .lock()
@@ -104,6 +110,6 @@ impl IdleSuspendExecutor for FakeExecutor {
             });
 
         self.recorded_requests.lock().push(request);
-        outcome
+        Box::pin(async move { outcome })
     }
 }

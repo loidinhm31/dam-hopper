@@ -324,3 +324,310 @@ async fn test_fake_executor_records_requests() {
 
     assert_eq!(executor.recorded_requests(), vec![req]);
 }
+
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use crate::idle_suspend::coordinator::{
+    CoordinatorTimingResult, IdleSuspendCoordinator, UpdateTimingCommand,
+};
+use crate::idle_suspend::status::CoordinatorState;
+use crate::pty::event_sink::NoopEventSink;
+use crate::pty::manager::PtySessionManager;
+
+fn create_test_policy(dir: &std::path::Path, enabled: bool) -> StartupIdleSuspendPolicy {
+    let registry_path = dir.join("dam-hopper.toml");
+    let content = r#"
+[workspace]
+name = "test-ws"
+
+[server.idle_suspend]
+enabled = false
+quiet_period_seconds = 300
+wake_after_seconds = 600
+"#;
+    fs::write(&registry_path, content).unwrap();
+    StartupIdleSuspendPolicy {
+        enabled,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: IdleSuspendCapabilitySelection::Auto,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_coordinator_disabled_when_policy_disabled() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), false);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager,
+    );
+
+    let status = coordinator.status();
+    assert_eq!(status.state, CoordinatorState::Disabled);
+    assert!(!status.enabled);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_coordinator_grace_arming_and_cancellation() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager.clone(),
+    );
+
+    let mut status_rx = coordinator.subscribe_status();
+    assert_eq!(status_rx.borrow().state, CoordinatorState::Watching);
+
+    // Create a live session so coordinator observes a non-quiescent fleet
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.begin_create("t1", 1).unwrap();
+        fleet.publish_live("t1", 1);
+    });
+
+    while status_rx.borrow().fleet_snapshot.live_count != 1 {
+        status_rx.changed().await.unwrap();
+    }
+
+    // Fleet transitions from non-quiescent to quiescent -> coordinator arms
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.remove_live("t1", 1);
+    });
+
+    while status_rx.borrow().state != CoordinatorState::Armed {
+        status_rx.changed().await.unwrap();
+    }
+    assert!(status_rx.borrow().arm_deadline_ms.is_some());
+
+    // A create reservation occurs during grace -> cancels arming
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.begin_create("t2", 2).unwrap();
+    });
+
+    while status_rx.borrow().state != CoordinatorState::Watching {
+        status_rx.changed().await.unwrap();
+    }
+    assert!(status_rx.borrow().arm_deadline_ms.is_none());
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_deadline_final_check_and_resumed() {
+    tokio::time::pause();
+
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager.clone(),
+    );
+    let mut status_rx = coordinator.subscribe_status();
+
+    // Create session so coordinator observes a non-quiescent fleet
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.begin_create("t1", 1).unwrap();
+        fleet.publish_live("t1", 1);
+    });
+
+    while status_rx.borrow().fleet_snapshot.live_count != 1 {
+        status_rx.changed().await.unwrap();
+    }
+
+    // Transition fleet from non-quiescent to quiescent -> coordinator arms
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.remove_live("t1", 1);
+    });
+
+    // Advance to armed
+    while status_rx.borrow().state != CoordinatorState::Armed {
+        status_rx.changed().await.unwrap();
+    }
+    assert_eq!(status_rx.borrow().state, CoordinatorState::Armed);
+
+    // Advance past grace deadline (60 seconds)
+    tokio::time::advance(std::time::Duration::from_secs(61)).await;
+
+    while status_rx.borrow().state != CoordinatorState::Resumed {
+        status_rx.changed().await.unwrap();
+    }
+    assert_eq!(status_rx.borrow().state, CoordinatorState::Resumed);
+    assert!(!pty_manager.fleet_snapshot().handoff_active);
+
+    // Verify exactly one suspend request occurred
+    let reqs = executor.recorded_requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].request_id, "epoch-1");
+    assert_eq!(reqs[0].wake_after_seconds, 600);
+
+    // Advance further by 100 seconds with empty fleet — must NOT loop or re-arm!
+    tokio::time::advance(std::time::Duration::from_secs(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(status_rx.borrow().state, CoordinatorState::Resumed);
+    assert_eq!(executor.recorded_requests().len(), 1);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_timing_update_ordered_transaction() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+
+    let store = IdleSuspendTimingStore::new(policy.canonical_registry_path.clone());
+    let audit_file = tmp.path().join("audit.jsonl");
+    let audit = IdleSuspendTimingAudit::new(audit_file.clone());
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing.clone(),
+        Some(store),
+        Some(audit),
+        executor,
+        pty_manager,
+    );
+
+    let cmd = UpdateTimingCommand {
+        actor: "admin-user".to_string(),
+        quiet_period_seconds: 120,
+        wake_after_seconds: 900,
+    };
+
+    let result = coordinator.update_timing(cmd.clone()).await;
+    match result {
+        CoordinatorTimingResult::Success {
+            changed,
+            status_revision,
+            quiet_period_seconds,
+            wake_after_seconds,
+        } => {
+            assert!(changed);
+            assert_eq!(status_revision, 2);
+            assert_eq!(quiet_period_seconds, 120);
+            assert_eq!(wake_after_seconds, 900);
+        }
+        other => panic!("Expected Success, got: {other:?}"),
+    }
+
+    // Verify runtime timing updated
+    assert_eq!(timing.read().await.quiet_period_seconds, 120);
+    assert_eq!(timing.read().await.wake_after_seconds, 900);
+
+    // Verify TOML file on disk updated
+    let registry_content = fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    assert!(registry_content.contains("quiet_period_seconds = 120"));
+    assert!(registry_content.contains("wake_after_seconds = 900"));
+
+    // Verify audit log written
+    let audit_content = fs::read_to_string(&audit_file).unwrap();
+    assert!(audit_content.contains("admin-user"));
+    assert!(audit_content.contains("admitted"));
+    assert!(audit_content.contains("committed"));
+
+    // Sending same command again reports changed = false
+    let result_same = coordinator.update_timing(cmd).await;
+    match result_same {
+        CoordinatorTimingResult::Success { changed, .. } => assert!(!changed),
+        other => panic!("Expected Success, got: {other:?}"),
+    }
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_timing_update_rejected_during_handoff() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+
+    // Force handoff active on manager
+    let gen = pty_manager.fleet_snapshot().generation;
+    pty_manager.try_claim_handoff(gen).unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager.clone(),
+    );
+
+    let cmd = UpdateTimingCommand {
+        actor: "admin".to_string(),
+        quiet_period_seconds: 120,
+        wake_after_seconds: 900,
+    };
+
+    let result = coordinator.update_timing(cmd).await;
+    assert_eq!(result, CoordinatorTimingResult::HandoffInProgress);
+
+    pty_manager.release_handoff();
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_timing_update_validation_and_audit_failure() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager,
+    );
+
+    // Below min quiet period (10)
+    let cmd = UpdateTimingCommand {
+        actor: "admin".to_string(),
+        quiet_period_seconds: 0,
+        wake_after_seconds: 600,
+    };
+
+    let result = coordinator.update_timing(cmd).await;
+    match result {
+        CoordinatorTimingResult::ValidationFailed(err) => {
+            assert!(err.contains("quietPeriodSeconds must be between"));
+        }
+        other => panic!("Expected ValidationFailed, got: {other:?}"),
+    }
+
+    coordinator.shutdown().await;
+}

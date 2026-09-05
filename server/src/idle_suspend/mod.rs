@@ -3,6 +3,7 @@ pub mod protocol;
 pub mod timing_store;
 pub mod timing_audit;
 pub mod coordinator;
+pub mod status;
 pub mod executor;
 
 #[cfg(test)]
@@ -17,5 +18,9 @@ pub use protocol::{
 };
 pub use timing_store::IdleSuspendTimingStore;
 pub use timing_audit::{IdleSuspendTimingAudit, TimingAuditRecord, TimingAuditResult};
-pub use coordinator::{CoordinatorTimingCommand, CoordinatorTimingResult};
+pub use coordinator::{
+    CoordinatorTimingCommand, CoordinatorTimingResult, IdleSuspendCoordinator,
+    UpdateTimingCommand,
+};
 pub use executor::{FakeExecutor, IdleSuspendExecutor, UnavailableExecutor};
+pub use status::{CoordinatorState, IdleSuspendStatusV1};
