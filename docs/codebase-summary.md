@@ -61,7 +61,7 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **WebSocket Transport**: Bi-directional communication for real-time updates
 - **Workflow Store**: Domain-first Plan/Phase/Task hierarchy, scoped sessions,
   terminal/agent resource links, notes, events, and bounded overview queries
-  persisted in the additive migration-010 SQLite tables.
+- **Terminal Idle Suspend**: Server-authoritative opt-in Linux suspend policy (`server/src/idle_suspend/`) with fleet quiescence monitoring, bounded timing mutation (`PATCH /api/system/idle-suspend/v1/timing`), out-of-band revision broadcast (`host:idleSuspendChanged`), hardened root-owned systemd helper IPC, and rollback runbook (`deploy/reset-linux-production.sh`). Full integration coverage in `server/tests/idle_suspend.rs` and `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx`.
 
 ### Frontend (React + Vite)
 

@@ -1,4 +1,6 @@
+use crate::pty::fleet_state::{HandoffClaimError, PtyFleetState};
 use std::fs;
+use std::path::PathBuf;
 use tempfile::tempdir;
 
 use crate::config::{
@@ -7,13 +9,19 @@ use crate::config::{
     MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
     MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
 };
+use crate::idle_suspend::audit::{HelperAudit, HelperAuditRecord, HelperAuditRecordType};
+use crate::idle_suspend::backend::{FakeActionBackend, SuspendActionBackend, SystemdLogindBackend};
 use crate::idle_suspend::executor::{
     FakeExecutor, IdleSuspendExecutor, SystemdIdleSuspendExecutor, UnavailableExecutor,
 };
-use crate::idle_suspend::helper_client::HelperClient;
 use crate::idle_suspend::helper_server::HelperServer;
+use crate::idle_suspend::peer_auth::{EnrolledPeerPolicy, PeerAuthError, PeerCredentials};
 use crate::idle_suspend::policy::{
     validate_timing_pair, RuntimeIdleSuspendTiming, StartupIdleSuspendPolicy,
+};
+use crate::idle_suspend::preflight::{
+    ActiveInhibitor, FakeInhibitorProvider, FakePreflightChecker, PreflightChecker, PreflightError,
+    SysfsPreflightChecker,
 };
 use crate::idle_suspend::protocol::{
     decode_frame, encode_frame, read_frame_async, validate_request_id, write_frame_async,
@@ -21,17 +29,6 @@ use crate::idle_suspend::protocol::{
     IdleSuspendErrorCode, IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse,
     ProtocolError, RequestDeduplicator, SuspendOutcome, SuspendWithRtcWakeRequest,
     HELPER_PROTOCOL_VERSION, MAX_HELPER_FRAME_BYTES,
-};
-use crate::idle_suspend::peer_auth::{EnrolledPeerPolicy, PeerAuthError, PeerCredentials};
-use crate::idle_suspend::preflight::{
-    ActiveInhibitor, FakeInhibitorProvider, FakePreflightChecker, PreflightChecker, PreflightError,
-    SysfsPreflightChecker,
-};
-use crate::idle_suspend::audit::{
-    HelperAudit, HelperAuditError, HelperAuditRecord, HelperAuditRecordType,
-};
-use crate::idle_suspend::backend::{
-    FakeActionBackend, SuspendActionBackend, SystemdLogindBackend,
 };
 use crate::idle_suspend::timing_audit::{
     AuditError, IdleSuspendTimingAudit, TimingAuditRecord, TimingAuditResult,
@@ -61,8 +58,16 @@ fn test_default_idle_suspend_config() {
 #[test]
 fn test_timing_bounds_validation() {
     // Valid boundaries
-    assert!(validate_timing_pair(MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS).is_ok());
-    assert!(validate_timing_pair(MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS).is_ok());
+    assert!(validate_timing_pair(
+        MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+        MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+    )
+    .is_ok());
+    assert!(validate_timing_pair(
+        MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+        MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+    )
+    .is_ok());
 
     // Below minimum
     assert!(validate_timing_pair(MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS - 1, 600).is_err());
@@ -141,7 +146,10 @@ fn test_startup_policy_immutability() {
     let cfg = read_config(&config_path).unwrap();
     let policy = StartupIdleSuspendPolicy::from_config(&config_path, &cfg.server.idle_suspend);
     assert!(policy.is_enabled());
-    assert_eq!(policy.canonical_registry_path, config_path.canonicalize().unwrap());
+    assert_eq!(
+        policy.canonical_registry_path,
+        config_path.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -265,8 +273,10 @@ fn test_protocol_patch_request_denies_unknown_fields() {
     let parsed: Result<IdleSuspendTimingPatchRequest, _> = serde_json::from_str(valid_json);
     assert!(parsed.is_ok());
 
-    let unknown_field_json = r#"{"quietPeriodSeconds": 900, "wakeAfterSeconds": 600, "extra": "forbidden"}"#;
-    let parsed_err: Result<IdleSuspendTimingPatchRequest, _> = serde_json::from_str(unknown_field_json);
+    let unknown_field_json =
+        r#"{"quietPeriodSeconds": 900, "wakeAfterSeconds": 600, "extra": "forbidden"}"#;
+    let parsed_err: Result<IdleSuspendTimingPatchRequest, _> =
+        serde_json::from_str(unknown_field_json);
     assert!(parsed_err.is_err());
 
     let resp = IdleSuspendTimingPatchResponse::new(true, 4, 1800, 900);
@@ -342,15 +352,14 @@ async fn test_fake_executor_records_requests() {
 
     assert_eq!(executor.recorded_requests(), vec![req]);
 }
-
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use crate::idle_suspend::coordinator::{
     CoordinatorTimingResult, IdleSuspendCoordinator, UpdateTimingCommand,
 };
 use crate::idle_suspend::status::CoordinatorState;
 use crate::pty::event_sink::NoopEventSink;
 use crate::pty::manager::PtySessionManager;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 fn create_test_policy(dir: &std::path::Path, enabled: bool) -> StartupIdleSuspendPolicy {
     let registry_path = dir.join("dam-hopper.toml");
@@ -376,18 +385,14 @@ wake_after_seconds = 600
 async fn test_coordinator_disabled_when_policy_disabled() {
     let tmp = tempdir().unwrap();
     let policy = create_test_policy(tmp.path(), false);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
 
-    let coordinator = IdleSuspendCoordinator::start(
-        policy,
-        timing,
-        None,
-        None,
-        executor,
-        pty_manager,
-    );
+    let coordinator =
+        IdleSuspendCoordinator::start(policy, timing, None, None, executor, pty_manager);
 
     let status = coordinator.status();
     assert_eq!(status.state, CoordinatorState::Disabled);
@@ -403,14 +408,8 @@ async fn test_coordinator_grace_arming_and_cancellation() {
     let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
-    let coordinator = IdleSuspendCoordinator::start(
-        policy,
-        timing,
-        None,
-        None,
-        executor,
-        pty_manager.clone(),
-    );
+    let coordinator =
+        IdleSuspendCoordinator::start(policy, timing, None, None, executor, pty_manager.clone());
 
     let mut status_rx = coordinator.subscribe_status();
     assert_eq!(status_rx.borrow().state, CoordinatorState::Watching);
@@ -517,7 +516,9 @@ async fn test_coordinator_deadline_final_check_and_resumed() {
 async fn test_coordinator_timing_update_ordered_transaction() {
     let tmp = tempdir().unwrap();
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
 
@@ -585,7 +586,9 @@ async fn test_coordinator_timing_update_ordered_transaction() {
 async fn test_coordinator_timing_update_rejected_during_handoff() {
     let tmp = tempdir().unwrap();
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
 
@@ -593,14 +596,8 @@ async fn test_coordinator_timing_update_rejected_during_handoff() {
     let gen = pty_manager.fleet_snapshot().generation;
     pty_manager.try_claim_handoff(gen).unwrap();
 
-    let coordinator = IdleSuspendCoordinator::start(
-        policy,
-        timing,
-        None,
-        None,
-        executor,
-        pty_manager.clone(),
-    );
+    let coordinator =
+        IdleSuspendCoordinator::start(policy, timing, None, None, executor, pty_manager.clone());
 
     let cmd = UpdateTimingCommand {
         actor: "admin".to_string(),
@@ -619,18 +616,14 @@ async fn test_coordinator_timing_update_rejected_during_handoff() {
 async fn test_coordinator_timing_update_validation_and_audit_failure() {
     let tmp = tempdir().unwrap();
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
 
-    let coordinator = IdleSuspendCoordinator::start(
-        policy,
-        timing,
-        None,
-        None,
-        executor,
-        pty_manager,
-    );
+    let coordinator =
+        IdleSuspendCoordinator::start(policy, timing, None, None, executor, pty_manager);
 
     // Below min quiet period (10)
     let cmd = UpdateTimingCommand {
@@ -984,7 +977,8 @@ fn test_preflight_checks_fake_and_sysfs() {
         inhibitor: None,
         error: None,
     });
-    let sysfs2 = SysfsPreflightChecker::with_paths(&power_state, &rtc_alarm, "mem", fake_inhibitor2);
+    let sysfs2 =
+        SysfsPreflightChecker::with_paths(&power_state, &rtc_alarm, "mem", fake_inhibitor2);
     match sysfs2.run_all() {
         Err(PreflightError::UnsupportedSuspend(msg)) => {
             assert!(msg.contains("not in available modes"));
@@ -1017,11 +1011,17 @@ fn test_helper_audit_record_and_fail_closed() {
 
     let records = audit.read_all_records().unwrap();
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0].record_type, HelperAuditRecordType::AcceptedIntent);
+    assert_eq!(
+        records[0].record_type,
+        HelperAuditRecordType::AcceptedIntent
+    );
     assert_eq!(records[0].request_id, "tx-100");
     assert_eq!(records[0].wake_after_seconds, Some(600));
     assert_eq!(records[0].peer_pid, 1234);
-    assert_eq!(records[1].record_type, HelperAuditRecordType::ExecutionCompleted);
+    assert_eq!(
+        records[1].record_type,
+        HelperAuditRecordType::ExecutionCompleted
+    );
 
     // On Unix, verify file mode is 0600
     #[cfg(unix)]
@@ -1101,7 +1101,13 @@ async fn test_helper_server_client_ipc_success_and_audit() {
     let preflight = Arc::new(FakePreflightChecker::new_passing());
     let backend = Arc::new(FakeActionBackend::with_elapsed(590));
     let audit = Arc::new(HelperAudit::new(&audit_path, 100));
-    let server = Arc::new(HelperServer::new(policy, preflight, backend, Arc::clone(&audit), 100));
+    let server = Arc::new(HelperServer::new(
+        policy,
+        preflight,
+        backend,
+        Arc::clone(&audit),
+        100,
+    ));
 
     let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
     let server_handle = {
@@ -1129,7 +1135,10 @@ async fn test_helper_server_client_ipc_success_and_audit() {
     };
     let outcome = executor.execute_suspend(req).await;
     match outcome {
-        SuspendOutcome::ResumedSuccessfully { request_id, elapsed_seconds } => {
+        SuspendOutcome::ResumedSuccessfully {
+            request_id,
+            elapsed_seconds,
+        } => {
             assert_eq!(request_id, "test-epoch-1");
             assert_eq!(elapsed_seconds, 590);
         }
@@ -1139,10 +1148,16 @@ async fn test_helper_server_client_ipc_success_and_audit() {
     // 3. Verify audit log
     let records = audit.read_all_records().unwrap();
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0].record_type, HelperAuditRecordType::AcceptedIntent);
+    assert_eq!(
+        records[0].record_type,
+        HelperAuditRecordType::AcceptedIntent
+    );
     assert_eq!(records[0].request_id, "test-epoch-1");
     assert_eq!(records[0].wake_after_seconds, Some(600));
-    assert_eq!(records[1].record_type, HelperAuditRecordType::ExecutionCompleted);
+    assert_eq!(
+        records[1].record_type,
+        HelperAuditRecordType::ExecutionCompleted
+    );
     assert_eq!(records[1].request_id, "test-epoch-1");
 
     server_handle.abort();
@@ -1189,7 +1204,12 @@ async fn test_helper_server_client_inhibitor_and_deduplication() {
     };
     let outcome = executor.execute_suspend(req).await;
     match outcome {
-        SuspendOutcome::BlockedByInhibitor { request_id, inhibitor, who, why } => {
+        SuspendOutcome::BlockedByInhibitor {
+            request_id,
+            inhibitor,
+            who,
+            why,
+        } => {
             assert_eq!(request_id, "test-inhibited");
             assert!(inhibitor.contains("backup-svc"));
             assert_eq!(who.as_deref(), Some("backup-svc"));
@@ -1225,7 +1245,13 @@ async fn test_helper_server_peer_auth_rejection() {
     let preflight = Arc::new(FakePreflightChecker::new_passing());
     let backend = Arc::new(FakeActionBackend::new());
     let audit = Arc::new(HelperAudit::new(&audit_path, 100));
-    let server = Arc::new(HelperServer::new(policy, preflight, backend, Arc::clone(&audit), 100));
+    let server = Arc::new(HelperServer::new(
+        policy,
+        preflight,
+        backend,
+        Arc::clone(&audit),
+        100,
+    ));
 
     let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
     let server_handle = {
@@ -1249,7 +1275,239 @@ async fn test_helper_server_peer_auth_rejection() {
     // Rejected audit was logged
     let records = audit.read_all_records().unwrap();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].record_type, HelperAuditRecordType::ExecutionRejected);
+    assert_eq!(
+        records[0].record_type,
+        HelperAuditRecordType::ExecutionRejected
+    );
 
     server_handle.abort();
+}
+
+#[test]
+fn test_manager_stale_incarnation_callback_rejected() {
+    let (mut fleet, _watcher) = PtyFleetState::new();
+    assert!(fleet.is_quiescent());
+
+    // Session "session-1" begins creating with incarnation 1
+    assert!(fleet.begin_create("session-1", 1).is_ok());
+    assert!(!fleet.is_quiescent());
+    assert_eq!(fleet.snapshot().creating_count, 1);
+
+    // Stale completion with wrong incarnation 99 is ignored
+    fleet.publish_live("session-1", 99);
+    assert_eq!(fleet.snapshot().creating_count, 1);
+    assert_eq!(fleet.snapshot().live_count, 0);
+
+    // Correct completion with incarnation 1 publishes live
+    fleet.publish_live("session-1", 1);
+    assert_eq!(fleet.snapshot().creating_count, 0);
+    assert_eq!(fleet.snapshot().live_count, 1);
+
+    // Stale remove with incarnation 99 is ignored
+    fleet.remove_live("session-1", 99);
+    assert_eq!(fleet.snapshot().live_count, 1);
+
+    // Correct remove with incarnation 1 removes live
+    fleet.remove_live("session-1", 1);
+    assert_eq!(fleet.snapshot().live_count, 0);
+    assert!(fleet.is_quiescent());
+}
+
+#[test]
+fn test_manager_restart_queue_backoff_quiescence_invariant() {
+    let (mut fleet, watcher) = PtyFleetState::new();
+    assert!(fleet.is_quiescent());
+
+    // 1. Session begins creating and publishes live
+    fleet.begin_create("restartable-1", 1).unwrap();
+    fleet.publish_live("restartable-1", 1);
+    assert!(!fleet.is_quiescent());
+    assert_eq!(fleet.snapshot().live_count, 1);
+
+    // 2. Session exits with restart policy -> transitions directly live -> restart_pending
+    // Invariant: at no point does fleet emit a quiescent state during this transition!
+    fleet.transition_live_to_restart_pending("restartable-1", 1);
+    let snap = watcher.snapshot();
+    assert_eq!(snap.live_count, 0);
+    assert_eq!(snap.restart_pending_count, 1);
+    assert!(
+        !snap.is_quiescent(),
+        "Must NOT be quiescent during restart backoff"
+    );
+
+    // 3. Supervisor triggers spawn -> transitions restart_pending -> creating
+    assert!(fleet
+        .transition_restart_pending_to_creating("restartable-1", 1, 2)
+        .is_ok());
+    let snap2 = watcher.snapshot();
+    assert_eq!(snap2.restart_pending_count, 0);
+    assert_eq!(snap2.creating_count, 1);
+    assert!(!snap2.is_quiescent());
+
+    // 4. Session becomes live under new incarnation 2
+    fleet.publish_live("restartable-1", 2);
+    assert_eq!(fleet.snapshot().live_count, 1);
+
+    // 5. Final exit without restart
+    fleet.remove_live("restartable-1", 2);
+    assert!(fleet.is_quiescent());
+}
+
+#[test]
+fn test_manager_disposal_and_shutdown_gates() {
+    let (mut fleet, _watcher) = PtyFleetState::new();
+    let gen = fleet.generation();
+
+    // Normal handoff claim succeeds when quiescent
+    let claim = fleet.try_claim_handoff(gen).unwrap();
+    assert_eq!(claim.generation, gen + 1);
+    assert!(fleet.snapshot().handoff_active);
+
+    // Second claim rejected because handoff already active
+    assert_eq!(
+        fleet.try_claim_handoff(fleet.generation()),
+        Err(HandoffClaimError::HandoffAlreadyActive)
+    );
+
+    // Release handoff
+    fleet.release_handoff();
+    assert!(!fleet.snapshot().handoff_active);
+
+    // Generation mismatch rejected
+    assert!(matches!(
+        fleet.try_claim_handoff(9999),
+        Err(HandoffClaimError::GenerationMismatch { .. })
+    ));
+}
+
+#[tokio::test]
+async fn test_helper_server_malformed_and_oversized_frame_rejection() {
+    let tmp = tempdir().unwrap();
+    let socket_path = tmp.path().join("helper_malformed.sock");
+    let audit_path = tmp.path().join("audit_malformed.jsonl");
+
+    let policy = EnrolledPeerPolicy::new_test_permissive();
+    let preflight = Arc::new(FakePreflightChecker::new_passing());
+    let backend = Arc::new(FakeActionBackend::new());
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let server = Arc::new(HelperServer::new(policy, preflight, backend, audit, 100));
+
+    let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+    let server_handle = {
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let srv = Arc::clone(&server);
+                tokio::spawn(async move {
+                    let cred = PeerCredentials::new(std::process::id(), 1000, 1000);
+                    let _ = srv.handle_connection(&mut stream, cred).await;
+                });
+            }
+        })
+    };
+
+    let mut stream = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+    use tokio::io::AsyncWriteExt;
+    let invalid_len = (MAX_HELPER_FRAME_BYTES as u32 + 1).to_be_bytes();
+    stream.write_all(&invalid_len).await.unwrap();
+
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0u8; 10];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(n, 0, "Server must close stream on oversized frame");
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_helper_server_audit_failure_fails_closed() {
+    let tmp = tempdir().unwrap();
+    let socket_path = tmp.path().join("helper_audit_fail.sock");
+    let audit_path = PathBuf::from("/nonexistent_forbidden_dir/sub/audit.jsonl");
+
+    let policy = EnrolledPeerPolicy::new_test_permissive();
+    let preflight = Arc::new(FakePreflightChecker::new_passing());
+    let backend = Arc::new(FakeActionBackend::new());
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let server = Arc::new(HelperServer::new(
+        policy,
+        preflight,
+        Arc::clone(&backend),
+        audit,
+        100,
+    ));
+
+    let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+    let server_handle = {
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let srv = Arc::clone(&server);
+                tokio::spawn(async move {
+                    let cred = PeerCredentials::new(std::process::id(), 1000, 1000);
+                    let _ = srv.handle_connection(&mut stream, cred).await;
+                });
+            }
+        })
+    };
+
+    let executor = SystemdIdleSuspendExecutor::new(&socket_path);
+    let req = SuspendWithRtcWakeRequest {
+        request_id: "test-audit-fail".to_string(),
+        wake_after_seconds: 600,
+    };
+
+    let outcome = executor.execute_suspend(req).await;
+    match outcome {
+        SuspendOutcome::ExecutionFailed { error, .. } => {
+            assert!(error.contains("audit") || error.contains("Audit"));
+        }
+        other => panic!("Expected ExecutionFailed due to audit failure, got: {other:?}"),
+    }
+
+    assert!(!*backend.suspend_called.lock().unwrap());
+
+    server_handle.abort();
+}
+
+#[test]
+fn test_timing_store_preserves_unrelated_toml_structure() {
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+
+    let full_toml = r#"[workspace]
+name = "complex-workspace"
+root = "/tmp/test"
+
+[server]
+host = "127.0.0.1"
+port = 4801
+
+[server.idle_suspend]
+enabled = true
+quiet_period_seconds = 300
+wake_after_seconds = 600
+
+[[projects]]
+name = "api-service"
+path = "./api"
+type = "cargo"
+
+[features]
+experimental = true
+"#;
+    fs::write(&config_path, full_toml).unwrap();
+
+    let store = IdleSuspendTimingStore::new(config_path.clone());
+    store.persist_timing_pair(450, 900).unwrap();
+
+    let updated = fs::read_to_string(&config_path).unwrap();
+    assert!(updated.contains("quiet_period_seconds = 450"));
+    assert!(updated.contains("wake_after_seconds = 900"));
+    assert!(updated.contains("[workspace]"));
+    assert!(updated.contains("complex-workspace"));
+    assert!(updated.contains("[[projects]]"));
+    assert!(updated.contains("api-service"));
+    assert!(updated.contains("[features]"));
+    assert!(updated.contains("experimental = true"));
 }
