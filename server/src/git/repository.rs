@@ -12,7 +12,7 @@ use git2::{BranchType, PackBuilderStage, PushOptions, Repository, StatusOptions}
 use crate::error::AppError;
 use crate::git::cli_fallback;
 use crate::git::progress::{
-    emit_completed, emit_failed, emit_progress, emit_started, ProgressSender,
+    ProgressSender, emit_completed, emit_failed, emit_progress, emit_started,
 };
 use crate::git::types::{
     BranchInfo, BranchUpdateResult, CheckoutStrategy, GitActionResult, GitBlockReason,
@@ -21,6 +21,9 @@ use crate::git::types::{
 use crate::ssh::SshCredStore;
 
 pub(crate) fn open_repo(path: &Path) -> Result<Repository, AppError> {
+    unsafe {
+        let _ = git2::opts::set_verify_owner_validation(false);
+    }
     Repository::open(path).map_err(|e| {
         if e.code() == git2::ErrorCode::NotFound {
             AppError::GitNotFound(path.to_string_lossy().into_owned())
@@ -1429,8 +1432,8 @@ pub fn get_log(
     let mut command = Command::new("git");
     command
         .current_dir(project_path)
+        .args(["-c", "safe.directory=*"])
         .arg("log")
-        .arg("--date-order")
         .arg(format!("--skip={}", offset))
         .arg(format!("-n {}", limit))
         .arg("--format=%H%x00%P%x00%aN%x00%aE%x00%at%x00%s%x00%D");
