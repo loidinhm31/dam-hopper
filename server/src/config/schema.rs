@@ -344,6 +344,102 @@ impl TelemetryConfig {
     }
 }
 
+// ──────────────────────────────────────────────
+// Idle suspend config
+// ──────────────────────────────────────────────
+
+pub const MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS: u64 = 60;
+pub const MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS: u64 = 86400;
+pub const DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS: u64 = 900;
+
+pub const MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS: u64 = 60;
+pub const MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS: u64 = 86400;
+pub const DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS: u64 = 600;
+
+pub const fn default_idle_suspend_quiet_period_seconds() -> u64 {
+    DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS
+}
+
+pub const fn default_idle_suspend_wake_after_seconds() -> u64 {
+    DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum IdleSuspendCapabilitySelection {
+    #[default]
+    Auto,
+    SystemdLogind,
+    Rtcwake,
+}
+
+impl IdleSuspendCapabilitySelection {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::SystemdLogind => "systemd-logind",
+            Self::Rtcwake => "rtcwake",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdleSuspendConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_idle_suspend_quiet_period_seconds", alias = "quiet_period_seconds")]
+    pub quiet_period_seconds: u64,
+    #[serde(default = "default_idle_suspend_wake_after_seconds", alias = "wake_after_seconds")]
+    pub wake_after_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "enrollment_reference")]
+    pub enrollment_reference: Option<String>,
+    #[serde(default, alias = "capability_selection")]
+    pub capability_selection: IdleSuspendCapabilitySelection,
+}
+
+impl Default for IdleSuspendConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            quiet_period_seconds: DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+            wake_after_seconds: DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+            enrollment_reference: None,
+            capability_selection: IdleSuspendCapabilitySelection::default(),
+        }
+    }
+}
+
+impl IdleSuspendConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.quiet_period_seconds < MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS
+            || self.quiet_period_seconds > MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS
+        {
+            return Err(format!(
+                "server.idle_suspend.quiet_period_seconds must be between {} and {}",
+                MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS
+            ));
+        }
+        if self.wake_after_seconds < MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+            || self.wake_after_seconds > MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+        {
+            return Err(format!(
+                "server.idle_suspend.wake_after_seconds must be between {} and {}",
+                MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+            ));
+        }
+        if let Some(enrollment) = &self.enrollment_reference {
+            if enrollment.trim().is_empty() {
+                return Err("server.idle_suspend.enrollment_reference cannot be empty when provided".into());
+            }
+            if enrollment.len() > 256 {
+                return Err("server.idle_suspend.enrollment_reference exceeds maximum length of 256 characters".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerConfig {
@@ -363,8 +459,9 @@ pub struct ServerConfig {
     pub workflow_deleted_note_retention_days: u32,
     #[serde(default = "default_workflow_stale_after_hours", alias = "workflow_stale_after_hours")]
     pub workflow_stale_after_hours: u32,
+    #[serde(default, alias = "idle_suspend")]
+    pub idle_suspend: IdleSuspendConfig,
 }
-
 pub const fn default_workflow_event_retention_days() -> u32 { 90 }
 pub const fn default_workflow_deleted_note_retention_days() -> u32 { 7 }
 pub const fn default_workflow_stale_after_hours() -> u32 { 24 }
@@ -381,6 +478,7 @@ impl ServerConfig {
         if !(1..=8760).contains(&self.workflow_stale_after_hours) {
             return Err("server.workflow_stale_after_hours must be between 1 and 8760".into());
         }
+        self.idle_suspend.validate()?;
         Ok(())
     }
 }
@@ -395,6 +493,7 @@ impl Default for ServerConfig {
             workflow_event_retention_days: default_workflow_event_retention_days(),
             workflow_deleted_note_retention_days: default_workflow_deleted_note_retention_days(),
             workflow_stale_after_hours: default_workflow_stale_after_hours(),
+            idle_suspend: IdleSuspendConfig::default(),
         }
     }
 }

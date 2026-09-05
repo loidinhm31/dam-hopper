@@ -715,6 +715,7 @@ dependencies = [
  "once_cell",
  "opaque-ke",
  "opentelemetry-proto",
+ "parking_lot",
  "pathdiff",
  "png",
  "portable-pty",
