@@ -7,6 +7,8 @@ After=network-online.target
 Type=exec
 User=@API_USER@
 Group=@API_GROUP@
+StateDirectory=dam-hopper
+RuntimeDirectory=dam-hopper
 WorkingDirectory=@API_HOME@
 Environment=HOME=@API_HOME@
 Environment=XDG_CONFIG_HOME=@API_HOME@/.config

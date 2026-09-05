@@ -23,6 +23,8 @@ fn test_render_api_unit_success() {
 
     assert!(rendered.contains("User=dam-hopper"));
     assert!(rendered.contains("Group=dam-hopper"));
+    assert!(rendered.contains("StateDirectory=dam-hopper"));
+    assert!(rendered.contains("RuntimeDirectory=dam-hopper"));
     assert!(rendered.contains("WorkingDirectory=/var/lib/dam-hopper"));
     assert!(rendered.contains("Environment=HOME=/var/lib/dam-hopper"));
     assert!(rendered.contains("Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config"));
