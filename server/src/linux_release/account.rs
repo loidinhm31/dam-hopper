@@ -98,17 +98,51 @@ pub fn verify_api_service_account(username: &str) -> Result<UserInfo, ReleaseErr
     if trimmed.is_empty() {
         return Err(ReleaseError::Config("service user cannot be empty".into()));
     }
-    let user = get_user_by_name(trimmed).ok_or_else(|| ReleaseError::Config(
-        format!("system user '{trimmed}' does not exist"),
-    ))?;
+    let user = get_user_by_name(trimmed)
+        .ok_or_else(|| ReleaseError::Config(format!("system user '{trimmed}' does not exist")))?;
 
     if user.uid == 0 || trimmed == "root" {
-        return Err(ReleaseError::Config(
-            format!("service user '{trimmed}' cannot be root (UID 0)"),
-        ));
+        return Err(ReleaseError::Config(format!(
+            "service user '{trimmed}' cannot be root (UID 0)"
+        )));
     }
 
     Ok(user)
+}
+
+/// Ensure the requested service user exists, creating it as a system user if root and missing.
+pub fn ensure_or_verify_service_user(username: &str) -> Result<UserInfo, ReleaseError> {
+    if let Some(_user) = get_user_by_name(username) {
+        return verify_api_service_account(username);
+    }
+    #[cfg(unix)]
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!(
+            "User '{username}' does not exist. Creating dedicated system user '{username}'..."
+        );
+        let res = std::process::Command::new("useradd")
+            .args([
+                "--system",
+                "--shell",
+                "/usr/sbin/nologin",
+                "--home-dir",
+                &format!("/var/lib/{username}"),
+                "--create-home",
+                username,
+            ])
+            .output();
+        if let Ok(output) = res {
+            if output.status.success() {
+                eprintln!("Successfully created system user '{username}'.");
+            }
+        }
+        if get_user_by_name(username).is_none() {
+            let _ = std::process::Command::new("useradd")
+                .args(["--system", "--create-home", username])
+                .output();
+        }
+    }
+    verify_api_service_account(username)
 }
 
 /// Interactively prompt or automatically resolve the service user for dam-hopper-api.
@@ -118,11 +152,13 @@ pub fn resolve_service_user(
 ) -> Result<String, ReleaseError> {
     if let Some(user) = explicit {
         let trimmed = user.trim();
-        verify_api_service_account(trimmed)?;
+        ensure_or_verify_service_user(trimmed)?;
         return Ok(trimmed.to_string());
     }
 
-    let sudo_user = std::env::var("SUDO_USER").ok().filter(|u| !u.trim().is_empty());
+    let sudo_user = std::env::var("SUDO_USER")
+        .ok()
+        .filter(|u| !u.trim().is_empty());
     let default_candidate = if let Some(su) = &sudo_user {
         if su != "root" && get_user_by_name(su).map(|u| u.uid != 0).unwrap_or(false) {
             Some(su.clone())
@@ -133,14 +169,16 @@ pub fn resolve_service_user(
         None
     };
 
-    let default_user = default_candidate
-        .or_else(|| {
-            if get_user_by_name("dam-hopper").map(|u| u.uid != 0).unwrap_or(false) {
-                Some("dam-hopper".to_string())
-            } else {
-                None
-            }
-        });
+    let default_user = default_candidate.or_else(|| {
+        if get_user_by_name("dam-hopper")
+            .map(|u| u.uid != 0)
+            .unwrap_or(false)
+        {
+            Some("dam-hopper".to_string())
+        } else {
+            None
+        }
+    });
 
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() && !non_interactive {
@@ -163,10 +201,10 @@ pub fn resolve_service_user(
         } else {
             chosen
         };
-        verify_api_service_account(final_user)?;
+        ensure_or_verify_service_user(final_user)?;
         Ok(final_user.to_string())
     } else if let Some(user) = default_user {
-        verify_api_service_account(&user)?;
+        ensure_or_verify_service_user(&user)?;
         Ok(user)
     } else {
         Err(ReleaseError::Config(

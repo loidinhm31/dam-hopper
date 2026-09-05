@@ -464,13 +464,36 @@ pub(crate) fn execute_staging_transaction(
                 .previous
                 .as_ref()
                 .is_some_and(|p| p.release_path == target_dir.to_string_lossy());
-            if (is_active || is_previous) && !reinstall {
+            let effective_reinstall = if (is_active || is_previous) && !reinstall {
+                use std::io::IsTerminal;
+                if std::io::stdin().is_terminal() {
+                    eprintln!(
+                        "Release destination '{}' is currently active or previous.",
+                        target_dir.display()
+                    );
+                    eprint!("Do you want to stop active units and reinstall/replace? [y/N]: ");
+                    use std::io::Write;
+                    let _ = std::io::stderr().flush();
+                    let mut input = String::new();
+                    if std::io::stdin().read_line(&mut input).is_ok() {
+                        let trimmed = input.trim().to_lowercase();
+                        trimmed == "y" || trimmed == "yes"
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                reinstall
+            };
+            if (is_active || is_previous) && !effective_reinstall {
                 return Err(ReleaseError::InvalidBundle {
                     path: target_dir.display().to_string(),
                     reason: "cannot overwrite active or previous release destination (use --reinstall to replace)".to_string(),
                 });
             }
-            if (is_active || is_previous) && reinstall {
+            if (is_active || is_previous) && effective_reinstall {
                 for &unit in super::constants::ALL_SERVICE_UNITS {
                     let _ = super::systemd::systemctl_stop(unit);
                 }

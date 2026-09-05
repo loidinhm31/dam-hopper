@@ -257,6 +257,22 @@ done
 if [[ -n "${SERVICE_USER}" ]]; then
     INSTALL_CMD+=("--service-user" "${SERVICE_USER}")
 fi
+if [[ -d "/opt/dam-hopper/releases/${TAG}/${ROLE}" && ${REINSTALL} -eq 0 ]]; then
+    echo "Release ${TAG} for role '${ROLE}' is already installed at /opt/dam-hopper/releases/${TAG}/${ROLE}."
+    REINSTALL_CONFIRMED=""
+    if [[ -t 0 ]]; then
+        read -r -p "Do you want to reinstall and replace it? [y/N] " REINSTALL_CONFIRMED || true
+    elif [[ -e /dev/tty ]]; then
+        read -r -p "Do you want to reinstall and replace it? [y/N] " REINSTALL_CONFIRMED < /dev/tty || true
+    fi
+    if [[ "${REINSTALL_CONFIRMED}" =~ ^[Yy]$ || "${REINSTALL_CONFIRMED}" =~ ^[Yy][Ee][Ss]$ ]]; then
+        REINSTALL=1
+    else
+        echo "Aborting install. To replace the existing installation, rerun with --reinstall" >&2
+        exit 1
+    fi
+fi
+
 if [[ ${REINSTALL} -eq 1 ]]; then
     INSTALL_CMD+=("--reinstall")
     echo "Stopping existing services and clearing old release directory for clean reinstall..."

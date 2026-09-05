@@ -12,8 +12,8 @@ use super::process::{
     inspect_service_process, is_port_listening_wildcard, verify_service_identity_and_exe,
 };
 use super::systemd::systemctl_is_active;
-use reqwest::Client;
 use futures_util::StreamExt;
+use reqwest::Client;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -56,7 +56,15 @@ pub use HttpProbeOutcome as ProbeOutcome;
 async fn probe_target(client: &Client, target: &HealthProbeTarget) -> ProbeOutcome {
     match systemctl_is_active(&target.unit_name) {
         Ok(true) => {}
-        Ok(false) => return ProbeOutcome::Transient("unit is not active".into()),
+        Ok(false) => {
+            let diag = query_unit_failure_log(&target.unit_name);
+            let msg = if let Some(d) = diag {
+                format!("unit is not active ({d})")
+            } else {
+                "unit is not active".into()
+            };
+            return ProbeOutcome::Transient(msg);
+        }
         Err(e) => return ProbeOutcome::Fatal(format!("systemctl is-active failed: {e}")),
     }
 
@@ -66,11 +74,9 @@ async fn probe_target(client: &Client, target: &HealthProbeTarget) -> ProbeOutco
         Err(e) => return ProbeOutcome::Fatal(format!("inspect process failed: {e}")),
     };
 
-    if let Err(e) = verify_service_identity_and_exe(
-        &evidence,
-        target.expected_uid,
-        &target.expected_exe_prefix,
-    ) {
+    if let Err(e) =
+        verify_service_identity_and_exe(&evidence, target.expected_uid, &target.expected_exe_prefix)
+    {
         return ProbeOutcome::Fatal(format!("process identity check failed: {e}"));
     }
     if evidence.gid != target.expected_gid {
@@ -82,7 +88,12 @@ async fn probe_target(client: &Client, target: &HealthProbeTarget) -> ProbeOutco
 
     match is_port_listening_wildcard(target.port) {
         Ok(true) => {}
-        Ok(false) => return ProbeOutcome::Transient(format!("port {} not listening on wildcard", target.port)),
+        Ok(false) => {
+            return ProbeOutcome::Transient(format!(
+                "port {} not listening on wildcard",
+                target.port
+            ));
+        }
         Err(e) => return ProbeOutcome::Fatal(format!("port check error: {e}")),
     }
 
@@ -112,14 +123,18 @@ pub async fn probe_http_endpoint(
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     if !ctype.contains("application/json") {
-        return HttpProbeOutcome::Fatal(format!("unexpected Content-Type '{ctype}', expected JSON"));
+        return HttpProbeOutcome::Fatal(format!(
+            "unexpected Content-Type '{ctype}', expected JSON"
+        ));
     }
 
     if resp
         .content_length()
         .is_some_and(|length| length > MAX_HEALTH_BODY_BYTES as u64)
     {
-        return HttpProbeOutcome::Fatal(format!("health body exceeds {MAX_HEALTH_BODY_BYTES} bytes"));
+        return HttpProbeOutcome::Fatal(format!(
+            "health body exceeds {MAX_HEALTH_BODY_BYTES} bytes"
+        ));
     }
 
     let mut stream = resp.bytes_stream();
@@ -134,7 +149,9 @@ pub async fn probe_http_endpoint(
             }
         };
         if bytes.len().saturating_add(chunk.len()) > MAX_HEALTH_BODY_BYTES {
-            return HttpProbeOutcome::Fatal(format!("health body exceeds {MAX_HEALTH_BODY_BYTES} bytes"));
+            return HttpProbeOutcome::Fatal(format!(
+                "health body exceeds {MAX_HEALTH_BODY_BYTES} bytes"
+            ));
         }
         bytes.extend_from_slice(&chunk);
     }
@@ -145,13 +162,19 @@ pub async fn probe_http_endpoint(
     };
 
     if body.schema_version != 1 {
-        return HttpProbeOutcome::Fatal(format!("schemaVersion {}, expected 1", body.schema_version));
+        return HttpProbeOutcome::Fatal(format!(
+            "schemaVersion {}, expected 1",
+            body.schema_version
+        ));
     }
     if body.status != "ok" {
         return HttpProbeOutcome::Fatal(format!("status '{}', expected 'ok'", body.status));
     }
     if body.role != expected_role {
-        return HttpProbeOutcome::Fatal(format!("role '{}', expected '{}'", body.role, expected_role));
+        return HttpProbeOutcome::Fatal(format!(
+            "role '{}', expected '{}'",
+            body.role, expected_role
+        ));
     }
     if body.version != expected_version {
         return HttpProbeOutcome::Fatal(format!(
@@ -230,4 +253,26 @@ pub async fn wait_for_health_stability(
 
         tokio::time::sleep(interval).await;
     }
+}
+
+fn query_unit_failure_log(unit_name: &str) -> Option<String> {
+    let output = std::process::Command::new("journalctl")
+        .args(["-u", unit_name, "-n", "3", "--no-pager"])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<&str> = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with("-- Boot"))
+            .collect();
+        if !lines.is_empty() {
+            let tail = lines[lines.len().saturating_sub(2)..].join("; ");
+            if !tail.is_empty() {
+                return Some(tail);
+            }
+        }
+    }
+    None
 }
