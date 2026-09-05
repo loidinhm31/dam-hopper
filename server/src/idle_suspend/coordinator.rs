@@ -7,6 +7,10 @@ use tokio::sync::{mpsc, oneshot, watch, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::idle_suspend::executor::IdleSuspendExecutor;
+use crate::config::{
+    MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+    MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+};
 use crate::idle_suspend::policy::{
     validate_timing_pair, RuntimeIdleSuspendTiming, StartupIdleSuspendPolicy,
 };
@@ -79,6 +83,27 @@ impl IdleSuspendCoordinator {
         executor: Arc<dyn IdleSuspendExecutor>,
         pty_manager: PtySessionManager,
     ) -> Self {
+        Self::start_with_sink(
+            startup_policy,
+            runtime_timing,
+            timing_store,
+            timing_audit,
+            executor,
+            pty_manager,
+            None,
+        )
+    }
+
+    pub fn start_with_sink(
+        startup_policy: StartupIdleSuspendPolicy,
+        runtime_timing: Arc<RwLock<RuntimeIdleSuspendTiming>>,
+        timing_store: Option<IdleSuspendTimingStore>,
+        timing_audit: Option<IdleSuspendTimingAudit>,
+        executor: Arc<dyn IdleSuspendExecutor>,
+        pty_manager: PtySessionManager,
+        event_sink: Option<Arc<dyn crate::pty::EventSink>>,
+    ) -> Self {
+        let event_sink = event_sink.unwrap_or_else(|| pty_manager.sink());
         let (command_tx, command_rx) = mpsc::channel(32);
         let shutdown_token = CancellationToken::new();
 
@@ -100,9 +125,20 @@ impl IdleSuspendCoordinator {
             status_revision: 1,
             state: initial_state,
             enabled: startup_policy.enabled,
+            timing_mutable: startup_policy.enabled && initial_state != CoordinatorState::HandedOff,
+            timing_mutable_reason: if !startup_policy.enabled {
+                Some("disabled".to_string())
+            } else {
+                None
+            },
+            capability_code: startup_policy.capability_selection.as_str().to_string(),
             current_epoch: 0,
             quiet_period_seconds: quiet,
             wake_after_seconds: wake,
+            min_quiet_period_seconds: MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+            max_quiet_period_seconds: MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+            min_wake_after_seconds: MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+            max_wake_after_seconds: MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
             fleet_snapshot,
             arm_deadline_ms: None,
             last_outcome: None,
@@ -121,6 +157,7 @@ impl IdleSuspendCoordinator {
                 timing_audit,
                 executor,
                 pty_manager,
+                event_sink,
                 fleet_watcher,
                 command_rx,
                 status_tx,
@@ -179,6 +216,7 @@ async fn run_coordinator(
     timing_audit: Option<IdleSuspendTimingAudit>,
     executor: Arc<dyn IdleSuspendExecutor>,
     pty_manager: PtySessionManager,
+    event_sink: Arc<dyn crate::pty::EventSink>,
     mut fleet_watcher: crate::pty::fleet_state::PtyFleetWatcher,
     mut command_rx: mpsc::Receiver<CommandMessage>,
     status_tx: watch::Sender<IdleSuspendStatusV1>,
@@ -187,7 +225,6 @@ async fn run_coordinator(
     mut wake_after_seconds: u64,
 ) {
     let initial_snapshot = fleet_watcher.snapshot();
-
     let mut state = if startup_policy.enabled {
         CoordinatorState::Watching
     } else {
@@ -201,6 +238,21 @@ async fn run_coordinator(
     let mut armed_generation: Option<u64> = None;
     let mut last_outcome: Option<SuspendOutcome> = None;
     let mut detail: Option<String> = None;
+    publish_status(
+        &status_tx,
+        Some(&*event_sink),
+        state,
+        &startup_policy,
+        quiet_period_seconds,
+        wake_after_seconds,
+        status_revision,
+        current_epoch,
+        initial_snapshot,
+        arm_deadline,
+        &last_outcome,
+        &detail,
+    );
+
 
     loop {
         let sleep_fut = async {
@@ -216,7 +268,7 @@ async fn run_coordinator(
                 if state == CoordinatorState::Armed {
                     state = CoordinatorState::Watching;
                     status_revision = status_revision.wrapping_add(1);
-                    publish_status(&status_tx, state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, pty_manager.fleet_snapshot(), None, &last_outcome, &detail);
+                    publish_status(&status_tx, Some(&*event_sink), state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, pty_manager.fleet_snapshot(), None, &last_outcome, &detail);
                 }
                 break;
             }
@@ -239,7 +291,7 @@ async fn run_coordinator(
                     &pty_manager,
                     epoch_ready,
                 ).await;
-                publish_status(&status_tx, state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, pty_manager.fleet_snapshot(), arm_deadline, &last_outcome, &detail);
+                publish_status(&status_tx, Some(&*event_sink), state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, pty_manager.fleet_snapshot(), arm_deadline, &last_outcome, &detail);
                 let _ = reply.send(result);
             }
             changed = fleet_watcher.changed() => {
@@ -259,7 +311,7 @@ async fn run_coordinator(
                     &startup_policy,
                     quiet_period_seconds,
                 );
-                publish_status(&status_tx, state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, snapshot, arm_deadline, &last_outcome, &detail);
+                publish_status(&status_tx, Some(&*event_sink), state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, snapshot, arm_deadline, &last_outcome, &detail);
             }
             _ = sleep_fut => {
                 handle_deadline(
@@ -278,6 +330,7 @@ async fn run_coordinator(
                     &executor,
                     &status_tx,
                     &startup_policy,
+                    &event_sink,
                 ).await;
             }
         }
@@ -286,6 +339,7 @@ async fn run_coordinator(
 
 fn publish_status(
     tx: &watch::Sender<IdleSuspendStatusV1>,
+    event_sink: Option<&dyn crate::pty::EventSink>,
     state: CoordinatorState,
     startup_policy: &StartupIdleSuspendPolicy,
     quiet_period_seconds: u64,
@@ -312,15 +366,31 @@ fn publish_status(
         status_revision,
         state,
         enabled: startup_policy.enabled,
+        timing_mutable: startup_policy.enabled && state != CoordinatorState::HandedOff,
+        timing_mutable_reason: if !startup_policy.enabled {
+            Some("disabled".to_string())
+        } else if state == CoordinatorState::HandedOff {
+            Some("handoffInProgress".to_string())
+        } else {
+            None
+        },
+        capability_code: startup_policy.capability_selection.as_str().to_string(),
         current_epoch,
         quiet_period_seconds,
         wake_after_seconds,
+        min_quiet_period_seconds: MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+        max_quiet_period_seconds: MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+        min_wake_after_seconds: MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+        max_wake_after_seconds: MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
         fleet_snapshot,
         arm_deadline_ms,
         last_outcome: last_outcome.clone(),
         detail: detail.clone(),
         timestamp_ms: IdleSuspendStatusV1::now_ms(),
     };
+    if let Some(sink) = event_sink {
+        sink.send_idle_suspend_changed(status_revision);
+    }
     let _ = tx.send(status);
 }
 
@@ -522,6 +592,7 @@ async fn handle_deadline(
     executor: &Arc<dyn IdleSuspendExecutor>,
     status_tx: &watch::Sender<IdleSuspendStatusV1>,
     startup_policy: &StartupIdleSuspendPolicy,
+    event_sink: &Arc<dyn crate::pty::EventSink>,
 ) {
     *arm_deadline = None;
     *armed_generation = None;
@@ -532,8 +603,10 @@ async fn handle_deadline(
         Ok(_claim) => {
             *state = CoordinatorState::HandedOff;
             *status_revision = status_revision.wrapping_add(1);
+            let event_sink_ref = event_sink.as_ref();
             publish_status(
                 status_tx,
+                Some(event_sink_ref),
                 *state,
                 startup_policy,
                 quiet_period_seconds,
@@ -580,8 +653,10 @@ async fn handle_deadline(
             pty_manager.release_handoff();
             *epoch_ready = false;
             *status_revision = status_revision.wrapping_add(1);
+            let event_sink_ref = event_sink.as_ref();
             publish_status(
                 status_tx,
+                Some(event_sink_ref),
                 *state,
                 startup_policy,
                 quiet_period_seconds,
@@ -598,8 +673,10 @@ async fn handle_deadline(
             *state = CoordinatorState::Watching;
             *epoch_ready = false;
             *status_revision = status_revision.wrapping_add(1);
+            let event_sink_ref = event_sink.as_ref();
             publish_status(
                 status_tx,
+                Some(event_sink_ref),
                 *state,
                 startup_policy,
                 quiet_period_seconds,

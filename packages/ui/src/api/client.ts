@@ -559,6 +559,95 @@ export interface SshForgetCredentialResult {
   forgotten: boolean;
   error?: string;
 }
+// ── Terminal Idle Suspend Types ───────────────────────────────────────────────
+
+export type IdleSuspendCoordinatorState =
+  | "disabled"
+  | "watching"
+  | "armed"
+  | "finalCheck"
+  | "handedOff"
+  | "suppressed"
+  | "failed"
+  | "resumed";
+
+export interface IdleSuspendFleetSnapshot {
+  generation: number;
+  liveCount: number;
+  creatingCount: number;
+  restartPendingCount: number;
+  quiescent: boolean;
+  disposing: boolean;
+  handoffActive: boolean;
+}
+
+export type IdleSuspendOutcome =
+  | { type: "resumedSuccessfully"; resumedAtMs: number }
+  | { type: "rejectedFleetActive"; reason: string }
+  | { type: "blockedByInhibitor"; inhibitor: string }
+  | { type: "unsupportedCapability"; detail: string }
+  | { type: "executionFailed"; error: string };
+
+export interface IdleSuspendStatusV1 {
+  version: 1;
+  statusRevision: number;
+  state: IdleSuspendCoordinatorState;
+  enabled: boolean;
+  timingMutable: boolean;
+  timingMutableReason?: string | null;
+  capabilityCode: string;
+  currentEpoch: number;
+  quietPeriodSeconds: number;
+  wakeAfterSeconds: number;
+  minQuietPeriodSeconds: number;
+  maxQuietPeriodSeconds: number;
+  minWakeAfterSeconds: number;
+  maxWakeAfterSeconds: number;
+  fleetSnapshot: IdleSuspendFleetSnapshot;
+  armDeadlineMs?: number | null;
+  lastOutcome?: IdleSuspendOutcome | null;
+  detail?: string | null;
+  timestampMs: number;
+}
+
+export function isIdleSuspendStatusV1(value: unknown): value is IdleSuspendStatusV1 {
+  if (typeof value !== "object" || value === null) return false;
+  const s = value as Record<string, unknown>;
+  return (
+    s.version === 1 &&
+    typeof s.statusRevision === "number" &&
+    typeof s.state === "string" &&
+    typeof s.enabled === "boolean" &&
+    typeof s.timingMutable === "boolean" &&
+    typeof s.capabilityCode === "string" &&
+    typeof s.quietPeriodSeconds === "number" &&
+    typeof s.wakeAfterSeconds === "number" &&
+    typeof s.minQuietPeriodSeconds === "number" &&
+    typeof s.maxQuietPeriodSeconds === "number" &&
+    typeof s.minWakeAfterSeconds === "number" &&
+    typeof s.maxWakeAfterSeconds === "number" &&
+    typeof s.fleetSnapshot === "object" &&
+    s.fleetSnapshot !== null &&
+    typeof s.timestampMs === "number"
+  );
+}
+
+export function asIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 | null {
+  return isIdleSuspendStatusV1(value) ? value : null;
+}
+
+export interface IdleSuspendTimingPatchRequest {
+  quietPeriodSeconds: number;
+  wakeAfterSeconds: number;
+}
+
+export interface IdleSuspendTimingPatchResponse {
+  version: 1;
+  changed: boolean;
+  statusRevision: number;
+  quietPeriodSeconds: number;
+  wakeAfterSeconds: number;
+}
 
 // ── Memory + Import Types ─────────────────────────────────────────────────────
 // NOTE: These mirror types from @dam-hopper/core. Duplication is intentional —
@@ -1675,6 +1764,13 @@ export const api = {
         {
           limit,
         },
+      ),
+    idleSuspendStatus: () =>
+      getTransport().invoke<IdleSuspendStatusV1>("system:idleSuspendStatus"),
+    updateIdleSuspendTiming: (timing: IdleSuspendTimingPatchRequest) =>
+      getTransport().invoke<IdleSuspendTimingPatchResponse>(
+        "system:updateIdleSuspendTiming",
+        timing,
       ),
   },
   usage: {

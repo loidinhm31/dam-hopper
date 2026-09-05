@@ -27,7 +27,7 @@ use crate::state::AppState;
 
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
-    fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, media_session,
+    fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend, media_session,
     port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, usage,
     usage_sessions, workspace, ws, workflow,
 };
@@ -303,6 +303,16 @@ pub fn build_router_with_web_dir_and_origins(
             get(host_actions::get_execution),
         )
         .route("/api/system/actions/v1/audit", get(host_actions::get_audit))
+        // Terminal idle suspend
+        .route(
+            "/api/system/idle-suspend/v1/status",
+            get(idle_suspend::get_status),
+        )
+        .route(
+            "/api/system/idle-suspend/v1/timing",
+            patch(idle_suspend::update_timing)
+                .layer(RequestBodyLimitLayer::new(16 * 1024)),
+        )
         // Diagnostics
         .route(
             "/api/diagnostics/export",

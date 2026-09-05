@@ -13,6 +13,7 @@ pub mod fs_video;
 pub mod git;
 pub mod git_diff;
 pub mod host_actions;
+pub mod idle_suspend;
 mod http_byte_range;
 pub mod media_session;
 mod media_stream_headers;
