@@ -66,8 +66,9 @@ pub fn validate_api_unit_policy(
     }
 
     let expected_exec = format!(
-        "{}/bin/dam-hopper-server --config /etc/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801",
-        ctx.release_root.display()
+        "{}/bin/dam-hopper-server --config {}/.config/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801",
+        ctx.release_root.display(),
+        ctx.api_home
     );
     assert_eq_prop(unit, name, "Service", "ExecStart", &expected_exec)?;
 
