@@ -28,6 +28,8 @@ pub fn validate_api_unit_policy(
     assert_eq_prop(unit, name, "Service", "Type", "exec")?;
     assert_eq_prop(unit, name, "Service", "User", &ctx.api_user)?;
     assert_eq_prop(unit, name, "Service", "Group", &ctx.api_group)?;
+    assert_eq_prop(unit, name, "Service", "StateDirectory", "dam-hopper")?;
+    assert_eq_prop(unit, name, "Service", "RuntimeDirectory", "dam-hopper")?;
     assert_eq_prop(unit, name, "Service", "WorkingDirectory", &ctx.api_home)?;
     assert_eq_prop(unit, name, "Service", "Restart", "on-failure")?;
     assert_eq_prop(unit, name, "Service", "KillSignal", "SIGTERM")?;

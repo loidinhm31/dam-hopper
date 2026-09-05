@@ -26,6 +26,8 @@ pub const API_SERVICE_UNIT: &str = "dam-hopper-api.service";
 pub const API_SERVICE_IDENTITY: &str = "root";
 /// Default fallback system user for the API server.
 pub const DEFAULT_API_SERVICE_USER: &str = "dam-hopper";
+/// Dedicated home and state directory for the API server.
+pub const API_SERVICE_HOME: &str = "/var/lib/dam-hopper";
 /// Default bind host for the API server.
 pub const API_SERVICE_BIND_HOST: &str = "0.0.0.0";
 /// Dedicated port for the API server.
@@ -48,11 +50,7 @@ pub const WEB_SERVICE_HEALTH_PATH: &str = "/__dam-hopper/health";
 pub const RECOVERY_SERVICE_UNIT: &str = "dam-hopper-recovery.service";
 
 /// All managed release systemd service unit names.
-pub const ALL_SERVICE_UNITS: &[&str] = &[
-    API_SERVICE_UNIT,
-    WEB_SERVICE_UNIT,
-    RECOVERY_SERVICE_UNIT,
-];
+pub const ALL_SERVICE_UNITS: &[&str] = &[API_SERVICE_UNIT, WEB_SERVICE_UNIT, RECOVERY_SERVICE_UNIT];
 
 /// Standard rollback declaration compatibility flag.
 pub const ROLLBACK_PREVIOUS_COMPATIBLE: bool = true;

@@ -118,7 +118,7 @@ pub async fn execute_activation_locked_with_args(
                                 &content,
                                 &user_name,
                                 &group_name,
-                                &user_info.home,
+                                super::constants::API_SERVICE_HOME,
                             ) {
                                 let _ = fs::write(&installed_api_unit, updated.as_bytes());
                                 let _ = systemctl_daemon_reload();
@@ -181,7 +181,7 @@ pub async fn execute_activation_locked_with_args(
                     &unit_content,
                     &user_name,
                     &group_name,
-                    &user_info.home,
+                    super::constants::API_SERVICE_HOME,
                 )?;
                 fs::write(&api_unit_path, updated.as_bytes()).map_err(|e| ReleaseError::Io {
                     action: "write updated pending api unit",
@@ -678,15 +678,26 @@ fn hash_optional_file(path: &Path) -> Result<Option<String>, ReleaseError> {
     }
 }
 
-fn ensure_user_config_ownership(home: &str, uid: u32, gid: u32) {
-    let home_path = std::path::Path::new(home);
-    let dot_config = home_path.join(".config");
-    let user_config_dir = dot_config.join("dam-hopper");
-    let _ = fs::create_dir_all(&user_config_dir);
-    #[cfg(unix)]
-    {
-        chown_single(&dot_config, uid, gid);
-        chown_recursive(&user_config_dir, uid, gid);
+fn ensure_user_config_ownership(user_home: &str, uid: u32, gid: u32) {
+    let targets = if user_home == super::constants::API_SERVICE_HOME {
+        vec![std::path::PathBuf::from(super::constants::API_SERVICE_HOME)]
+    } else {
+        vec![
+            std::path::PathBuf::from(super::constants::API_SERVICE_HOME),
+            std::path::PathBuf::from(user_home),
+        ]
+    };
+    for base in targets {
+        let _ = fs::create_dir_all(&base);
+        let dot_config = base.join(".config");
+        let user_config_dir = dot_config.join("dam-hopper");
+        let _ = fs::create_dir_all(&user_config_dir);
+        #[cfg(unix)]
+        {
+            chown_single(&base, uid, gid);
+            chown_single(&dot_config, uid, gid);
+            chown_recursive(&user_config_dir, uid, gid);
+        }
     }
 }
 
