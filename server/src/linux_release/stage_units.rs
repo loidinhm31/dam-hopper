@@ -1,15 +1,13 @@
 //! Staging and isolated verification of candidate systemd units and public host config.
 
-use super::error::ReleaseError;
 use super::durable_fs::atomic_write_file;
-use super::host_config::{load_host_public_config, save_host_public_config, HostPublicConfig};
+use super::error::ReleaseError;
+use super::host_config::{HostPublicConfig, load_host_public_config, save_host_public_config};
 use super::inventory::TargetRole;
 use super::layout::Layout;
 use super::manifest::ReleaseManifest;
 use super::systemd::systemd_analyze_verify;
-use super::unit::{
-    render_api_unit, render_recovery_unit, render_web_unit, UnitRenderContext,
-};
+use super::unit::{UnitRenderContext, render_api_unit, render_recovery_unit, render_web_unit};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -37,7 +35,6 @@ pub fn stage_candidate_units(
     )
 }
 
-
 /// Stage release-owned units with transaction-scoped unit and public-config paths.
 pub(crate) fn stage_candidate_units_for_release_with_render_root_and_config(
     layout: &Layout,
@@ -62,7 +59,6 @@ pub(crate) fn stage_candidate_units_for_release_with_render_root_and_config(
         true,
     )
 }
-
 
 fn stage_candidate_units_inner(
     layout: &Layout,
@@ -102,13 +98,11 @@ fn stage_candidate_units_inner(
         action: "create pending-units directory",
         details: e.to_string(),
     })?;
-    fs::set_permissions(
-        pending_units_dir,
-        fs::Permissions::from_mode(0o700),
-    )
-    .map_err(|e| ReleaseError::Io {
-        action: "set pending-units directory permissions",
-        details: e.to_string(),
+    fs::set_permissions(pending_units_dir, fs::Permissions::from_mode(0o700)).map_err(|e| {
+        ReleaseError::Io {
+            action: "set pending-units directory permissions",
+            details: e.to_string(),
+        }
     })?;
 
     let existing_public_config = load_host_public_config(&layout.host_config_json_path())?;
@@ -122,11 +116,15 @@ fn stage_candidate_units_inner(
     let (service_user, service_group, service_home) = if let Some(config) = &host_config {
         if let Some(user_name) = &config.service_user {
             if let Some(user) = super::account::get_user_by_name(user_name) {
-                let group = super::account::get_group_by_gid(user.gid)
-                    .unwrap_or_else(|| user_name.clone());
-                (user_name.clone(), group, user.home)
+                let group =
+                    super::account::get_group_by_gid(user.gid).unwrap_or_else(|| user_name.clone());
+                (user_name.clone(), group, "/var/lib/dam-hopper".to_string())
             } else {
-                (user_name.clone(), user_name.clone(), format!("/home/{user_name}"))
+                (
+                    user_name.clone(),
+                    user_name.clone(),
+                    "/var/lib/dam-hopper".to_string(),
+                )
             }
         } else {
             resolve_staging_service_identity()
