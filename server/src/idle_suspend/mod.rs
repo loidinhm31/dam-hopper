@@ -19,7 +19,8 @@ pub use policy::{
     validate_timing_pair, RuntimeIdleSuspendTiming, StartupIdleSuspendPolicy,
 };
 pub use protocol::{
-    decode_frame, encode_frame, read_frame_async, validate_request_id, write_frame_async,
+    decode_frame, encode_frame, read_frame_async, validate_request_id,
+    validate_suspend_wake_seconds, write_frame_async,
     HelperRequestFrame, HelperRequestPayload, HelperResponseFrame, HelperResponsePayload,
     IdleSuspendErrorCode, IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse,
     ProtocolError, RequestDeduplicator, SuspendOutcome, SuspendWithRtcWakeRequest,

@@ -477,6 +477,32 @@ async fn test_idle_suspend_pre_handoff_timing_patch_rearms() {
     coordinator.shutdown().await;
 }
 
+#[tokio::test]
+async fn test_idle_suspend_automatic_timing_rejects_zero_wake_after_seconds() {
+    let fixture = setup_test_fixture(true, 300, 600);
+    let fake_executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(fake_executor)
+        .await;
+
+    // Attempting to update automatic timing with wake_after_seconds = 0 MUST fail validation
+    let cmd = UpdateTimingCommand {
+        actor: "admin-tester".to_string(),
+        quiet_period_seconds: 300,
+        wake_after_seconds: 0,
+    };
+    let result = coordinator.update_timing(cmd).await;
+    match result {
+        CoordinatorTimingResult::ValidationFailed(error) => {
+            assert!(error.contains("wakeAfterSeconds") || error.contains("wake") || error.contains("Bounds"));
+        }
+        other => panic!("Expected ValidationFailed for wake_after_seconds=0, got: {other:?}"),
+    }
+
+    coordinator.shutdown().await;
+}
+
 // ---------------------------------------------------------------------------
 // 5. Post-handoff Timing Mutation is Rejected with HandoffInProgress (409)
 // ---------------------------------------------------------------------------

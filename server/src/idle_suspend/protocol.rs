@@ -189,6 +189,18 @@ pub fn validate_request_id(id: &str) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+/// Validates wake after seconds for suspend execution: exactly 0 (indefinite) or bounded (60..=86400).
+pub fn validate_suspend_wake_seconds(wake_after_seconds: u64) -> Result<(), ProtocolError> {
+    if wake_after_seconds == 0
+        || (wake_after_seconds >= crate::config::MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+            && wake_after_seconds <= crate::config::MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS)
+    {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidWakeSeconds(wake_after_seconds))
+    }
+}
+
 /// Bounded FIFO deduplication cache for helper request IDs to reject replays.
 #[derive(Debug)]
 pub struct RequestDeduplicator {
@@ -256,11 +268,7 @@ impl HelperRequestFrame {
 
     pub fn new_suspend(req: SuspendWithRtcWakeRequest) -> Result<Self, ProtocolError> {
         validate_request_id(&req.request_id)?;
-        if req.wake_after_seconds < crate::config::MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS
-            || req.wake_after_seconds > crate::config::MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS
-        {
-            return Err(ProtocolError::InvalidWakeSeconds(req.wake_after_seconds));
-        }
+        validate_suspend_wake_seconds(req.wake_after_seconds)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -283,11 +291,7 @@ impl HelperRequestFrame {
             HelperRequestPayload::ProbeCapability => Ok(()),
             HelperRequestPayload::SuspendWithRtcWake(req) => {
                 validate_request_id(&req.request_id)?;
-                if req.wake_after_seconds < crate::config::MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS
-                    || req.wake_after_seconds > crate::config::MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS
-                {
-                    return Err(ProtocolError::InvalidWakeSeconds(req.wake_after_seconds));
-                }
+                validate_suspend_wake_seconds(req.wake_after_seconds)?;
                 Ok(())
             }
         }

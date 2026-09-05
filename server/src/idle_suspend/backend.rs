@@ -3,8 +3,9 @@ use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// Trait defining execution of the fixed RTC-wake programming and host suspend.
 pub trait SuspendActionBackend: Send + Sync {
-    /// Program the hardware RTC wakealarm for `wake_after_seconds` into the future.
-    fn program_rtc_wake(&self, wake_after_seconds: u64) -> Result<(), String>;
+    /// Program the hardware RTC wakealarm for `wake_after_seconds` into the future,
+    /// or clear any existing alarm if `wake_after_seconds` is `None` (indefinite sleep).
+    fn program_rtc_wake(&self, wake_after_seconds: Option<u64>) -> Result<(), String>;
     /// Trigger host suspend via systemd logind, blocking until host resumes. Returns elapsed seconds.
     fn trigger_suspend(&self) -> Result<u64, String>;
 }
@@ -49,29 +50,79 @@ impl Default for SystemdLogindBackend {
 }
 
 impl SuspendActionBackend for SystemdLogindBackend {
-    fn program_rtc_wake(&self, wake_after_seconds: u64) -> Result<(), String> {
-        let now_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| format!("System clock error: {e}"))?
-            .as_secs();
-
-        let target_epoch = now_epoch
-            .checked_add(wake_after_seconds)
-            .ok_or_else(|| "Target wake epoch timestamp overflowed".to_string())?;
-
-        // 1. Clear any prior alarm by writing 0
-        let _ = std::fs::write(&self.rtc_wakealarm_path, "0\n");
-
-        // 2. Program new target epoch alarm
-        let target_str = format!("{}\n", target_epoch);
-        std::fs::write(&self.rtc_wakealarm_path, target_str).map_err(|e| {
+    fn program_rtc_wake(&self, wake_after_seconds: Option<u64>) -> Result<(), String> {
+        // 1. Clear any prior alarm by writing 0\n and strictly verify the write
+        std::fs::write(&self.rtc_wakealarm_path, "0\n").map_err(|e| {
             format!(
-                "Failed writing target alarm {} to {}: {}",
-                target_epoch,
+                "Failed clearing RTC wakealarm at {}: {}",
                 self.rtc_wakealarm_path.display(),
                 e
             )
         })?;
+
+        // 2. Read back to verify clear operation
+        let cleared_content = std::fs::read_to_string(&self.rtc_wakealarm_path).map_err(|e| {
+            format!(
+                "Failed reading back cleared RTC wakealarm from {}: {}",
+                self.rtc_wakealarm_path.display(),
+                e
+            )
+        })?;
+        let trimmed_clear = cleared_content.trim();
+        if !trimmed_clear.is_empty() && trimmed_clear != "0" {
+            return Err(format!(
+                "RTC wakealarm clear verification failed at {}: readback was '{}'",
+                self.rtc_wakealarm_path.display(),
+                trimmed_clear
+            ));
+        }
+
+        // 3. For timed mode (Some), calculate target epoch, write, and verify readback
+        if let Some(seconds) = wake_after_seconds {
+            let now_epoch = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| format!("System clock error: {e}"))?
+                .as_secs();
+
+            let target_epoch = now_epoch
+                .checked_add(seconds)
+                .ok_or_else(|| "Target wake epoch timestamp overflowed".to_string())?;
+
+            let target_str = format!("{}\n", target_epoch);
+            std::fs::write(&self.rtc_wakealarm_path, &target_str).map_err(|e| {
+                format!(
+                    "Failed writing target alarm {} to {}: {}",
+                    target_epoch,
+                    self.rtc_wakealarm_path.display(),
+                    e
+                )
+            })?;
+
+            let readback_content = std::fs::read_to_string(&self.rtc_wakealarm_path).map_err(|e| {
+                format!(
+                    "Failed reading back programmed RTC wakealarm from {}: {}",
+                    self.rtc_wakealarm_path.display(),
+                    e
+                )
+            })?;
+            let readback_trimmed = readback_content.trim();
+            let readback_epoch = readback_trimmed.parse::<u64>().map_err(|e| {
+                format!(
+                    "Failed parsing readback RTC wakealarm '{}' from {}: {}",
+                    readback_trimmed,
+                    self.rtc_wakealarm_path.display(),
+                    e
+                )
+            })?;
+            if readback_epoch != target_epoch {
+                return Err(format!(
+                    "RTC wakealarm readback mismatch at {}: expected {}, got {}",
+                    self.rtc_wakealarm_path.display(),
+                    target_epoch,
+                    readback_epoch
+                ));
+            }
+        }
 
         Ok(())
     }
@@ -107,7 +158,7 @@ impl SuspendActionBackend for SystemdLogindBackend {
 /// Fake action backend for deterministic unit/integration testing.
 #[derive(Debug, Default)]
 pub struct FakeActionBackend {
-    pub programmed_wake: Mutex<Option<u64>>,
+    pub programmed_wake: Mutex<Option<Option<u64>>>,
     pub suspend_called: Mutex<bool>,
     pub fail_rtc: Mutex<Option<String>>,
     pub fail_suspend: Mutex<Option<String>>,
@@ -138,10 +189,25 @@ impl FakeActionBackend {
     pub fn set_fail_suspend(&self, err: Option<String>) {
         *self.fail_suspend.lock().unwrap() = err;
     }
+
+    pub fn is_not_called(&self) -> bool {
+        self.programmed_wake.lock().unwrap().is_none()
+    }
+
+    pub fn is_clear_only(&self) -> bool {
+        matches!(*self.programmed_wake.lock().unwrap(), Some(None))
+    }
+
+    pub fn timed_wake_seconds(&self) -> Option<u64> {
+        match *self.programmed_wake.lock().unwrap() {
+            Some(Some(secs)) => Some(secs),
+            _ => None,
+        }
+    }
 }
 
 impl SuspendActionBackend for FakeActionBackend {
-    fn program_rtc_wake(&self, wake_after_seconds: u64) -> Result<(), String> {
+    fn program_rtc_wake(&self, wake_after_seconds: Option<u64>) -> Result<(), String> {
         if let Some(err) = self.fail_rtc.lock().unwrap().as_ref() {
             return Err(err.clone());
         }

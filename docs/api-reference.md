@@ -360,7 +360,7 @@ incidents, while an omitted additive field preserves them for old-server
 compatibility until REST establishes current state.
 ### Terminal idle suspend
 
-Server-authoritative, fail-closed terminal idle suspend subsystem with protected status, bounded authenticated timing settings, out-of-band push hints, and read-only host-resource popover status.
+Server-authoritative, fail-closed terminal idle suspend subsystem with protected status, bounded authenticated timing settings, out-of-band push hints, and read-only host-resource popover status. Manual force-suspend REST admission is a later phase; Phase 01 changes only the enrolled helper execution contract.
 
 #### GET /api/system/idle-suspend/v1/status
 
@@ -418,15 +418,35 @@ Out-of-band revision-only push hint broadcast over a dedicated event channel iso
   ```
 - **Behavior**: Client validates `version: 1` and integer `revision`, then invalidates `['system', 'idle-suspend', 'v1', 'status']` query cache. Reconnects and broadcast lag reconcile automatically via REST status GET.
 - **Post-Resume Reconciliation**: Following a suspend/resume cycle or execution failure, the coordinator refreshes capabilities and authoritative status revision, publishes `host:idleSuspendChanged`, and releases the handoff lock. Clients recover authoritative state on next fetch with no duplicate suspend attempt while the fleet remains empty.
+
+#### Phase 01 helper execution contract
+
+The enrolled Unix-socket helper accepts protocol version `1` frames with a
+required camelCase `requestId` and `wakeAfterSeconds` field. Frames use a
+4-byte length prefix and are capped at 4 KiB; unknown JSON fields are rejected.
+The execution domain accepts exactly `0` or `60..=86400` seconds. The `0`
+sentinel means indefinite sleep and is not valid in the automatic timing pair
+returned by status or accepted by `PATCH /api/system/idle-suspend/v1/timing`.
+
+For `wakeAfterSeconds: 0`, the helper converts the value to clear-only mode:
+it clears `/sys/class/rtc/rtc0/wakealarm`, reads back the clear, and skips
+target-epoch arithmetic and writes. A nonzero request clears and verifies,
+computes a checked `now + seconds`, writes the target epoch, and verifies the
+readback. The helper rejects any unexpected non-empty pre-existing alarm as
+`RtcAlarmBusy`; clear/readback/write, capability, inhibitor, peer, dedupe, and
+audit-intent failures return a typed failure and do not invoke suspend.
+
+The helper records `wakeAfterSeconds: 0` in both intent and completion audit
+records. These details are internal to the enrolled helper and are not exposed
+as a browser-selectable path, device, command, suspend mode, or absolute time.
+
 ### Deferred remediation backlog
 
-Re-authentication, action lifecycle, privileged helper/IPC, enrollment, and
-host mutation are not part of this release and are intentionally not a current
-supported API surface. Some inert, fail-closed route scaffolding remains in the
-server for a future design, but it is not an enabled monitoring capability and
-is not documented as a client contract. A separate approved architecture and
-security gate is required before it can become active. This reference documents
-only the read-only monitoring routes above.
+General host remediation (re-authenticated cache dropping, process control,
+generic privileged actions, and their future APIs) is not part of this release.
+The fixed idle-suspend helper is a separate enrolled boundary documented above;
+it does not make generic host mutation available. Inert fail-closed scaffolding
+must not be treated as a client contract.
 
 Server tuning is configured in TOML under `[server.host_resources]` using
 snake_case keys: `light_sample_seconds` (5), `process_sample_seconds` (15),

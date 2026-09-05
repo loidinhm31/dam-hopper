@@ -31,6 +31,8 @@ pub enum PreflightError {
     UnsupportedRtc(String),
     #[error("Sleep is blocked by active inhibitor: {0}")]
     Inhibited(String, Option<String>, Option<String>),
+    #[error("RTC wakealarm is already in use: {0}")]
+    RtcAlarmBusy(String),
     #[error("Preflight probe error: {0}")]
     ProbeError(String),
 }
@@ -202,6 +204,21 @@ impl PreflightChecker for SysfsPreflightChecker {
                 self.rtc_wakealarm_path.display()
             )));
         }
+        let content = std::fs::read_to_string(&self.rtc_wakealarm_path).map_err(|e| {
+            PreflightError::ProbeError(format!(
+                "Failed to read RTC wakealarm at {}: {}",
+                self.rtc_wakealarm_path.display(),
+                e
+            ))
+        })?;
+        let trimmed = content.trim();
+        if !trimmed.is_empty() && trimmed != "0" {
+            return Err(PreflightError::RtcAlarmBusy(format!(
+                "Non-empty RTC wakealarm detected at {} ('{}')",
+                self.rtc_wakealarm_path.display(),
+                trimmed
+            )));
+        }
         Ok(())
     }
 
@@ -223,6 +240,7 @@ impl PreflightChecker for SysfsPreflightChecker {
 pub struct FakePreflightChecker {
     pub suspend_ok: bool,
     pub rtc_ok: bool,
+    pub rtc_busy: Option<String>,
     pub active_inhibitor: Option<ActiveInhibitor>,
     pub probe_error: Option<String>,
 }
@@ -232,6 +250,7 @@ impl FakePreflightChecker {
         Self {
             suspend_ok: true,
             rtc_ok: true,
+            rtc_busy: None,
             active_inhibitor: None,
             probe_error: None,
         }
@@ -265,6 +284,9 @@ impl PreflightChecker for FakePreflightChecker {
             return Err(PreflightError::UnsupportedRtc(
                 "Simulated lack of RTC alarm".to_string(),
             ));
+        }
+        if let Some(busy) = &self.rtc_busy {
+            return Err(PreflightError::RtcAlarmBusy(busy.clone()));
         }
         Ok(())
     }

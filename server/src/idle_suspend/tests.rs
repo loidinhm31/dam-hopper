@@ -24,11 +24,12 @@ use crate::idle_suspend::preflight::{
     SysfsPreflightChecker,
 };
 use crate::idle_suspend::protocol::{
-    decode_frame, encode_frame, read_frame_async, validate_request_id, write_frame_async,
-    HelperRequestFrame, HelperRequestPayload, HelperResponseFrame, HelperResponsePayload,
-    IdleSuspendErrorCode, IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse,
-    ProtocolError, RequestDeduplicator, SuspendOutcome, SuspendWithRtcWakeRequest,
-    HELPER_PROTOCOL_VERSION, MAX_HELPER_FRAME_BYTES,
+    decode_frame, encode_frame, read_frame_async, validate_request_id,
+    validate_suspend_wake_seconds, write_frame_async, HelperRequestFrame,
+    HelperRequestPayload, HelperResponseFrame, HelperResponsePayload, IdleSuspendErrorCode,
+    IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse, ProtocolError,
+    RequestDeduplicator, SuspendOutcome, SuspendWithRtcWakeRequest, HELPER_PROTOCOL_VERSION,
+    MAX_HELPER_FRAME_BYTES,
 };
 use crate::idle_suspend::timing_audit::{
     AuditError, IdleSuspendTimingAudit, TimingAuditRecord, TimingAuditResult,
@@ -1059,15 +1060,18 @@ fn test_helper_audit_bounded_pruning() {
 fn test_action_backend_fake_and_sysfs() {
     // 1. FakeActionBackend
     let fake_backend = FakeActionBackend::with_elapsed(300);
-    assert!(fake_backend.program_rtc_wake(600).is_ok());
-    assert_eq!(*fake_backend.programmed_wake.lock().unwrap(), Some(600));
+    assert!(fake_backend.program_rtc_wake(Some(600)).is_ok());
+    assert_eq!(*fake_backend.programmed_wake.lock().unwrap(), Some(Some(600)));
+    assert_eq!(fake_backend.timed_wake_seconds(), Some(600));
+    assert!(!fake_backend.is_clear_only());
+    assert!(!fake_backend.is_not_called());
     let elapsed = fake_backend.trigger_suspend().unwrap();
     assert_eq!(elapsed, 300);
     assert!(*fake_backend.suspend_called.lock().unwrap());
 
     // Test simulated failures
     fake_backend.set_fail_rtc(Some("RTC busy".to_string()));
-    assert!(fake_backend.program_rtc_wake(600).is_err());
+    assert!(fake_backend.program_rtc_wake(Some(600)).is_err());
     fake_backend.set_fail_rtc(None);
 
     fake_backend.set_fail_suspend(Some("logind permission denied".to_string()));
@@ -1079,7 +1083,7 @@ fn test_action_backend_fake_and_sysfs() {
     let fake_systemctl = tmp.path().join("fake_systemctl");
 
     let backend = SystemdLogindBackend::with_paths(&fake_wakealarm, &fake_systemctl);
-    assert!(backend.program_rtc_wake(300).is_ok());
+    assert!(backend.program_rtc_wake(Some(300)).is_ok());
 
     let written_content = fs::read_to_string(&fake_wakealarm).unwrap();
     let written_epoch: u64 = written_content.trim().parse().unwrap();
@@ -1510,4 +1514,304 @@ experimental = true
     assert!(updated.contains("api-service"));
     assert!(updated.contains("[features]"));
     assert!(updated.contains("experimental = true"));
+}
+
+#[test]
+fn test_validate_suspend_wake_seconds_domain() {
+    // 0 is valid for execution (indefinite sleep)
+    assert!(validate_suspend_wake_seconds(0).is_ok());
+
+    // 1..=59 are rejected
+    assert!(matches!(
+        validate_suspend_wake_seconds(1),
+        Err(ProtocolError::InvalidWakeSeconds(1))
+    ));
+    assert!(matches!(
+        validate_suspend_wake_seconds(59),
+        Err(ProtocolError::InvalidWakeSeconds(59))
+    ));
+
+    // 60..=86400 are valid bounded timed wake
+    assert!(validate_suspend_wake_seconds(MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS).is_ok());
+    assert!(validate_suspend_wake_seconds(600).is_ok());
+    assert!(validate_suspend_wake_seconds(MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS).is_ok());
+
+    // Values above maximum are rejected
+    assert!(matches!(
+        validate_suspend_wake_seconds(MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS + 1),
+        Err(ProtocolError::InvalidWakeSeconds(_))
+    ));
+    assert!(matches!(
+        validate_suspend_wake_seconds(u64::MAX),
+        Err(ProtocolError::InvalidWakeSeconds(_))
+    ));
+}
+
+#[test]
+fn test_automatic_timing_bounds_regression() {
+    // Automatic timing validation MUST continue to reject 0 for wake_after_seconds
+    assert!(validate_timing_pair(300, 0).is_err());
+    assert!(validate_timing_pair(0, 300).is_err());
+    assert!(validate_timing_pair(300, 59).is_err());
+    assert!(validate_timing_pair(300, 60).is_ok());
+    assert!(validate_timing_pair(300, 86400).is_ok());
+
+    // IdleSuspendConfig validate() MUST reject wake_after_seconds = 0
+    let mut cfg = IdleSuspendConfig::default();
+    cfg.wake_after_seconds = 0;
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn test_suspend_request_frame_zero_sentinel_and_serde() {
+    // Request with wake_after_seconds = 0 (indefinite sleep)
+    let req_zero = SuspendWithRtcWakeRequest {
+        request_id: "req-indefinite-1".to_string(),
+        wake_after_seconds: 0,
+    };
+    let frame_zero = HelperRequestFrame::new_suspend(req_zero.clone()).unwrap();
+    assert!(frame_zero.validate().is_ok());
+
+    // Request with invalid wake_after_seconds = 59 fails construction and validation
+    let req_invalid = SuspendWithRtcWakeRequest {
+        request_id: "req-invalid-1".to_string(),
+        wake_after_seconds: 59,
+    };
+    assert!(HelperRequestFrame::new_suspend(req_invalid).is_err());
+
+    // Serde round-trip with JSON containing wakeAfterSeconds: 0
+    let json = serde_json::json!({
+        "version": 1,
+        "payload": {
+            "type": "suspendWithRtcWake",
+            "requestId": "req-wire-0",
+            "wakeAfterSeconds": 0
+        },
+        "timestampMs": 1725590000000u64
+    });
+    let decoded: HelperRequestFrame = serde_json::from_value(json).unwrap();
+    assert!(decoded.validate().is_ok());
+    match decoded.payload {
+        HelperRequestPayload::SuspendWithRtcWake(req) => {
+            assert_eq!(req.request_id, "req-wire-0");
+            assert_eq!(req.wake_after_seconds, 0);
+        }
+        _ => panic!("Expected SuspendWithRtcWake"),
+    }
+}
+
+#[test]
+fn test_systemd_logind_backend_clear_only_and_failures() {
+    let tmp = tempdir().unwrap();
+    let fake_wakealarm = tmp.path().join("fake_wakealarm");
+    let fake_systemctl = tmp.path().join("fake_systemctl");
+    let backend = SystemdLogindBackend::with_paths(&fake_wakealarm, &fake_systemctl);
+
+    // 1. Clear-only mode (None)
+    assert!(backend.program_rtc_wake(None).is_ok());
+    let written = fs::read_to_string(&fake_wakealarm).unwrap();
+    // In clear-only, "0\n" was written and verified; no target epoch was written
+    assert_eq!(written.trim(), "0");
+
+    // 2. Clear failure: unwritable path
+    let bad_backend = SystemdLogindBackend::with_paths(
+        tmp.path().join("nonexistent_dir").join("wakealarm"),
+        &fake_systemctl,
+    );
+    assert!(bad_backend.program_rtc_wake(None).is_err());
+    assert!(bad_backend.program_rtc_wake(Some(300)).is_err());
+}
+
+#[test]
+fn test_preflight_rtc_exclusive_ownership_and_busy_alarm() {
+    let tmp = tempdir().unwrap();
+    let wakealarm_path = tmp.path().join("wakealarm");
+    let power_path = tmp.path().join("power_state");
+    fs::write(&power_path, "mem disk freeze\n").unwrap();
+
+    // 1. Empty wakealarm file (no alarm set) -> passes
+    fs::write(&wakealarm_path, "").unwrap();
+    let checker = SysfsPreflightChecker::with_paths(
+        &power_path,
+        &wakealarm_path,
+        "mem",
+        Box::new(FakeInhibitorProvider::default()),
+    );
+    assert!(checker.check_rtc_wakealarm().is_ok());
+
+    // 2. Wakealarm file containing "0\n" (cleared alarm) -> passes
+    fs::write(&wakealarm_path, "0\n").unwrap();
+    assert!(checker.check_rtc_wakealarm().is_ok());
+
+    // 3. Wakealarm file containing non-empty epoch (busy alarm) -> rejected with RtcAlarmBusy
+    fs::write(&wakealarm_path, "1725599999\n").unwrap();
+    match checker.check_rtc_wakealarm() {
+        Err(PreflightError::RtcAlarmBusy(msg)) => {
+            assert!(msg.contains("1725599999"));
+        }
+        other => panic!("Expected RtcAlarmBusy, got: {other:?}"),
+    }
+
+    // 4. FakePreflightChecker with rtc_busy simulates busy alarm
+    let mut fake = FakePreflightChecker::new_passing();
+    fake.rtc_busy = Some("foreign schedule active".to_string());
+    match fake.check_rtc_wakealarm() {
+        Err(PreflightError::RtcAlarmBusy(msg)) => {
+            assert_eq!(msg, "foreign schedule active");
+        }
+        other => panic!("Expected RtcAlarmBusy, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_helper_server_indefinite_sleep_execution_and_audit() {
+    let tmp = tempdir().unwrap();
+    let socket_path = tmp.path().join("helper.sock");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let policy = EnrolledPeerPolicy::new_test_permissive();
+    let preflight = Arc::new(FakePreflightChecker::new_passing());
+    let backend = Arc::new(FakeActionBackend::with_elapsed(120));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+
+    let server = HelperServer::new(
+        policy,
+        preflight,
+        Arc::clone(&backend),
+        Arc::clone(&audit),
+        100,
+    );
+
+    let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+    let server_handle = tokio::spawn(async move {
+        if let Ok((mut stream, _)) = listener.accept().await {
+            let cred = PeerCredentials { pid: 9999, uid: 1000, gid: 1000 };
+            let _ = server.handle_connection(&mut stream, cred).await;
+        }
+    });
+
+    let client = crate::idle_suspend::HelperClient::new(&socket_path);
+    // Send request with wake_after_seconds: 0 (indefinite sleep)
+    let outcome = client.execute_suspend(SuspendWithRtcWakeRequest {
+        request_id: "req-indef-test".to_string(),
+        wake_after_seconds: 0,
+    }).await.unwrap();
+
+    match outcome {
+        SuspendOutcome::ResumedSuccessfully { request_id, elapsed_seconds } => {
+            assert_eq!(request_id, "req-indef-test");
+            assert_eq!(elapsed_seconds, 120);
+        }
+        other => panic!("Expected ResumedSuccessfully, got: {other:?}"),
+    }
+
+    // Backend received None (clear-only) and trigger_suspend was called
+    assert!(backend.is_clear_only());
+    assert!(*backend.suspend_called.lock().unwrap());
+
+    server_handle.await.unwrap();
+
+    // Verify audit log explicitly records wake_after_seconds: Some(0) and is_indefinite_sleep() == true
+    let records = audit.read_all_records().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].record_type, HelperAuditRecordType::AcceptedIntent);
+    assert_eq!(records[0].wake_after_seconds, Some(0));
+    assert!(records[0].is_indefinite_sleep());
+
+    assert_eq!(records[1].record_type, HelperAuditRecordType::ExecutionCompleted);
+    assert_eq!(records[1].wake_after_seconds, Some(0));
+    assert!(records[1].is_indefinite_sleep());
+}
+
+#[tokio::test]
+async fn test_helper_server_busy_alarm_and_rtc_failure_suppresses_suspend() {
+    let tmp = tempdir().unwrap();
+    let socket_path = tmp.path().join("helper.sock");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    // 1. Busy alarm preflight failure suppresses suspend
+    let policy = EnrolledPeerPolicy::new_test_permissive();
+    let mut preflight = FakePreflightChecker::new_passing();
+    preflight.rtc_busy = Some("foreign cron wakealarm active".to_string());
+    let backend = Arc::new(FakeActionBackend::new());
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+
+    let server = HelperServer::new(
+        policy,
+        Arc::new(preflight),
+        Arc::clone(&backend),
+        Arc::clone(&audit),
+        100,
+    );
+
+    let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+    let server_handle = tokio::spawn(async move {
+        if let Ok((mut stream, _)) = listener.accept().await {
+            let cred = PeerCredentials { pid: 9999, uid: 1000, gid: 1000 };
+            let _ = server.handle_connection(&mut stream, cred).await;
+        }
+    });
+
+    let client = crate::idle_suspend::HelperClient::new(&socket_path);
+    let outcome = client.execute_suspend(SuspendWithRtcWakeRequest {
+        request_id: "req-busy-test".to_string(),
+        wake_after_seconds: 0,
+    }).await.unwrap();
+
+    match outcome {
+        SuspendOutcome::ExecutionFailed { request_id, error } => {
+            assert_eq!(request_id, "req-busy-test");
+            assert!(error.contains("RTC alarm already programmed"));
+        }
+        other => panic!("Expected ExecutionFailed, got: {other:?}"),
+    }
+
+    // Crucial invariant: trigger_suspend was NOT called! Zero suspend calls.
+    assert!(!*backend.suspend_called.lock().unwrap());
+    assert!(backend.is_not_called());
+
+    server_handle.await.unwrap();
+
+    // 2. RTC programming failure suppresses suspend
+    let socket_path_2 = tmp.path().join("helper2.sock");
+    let policy2 = EnrolledPeerPolicy::new_test_permissive();
+    let preflight2 = Arc::new(FakePreflightChecker::new_passing());
+    let backend2 = Arc::new(FakeActionBackend::new());
+    backend2.set_fail_rtc(Some("sysfs write permission denied".to_string()));
+    let audit2 = Arc::new(HelperAudit::new(tmp.path().join("audit2.jsonl"), 100));
+
+    let server2 = HelperServer::new(
+        policy2,
+        preflight2,
+        Arc::clone(&backend2),
+        audit2,
+        100,
+    );
+
+    let listener2 = tokio::net::UnixListener::bind(&socket_path_2).unwrap();
+    let server_handle2 = tokio::spawn(async move {
+        if let Ok((mut stream, _)) = listener2.accept().await {
+            let cred = PeerCredentials { pid: 9999, uid: 1000, gid: 1000 };
+            let _ = server2.handle_connection(&mut stream, cred).await;
+        }
+    });
+
+    let client2 = crate::idle_suspend::HelperClient::new(&socket_path_2);
+    let outcome2 = client2.execute_suspend(SuspendWithRtcWakeRequest {
+        request_id: "req-rtc-fail".to_string(),
+        wake_after_seconds: 0,
+    }).await.unwrap();
+
+    match outcome2 {
+        SuspendOutcome::ExecutionFailed { request_id, error } => {
+            assert_eq!(request_id, "req-rtc-fail");
+            assert!(error.contains("RTC programming failed"));
+        }
+        other => panic!("Expected ExecutionFailed, got: {other:?}"),
+    }
+
+    // Crucial invariant: trigger_suspend was NOT called!
+    assert!(!*backend2.suspend_called.lock().unwrap());
+
+    server_handle2.await.unwrap();
 }

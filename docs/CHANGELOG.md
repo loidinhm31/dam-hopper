@@ -1,3 +1,19 @@
+# 2026-09-06
+
+- **Authenticated Manual Force Sleep — Phase 01 protocol/helper complete.**
+  Extended the version-1 enrolled helper execution domain to accept
+  `wakeAfterSeconds: 0` as an indefinite-sleep sentinel while keeping persisted
+  automatic timing at `60..=86400`.
+- Zero converts to clear-only RTC behavior: write and verify `0`, with no
+  target-epoch arithmetic or write. Timed values clear and verify, calculate a
+  checked target, write it, and verify the readback.
+- Added fail-closed RTC ownership preflight (`RtcAlarmBusy`), explicit
+  zero-valued helper intent/completion audit records, and no-suspend behavior
+  for RTC, audit, capability, inhibitor, or preflight failures.
+- Added protocol, backend, preflight, helper IPC, audit, and automatic timing
+  regression coverage using temporary files and fake backends only; tests never
+  invoke host suspend, logind, or real RTC hardware.
+
 # 2026-09-02
 
 - **Phase 01: Workflow tracking domain and relational persistence.** Added the

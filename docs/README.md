@@ -16,6 +16,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Frontend Components](./frontend-components.md)** — Shared React component architecture and host lifecycle
 - **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries
 - **[Worktree Operations](./worktree-operation.md)** — Target selection and safe worktree lifecycle
+- **[Terminal Idle Suspend Security](./terminal-idle-suspend-security.md)** — Automatic timing bounds, helper IPC, RTC ownership, audit, and fail-closed rules
 
 ## Reference Documentation
 
@@ -27,6 +28,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
 - **[Changelog](./CHANGELOG.md)** — Dated feature, persistence, and release notes
+- **[Terminal Idle Suspend Security](./terminal-idle-suspend-security.md)** — Security invariants and helper execution policy
 
 ## Deployment
 
@@ -88,6 +90,18 @@ exists before linking it from a new document.
 - **Phase 05:** Enhanced exit events with restart metadata, separate FS/PTY channels
 - **Phase 06:** Lifecycle UI with status dots, restart badges, exit/restart/reconnect banners
 - See: [API Reference](./api-reference.md#terminals)
+
+**Terminal Idle Suspend** — Server-authoritative, opt-in Linux suspend with
+bounded automatic timing and a fixed enrolled helper.
+
+- Status: `GET /api/system/idle-suspend/v1/status`; timing: `PATCH .../timing`
+- Automatic persisted wake values remain `60..=86400` seconds.
+- Phase 01 helper execution accepts `wakeAfterSeconds: 0` for clear-only,
+  indefinite sleep; it clears and verifies RTC state without target arithmetic.
+- Unexpected pre-existing RTC alarms, inhibitors, capability failures, and RTC
+  or audit failures suppress suspend. See [API Reference](./api-reference.md#terminal-idle-suspend),
+  [Configuration Guide](./configuration-guide.md#terminal-idle-suspend-opt-in-linux-suspend),
+  and [Systemd runbook](./linux-systemd.md#11-terminal-idle-suspend-helper-enrollment--rollback-runbook).
 
 **Git Operations** — Clone, push, pull, status, branch actions, history edits.
 

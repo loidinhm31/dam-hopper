@@ -97,6 +97,10 @@ impl HelperAuditRecord {
             detail: Some(detail.into()),
         }
     }
+
+    pub fn is_indefinite_sleep(&self) -> bool {
+        self.wake_after_seconds == Some(0)
+    }
 }
 
 fn current_epoch_ms() -> u64 {
