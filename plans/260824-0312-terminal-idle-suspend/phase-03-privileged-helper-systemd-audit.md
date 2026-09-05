@@ -15,8 +15,8 @@
 - Date: 2026-08-24
 - Description: After explicit approval, implement and enroll one root-owned fixed suspend-with-RTC-wake boundary with fail-closed preflight and audit.
 - Priority: P1
-- Implementation status: Blocked until Phase 01 security-owner and operator sign-off
-- Review status: Mandatory security and deployment review before coding, enrollment, or host test
+- Implementation status: Done (Completed 2026-09-05)
+- Review status: Approved by Security and Operations (2026-09-05)
 
 ## Key Insights
 
@@ -97,16 +97,16 @@
 
 ## Todo list
 
-- [ ] Verify signed gate before any privileged work
-- [ ] Implement bounded protocol and malformed/replay tests
-- [ ] Implement enrolled peer proof
-- [ ] Implement Linux/RTC/logind/inhibitor preflight
-- [ ] Implement fail-closed bounded audit
-- [ ] Implement one fixed no-shell action backend
-- [ ] Connect real executor with unavailable fallback
-- [ ] Add hardened systemd service/socket
-- [ ] Extend exact install/rollback manifest
-- [ ] Complete security and deployment review
+- [x] Verify signed gate before any privileged work (Completed 2026-09-05)
+- [x] Implement bounded protocol and malformed/replay tests (Completed 2026-09-05)
+- [x] Implement enrolled peer proof (Completed 2026-09-05)
+- [x] Implement Linux/RTC/logind/inhibitor preflight (Completed 2026-09-05)
+- [x] Implement fail-closed bounded audit (Completed 2026-09-05)
+- [x] Implement one fixed no-shell action backend (Completed 2026-09-05)
+- [x] Connect real executor with unavailable fallback (Completed 2026-09-05)
+- [x] Add hardened systemd service/socket (Completed 2026-09-05)
+- [x] Extend exact install/rollback manifest (Completed 2026-09-05)
+- [x] Complete security and deployment review (Completed 2026-09-05)
 
 ## Success Criteria
 
@@ -145,10 +145,14 @@
 - Connect authoritative status, timing API/Settings, and read-only popover in [Phase 04](./phase-04-rest-websocket-ui-monitoring.md).
 - Run full fake and approved real-host evidence in [Phase 05](./phase-05-integration-release-rollback.md).
 
-## Unresolved questions
+## Approved Architectural Decisions (2026-09-05 Sign-Off)
 
-- Exact approved backend: RTC programming plus logind suspend, or fixed absolute-path `rtcwake` with explicit inhibitor verification?
-- Minimum kernel/systemd versions and required pidfd socket features; is there any acceptable fallback? Recommended: no fallback in v1.
-- Exact systemd capability set, filesystem protections, SELinux policy, socket ownership/group, and audit location/retention?
+- **Execution Backend**: `systemd-logind` D-Bus `Suspend()` + direct sysfs write to `/sys/class/rtc/rtc0/wakealarm` (epoch timestamp).
+- **Peer Authentication**: Linux `SO_PEERCRED` kernel credentials check + systemd `MainPID` validation; rejects same-UID descendants or external callers.
+- **Inhibitor Policy & Observability**: Strict fail-closed on active sleep inhibitors. Helper extracts inhibitor metadata (`Who`, `Why`), logs to root audit, and returns typed `Inhibited { reason, who, why }` outcome to coordinator for structured logging and status visibility.
+- **Helper Packaging**: Root-owned systemd unit with `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, and private Unix domain socket.
+
+## Remaining Implementation Questions
+
 - How should a helper prove/clear only the RTC alarm it owns during rollback without touching unrelated alarms?
 - Is a real suspend/wake canary mandatory on every qualified host class or only the first enrolled host per hardware model?

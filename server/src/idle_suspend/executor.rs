@@ -57,6 +57,58 @@ impl IdleSuspendExecutor for UnavailableExecutor {
     }
 }
 
+/// Enrolled production executor that communicates with the privileged systemd helper.
+#[derive(Debug, Clone)]
+pub struct SystemdIdleSuspendExecutor {
+    client: crate::idle_suspend::helper_client::HelperClient,
+}
+
+impl SystemdIdleSuspendExecutor {
+    pub fn new(socket_path: impl AsRef<std::path::Path>) -> Self {
+        Self {
+            client: crate::idle_suspend::helper_client::HelperClient::new(socket_path),
+        }
+    }
+
+    pub fn from_client(client: crate::idle_suspend::helper_client::HelperClient) -> Self {
+        Self { client }
+    }
+
+    pub fn client(&self) -> &crate::idle_suspend::helper_client::HelperClient {
+        &self.client
+    }
+}
+
+impl IdleSuspendExecutor for SystemdIdleSuspendExecutor {
+    fn check_capability(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async move {
+            if !self.client.is_socket_present() {
+                return false;
+            }
+            match self.client.check_capability().await {
+                Ok((supported, _)) => supported,
+                Err(_) => false,
+            }
+        })
+    }
+
+    fn execute_suspend(
+        &self,
+        request: SuspendWithRtcWakeRequest,
+    ) -> BoxFuture<'_, SuspendOutcome> {
+        Box::pin(async move {
+            let req_id = request.request_id.clone();
+            match self.client.execute_suspend(request).await {
+                Ok(outcome) => outcome,
+                Err(e) => SuspendOutcome::ExecutionFailed {
+                    request_id: req_id,
+                    error: format!("Helper IPC communication error: {e}"),
+                },
+            }
+        })
+    }
+}
+
 /// Fake in-memory executor for deterministic test coverage.
 #[derive(Debug)]
 pub struct FakeExecutor {
