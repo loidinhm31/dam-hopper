@@ -20,7 +20,7 @@ Environment=GIT_CONFIG_VALUE_0=*
 Environment=DAM_HOPPER_CORS_ORIGINS=@API_ORIGINS@
 EnvironmentFile=-/etc/dam-hopper/server.env
 EnvironmentFile=-/etc/dam-hopper/server-safety.env
-ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config /etc/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801
+ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config @API_HOME@/.config/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801
 Restart=on-failure
 RestartSec=5s
 KillSignal=SIGTERM
