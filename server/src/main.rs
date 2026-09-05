@@ -77,6 +77,10 @@ async fn main() -> anyhow::Result<()> {
     unsafe {
         let _ = git2::opts::set_verify_owner_validation(false);
     }
+    std::env::remove_var("GIT_CONFIG_PARAMETERS");
+    std::env::set_var("GIT_CONFIG_COUNT", "1");
+    std::env::set_var("GIT_CONFIG_KEY_0", "safe.directory");
+    std::env::set_var("GIT_CONFIG_VALUE_0", "*");
 
     // ── Auth token ────────────────────────────────────────────────────────────
 
