@@ -27,6 +27,7 @@ use super::systemd::{
 use super::transaction::ActivationTransaction;
 use chrono::Utc;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::Path;
 
 pub async fn execute_activation(layout: &Layout) -> Result<(), ReleaseError> {
@@ -95,6 +96,37 @@ pub async fn execute_activation_locked_with_args(
             }
             validate_active_preflight(layout, &active_candidate, &allowed_sqlite_pids)?;
             if active_candidate.role.includes_server() {
+                let host_config = super::host_config::load_host_config(&layout.host_config_path())?;
+                let user_candidate = if let Some(u) = &args.service_user {
+                    Some(u.as_str())
+                } else {
+                    host_config.as_ref().and_then(|c| c.service_user.as_deref())
+                };
+                if user_candidate.is_some()
+                    || args.service_user.is_some()
+                    || std::io::stdin().is_terminal()
+                {
+                    let user_name =
+                        super::account::resolve_service_user(user_candidate, args.non_interactive)?;
+                    let user_info = super::account::verify_api_service_account(&user_name)?;
+                    let group_name = super::account::get_group_by_gid(user_info.gid)
+                        .unwrap_or_else(|| user_name.clone());
+                    let installed_api_unit = layout.systemd_unit_dir.join(API_SERVICE_UNIT);
+                    if installed_api_unit.exists() {
+                        if let Ok(content) = fs::read_to_string(&installed_api_unit) {
+                            if let Ok(updated) = update_unit_service_identity(
+                                &content,
+                                &user_name,
+                                &group_name,
+                                &user_info.home,
+                            ) {
+                                let _ = fs::write(&installed_api_unit, updated.as_bytes());
+                                let _ = systemctl_daemon_reload();
+                            }
+                        }
+                    }
+                    ensure_user_config_ownership(&user_info.home, user_info.uid, user_info.gid);
+                }
                 systemctl_start("dam-hopper-api.service")?;
             }
             if active_candidate.role.includes_web() {
@@ -134,18 +166,7 @@ pub async fn execute_activation_locked_with_args(
             config_to_save.service_user = Some(user_name.clone());
             super::host_config::save_host_config(&layout.host_config_path(), &config_to_save)?;
         }
-        let user_config_dir = std::path::PathBuf::from(&user_info.home)
-            .join(".config")
-            .join("dam-hopper");
-        if let Ok(()) = fs::create_dir_all(&user_config_dir) {
-            #[cfg(unix)]
-            if let Ok(c_path) = std::ffi::CString::new(user_config_dir.to_string_lossy().as_bytes())
-            {
-                unsafe {
-                    libc::chown(c_path.as_ptr(), user_info.uid, user_info.gid);
-                }
-            }
-        }
+        ensure_user_config_ownership(&user_info.home, user_info.uid, user_info.gid);
 
         if let Some(ref units_path_str) = candidate.pending_units_path {
             let units_dir = std::path::Path::new(units_path_str);
@@ -654,5 +675,41 @@ fn hash_optional_file(path: &Path) -> Result<Option<String>, ReleaseError> {
             action: "inspect staged unit file",
             details: error.to_string(),
         }),
+    }
+}
+
+fn ensure_user_config_ownership(home: &str, uid: u32, gid: u32) {
+    let home_path = std::path::Path::new(home);
+    let dot_config = home_path.join(".config");
+    let user_config_dir = dot_config.join("dam-hopper");
+    let _ = fs::create_dir_all(&user_config_dir);
+    #[cfg(unix)]
+    {
+        chown_single(&dot_config, uid, gid);
+        chown_recursive(&user_config_dir, uid, gid);
+    }
+}
+
+#[cfg(unix)]
+fn chown_single(path: &std::path::Path, uid: u32, gid: u32) {
+    if let Ok(c_path) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) {
+        unsafe {
+            libc::chown(c_path.as_ptr(), uid, gid);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn chown_recursive(path: &std::path::Path, uid: u32, gid: u32) {
+    chown_single(path, uid, gid);
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                chown_recursive(&p, uid, gid);
+            } else {
+                chown_single(&p, uid, gid);
+            }
+        }
     }
 }
