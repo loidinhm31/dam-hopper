@@ -168,6 +168,11 @@ chmod 0755 "${TMP_STAGE}/bin/dam-hopper-server"
 cp -p "${WEB_BIN}" "${TMP_STAGE}/bin/dam-hopper-web"
 chmod 0755 "${TMP_STAGE}/bin/dam-hopper-web"
 
+HELPER_BIN="${TARGET_DIR}/dam-hopper-idle-suspend-helper"
+if [[ -f "${HELPER_BIN}" ]]; then
+    cp -p "${HELPER_BIN}" "${TMP_STAGE}/bin/dam-hopper-idle-suspend-helper"
+    chmod 0755 "${TMP_STAGE}/bin/dam-hopper-idle-suspend-helper"
+fi
 # Copy systemd units and sysusers
 cp -p "${API_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-api.service"
 chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-api.service"
@@ -180,6 +185,18 @@ chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-recovery.service"
 
 cp -p "${SYSUSERS_CONF}" "${TMP_STAGE}/sysusers.d/dam-hopper-web.conf"
 chmod 0644 "${TMP_STAGE}/sysusers.d/dam-hopper-web.conf"
+HELPER_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-idle-suspend-helper.service.in"
+if [[ -f "${HELPER_SERVICE_IN}" ]]; then
+    cp -p "${HELPER_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-idle-suspend-helper.service"
+    chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-idle-suspend-helper.service"
+fi
+
+HELPER_SOCKET_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-idle-suspend-helper.socket.in"
+if [[ -f "${HELPER_SOCKET_IN}" ]]; then
+    cp -p "${HELPER_SOCKET_IN}" "${TMP_STAGE}/systemd/dam-hopper-idle-suspend-helper.socket"
+    chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-idle-suspend-helper.socket"
+fi
+
 
 # Copy LICENSE
 cp -p "${LICENSE_FILE}" "${TMP_STAGE}/LICENSE"

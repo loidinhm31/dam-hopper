@@ -21,14 +21,14 @@ Add startup-owned terminal-fleet monitoring that may request one fixed RTC-timed
 |---|---|---|---|---:|---|
 | 1 | Policy, config, security gate, protocol | Done | 100% | 10h | [Phase 01](./phase-01-policy-config-security-gate.md) |
 | 2 | PTY fleet seam and fake coordinator | Done | 100% | 18h | [Phase 02](./phase-02-pty-fleet-coordinator.md) |
-| 3 | Privileged helper, systemd enrollment, audit | Blocked on sign-off | 0% | 20h | [Phase 03](./phase-03-privileged-helper-systemd-audit.md) |
+| 3 | Privileged helper, systemd enrollment, audit | Done | 100% | 20h | [Phase 03](./phase-03-privileged-helper-systemd-audit.md) |
 | 4 | Protected status/timing API, WS hint, Settings UI | Done | 100% | 8h | [Phase 04](./phase-04-rest-websocket-ui-monitoring.md) |
 | 5 | Integration, release, resume, rollback evidence | Pending | 0% | 12h | [Phase 05](./phase-05-integration-release-rollback.md) |
 
 ## Dependencies
 
 - Phase 2 depends on Phase 1 policy, persistence, audit, protocol, and timing-command contracts; it uses fake/unavailable execution.
-- Phase 3 requires recorded security-owner/operator approval; no privileged code or enrollment before it.
+- Phase 3: Recorded security-owner/operator approval on 2026-09-05 (logind D-Bus + RTC sysfs, SO_PEERCRED + MainPID, structured inhibitor logging); privileged code and enrollment unblocked.
 - Phase 4 depends on Phases 1–2 authoritative status and ordered timing admission, not real-helper enablement.
 - Phase 5 depends on Phases 1–4; real-host acceptance additionally requires approved Phase 3.
 - Linux/systemd/RTC/logind support, root-owned enrollment, and authenticated production identity are external prerequisites.
@@ -68,5 +68,5 @@ Add startup-owned terminal-fleet monitoring that may request one fixed RTC-timed
 
 ### Revalidation gate
 
-- [ ] Confirm the remaining values/policies above and the exact v1 timing contract/error codes in Phases 1 and 4.
-- [ ] Do not mark revised design validated or begin implementation until second interview and security/operator gates complete.
+- [x] Confirm the remaining values/policies above and the exact v1 timing contract/error codes in Phases 1 and 4 (Completed in Phase 1 & 4).
+- [x] Operational and security gate completed: Sign-off recorded on 2026-09-05; Phase 3 unblocked.
