@@ -22,7 +22,7 @@ use super::state::{ManagerState, load_or_init_manager_state, save_manager_state}
 use super::state_record::{PendingCandidateRecord, ReleaseRecord, TransactionPhase};
 use super::systemd::{
     backup_unit_files, disable_if_enabled, install_unit_file, systemctl_daemon_reload,
-    systemctl_enable, systemctl_is_active, systemctl_start, systemctl_stop, systemd_sysusers,
+    systemctl_enable, systemctl_start, systemctl_stop, systemd_sysusers,
 };
 use super::transaction::ActivationTransaction;
 use chrono::Utc;
@@ -294,13 +294,13 @@ async fn execute_activation_pipeline(
     }
 
     for &unit in ALL_SERVICE_UNITS {
-        if systemctl_is_active(unit)? {
-            systemctl_stop(unit)?;
-        }
+        let _ = systemctl_stop(unit);
     }
-    if systemctl_is_active(super::legacy_format2::LEGACY_FORMAT2_UNIT)? {
-        systemctl_stop(super::legacy_format2::LEGACY_FORMAT2_UNIT)?;
-    }
+    let _ = systemctl_stop(super::legacy_format2::LEGACY_FORMAT2_UNIT);
+    let _ = super::process::terminate_stray_listeners(&[
+        super::constants::API_SERVICE_PORT,
+        super::constants::WEB_SERVICE_PORT,
+    ]);
 
     backup_unit_files(
         ALL_SERVICE_UNITS,

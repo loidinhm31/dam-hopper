@@ -111,7 +111,7 @@ pub use platform::{
 pub use privilege::{current_euid, verify_privileges};
 pub use process::{
     ServiceProcessEvidence, check_ports_free, inspect_service_process, is_port_listening,
-    parse_proc_net_listening, verify_no_foreign_sqlite_holders, verify_service_identity_and_exe,
+    parse_proc_net_listening, terminate_stray_listeners, verify_no_foreign_sqlite_holders,
 };
 pub use recovery::execute_recovery;
 pub use retention::apply_retention;

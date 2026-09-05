@@ -257,7 +257,7 @@ pub async fn wait_for_health_stability(
 
 fn query_unit_failure_log(unit_name: &str) -> Option<String> {
     let output = std::process::Command::new("journalctl")
-        .args(["-u", unit_name, "-n", "3", "--no-pager"])
+        .args(["-u", unit_name, "-n", "15", "--no-pager"])
         .output()
         .ok()?;
     if output.status.success() {
@@ -267,6 +267,15 @@ fn query_unit_failure_log(unit_name: &str) -> Option<String> {
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with("-- Boot"))
             .collect();
+        if let Some(err_line) = lines.iter().rev().find(|l| {
+            l.contains("Error:")
+                || l.contains("panicked")
+                || l.contains("FATAL")
+                || l.contains("Permission denied")
+                || l.contains("Address already in use")
+        }) {
+            return Some((*err_line).to_string());
+        }
         if !lines.is_empty() {
             let tail = lines[lines.len().saturating_sub(2)..].join("; ");
             if !tail.is_empty() {

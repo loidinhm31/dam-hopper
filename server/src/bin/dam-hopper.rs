@@ -168,6 +168,10 @@ async fn main() -> ExitCode {
                     }
                 }
             }
+            let _ = dam_hopper_server::linux_release::terminate_stray_listeners(&[
+                dam_hopper_server::linux_release::API_SERVICE_PORT,
+                dam_hopper_server::linux_release::WEB_SERVICE_PORT,
+            ]);
             if args.clean {
                 println!("Cleaning active release state and symlinks...");
                 let _ = std::fs::remove_file(layout.current_link());

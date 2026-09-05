@@ -1,31 +1,29 @@
 //! Automatic and manual rollback restoration with verified health stability.
 
-use super::activate_preflight::build_candidate_health_targets;
 use super::account::get_user_by_name;
+use super::activate_preflight::build_candidate_health_targets;
 use super::constants::{
     ALL_SERVICE_UNITS, API_SERVICE_HEALTH_PATH, API_SERVICE_UNIT, RECOVERY_SERVICE_UNIT,
     WEB_SERVICE_UNIT,
 };
 use super::durable_fs::{atomic_symlink, copy_file_durable};
 use super::error::ReleaseError;
-use super::legacy_format2::{
-    validate_format2_unit, LEGACY_FORMAT2_PORT, LEGACY_FORMAT2_TAG, LEGACY_FORMAT2_UNIT,
-    LEGACY_FORMAT2_USER,
-};
 use super::health::{
-    wait_for_health_stability, DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE,
-    DEFAULT_STARTUP_DEADLINE,
+    DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_STARTUP_DEADLINE,
+    wait_for_health_stability,
 };
 use super::host_config::load_host_public_config;
 use super::layout::Layout;
+use super::legacy_format2::{
+    LEGACY_FORMAT2_PORT, LEGACY_FORMAT2_TAG, LEGACY_FORMAT2_UNIT, LEGACY_FORMAT2_USER,
+    validate_format2_unit,
+};
 use super::lock::DeploymentLock;
 use super::manifest::ReleaseManifest;
 use super::process::{check_ports_free, inspect_service_process, is_port_listening_wildcard};
 use super::stage_units::stage_candidate_units_for_release_with_render_root_and_config;
 use super::state::{load_or_init_manager_state, save_manager_state};
-use super::state_record::{
-    FailureRecord, PendingCandidateRecord, ReleaseRecord, TransactionPhase,
-};
+use super::state_record::{FailureRecord, PendingCandidateRecord, ReleaseRecord, TransactionPhase};
 use super::systemd::{
     remove_unit_file, restore_unit_files, systemctl_daemon_reload, systemctl_disable,
     systemctl_enable, systemctl_is_active, systemctl_is_enabled, systemctl_start, systemctl_stop,
@@ -34,8 +32,8 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::time::Duration;
 use std::path::Path;
+use std::time::Duration;
 
 pub fn stop_and_disable_units(units: &[&str], systemd_dir: &Path) -> Result<(), ReleaseError> {
     for &unit in units {
@@ -103,19 +101,17 @@ fn stage_previous_release_candidate(
         .unwrap_or_default();
     let tx_id = uuid::Uuid::new_v4().to_string();
     let pending_units_dir = layout.transaction_pending_units_dir(&tx_id);
-    let pending_host_config_path =
-        layout.transaction_pending_host_config_json_path(&tx_id);
-    let stage_result =
-        stage_candidate_units_for_release_with_render_root_and_config(
-            layout,
-            release_path,
-            release_path,
-            &manifest,
-            release.role,
-            &allow_origins,
-            &pending_units_dir,
-            &pending_host_config_path,
-        );
+    let pending_host_config_path = layout.transaction_pending_host_config_json_path(&tx_id);
+    let stage_result = stage_candidate_units_for_release_with_render_root_and_config(
+        layout,
+        release_path,
+        release_path,
+        &manifest,
+        release.role,
+        &allow_origins,
+        &pending_units_dir,
+        &pending_host_config_path,
+    );
     if let Err(error) = stage_result {
         let cleanup_result =
             cleanup_rollback_staging(&pending_units_dir, &pending_host_config_path);
@@ -166,12 +162,12 @@ fn cleanup_rollback_staging(
     pending_host_config_path: &Path,
 ) -> Result<(), ReleaseError> {
     match fs::symlink_metadata(pending_units_dir) {
-        Ok(meta) if meta.file_type().is_dir() => fs::remove_dir_all(pending_units_dir).map_err(|e| {
-            ReleaseError::Io {
+        Ok(meta) if meta.file_type().is_dir() => {
+            fs::remove_dir_all(pending_units_dir).map_err(|e| ReleaseError::Io {
                 action: "remove failed rollback pending units",
                 details: e.to_string(),
-            }
-        })?,
+            })?
+        }
         Ok(_) => {
             return Err(ReleaseError::OwnershipViolation {
                 path: pending_units_dir.display().to_string(),
@@ -188,12 +184,11 @@ fn cleanup_rollback_staging(
         }
     }
     match fs::symlink_metadata(pending_host_config_path) {
-        Ok(meta) if meta.file_type().is_file() => fs::remove_file(pending_host_config_path).map_err(|e| {
-            ReleaseError::Io {
+        Ok(meta) if meta.file_type().is_file() => fs::remove_file(pending_host_config_path)
+            .map_err(|e| ReleaseError::Io {
                 action: "remove failed rollback pending host config",
                 details: e.to_string(),
-            }
-        })?,
+            })?,
         Ok(_) => {
             return Err(ReleaseError::OwnershipViolation {
                 path: pending_host_config_path.display().to_string(),
@@ -267,14 +262,14 @@ fn validate_imported_legacy_release(
         });
     }
 
-    let unit_hash = release.api_unit_sha256.as_ref().ok_or_else(|| {
-        ReleaseError::LegacyMigrationRejected {
-            reason: "imported legacy rollback record has no unit digest".into(),
-        }
-    })?;
-    let unit_path = release_path
-        .join("systemd")
-        .join(LEGACY_FORMAT2_UNIT);
+    let unit_hash =
+        release
+            .api_unit_sha256
+            .as_ref()
+            .ok_or_else(|| ReleaseError::LegacyMigrationRejected {
+                reason: "imported legacy rollback record has no unit digest".into(),
+            })?;
+    let unit_path = release_path.join("systemd").join(LEGACY_FORMAT2_UNIT);
     validate_format2_unit(&unit_path, unit_hash, true)?;
     Ok(())
 }
@@ -303,7 +298,10 @@ fn validate_installed_legacy_unit_and_wants(
         action: "read imported legacy wants link target",
         details: e.to_string(),
     })?;
-    if !wants_target.to_string_lossy().ends_with(LEGACY_FORMAT2_UNIT) {
+    if !wants_target
+        .to_string_lossy()
+        .ends_with(LEGACY_FORMAT2_UNIT)
+    {
         return Err(ReleaseError::LegacyMigrationRejected {
             reason: format!("imported legacy wants link does not target {LEGACY_FORMAT2_UNIT}"),
         });
@@ -328,13 +326,14 @@ async fn probe_imported_legacy_health() -> Result<(), ReleaseError> {
         .build()
         .map_err(|e| ReleaseError::Config(format!("failed to build legacy health client: {e}")))?;
     let url = format!("http://127.0.0.1:{LEGACY_FORMAT2_PORT}{API_SERVICE_HEALTH_PATH}");
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| ReleaseError::LegacyMigrationRejected {
-            reason: format!("legacy health probe failed at {url}: {e}"),
-        })?;
+    let response =
+        client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| ReleaseError::LegacyMigrationRejected {
+                reason: format!("legacy health probe failed at {url}: {e}"),
+            })?;
     if response.status() != reqwest::StatusCode::OK {
         return Err(ReleaseError::LegacyMigrationRejected {
             reason: format!("legacy health probe returned status {}", response.status()),
@@ -386,7 +385,6 @@ async fn probe_imported_legacy_health() -> Result<(), ReleaseError> {
         });
     }
     Ok(())
-
 }
 /// Verify a committed imported format-2 release and, optionally, its live service.
 pub(crate) async fn inspect_imported_legacy_installation(
@@ -397,7 +395,12 @@ pub(crate) async fn inspect_imported_legacy_installation(
     validate_imported_legacy_release(layout, release)?;
     let binary_path = layout.opt_dir.join("bin").join("dam-hopper-server");
     super::ownership::verify_path_permissions(&binary_path, 0o755, true)?;
-    let imported_hash = hash_file(Path::new(&release.release_path).join("bin").join("dam-hopper-server").as_path())?;
+    let imported_hash = hash_file(
+        Path::new(&release.release_path)
+            .join("bin")
+            .join("dam-hopper-server")
+            .as_path(),
+    )?;
     let installed_hash = hash_file(&binary_path)?;
     if installed_hash != imported_hash {
         return Err(ReleaseError::ArchiveDigestMismatch {
@@ -407,11 +410,13 @@ pub(crate) async fn inspect_imported_legacy_installation(
         });
     }
 
-    let unit_hash = release.api_unit_sha256.as_ref().ok_or_else(|| {
-        ReleaseError::LegacyMigrationRejected {
-            reason: "imported legacy rollback record has no unit digest".into(),
-        }
-    })?;
+    let unit_hash =
+        release
+            .api_unit_sha256
+            .as_ref()
+            .ok_or_else(|| ReleaseError::LegacyMigrationRejected {
+                reason: "imported legacy rollback record has no unit digest".into(),
+            })?;
     validate_installed_legacy_unit_and_wants(layout, unit_hash)?;
 
     if !check_live_process {
@@ -458,12 +463,22 @@ pub(crate) async fn inspect_imported_legacy_installation(
     probe_imported_legacy_health().await
 }
 
-
 /// Automatic rollback on candidate activation failure: restores `state.active` or clean baseline.
-pub async fn rollback_activation_failure(layout: &Layout, reason: &str) -> Result<(), ReleaseError> {
+pub async fn rollback_activation_failure(
+    layout: &Layout,
+    reason: &str,
+) -> Result<(), ReleaseError> {
     let mut state = load_or_init_manager_state(&layout.manager_state_path())?;
     // Case 1: First-install baseline restoration
     if state.active.is_none() {
+        for &unit in ALL_SERVICE_UNITS {
+            let _ = super::systemd::systemctl_stop(unit);
+            let _ = super::systemd::disable_if_enabled(unit);
+        }
+        let _ = super::process::terminate_stray_listeners(&[
+            super::constants::API_SERVICE_PORT,
+            super::constants::WEB_SERVICE_PORT,
+        ]);
         if let Some(tx) = state.transaction.clone() {
             if let Some(ref mig) = tx.migration {
                 stop_and_disable_units(ALL_SERVICE_UNITS, &layout.systemd_unit_dir)?;
@@ -494,10 +509,12 @@ pub async fn rollback_activation_failure(layout: &Layout, reason: &str) -> Resul
             }
         }
         match fs::symlink_metadata(layout.host_config_json_path()) {
-            Ok(_) => fs::remove_file(layout.host_config_json_path()).map_err(|e| ReleaseError::Io {
-                action: "remove public host configuration",
-                details: e.to_string(),
-            })?,
+            Ok(_) => {
+                fs::remove_file(layout.host_config_json_path()).map_err(|e| ReleaseError::Io {
+                    action: "remove public host configuration",
+                    details: e.to_string(),
+                })?
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(ReleaseError::Io {
@@ -521,10 +538,12 @@ pub async fn rollback_activation_failure(layout: &Layout, reason: &str) -> Resul
     // Case 2: Restore currently active release from backups
     let active = state.active.clone().unwrap();
     for &unit in ALL_SERVICE_UNITS {
-        if systemctl_is_active(unit)? {
-            systemctl_stop(unit)?;
-        }
+        let _ = systemctl_stop(unit);
     }
+    let _ = super::process::terminate_stray_listeners(&[
+        super::constants::API_SERVICE_PORT,
+        super::constants::WEB_SERVICE_PORT,
+    ]);
 
     if let Some(tx) = &state.transaction {
         if let Some(bkp) = &tx.units_backup_dir {
@@ -575,7 +594,6 @@ pub async fn rollback_activation_failure(layout: &Layout, reason: &str) -> Resul
     systemctl_daemon_reload()?;
     systemctl_enable(RECOVERY_SERVICE_UNIT)?;
 
-
     if active.role.includes_server() {
         systemctl_start("dam-hopper-api.service")?;
     }
@@ -585,7 +603,14 @@ pub async fn rollback_activation_failure(layout: &Layout, reason: &str) -> Resul
 
     let cand = release_to_candidate(&active);
     let targets = build_candidate_health_targets(&cand)?;
-    if let Err(e) = wait_for_health_stability(&targets, DEFAULT_STARTUP_DEADLINE, DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_PROBE_INTERVAL).await {
+    if let Err(e) = wait_for_health_stability(
+        &targets,
+        DEFAULT_STARTUP_DEADLINE,
+        DEFAULT_REQUIRED_CONSECUTIVE,
+        DEFAULT_PROBE_INTERVAL,
+    )
+    .await
+    {
         if let Some(ref mut tx) = state.transaction {
             tx.phase = TransactionPhase::Failed;
         }
@@ -680,7 +705,11 @@ pub async fn execute_manual_rollback(layout: &Layout) -> Result<(), ReleaseError
             action: "create legacy rollback bin directory",
             details: e.to_string(),
         })?;
-        copy_file_durable(&legacy_bin_src, &bin_parent.join("dam-hopper-server"), Some(0o755))?;
+        copy_file_durable(
+            &legacy_bin_src,
+            &bin_parent.join("dam-hopper-server"),
+            Some(0o755),
+        )?;
 
         match fs::symlink_metadata(&target_wants) {
             Ok(meta) if meta.file_type().is_symlink() => {
