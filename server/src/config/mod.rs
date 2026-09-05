@@ -20,9 +20,12 @@ pub use presets::{get_effective_command, get_preset, get_project_services};
 pub use resolve::{resolve_startup_config, ConfigResolution, ConfigResolutionInput, ConfigSource};
 pub use schema::{
     AgentAssignment, AgentStoreConfig, CommandKind, DamHopperConfig, FeaturesConfig, GlobalConfig,
-    KnownWorkspace, ProjectAgents, ProjectConfig, ProjectType, RestartPolicy, ServerConfig,
-    ServiceConfig, TelemetryCollectorConfig, TelemetryConfig, TerminalProfile, WorkspaceInfo,
-    DEFAULT_RESTART_MAX_RETRIES,
+    IdleSuspendCapabilitySelection, IdleSuspendConfig, KnownWorkspace, ProjectAgents, ProjectConfig,
+    ProjectType, RestartPolicy, ServerConfig, ServiceConfig, TelemetryCollectorConfig,
+    TelemetryConfig, TerminalProfile, WorkspaceInfo, DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+    DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS, DEFAULT_RESTART_MAX_RETRIES,
+    MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+    MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
 };
 
 pub use crate::system::config::HostResourceMonitorConfig;

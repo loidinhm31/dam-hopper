@@ -17,7 +17,15 @@ pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
     let _workspace_context = state.workspace_context_guard.write().await;
     let config_path = state.config.read().await.config_path.clone();
     match read_config(&config_path) {
-        Ok(cfg) => {
+        Ok(mut cfg) => {
+            cfg.server.idle_suspend.enabled = state.idle_suspend_policy.enabled;
+            cfg.server.idle_suspend.enrollment_reference = state.idle_suspend_policy.enrollment_reference.clone();
+            cfg.server.idle_suspend.capability_selection = state.idle_suspend_policy.capability_selection;
+            {
+                let timing = state.idle_suspend_timing.read().await;
+                cfg.server.idle_suspend.quiet_period_seconds = timing.quiet_period_seconds;
+                cfg.server.idle_suspend.wake_after_seconds = timing.wake_after_seconds;
+            }
             state.media_tickets.revoke_all();
             state.fs.reinit_sandbox(project_roots_from_config(&cfg));
             state
@@ -72,7 +80,17 @@ pub async fn import_settings(
     State(state): State<AppState>,
     Json(body): Json<ImportBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if let Some(gc) = body.global_config {
+    if let Some(mut gc) = body.global_config {
+        let current_cfg = state.config.read().await;
+        if gc.server.idle_suspend != Default::default()
+            && gc.server.idle_suspend != current_cfg.server.idle_suspend
+        {
+            return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+                "Terminal idle-suspend timing must be configured via PATCH /api/system/idle-suspend/v1/timing and enablement is startup-owned".to_string(),
+            )));
+        }
+        gc.server.idle_suspend = current_cfg.server.idle_suspend.clone();
+        drop(current_cfg);
         let gc_path = crate::config::global_config_path();
         crate::config::write_global_config_at(&gc_path, &gc).map_err(ApiError::from_app)?;
         *state.global_config.write().await = gc;
