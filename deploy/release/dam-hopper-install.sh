@@ -277,6 +277,8 @@ if [[ ${REINSTALL} -eq 1 ]]; then
     INSTALL_CMD+=("--reinstall")
     echo "Stopping existing services and clearing old release directory for clean reinstall..."
     systemctl stop dam-hopper-api dam-hopper-web dam-hopper-recovery 2>/dev/null || sudo systemctl stop dam-hopper-api dam-hopper-web dam-hopper-recovery 2>/dev/null || true
+    pkill -f "dam-hopper-server" 2>/dev/null || sudo pkill -f "dam-hopper-server" 2>/dev/null || true
+    pkill -f "dam-hopper-web" 2>/dev/null || sudo pkill -f "dam-hopper-web" 2>/dev/null || true
     if [[ -d "/opt/dam-hopper/releases/${TAG}/${ROLE}" ]]; then
         rm -rf "/opt/dam-hopper/releases/${TAG}/${ROLE}" 2>/dev/null || sudo rm -rf "/opt/dam-hopper/releases/${TAG}/${ROLE}" 2>/dev/null || true
     fi
