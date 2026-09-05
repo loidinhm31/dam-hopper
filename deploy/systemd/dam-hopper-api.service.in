@@ -14,7 +14,9 @@ Environment=HOME=@API_HOME@
 Environment=XDG_CONFIG_HOME=@API_HOME@/.config
 Environment=RUST_LOG=info
 Environment=RUST_ENV=production
-Environment=GIT_CONFIG_PARAMETERS='safe.directory=*'
+Environment=GIT_CONFIG_COUNT=1
+Environment=GIT_CONFIG_KEY_0=safe.directory
+Environment=GIT_CONFIG_VALUE_0=*
 Environment=DAM_HOPPER_CORS_ORIGINS=@API_ORIGINS@
 EnvironmentFile=-/etc/dam-hopper/server.env
 EnvironmentFile=-/etc/dam-hopper/server-safety.env
