@@ -315,13 +315,13 @@ Do not recreate, document, or execute these paths. All host management is perfor
 
 ## 11. Terminal Idle Suspend Helper Enrollment & Rollback Runbook
 
-The server-authoritative terminal idle suspend subsystem provides opt-in, fail-closed host suspend with RTC wake after a bounded quiet period with zero active or starting PTY terminals.
+The server-authoritative terminal idle suspend subsystem provides opt-in, fail-closed host suspend with RTC wake after a bounded quiet period with zero active or starting PTY terminals. The enrolled helper also supports the Phase 01 execution-only indefinite-sleep sentinel; automatic persisted timing remains bounded.
 
 ### 11.1 Host Qualification Requirements
 Before enabling terminal idle suspend on a production host:
 1. **Kernel & RTC Hardware**: The host must expose a functional RTC wakealarm device at `/sys/class/rtc/rtc0/wakealarm`.
-2. **Systemd & Logind**: Logind D-Bus interface `org.freedesktop.login1.Manager` must support `Suspend` without desktop session inhibitors blocking non-interactive operation.
-3. **Inhibitors**: Active system inhibitors (e.g. system update locks, backup operations) are respected and cause suspend requests to fail closed without retry.
+2. **Systemd & Logind**: The fixed `systemctl suspend` path must reach systemd/logind and support suspend without desktop session inhibitors blocking non-interactive operation.
+3. **RTC ownership and inhibitors**: DamHopper must be the approved owner of `rtc0` wakealarm. A non-empty existing alarm is rejected as busy; active system inhibitors (for example system update locks or backup operations) are respected and cause suspend requests to fail closed without retry.
 
 ### 11.2 Privileged Helper Enrollment & Hardening
 The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed suspend request with RTC wakealarm programming over a local Unix domain socket:
@@ -335,7 +335,28 @@ The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed
 - **Peer Credential Verification**: The helper validates peer UID and PID on connection via `SO_PEERCRED`, rejecting unauthorized callers.
 - **Audit Trail**: Every request, intent, and completion is recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`).
 
+#### Phase 01 RTC and wake semantics
+
+The helper protocol remains version 1 and accepts `wakeAfterSeconds: 0` or
+`60..=86400` only. Zero is converted to clear-only mode: the helper writes
+`0` to `/sys/class/rtc/rtc0/wakealarm`, reads it back, and skips target-epoch
+calculation and writes. A timed value clears and verifies first, computes a
+checked `now + seconds`, writes the target, and verifies the readback.
+
+Peer authentication, protocol version checks, request-ID deduplication,
+capability/inhibitor/RTC preflight, and the intent audit occur before RTC
+mutation. Any busy alarm, audit-intent failure, clear/readback/write failure,
+or unsupported capability suppresses suspend. Intent and completion records
+retain `wakeAfterSeconds: 0`; audit files remain mode `0600` and bounded.
+
+Do not qualify indefinite sleep from an automated test: repository tests use
+temporary files and fake backends and never invoke `systemctl`, logind, or a
+real RTC. A production indefinite canary requires explicit operations approval
+and a verified physical or out-of-band wake path; use a bounded timed canary
+first.
+
 ### 11.3 Boundary Verification
+
 Run the non-privileged boundary verification script before deployment:
 ```bash
 ./scripts/verify-idle-suspend-boundary.sh

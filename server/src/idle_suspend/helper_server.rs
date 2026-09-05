@@ -145,6 +145,10 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
                                 detail: msg,
                             }
                         }
+                        PreflightError::RtcAlarmBusy(msg) => SuspendOutcome::ExecutionFailed {
+                            request_id: req.request_id.clone(),
+                            error: format!("RTC alarm already programmed: {msg}"),
+                        },
                         PreflightError::ProbeError(msg) => SuspendOutcome::ExecutionFailed {
                             request_id: req.request_id.clone(),
                             error: format!("Preflight probe error: {msg}"),
@@ -183,8 +187,15 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
                     return Ok(());
                 }
 
+                // Convert numeric wake_after_seconds to Option<u64> (0 is None = clear-only)
+                let wake_opt = if req.wake_after_seconds == 0 {
+                    None
+                } else {
+                    Some(req.wake_after_seconds)
+                };
+
                 // Program hardware RTC wakealarm
-                if let Err(e) = self.backend.program_rtc_wake(req.wake_after_seconds) {
+                if let Err(e) = self.backend.program_rtc_wake(wake_opt) {
                     let outcome = SuspendOutcome::ExecutionFailed {
                         request_id: req.request_id.clone(),
                         error: format!("RTC programming failed: {e}"),

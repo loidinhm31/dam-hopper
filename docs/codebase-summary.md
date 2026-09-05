@@ -8,8 +8,8 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-02): 1,538 files, 3,237,062 tokens, and 13,124,780 characters.
-- Repomix security scanning excluded three suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
+- Repomix snapshot (2026-09-06): 1,726 files, 3,586,969 tokens, and 14,620,565 characters.
+- Repomix security scanning excluded four suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
 The snapshot is a compaction aid, not a release artifact; generated
@@ -61,7 +61,23 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **WebSocket Transport**: Bi-directional communication for real-time updates
 - **Workflow Store**: Domain-first Plan/Phase/Task hierarchy, scoped sessions,
   terminal/agent resource links, notes, events, and bounded overview queries
-- **Terminal Idle Suspend**: Server-authoritative opt-in Linux suspend policy (`server/src/idle_suspend/`) with fleet quiescence monitoring, bounded timing mutation (`PATCH /api/system/idle-suspend/v1/timing`), out-of-band revision broadcast (`host:idleSuspendChanged`), hardened root-owned systemd helper IPC, and rollback runbook (`deploy/reset-linux-production.sh`). Full integration coverage in `server/tests/idle_suspend.rs` and `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx`.
+- **Terminal Idle Suspend**: `server/src/idle_suspend/` owns server-authoritative fleet quiescence, bounded automatic timing, helper IPC, RTC/inhibitor preflight, and mode-0600 audits. Phase 01 adds execution-only `wakeAfterSeconds: 0` (indefinite sleep), clear/readback verification, busy-alarm rejection, and explicit zero-valued audit records. Automatic timing remains `60..=86400`; the helper uses a fixed `systemctl suspend` path. REST/UI manual admission remains in later plan phases.
+  - Protocol: version 1, required camelCase `requestId`/`wakeAfterSeconds`, deny-unknown-fields JSON, 4 KiB length-prefixed frames, request-ID dedupe.
+  - Helper order: peer/protocol validation → dedupe → suspend/RTC/inhibitor preflight → synced intent audit → clear/readback (and timed write/readback) → fixed suspend → completion audit.
+  - Tests: `server/src/idle_suspend/tests.rs` covers execution/automatic bounds, zero serde, clear-only and timed behavior, overflow/failures, busy alarms, audit ordering, and helper IPC; `server/tests/idle_suspend.rs` guards automatic zero rejection.
+  - No automated test invokes real RTC, `systemctl`, logind, or host suspend.
+
+### Terminal idle suspend helper module map (Phase 01)
+
+| Module | Responsibility |
+| --- | --- |
+| `protocol.rs` | Version-1 frames, 4 KiB framing, request IDs, execution-only wake validation |
+| `backend.rs` | `Option<u64>` RTC seam; clear/readback; checked timed epoch; fixed suspend command; fake observability |
+| `preflight.rs` | Suspend mode, RTC path/ownership, and inhibitor checks with typed fail-closed errors |
+| `helper_server.rs` | Peer auth, frame validation, dedupe, preflight, audit-before-mutation, fixed execution |
+| `audit.rs` | Bounded mode-0600 JSONL records with explicit zero sentinel |
+| `tests.rs` / `server/tests/idle_suspend.rs` | Unit, helper IPC, failure, boundary, and automatic-regression coverage |
+
 
 ### Frontend (React + Vite)
 
@@ -637,8 +653,9 @@ dam-hopper/
 │   │   │   ├── service.rs
 │   │   │   ├── tests.rs
 │   │   │   └── observation_tests.rs
-│   │   ├── agent_store/       # Agent store service
-│   │   └── lib.rs             # Library exports
+│   │   ├── idle_suspend/       # Helper IPC, RTC preflight, audit, coordinator
+│   │   ├── agent_store/        # Agent store service
+│   │   └── lib.rs              # Library exports
 │   ├── tests/
 │   │   ├── workflow_api.rs    # Workflow REST integration tests
 │   │   └── auth_no_auth.rs    # Auth bypass integration tests
@@ -687,6 +704,12 @@ dam-hopper/
   (2 ignored), and UI TypeScript compilation passed. The focused breakdown is
   13 pure-helper, 26 WorkspacePage, 6 IdeShell, 12 TerminalWorkspaceShell,
   and 5 MobileWorkspaceShell assertions.
+- **Idle-suspend Phase 01**: `server/src/idle_suspend/tests.rs` covers
+  execution-domain boundaries (`0`, `1..=59`, `60`, max, overflow), automatic
+  zero rejection, clear-only/timed RTC verification, busy alarms, audit
+  ordering, peer/dedupe/preflight failures, and helper IPC. The integration
+  regression in `server/tests/idle_suspend.rs` proves automatic timing remains
+  bounded. Tests use fake backends and temporary files; no host suspend/RTC.
 - **Web**: Component tests with Vitest, 80% coverage target
 
 ### Known Limitations (Pre-existing)
@@ -742,14 +765,14 @@ dam-hopper/
 
 ---
 
-**Last Updated**: September 2, 2026
-**Phase Status**: Phase 06 WorkspacePage and Shell Integration is complete /
-DONE (2026-09-02) on the Phase 05 responsive workflow context surface and
-Phase 04 shared workflow client/query foundation. It mounts through existing
-shell toolbar seams, reuses terminal/project-target owners, and resets only
-workflow presentation on profile changes. Full Chromium geometry,
-touch/safe-area, focus-continuity, and host-integration qualification remain
-Phase 07 work; formal source coverage is also unavailable.
-**Generated by**: Repomix v1.18.0 snapshot (1,534 files / 3,216,530 tokens)
-plus source-verified maintenance. Three security-flagged files were excluded
-from the compaction output.
+**Last Updated**: September 6, 2026
+**Phase Status**: Phase 01 of Authenticated Manual Force Sleep is complete /
+DONE (2026-09-06). The version-1 helper execution contract accepts exactly
+`wakeAfterSeconds: 0` or `60..=86400`; zero clears and verifies the RTC alarm
+without target-epoch arithmetic, while automatic timing remains bounded.
+Coordinator, REST, UI, and integration/documentation phases remain pending.
+No real-host suspend or RTC qualification is implied by automated tests.
+**Generated by**: Repomix v1.18.0 snapshot (1,726 files / 3,586,969 tokens /
+14,620,565 characters). Four security-flagged files were excluded from the
+compaction output; review them separately before relying on a complete-file
+inventory.

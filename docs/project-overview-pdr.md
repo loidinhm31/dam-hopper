@@ -620,7 +620,7 @@ authoritative for workspace/target ownership, limits, errors, and replay.
 - Single-flight idle epoch: exactly one suspend execution per empty period; zero auto-retry loops while fleet remains empty.
 - Atomically mutable timing pair (`quiet_period_seconds`, `wake_after_seconds`) via dedicated `PATCH /api/system/idle-suspend/v1/timing` endpoint.
 - Out-of-band revision notifications broadcast via `host:idleSuspendChanged` WebSocket hints.
-- Privileged execution seam via socket-activated root helper (`dam-hopper-idle-suspend-helper`) using `SO_PEERCRED` authentication, RTC sysfs wakealarm programming, and logind D-Bus suspend.
+- Privileged execution seam via socket-activated root helper (`dam-hopper-idle-suspend-helper`) using `SO_PEERCRED` authentication, RTC sysfs wakealarm programming, and the fixed `systemctl suspend` path that delegates to systemd/logind.
 - Read-only live monitoring surfaced in host-resource popover; timing tuning in Settings.
 - Safe operator rollback runbook and non-privileged boundary verification (`scripts/verify-idle-suspend-boundary.sh`, `deploy/reset-linux-production.sh`).
 
@@ -630,6 +630,40 @@ authoritative for workspace/target ownership, limits, errors, and replay.
 - [x] Zero sudo, shell pipelines, or arbitrary command execution in server binary.
 - [x] Post-resume capability, fleet, and revision reconciliation without repeat suspend.
 - [x] Automated test suite runs with 100% fake-time/executor mocks; no automated CI/local command triggers host sleep or RTC writes.
+
+### PR-016: Authenticated Manual Force Sleep — Phase 01 Protocol and Helper
+
+**Status:** Phase 01 complete / DONE on 2026-09-06. Coordinator, REST,
+confirmation-dialog, and integration/documentation phases remain pending in
+the [Authenticated Manual Force Sleep plan](../plans/260906-0348-manual-force-sleep-button/plan.md).
+
+**Functional Requirements:**
+
+- Keep helper protocol version 1 and the fixed request shape; accept
+  `wakeAfterSeconds` exactly as `0` or `60..=86400`.
+- Keep persisted automatic idle timing and `PATCH /timing` at `60..=86400`;
+  `0` is execution-only and means indefinite sleep.
+- Convert `0` to clear-only RTC behavior. Clear `/sys/class/rtc/rtc0/wakealarm`,
+  verify the clear, and skip target-epoch arithmetic and writes.
+- For nonzero values, clear and verify, calculate `now + seconds` with checked
+  arithmetic, write the target epoch, and verify the readback.
+- Reject unexpected non-empty RTC alarms under the approved DamHopper-exclusive
+  ownership policy. Preserve peer, protocol-version, dedupe, capability,
+  inhibitor, audit-before-mutation, and fixed-suspend checks.
+- Record the numeric zero explicitly in bounded helper intent/completion audit
+  records without exposing credentials, terminal content, raw IPC, or paths to
+  browser clients.
+
+**Acceptance Criteria:**
+
+- [x] Execution validator accepts only `0` or the approved nonzero interval.
+- [x] Automatic config/timing validation continues to reject zero.
+- [x] Clear-only and timed RTC paths verify all required writes/readbacks.
+- [x] Busy-alarm, audit, capability, inhibitor, and RTC failures produce zero
+  suspend calls in fake/temp-file tests.
+- [x] Scoped protocol, backend, preflight, helper, audit, and integration
+  regressions cover boundaries and compatibility without touching host power.
+
 
 ## Non-Functional Requirements
 

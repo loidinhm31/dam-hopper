@@ -220,7 +220,7 @@ rollback rehearsal deferred as post-release work; none is passed evidence.
 
 ## Terminal Idle Suspend (Opt-in Linux Suspend)
 
-The server-authoritative terminal idle suspend feature monitors active PTY fleet state and can request host suspend with RTC wake after a bounded quiet period with zero active or starting terminals.
+The server-authoritative terminal idle suspend feature monitors active PTY fleet state and can request host suspend with RTC wake after a bounded quiet period with zero active or starting terminals. Phase 01 also hardens the enrolled helper's execution path for the manual-force-sleep plan; that path is not a configuration mutation.
 
 The feature is **disabled by default** (`enabled = false`) and requires explicit host configuration under `[server.idle_suspend]` in the loaded registry TOML (`~/.config/dam-hopper/dam-hopper.toml`).
 
@@ -240,8 +240,24 @@ capability_selection = "auto"
 - **Timing Bounds**:
   - `quiet_period_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 900 (15 min).
   - `wake_after_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 600 (10 min).
-- **Security Safeguards**: The timing route is unavailable in development mode (`--no-auth`). All suspend requests fail closed if sleep inhibitors are active, helper enrollment is missing, or host capabilities are unsupported.
+- **Security Safeguards**: The timing route is unavailable in development mode (`--no-auth`). All suspend requests fail closed if sleep inhibitors are active, helper enrollment is missing, host capabilities are unsupported, or RTC ownership is ambiguous.
 - **Rollback & Verification**: Non-privileged boundary verification is performed with `scripts/verify-idle-suspend-boundary.sh`. Production resets or rollbacks are executed safely via `deploy/reset-linux-production.sh` (supporting `--dry-run`), which disables startup policy, stops helper units, verifies RTC alarm state, and preserves audit logs.
+
+### Execution-only indefinite sleep (Phase 01)
+
+`wake_after_seconds = 0` is **never valid** in this persisted automatic
+configuration or in the timing PATCH. The helper execution protocol accepts
+`wakeAfterSeconds: 0` as a required numeric sentinel for one fixed
+indefinite-sleep request. The helper converts it to clear-only RTC behavior:
+write `0`, read back the clear, and do not calculate or write a target epoch.
+
+Nonzero execution values remain `60..=86400` seconds. The helper clears and
+verifies the RTC alarm before programming a checked target epoch and verifying
+the readback. A non-empty pre-existing `/sys/class/rtc/rtc0/wakealarm` is
+treated as an ownership conflict (`RtcAlarmBusy`), and any preflight, clear,
+readback, write, audit-intent, or suspend failure suppresses the operation.
+Automated tests use temporary files and fake backends; they never suspend the
+test host or program its RTC.
 
 ### Browser Debug Preview
 
