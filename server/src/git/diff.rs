@@ -12,7 +12,7 @@ use git2::{DiffOptions, Repository};
 use crate::error::AppError;
 use crate::git::types::{
     ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent, GitLineChange, HunkInfo,
-    SubmoduleGitlinkInfo, VcsRootKind, UNTRACKED_PAGE_SIZE,
+    SubmoduleGitlinkInfo, UNTRACKED_PAGE_SIZE, VcsRootKind,
 };
 use crate::git::vcs_roots::discover_vcs_roots;
 
@@ -21,6 +21,9 @@ use crate::git::vcs_roots::discover_vcs_roots;
 // ---------------------------------------------------------------------------
 
 fn open_repo(path: &Path) -> Result<Repository, AppError> {
+    unsafe {
+        let _ = git2::opts::set_verify_owner_validation(false);
+    }
     Repository::open(path).map_err(|e| {
         if e.code() == git2::ErrorCode::NotFound {
             AppError::GitNotFound(path.to_string_lossy().into_owned())
@@ -470,6 +473,7 @@ fn append_submodule_status_entries(
     }
 
     let output = Command::new("git")
+        .args(["-c", "safe.directory=*"])
         .args(["status", "--porcelain=v1", "--ignore-submodules=none", "-z"])
         .current_dir(project_path)
         .output()
@@ -954,9 +958,10 @@ pub fn commit_files(project_path: &Path, message: &str, amend: bool) -> Result<S
         return Ok(oid.to_string());
     }
     let parents: Vec<git2::Commit> = match repo.head() {
-        Ok(head) => vec![head
-            .peel_to_commit()
-            .map_err(|e| AppError::Git(e.message().to_string()))?],
+        Ok(head) => vec![
+            head.peel_to_commit()
+                .map_err(|e| AppError::Git(e.message().to_string()))?,
+        ],
         Err(_) => vec![],
     };
     let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
