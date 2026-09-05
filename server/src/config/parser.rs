@@ -412,6 +412,32 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
         );
         config.insert("host_resources".into(), Value::Table(table));
     }
+    if server.idle_suspend != Default::default() {
+        let idle_suspend = &server.idle_suspend;
+        let mut table = toml::map::Map::new();
+        table.insert("enabled".to_string(), Value::Boolean(idle_suspend.enabled));
+        table.insert(
+            "quiet_period_seconds".to_string(),
+            Value::Integer(idle_suspend.quiet_period_seconds as i64),
+        );
+        table.insert(
+            "wake_after_seconds".to_string(),
+            Value::Integer(idle_suspend.wake_after_seconds as i64),
+        );
+        if let Some(enrollment) = &idle_suspend.enrollment_reference {
+            table.insert(
+                "enrollment_reference".to_string(),
+                Value::String(enrollment.clone()),
+            );
+        }
+        if idle_suspend.capability_selection != Default::default() {
+            table.insert(
+                "capability_selection".to_string(),
+                Value::String(idle_suspend.capability_selection.as_str().to_string()),
+            );
+        }
+        config.insert("idle_suspend".to_string(), Value::Table(table));
+    }
     Value::Table(config)
 }
 

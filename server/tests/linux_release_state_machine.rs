@@ -227,16 +227,30 @@ fn test_reference_safe_retention() {
     fs::write(old_dir.join("bin/dam-hopper-web"), b"web").unwrap();
     fs::create_dir_all(old_dir.join("systemd")).unwrap();
     use std::os::unix::fs::PermissionsExt;
+    if let Some(parent) = old_dir.parent() {
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o755));
+    }
+    fs::set_permissions(&old_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(old_dir.join("bin"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(old_dir.join("systemd"), fs::Permissions::from_mode(0o755)).unwrap();
     fs::set_permissions(old_dir.join("bin/dam-hopper-manager"), fs::Permissions::from_mode(0o755)).unwrap();
     fs::set_permissions(old_dir.join("bin/dam-hopper-server"), fs::Permissions::from_mode(0o755)).unwrap();
     fs::set_permissions(old_dir.join("bin/dam-hopper-web"), fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(old_dir.join("systemd/dam-hopper-api.service"), b"unit").unwrap();
     fs::write(old_dir.join("systemd/dam-hopper-web.service"), b"unit").unwrap();
     fs::create_dir_all(old_dir.join("sysusers.d")).unwrap();
+    fs::set_permissions(old_dir.join("sysusers.d"), fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(old_dir.join("sysusers.d/dam-hopper-web.conf"), b"conf").unwrap();
     fs::create_dir_all(old_dir.join("web")).unwrap();
+    fs::set_permissions(old_dir.join("web"), fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(old_dir.join("web/index.html"), b"html").unwrap();
     fs::write(old_dir.join("LICENSE"), b"license").unwrap();
+    let _ = fs::set_permissions(old_dir.join("release-manifest.json"), fs::Permissions::from_mode(0o644));
+    let _ = fs::set_permissions(old_dir.join("systemd/dam-hopper-api.service"), fs::Permissions::from_mode(0o644));
+    let _ = fs::set_permissions(old_dir.join("systemd/dam-hopper-web.service"), fs::Permissions::from_mode(0o644));
+    let _ = fs::set_permissions(old_dir.join("sysusers.d/dam-hopper-web.conf"), fs::Permissions::from_mode(0o644));
+    let _ = fs::set_permissions(old_dir.join("web/index.html"), fs::Permissions::from_mode(0o644));
+    let _ = fs::set_permissions(old_dir.join("LICENSE"), fs::Permissions::from_mode(0o644));
     let pruned = apply_retention(&layout, &state).expect("apply retention");
     assert_eq!(pruned, 1);
     assert!(active_dir.exists());

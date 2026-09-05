@@ -111,6 +111,14 @@ pub struct AppState {
     /// Optional workflow store/service. Workflow availability never gates PTY APIs.
     pub workflow: Option<Arc<WorkflowService>>,
     pub workspace_target_resolver: WorkspaceTargetResolver,
+    /// Startup policy for server-authoritative terminal idle suspend.
+    pub idle_suspend_policy: Arc<crate::idle_suspend::StartupIdleSuspendPolicy>,
+    /// Mutable runtime timing configuration with status revision tracking.
+    pub idle_suspend_timing: Arc<RwLock<crate::idle_suspend::RuntimeIdleSuspendTiming>>,
+    /// Narrow atomic pair store for canonical registry persistence.
+    pub idle_suspend_store: Arc<crate::idle_suspend::IdleSuspendTimingStore>,
+    /// Server-private audit log for idle suspend timing mutations.
+    pub idle_suspend_audit: Arc<crate::idle_suspend::IdleSuspendTimingAudit>,
 }
 
 impl AppState {
@@ -251,6 +259,33 @@ impl AppState {
         let video_stream_tickets = VideoStreamTicketStore::from_media(media_tickets.clone());
         let image_stream_tickets = ImageStreamTicketStore::from_media(media_tickets.clone());
 
+        let idle_suspend_policy = Arc::new(
+            crate::idle_suspend::StartupIdleSuspendPolicy::from_config(
+                &config.config_path,
+                &config.server.idle_suspend,
+            ),
+        );
+        let idle_suspend_timing = Arc::new(RwLock::new(
+            crate::idle_suspend::RuntimeIdleSuspendTiming::from_config(
+                &config.server.idle_suspend,
+            )
+            .map_err(|e| anyhow::anyhow!("Invalid idle suspend timing: {e}"))?,
+        ));
+        let idle_suspend_store = Arc::new(
+            crate::idle_suspend::IdleSuspendTimingStore::new(
+                idle_suspend_policy.canonical_registry_path.clone(),
+            ),
+        );
+        let idle_suspend_audit_dir = config
+            .config_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(".config/dam-hopper"));
+        let idle_suspend_audit = Arc::new(
+            crate::idle_suspend::IdleSuspendTimingAudit::new(
+                idle_suspend_audit_dir.join("idle-suspend-audit.jsonl"),
+            ),
+        );
         Ok(Self {
             workspace_dir,
             config: Arc::new(RwLock::new(config)),
@@ -284,6 +319,10 @@ impl AppState {
             telemetry_coordinator: Arc::new(tokio::sync::Mutex::new(())),
             workflow: None,
             workspace_target_resolver: WorkspaceTargetResolver::new(),
+            idle_suspend_policy,
+            idle_suspend_timing,
+            idle_suspend_store,
+            idle_suspend_audit,
         })
     }
     /// Attach the optional workflow repository using the existing session DB connection.

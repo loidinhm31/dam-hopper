@@ -183,8 +183,15 @@ pub async fn switch_workspace(
     Json(body): Json<PathBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = std::path::PathBuf::from(&body.path);
-    let cfg = load_config_from_workspace_or_file(&path).map_err(ApiError::from_app)?;
-
+    let mut cfg = load_config_from_workspace_or_file(&path).map_err(ApiError::from_app)?;
+    cfg.server.idle_suspend.enabled = state.idle_suspend_policy.enabled;
+    cfg.server.idle_suspend.enrollment_reference = state.idle_suspend_policy.enrollment_reference.clone();
+    cfg.server.idle_suspend.capability_selection = state.idle_suspend_policy.capability_selection;
+    {
+        let timing = state.idle_suspend_timing.read().await;
+        cfg.server.idle_suspend.quiet_period_seconds = timing.quiet_period_seconds;
+        cfg.server.idle_suspend.wake_after_seconds = timing.wake_after_seconds;
+    }
     state.pty_manager.dispose().map_err(ApiError::from_app)?;
 
     let _workspace_context = state.workspace_context_guard.write().await;

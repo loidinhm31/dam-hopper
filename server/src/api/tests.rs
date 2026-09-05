@@ -6112,3 +6112,108 @@ async fn config_and_settings_reload_revoke_shared_media_tickets() {
         .lookup_and_touch(&settings_video)
         .is_none());
 }
+
+#[tokio::test]
+async fn config_put_preserves_idle_suspend() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "preserved-test", "root": "." },
+            "projects": [{ "name": "test-project", "path": ".", "type": "custom" }]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(state.config.read().await.workspace.name, "preserved-test");
+    assert_eq!(state.config.read().await.server.idle_suspend, crate::config::IdleSuspendConfig::default());
+}
+
+#[tokio::test]
+async fn config_put_rejects_idle_suspend_delta() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "delta-test", "root": "." },
+            "server": {
+                "idleSuspend": {
+                    "enabled": true,
+                    "quietPeriodSeconds": 1800,
+                    "wakeAfterSeconds": 900
+                }
+            },
+            "projects": [{ "name": "test-project", "path": ".", "type": "custom" }]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let err_str = String::from_utf8_lossy(&body);
+    assert!(err_str.contains("Terminal idle-suspend timing must be configured via PATCH"));
+}
+
+#[tokio::test]
+async fn settings_import_rejects_idle_suspend_delta() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let mut gc = crate::config::GlobalConfig::default();
+    gc.server.idle_suspend.enabled = true;
+    gc.server.idle_suspend.quiet_period_seconds = 1800;
+
+    let resp = post_json(
+        state.clone(),
+        "/api/settings/import",
+        serde_json::json!({
+            "globalConfig": gc
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn workspace_switch_preserves_startup_idle_suspend_policy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let switched_dir = tempfile::tempdir().unwrap();
+    let switched_cfg = switched_dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &switched_cfg,
+        r#"
+[workspace]
+name = "switched-ws"
+
+[server.idle_suspend]
+enabled = true
+quiet_period_seconds = 3600
+wake_after_seconds = 1800
+enrollment_reference = "systemd:fake"
+"#,
+    )
+    .unwrap();
+
+    let resp = post_json(
+        state.clone(),
+        "/api/workspace/switch",
+        serde_json::json!({ "path": switched_cfg.to_string_lossy().to_string() }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Verify that switched workspace loaded name, but idle_suspend policy remains the startup policy!
+    let current_cfg = state.config.read().await;
+    assert_eq!(current_cfg.workspace.name, "switched-ws");
+    assert_eq!(current_cfg.server.idle_suspend.enabled, false); // Startup was false
+    assert_eq!(current_cfg.server.idle_suspend.enrollment_reference, None); // Startup was None
+    assert_eq!(current_cfg.server.idle_suspend.quiet_period_seconds, 900); // Startup default
+    assert_eq!(current_cfg.server.idle_suspend.wake_after_seconds, 600); // Startup default
+}

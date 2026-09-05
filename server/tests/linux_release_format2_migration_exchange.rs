@@ -135,6 +135,10 @@ fn test_retention_allows_imported_format2_and_prunes_when_unreferenced() {
     let srv_unit = imported_dir.join("server").join("systemd");
     fs::create_dir_all(&srv_bin).unwrap();
     fs::create_dir_all(&srv_unit).unwrap();
+    fs::set_permissions(&imported_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(imported_dir.join("server"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&srv_bin, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&srv_unit, fs::Permissions::from_mode(0o755)).unwrap();
     let bin_path = srv_bin.join("dam-hopper-server");
     fs::write(&bin_path, b"imported-bin").unwrap();
     fs::set_permissions(&bin_path, fs::Permissions::from_mode(0o755)).unwrap();

@@ -218,6 +218,31 @@ period. The release owner approved Phase 07 completion with the still-unobserved
 Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and
 rollback rehearsal deferred as post-release work; none is passed evidence.
 
+## Terminal Idle Suspend (Opt-in Linux Suspend)
+
+The server-authoritative terminal idle suspend feature monitors active PTY fleet state and can request host suspend with RTC wake after a bounded quiet period with zero active or starting terminals.
+
+The feature is **disabled by default** (`enabled = false`) and requires explicit host configuration under `[server.idle_suspend]` in the loaded registry TOML (`~/.config/dam-hopper/dam-hopper.toml`).
+
+```toml
+[server.idle_suspend]
+enabled = false
+quiet_period_seconds = 900
+wake_after_seconds = 600
+capability_selection = "auto"
+# enrollment_reference = "systemd:dam-hopper-idle-suspend.service"
+```
+
+### Startup Ownership and Immutability
+
+- **Enablement and Enrollment**: `enabled`, `enrollment_reference`, and `capability_selection` are captured immutably at server boot. Workspace switches, config reload, full-config update (`PUT /api/config`), or settings imports cannot enable or re-enroll idle suspend.
+- **Timing Updates**: Authenticated users can tune `quiet_period_seconds` and `wake_after_seconds` via the dedicated endpoint `PATCH /api/system/idle-suspend/v1/timing`. Unrestricted full-config updates preserve the current idle-suspend configuration and reject incoming modifications.
+- **Timing Bounds**:
+  - `quiet_period_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 900 (15 min).
+  - `wake_after_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 600 (10 min).
+- **Security Safeguards**: The timing route is unavailable in development mode (`--no-auth`). All suspend requests fail closed if sleep inhibitors are active, helper enrollment is missing, or host capabilities are unsupported.
+
+
 ### Browser Debug Preview
 
 The Browser tool has no server configuration flag. It embeds the selected

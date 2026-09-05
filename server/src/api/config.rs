@@ -37,6 +37,7 @@ pub async fn update_config(
 ) -> Result<impl IntoResponse, ApiError> {
     let current = state.config.read().await.clone();
     preserve_and_reject_telemetry_mutation(&mut body, &current)?;
+    preserve_and_reject_idle_suspend_mutation(&mut body, &current)?;
     let config_path = current.config_path.clone();
     let config_dir = config_path.parent().unwrap_or(StdPath::new("/"));
     relativize_project_paths(&mut body, config_dir);
@@ -72,6 +73,62 @@ fn preserve_and_reject_telemetry_mutation(
             "Update telemetry through /api/usage/settings".to_string(),
         )));
     }
+    Ok(())
+}
+
+fn preserve_and_reject_idle_suspend_mutation(
+    body: &mut Value,
+    current: &DamHopperConfig,
+) -> Result<(), ApiError> {
+    let root = body.as_object_mut().ok_or_else(|| {
+        ApiError::from_app(AppError::InvalidInput(
+            "Config must be an object".to_string(),
+        ))
+    })?;
+    let server = root
+        .entry("server")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| {
+            ApiError::from_app(AppError::InvalidInput(
+                "server must be an object".to_string(),
+            ))
+        })?;
+
+    let requested = server.remove("idleSuspend").or_else(|| server.remove("idle_suspend"));
+    if let Some(requested_val) = requested {
+        let requested_cfg: Result<crate::config::IdleSuspendConfig, _> =
+            serde_json::from_value(requested_val.clone());
+        match requested_cfg {
+            Ok(cfg) if cfg == current.server.idle_suspend => {}
+            _ => {
+                return Err(ApiError::from_app(AppError::InvalidInput(
+                    "Terminal idle-suspend timing must be configured via PATCH /api/system/idle-suspend/v1/timing and enablement is startup-owned".to_string(),
+                )));
+            }
+        }
+    }
+
+    let mut idle_map = serde_json::Map::new();
+    idle_map.insert("enabled".to_string(), Value::Bool(current.server.idle_suspend.enabled));
+    idle_map.insert(
+        "quiet_period_seconds".to_string(),
+        Value::Number(serde_json::Number::from(current.server.idle_suspend.quiet_period_seconds)),
+    );
+    idle_map.insert(
+        "wake_after_seconds".to_string(),
+        Value::Number(serde_json::Number::from(current.server.idle_suspend.wake_after_seconds)),
+    );
+    if let Some(enrollment) = &current.server.idle_suspend.enrollment_reference {
+        idle_map.insert("enrollment_reference".to_string(), Value::String(enrollment.clone()));
+    }
+    if current.server.idle_suspend.capability_selection != Default::default() {
+        idle_map.insert(
+            "capability_selection".to_string(),
+            Value::String(current.server.idle_suspend.capability_selection.as_str().to_string()),
+        );
+    }
+    server.insert("idle_suspend".to_string(), Value::Object(idle_map));
     Ok(())
 }
 
@@ -540,7 +597,15 @@ fn json_to_toml(v: &Value) -> Option<toml::Value> {
 async fn reload_config(state: &AppState) -> Result<(), ApiError> {
     let _workspace_context = state.workspace_context_guard.write().await;
     let config_path = state.config.read().await.config_path.clone();
-    let new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
+    let mut new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
+    new_cfg.server.idle_suspend.enabled = state.idle_suspend_policy.enabled;
+    new_cfg.server.idle_suspend.enrollment_reference = state.idle_suspend_policy.enrollment_reference.clone();
+    new_cfg.server.idle_suspend.capability_selection = state.idle_suspend_policy.capability_selection;
+    {
+        let timing = state.idle_suspend_timing.read().await;
+        new_cfg.server.idle_suspend.quiet_period_seconds = timing.quiet_period_seconds;
+        new_cfg.server.idle_suspend.wake_after_seconds = timing.wake_after_seconds;
+    }
     state.media_tickets.revoke_all();
     state.fs.reinit_sandbox(project_roots_from_config(&new_cfg));
     state.workspace_target_resolver.invalidate_all().await;
