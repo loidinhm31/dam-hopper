@@ -695,8 +695,22 @@ fn ensure_user_config_ownership(user_home: &str, uid: u32, gid: u32) {
         let dot_config = base.join(".config");
         let user_config_dir = dot_config.join("dam-hopper");
         let _ = fs::create_dir_all(&user_config_dir);
+        let user_toml = user_config_dir.join("dam-hopper.toml");
+        if !user_toml.exists() {
+            let etc_toml = std::path::Path::new("/etc/dam-hopper/dam-hopper.toml");
+            if etc_toml.exists() {
+                let _ = fs::copy(etc_toml, &user_toml);
+            } else {
+                let _ = fs::write(&user_toml, "[workspace]\nname = \"default\"\n");
+            }
+        }
         #[cfg(unix)]
         {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&user_config_dir, fs::Permissions::from_mode(0o700));
+            if user_toml.exists() {
+                let _ = fs::set_permissions(&user_toml, fs::Permissions::from_mode(0o600));
+            }
             chown_single(&base, uid, gid);
             chown_single(&dot_config, uid, gid);
             chown_recursive(&user_config_dir, uid, gid);
