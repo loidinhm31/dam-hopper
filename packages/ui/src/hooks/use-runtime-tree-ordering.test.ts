@@ -55,9 +55,10 @@ describe("moveRuntimeGroupOrder", () => {
 
 describe("moveRuntimeItemOrder", () => {
   it("produces runtimeItemOrder for an item drag within a group", () => {
-    expect(moveRuntimeItemOrder(groups, {}, "web", "port:web:5173", "session:web"))
-      .toEqual({
-        web: ["port:web:5173", "session:web"],
-      });
+    expect(
+      moveRuntimeItemOrder(groups, {}, "web", "port:web:5173", "session:web"),
+    ).toEqual({
+      web: ["port:web:5173", "session:web"],
+    });
   });
 });

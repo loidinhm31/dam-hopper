@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DetectedPort } from "@/api/client.js";
-import {
-  acceptsDetectedPortEvent,
-} from "./use-ports.js";
+import { acceptsDetectedPortEvent } from "./use-ports.js";
 import {
   rememberTerminalSessionIncarnation,
   confirmTerminalPortIncarnation,

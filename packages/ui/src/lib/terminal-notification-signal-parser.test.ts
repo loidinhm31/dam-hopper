@@ -29,7 +29,9 @@ describe("terminal notification signal parser", () => {
   });
 
   it("parses OSC 9 title and body payloads", () => {
-    expect(parseOsc9Notification("9;Build done;Review terminal", context)).toMatchObject({
+    expect(
+      parseOsc9Notification("9;Build done;Review terminal", context),
+    ).toMatchObject({
       source: "osc9",
       title: "Build done",
       body: "Review terminal",

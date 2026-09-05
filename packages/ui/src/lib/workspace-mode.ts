@@ -26,4 +26,3 @@ export function saveWorkspaceMode(
     storage?.setItem(WORKSPACE_MODE_KEY, mode);
   } catch {}
 }
-

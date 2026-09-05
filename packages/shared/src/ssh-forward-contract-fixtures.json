@@ -1,9 +1,23 @@
 {
   "wireCounters": ["0", "9", "10", "99", "100", "18446744073709551615"],
-  "invalidWireCounters": ["", "00", "01", "-1", "1.0", "1e3", "18446744073709551616"],
+  "invalidWireCounters": [
+    "",
+    "00",
+    "01",
+    "-1",
+    "1.0",
+    "1e3",
+    "18446744073709551616"
+  ],
   "timestamps": ["2026-08-10T12:34:56.789Z"],
-  "invalidTimestamps": ["2026-08-10T12:34:56Z", "2026-08-10T12:34:56.789+00:00"],
-  "knownScopes": { "status": "available", "ids": ["c1f5890a-55d7-46ca-949b-0d63972f0a68"] },
+  "invalidTimestamps": [
+    "2026-08-10T12:34:56Z",
+    "2026-08-10T12:34:56.789+00:00"
+  ],
+  "knownScopes": {
+    "status": "available",
+    "ids": ["c1f5890a-55d7-46ca-949b-0d63972f0a68"]
+  },
   "knownScopesUnavailable": { "status": "unavailable" },
   "dtoSamples": {
     "desktopClientContext": {

@@ -49,7 +49,9 @@ describe("bindTerminalTouchScroll", () => {
     const first = touch(1, 120);
     const second = touch(2, 120);
 
-    fixture.root.dispatchEvent(touchEvent("touchstart", [first], undefined, 10));
+    fixture.root.dispatchEvent(
+      touchEvent("touchstart", [first], undefined, 10),
+    );
     fixture.root.dispatchEvent(
       touchEvent("touchmove", [touch(1, 60)], undefined, 20),
     );
@@ -71,10 +73,10 @@ describe("bindTerminalTouchScroll", () => {
     const first = touch(1, 120);
     const unrelated = touch(2, 120);
 
-    fixture.root.dispatchEvent(touchEvent("touchstart", [first], undefined, 10));
     fixture.root.dispatchEvent(
-      touchEvent("touchend", [], [unrelated], 20),
+      touchEvent("touchstart", [first], undefined, 10),
     );
+    fixture.root.dispatchEvent(touchEvent("touchend", [], [unrelated], 20));
     fixture.root.dispatchEvent(
       touchEvent("touchmove", [touch(1, 60)], undefined, 30),
     );
@@ -128,7 +130,7 @@ function createFixture(matches = true) {
     return animationFrames.length;
   });
   const cancelAnimationFrame = vi.fn();
-  const matchMedia = vi.fn(() => ({ matches } as MediaQueryList));
+  const matchMedia = vi.fn(() => ({ matches }) as MediaQueryList);
   const scrollLines = vi.fn();
   vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
   vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);

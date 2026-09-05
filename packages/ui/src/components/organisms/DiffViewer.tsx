@@ -343,9 +343,7 @@ export function DiffViewer({
         if (isProjectTargetError(readResult.code, readMessage)) {
           onTargetUnavailable?.();
         }
-        throw new Error(
-          readMessage,
-        );
+        throw new Error(readMessage);
       }
       const mtime = (readResult as { mtime: number }).mtime;
       const writeResult = await transport().fsWriteFile(

@@ -167,7 +167,7 @@ function RuntimeSessionLeaf({
           title={
             session.cwd
               ? `cwd: ${session.cwd}`
-              : session.openTitle?.fullText ?? session.label
+              : (session.openTitle?.fullText ?? session.label)
           }
           className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]/60"
           onContextMenu={(event) =>

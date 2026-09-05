@@ -66,23 +66,27 @@ const patterns: AgentCommandPattern[] = [
 
 describe("extractExecutableToken", () => {
   it("skips env and leading assignments", () => {
-    expect(extractExecutableToken("env NODE_ENV=test FOO=bar codex --ask")).toBe(
-      "codex",
-    );
+    expect(
+      extractExecutableToken("env NODE_ENV=test FOO=bar codex --ask"),
+    ).toBe("codex");
   });
 
   it("skips supported env options before resolving the executable", () => {
     expect(extractExecutableToken("env -u FOO codex --ask")).toBe("codex");
     expect(extractExecutableToken("env --unset=FOO codex --ask")).toBe("codex");
-    expect(extractExecutableToken("env --chdir /tmp codex --ask")).toBe("codex");
-    expect(extractExecutableToken("env --chdir=/tmp codex --ask")).toBe("codex");
+    expect(extractExecutableToken("env --chdir /tmp codex --ask")).toBe(
+      "codex",
+    );
+    expect(extractExecutableToken("env --chdir=/tmp codex --ask")).toBe(
+      "codex",
+    );
   });
 
   it("extracts executables from env split-string options", () => {
     expect(extractExecutableToken('env -S "codex --ask"')).toBe("codex");
-    expect(extractExecutableToken('env --split-string "FOO=1 codex --ask"')).toBe(
-      "codex",
-    );
+    expect(
+      extractExecutableToken('env --split-string "FOO=1 codex --ask"'),
+    ).toBe("codex");
   });
 
   it("handles env boundary cases without over-matching", () => {
@@ -104,7 +108,9 @@ describe("recognizeAgentCommand", () => {
       patternId: "codex",
       executable: "codex",
     });
-    expect(recognizeAgentCommand("env FOO=1 codex --ask", patterns)).toMatchObject({
+    expect(
+      recognizeAgentCommand("env FOO=1 codex --ask", patterns),
+    ).toMatchObject({
       patternId: "codex",
       executable: "codex",
     });
@@ -117,7 +123,9 @@ describe("recognizeAgentCommand", () => {
       agent: "claude",
       patternId: "claude",
     });
-    expect(recognizeAgentCommand("claude-code --resume", patterns)).toMatchObject({
+    expect(
+      recognizeAgentCommand("claude-code --resume", patterns),
+    ).toMatchObject({
       agent: "claude",
       patternId: "claude-code",
     });

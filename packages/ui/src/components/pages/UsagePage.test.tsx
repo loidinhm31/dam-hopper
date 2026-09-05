@@ -109,10 +109,10 @@ describe("UsagePage", () => {
   it("renders privacy copy, aggregate controls, and coverage state", () => {
     const markup = renderToStaticMarkup(<UsagePage />);
 
+    expect(markup).toContain("Privacy-safe Codex response aggregates");
     expect(markup).toContain(
-      "Privacy-safe Codex response aggregates",
+      "No prompts, responses, or raw telemetry payloads are shown.",
     );
-    expect(markup).toContain("No prompts, responses, or raw telemetry payloads are shown.");
     expect(markup).toContain("Codex receiver health");
     expect(markup).toContain("Pause collection");
     expect(markup).toContain("Delete all usage");

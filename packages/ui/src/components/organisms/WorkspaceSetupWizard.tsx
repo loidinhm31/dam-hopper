@@ -263,7 +263,8 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                   <>
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm text-[var(--color-text-muted)]">
-                        {effectiveSelectedProjects.length} of {projects.length} selected
+                        {effectiveSelectedProjects.length} of {projects.length}{" "}
+                        selected
                       </span>
                       <button
                         onClick={toggleAll}

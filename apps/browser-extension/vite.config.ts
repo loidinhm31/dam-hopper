@@ -7,7 +7,7 @@ const defaultDevelopmentParentOrigins = [
   "http://127.0.0.1:4800",
   "http://127.0.0.1:4173",
   "http://localhost:4173",
-  "http://100.91.26.60:5173"
+  "http://100.91.26.60:5173",
 ];
 
 const configuredParentOrigins = (
@@ -22,9 +22,7 @@ const parentOrigins = [
 
 export default defineConfig({
   define: {
-    __DAM_HOPPER_EXTENSION_PARENT_ORIGINS__: JSON.stringify(
-      parentOrigins,
-    ),
+    __DAM_HOPPER_EXTENSION_PARENT_ORIGINS__: JSON.stringify(parentOrigins),
   },
   build: {
     emptyOutDir: true,

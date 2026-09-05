@@ -67,7 +67,8 @@ describe("useGitWithSshRetry helpers", () => {
       getSshLoadKeyStatus({
         success: true,
         saved: false,
-        error: "Key loaded for this session only; save for later failed: no keyring",
+        error:
+          "Key loaded for this session only; save for later failed: no keyring",
       }),
     ).toContain("session only");
   });
@@ -83,8 +84,12 @@ describe("useGitWithSshRetry helpers", () => {
       },
     ];
 
-    expect(getRetryFailureStatus("push", results)).toContain("Push still failed");
-    expect(getRetryFailureStatus("fetch", results)).toContain("Fetch still failed");
+    expect(getRetryFailureStatus("push", results)).toContain(
+      "Push still failed",
+    );
+    expect(getRetryFailureStatus("fetch", results)).toContain(
+      "Fetch still failed",
+    );
   });
 
   it("formats non-auth operation failures so the UI can surface them", () => {

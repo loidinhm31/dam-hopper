@@ -38,15 +38,29 @@ export function UsageMetricCard({
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">{label}</p>
-        {Icon ? <Icon aria-hidden="true" className={cn("h-3.5 w-3.5 shrink-0", toneStyles[tone])} /> : null}
+        <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+          {label}
+        </p>
+        {Icon ? (
+          <Icon
+            aria-hidden="true"
+            className={cn("h-3.5 w-3.5 shrink-0", toneStyles[tone])}
+          />
+        ) : null}
       </div>
-      <p className={cn("mt-1.5 truncate text-xl font-semibold tabular-nums", unavailable ? "text-[var(--color-text-muted)]" : toneStyles[tone])}>
+      <p
+        className={cn(
+          "mt-1.5 truncate text-xl font-semibold tabular-nums",
+          unavailable ? "text-[var(--color-text-muted)]" : toneStyles[tone],
+        )}
+      >
         {unavailable ? "—" : value}
       </p>
       {description ? (
         <p className="mt-1 flex items-start gap-1 text-[10px] leading-4 text-[var(--color-text-muted)]">
-          {unavailable ? <Info aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0" /> : null}
+          {unavailable ? (
+            <Info aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0" />
+          ) : null}
           <span>{description}</span>
         </p>
       ) : null}

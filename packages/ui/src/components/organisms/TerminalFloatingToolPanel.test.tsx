@@ -95,9 +95,7 @@ describe("TerminalFloatingToolPanel", () => {
     );
     expect(content).not.toBeNull();
     await act(async () => {
-      content?.dispatchEvent(
-        new Event("pointerdown", { bubbles: true }),
-      );
+      content?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     });
     expect(onActivate).toHaveBeenCalledOnce();
 

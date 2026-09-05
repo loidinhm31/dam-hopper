@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildTreeCopyPaths,
-  joinRelativePath,
-} from "./tree-copy-paths.js";
+import { buildTreeCopyPaths, joinRelativePath } from "./tree-copy-paths.js";
 
 describe("joinRelativePath", () => {
   it("returns the node id when subPath is empty", () => {

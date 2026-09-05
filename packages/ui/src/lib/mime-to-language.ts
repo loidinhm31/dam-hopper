@@ -1,4 +1,7 @@
-import { getDisplayLanguage, getMonacoLanguage } from "@/lib/file-decoration.js";
+import {
+  getDisplayLanguage,
+  getMonacoLanguage,
+} from "@/lib/file-decoration.js";
 
 /** Compatibility wrapper for display-language lookups from MIME-only call sites. */
 export function mimeToLanguage(mime?: string, pathOrName = ""): string {

@@ -131,7 +131,9 @@ describe("MonacoHost viewState lifecycle persistence", () => {
 
   it("calls onViewStateChange with viewState and tabKey on editor blur", async () => {
     const onViewStateChange = vi.fn();
-    const mockViewState = { cursorState: [{ position: { lineNumber: 10, column: 1 } }] };
+    const mockViewState = {
+      cursorState: [{ position: { lineNumber: 10, column: 1 } }],
+    };
     let blurHandler: (() => void) | undefined;
 
     await act(async () => {
@@ -168,7 +170,9 @@ describe("MonacoHost viewState lifecycle persistence", () => {
 
   it("persists previous tab's viewState when tabKey changes", async () => {
     const onViewStateChange = vi.fn();
-    const mockViewState1 = { cursorState: [{ position: { lineNumber: 50, column: 5 } }] };
+    const mockViewState1 = {
+      cursorState: [{ position: { lineNumber: 50, column: 5 } }],
+    };
 
     await act(async () => {
       root.render(
@@ -214,7 +218,9 @@ describe("MonacoHost viewState lifecycle persistence", () => {
 
   it("persists viewState on component unmount", async () => {
     const onViewStateChange = vi.fn();
-    const mockViewState = { cursorState: [{ position: { lineNumber: 99, column: 1 } }] };
+    const mockViewState = {
+      cursorState: [{ position: { lineNumber: 99, column: 1 } }],
+    };
 
     await act(async () => {
       root.render(
@@ -246,6 +252,9 @@ describe("MonacoHost viewState lifecycle persistence", () => {
       root.unmount();
     });
 
-    expect(onViewStateChange).toHaveBeenCalledWith(mockViewState, "tab-unmount");
+    expect(onViewStateChange).toHaveBeenCalledWith(
+      mockViewState,
+      "tab-unmount",
+    );
   });
 });

@@ -11,7 +11,9 @@ interface ExecuteWithRetryOptions {
   operation: GitOperationLabel;
 }
 
-export function normalizeGitRetryResults(result: GitRetryResult): GitOpResult[] {
+export function normalizeGitRetryResults(
+  result: GitRetryResult,
+): GitOpResult[] {
   return Array.isArray(result) ? result : [result];
 }
 
@@ -45,9 +47,7 @@ function isAuthError(results: GitOpResult[]): boolean {
   return results.some((r) => !r.success && matchesSshAuthError(r.error));
 }
 
-export function shouldPromptForSshPassphrase(
-  results: GitOpResult[],
-): boolean {
+export function shouldPromptForSshPassphrase(results: GitOpResult[]): boolean {
   return isAuthError(results);
 }
 
@@ -72,7 +72,9 @@ interface UseGitWithSshRetryResult {
   ) => Promise<GitOpResult[]>;
 }
 
-export function getSshLoadKeyStatus(result: SshLoadKeyResult): string | undefined {
+export function getSshLoadKeyStatus(
+  result: SshLoadKeyResult,
+): string | undefined {
   if (result.error) return result.error;
   if (result.saved) {
     return "SSH key loaded. Saved passphrase is available for later use on this device.";
@@ -201,12 +203,20 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
   );
 
   const handleSubmit = useCallback(
-    async (passphrase: string, keyPath: string | undefined, saveForLater: boolean) => {
+    async (
+      passphrase: string,
+      keyPath: string | undefined,
+      saveForLater: boolean,
+    ) => {
       setState((s) => ({ ...s, loading: true, error: undefined }));
 
       let result;
       try {
-        result = await sshAddKey.mutateAsync({ passphrase, keyPath, saveForLater });
+        result = await sshAddKey.mutateAsync({
+          passphrase,
+          keyPath,
+          saveForLater,
+        });
       } catch (error) {
         setState((s) => ({
           ...s,

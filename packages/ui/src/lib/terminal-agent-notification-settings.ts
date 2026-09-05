@@ -11,40 +11,41 @@ export const MAX_TERMINAL_AGENT_COMMAND_ID_LENGTH = 64;
 export const MAX_TERMINAL_AGENT_COMMAND_LABEL_LENGTH = 64;
 export const MAX_TERMINAL_AGENT_COMMAND_PATTERN_LENGTH = 128;
 
-const DEFAULT_TERMINAL_AGENT_COMMAND_PATTERNS: readonly AgentCommandPattern[] = [
-  {
-    id: "codex",
-    label: "Codex",
-    kind: "literal",
-    pattern: "codex",
-    agent: "codex",
-    enabled: true,
-  },
-  {
-    id: "claude",
-    label: "Claude",
-    kind: "literal",
-    pattern: "claude",
-    agent: "claude",
-    enabled: true,
-  },
-  {
-    id: "claude-code",
-    label: "Claude Code",
-    kind: "literal",
-    pattern: "claude-code",
-    agent: "claude",
-    enabled: true,
-  },
-  {
-    id: "antigravity",
-    label: "Antigravity",
-    kind: "literal",
-    pattern: "antigravity",
-    agent: "antigravity",
-    enabled: true,
-  },
-];
+const DEFAULT_TERMINAL_AGENT_COMMAND_PATTERNS: readonly AgentCommandPattern[] =
+  [
+    {
+      id: "codex",
+      label: "Codex",
+      kind: "literal",
+      pattern: "codex",
+      agent: "codex",
+      enabled: true,
+    },
+    {
+      id: "claude",
+      label: "Claude",
+      kind: "literal",
+      pattern: "claude",
+      agent: "claude",
+      enabled: true,
+    },
+    {
+      id: "claude-code",
+      label: "Claude Code",
+      kind: "literal",
+      pattern: "claude-code",
+      agent: "claude",
+      enabled: true,
+    },
+    {
+      id: "antigravity",
+      label: "Antigravity",
+      kind: "literal",
+      pattern: "antigravity",
+      agent: "antigravity",
+      enabled: true,
+    },
+  ];
 
 export function cloneAgentCommandPatterns(
   patterns: readonly AgentCommandPattern[],
@@ -133,7 +134,8 @@ function createNormalizedPatternId(
 
   while (true) {
     const suffixText = suffix === 0 ? "" : `-${suffix + 1}`;
-    const prefixLength = MAX_TERMINAL_AGENT_COMMAND_ID_LENGTH - suffixText.length;
+    const prefixLength =
+      MAX_TERMINAL_AGENT_COMMAND_ID_LENGTH - suffixText.length;
     const candidate = `${slug.slice(0, Math.max(1, prefixLength))}${suffixText}`;
     if (!seen.has(candidate)) {
       seen.add(candidate);

@@ -65,8 +65,7 @@ export function filterClientDiagnosticsSnapshot(
   exportScope?: DiagnosticsExportScopeContext;
 } {
   const windowMinutes =
-    options.windowMinutes ??
-    DEFAULT_DIAGNOSTICS_EXPORT_REQUEST.windowMinutes;
+    options.windowMinutes ?? DEFAULT_DIAGNOSTICS_EXPORT_REQUEST.windowMinutes;
   const cutoff = now - windowMinutes * 60_000;
   const sourceLogs = Array.isArray(snapshot.logs) ? snapshot.logs : [];
   const logs = sourceLogs.filter(
@@ -101,8 +100,7 @@ export function buildDiagnosticsExportRequest(
   options: DiagnosticsExportOptions = {},
 ): DiagnosticExportRequest {
   const windowMinutes =
-    options.windowMinutes ??
-    DEFAULT_DIAGNOSTICS_EXPORT_REQUEST.windowMinutes;
+    options.windowMinutes ?? DEFAULT_DIAGNOSTICS_EXPORT_REQUEST.windowMinutes;
   const terminalIds = options.terminalIds ?? options.scope?.terminalIds;
   return {
     ...DEFAULT_DIAGNOSTICS_EXPORT_REQUEST,
@@ -114,13 +112,10 @@ export function buildDiagnosticsExportRequest(
       options.terminalTailBytes ??
       DEFAULT_DIAGNOSTICS_EXPORT_REQUEST.terminalTailBytes,
     ...(terminalIds !== undefined ? { terminalIds } : {}),
-    frontend: filterClientDiagnosticsSnapshot(
-      getClientDiagnosticsSnapshot(),
-      {
-        ...options,
-        windowMinutes,
-      },
-    ),
+    frontend: filterClientDiagnosticsSnapshot(getClientDiagnosticsSnapshot(), {
+      ...options,
+      windowMinutes,
+    }),
   };
 }
 

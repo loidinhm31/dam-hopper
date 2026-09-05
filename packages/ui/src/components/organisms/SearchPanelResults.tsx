@@ -81,7 +81,10 @@ export function SearchPanelResults({
                   {group.project}
                 </span>
               )}
-              <FileDecorationIcon pathOrName={group.path} className="h-3.5 w-3.5" />
+              <FileDecorationIcon
+                pathOrName={group.path}
+                className="h-3.5 w-3.5"
+              />
               <span className="truncate">{group.path}</span>
             </div>
             {group.matches.map((match) => {
@@ -100,7 +103,11 @@ export function SearchPanelResults({
                     {match.line}
                   </span>
                   <span className="text-[11px] font-mono text-[var(--color-text)] truncate leading-5">
-                    {highlightMatch(match.text.trimStart(), query, caseSensitive)}
+                    {highlightMatch(
+                      match.text.trimStart(),
+                      query,
+                      caseSensitive,
+                    )}
                   </span>
                 </button>
               );
