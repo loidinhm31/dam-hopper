@@ -55,12 +55,26 @@ pub struct IdleSuspendStatusV1 {
     pub state: CoordinatorState,
     /// True if idle suspend is enabled by operator startup policy.
     pub enabled: bool,
+    /// Whether timing can currently be mutated by an authenticated actor.
+    pub timing_mutable: bool,
+    /// Reason string when timing cannot be mutated (e.g. "handoffInProgress", "disabled").
+    pub timing_mutable_reason: Option<String>,
+    /// Capability code reported by policy/executor (e.g. "unavailable", "fake", "rtcwake").
+    pub capability_code: String,
     /// Monotonic identifier for the current or last idle epoch.
     pub current_epoch: u64,
     /// Active quiet period duration in seconds before suspend arms.
     pub quiet_period_seconds: u64,
     /// Active wake duration in seconds requested for RTC timer.
     pub wake_after_seconds: u64,
+    /// Minimum allowed quiet period duration in seconds.
+    pub min_quiet_period_seconds: u64,
+    /// Maximum allowed quiet period duration in seconds.
+    pub max_quiet_period_seconds: u64,
+    /// Minimum allowed wake duration in seconds.
+    pub min_wake_after_seconds: u64,
+    /// Maximum allowed wake duration in seconds.
+    pub max_wake_after_seconds: u64,
     /// Content-free snapshot of current PTY fleet counts and generation.
     pub fleet_snapshot: PtyFleetSnapshot,
     /// Unix timestamp in milliseconds when armed grace expires, if currently armed.

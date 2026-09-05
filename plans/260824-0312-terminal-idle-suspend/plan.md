@@ -22,7 +22,7 @@ Add startup-owned terminal-fleet monitoring that may request one fixed RTC-timed
 | 1 | Policy, config, security gate, protocol | Done | 100% | 10h | [Phase 01](./phase-01-policy-config-security-gate.md) |
 | 2 | PTY fleet seam and fake coordinator | Done | 100% | 18h | [Phase 02](./phase-02-pty-fleet-coordinator.md) |
 | 3 | Privileged helper, systemd enrollment, audit | Blocked on sign-off | 0% | 20h | [Phase 03](./phase-03-privileged-helper-systemd-audit.md) |
-| 4 | Protected status/timing API, WS hint, Settings UI | Pending | 0% | 8h | [Phase 04](./phase-04-rest-websocket-ui-monitoring.md) |
+| 4 | Protected status/timing API, WS hint, Settings UI | Done | 100% | 8h | [Phase 04](./phase-04-rest-websocket-ui-monitoring.md) |
 | 5 | Integration, release, resume, rollback evidence | Pending | 0% | 12h | [Phase 05](./phase-05-integration-release-rollback.md) |
 
 ## Dependencies

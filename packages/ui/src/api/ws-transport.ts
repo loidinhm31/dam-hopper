@@ -1098,6 +1098,14 @@ function channelToEndpoint(
         url: `/api/system/resources/v1/alerts?limit=${encodeURIComponent(String(limit))}`,
       };
     }
+    case "system:idleSuspendStatus":
+      return { method: "GET", url: "/api/system/idle-suspend/v1/status" };
+    case "system:updateIdleSuspendTiming":
+      return {
+        method: "PATCH",
+        url: "/api/system/idle-suspend/v1/timing",
+        body: data,
+      };
 
     // Usage analytics (REST only; never sent to the terminal WebSocket).
     case "usage:summary": {

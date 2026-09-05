@@ -36,6 +36,42 @@ export interface HostResourceAlertChangedEvent extends IpcEvent {
   type: "host:alertChanged";
   data: HostResourceAlert | HostResourceResourceAlert;
 }
+export interface HostIdleSuspendChangedEvent extends IpcEvent {
+  type: "host:idleSuspendChanged";
+  data: {
+    version: number;
+    revision: number;
+  };
+}
+
+export function asHostIdleSuspendChangedEvent(
+  event: IpcEvent,
+): HostIdleSuspendChangedEvent | null {
+  if (
+    event.type !== "host:idleSuspendChanged" ||
+    typeof event.data !== "object" ||
+    event.data === null
+  ) {
+    return null;
+  }
+  const data = event.data as { version?: unknown; revision?: unknown };
+  if (
+    data.version === 1 &&
+    typeof data.revision === "number" &&
+    Number.isSafeInteger(data.revision)
+  ) {
+    return {
+      type: "host:idleSuspendChanged",
+      timestamp: event.timestamp,
+      data: {
+        version: 1,
+        revision: data.revision,
+      },
+    };
+  }
+  return null;
+}
+
 
 export interface TerminalTargetUnavailableEvent {
   sessionId: string;
@@ -112,6 +148,7 @@ const PUSH_EVENT_CHANNELS = [
   "install:failed",
   "host:alertChanged",
   "host:alertsInvalidated",
+  "host:idleSuspendChanged",
 ] as const;
 
 export function asTerminalTargetUnavailableEvent(
@@ -472,6 +509,13 @@ export function useIpc(): { status: IpcStatus } {
       subscribeIpc("host:alertsInvalidated", () =>
         invalidateHostResourceQueries(qc),
       ),
+      subscribeIpc("host:idleSuspendChanged", (event) => {
+        const changeEvent = asHostIdleSuspendChangedEvent(event);
+        if (!changeEvent) return;
+        void qc.invalidateQueries({
+          queryKey: ["system", "idle-suspend", "v1", "status"],
+        });
+      }),
     ];
 
     initTransportListeners();

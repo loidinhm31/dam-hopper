@@ -236,7 +236,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let pty_out = pty_tx.clone();
     let pty_pump = tokio::spawn(pump_pty(pty_rx_broadcast, pty_out, Arc::clone(&pty_order)));
     let host_alert_rx = state.event_sink.subscribe_host_alerts();
-    let host_alert_pump = tokio::spawn(pump_host_alerts(host_alert_rx, alert_tx));
+    let host_alert_pump = tokio::spawn(pump_host_alerts(host_alert_rx, alert_tx.clone()));
+    let idle_suspend_rx = state.event_sink.subscribe_idle_suspend();
+    let idle_suspend_pump = tokio::spawn(pump_idle_suspend_hints(idle_suspend_rx, alert_tx));
 
     // Per-conn fs subscription pumps: sub_id → JoinHandle
     let mut fs_pumps: HashMap<u64, tokio::task::JoinHandle<()>> = HashMap::new();
@@ -1656,6 +1658,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
     pty_pump.abort();
     host_alert_pump.abort();
+    idle_suspend_pump.abort();
     writer.abort();
 }
 
@@ -2537,6 +2540,28 @@ async fn pump_host_alerts(
         }
     }
 }
+async fn pump_idle_suspend_hints(
+    mut rx: tokio::sync::broadcast::Receiver<String>,
+    alert_tx: mpsc::Sender<WireMsg>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(msg) => {
+                if alert_tx.send(WireMsg::Text(msg)).await.is_err() {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                warn!(
+                    dropped = n,
+                    "idle suspend broadcast lagged; client reconciles via REST status"
+                );
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // FS subscribe helper

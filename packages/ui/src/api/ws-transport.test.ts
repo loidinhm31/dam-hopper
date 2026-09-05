@@ -1109,3 +1109,48 @@ describe("WsTransport workflow operations", () => {
     transport.destroy();
   });
 });
+describe("WsTransport idle suspend endpoints", () => {
+  it("maps status and updateTiming requests to versioned system API", async () => {
+    installMockWebSocket();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: 1, statusRevision: 1 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: 1, changed: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("system:idleSuspendStatus");
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/system/idle-suspend/v1/status",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "GET",
+    });
+
+    await transport.invoke("system:updateIdleSuspendTiming", {
+      quietPeriodSeconds: 300,
+      wakeAfterSeconds: 600,
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://localhost:4800/api/system/idle-suspend/v1/timing",
+    );
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "PATCH",
+      body: JSON.stringify({
+        quietPeriodSeconds: 300,
+        wakeAfterSeconds: 600,
+      }),
+    });
+    transport.destroy();
+  });
+});

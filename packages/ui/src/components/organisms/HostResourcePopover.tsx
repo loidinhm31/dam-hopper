@@ -16,6 +16,7 @@ import {
 import { HostResourceDiagnosis } from "@/components/organisms/HostResourceDiagnosis.js";
 import { HostResourceGlance } from "@/components/organisms/HostResourceGlance.js";
 import { useHostResourceAlertPresentation } from "@/hooks/use-host-resource-alert-presentation.js";
+import { HostIdleSuspendStatus } from "@/components/organisms/HostIdleSuspendStatus.js";
 import {
   formatAlertState,
   resolveHostResourceStatus,
@@ -252,6 +253,9 @@ export function HostResourcePopover() {
                 metricsError={legacyMetrics.isError}
               />
             )}
+            <div className="mt-3">
+              <HostIdleSuspendStatus />
+            </div>
             {snapshot.data && (
               <section className="mt-3 border-t border-[var(--color-border)] pt-3">
                 <h3>
