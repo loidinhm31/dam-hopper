@@ -16,7 +16,9 @@ export function detectTerminalAgentTitleActivity(
   if (agent !== "codex") return null;
 
   if (CODEX_WORKING_TITLE_RE.test(normalizedTitle)) {
-    const readyTitle = normalizedTitle.replace(CODEX_WORKING_TITLE_RE, "").trim();
+    const readyTitle = normalizedTitle
+      .replace(CODEX_WORKING_TITLE_RE, "")
+      .trim();
     return readyTitle ? { kind: "working", readyTitle } : null;
   }
 

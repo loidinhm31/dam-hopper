@@ -78,14 +78,8 @@ export function clampTerminalFloatingPanelLayout(
     margin = TERMINAL_FILE_PANEL_MARGIN,
   }: TerminalFloatingPanelConstraints,
 ) {
-  const widthLimit = Math.max(
-    minWidth,
-    bounds.width - margin * 2,
-  );
-  const heightLimit = Math.max(
-    minHeight,
-    bounds.height - margin * 2,
-  );
+  const widthLimit = Math.max(minWidth, bounds.width - margin * 2);
+  const heightLimit = Math.max(minHeight, bounds.height - margin * 2);
   const width = Math.min(
     Math.max(layout.width, minWidth),
     Math.min(maxWidth, widthLimit),
@@ -103,10 +97,7 @@ export function clampTerminalFloatingPanelLayout(
       ? null
       : Math.min(
           Math.max(layout.left, margin),
-          Math.max(
-            margin,
-            bounds.width - width - margin,
-          ),
+          Math.max(margin, bounds.width - width - margin),
         );
 
   return {

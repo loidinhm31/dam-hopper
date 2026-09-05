@@ -84,7 +84,9 @@ export function RuntimeActiveSessionTitle({
     >
       <span
         className="min-w-0"
-        onDoubleClick={() => activeSessionId && onRenameSession?.(activeSessionId)}
+        onDoubleClick={() =>
+          activeSessionId && onRenameSession?.(activeSessionId)
+        }
       >
         {activeSessionTitle ? (
           <TerminalTitleText
@@ -178,7 +180,8 @@ export function ActiveTerminalRuntimeDisplay({
     (tab) => tab.sessionId === activeSessionId,
   );
   const activeSessionLabel = activeSession
-    ? activeSession.name ?? `${activeSession.project}: ${activeSession.command}`
+    ? (activeSession.name ??
+      `${activeSession.project}: ${activeSession.command}`)
     : "No terminal selected";
   const handleMobileSelectSession = (sessionId: string) => {
     onSelectTab?.(sessionId);

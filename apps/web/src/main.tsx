@@ -11,7 +11,9 @@ import { profileScopedQueryKeyHash } from "@dam-hopper/ui/api/query-client";
 import {
   getActiveProfile,
   migrateToProfiles,
+  reconcileManagedProfile,
 } from "@dam-hopper/ui/api/server-config";
+import { fetchRuntimeConfig } from "@dam-hopper/ui/api/runtime-config";
 import {
   initializeClientDiagnostics,
   setClientTransportStatus,
@@ -28,28 +30,39 @@ configureLogger({
 });
 initializeClientDiagnostics();
 
-migrateToProfiles();
+async function bootstrap() {
+  migrateToProfiles();
 
-const activeProfile = getActiveProfile();
-const transport = activeProfile
-  ? new WsTransport(activeProfile.url, activeProfile.id)
-  : new IdleTransport();
-setClientTransportStatus(transport.getStatus());
-transport.onStatusChange((status) => setClientTransportStatus(status));
-initTransport(transport);
+  const runtimeConfig = await fetchRuntimeConfig();
+  if (runtimeConfig) {
+    reconcileManagedProfile(runtimeConfig);
+  }
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 10_000,
-      retry: 1,
-      queryKeyHashFn: profileScopedQueryKeyHash,
+  const activeProfile = getActiveProfile();
+  const transport = activeProfile
+    ? new WsTransport(activeProfile.url, activeProfile.id)
+    : new IdleTransport();
+  setClientTransportStatus(transport.getStatus());
+  transport.onStatusChange((status) => setClientTransportStatus(status));
+  initTransport(transport);
+
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 10_000,
+        retry: 1,
+        queryKeyHashFn: profileScopedQueryKeyHash,
+      },
     },
-  },
-});
+  });
 
-createRoot(document.getElementById("root")!).render(
-  <QueryClientProvider client={queryClient}>
-    <DamHopperApp />
-  </QueryClientProvider>,
-);
+  createRoot(document.getElementById("root")!).render(
+    <QueryClientProvider client={queryClient}>
+      <DamHopperApp />
+    </QueryClientProvider>,
+  );
+}
+
+void bootstrap().catch((err) => {
+  console.error("DamHopper web bootstrap failed:", err);
+});

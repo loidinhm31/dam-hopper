@@ -1,10 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { SearchMode, SearchScope } from "@/stores/search-ui.js";
-import type {
-  PathSearchResponse,
-  SearchResponse,
-} from "@/api/fs-types.js";
+import type { PathSearchResponse, SearchResponse } from "@/api/fs-types.js";
 
 type SearchData = SearchResponse | PathSearchResponse | undefined;
 

@@ -107,16 +107,12 @@ describe("compact workspace media query helpers", () => {
     const target = {
       innerWidth: 700,
       matchMedia: vi.fn(() => mediaQuery),
-      addEventListener: vi.fn(
-        (_type: "resize", listener: EventListener) => {
-          resizeListeners.add(listener);
-        },
-      ),
-      removeEventListener: vi.fn(
-        (_type: "resize", listener: EventListener) => {
-          resizeListeners.delete(listener);
-        },
-      ),
+      addEventListener: vi.fn((_type: "resize", listener: EventListener) => {
+        resizeListeners.add(listener);
+      }),
+      removeEventListener: vi.fn((_type: "resize", listener: EventListener) => {
+        resizeListeners.delete(listener);
+      }),
     };
     const updates: boolean[] = [];
 

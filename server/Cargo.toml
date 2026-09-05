@@ -1,6 +1,6 @@
 [package]
 name = "dam-hopper-server"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "Rust backend server for the DamHopper multi-project development workspace UI"
@@ -18,6 +18,14 @@ exclude = [
 [[bin]]
 name = "dam-hopper-server"
 path = "src/main.rs"
+
+[[bin]]
+name = "dam-hopper"
+path = "src/bin/dam-hopper.rs"
+
+[[bin]]
+name = "dam-hopper-web"
+path = "src/bin/dam-hopper-web.rs"
 
 [features]
 # Bundle libgit2 + openssl statically — used for portable release binaries in CI
@@ -37,6 +45,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 toml_edit = "0.22"
+
+# Versioning
+semver = "1"
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -77,6 +88,10 @@ infer = "0.15"
 mime_guess = "2"
 dunce = "1"
 
+
+# Release archive handling
+tar = "0.4"
+flate2 = "1"
 # File system watching with debounce
 notify = "7"
 notify-debouncer-full = "0.4"

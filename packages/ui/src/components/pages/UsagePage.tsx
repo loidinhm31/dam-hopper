@@ -114,12 +114,7 @@ export function UsagePage() {
       limit: 25,
       cursor: sessionCursor,
     }),
-    [
-      query.model,
-      sessionCursor,
-      summary?.range.from,
-      summary?.range.to,
-    ],
+    [query.model, sessionCursor, summary?.range.from, summary?.range.to],
   );
   const sessions = useUsageSessions(
     sessionQuery,

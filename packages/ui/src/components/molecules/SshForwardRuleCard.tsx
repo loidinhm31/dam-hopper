@@ -42,12 +42,11 @@ export function SshForwardRuleCard({
   const runtimeActive = isSshForwardRuleRuntimeActive(state);
   const checked = rule.desiredEnabled || runtimeActive;
   const active = runtimeActive;
-  const pendingActivation = rule.desiredEnabled && !runtimeActive && state !== "failed";
+  const pendingActivation =
+    rule.desiredEnabled && !runtimeActive && state !== "failed";
   const enabling = !checked;
   const toggleDisabled =
-    pending ||
-    state === "closing" ||
-    (enabling && enabledRuleLimitReached);
+    pending || state === "closing" || (enabling && enabledRuleLimitReached);
 
   return (
     <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)]/70 p-3">
@@ -90,9 +89,7 @@ export function SshForwardRuleCard({
             onClick={active ? onBlockedAction : onEdit}
             disabled={pending}
             aria-label={`Edit ${rule.name}`}
-            title={
-              active ? "Disable the rule before editing" : undefined
-            }
+            title={active ? "Disable the rule before editing" : undefined}
           >
             <Edit2 className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Edit</span>
@@ -103,9 +100,7 @@ export function SshForwardRuleCard({
             onClick={active ? onBlockedAction : onDelete}
             disabled={pending}
             aria-label={`Delete ${rule.name}`}
-            title={
-              active ? "Disable the rule before deleting" : undefined
-            }
+            title={active ? "Disable the rule before deleting" : undefined}
           >
             <Trash2 className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Delete</span>

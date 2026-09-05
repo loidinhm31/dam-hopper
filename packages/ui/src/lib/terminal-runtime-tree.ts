@@ -147,7 +147,10 @@ function sortGroups(
       return projectLeft - projectRight;
     }
 
-    if (left.id === FREE_RUNTIME_GROUP_ID || right.id === FREE_RUNTIME_GROUP_ID) {
+    if (
+      left.id === FREE_RUNTIME_GROUP_ID ||
+      right.id === FREE_RUNTIME_GROUP_ID
+    ) {
       return left.id === FREE_RUNTIME_GROUP_ID ? -1 : 1;
     }
     if (
@@ -161,7 +164,10 @@ function sortGroups(
   });
 }
 
-function sortItems(group: MutableGroup, runtimeItemOrder: Record<string, string[]>) {
+function sortItems(
+  group: MutableGroup,
+  runtimeItemOrder: Record<string, string[]>,
+) {
   const persistedOrder = runtimeItemOrder[group.id] ?? [];
   group.items.sort((left, right) => {
     const persistedLeft = persistedOrder.indexOf(left.id);
@@ -181,7 +187,10 @@ function sortItems(group: MutableGroup, runtimeItemOrder: Record<string, string[
       return left.port - (right as RuntimePortItem).port;
     }
 
-    return left.startedAt - (right as RuntimeSessionItem | RuntimeServiceGroupItem).startedAt;
+    return (
+      left.startedAt -
+      (right as RuntimeSessionItem | RuntimeServiceGroupItem).startedAt
+    );
   });
 }
 
@@ -230,7 +239,9 @@ export function buildRuntimeTree({
 
   for (const port of ports) {
     if (port.state === "lost") continue;
-    const attached = port.sessionId ? sessionItems.get(port.sessionId) : undefined;
+    const attached = port.sessionId
+      ? sessionItems.get(port.sessionId)
+      : undefined;
     if (attached) {
       attached.ports.push(toRuntimePort(port, groupName(attached.groupId)));
       continue;
@@ -278,7 +289,11 @@ export function buildRuntimeTree({
     group.items.push(...(orphanPortsByGroup.get(group.id) ?? []));
   }
 
-  const sortedGroups = sortGroups([...groups.values()], projectOrder, runtimeGroupOrder);
+  const sortedGroups = sortGroups(
+    [...groups.values()],
+    projectOrder,
+    runtimeGroupOrder,
+  );
   for (const group of sortedGroups) {
     for (const item of group.items) {
       if (item.kind === "session") {

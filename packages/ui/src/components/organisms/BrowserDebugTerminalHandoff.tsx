@@ -96,12 +96,15 @@ export function BrowserDebugTerminalHandoff({
   );
   const preparationTarget = mode === "active" ? target : selectedTarget;
   const currentArtifactTarget = artifactTarget
-    ? targets.find((candidate) => candidate.sessionId === artifactTarget.sessionId)
+    ? targets.find(
+        (candidate) => candidate.sessionId === artifactTarget.sessionId,
+      )
     : null;
   const canPrepare = Boolean(
     selection && isBrowserTerminalTargetReady(preparationTarget),
   );
-  const visibleTarget = currentArtifactTarget ?? artifactTarget ?? preparationTarget;
+  const visibleTarget =
+    currentArtifactTarget ?? artifactTarget ?? preparationTarget;
   const visibleTargetReason = visibleTarget
     ? browserTerminalTargetReason(visibleTarget)
     : null;

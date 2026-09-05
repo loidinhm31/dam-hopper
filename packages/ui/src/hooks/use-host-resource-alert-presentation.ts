@@ -105,20 +105,28 @@ export const useHostResourceAlertPresentationStore =
             },
           ].slice(-MAX_PRESENTED_INCIDENTS);
           if (changed && !unreadIds.includes(incidentId)) {
-            unreadIds = [...unreadIds, incidentId].slice(-MAX_PRESENTED_INCIDENTS);
+            unreadIds = [...unreadIds, incidentId].slice(
+              -MAX_PRESENTED_INCIDENTS,
+            );
           }
         }
 
         // Undefined means an older server did not send the additive field.
         // An explicit array is authoritative for resource incidents only.
         if (resourceAlerts !== undefined) {
-          const activeIds = new Set(resourceAlerts.map((item) => item.incidentId));
+          const activeIds = new Set(
+            resourceAlerts.map((item) => item.incidentId),
+          );
           const removedIds = versions
-            .filter((version) => version.resource && !activeIds.has(version.incidentId ?? ""))
+            .filter(
+              (version) =>
+                version.resource && !activeIds.has(version.incidentId ?? ""),
+            )
             .map((version) => version.incidentId)
             .filter((id): id is string => id != null);
           versions = versions.filter(
-            (version) => !version.resource || activeIds.has(version.incidentId ?? ""),
+            (version) =>
+              !version.resource || activeIds.has(version.incidentId ?? ""),
           );
           unreadIds = unreadIds.filter((id) => !removedIds.includes(id));
         }

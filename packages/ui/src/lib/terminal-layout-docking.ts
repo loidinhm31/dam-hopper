@@ -1,4 +1,9 @@
-import type { DockEdge, DockTarget, LayoutNode, PaneNode } from "@/types/terminal-layout.js";
+import type {
+  DockEdge,
+  DockTarget,
+  LayoutNode,
+  PaneNode,
+} from "@/types/terminal-layout.js";
 import {
   collectPanes,
   createSplitNode,
@@ -61,7 +66,8 @@ function splitPaneWithSession(
   if (!targetPane) return { root: tree, newPaneId: paneId };
 
   const newPane = newPaneNode([sessionId], sessionId);
-  const direction = edge === "left" || edge === "right" ? "horizontal" : "vertical";
+  const direction =
+    edge === "left" || edge === "right" ? "horizontal" : "vertical";
   const children: [LayoutNode, LayoutNode] =
     edge === "left" || edge === "top"
       ? [newPane, targetPane]
@@ -121,7 +127,9 @@ export function setActivePaneSession(
   sessionId: string,
 ): LayoutNode {
   return updatePane(tree, paneId, (pane) =>
-    pane.activeSessionId === sessionId ? pane : { ...pane, activeSessionId: sessionId },
+    pane.activeSessionId === sessionId
+      ? pane
+      : { ...pane, activeSessionId: sessionId },
   );
 }
 
@@ -151,12 +159,21 @@ export function dockSessionInLayout(
     return { root, focusedPaneId: sourcePaneId, changed: root !== tree };
   }
 
-  if (target.kind === "pane-edge" && target.paneId === sourcePaneId && sourcePane.sessionIds.length <= 1) {
+  if (
+    target.kind === "pane-edge" &&
+    target.paneId === sourcePaneId &&
+    sourcePane.sessionIds.length <= 1
+  ) {
     return { root: tree, focusedPaneId: sourcePaneId, changed: false };
   }
 
   if (target.kind === "tab-index" && target.paneId === sourcePaneId) {
-    const root = insertSessionIntoPane(tree, sourcePaneId, sessionId, target.index);
+    const root = insertSessionIntoPane(
+      tree,
+      sourcePaneId,
+      sessionId,
+      target.index,
+    );
     return { root, focusedPaneId: sourcePaneId, changed: root !== tree };
   }
 
@@ -166,7 +183,12 @@ export function dockSessionInLayout(
   }
 
   if (target.kind === "pane-edge") {
-    const split = splitPaneWithSession(next, target.paneId, target.edge, sessionId);
+    const split = splitPaneWithSession(
+      next,
+      target.paneId,
+      target.edge,
+      sessionId,
+    );
     return {
       root: split.root,
       focusedPaneId: split.newPaneId,

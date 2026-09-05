@@ -84,100 +84,102 @@ function TerminalHistoryListContent({
 
   return (
     <DialogContent
-        aria-describedby="terminal-history-description"
-        className="max-h-[min(42rem,calc(var(--app-viewport-height)_-_2rem))] max-w-3xl gap-3 overflow-y-auto p-4 font-mono text-sm"
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          queryRef.current?.focus();
-        }}
-      >
-        <DialogHeader>
-          <DialogTitle>Command history</DialogTitle>
-          <DialogDescription id="terminal-history-description">
-            Choose a command to insert into the current prompt. Use never runs it.
-          </DialogDescription>
-        </DialogHeader>
+      aria-describedby="terminal-history-description"
+      className="max-h-[min(42rem,calc(var(--app-viewport-height)_-_2rem))] max-w-3xl gap-3 overflow-y-auto p-4 font-mono text-sm"
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        queryRef.current?.focus();
+      }}
+    >
+      <DialogHeader>
+        <DialogTitle>Command history</DialogTitle>
+        <DialogDescription id="terminal-history-description">
+          Choose a command to insert into the current prompt. Use never runs it.
+        </DialogDescription>
+      </DialogHeader>
 
-        <label className="grid gap-1.5 text-xs text-[var(--color-text-muted)]">
-          Search history
-          <input
-            ref={queryRef}
-            value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
-            className="h-9 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:ring-2 focus-visible:ring-blue-400"
-            placeholder="Type to filter commands"
-          />
-        </label>
+      <label className="grid gap-1.5 text-xs text-[var(--color-text-muted)]">
+        Search history
+        <input
+          ref={queryRef}
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          className="h-9 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:ring-2 focus-visible:ring-blue-400"
+          placeholder="Type to filter commands"
+        />
+      </label>
 
-        <p aria-live="polite" className="text-xs text-[var(--color-text-muted)]">
-          {results.length} {results.length === 1 ? "command" : "commands"}
+      <p aria-live="polite" className="text-xs text-[var(--color-text-muted)]">
+        {results.length} {results.length === 1 ? "command" : "commands"}
+      </p>
+      {hasMultilineResult && (
+        <p
+          id="terminal-history-multiline-note"
+          className="text-xs text-[var(--color-text-muted)]"
+        >
+          Multi-line commands can be copied but cannot be inserted.
         </p>
-        {hasMultilineResult && (
-          <p
-            id="terminal-history-multiline-note"
-            className="text-xs text-[var(--color-text-muted)]"
-          >
-            Multi-line commands can be copied but cannot be inserted.
-          </p>
-        )}
+      )}
 
-        {results.length === 0 ? (
-          <p className="rounded border border-dashed border-[var(--color-border)] p-3 text-sm text-[var(--color-text-muted)]">
-            No matching commands.
-          </p>
-        ) : (
-          <ul aria-label="Matching command history" className="grid gap-2">
-            {results.map(({ entry }) => {
-              const isMultiline = !canUseTerminalHistoryCommand(entry.command);
-              const identifier = commandIdentifier(entry.command);
-              return (
-                <li
-                  key={entry.id}
-                  className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3"
-                >
-                  <code className="block whitespace-pre-wrap break-all text-xs leading-5 text-[var(--color-text)]">
-                    {entry.command}
-                  </code>
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs text-[var(--color-text-muted)]">
-                      {entry.project ? `Project: ${entry.project}` : "All projects"}
-                    </span>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void copy(entry.command)}
-                        aria-label={`Copy command: ${identifier}`}
-                        className="rounded border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-                      >
-                        {copiedCommand === entry.command ? "Copied" : "Copy"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isMultiline}
-                        aria-describedby={
-                          isMultiline
-                            ? "terminal-history-multiline-note"
-                            : undefined
-                        }
-                        aria-label={`Use command: ${identifier}`}
-                        onClick={() => onUse(entry.command)}
-                        className="rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Use
-                      </button>
-                    </div>
+      {results.length === 0 ? (
+        <p className="rounded border border-dashed border-[var(--color-border)] p-3 text-sm text-[var(--color-text-muted)]">
+          No matching commands.
+        </p>
+      ) : (
+        <ul aria-label="Matching command history" className="grid gap-2">
+          {results.map(({ entry }) => {
+            const isMultiline = !canUseTerminalHistoryCommand(entry.command);
+            const identifier = commandIdentifier(entry.command);
+            return (
+              <li
+                key={entry.id}
+                className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3"
+              >
+                <code className="block whitespace-pre-wrap break-all text-xs leading-5 text-[var(--color-text)]">
+                  {entry.command}
+                </code>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    {entry.project
+                      ? `Project: ${entry.project}`
+                      : "All projects"}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void copy(entry.command)}
+                      aria-label={`Copy command: ${identifier}`}
+                      className="rounded border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                    >
+                      {copiedCommand === entry.command ? "Copied" : "Copy"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isMultiline}
+                      aria-describedby={
+                        isMultiline
+                          ? "terminal-history-multiline-note"
+                          : undefined
+                      }
+                      aria-label={`Use command: ${identifier}`}
+                      onClick={() => onUse(entry.command)}
+                      className="rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Use
+                    </button>
                   </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
 
-        {copyFailed && (
-          <p role="status" className="text-xs text-red-400">
-            Copy failed. Your browser did not allow clipboard access.
-          </p>
-        )}
+      {copyFailed && (
+        <p role="status" className="text-xs text-red-400">
+          Copy failed. Your browser did not allow clipboard access.
+        </p>
+      )}
     </DialogContent>
   );
 }

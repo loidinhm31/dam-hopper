@@ -9,7 +9,9 @@ import {
 } from "@/components/ui/ContextMenu.js";
 import "@/index.css";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 const EDGE_PADDING = 8;
 const EDGE_TOLERANCE = 1;
@@ -49,7 +51,10 @@ function ViewportContextMenuFixture() {
   const [actionCount, setActionCount] = React.useState(0);
 
   return (
-    <main data-testid="fixture" style={{ minHeight: "100vh", position: "relative" }}>
+    <main
+      data-testid="fixture"
+      style={{ minHeight: "100vh", position: "relative" }}
+    >
       <div
         data-testid="filtered-panel"
         style={{
@@ -151,7 +156,9 @@ describe("viewport context menu in Chromium", () => {
   }
 
   async function openAt(testId: string, clientX: number, clientY: number) {
-    const trigger = document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+    const trigger = document.querySelector<HTMLElement>(
+      `[data-testid="${testId}"]`,
+    );
     expect(trigger).not.toBeNull();
     await act(async () => {
       trigger?.dispatchEvent(
@@ -163,7 +170,9 @@ describe("viewport context menu in Chromium", () => {
         }),
       );
     });
-    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull());
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="menu"]')).not.toBeNull(),
+    );
     return document.querySelector<HTMLElement>('[role="menu"]')!;
   }
 
@@ -182,11 +191,15 @@ describe("viewport context menu in Chromium", () => {
 
   it("portals through body and stays pointer-relative outside containing blocks", async () => {
     await renderFixture();
-    const panel = document.querySelector<HTMLElement>('[data-testid="filtered-panel"]')!;
+    const panel = document.querySelector<HTMLElement>(
+      '[data-testid="filtered-panel"]',
+    )!;
     const clickX = 140;
     const clickY = 140;
     const menu = await openAt("filtered-trigger", clickX, clickY);
-    const wrapper = menu.closest<HTMLElement>("[data-radix-popper-content-wrapper]");
+    const wrapper = menu.closest<HTMLElement>(
+      "[data-radix-popper-content-wrapper]",
+    );
     const panelRect = panel.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
 
@@ -224,7 +237,9 @@ describe("viewport context menu in Chromium", () => {
       await act(async () => {
         document.dispatchEvent(new Event("scroll", { bubbles: true }));
       });
-      await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+      await vi.waitFor(() =>
+        expect(document.querySelector('[role="menu"]')).toBeNull(),
+      );
     }
   });
 
@@ -237,7 +252,9 @@ describe("viewport context menu in Chromium", () => {
     );
     const firstRect = firstMenu.getBoundingClientRect();
 
-    const trigger = document.querySelector<HTMLElement>('[data-testid="open-space-trigger"]')!;
+    const trigger = document.querySelector<HTMLElement>(
+      '[data-testid="open-space-trigger"]',
+    )!;
     const secondX = window.innerWidth - 24;
     const secondY = Math.round(window.innerHeight / 2);
     await act(async () => {
@@ -251,7 +268,9 @@ describe("viewport context menu in Chromium", () => {
       );
     });
     await vi.waitFor(() => {
-      const rect = document.querySelector<HTMLElement>('[role="menu"]')?.getBoundingClientRect();
+      const rect = document
+        .querySelector<HTMLElement>('[role="menu"]')
+        ?.getBoundingClientRect();
       expect(rect && Math.abs(rect.left - firstRect.left)).toBeGreaterThan(20);
       expect(rect && Math.abs(rect.top - firstRect.top)).toBeGreaterThan(20);
     });
@@ -260,21 +279,31 @@ describe("viewport context menu in Chromium", () => {
     expect(Math.abs(secondRect.left - firstRect.left)).toBeGreaterThan(20);
     expect(Math.abs(secondRect.top - firstRect.top)).toBeGreaterThan(20);
 
-    const expand = document.querySelector<HTMLElement>('[data-testid="open-space-expand"]');
+    const expand = document.querySelector<HTMLElement>(
+      '[data-testid="open-space-expand"]',
+    );
     await act(async () => expand?.click());
-    await vi.waitFor(() => expect(secondMenu.getBoundingClientRect().width).toBeGreaterThan(300));
+    await vi.waitFor(() =>
+      expect(secondMenu.getBoundingClientRect().width).toBeGreaterThan(300),
+    );
     await vi.waitFor(() => assertInsideViewport(secondMenu));
   });
 
   it("fires an action once and dismisses on Escape, outside pointer, and scroll", async () => {
     await renderFixture();
     const menu = await openAt("open-space-trigger", 320, 240);
-    const action = menu.querySelector<HTMLElement>('[data-testid="open-space-action"]');
+    const action = menu.querySelector<HTMLElement>(
+      '[data-testid="open-space-action"]',
+    );
     await act(async () => action?.click());
-    expect(document.querySelector('[data-testid="action-count"]')?.textContent).toBe("1");
+    expect(
+      document.querySelector('[data-testid="action-count"]')?.textContent,
+    ).toBe("1");
     expect(document.querySelector('[role="menu"]')).toBeNull();
 
-    const trigger = document.querySelector<HTMLElement>('[data-testid="open-space-trigger"]')!;
+    const trigger = document.querySelector<HTMLElement>(
+      '[data-testid="open-space-trigger"]',
+    )!;
     trigger.focus();
     await openAt("open-space-trigger", 320, 240);
     await act(async () => {
@@ -282,25 +311,35 @@ describe("viewport context menu in Chromium", () => {
         new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
       );
     });
-    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="menu"]')).toBeNull(),
+    );
     expect(document.activeElement).toBe(trigger);
 
     await openAt("open-space-trigger", 320, 240);
     await act(async () => {
-      document.querySelector<HTMLElement>('[data-testid="outside"]')?.dispatchEvent(
-        new PointerEvent("pointerdown", { bubbles: true }),
-      );
+      document
+        .querySelector<HTMLElement>('[data-testid="outside"]')
+        ?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     });
-    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="menu"]')).toBeNull(),
+    );
 
     await openAt("open-space-trigger", 320, 240);
-    await act(async () => document.dispatchEvent(new Event("scroll", { bubbles: true })));
-    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+    await act(async () =>
+      document.dispatchEvent(new Event("scroll", { bubbles: true })),
+    );
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="menu"]')).toBeNull(),
+    );
   });
 
   it("opens from the keyboard, focuses the first item, and supports roving navigation", async () => {
     await renderFixture();
-    const trigger = document.querySelector<HTMLElement>('[data-testid="open-space-trigger"]')!;
+    const trigger = document.querySelector<HTMLElement>(
+      '[data-testid="open-space-trigger"]',
+    )!;
     trigger.focus();
     await act(async () => {
       trigger.dispatchEvent(
@@ -311,41 +350,58 @@ describe("viewport context menu in Chromium", () => {
         }),
       );
     });
-    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull());
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="menu"]')).not.toBeNull(),
+    );
     expect(document.activeElement?.textContent).toContain("Expand menu");
 
     await act(async () => {
-      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "End" }));
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "End" }),
+      );
     });
     expect(document.activeElement?.textContent).toContain("Run action");
     await act(async () => {
-      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Home" }));
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "Home" }),
+      );
     });
     expect(document.activeElement?.textContent).toContain("Expand menu");
 
     await act(async () => {
-      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+      );
     });
-    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="menu"]')).toBeNull(),
+    );
     expect(document.activeElement).toBe(trigger);
   });
 
   const cssZoomSupported =
     typeof CSS !== "undefined" && CSS.supports("zoom", "1");
 
-  it.skipIf(!cssZoomSupported)("keeps edge placement valid at desktop zoom levels", async () => {
-    for (const zoom of DESKTOP_ZOOMS) {
-      document.documentElement.style.zoom = String(zoom);
-      await renderFixture();
-      const menu = await openAt(
-        "right-edge-trigger",
-        window.innerWidth - 12,
-        Math.round(window.innerHeight / 2),
-      );
-      assertInsideViewport(menu, zoom);
-      await act(async () => document.dispatchEvent(new Event("scroll", { bubbles: true })));
-      await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
-      await act(async () => root.render(<ViewportContextMenuFixture />));
-    }
-  });
+  it.skipIf(!cssZoomSupported)(
+    "keeps edge placement valid at desktop zoom levels",
+    async () => {
+      for (const zoom of DESKTOP_ZOOMS) {
+        document.documentElement.style.zoom = String(zoom);
+        await renderFixture();
+        const menu = await openAt(
+          "right-edge-trigger",
+          window.innerWidth - 12,
+          Math.round(window.innerHeight / 2),
+        );
+        assertInsideViewport(menu, zoom);
+        await act(async () =>
+          document.dispatchEvent(new Event("scroll", { bubbles: true })),
+        );
+        await vi.waitFor(() =>
+          expect(document.querySelector('[role="menu"]')).toBeNull(),
+        );
+        await act(async () => root.render(<ViewportContextMenuFixture />));
+      }
+    },
+  );
 });

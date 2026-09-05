@@ -5,14 +5,14 @@ use std::{
     fs,
     io::Write,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use portable_pty::CommandBuilder;
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use tempfile::{NamedTempFile, TempDir, TempPath};
 
 use super::shell_lifecycle::ShellLifecycle;
@@ -129,7 +129,21 @@ impl ShellIntegration {
         let init_file = if matches!(shell, Shell::Bash) {
             let mut wrapper = NamedTempFile::new().ok()?;
             let rc = format!(
-                "[[ -f \"$HOME/.bashrc\" ]] && source \"$HOME/.bashrc\"\n{}\n",
+                "[[ -f /etc/profile ]] && source /etc/profile\n\
+                 [[ -f /etc/bash.bashrc ]] && source /etc/bash.bashrc\n\
+                 [[ -f /etc/bashrc ]] && source /etc/bashrc\n\
+                 [[ -f \"$HOME/.profile\" ]] && source \"$HOME/.profile\"\n\
+                 [[ -f \"$HOME/.bash_profile\" ]] && source \"$HOME/.bash_profile\"\n\
+                 [[ -f \"$HOME/.bashrc\" ]] && source \"$HOME/.bashrc\"\n\
+                 for __p in \"$HOME/.local/bin\" \"$HOME/.cargo/bin\" \"$HOME/bin\" \"$HOME/.omp/bin\" \"$HOME/.evcrate/bin\"; do\n\
+                   if [[ -d \"$__p\" && \":$PATH:\" != *\":$__p:\"* ]]; then\n\
+                     export PATH=\"$__p:$PATH\"\n\
+                   fi\n\
+                 done\n\
+                 if [[ -z \"$PS1\" || \"$PS1\" == \"\\\\s-\\\\v\\\\\\$ \" ]]; then\n\
+                     PS1='\\u@\\h:\\w\\$ '\n\
+                 fi\n\
+                 {}\n",
                 asset
             );
             wrapper.write_all(rc.as_bytes()).ok()?;

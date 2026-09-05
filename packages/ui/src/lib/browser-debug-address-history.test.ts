@@ -29,7 +29,11 @@ describe("browser debug address history", () => {
       STORAGE_KEY,
       JSON.stringify({
         version: 1,
-        entries: ["not a url", "https://user:secret@example.test", "https://ok.test/path"],
+        entries: [
+          "not a url",
+          "https://user:secret@example.test",
+          "https://ok.test/path",
+        ],
       }),
     );
 

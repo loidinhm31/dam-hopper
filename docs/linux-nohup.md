@@ -1,12 +1,17 @@
 # Linux Nohup Setup (legacy, unsupported)
 
-The nohup launcher is retained only as rollback history. It is not a supported
-production owner, its package aliases are retired, and it must never run at the
-same time as `dam-hopper.service` or open the same SQLite files. Use the guarded
-[Linux systemd workflow](./linux-systemd.md) for current production operation.
-The current systemd workflow is backend-only; browser assets are a separate
-deployment concern. The legacy/container notes below may still describe a
-same-process web directory, but they do not change the systemd package.
+The nohup launcher is retained only for separately approved legacy rollback
+work. It is not a supported production owner, and it must never run alongside
+manager-installed `dam-hopper-api.service`, `dam-hopper-web.service`, or any
+process using the same SQLite files. The historical fixed
+`dam-hopper.service` and checkout-built production/reset runner are retired.
+Use the authoritative [Linux systemd workflow](./linux-systemd.md) for current
+production operation.
+
+The current systemd workflow is backend-only. Phase 03 adds the separate
+`dam-hopper-web` host on `0.0.0.0:4802`; `dam-hopper-server` serves browser
+assets only when an explicit `--web-dir` (or `DAM_HOPPER_WEB_DIR`) is supplied.
+The legacy/container notes below describe that explicit combined mode only.
 
 ## Install And Start
 
@@ -91,10 +96,11 @@ or host-mutation control. Before a staged rollout, verify that authenticated
 `GET /api/system/metrics` still returns its compatible basic CPU, memory, disk,
 and temperature shape; then check the versioned snapshot and alerts routes.
 
-Container builds serve the compiled browser assets from `/opt/dam-hopper/web`.
-For a nohup deployment that serves the browser from the same process, set
-`DAM_HOPPER_WEB_DIR` to a separately built, readable `apps/web/dist`; otherwise
-use an external browser-asset host.
+Container builds place compiled browser assets at `/opt/dam-hopper/web`, and
+the Docker command explicitly passes `--web-dir /opt/dam-hopper/web` to combine
+API and web serving on `4800`. For a legacy nohup deployment that deliberately
+uses the same process, set `DAM_HOPPER_WEB_DIR` to a separately built, readable
+`apps/web/dist`; otherwise run `dam-hopper-web` or use an external asset host.
 
 Build the container from the repository `Dockerfile`; its Rust builder is pinned
 to the ABI-compatible Bookworm toolchain and includes the server asset bundle.
@@ -161,6 +167,6 @@ remediation capability.
 ```bash
 deploy/run-linux-nohup.sh stop
 ```
-
-Do not recursively remove the runtime tree as part of legacy recovery; the
-guarded reset owns the exact purge boundary.
+Do not recursively remove the runtime tree as part of legacy recovery;
+user configuration, databases, and application data must be preserved.
+The release manager does not purge runtime directories.

@@ -41,7 +41,9 @@ export function BrowserDebugConsole({
             <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
           )}
           Browser console
-          <span className="text-[var(--color-text-muted)]">({entries.length})</span>
+          <span className="text-[var(--color-text-muted)]">
+            ({entries.length})
+          </span>
         </button>
         <Button
           type="button"
@@ -72,10 +74,14 @@ export function BrowserDebugConsole({
           ) : (
             entries.map((entry) => (
               <p key={entry.id} className="break-words">
-                <span className={cn("mr-2 uppercase", LEVEL_CLASS[entry.level])}>
+                <span
+                  className={cn("mr-2 uppercase", LEVEL_CLASS[entry.level])}
+                >
                   {entry.level}
                 </span>
-                <span className="text-[var(--color-text)]">{entry.message}</span>
+                <span className="text-[var(--color-text)]">
+                  {entry.message}
+                </span>
               </p>
             ))
           )}

@@ -27,7 +27,9 @@ export function AppLayout({ children, title, actions }: Props) {
             <span className="text-[var(--color-text-muted)]/30 text-[10px] hidden sm:inline">
               ~/dam-hopper/{title.toLowerCase()}
             </span>
-            {actions && <div className="ml-auto flex items-center">{actions}</div>}
+            {actions && (
+              <div className="ml-auto flex items-center">{actions}</div>
+            )}
           </header>
         )}
         <main className="flex-1 overflow-y-auto">

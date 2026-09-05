@@ -128,7 +128,8 @@ export function AgentStorePage() {
               className="flex gap-4"
               style={{
                 minHeight: 0,
-                height: "clamp(360px, calc(var(--app-viewport-height) * 0.45), 520px)",
+                height:
+                  "clamp(360px, calc(var(--app-viewport-height) * 0.45), 520px)",
               }}
             >
               <div className="w-64 shrink-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden flex flex-col">
@@ -183,7 +184,8 @@ export function AgentStorePage() {
           <div
             className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 flex flex-col"
             style={{
-              height: "clamp(400px, calc(var(--app-viewport-height) * 0.6), 640px)",
+              height:
+                "clamp(400px, calc(var(--app-viewport-height) * 0.6), 640px)",
             }}
           >
             <Suspense fallback={AGENT_STORE_FALLBACK}>

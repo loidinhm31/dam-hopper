@@ -20,13 +20,19 @@ class MemoryStorage {
 class MemoryWindow {
   private listeners = new Map<string, Set<(event: Event) => void>>();
 
-  public addEventListener(type: string, listener: (event: Event) => void): void {
+  public addEventListener(
+    type: string,
+    listener: (event: Event) => void,
+  ): void {
     const listeners = this.listeners.get(type) ?? new Set();
     listeners.add(listener);
     this.listeners.set(type, listeners);
   }
 
-  public removeEventListener(type: string, listener: (event: Event) => void): void {
+  public removeEventListener(
+    type: string,
+    listener: (event: Event) => void,
+  ): void {
     const listeners = this.listeners.get(type);
     listeners?.delete(listener);
     if (listeners?.size === 0) {
@@ -194,29 +200,20 @@ describe("DiagnosticsClient", () => {
     });
 
     client.initialize();
-    browserWindow.dispatch(
-      "error",
-      {
-        message: "render failed",
-        filename: "app.tsx",
-        lineno: 10,
-        colno: 4,
-        error: new Error("password=hunter2"),
-      } as Event,
-    );
-    browserWindow.dispatch(
-      "unhandledrejection",
-      {
-        reason: new Error("password=hunter2"),
-      } as Event,
-    );
+    browserWindow.dispatch("error", {
+      message: "render failed",
+      filename: "app.tsx",
+      lineno: 10,
+      colno: 4,
+      error: new Error("password=hunter2"),
+    } as Event);
+    browserWindow.dispatch("unhandledrejection", {
+      reason: new Error("password=hunter2"),
+    } as Event);
     client.dispose();
-    browserWindow.dispatch(
-      "error",
-      {
-        message: "should be ignored",
-      } as Event,
-    );
+    browserWindow.dispatch("error", {
+      message: "should be ignored",
+    } as Event);
 
     const snapshot = client.snapshot();
     expect(snapshot.browserErrors).toHaveLength(2);

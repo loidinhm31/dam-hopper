@@ -48,9 +48,7 @@ describe("download-json", () => {
     expect(fileName).toBe("dam-hopper-diagnostics-20260707-182905.json");
     expect(createElement).toHaveBeenCalledWith("a");
     expect(anchor.href).toBe("blob:test");
-    expect(anchor.download).toBe(
-      "dam-hopper-diagnostics-20260707-182905.json",
-    );
+    expect(anchor.download).toBe("dam-hopper-diagnostics-20260707-182905.json");
     expect(appendChild).toHaveBeenCalledWith(anchor);
     expect(click).toHaveBeenCalledTimes(1);
     expect(removeChild).toHaveBeenCalledWith(anchor);

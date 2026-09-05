@@ -31,8 +31,9 @@ describe("LargeFileViewer", () => {
   let root: ReturnType<typeof createRoot>;
 
   beforeEach(() => {
-    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
-      true;
+    (
+      globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
     fsRead.mockReset();
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
     container = document.createElement("div");

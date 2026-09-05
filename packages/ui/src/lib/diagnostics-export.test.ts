@@ -42,7 +42,9 @@ const snapshot = {
   profile: null,
   transportStatus: null,
 } as const;
-const downloadJsonMock = vi.fn(() => "dam-hopper-diagnostics-20260707-181500.json");
+const downloadJsonMock = vi.fn(
+  () => "dam-hopper-diagnostics-20260707-181500.json",
+);
 
 vi.mock("./diagnostics-client.js", () => ({
   getClientDiagnosticsSnapshot: () => snapshot,

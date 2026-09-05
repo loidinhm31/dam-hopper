@@ -10,10 +10,7 @@ import { AlertTriangle, Download, Film, Loader2, RotateCw } from "lucide-react";
 import { Button } from "@/components/atoms/Button.js";
 import { issueVideoTicket } from "@/api/video-tickets.js";
 import { startVideoDownload } from "@/lib/start-video-download.js";
-import {
-  isProjectTargetError,
-  type ProjectTargetRef,
-} from "@/api/client.js";
+import { isProjectTargetError, type ProjectTargetRef } from "@/api/client.js";
 import {
   getProfileChangeVersion,
   subscribeToProfileChanges,
@@ -209,7 +206,12 @@ export function VideoPreview({
           error && typeof error === "object" && "code" in error
             ? String((error as { code?: unknown }).code ?? "")
             : undefined;
-        if (isProjectTargetError(code, error instanceof Error ? error.message : undefined)) {
+        if (
+          isProjectTargetError(
+            code,
+            error instanceof Error ? error.message : undefined,
+          )
+        ) {
           onTargetUnavailableRef.current?.();
         }
         setMediaState("error");

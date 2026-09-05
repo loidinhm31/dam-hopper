@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildRuntimeTree, reorderRuntimeIds } from "./terminal-runtime-tree.js";
+import {
+  buildRuntimeTree,
+  reorderRuntimeIds,
+} from "./terminal-runtime-tree.js";
 import type { PortEntry } from "@/hooks/use-ports.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
@@ -32,7 +35,10 @@ function tab(
   };
 }
 
-function port(portNumber: number, overrides: Partial<PortEntry> = {}): PortEntry {
+function port(
+  portNumber: number,
+  overrides: Partial<PortEntry> = {},
+): PortEntry {
   return {
     port: portNumber,
     project: overrides.project ?? "web",
@@ -43,7 +49,6 @@ function port(portNumber: number, overrides: Partial<PortEntry> = {}): PortEntry
 }
 
 describe("buildRuntimeTree", () => {
-
   it("carries structured open titles while mounted-only leaves stay readable", () => {
     const groups = buildRuntimeTree({
       terminals: [terminal("open", "web"), terminal("mounted-only", "web")],

@@ -65,7 +65,9 @@ describe("file-tree-reveal", () => {
 
     expect(loadChildren).toHaveBeenNthCalledWith(1, "src");
     expect(loadChildren).toHaveBeenNthCalledWith(2, "src/components");
-    expect(tree.openParents).toHaveBeenCalledWith("src/components/FileTree.tsx");
+    expect(tree.openParents).toHaveBeenCalledWith(
+      "src/components/FileTree.tsx",
+    );
     expect(tree.select).toHaveBeenCalledWith("src/components/FileTree.tsx");
     expect(tree.focus).toHaveBeenCalledWith("src/components/FileTree.tsx", {
       scroll: false,

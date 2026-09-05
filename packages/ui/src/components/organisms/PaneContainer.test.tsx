@@ -382,21 +382,20 @@ describe("PaneContainer browser integration", () => {
         .querySelector<HTMLButtonElement>("[data-testid=pane-accessory-open]")
         ?.click(),
     );
-    expect(
-      scrollButtons()?.getAttribute("data-accessory-panel-open"),
-    ).toBe("true");
+    expect(scrollButtons()?.getAttribute("data-accessory-panel-open")).toBe(
+      "true",
+    );
     await act(async () =>
       container
         .querySelector<HTMLButtonElement>("[data-testid=pane-accessory-close]")
         ?.click(),
     );
-    expect(
-      scrollButtons()?.getAttribute("data-accessory-panel-open"),
-    ).toBe("false");
+    expect(scrollButtons()?.getAttribute("data-accessory-panel-open")).toBe(
+      "false",
+    );
     expect(
       container.querySelectorAll("[data-testid=terminal-scroll-buttons]"),
     ).toHaveLength(1);
-
 
     await renderPane(accessoryPane, "shell:other");
     expect(scrollButtons()).toBeNull();
