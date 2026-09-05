@@ -62,6 +62,7 @@ fn first_parent_or_empty_tree(
 
 async fn git_output(args: &[&str], cwd: &Path) -> Result<String, AppError> {
     let output = Command::new("git")
+        .args(["-c", "safe.directory=*"])
         .args(args)
         .current_dir(cwd)
         .output()
@@ -78,6 +79,7 @@ async fn git_output(args: &[&str], cwd: &Path) -> Result<String, AppError> {
 
 async fn git_status(args: &[&str], cwd: &Path) -> Result<bool, AppError> {
     let output = Command::new("git")
+        .args(["-c", "safe.directory=*"])
         .args(args)
         .current_dir(cwd)
         .output()
@@ -95,6 +97,7 @@ async fn selected_patch(
     let mut output = Command::new("git");
     output
         .current_dir(project_path)
+        .args(["-c", "safe.directory=*"])
         .args(["diff", "--binary", parent, hash, "--"])
         .args(paths);
     let output = output
@@ -119,6 +122,7 @@ async fn apply_patch(
     let mut command = Command::new("git");
     command
         .current_dir(project_path)
+        .args(["-c", "safe.directory=*"])
         .arg("apply")
         .arg("--3way")
         .arg("--quiet")
