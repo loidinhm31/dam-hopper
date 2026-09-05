@@ -241,7 +241,7 @@ capability_selection = "auto"
   - `quiet_period_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 900 (15 min).
   - `wake_after_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 600 (10 min).
 - **Security Safeguards**: The timing route is unavailable in development mode (`--no-auth`). All suspend requests fail closed if sleep inhibitors are active, helper enrollment is missing, or host capabilities are unsupported.
-
+- **Rollback & Verification**: Non-privileged boundary verification is performed with `scripts/verify-idle-suspend-boundary.sh`. Production resets or rollbacks are executed safely via `deploy/reset-linux-production.sh` (supporting `--dry-run`), which disables startup policy, stops helper units, verifies RTC alarm state, and preserves audit logs.
 
 ### Browser Debug Preview
 

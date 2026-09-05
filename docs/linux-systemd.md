@@ -310,3 +310,50 @@ The following checkout-runner scripts, fixed units, and package scripts have bee
 - ❌ `pnpm linux:production` / `pnpm linux:reset`
 
 Do not recreate, document, or execute these paths. All host management is performed via `dam-hopper-install.sh` and the `dam-hopper` CLI binary.
+
+---
+
+## 11. Terminal Idle Suspend Helper Enrollment & Rollback Runbook
+
+The server-authoritative terminal idle suspend subsystem provides opt-in, fail-closed host suspend with RTC wake after a bounded quiet period with zero active or starting PTY terminals.
+
+### 11.1 Host Qualification Requirements
+Before enabling terminal idle suspend on a production host:
+1. **Kernel & RTC Hardware**: The host must expose a functional RTC wakealarm device at `/sys/class/rtc/rtc0/wakealarm`.
+2. **Systemd & Logind**: Logind D-Bus interface `org.freedesktop.login1.Manager` must support `Suspend` without desktop session inhibitors blocking non-interactive operation.
+3. **Inhibitors**: Active system inhibitors (e.g. system update locks, backup operations) are respected and cause suspend requests to fail closed without retry.
+
+### 11.2 Privileged Helper Enrollment & Hardening
+The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed suspend request with RTC wakealarm programming over a local Unix domain socket:
+- **Socket Unit**: `deploy/systemd/dam-hopper-idle-suspend-helper.socket` creates `/run/dam-hopper/idle-suspend.sock` with `SocketMode=0660`.
+- **Service Unit**: `deploy/systemd/dam-hopper-idle-suspend-helper.service` executes the helper under strict systemd hardening:
+  - `NoNewPrivileges=yes`
+  - `ProtectSystem=strict`
+  - `ProtectHome=yes`
+  - `PrivateTmp=yes`
+  - `CapabilityBoundingSet=CAP_WAKE_ALARM`
+- **Peer Credential Verification**: The helper validates peer UID and PID on connection via `SO_PEERCRED`, rejecting unauthorized callers.
+- **Audit Trail**: Every request, intent, and completion is recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`).
+
+### 11.3 Boundary Verification
+Run the non-privileged boundary verification script before deployment:
+```bash
+./scripts/verify-idle-suspend-boundary.sh
+```
+
+### 11.4 Rollback and Emergency Reset
+To completely disenroll the privileged helper, revert configuration, and restore host integrity:
+```bash
+# Dry-run simulation:
+./deploy/reset-linux-production.sh --dry-run
+
+# Full production reset (requires root):
+sudo ./deploy/reset-linux-production.sh
+```
+Rollback guarantees:
+1. Verifies no helper handoff is actively executing.
+2. Atomically disables `enabled = false` under `[server.idle_suspend]`.
+3. Stops and disables helper socket and service units.
+4. Preserves external RTC alarms (never clears unrelated alarms).
+5. Removes only manifest-owned helper assets and runs `systemctl daemon-reload`.
+6. Preserves audit logs for post-mortem operator analysis.

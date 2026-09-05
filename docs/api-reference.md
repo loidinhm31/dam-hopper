@@ -403,8 +403,8 @@ Protected, atomic timing pair mutation endpoint. Accepts only the complete bound
 - **Responses**:
   - `200 OK`: Returns `IdleSuspendTimingPatchResponse` (`{ "version": 1, "changed": bool, "statusRevision": int, "quietPeriodSeconds": int, "wakeAfterSeconds": int }`).
   - `400 Bad Request`: Validation failure (`invalidIdleSuspendTiming`).
-  - `409 Conflict`: Returned when helper handoff is actively in progress (`idleSuspendHandoffInProgress`). Performs zero memory or disk mutation. Not auto-retried.
-  - `503 Service Unavailable`: Subsystem or persistence unavailable (`idleSuspendTimingUnavailable`, `idleSuspendTimingAuditUnavailable`, `idleSuspendTimingPersistenceUnavailable`).
+  - `409 Conflict`: Returned when helper handoff is actively in progress (`idleSuspendHandoffInProgress`). Performs zero memory or disk mutation; clients and UI do NOT auto-retry until resume/failure reconciliation.
+  - `503 Service Unavailable`: Subsystem, authentication, or persistence unavailable (`authenticationUnavailable`, `idleSuspendTimingUnavailable`, `idleSuspendTimingAuditUnavailable`, `idleSuspendTimingPersistenceUnavailable`).
 
 #### `host:idleSuspendChanged` transport event
 
@@ -417,7 +417,7 @@ Out-of-band revision-only push hint broadcast over a dedicated event channel iso
   }
   ```
 - **Behavior**: Client validates `version: 1` and integer `revision`, then invalidates `['system', 'idle-suspend', 'v1', 'status']` query cache. Reconnects and broadcast lag reconcile automatically via REST status GET.
-
+- **Post-Resume Reconciliation**: Following a suspend/resume cycle or execution failure, the coordinator refreshes capabilities and authoritative status revision, publishes `host:idleSuspendChanged`, and releases the handoff lock. Clients recover authoritative state on next fetch with no duplicate suspend attempt while the fleet remains empty.
 ### Deferred remediation backlog
 
 Re-authentication, action lifecycle, privileged helper/IPC, enrollment, and

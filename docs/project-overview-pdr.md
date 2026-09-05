@@ -610,6 +610,27 @@ notes, paths, external IDs, or request bodies. Server validation remains
 authoritative for workspace/target ownership, limits, errors, and replay.
 
 
+### PR-015: Server-Authoritative Terminal Idle Suspend (Phases 01–05)
+
+**Status:** Complete / DONE on 2026-09-05. Cross-module integration, privileged helper enrollment, systemd sandboxing, REST/WebSocket contract, and UI browser tests verified. Full integration tests passed in `server/tests/idle_suspend.rs` and browser tests passed in `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx`.
+
+**Functional Requirements:**
+- Server-authoritative PTY fleet monitoring detects quiescent state (0 live, 0 creating, 0 restarting PTYs).
+- Configurable quiet period initiates an armed timer; active or spawning PTYs immediately cancel the timer.
+- Single-flight idle epoch: exactly one suspend execution per empty period; zero auto-retry loops while fleet remains empty.
+- Atomically mutable timing pair (`quiet_period_seconds`, `wake_after_seconds`) via dedicated `PATCH /api/system/idle-suspend/v1/timing` endpoint.
+- Out-of-band revision notifications broadcast via `host:idleSuspendChanged` WebSocket hints.
+- Privileged execution seam via socket-activated root helper (`dam-hopper-idle-suspend-helper`) using `SO_PEERCRED` authentication, RTC sysfs wakealarm programming, and logind D-Bus suspend.
+- Read-only live monitoring surfaced in host-resource popover; timing tuning in Settings.
+- Safe operator rollback runbook and non-privileged boundary verification (`scripts/verify-idle-suspend-boundary.sh`, `deploy/reset-linux-production.sh`).
+
+**Acceptance Criteria:**
+- [x] Disabled by default at startup; requires explicit operator configuration.
+- [x] Timing updates rejected under `--no-auth` (`403`) and during active helper handoff (`409`).
+- [x] Zero sudo, shell pipelines, or arbitrary command execution in server binary.
+- [x] Post-resume capability, fleet, and revision reconciliation without repeat suspend.
+- [x] Automated test suite runs with 100% fake-time/executor mocks; no automated CI/local command triggers host sleep or RTC writes.
+
 ## Non-Functional Requirements
 
 ### Performance

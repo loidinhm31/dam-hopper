@@ -4,8 +4,8 @@ use std::{
     io::Read as _,
     path::{Path, PathBuf},
     sync::{
-        Arc, Condvar, Mutex,
         atomic::{AtomicUsize, Ordering},
+        Arc, Condvar, Mutex,
     },
     thread::JoinHandle,
     time::Duration,
@@ -14,14 +14,14 @@ use std::{
 use portable_pty::{Child as PtyChild, CommandBuilder, NativePtySystem, PtySize, PtySystem as _};
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
+use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::Notify;
-use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::{
     config::schema::RestartPolicy,
-    diagnostics::{DiagnosticStore, TerminalTail, redact_diagnostic_text},
+    diagnostics::{redact_diagnostic_text, DiagnosticStore, TerminalTail},
     error::AppError,
     fs::FsSubsystem,
     persistence::SessionStore,
@@ -34,8 +34,8 @@ use crate::{
         shell_lifecycle::{LifecycleEvent, LifecycleState, ShellLifecycle},
     },
     workspace_target::{
-        ProjectTargetRef, WorkspaceTargetError, WorkspaceTargetResolver, target_path_identity,
-        target_path_is_within, target_path_relative,
+        target_path_identity, target_path_is_within, target_path_relative, ProjectTargetRef,
+        WorkspaceTargetError, WorkspaceTargetResolver,
     },
 };
 
@@ -985,19 +985,23 @@ impl PtySessionManager {
         Arc::clone(&self.sink)
     }
 
-
     pub fn try_claim_handoff(
         &self,
         expected_generation: u64,
-    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError> {
-        self.inner.lock().unwrap().fleet.try_claim_handoff(expected_generation)
+    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError>
+    {
+        self.inner
+            .lock()
+            .unwrap()
+            .fleet
+            .try_claim_handoff(expected_generation)
     }
 
     pub fn release_handoff(&self) {
         self.inner.lock().unwrap().fleet.release_handoff();
     }
 
-    #[cfg(test)]
+    #[doc(hidden)]
     pub fn with_fleet_for_test<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut crate::pty::fleet_state::PtyFleetState) -> R,
@@ -2464,7 +2468,7 @@ fn reader_thread(
     // snapshot before its lifecycle transition.
     let mut bytes_since_snapshot = 0usize;
     const SNAPSHOT_THRESHOLD: usize = 16 * 1024; // 16KB
-    // Lifecycle-only chunks must not announce editing before prompt bytes exist.
+                                                 // Lifecycle-only chunks must not announce editing before prompt bytes exist.
     let mut pending_lifecycle_events: Vec<(u64, LifecycleEvent)> = Vec::new();
     let mut visible_output_since_boundary = false;
 
@@ -2649,7 +2653,9 @@ fn reader_thread(
             };
 
             if will_restart {
-                inner_guard.fleet.transition_live_to_restart_pending(&session_id, incarnation);
+                inner_guard
+                    .fleet
+                    .transition_live_to_restart_pending(&session_id, incarnation);
             } else {
                 inner_guard.fleet.remove_live(&session_id, incarnation);
             }
@@ -2842,7 +2848,11 @@ fn reader_thread(
                 error = %e,
                 "Respawn queue full — supervisor may be dead/slow, dropping restart request"
             );
-            inner.lock().unwrap().fleet.cancel_restart_pending(&session_id, incarnation);
+            inner
+                .lock()
+                .unwrap()
+                .fleet
+                .cancel_restart_pending(&session_id, incarnation);
         }
     }
 
@@ -2940,7 +2950,9 @@ async fn supervisor_loop(
                 || inner_guard.generation != cmd.generation
                 || inner_guard.killed.contains(&session_id)
             {
-                inner_guard.fleet.cancel_restart_pending(&session_id, cmd.incarnation);
+                inner_guard
+                    .fleet
+                    .cancel_restart_pending(&session_id, cmd.incarnation);
                 info!(id = %session_id, "Session killed during backoff — skipping restart");
                 continue;
             }
@@ -3214,7 +3226,9 @@ fn finish_failed_replacement_locked(
         if !guard.replacement_is_current(session_id, replacement_incarnation) {
             return;
         }
-        guard.fleet.cancel_create(session_id, replacement_incarnation);
+        guard
+            .fleet
+            .cancel_create(session_id, replacement_incarnation);
 
         let live_is_current = guard
             .live
@@ -3668,19 +3682,25 @@ async fn respawn_internal(
     let (replacement_incarnation, preserve_target_unavailable, source_buffer) = {
         let mut guard = inner.lock().unwrap();
         if !guard.respawn_source_is_current(session_id, source_incarnation) {
-            guard.fleet.cancel_restart_pending(session_id, source_incarnation);
+            guard
+                .fleet
+                .cancel_restart_pending(session_id, source_incarnation);
             return Err(AppError::PtyError(
                 "PTY respawn was superseded by a newer request".into(),
             ));
         }
         if guard.fleet.is_handoff_active() {
-            guard.fleet.cancel_restart_pending(session_id, source_incarnation);
+            guard
+                .fleet
+                .cancel_restart_pending(session_id, source_incarnation);
             return Err(AppError::IdleSuspendHandoffInProgress(
                 "Cannot restart terminal while host suspend is in progress".into(),
             ));
         }
         if guard.closing {
-            guard.fleet.cancel_restart_pending(session_id, source_incarnation);
+            guard
+                .fleet
+                .cancel_restart_pending(session_id, source_incarnation);
             return Err(AppError::Unavailable("PTY manager is shutting down".into()));
         }
         // A rename may have occurred after the reader queued this command.
@@ -3698,19 +3718,19 @@ async fn respawn_internal(
             .get(session_id)
             .and_then(|session| session.buffer.as_ref().map(Arc::clone));
         let inc = guard.begin_replacement(session_id);
-        guard.fleet.transition_restart_pending_to_creating(session_id, source_incarnation, inc)?;
-        (
-            inc,
-            preserve_target_unavailable,
-            source_buffer,
-        )
+        guard
+            .fleet
+            .transition_restart_pending_to_creating(session_id, source_incarnation, inc)?;
+        (inc, preserve_target_unavailable, source_buffer)
     };
     let opts = &cmd.respawn_opts;
 
     let Some(_lifecycle_permit) = lifecycle_gate.try_begin() else {
         info!(id = %session_id, "Respawn skipped while PTY manager is disposing");
         let mut guard = inner.lock().unwrap();
-        guard.fleet.cancel_create(session_id, replacement_incarnation);
+        guard
+            .fleet
+            .cancel_create(session_id, replacement_incarnation);
         guard.finish_replacement(session_id, replacement_incarnation);
         return Ok(None);
     };
@@ -3723,7 +3743,9 @@ async fn respawn_internal(
             || inner_guard.generation != cmd.generation
             || inner_guard.killed.contains(session_id)
         {
-            inner_guard.fleet.cancel_create(session_id, replacement_incarnation);
+            inner_guard
+                .fleet
+                .cancel_create(session_id, replacement_incarnation);
             true
         } else {
             false
@@ -4449,7 +4471,7 @@ mod command_builder_tests {
 
 #[cfg(test)]
 mod attach_snapshot_tests {
-    use super::{ShellLifecycle, attach_editing_generation};
+    use super::{attach_editing_generation, ShellLifecycle};
 
     #[test]
     fn parsed_editing_is_not_attachable_until_prompt_boundary_is_published() {
@@ -4749,12 +4771,10 @@ mod tests {
         );
 
         assert!(manager.mark_target_unavailable(id, "demo", target));
-        assert!(
-            receiver
-                .try_recv()
-                .expect("target-loss event should be emitted")
-                .contains("terminal:target-unavailable")
-        );
+        assert!(receiver
+            .try_recv()
+            .expect("target-loss event should be emitted")
+            .contains("terminal:target-unavailable"));
         let session = manager
             .list()
             .into_iter()
@@ -5220,13 +5240,11 @@ mod tests {
             Some((b"tail".to_vec(), 4))
         );
         persist_session_exited(&persist_tx, Some(&store), &exited_meta.id, 3);
-        assert!(
-            store
-                .load_sessions()
-                .unwrap()
-                .iter()
-                .all(|session| session.meta.id != exited_meta.id)
-        );
+        assert!(store
+            .load_sessions()
+            .unwrap()
+            .iter()
+            .all(|session| session.meta.id != exited_meta.id));
     }
 
     #[tokio::test]

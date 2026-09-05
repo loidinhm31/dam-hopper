@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch, RwLock};
 use tokio_util::sync::CancellationToken;
 
-use crate::idle_suspend::executor::IdleSuspendExecutor;
 use crate::config::{
     MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
     MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
 };
+use crate::idle_suspend::executor::{BoxFuture, IdleSuspendExecutor};
 use crate::idle_suspend::policy::{
     validate_timing_pair, RuntimeIdleSuspendTiming, StartupIdleSuspendPolicy,
 };
@@ -253,6 +253,7 @@ async fn run_coordinator(
         &detail,
     );
 
+    let mut in_flight_suspend: Option<BoxFuture<'static, SuspendOutcome>> = None;
 
     loop {
         let sleep_fut = async {
@@ -260,6 +261,13 @@ async fn run_coordinator(
                 tokio::time::sleep_until(deadline).await;
             } else {
                 std::future::pending::<()>().await;
+            }
+        };
+
+        let suspend_fut = async {
+            match in_flight_suspend.as_mut() {
+                Some(fut) => fut.await,
+                None => std::future::pending::<SuspendOutcome>().await,
             }
         };
 
@@ -271,6 +279,24 @@ async fn run_coordinator(
                     publish_status(&status_tx, Some(&*event_sink), state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, pty_manager.fleet_snapshot(), None, &last_outcome, &detail);
                 }
                 break;
+            }
+            outcome = suspend_fut => {
+                in_flight_suspend = None;
+                handle_outcome(
+                    outcome,
+                    &mut state,
+                    &mut epoch_ready,
+                    current_epoch,
+                    &mut status_revision,
+                    &mut last_outcome,
+                    &mut detail,
+                    &pty_manager,
+                    wake_after_seconds,
+                    quiet_period_seconds,
+                    &status_tx,
+                    &startup_policy,
+                    &event_sink,
+                );
             }
             msg = command_rx.recv() => {
                 let Some(CommandMessage::UpdateTiming { cmd, reply }) = msg else {
@@ -314,7 +340,7 @@ async fn run_coordinator(
                 publish_status(&status_tx, Some(&*event_sink), state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, snapshot, arm_deadline, &last_outcome, &detail);
             }
             _ = sleep_fut => {
-                handle_deadline(
+                let claimed = handle_deadline(
                     &mut state,
                     &mut epoch_ready,
                     current_epoch,
@@ -322,16 +348,25 @@ async fn run_coordinator(
                     &mut arm_deadline,
                     &mut armed_generation,
                     &mut status_revision,
-                    &mut last_outcome,
-                    &mut detail,
+                    &last_outcome,
+                    &detail,
                     &pty_manager,
                     wake_after_seconds,
                     quiet_period_seconds,
-                    &executor,
                     &status_tx,
                     &startup_policy,
                     &event_sink,
-                ).await;
+                );
+                if claimed {
+                    let req = SuspendWithRtcWakeRequest {
+                        request_id: format!("epoch-{}", current_epoch),
+                        wake_after_seconds,
+                    };
+                    let exec = Arc::clone(&executor);
+                    in_flight_suspend = Some(Box::pin(async move {
+                        exec.execute_suspend(req).await
+                    }));
+                }
             }
         }
     }
@@ -466,7 +501,8 @@ async fn handle_timing(
     }
 
     if let Some(store) = timing_store {
-        if let Err(e) = store.persist_timing_pair(cmd.quiet_period_seconds, cmd.wake_after_seconds) {
+        if let Err(e) = store.persist_timing_pair(cmd.quiet_period_seconds, cmd.wake_after_seconds)
+        {
             if let Some(audit) = timing_audit {
                 if let Ok(rec) = TimingAuditRecord::new(
                     cmd.actor.clone(),
@@ -501,7 +537,10 @@ async fn handle_timing(
     let changed = cur_quiet != cmd.quiet_period_seconds || cur_wake != cmd.wake_after_seconds;
     *quiet_period_seconds = cmd.quiet_period_seconds;
     *wake_after_seconds = cmd.wake_after_seconds;
-    let _ = runtime_timing.write().await.apply_update(cmd.quiet_period_seconds, cmd.wake_after_seconds);
+    let _ = runtime_timing
+        .write()
+        .await
+        .apply_update(cmd.quiet_period_seconds, cmd.wake_after_seconds);
     *status_revision = status_revision.wrapping_add(1);
 
     if *state == CoordinatorState::Armed {
@@ -512,7 +551,8 @@ async fn handle_timing(
         let snap = pty_manager.fleet_snapshot();
         if snap.is_quiescent() && epoch_ready && startup_policy.enabled {
             *state = CoordinatorState::Armed;
-            *arm_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(cmd.quiet_period_seconds));
+            *arm_deadline =
+                Some(tokio::time::Instant::now() + Duration::from_secs(cmd.quiet_period_seconds));
             *armed_generation = Some(snap.generation);
         }
     }
@@ -570,13 +610,14 @@ fn handle_fleet(
         *epoch_ready = true;
         *current_epoch = current_epoch.wrapping_add(1);
         *state = CoordinatorState::Armed;
-        *arm_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(quiet_period_seconds));
+        *arm_deadline =
+            Some(tokio::time::Instant::now() + Duration::from_secs(quiet_period_seconds));
         *armed_generation = Some(snapshot.generation);
         *status_revision = status_revision.wrapping_add(1);
     }
 }
 
-async fn handle_deadline(
+fn handle_deadline(
     state: &mut CoordinatorState,
     epoch_ready: &mut bool,
     current_epoch: u64,
@@ -584,16 +625,15 @@ async fn handle_deadline(
     arm_deadline: &mut Option<tokio::time::Instant>,
     armed_generation: &mut Option<u64>,
     status_revision: &mut u64,
-    last_outcome: &mut Option<SuspendOutcome>,
-    detail: &mut Option<String>,
+    last_outcome: &Option<SuspendOutcome>,
+    detail: &Option<String>,
     pty_manager: &PtySessionManager,
     wake_after_seconds: u64,
     quiet_period_seconds: u64,
-    executor: &Arc<dyn IdleSuspendExecutor>,
     status_tx: &watch::Sender<IdleSuspendStatusV1>,
     startup_policy: &StartupIdleSuspendPolicy,
     event_sink: &Arc<dyn crate::pty::EventSink>,
-) {
+) -> bool {
     *arm_deadline = None;
     *armed_generation = None;
     *state = CoordinatorState::FinalCheck;
@@ -618,56 +658,7 @@ async fn handle_deadline(
                 last_outcome,
                 detail,
             );
-
-            let req = SuspendWithRtcWakeRequest {
-                request_id: format!("epoch-{}", current_epoch),
-                wake_after_seconds,
-            };
-
-            let outcome = executor.execute_suspend(req).await;
-            *last_outcome = Some(outcome.clone());
-
-            match outcome {
-                SuspendOutcome::ResumedSuccessfully { .. } => {
-                    *state = CoordinatorState::Resumed;
-                    *detail = None;
-                }
-                SuspendOutcome::RejectedFleetActive { reason, .. } => {
-                    *state = CoordinatorState::Suppressed;
-                    *detail = Some(format!("fleet active: {reason}"));
-                }
-                SuspendOutcome::BlockedByInhibitor { inhibitor, .. } => {
-                    *state = CoordinatorState::Suppressed;
-                    *detail = Some(format!("inhibited by {inhibitor}"));
-                }
-                SuspendOutcome::UnsupportedCapability { detail: d, .. } => {
-                    *state = CoordinatorState::Suppressed;
-                    *detail = Some(format!("unsupported capability: {d}"));
-                }
-                SuspendOutcome::ExecutionFailed { error, .. } => {
-                    *state = CoordinatorState::Failed;
-                    *detail = Some(format!("suspend failed: {error}"));
-                }
-            }
-
-            pty_manager.release_handoff();
-            *epoch_ready = false;
-            *status_revision = status_revision.wrapping_add(1);
-            let event_sink_ref = event_sink.as_ref();
-            publish_status(
-                status_tx,
-                Some(event_sink_ref),
-                *state,
-                startup_policy,
-                quiet_period_seconds,
-                wake_after_seconds,
-                *status_revision,
-                current_epoch,
-                pty_manager.fleet_snapshot(),
-                None,
-                last_outcome,
-                detail,
-            );
+            true
         }
         Err(_) => {
             *state = CoordinatorState::Watching;
@@ -688,6 +679,67 @@ async fn handle_deadline(
                 last_outcome,
                 detail,
             );
+            false
         }
     }
+}
+
+fn handle_outcome(
+    outcome: SuspendOutcome,
+    state: &mut CoordinatorState,
+    epoch_ready: &mut bool,
+    current_epoch: u64,
+    status_revision: &mut u64,
+    last_outcome: &mut Option<SuspendOutcome>,
+    detail: &mut Option<String>,
+    pty_manager: &PtySessionManager,
+    wake_after_seconds: u64,
+    quiet_period_seconds: u64,
+    status_tx: &watch::Sender<IdleSuspendStatusV1>,
+    startup_policy: &StartupIdleSuspendPolicy,
+    event_sink: &Arc<dyn crate::pty::EventSink>,
+) {
+    *last_outcome = Some(outcome.clone());
+
+    match outcome {
+        SuspendOutcome::ResumedSuccessfully { .. } => {
+            *state = CoordinatorState::Resumed;
+            *detail = None;
+        }
+        SuspendOutcome::RejectedFleetActive { reason, .. } => {
+            *state = CoordinatorState::Suppressed;
+            *detail = Some(format!("fleet active: {reason}"));
+        }
+        SuspendOutcome::BlockedByInhibitor { inhibitor, .. } => {
+            *state = CoordinatorState::Suppressed;
+            *detail = Some(format!("inhibited by {inhibitor}"));
+        }
+        SuspendOutcome::UnsupportedCapability { detail: d, .. } => {
+            *state = CoordinatorState::Suppressed;
+            *detail = Some(format!("unsupported capability: {d}"));
+        }
+        SuspendOutcome::ExecutionFailed { error, .. } => {
+            *state = CoordinatorState::Failed;
+            *detail = Some(format!("suspend failed: {error}"));
+        }
+    }
+
+    pty_manager.release_handoff();
+    *epoch_ready = false;
+    *status_revision = status_revision.wrapping_add(1);
+    let event_sink_ref = event_sink.as_ref();
+    publish_status(
+        status_tx,
+        Some(event_sink_ref),
+        *state,
+        startup_policy,
+        quiet_period_seconds,
+        wake_after_seconds,
+        *status_revision,
+        current_epoch,
+        pty_manager.fleet_snapshot(),
+        None,
+        last_outcome,
+        detail,
+    );
 }
