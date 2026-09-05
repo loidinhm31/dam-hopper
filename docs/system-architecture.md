@@ -64,7 +64,7 @@
 
 ## Server-Authoritative Terminal Idle Suspend Architecture
 
-The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automation backed by authoritative PTY fleet state, single-flight idle epochs, bounded authenticated timing mutations, and hardened socket-activated helper execution.
+The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automation backed by authoritative PTY fleet state, single-flight idle epochs, bounded authenticated timing mutations, and a hardened socket-activated helper. Automatic idle timing remains bounded; the helper's execution-only `wakeAfterSeconds: 0` sentinel represents indefinite sleep.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -88,9 +88,9 @@ The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automa
 │  dam-hopper-idle-suspend-helper (Root-owned Systemd Helper) │
 │  ├─ Peer auth verification (UID matching server, MainPID)   │
 │  ├─ SysfsPreflightChecker (/sys/class/rtc/rtc0/wakealarm)   │
-│  ├─ Active inhibitor check (org.freedesktop.login1)         │
-│  ├─ RTC wakealarm programming (/sys/class/rtc/rtc0/wakealarm)
-│  ├─ Logind D-Bus suspend (org.freedesktop.login1.Manager)   │
+│  ├─ Active inhibitor preflight (systemd-inhibit)              │
+│  ├─ RTC clear/program/readback verification                  │
+│  ├─ Fixed `systemctl suspend` execution path                 │
 │  └─ HelperAudit (/var/log/dam-hopper/idle-suspend-helper.jsonl)
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -104,6 +104,26 @@ The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automa
    The coordinator event loop manages the in-flight suspend future concurrently with the command receiver, ensuring timing requests during suspend are responded to immediately with `409` rather than blocking the server.
 4. **Root & Server Audit Separation**:
    Privileged helper operations are recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`). Server timing mutations are recorded to `/var/log/dam-hopper/idle-suspend-timing.jsonl` (mode `0600`). No tokens, credentials, or terminal contents are ever audited.
+
+### Phase 01 helper execution contract
+
+`SuspendWithRtcWakeRequest` keeps protocol version 1, a required camelCase
+`requestId`, and a required `wakeAfterSeconds` `u64` in a length-prefixed frame
+bounded to 4 KiB. The execution validator accepts exactly `0` or `60..=86400`;
+the automatic timing/configuration validator remains `60..=86400`.
+
+The helper authenticates the enrolled peer, validates protocol version and
+request ID, rejects replayed IDs, checks suspend/RTC/inhibitor preflight, and
+records an intent audit before touching RTC state. Zero converts to `None`,
+which writes `0`, reads it back, and skips target-epoch arithmetic and writes.
+A nonzero request clears and verifies first, then computes a checked `now + seconds`,
+writes the target, and verifies the readback. Any clear/readback/write or
+preflight failure returns a typed failure and does not call suspend. Completion
+audit records preserve `wakeAfterSeconds: 0` explicitly.
+
+Preflight rejects any non-empty RTC alarm (`RtcAlarmBusy`) under the
+DamHopper-exclusive ownership policy. Automated tests use temporary RTC files
+and fake backends only; they never program a host RTC or invoke suspend.
 
 The overview names both launch modes for context. The systemd deployment uses
 `0.0.0.0:4801` for Tailscale access; the host firewall and Tailscale ACLs must

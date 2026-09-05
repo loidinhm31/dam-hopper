@@ -38,6 +38,12 @@ server/src/
 │       ├── file-decoration-icon.tsx # Thin icon wrapper around the shared registry
 │       └── mime-to-language.ts      # Compatibility wrapper for MIME-only callers
 ├── pty/              # Terminal sessions
+├── idle_suspend/     # Bounded suspend policy, helper IPC, preflight, audit
+│   ├── protocol.rs   # Versioned frames and execution-only validation
+│   ├── backend.rs    # Option<u64> RTC seam and fixed suspend backend
+│   ├── preflight.rs  # Suspend/RTC/inhibitor checks
+│   ├── helper_server.rs # Peer, dedupe, audit, and side-effect ordering
+│   └── audit.rs      # Bounded mode-0600 helper JSONL audit
 ├── git/              # Git operations
 ├── agent_store/      # Item distribution
 └── commands/         # Command registry
@@ -66,12 +72,41 @@ Top-level `AppError` wraps module errors:
 ```rust
 pub enum AppError {
     Fs(FsError),
+
     Git(GitError),
     NotFound(String),
 }
 ```
 
 API handlers map to HTTP status via `ApiError::from(AppError)`.
+
+### Idle-suspend protocol and helper patterns (Phase 01)
+
+Keep automatic timing validation separate from execution validation:
+
+- `validate_timing_pair` and persisted `IdleSuspendConfig` retain
+  `quiet_period_seconds`/`wake_after_seconds` bounds of `60..=86400`.
+- `validate_suspend_wake_seconds` accepts only `0` or `60..=86400` for the
+  fixed helper request. Do not widen the shared configuration minimum.
+- Keep the wire DTO numeric and required (`wakeAfterSeconds`); convert `0` to
+  `Option<u64>::None` only at the helper/backend boundary.
+
+Side-effect ordering is part of the security contract:
+
+1. Verify enrolled peer credentials and decode one bounded version-1 frame.
+2. Validate request ID/wake domain, then deduplicate the request ID.
+3. Run suspend, RTC ownership, and inhibitor preflight.
+4. Sync the helper intent audit before any RTC mutation.
+5. Clear/read back RTC state; timed mode then writes and verifies a checked
+   target epoch. `None` must never enter epoch arithmetic.
+6. Invoke only the fixed suspend backend and write a typed completion audit.
+
+Drop synchronous mutex guards before every `.await`; the helper dedupe guard is
+scoped before response writes and backend work. Error paths are fail-closed:
+busy alarms, audit-intent failures, RTC clear/readback/write failures,
+unsupported capabilities, and inhibitors produce no suspend call. Tests use
+`tempfile` RTC/audit paths and fake preflight/backends; never use real power
+management or host RTC state.
 
 ### Async Patterns
 
