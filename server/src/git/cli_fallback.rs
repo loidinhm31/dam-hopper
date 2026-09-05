@@ -8,7 +8,7 @@ use std::time::Instant;
 use tokio::process::Command;
 
 use crate::error::AppError;
-use crate::git::progress::{emit_completed, emit_failed, emit_started, ProgressSender};
+use crate::git::progress::{ProgressSender, emit_completed, emit_failed, emit_started};
 use crate::git::types::{
     GitOperation, GitOperationResult, GitRecoveryOperation, GitRecoveryState, Worktree,
     WorktreeAddOptions,
@@ -39,6 +39,7 @@ pub(crate) fn validate_branch_name(branch: &str) -> Result<(), AppError> {
 
 pub(crate) async fn run_git(args: &[&str], cwd: &Path) -> Result<String, AppError> {
     let output = Command::new("git")
+        .args(["-c", "safe.directory=*"])
         .args(args)
         .current_dir(cwd)
         .output()
@@ -163,6 +164,7 @@ pub(crate) async fn is_commit_pushed(cwd: &Path, hash: &str) -> Result<bool, App
 
 pub(crate) async fn git_status(args: &[&str], cwd: &Path) -> Result<bool, AppError> {
     let output = Command::new("git")
+        .args(["-c", "safe.directory=*"])
         .args(args)
         .current_dir(cwd)
         .output()
@@ -297,8 +299,17 @@ pub async fn add_worktree(
         })
 }
 
-pub async fn remove_worktree(project_path: &Path, worktree_path: &str) -> Result<(), AppError> {
-    run_git(&["worktree", "remove", worktree_path], project_path).await?;
+pub async fn remove_worktree(
+    project_path: &Path,
+    worktree_path: &str,
+    force: bool,
+) -> Result<(), AppError> {
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push(worktree_path);
+    run_git(&args, project_path).await?;
     Ok(())
 }
 

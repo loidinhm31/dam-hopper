@@ -1,7 +1,4 @@
-import {
-  DEFAULT_APP_ZOOM_LEVEL,
-  type AppZoomLevel,
-} from "@/lib/app-zoom.js";
+import { DEFAULT_APP_ZOOM_LEVEL, type AppZoomLevel } from "@/lib/app-zoom.js";
 
 export const COMPACT_WORKSPACE_MAX_WIDTH = 1280;
 export const COMPACT_WORKSPACE_QUERY = `(max-width: ${COMPACT_WORKSPACE_MAX_WIDTH}px)`;

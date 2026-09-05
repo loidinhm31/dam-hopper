@@ -13,8 +13,8 @@ pub async fn add(project_path: &Path, options: WorktreeAddOptions) -> Result<Wor
     cli_fallback::add_worktree(project_path, &options).await
 }
 
-pub async fn remove(project_path: &Path, worktree_path: &str) -> Result<(), AppError> {
-    cli_fallback::remove_worktree(project_path, worktree_path).await
+pub async fn remove(project_path: &Path, worktree_path: &str, force: bool) -> Result<(), AppError> {
+    cli_fallback::remove_worktree(project_path, worktree_path, force).await
 }
 
 pub async fn prune(project_path: &Path) -> Result<(), AppError> {

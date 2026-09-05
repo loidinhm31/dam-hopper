@@ -1,7 +1,4 @@
-import type {
-  AgentCommandPattern,
-  TerminalAgentType,
-} from "@/api/client.js";
+import type { AgentCommandPattern, TerminalAgentType } from "@/api/client.js";
 
 export interface RecognizedAgentCommand {
   agent: TerminalAgentType;

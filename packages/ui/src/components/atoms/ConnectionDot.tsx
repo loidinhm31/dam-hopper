@@ -42,7 +42,12 @@ export function ConnectionDot({
   const compactLabelClass = "text-[length:calc(var(--app-font-size)*0.65)]";
 
   return (
-    <span className={cn("flex items-center gap-1.5 tracking-wide", compactTextClass)}>
+    <span
+      className={cn(
+        "flex items-center gap-1.5 tracking-wide",
+        compactTextClass,
+      )}
+    >
       <span
         className={cn(
           "inline-block h-1.5 w-1.5 rounded-full shrink-0",

@@ -9,6 +9,7 @@ pub mod error;
 pub mod fs;
 pub mod git;
 pub mod host_actions;
+pub mod linux_release;
 pub mod persistence;
 pub mod port_forward;
 pub mod pty;
@@ -18,8 +19,9 @@ pub mod system;
 pub mod telemetry;
 pub mod tunnel;
 pub mod utils;
-pub mod workspace_target;
+pub mod web_host;
 pub mod workflow;
+pub mod workspace_target;
 
 /// Check inotify watch limit at startup (Linux only).
 ///

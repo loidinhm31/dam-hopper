@@ -1,6 +1,6 @@
 [package]
 name = "dam-hopper-native"
-version = "0.1.0"
+version = "0.2.0"
 description = "DamHopper native client"
 authors = ["DamHopper contributors"]
 edition = "2021"

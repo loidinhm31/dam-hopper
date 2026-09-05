@@ -44,6 +44,7 @@ import {
   applyTerminalBufferReplay,
   utf8ByteLength,
 } from "@/lib/terminal-buffer-replay.js";
+import { copyToClipboard } from "@/hooks/use-clipboard.js";
 import {
   createTerminalStreamReplayGate,
   markTerminalStreamReadyAfterRestart,
@@ -271,6 +272,14 @@ export function TerminalPanel({
     terminalBoundary.appendChild(terminalHost);
     container.appendChild(terminalBoundary);
 
+    const handleContextMenu = (e: MouseEvent) => {
+      if (term.hasSelection()) {
+        e.preventDefault();
+        const selection = term.getSelection();
+        if (selection) void copyToClipboard(selection);
+      }
+    };
+    terminalBoundary.addEventListener("contextmenu", handleContextMenu);
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(terminalHost);
@@ -490,7 +499,8 @@ export function TerminalPanel({
 
     unsubExitEnhanced =
       transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
-        const currentIncarnation = latestTerminalSessionIncarnation(safeSessionId);
+        const currentIncarnation =
+          latestTerminalSessionIncarnation(safeSessionId);
         if (
           exitEvent.incarnation === undefined
             ? currentIncarnation !== undefined
@@ -599,6 +609,18 @@ export function TerminalPanel({
       ) {
         return false;
       }
+      const isCopyShortcut =
+        e.type === "keydown" &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        (e.code === "KeyC" || e.key === "c" || e.key === "C") &&
+        term.hasSelection();
+      if (isCopyShortcut) {
+        const selection = term.getSelection();
+        if (selection) void copyToClipboard(selection);
+        return false;
+      }
       const settings = useSettingsStore.getState();
       return handleSharedTerminalKeyEvent(e, {
         workspaceShortcut: settings.terminalWorkspaceShortcut,
@@ -614,7 +636,7 @@ export function TerminalPanel({
           settings.terminalFontSizeDecreaseShortcut,
         onCopySelection: () => {
           const selection = term.getSelection();
-          if (selection) void navigator.clipboard.writeText(selection);
+          if (selection) void copyToClipboard(selection);
         },
         onFind: () => findController.open(),
         onNewTerminal,
@@ -833,6 +855,7 @@ export function TerminalPanel({
       rendererRef.current?.dispose();
       rendererRef.current = null;
       term.dispose();
+      terminalBoundary.removeEventListener("contextmenu", handleContextMenu);
       terminalBoundary.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

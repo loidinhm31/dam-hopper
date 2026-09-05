@@ -1,20 +1,20 @@
 use clap::Parser;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::path::PathBuf;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use std::sync::Arc;
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
-    api::{build_router_with_origins, router::parse_cors_origins},
+    api::router::{build_router_with_web_dir_and_origins, parse_cors_origins},
     config::{
-        global_config_path, global_registry_path, read_global_config_at, resolve_startup_config,
-        ConfigResolutionInput, ConfigSource, DamHopperConfig,
+        ConfigResolutionInput, ConfigSource, DamHopperConfig, global_config_path,
+        global_registry_path, read_global_config_at, resolve_startup_config,
     },
     crypto::load_or_create_server_setup,
     diagnostics::{DiagnosticStore, DiagnosticTracingLayer},
     fs::FsSubsystem,
-    port_forward::{proc_poll_loop, PortForwardManager},
+    port_forward::{PortForwardManager, proc_poll_loop},
     probe_inotify_limit,
     pty::{BroadcastEventSink, PtySessionManager, PtyTargetContext},
     state::AppState,
@@ -52,6 +52,10 @@ struct Cli {
     /// Skip authentication (dev mode) — all requests bypass auth middleware
     #[arg(long, env = "DAM_HOPPER_NO_AUTH")]
     no_auth: bool,
+
+    /// Optional static web directory for combined API + UI serving (e.g. Docker)
+    #[arg(long, env = "DAM_HOPPER_WEB_DIR")]
+    web_dir: Option<PathBuf>,
 }
 
 const TOKEN_CAPACITY: usize = 512;
@@ -68,6 +72,15 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    // Disable libgit2 repository owner validation so git operations succeed on projects
+    // across user homes, WSL mounts, and external drives owned by other users or UIDs.
+    unsafe {
+        let _ = git2::opts::set_verify_owner_validation(false);
+    }
+    std::env::remove_var("GIT_CONFIG_PARAMETERS");
+    std::env::set_var("GIT_CONFIG_COUNT", "1");
+    std::env::set_var("GIT_CONFIG_KEY_0", "safe.directory");
+    std::env::set_var("GIT_CONFIG_VALUE_0", "*");
 
     // ── Auth token ────────────────────────────────────────────────────────────
 
@@ -265,7 +278,8 @@ async fn main() -> anyhow::Result<()> {
         opaque_server_setup,
         diagnostics,
         telemetry_runtime.clone(),
-    )?.with_workflow_store(workflow_store.clone());
+    )?
+    .with_workflow_store(workflow_store.clone());
     if let Some(workflow_store_for_obs) = workflow_store.clone() {
         let (recorder, _dropped, _worker_handle) =
             dam_hopper_server::workflow::observation::start_observation_worker_with_diagnostics(
@@ -324,7 +338,10 @@ async fn main() -> anyhow::Result<()> {
                     tracing::info!(seeded, "Seeded persisted port candidates");
                 }
                 if let Some(workflow) = &state.workflow {
-                    match workflow.reconcile_terminal_links(live_sessions.clone()).await {
+                    match workflow
+                        .reconcile_terminal_links(live_sessions.clone())
+                        .await
+                    {
                         Ok((attached, detached)) => {
                             tracing::info!(
                                 attached = attached.min(1_000),
@@ -367,7 +384,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(proc_poll_loop(port_forward_manager));
 
     let telemetry_shutdown = state.telemetry_runtime.clone();
-    let router = build_router_with_origins(state, allowed_origins);
+    let router = build_router_with_web_dir_and_origins(state, allowed_origins, cli.web_dir);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
 
@@ -378,7 +395,7 @@ async fn main() -> anyhow::Result<()> {
 
     #[cfg(unix)]
     let shutdown_signal = async {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut sigterm = signal(SignalKind::terminate()).unwrap_or_else(|_| {
             // fallback: never fires, but ctrl_c still works
             signal(SignalKind::hangup()).expect("failed to install SIGTERM handler")

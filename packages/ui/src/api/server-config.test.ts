@@ -26,6 +26,7 @@ import {
   removeNativeScopeId,
   retireNativeScopeId,
   subscribeToProfileChanges,
+  reconcileManagedProfile,
 } from "./server-config.js";
 
 function mockStorage(): Storage {
@@ -176,9 +177,9 @@ describe("server profile migration", () => {
     expect(getExistingNativeScopeId("legacy-profile")).toBeNull();
     expect(getNativeScopeId("legacy-profile")).toBe(secondNativeId);
 
-    expect(
-      completeNativeScopeDeletion("legacy-profile", firstNativeId),
-    ).toBe(true);
+    expect(completeNativeScopeDeletion("legacy-profile", firstNativeId)).toBe(
+      true,
+    );
     expect(getNativeScopeId("legacy-profile")).toBe(secondNativeId);
   });
 
@@ -401,31 +402,53 @@ describe("server profile migration", () => {
   });
 
   it("reports unavailable profile reads rather than an authoritative empty list", () => {
-    vi.spyOn(localStorage, "getItem").mockImplementation(() => { throw new Error("unavailable"); });
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new Error("unavailable");
+    });
     expect(readServerProfiles()).toEqual({ status: "unavailable" });
   });
 
   it("emits distinct profile-list, active, and deleted events after delete commits", () => {
     const events: unknown[] = [];
-    const unsubscribe = subscribeToProfileChanges((event) => events.push(event));
-    const profile = { id: "profile-a", name: "A", url: "http://a.test", authType: "basic" as const, createdAt: 1 };
+    const unsubscribe = subscribeToProfileChanges((event) =>
+      events.push(event),
+    );
+    const profile = {
+      id: "profile-a",
+      name: "A",
+      url: "http://a.test",
+      authType: "basic" as const,
+      createdAt: 1,
+    };
     saveProfiles([profile]);
     expect(events).toContainEqual({ type: "profileListChanged" });
     setActiveProfile(profile.id);
-    expect(events).toContainEqual({ type: "activeChanged", activeProfileId: profile.id });
+    expect(events).toContainEqual({
+      type: "activeChanged",
+      activeProfileId: profile.id,
+    });
     expect(deleteProfile(profile.id)).toBe(true);
-    expect(events).toContainEqual({ type: "deleted", deletedProfileId: profile.id, knownProfileIds: { status: "available", ids: [] } });
+    expect(events).toContainEqual({
+      type: "deleted",
+      deletedProfileId: profile.id,
+      knownProfileIds: { status: "available", ids: [] },
+    });
     unsubscribe();
   });
 
   it("emits data changes without presenting them as active-profile changes", () => {
     const events: unknown[] = [];
-    const unsubscribe = subscribeToProfileChanges((event) => events.push(event));
+    const unsubscribe = subscribeToProfileChanges((event) =>
+      events.push(event),
+    );
 
     setAuthToken("token", "profile-a");
 
     expect(events.at(-1)).toEqual({ type: "dataChanged" });
-    expect(events).not.toContainEqual({ type: "activeChanged", activeProfileId: null });
+    expect(events).not.toContainEqual({
+      type: "activeChanged",
+      activeProfileId: null,
+    });
     unsubscribe();
   });
 
@@ -452,5 +475,127 @@ describe("server profile migration", () => {
 
     expect(getActiveProfile()?.id).toBe(profileB.id);
     expect(getAuthToken(profileA.id)).toBeNull();
+  });
+});
+
+describe("managed runtime profile reconciliation", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", mockStorage());
+    vi.stubGlobal("sessionStorage", mockStorage());
+    vi.stubGlobal("location", {
+      protocol: "http:",
+      host: "127.0.0.1:4802",
+      hostname: "127.0.0.1",
+      origin: "http://127.0.0.1:4802",
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("creates a managed profile and sets it active on first load", () => {
+    const profile = reconcileManagedProfile({
+      profileId: "c7325e68-07e1-4e44-8d96-b333a4658cf9",
+      apiUrl: "http://127.0.0.1:4801",
+    });
+
+    expect(profile).not.toBeNull();
+    expect(getActiveProfile()?.id).toBe("c7325e68-07e1-4e44-8d96-b333a4658cf9");
+    expect(getActiveProfile()?.url).toBe("http://127.0.0.1:4801");
+  });
+
+  it("preserves existing active user profile when reconciling managed profile", () => {
+    const userProfile = {
+      id: "user-selected-profile",
+      name: "Custom User Server",
+      url: "http://custom-server:4800",
+      authType: "basic" as const,
+      createdAt: 100,
+    };
+    saveProfiles([userProfile]);
+    setActiveProfile(userProfile.id);
+
+    const managed = reconcileManagedProfile({
+      profileId: "c7325e68-07e1-4e44-8d96-b333a4658cf9",
+      apiUrl: "http://127.0.0.1:4801",
+    });
+
+    expect(managed).not.toBeNull();
+    expect(getActiveProfile()?.id).toBe("user-selected-profile");
+    expect(
+      getProfiles().some(
+        (p) => p.id === "c7325e68-07e1-4e44-8d96-b333a4658cf9",
+      ),
+    ).toBe(true);
+  });
+
+  it("clears token when managed profile URL changes", () => {
+    const managedId = "c7325e68-07e1-4e44-8d96-b333a4658cf9";
+    reconcileManagedProfile({
+      profileId: managedId,
+      apiUrl: "http://127.0.0.1:4801",
+    });
+    setAuthToken("initial-token", managedId);
+    expect(getAuthToken(managedId)).toBe("initial-token");
+
+    // Reconcile with new URL
+    reconcileManagedProfile({
+      profileId: managedId,
+      apiUrl: "http://127.0.0.1:4809",
+    });
+
+    expect(getActiveProfile()?.url).toBe("http://127.0.0.1:4809");
+    expect(getAuthToken(managedId)).toBeNull();
+  });
+
+  it("preserves token when managed profile URL is unchanged", () => {
+    const managedId = "c7325e68-07e1-4e44-8d96-b333a4658cf9";
+    reconcileManagedProfile({
+      profileId: managedId,
+      apiUrl: "http://127.0.0.1:4801",
+    });
+    setAuthToken("stable-token", managedId);
+
+    // Reconcile with same URL
+    reconcileManagedProfile({
+      profileId: managedId,
+      apiUrl: "http://127.0.0.1:4801/",
+    });
+
+    expect(getAuthToken(managedId)).toBe("stable-token");
+  });
+
+  it("enforces strict per-profile token isolation", () => {
+    const profileA = "c7325e68-07e1-4e44-8d96-b333a4658cf9";
+    const profileB = "d8436f79-18f2-4f55-9e07-c444b5769da0";
+
+    setAuthToken("token-secret-a", profileA);
+    setAuthToken("token-secret-b", profileB);
+
+    expect(getAuthToken(profileA)).toBe("token-secret-a");
+    expect(getAuthToken(profileB)).toBe("token-secret-b");
+
+    clearAuthToken(profileA);
+    expect(getAuthToken(profileA)).toBeNull();
+    expect(getAuthToken(profileB)).toBe("token-secret-b");
+  });
+
+  it("fails safely and returns null when given invalid or malformed managed profile config", () => {
+    // Empty profileId
+    expect(
+      reconcileManagedProfile({
+        profileId: "   ",
+        apiUrl: "http://127.0.0.1:4801",
+      }),
+    ).toBeNull();
+
+    // Empty API URL
+    expect(
+      reconcileManagedProfile({
+        profileId: "c7325e68-07e1-4e44-8d96-b333a4658cf9",
+        apiUrl: "   ",
+      }),
+    ).toBeNull();
   });
 });

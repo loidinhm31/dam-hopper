@@ -31,7 +31,9 @@ export type ServerProfileChange =
   | {
       type: "deleted";
       deletedProfileId: string;
-      knownProfileIds: { status: "available"; ids: string[] } | { status: "unavailable" };
+      knownProfileIds:
+        | { status: "available"; ids: string[] }
+        | { status: "unavailable" };
     };
 const profileChangeListeners = new Set<(event: ServerProfileChange) => void>();
 
@@ -65,24 +67,19 @@ function isHttpServerUrl(url: string): boolean {
 }
 
 function getConfiguredServerUrl(): string | null {
-  const env = (
-    import.meta as ImportMeta & {
-      env?: {
-        DEV?: boolean;
-        VITE_DAM_HOPPER_SERVER_URL?: string;
-      };
-    }
-  ).env;
-  const envUrl = env?.VITE_DAM_HOPPER_SERVER_URL;
-  if (!envUrl?.trim()) return null;
-
-  // In development, Vite's proxy keeps the browser same-origin.
-  const candidate =
-    env?.DEV && typeof location !== "undefined"
-      ? `${location.protocol}//${location.host}`
-      : envUrl;
-  const normalized = normalizeServerUrl(candidate);
-  return isHttpServerUrl(normalized) ? normalized : null;
+  if (import.meta.env.DEV) {
+    const envUrl = import.meta.env.VITE_DAM_HOPPER_SERVER_URL as
+      | string
+      | undefined;
+    if (!envUrl?.trim()) return null;
+    const candidate =
+      typeof location !== "undefined"
+        ? `${location.protocol}//${location.host}`
+        : envUrl;
+    const normalized = normalizeServerUrl(candidate);
+    return isHttpServerUrl(normalized) ? normalized : null;
+  }
+  return null;
 }
 
 /** Returns the configured server URL, stripping trailing slash. */
@@ -396,15 +393,16 @@ function readNativeScopeTombstones(): Record<string, string[]> | null {
   } catch {
     return null;
   }
-  if (stored === null)
-    return Object.create(null) as Record<string, string[]>;
+  if (stored === null) return Object.create(null) as Record<string, string[]>;
   try {
     const parsed: unknown = JSON.parse(stored);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       return null;
     const tombstones: Record<string, string[]> = Object.create(null);
     const nativeScopeIds = new Set<string>();
-    for (const [profileId, nativeScopeIdsForProfile] of Object.entries(parsed)) {
+    for (const [profileId, nativeScopeIdsForProfile] of Object.entries(
+      parsed,
+    )) {
       if (
         !profileId ||
         !Array.isArray(nativeScopeIdsForProfile) ||
@@ -545,7 +543,10 @@ export function readServerProfiles(): KnownServerProfiles {
     const profiles = parsed
       .filter(isServerProfile)
       .map((profile) => ({ ...profile, url: normalizeServerUrl(profile.url) }))
-      .filter((profile) => !seenIds.has(profile.id) && Boolean(seenIds.add(profile.id)));
+      .filter(
+        (profile) =>
+          !seenIds.has(profile.id) && Boolean(seenIds.add(profile.id)),
+      );
     return { status: "available", profiles };
   } catch {
     return { status: "unavailable" };
@@ -588,7 +589,8 @@ export function saveProfiles(profiles: ServerProfile[]): boolean {
       previousProfiles.status !== "available" ||
       previousProfiles.profiles.length !== profiles.length ||
       previousProfiles.profiles.some(
-        (profile) => !profiles.some((nextProfile) => nextProfile.id === profile.id),
+        (profile) =>
+          !profiles.some((nextProfile) => nextProfile.id === profile.id),
       );
     notifyProfileChange({
       type: profileIdsChanged ? "profileListChanged" : "dataChanged",
@@ -745,9 +747,13 @@ export function deleteProfile(id: string): boolean {
   notifyProfileChange({
     type: "deleted",
     deletedProfileId: id,
-    knownProfileIds: profiles.status === "available"
-      ? { status: "available", ids: profiles.profiles.map((candidate) => candidate.id) }
-      : { status: "unavailable" },
+    knownProfileIds:
+      profiles.status === "available"
+        ? {
+            status: "available",
+            ids: profiles.profiles.map((candidate) => candidate.id),
+          }
+        : { status: "unavailable" },
   });
   return true;
 }
@@ -816,6 +822,57 @@ export function migrateToProfiles(): void {
   }
 }
 
+/**
+ * Reconcile a deployed runtime configuration with the local server profile store.
+ *
+ * Enforces production precedence:
+ * 1. Existing active user profile remains active (user selection is never overridden).
+ * 2. Managed profile with stable ID is created or updated with new API URL.
+ * 3. If the managed profile's API URL changed, its scoped auth token is cleared before update.
+ * 4. If no profile was previously active, the managed profile is activated.
+ */
+export function reconcileManagedProfile(config: {
+  profileId: string;
+  apiUrl?: string;
+}): ServerProfile | null {
+  const rawApiUrl = config?.apiUrl?.trim();
+  if (!config?.profileId?.trim() || !rawApiUrl) {
+    return null;
+  }
+  const normalizedUrl = normalizeServerUrl(rawApiUrl);
+  const profiles = getProfiles();
+  const existingIdx = profiles.findIndex((p) => p.id === config.profileId);
+
+  let managedProfile: ServerProfile;
+
+  if (existingIdx >= 0) {
+    const existing = profiles[existingIdx];
+    if (haveServerUrlsChanged(existing.url, normalizedUrl)) {
+      clearAuthToken(config.profileId);
+      profiles[existingIdx] = { ...existing, url: normalizedUrl };
+      saveProfiles(profiles);
+    }
+    managedProfile = profiles[existingIdx];
+  } else {
+    managedProfile = {
+      id: config.profileId,
+      name: "Deployed Server",
+      url: normalizedUrl,
+      authType: "basic",
+      createdAt: Date.now(),
+    };
+    profiles.push(managedProfile);
+    saveProfiles(profiles);
+  }
+
+  const activeId = getActiveProfileId();
+  if (!activeId || !profiles.some((p) => p.id === activeId)) {
+    setActiveProfile(managedProfile.id);
+  }
+
+  return managedProfile;
+}
+
 function notifyProfileChange(event?: ServerProfileChange): void {
   profileChangeVersion += 1;
   if (event) {
@@ -836,7 +893,9 @@ export function getProfileChangeVersion(): number {
 }
 
 /** Subscribe to active-profile and profile-list changes in this tab and other tabs. */
-export function subscribeToProfileChanges(callback: (event: ServerProfileChange) => void): () => void {
+export function subscribeToProfileChanges(
+  callback: (event: ServerProfileChange) => void,
+): () => void {
   if (typeof window === "undefined") return () => {};
 
   profileChangeListeners.add(callback);
@@ -847,7 +906,10 @@ export function subscribeToProfileChanges(callback: (event: ServerProfileChange)
   const onStorage = (event: StorageEvent) => {
     if (event.key === KEY_ACTIVE_PROFILE) {
       profileChangeVersion += 1;
-      callback({ type: "activeChanged", activeProfileId: getActiveProfileId() });
+      callback({
+        type: "activeChanged",
+        activeProfileId: getActiveProfileId(),
+      });
     } else if (event.key === KEY_PROFILES) {
       profileChangeVersion += 1;
       callback({ type: "profileListChanged" });

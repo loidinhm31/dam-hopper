@@ -41,6 +41,9 @@ pub enum AppError {
     #[error("Git error: {0}")]
     Git(String),
 
+    #[error("Worktree is dirty: {0}")]
+    WorktreeDirty(String),
+
     #[error("Git repository not found: {0}")]
     GitNotFound(String),
 
@@ -84,7 +87,7 @@ impl AppError {
             | AppError::NotFound(_)
             | AppError::SessionNotFound(_)
             | AppError::GitNotFound(_) => 404,
-            AppError::GitUnavailable => 409,
+            AppError::GitUnavailable | AppError::WorktreeDirty(_) => 409,
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
             AppError::Fs(e) => e.status_code(),
             AppError::Unavailable(_) => 503,
@@ -104,6 +107,7 @@ impl AppError {
         match self {
             AppError::Workflow(error) => Some(error.api_code()),
             AppError::GitUnavailable => Some("GIT_NOT_INITIALIZED"),
+            AppError::WorktreeDirty(_) => Some("WORKTREE_DIRTY"),
             AppError::WorkspaceTarget(error) => Some(match error {
                 WorkspaceTargetError::UnknownProject => "WORKSPACE_PROJECT_NOT_FOUND",
                 WorkspaceTargetError::UnregisteredTarget => "WORKSPACE_TARGET_UNREGISTERED",

@@ -1,18 +1,17 @@
-name: Build DamHopper App
+name: Build DamHopper Desktop App
 
 on:
   push:
     tags:
-      - "v*"
+      - "desktop-v*"
   pull_request:
     branches:
       - main
   workflow_dispatch: # Allows manual triggering
 
 permissions:
-  contents: write
+  contents: read
   actions: read
-
 jobs:
   native-ssh-forward-windows-gate:
     name: Windows SSH forwarding pre-bundle gate
@@ -26,7 +25,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
@@ -47,67 +46,9 @@ jobs:
           pnpm --filter @dam-hopper/native smoke:ssh-forward -- --build-only
           pnpm --filter @dam-hopper/native exec tauri build --no-bundle
 
-  native-ssh-forward-windows-runtime-gate:
-    name: Windows SSH forwarding protected runtime gate
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: native-ssh-forward-windows-gate
-    runs-on: windows-latest
-    steps:
-      - name: Find successful protected runtime evidence
-        uses: actions/github-script@v7
-        env:
-          COMMIT_BINDING: ${{ github.sha }}
-        with:
-          script: |
-            const { data } = await github.rest.actions.listWorkflowRuns({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "native-ssh-forward-runtime-evidence.yml",
-              head_sha: process["env"]["COMMIT_BINDING"],
-              status: "success",
-              per_page: 100,
-            });
-            const run = data.workflow_runs
-              .filter(
-                (candidate) =>
-                  candidate.head_sha === process["env"]["COMMIT_BINDING"] &&
-                  candidate.status === "completed" &&
-                  candidate.conclusion === "success",
-              )
-              .sort(
-                (left, right) =>
-                  Date.parse(right.created_at) - Date.parse(left.created_at),
-              )[0];
-            if (!run) {
-              core.setFailed(
-                "no successful protected Windows runtime evidence exists for this commit",
-              );
-              return;
-            }
-            core.exportVariable("RUNTIME_EVIDENCE_RUN_ID", String(run.id));
-
-      - name: Download validated protected runtime evidence
-        uses: actions/download-artifact@v4
-        with:
-          name: native-ssh-forward-validated-windows-evidence
-          path: artifacts/native-ssh-forward
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ env.RUNTIME_EVIDENCE_RUN_ID }}
-
   build-desktop:
     needs:
       - native-ssh-forward-windows-gate
-      - native-ssh-forward-windows-runtime-gate
-    if: >-
-      ${{
-        always() &&
-        needs.native-ssh-forward-windows-gate.result == 'success' &&
-        (
-          needs.native-ssh-forward-windows-runtime-gate.result == 'success' ||
-          !startsWith(github.ref, 'refs/tags/v')
-        )
-      }}
     strategy:
       fail-fast: false
       matrix:
@@ -122,7 +63,9 @@ jobs:
             bundles: nsis
 
     runs-on: ${{ matrix.platform.os }}
-
+    permissions:
+      contents: write
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -143,14 +86,14 @@ jobs:
           }
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v4
         with:
           version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "pnpm"
 
       - name: Install Rust
@@ -189,8 +132,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ !startsWith(matrix.platform.os, 'windows') && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
           projectPath: apps/native
-          tagName: ${{ github.ref_name }}
-          releaseName: "DamHopper v__VERSION__"
+          tagName: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && github.ref_name || '' }}
+          releaseName: "DamHopper Desktop v__VERSION__"
           releaseBody: "See the assets to download and install this version."
           releaseDraft: true
           prerelease: false

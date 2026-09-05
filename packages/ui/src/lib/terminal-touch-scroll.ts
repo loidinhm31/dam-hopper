@@ -81,7 +81,6 @@ export function bindTerminalTouchScroll(
     stopInertia();
   };
 
-
   const startInertia = (): void => {
     if (Math.abs(velocity) < MIN_FLING_VELOCITY) return;
     inertiaTimestamp = performance.now();
@@ -120,7 +119,9 @@ export function bindTerminalTouchScroll(
     const target = event.target;
     if (
       target instanceof Element &&
-      target.closest(".xterm-helper-textarea, .xterm-scrollable-element > .scrollbar")
+      target.closest(
+        ".xterm-helper-textarea, .xterm-scrollable-element > .scrollbar",
+      )
     ) {
       return;
     }
@@ -148,10 +149,7 @@ export function bindTerminalTouchScroll(
       pendingPixels += delta;
       velocity = Math.max(
         -MAX_FLING_VELOCITY,
-        Math.min(
-          MAX_FLING_VELOCITY,
-          velocity * 0.7 + (delta / elapsed) * 0.3,
-        ),
+        Math.min(MAX_FLING_VELOCITY, velocity * 0.7 + (delta / elapsed) * 0.3),
       );
       scheduleMoveFlush();
     }

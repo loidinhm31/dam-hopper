@@ -16,23 +16,23 @@ cherry-picks.
 
 Example layout:
 
-~~~text
+```text
 /mnt/data/ws/sharing/dam-hopper                  # configured/main checkout
 /home/loidinh/WS/dam-hopper-ws/feat-project-worktree-switching
                                                     # feature worktree
-~~~
+```
 
 ## 2. Configure DamHopper once
 
 Register the repository once in the DamHopper registry, normally
 ~/.config/dam-hopper/dam-hopper.toml:
 
-~~~toml
+```toml
 [[projects]]
 name = "dam-hopper"
 path = "/mnt/data/ws/sharing/dam-hopper"
 type = "pnpm"
-~~~
+```
 
 Do not add a separate project entry for every worktree. DamHopper discovers
 worktrees registered by Git for the configured repository.
@@ -45,18 +45,18 @@ targets for this project.
 Set paths for the current shell. Replace them when working with another
 repository or branch:
 
-~~~bash
+```bash
 MAIN_REPO="/mnt/data/ws/sharing/dam-hopper"
 WORKTREE_PATH="/home/loidinh/WS/dam-hopper-ws/feat-project-worktree-switching"
 FEATURE_BRANCH="feat/project-worktree-switching"
-~~~
+```
 
 Check the repository and existing worktrees:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" status
 git -C "$MAIN_REPO" worktree list --porcelain
-~~~
+```
 
 The main/configured checkout cannot be removed as a secondary worktree.
 
@@ -64,30 +64,30 @@ The main/configured checkout cannot be removed as a secondary worktree.
 
 ### Create a new branch from origin/main
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" fetch origin --prune
 git -C "$MAIN_REPO" worktree add -b "$FEATURE_BRANCH" "$WORKTREE_PATH" origin/main
-~~~
+```
 
 ### Check out an existing local branch
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree add "$WORKTREE_PATH" "$FEATURE_BRANCH"
-~~~
+```
 
 ### Check out an existing remote branch
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" fetch origin --prune
 git -C "$MAIN_REPO" worktree add --track -b "$FEATURE_BRANCH" "$WORKTREE_PATH" "origin/$FEATURE_BRANCH"
-~~~
+```
 
 Verify the result:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree list
 git -C "$WORKTREE_PATH" status --short --branch
-~~~
+```
 
 A branch cannot normally be checked out in two worktrees at the same time.
 
@@ -96,17 +96,17 @@ A branch cannot normally be checked out in two worktrees at the same time.
 Generated files and dependencies are normally not shared between worktrees.
 Install the dependencies needed by the checkout:
 
-~~~bash
+```bash
 cd "$WORKTREE_PATH"
 pnpm install
-~~~
+```
 
 For DamHopper development:
 
-~~~bash
+```bash
 pnpm dev:server
 pnpm dev
-~~~
+```
 
 Use the normal configured server/auth startup for shared environments. Use
 --no-auth only for local development without production credentials.
@@ -159,28 +159,28 @@ worktree is rejected.
 
 From the worktree:
 
-~~~bash
+```bash
 cd "$WORKTREE_PATH"
 git status
 git diff
 git fetch origin --prune
 git rebase origin/main
-~~~
+```
 
 Run the relevant checks before committing:
 
-~~~bash
+```bash
 pnpm lint
 pnpm build
 pnpm test
-~~~
+```
 
 Commit changes in the worktree:
 
-~~~bash
+```bash
 git add -A
 git commit -m "feat: describe the change"
-~~~
+```
 
 Keep commits focused and avoid committing secrets or local-only files.
 
@@ -190,16 +190,16 @@ Keep commits focused and avoid committing secrets or local-only files.
 
 Push when the branch needs review, collaboration, CI, backup, or deployment:
 
-~~~bash
+```bash
 git -C "$WORKTREE_PATH" push -u origin "$FEATURE_BRANCH"
-~~~
+```
 
 Open a pull request. After it is merged, update the configured checkout:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" switch main
 git -C "$MAIN_REPO" pull --ff-only
-~~~
+```
 
 The parent checkout receives the change through the merged remote branch. No
 copying or linking is required.
@@ -208,11 +208,11 @@ copying or linking is required.
 
 If the change does not need a remote branch or pull request:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" switch main
 git -C "$MAIN_REPO" pull --ff-only
 git -C "$MAIN_REPO" merge --ff-only "$FEATURE_BRANCH"
-~~~
+```
 
 If fast-forward merging is not possible, inspect the divergence before using a
 normal merge or rebase.
@@ -227,37 +227,37 @@ the local repository. Push it when remote backup or collaboration is useful.
 
 ### List worktrees
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree list --porcelain
-~~~
+```
 
 ### Lock a worktree
 
 Lock a worktree that must not be pruned while it is temporarily offline:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree lock "$WORKTREE_PATH" --reason "temporary archive"
-~~~
+```
 
 Unlock it when it is active again:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree unlock "$WORKTREE_PATH"
-~~~
+```
 
 ### Move a worktree
 
 Use Git to move it so its administrative metadata stays correct:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree move "$WORKTREE_PATH" "/new/path/dam-hopper-feature"
-~~~
+```
 
 If the directory was moved manually, try to repair it:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree repair "/new/path/dam-hopper-feature"
-~~~
+```
 
 Refresh worktree discovery in DamHopper after moving or repairing a worktree.
 
@@ -273,16 +273,16 @@ Before removing a worktree:
 
 Check for uncommitted files:
 
-~~~bash
+```bash
 git -C "$WORKTREE_PATH" status --short
-~~~
+```
 
 If the changes must be preserved but are not ready to commit, stash tracked and
 untracked files:
 
-~~~bash
+```bash
 git -C "$WORKTREE_PATH" stash push -u -m "temporary save before removing worktree"
-~~~
+```
 
 ### Remove from DamHopper
 
@@ -297,69 +297,69 @@ running sessions are preserved as unavailable/orphaned resources until closed.
 
 ### Remove with Git
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree remove "$WORKTREE_PATH"
-~~~
+```
 
 Do not manually delete the directory first. Do not use --force unless losing
 uncommitted files is intentional:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree remove --force "$WORKTREE_PATH"
-~~~
+```
 
 If the directory was already deleted, inspect stale metadata first:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree prune --dry-run
 git -C "$MAIN_REPO" worktree prune
-~~~
+```
 
 ### Delete the local branch after removal
 
 Only delete the branch after the work is merged or no longer needed:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" branch -d "$FEATURE_BRANCH"
-~~~
+```
 
 After a merged pull request, delete the remote branch only if the repository
 policy allows it:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" push origin --delete "$FEATURE_BRANCH"
 git -C "$MAIN_REPO" fetch origin --prune
-~~~
+```
 
 ## 12. DamHopper API actions
 
 The UI uses these project-scoped endpoints:
 
-~~~text
+```text
 GET  /api/git/{project}/worktrees
 POST /api/git/{project}/worktrees
 DELETE /api/git/{project}/worktrees
 POST /api/git/{project}/worktrees/prune
-~~~
+```
 
 Add request example:
 
-~~~json
+```json
 {
   "branch": "feature/demo",
   "path": "/home/user/worktrees/demo-feature",
   "createBranch": true,
   "baseBranch": "main"
 }
-~~~
+```
 
 Remove request example:
 
-~~~json
+```json
 {
   "path": "/home/user/worktrees/demo-feature"
 }
-~~~
+```
 
 The configured/main worktree cannot be removed through the API. An explicit
 target path must belong to the configured repository's Git worktree list.
@@ -370,9 +370,9 @@ target path must belong to the configured repository's Git worktree list.
 
 Run:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree list --porcelain
-~~~
+```
 
 Then confirm that:
 
@@ -401,9 +401,9 @@ modified files remain.
 
 The branch is probably already checked out in another worktree:
 
-~~~bash
+```bash
 git -C "$MAIN_REPO" worktree list
-~~~
+```
 
 Switch that worktree to another branch or remove it before checking out the
 branch elsewhere.

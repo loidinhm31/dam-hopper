@@ -38,7 +38,9 @@ export function handleTerminalSuggestionKeyEvent(
     event.altKey &&
     event.code === "ArrowRight"
   ) {
-    const kind: TerminalSuggestionAcceptKind = event.shiftKey ? "token" : "full";
+    const kind: TerminalSuggestionAcceptKind = event.shiftKey
+      ? "token"
+      : "full";
     return accept(kind) ? false : true;
   }
   return true;

@@ -29,7 +29,11 @@ const {
   },
   nativeScopeAliases: new Map<string, string>(),
   retireNativeScopeId: vi.fn((profileId: string) => {
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(profileId))
+    if (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        profileId,
+      )
+    )
       return profileId;
     const nativeScopeId = nativeScopeAliases.get(profileId) ?? null;
     if (nativeScopeId) nativeScopeAliases.delete(profileId);
@@ -55,7 +59,11 @@ vi.mock("@/api/server-config.js", () => ({
   getNativeScopeIds: (ids: readonly string[]) => ({
     status: "available" as const,
     ids: ids.map((id) => {
-      if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))
+      if (
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+          id,
+        )
+      )
         return id;
       const existing = nativeScopeAliases.get(id);
       if (existing) return existing;
@@ -353,7 +361,9 @@ describe("SshForwardScopeBridge", () => {
     activeProfileId.value = legacyId;
     nativeScopeAliases.set(legacyId, nativeId);
     const value = host();
-    vi.mocked(value.activateScope).mockResolvedValue({ scopeId: nativeId } as never);
+    vi.mocked(value.activateScope).mockResolvedValue({
+      scopeId: nativeId,
+    } as never);
     vi.mocked(value.purgeScope).mockResolvedValue({
       purged: false,
       scopeId: nativeId,

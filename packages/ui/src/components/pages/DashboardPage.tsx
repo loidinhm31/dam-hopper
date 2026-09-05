@@ -147,7 +147,8 @@ export function DashboardPage() {
     () =>
       aliveSessions.map((session) => ({
         id: session.id,
-        label: session.name ?? `${session.project ?? "free"} · ${session.command}`,
+        label:
+          session.name ?? `${session.project ?? "free"} · ${session.command}`,
       })),
     [aliveSessions],
   );

@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dam-hopper.dev/schemas/release-manifest-v1.json",
+  "title": "DamHopperReleaseManifest",
+  "description": "Strict specification for immutable, single-archive Fedora 44 release manifests.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "release",
+    "profile",
+    "archive",
+    "components",
+    "inventory",
+    "services",
+    "rollback"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version (must be 1)."
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tag", "version", "commitSha"],
+      "properties": {
+        "tag": {
+          "type": "string",
+          "pattern": "^v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
+        },
+        "commitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "osId",
+        "osVersion",
+        "arch",
+        "target",
+        "glibcMin",
+        "systemdMin"
+      ],
+      "properties": {
+        "id": { "type": "string", "enum": ["linux-x86_64-systemd", "fedora44-x86_64-systemd"] },
+        "osId": { "type": "string" },
+        "osVersion": { "type": "string" },
+        "arch": { "type": "string", "const": "x86_64" },
+        "target": { "type": "string", "const": "x86_64-unknown-linux-gnu" },
+        "glibcMin": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+        "systemdMin": { "type": "integer", "minimum": 245 }
+      }
+    },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "size", "sha256"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^dam-hopper-v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)-(linux|fedora44)-x86_64-systemd\\.tar\\.gz$"
+        },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cli", "api", "webHost", "webAssets"],
+      "properties": {
+        "cli": { "$ref": "#/$defs/component" },
+        "api": { "$ref": "#/$defs/component" },
+        "webHost": { "$ref": "#/$defs/component" },
+        "webAssets": { "$ref": "#/$defs/component" }
+      }
+    },
+    "inventory": {
+      "type": "array",
+      "maxItems": 20000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "kind", "roles", "mode"],
+        "properties": {
+          "path": { "type": "string", "maxLength": 255 },
+          "kind": { "type": "string", "enum": ["file", "dir"] },
+          "roles": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "enum": ["common", "server", "web"] }
+          },
+          "mode": { "type": "integer", "minimum": 0, "maximum": 4095 },
+          "size": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "if": { "properties": { "kind": { "const": "file" } } },
+        "then": { "required": ["size", "sha256"] },
+        "else": {
+          "not": {
+            "anyOf": [{ "required": ["size"] }, { "required": ["sha256"] }]
+          }
+        }
+      }
+    },
+    "services": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api", "web"],
+      "properties": {
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unitName",
+            "identity",
+            "bindHost",
+            "port",
+            "healthPath"
+          ],
+          "properties": {
+            "unitName": { "type": "string", "const": "dam-hopper-api.service" },
+            "identity": { "type": "string", "const": "root" },
+            "bindHost": { "type": "string", "const": "0.0.0.0" },
+            "port": { "type": "integer", "const": 4801 },
+            "healthPath": { "type": "string", "const": "/api/health" }
+          }
+        },
+        "web": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unitName",
+            "identity",
+            "bindHost",
+            "port",
+            "healthPath"
+          ],
+          "properties": {
+            "unitName": { "type": "string", "const": "dam-hopper-web.service" },
+            "identity": { "type": "string", "const": "dam-hopper-web" },
+            "bindHost": { "type": "string", "const": "0.0.0.0" },
+            "port": { "type": "integer", "const": 4802 },
+            "healthPath": { "type": "string", "const": "/__dam-hopper/health" }
+          }
+        }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previousReleaseCompatible", "stateCompatibility"],
+      "properties": {
+        "previousReleaseCompatible": { "type": "boolean", "const": true },
+        "stateCompatibility": { "type": "string", "const": "n-1" }
+      }
+    }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
+        }
+      }
+    }
+  }
+}

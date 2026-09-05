@@ -4,8 +4,8 @@ use std::{
     io::Read as _,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Condvar, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     thread::JoinHandle,
     time::Duration,
@@ -14,14 +14,14 @@ use std::{
 use portable_pty::{Child as PtyChild, CommandBuilder, NativePtySystem, PtySize, PtySystem as _};
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
-use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::Notify;
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::{
     config::schema::RestartPolicy,
-    diagnostics::{redact_diagnostic_text, DiagnosticStore, TerminalTail},
+    diagnostics::{DiagnosticStore, TerminalTail, redact_diagnostic_text},
     error::AppError,
     fs::FsSubsystem,
     persistence::SessionStore,
@@ -34,8 +34,8 @@ use crate::{
         shell_lifecycle::{LifecycleEvent, LifecycleState, ShellLifecycle},
     },
     workspace_target::{
-        target_path_identity, target_path_is_within, target_path_relative, ProjectTargetRef,
-        WorkspaceTargetError, WorkspaceTargetResolver,
+        ProjectTargetRef, WorkspaceTargetError, WorkspaceTargetResolver, target_path_identity,
+        target_path_is_within, target_path_relative,
     },
 };
 
@@ -556,7 +556,8 @@ pub struct PtySessionManager {
     /// Reader threads and lifecycle methods record terminal events here (Phase 03).
     diagnostics: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
     /// Workflow observation recorder — set after construction via `set_workflow_recorder`.
-    workflow_recorder: Arc<std::sync::RwLock<Arc<dyn crate::workflow::WorkflowObservationRecorder>>>,
+    workflow_recorder:
+        Arc<std::sync::RwLock<Arc<dyn crate::workflow::WorkflowObservationRecorder>>>,
     /// Target validation and lifecycle guard shared by automatic respawns.
     target_context: Arc<std::sync::RwLock<Option<PtyTargetContext>>>,
     /// Number of reader threads that can still enqueue final persistence
@@ -999,7 +1000,10 @@ impl PtySessionManager {
     }
 
     /// Wire the workflow observation recorder after construction (Phase 03).
-    pub fn set_workflow_recorder(&self, recorder: Arc<dyn crate::workflow::WorkflowObservationRecorder>) {
+    pub fn set_workflow_recorder(
+        &self,
+        recorder: Arc<dyn crate::workflow::WorkflowObservationRecorder>,
+    ) {
         let mut cell = self.workflow_recorder.write().unwrap();
         *cell = recorder;
     }
@@ -2385,7 +2389,7 @@ fn reader_thread(
     // snapshot before its lifecycle transition.
     let mut bytes_since_snapshot = 0usize;
     const SNAPSHOT_THRESHOLD: usize = 16 * 1024; // 16KB
-                                                 // Lifecycle-only chunks must not announce editing before prompt bytes exist.
+    // Lifecycle-only chunks must not announce editing before prompt bytes exist.
     let mut pending_lifecycle_events: Vec<(u64, LifecycleEvent)> = Vec::new();
     let mut visible_output_since_boundary = false;
 
@@ -2589,14 +2593,16 @@ fn reader_thread(
             inner_guard.dead.insert(session_id.clone(), tombstone);
 
             if will_restart {
-                workflow_recorder.record(crate::workflow::WorkflowObservation::TerminalExitPendingRestart {
-                    session_id: session_id.clone(),
-                    incarnation,
-                    exit_code: Some(exit_code),
-                    restart_count,
-                    restart_in_ms,
-                    observed_at: crate::workflow::now_ms(),
-                });
+                workflow_recorder.record(
+                    crate::workflow::WorkflowObservation::TerminalExitPendingRestart {
+                        session_id: session_id.clone(),
+                        incarnation,
+                        exit_code: Some(exit_code),
+                        restart_count,
+                        restart_in_ms,
+                        observed_at: crate::workflow::now_ms(),
+                    },
+                );
             } else {
                 workflow_recorder.record(crate::workflow::WorkflowObservation::TerminalFinalExit {
                     session_id: session_id.clone(),
@@ -2823,7 +2829,9 @@ async fn supervisor_loop(
     diag_cell: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
     target_context_cell: Arc<std::sync::RwLock<Option<PtyTargetContext>>>,
     active_reader_count: Arc<AtomicUsize>,
-    workflow_recorder_cell: Arc<std::sync::RwLock<Arc<dyn crate::workflow::WorkflowObservationRecorder>>>,
+    workflow_recorder_cell: Arc<
+        std::sync::RwLock<Arc<dyn crate::workflow::WorkflowObservationRecorder>>,
+    >,
     lifecycle_gate: Arc<LifecycleGate>,
     persistence_gate: Arc<Mutex<()>>,
     readers: Arc<ReaderRegistry>,
@@ -4010,6 +4018,31 @@ fn apply_child_env(cmd: &mut CommandBuilder, env: &HashMap<String, String>) {
         cmd.env(key, value);
     }
 }
+#[cfg(unix)]
+fn resolve_current_user_account() -> Option<(String, String, String)> {
+    let euid = unsafe { libc::geteuid() };
+    let pwd = unsafe { libc::getpwuid(euid) };
+    if pwd.is_null() {
+        return None;
+    }
+    let pwd_ref = unsafe { &*pwd };
+    let name = unsafe {
+        std::ffi::CStr::from_ptr(pwd_ref.pw_name)
+            .to_string_lossy()
+            .into_owned()
+    };
+    let home = unsafe {
+        std::ffi::CStr::from_ptr(pwd_ref.pw_dir)
+            .to_string_lossy()
+            .into_owned()
+    };
+    let shell = unsafe {
+        std::ffi::CStr::from_ptr(pwd_ref.pw_shell)
+            .to_string_lossy()
+            .into_owned()
+    };
+    Some((name, home, shell))
+}
 
 fn build_child_env(env: &HashMap<String, String>) -> Vec<(String, OsString)> {
     let parent_env = std::env::vars_os()
@@ -4027,6 +4060,29 @@ pub(crate) fn build_child_env_from_parent_snapshot(
         .map(|(key, value)| (key.to_string(), value))
         .collect::<Vec<_>>();
     child_env.push(("TERM".to_string(), OsString::from("xterm-256color")));
+
+    #[cfg(unix)]
+    {
+        if let Some((user_name, user_home, user_shell)) = resolve_current_user_account() {
+            let has_valid_home = child_env
+                .iter()
+                .any(|(k, v)| k == "HOME" && !v.to_string_lossy().starts_with("/var/lib/"));
+            if !has_valid_home {
+                child_env.retain(|(k, _)| k != "HOME");
+                child_env.push(("HOME".to_string(), OsString::from(&user_home)));
+            }
+            if !child_env.iter().any(|(k, _)| k == "USER") {
+                child_env.push(("USER".to_string(), OsString::from(&user_name)));
+            }
+            if !child_env.iter().any(|(k, _)| k == "LOGNAME") {
+                child_env.push(("LOGNAME".to_string(), OsString::from(&user_name)));
+            }
+            if !child_env.iter().any(|(k, _)| k == "SHELL") {
+                child_env.push(("SHELL".to_string(), OsString::from(&user_shell)));
+            }
+        }
+    }
+
     child_env.extend(
         env.iter()
             .map(|(key, value)| (key.clone(), OsString::from(value))),
@@ -4289,7 +4345,7 @@ mod command_builder_tests {
 
 #[cfg(test)]
 mod attach_snapshot_tests {
-    use super::{attach_editing_generation, ShellLifecycle};
+    use super::{ShellLifecycle, attach_editing_generation};
 
     #[test]
     fn parsed_editing_is_not_attachable_until_prompt_boundary_is_published() {
@@ -4589,10 +4645,12 @@ mod tests {
         );
 
         assert!(manager.mark_target_unavailable(id, "demo", target));
-        assert!(receiver
-            .try_recv()
-            .expect("target-loss event should be emitted")
-            .contains("terminal:target-unavailable"));
+        assert!(
+            receiver
+                .try_recv()
+                .expect("target-loss event should be emitted")
+                .contains("terminal:target-unavailable")
+        );
         let session = manager
             .list()
             .into_iter()
@@ -5058,11 +5116,13 @@ mod tests {
             Some((b"tail".to_vec(), 4))
         );
         persist_session_exited(&persist_tx, Some(&store), &exited_meta.id, 3);
-        assert!(store
-            .load_sessions()
-            .unwrap()
-            .iter()
-            .all(|session| session.meta.id != exited_meta.id));
+        assert!(
+            store
+                .load_sessions()
+                .unwrap()
+                .iter()
+                .all(|session| session.meta.id != exited_meta.id)
+        );
     }
 
     #[tokio::test]
