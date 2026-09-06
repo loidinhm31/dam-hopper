@@ -8,8 +8,8 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-06): 1,726 files, 3,586,969 tokens, and 14,620,565 characters.
-- Repomix security scanning excluded four suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
+- Repomix snapshot (2026-09-06): 1,730 files, 3,565,165 tokens, and 14,537,973 characters.
+- Repomix security scanning excluded five suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
 The snapshot is a compaction aid, not a release artifact; generated
@@ -61,23 +61,27 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **WebSocket Transport**: Bi-directional communication for real-time updates
 - **Workflow Store**: Domain-first Plan/Phase/Task hierarchy, scoped sessions,
   terminal/agent resource links, notes, events, and bounded overview queries
-- **Terminal Idle Suspend**: `server/src/idle_suspend/` owns server-authoritative fleet quiescence, bounded automatic timing, helper IPC, RTC/inhibitor preflight, and mode-0600 audits. Phase 01 adds execution-only `wakeAfterSeconds: 0` (indefinite sleep), clear/readback verification, busy-alarm rejection, and explicit zero-valued audit records. Automatic timing remains `60..=86400`; the helper uses a fixed `systemctl suspend` path. REST/UI manual admission remains in later plan phases.
-  - Protocol: version 1, required camelCase `requestId`/`wakeAfterSeconds`, deny-unknown-fields JSON, 4 KiB length-prefixed frames, request-ID dedupe.
+- **Terminal Idle Suspend**: `server/src/idle_suspend/` owns server-authoritative fleet quiescence, bounded automatic timing, helper IPC, RTC/inhibitor preflight, server audit JSONL with capped recent reads (the append file is not pruned by the process), bounded root mode-0600 audits, and authenticated manual force sleep.
+  - Protocol: version 1, required camelCase fields, deny-unknown-fields JSON, 4 KiB length-prefixed helper frames, request-ID dedupe, and strict REST DTOs (`ForceSuspendRequest`, `ForceSuspendAcceptedResponse`, `IdleSuspendConflictResponse`).
+  - Coordinator & Fleet: PTY fleet watcher with generation fencing, active session tracking (`live + creating + restartPending`), automatic armed grace latching, forced handoff claim (`force: true` bypasses quiescence only), and status revision broadcast hints (`host:idleSuspendChanged`).
   - Helper order: peer/protocol validation → dedupe → suspend/RTC/inhibitor preflight → synced intent audit → clear/readback (and timed write/readback) → fixed suspend → completion audit.
-  - Tests: `server/src/idle_suspend/tests.rs` covers execution/automatic bounds, zero serde, clear-only and timed behavior, overflow/failures, busy alarms, audit ordering, and helper IPC; `server/tests/idle_suspend.rs` guards automatic zero rejection.
-  - No automated test invokes real RTC, `systemctl`, logind, or host suspend.
+  - REST API: Protected `POST /api/system/idle-suspend/v1/force-suspend` with same-origin cookie protection, Bearer auth, enabled actor checks, 16 KiB body limit, and `Cache-Control: no-store`.
+  - UI: `ForceSleepDialog` inside `HostResourcePopover` with active session detection/warning, checkbox confirmation, and indefinite sleep (`wakeAfterSeconds: 0`) default.
+- **Tests**: `server/src/idle_suspend/tests.rs` (unit, IPC, preflight, races), `server/tests/idle_suspend.rs` (cross-module, PTY lifecycle, REST DTOs), `server/src/api/tests.rs` (transport, auth, CSRF), `packages/ui/src/components/organisms/ForceSleepDialog.test.tsx` (UI unit), `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx` (Chromium browser), and `scripts/verify-idle-suspend-boundary.sh` (non-privileged boundary checks); automated coverage uses fakes/temp files rather than host suspend.
 
-### Terminal idle suspend helper module map (Phase 01)
+### Terminal idle suspend module map
 
 | Module | Responsibility |
 | --- | --- |
-| `protocol.rs` | Version-1 frames, 4 KiB framing, request IDs, execution-only wake validation |
+| `protocol.rs` | Version-1 frames, 4 KiB framing, request IDs, execution wake validation, REST request/response DTOs |
+| `coordinator.rs` | State machine, fleet watcher, automatic and manual force-suspend handoffs, latching, outcome reconciliation |
+| `server_audit.rs` | Mode-0600 JSONL durable server audit logger for timing and manual force-suspend intents; recent reads are capped while deployment owns file rotation |
 | `backend.rs` | `Option<u64>` RTC seam; clear/readback; checked timed epoch; fixed suspend command; fake observability |
 | `preflight.rs` | Suspend mode, RTC path/ownership, and inhibitor checks with typed fail-closed errors |
 | `helper_server.rs` | Peer auth, frame validation, dedupe, preflight, audit-before-mutation, fixed execution |
-| `audit.rs` | Bounded mode-0600 JSONL records with explicit zero sentinel |
-| `tests.rs` / `server/tests/idle_suspend.rs` | Unit, helper IPC, failure, boundary, and automatic-regression coverage |
-
+| `audit.rs` | Root helper bounded mode-0600 JSONL records with explicit zero sentinel |
+| `api/idle_suspend.rs` | Protected REST handlers (`GET /status`, `PATCH /timing`, `POST /force-suspend`) and CSRF guards |
+| `ForceSleepDialog.tsx` | React 19 dialog for manual sleep configuration, active session confirmation, and 409 handling |
 
 ### Frontend (React + Vite)
 
@@ -766,13 +770,17 @@ dam-hopper/
 ---
 
 **Last Updated**: September 6, 2026
-**Phase Status**: Phase 01 of Authenticated Manual Force Sleep is complete /
-DONE (2026-09-06). The version-1 helper execution contract accepts exactly
-`wakeAfterSeconds: 0` or `60..=86400`; zero clears and verifies the RTC alarm
-without target-epoch arithmetic, while automatic timing remains bounded.
-Coordinator, REST, UI, and integration/documentation phases remain pending.
-No real-host suspend or RTC qualification is implied by automated tests.
-**Generated by**: Repomix v1.18.0 snapshot (1,726 files / 3,586,969 tokens /
-14,620,565 characters). Four security-flagged files were excluded from the
+**Phase Status**: Authenticated Manual Force Sleep Phases 01–05 are complete
+(2026-09-06). Validation evidence: Rust idle-suspend integration 81/81,
+UI Vitest 3/3, Chromium browser 10/10, non-privileged boundary verifier
+12/12, and `cargo check` passed.
+The version-1 helper accepts exactly `wakeAfterSeconds: 0` or `60..=86400`;
+zero clears and verifies the RTC alarm without target-epoch arithmetic, while
+automatic timing remains bounded. No automated check invokes host suspend,
+logind, systemctl, or real RTC hardware. The timed canary is an operational
+procedure; the indefinite canary remains deferred pending Operations approval
+and verified physical/out-of-band wake and rollback ownership.
+**Generated by**: Repomix v1.18.0 snapshot (1,730 files / 3,565,165 tokens /
+14,537,973 characters). Five security-flagged files were excluded from the
 compaction output; review them separately before relying on a complete-file
 inventory.

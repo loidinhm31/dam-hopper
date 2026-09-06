@@ -70,17 +70,18 @@ The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automa
 ┌─────────────────────────────────────────────────────────────┐
 │  Browser UI                                                 │
 │  ├─ SettingsIdleSuspendTimingSection (PATCH /timing)        │
-│  ├─ HostResourcePopover / HostIdleSuspendStatus (read-only) │
+│  ├─ HostResourcePopover / HostIdleSuspendStatus             │
+│  ├─ ForceSleepDialog (POST /force-suspend)                  │
 │  └─ WsTransport ← host:idleSuspendChanged revision hint    │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ REST (GET /status, PATCH /timing)
+                       │ REST (GET /status, PATCH /timing, POST /force-suspend)
 ┌──────────────────────▼──────────────────────────────────────┐
 │  dam-hopper-server (Axum, Tokio)                            │
 │  ├─ IdleSuspendCoordinator (Async state machine)            │
 │  │  ├─ PtyFleetWatcher (quiescent when live+creating+restart=0)
 │  │  ├─ IdleSuspendTimingStore (atomic TOML pair write)      │
-│  │  ├─ IdleSuspendTimingAudit (server-side mode 0600 log)   │
-│  │  └─ BroadcastEventSink (isolated revision hint channel)  │
+│  │  ├─ IdleSuspendServerAudit (server-side mode 0600 log)    │
+│  │  └─ BroadcastEventSink (isolated revision hint channel)   │
 │  └─ SystemdIdleSuspendExecutor (Unix domain socket client) │
 └──────────────────────┬──────────────────────────────────────┘
                        │ /run/dam-hopper/idle-suspend.sock (SO_PEERCRED)
@@ -103,7 +104,18 @@ The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automa
 3. **Non-blocking In-Flight Handoff**:
    The coordinator event loop manages the in-flight suspend future concurrently with the command receiver, ensuring timing requests during suspend are responded to immediately with `409` rather than blocking the server.
 4. **Root & Server Audit Separation**:
-   Privileged helper operations are recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`). Server timing mutations are recorded to `/var/log/dam-hopper/idle-suspend-timing.jsonl` (mode `0600`). No tokens, credentials, or terminal contents are ever audited.
+   Privileged helper operations are recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`). Server timing and manual-action records are appended to `idle-suspend-audit.jsonl` beside the canonical registry/config directory (mode `0600`; recent-read APIs cap results at 10,000). No tokens, credentials, terminal contents, or command strings are ever audited.
+5. **Authenticated Manual Force Sleep & Active Fleet Confirmation**:
+   Manual force sleep (`POST /api/system/idle-suspend/v1/force-suspend`) provides a production action for authenticated, enabled operators with database authentication. When the PTY fleet is active (`live + creating + restartPending > 0`), the request requires explicit confirmation (`force: true`); `force: false` returns `409 idleSuspendActiveFleetConfirmationRequired` with content-free counts. `force: true` bypasses fleet quiescence only—never authentication, CSRF/same-origin checks, generation verification, durable audit logging, capability preflight, inhibitor checks, or helper peer authentication. Once admitted, the coordinator admits one handoff (`CoordinatorState::HandedOff`), cancels any in-flight automatic armed grace period, audits the intent, dispatches the helper request, and reconciles state upon resume.
+### Manual force-suspend admission and reconciliation
+
+The protected endpoint accepts strict JSON `{ "wakeAfterSeconds": 0, "force": false }` (or a bounded nonzero wake value) under the 16 KiB request limit. Execution accepts exactly `0` or `60..=86400`; persisted automatic timing remains `60..=86400`. The fleet snapshot exposes only `generation`, `liveCount`, `creatingCount`, `restartPendingCount`, `disposing`, `closing`, and `handoffActive`.
+
+- `202 Accepted` means the audited handoff was admitted, not that the host has already suspended. The response carries `state: "handedOff"`, `requestId`, `statusRevision`, `wakeAfterSeconds`, `forced`, and the fleet snapshot; every response is `Cache-Control: no-store`.
+- The browser submits at most one POST (`retry: false`). If delivery is ambiguous because the host suspends, reconnect and reconcile with the status endpoint and `host:idleSuspendChanged` revision hint; never replay the action.
+- Automatic scheduling may be disabled while manual execution remains available to an authenticated enabled actor when the helper is enrolled and capability checks pass. Missing helper, capability, inhibitor, RTC ownership, audit, generation, or handoff preconditions still fail closed.
+
+Manual suspend remains separate from the planned generic host-resource remediation helper. Monitoring and alert surfaces describe host state; only the explicit, authenticated ForceSleepDialog action can request suspend.
 
 ### Phase 01 helper execution contract
 

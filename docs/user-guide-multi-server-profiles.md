@@ -50,9 +50,26 @@ You can then edit this profile or create new ones.
 The browser discards push listeners from the old server and attaches one set to
 the replacement transport. Host-resource snapshots and alert history are then
 refetched through REST, so a missed disconnect event cannot be treated as
-current state. If the new server cannot provide deep metrics, the popover labels
 that limitation and keeps compatible CPU/disk data when available. The popover
-is read-only; switching profiles never authorizes a host operation.
+displays host status and resource metrics; switching profiles never authorizes a
+host operation. Actionable operations (such as Force Machine to Sleep) require
+explicit authentication and confirmation on the active profile.
+
+### Force-sleep actions use the active profile
+
+Force Machine to Sleep is a host-wide operation, not a profile-local read. The
+browser sends it only through the currently active profile's transport and
+requires an enabled, database-backed actor on that server. Cookie sessions must
+pass the server's exact same-origin policy; Bearer sessions must authenticate
+the enabled actor. A server running `--no-auth` rejects the action.
+
+Switching profiles rebinds transport, push listeners, and query cache; it does
+not authorize the replacement host or replay an ambiguous POST from the old
+host. Submit at most one request. If the host suspends before the response is
+observed, reconnect the active profile and refetch status/revision instead of
+retrying. Active-session confirmation belongs to the selected server's current
+fleet (`live + creating + restartPending`), so review the warning again after
+any profile switch.
 
 ## Working in a Git worktree
 

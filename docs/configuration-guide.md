@@ -240,7 +240,8 @@ capability_selection = "auto"
 - **Timing Bounds**:
   - `quiet_period_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 900 (15 min).
   - `wake_after_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 600 (10 min).
-- **Security Safeguards**: The timing route is unavailable in development mode (`--no-auth`). All suspend requests fail closed if sleep inhibitors are active, helper enrollment is missing, host capabilities are unsupported, or RTC ownership is ambiguous.
+- **Security Safeguards**: Both the timing mutation route and manual force-suspend route are strictly unavailable in development mode (`--no-auth`). All suspend requests fail closed if sleep inhibitors are active, helper enrollment is missing, host capabilities are unsupported, or RTC ownership is ambiguous.
+- **Manual Execution Independence**: Manual force sleep (`POST /api/system/idle-suspend/v1/force-suspend`) is independent of the automatic idle suspend `enabled` setting; it is accessible only to an authenticated enabled actor when helper enrollment and capability checks are satisfied.
 - **Rollback & Verification**: Non-privileged boundary verification is performed with `scripts/verify-idle-suspend-boundary.sh`. Production resets or rollbacks are executed safely via `deploy/reset-linux-production.sh` (supporting `--dry-run`), which disables startup policy, stops helper units, verifies RTC alarm state, and preserves audit logs.
 
 ### Execution-only indefinite sleep (Phase 01)
@@ -258,6 +259,30 @@ treated as an ownership conflict (`RtcAlarmBusy`), and any preflight, clear,
 readback, write, audit-intent, or suspend failure suppresses the operation.
 Automated tests use temporary files and fake backends; they never suspend the
 test host or program its RTC.
+
+### Manual Force Sleep and Confirmation
+
+Authenticated, database-backed operators can invoke manual force sleep from the Host Resource Popover or via `POST /api/system/idle-suspend/v1/force-suspend`. The strict JSON body is:
+
+```json
+{ "wakeAfterSeconds": 0, "force": false }
+```
+
+Execution accepts exactly `wakeAfterSeconds: 0` (indefinite, clear-only RTC mode) or
+`60..=86400` seconds. The persisted automatic configuration never accepts zero.
+The active fleet count is `live + creating + restartPending`; when it is nonzero,
+the UI requires explicit confirmation and sends `force: true`. A request with
+`force: false` returns `409 idleSuspendActiveFleetConfirmationRequired` without
+claiming the fleet or dispatching the helper. `force: true` bypasses quiescence
+only; authentication, generation, capability, inhibitor, RTC, audit, and helper
+peer checks remain mandatory.
+
+An accepted `202` means an audited handoff was admitted, not that the host has
+already suspended. The browser sends one POST with retries disabled. If delivery
+is ambiguous, reconnect and reconcile from the status endpoint, status revision,
+and `host:idleSuspendChanged`; never replay the action. Manual execution does not
+mutate the persisted automatic timing pair and can remain available when
+automatic `enabled = false`, provided the helper is enrolled and capable.
 
 ### Browser Debug Preview
 
