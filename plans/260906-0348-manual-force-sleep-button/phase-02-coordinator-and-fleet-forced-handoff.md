@@ -12,7 +12,7 @@
 
 - Date: 2026-09-06
 - Priority: P1
-- Status: Pending
+- Status: DONE (2026-09-06 10:48:00 +07:00)
 - Effort: 8h
 - Description: Add an audited coordinator command and a narrowly scoped forced fleet claim so explicit users may suspend with active managed terminals without weakening automatic quiescence safety.
 
@@ -111,15 +111,15 @@ Use a separate forced method rather than an optional flag on the existing normal
 
 ## Todo List
 
-- [ ] Add separate forced fleet claim
-- [ ] Add manager wrapper and negative dependency coverage
-- [ ] Define coordinator force command/result contract
-- [ ] Generalize server idle-suspend audit writer
-- [ ] Implement active-count confirmation result
-- [ ] Serialize manual action with timing and automatic deadline
-- [ ] Enroll executor independently of automatic enablement
-- [ ] Publish accepted handoff and reconcile every outcome
-- [ ] Add fake-time/fake-executor race tests
+- [x] Add separate forced fleet claim
+- [x] Add manager wrapper and negative dependency coverage
+- [x] Define coordinator force command/result contract
+- [x] Generalize server idle-suspend audit writer
+- [x] Implement active-count confirmation result
+- [x] Serialize manual action with timing and automatic deadline
+- [x] Enroll executor independently of automatic enablement
+- [x] Publish accepted handoff and reconcile every outcome
+- [x] Add fake-time/fake-executor race tests
 
 ## Success Criteria
 

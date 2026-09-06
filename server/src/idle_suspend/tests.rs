@@ -12,7 +12,7 @@ use crate::config::{
 use crate::idle_suspend::audit::{HelperAudit, HelperAuditRecord, HelperAuditRecordType};
 use crate::idle_suspend::backend::{FakeActionBackend, SuspendActionBackend, SystemdLogindBackend};
 use crate::idle_suspend::executor::{
-    FakeExecutor, IdleSuspendExecutor, SystemdIdleSuspendExecutor, UnavailableExecutor,
+    BoxFuture, FakeExecutor, IdleSuspendExecutor, SystemdIdleSuspendExecutor, UnavailableExecutor,
 };
 use crate::idle_suspend::helper_server::HelperServer;
 use crate::idle_suspend::peer_auth::{EnrolledPeerPolicy, PeerAuthError, PeerCredentials};
@@ -31,8 +31,9 @@ use crate::idle_suspend::protocol::{
     RequestDeduplicator, SuspendOutcome, SuspendWithRtcWakeRequest, HELPER_PROTOCOL_VERSION,
     MAX_HELPER_FRAME_BYTES,
 };
-use crate::idle_suspend::timing_audit::{
-    AuditError, IdleSuspendTimingAudit, TimingAuditRecord, TimingAuditResult,
+use crate::idle_suspend::server_audit::{
+    AuditError, IdleSuspendServerAudit, IdleSuspendTimingAudit, ManualAuditRecord,
+    ManualAuditResult, ServerAuditRecord, TimingAuditRecord, TimingAuditResult,
 };
 use crate::idle_suspend::timing_store::{IdleSuspendTimingStore, TimingStoreError};
 
@@ -232,7 +233,7 @@ fn test_timing_audit_logging() {
 
     audit.record_event(&record).unwrap();
 
-    let records = audit.read_recent_records(10).unwrap();
+    let records = audit.read_recent_timing_records(10).unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].actor, "admin-user");
     assert_eq!(records[0].requested_quiet_period_seconds, 1800);
@@ -354,7 +355,8 @@ async fn test_fake_executor_records_requests() {
     assert_eq!(executor.recorded_requests(), vec![req]);
 }
 use crate::idle_suspend::coordinator::{
-    CoordinatorTimingResult, IdleSuspendCoordinator, UpdateTimingCommand,
+    CoordinatorForceSuspendResult, CoordinatorTimingResult, ForceSuspendCommand,
+    IdleSuspendCoordinator, UpdateTimingCommand,
 };
 use crate::idle_suspend::status::CoordinatorState;
 use crate::pty::event_sink::NoopEventSink;
@@ -1814,4 +1816,506 @@ async fn test_helper_server_busy_alarm_and_rtc_failure_suppresses_suspend() {
     assert!(!*backend2.suspend_called.lock().unwrap());
 
     server_handle2.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_manual_force_suspend_quiescent_ordinary_claim() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let audit_file = tmp.path().join("audit.jsonl");
+    let audit = IdleSuspendServerAudit::new(audit_file.clone());
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        Some(audit.clone()),
+        executor.clone(),
+        pty_manager.clone(),
+    );
+
+    let cmd = ForceSuspendCommand {
+        actor: "operator-user".to_string(),
+        wake_after_seconds: 0,
+        force: false,
+    };
+
+    let result = coordinator.force_suspend(cmd).await;
+    let req_id = match result {
+        CoordinatorForceSuspendResult::Accepted {
+            request_id,
+            status_revision,
+            fleet_snapshot,
+        } => {
+            assert!(request_id.starts_with("manual-"));
+            assert_eq!(status_revision, 2);
+            assert!(fleet_snapshot.handoff_active);
+            request_id
+        }
+        other => panic!("Expected Accepted, got: {other:?}"),
+    };
+
+    // Wait for in-flight executor to finish
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Handoff released, state transitioned to Resumed
+    let status = coordinator.status();
+    assert_eq!(status.state, CoordinatorState::Resumed);
+    assert!(!pty_manager.fleet_snapshot().handoff_active);
+
+    // Verify audit log has Attempted, Accepted, and TerminalOutcome
+    let manual_records = audit.read_recent_manual_records(10).unwrap();
+    assert_eq!(manual_records.len(), 3);
+    assert_eq!(
+        manual_records[0].result,
+        ManualAuditResult::TerminalOutcome(SuspendOutcome::ResumedSuccessfully {
+            request_id: req_id.clone(),
+            elapsed_seconds: 0,
+        })
+    );
+    assert_eq!(manual_records[1].result, ManualAuditResult::Accepted);
+    assert_eq!(manual_records[2].result, ManualAuditResult::Attempted);
+    assert_eq!(manual_records[2].actor, "operator-user");
+    assert_eq!(manual_records[2].request_id, req_id);
+    assert_eq!(manual_records[2].wake_after_seconds, 0);
+    assert!(!manual_records[2].requested_force);
+    assert!(!manual_records[2].effective_force);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_manual_force_suspend_active_fleet_requires_confirmation() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let audit_file = tmp.path().join("audit.jsonl");
+    let audit = IdleSuspendServerAudit::new(audit_file.clone());
+
+    // Make fleet active
+    pty_manager.with_fleet_for_test(|f| {
+        f.begin_create("t_active", 1).unwrap();
+    });
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        Some(audit.clone()),
+        executor.clone(),
+        pty_manager.clone(),
+    );
+
+    let cmd = ForceSuspendCommand {
+        actor: "operator-user".to_string(),
+        wake_after_seconds: 120,
+        force: false,
+    };
+
+    let result = coordinator.force_suspend(cmd).await;
+    match result {
+        CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation { fleet_snapshot } => {
+            assert_eq!(fleet_snapshot.creating_count, 1);
+            assert_eq!(fleet_snapshot.running_count(), 1);
+            assert!(!fleet_snapshot.handoff_active);
+        }
+        other => panic!("Expected ActiveFleetRequiresConfirmation, got: {other:?}"),
+    }
+
+    // Zero executor calls, zero claims
+    assert_eq!(executor.recorded_requests().len(), 0);
+    assert!(!pty_manager.fleet_snapshot().handoff_active);
+
+    // Audit log has RejectedConfirmationRequired
+    let manual_records = audit.read_recent_manual_records(10).unwrap();
+    assert_eq!(manual_records.len(), 1);
+    assert_eq!(
+        manual_records[0].result,
+        ManualAuditResult::RejectedConfirmationRequired
+    );
+    assert_eq!(manual_records[0].creating_count, 1);
+
+    coordinator.shutdown().await;
+}
+
+struct BlockingTestExecutor {
+    release_rx: parking_lot::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+impl IdleSuspendExecutor for BlockingTestExecutor {
+    fn check_capability(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+
+    fn execute_suspend(&self, request: SuspendWithRtcWakeRequest) -> BoxFuture<'_, SuspendOutcome> {
+        let rx = self.release_rx.lock().take();
+        Box::pin(async move {
+            if let Some(r) = rx {
+                let _ = r.await;
+            }
+            SuspendOutcome::ResumedSuccessfully {
+                request_id: request.request_id,
+                elapsed_seconds: request.wake_after_seconds,
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_manual_force_suspend_active_fleet_with_force_succeeds() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let executor = Arc::new(BlockingTestExecutor {
+        release_rx: parking_lot::Mutex::new(Some(release_rx)),
+    });
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let audit_file = tmp.path().join("audit.jsonl");
+    let audit = IdleSuspendServerAudit::new(audit_file.clone());
+
+    // Make fleet active
+    pty_manager.with_fleet_for_test(|f| {
+        f.begin_create("t_active", 1).unwrap();
+    });
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        Some(audit.clone()),
+        executor.clone(),
+        pty_manager.clone(),
+    );
+
+    let cmd = ForceSuspendCommand {
+        actor: "operator-user".to_string(),
+        wake_after_seconds: 300,
+        force: true,
+    };
+
+    let result = coordinator.force_suspend(cmd).await;
+    match result {
+        CoordinatorForceSuspendResult::Accepted {
+            request_id,
+            status_revision,
+            fleet_snapshot,
+        } => {
+            assert!(request_id.starts_with("manual-"));
+            assert_eq!(status_revision, 2);
+            assert!(fleet_snapshot.handoff_active);
+        }
+        other => panic!("Expected Accepted, got: {other:?}"),
+    }
+
+    // New terminal creation blocked while handoff in flight
+    pty_manager.with_fleet_for_test(|f| {
+        assert!(matches!(
+            f.begin_create("t_blocked", 2),
+            Err(crate::error::AppError::IdleSuspendHandoffInProgress(_))
+        ));
+    });
+
+    // Release in-flight executor
+    let _ = release_tx.send(());
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Handoff released
+    assert!(!pty_manager.fleet_snapshot().handoff_active);
+
+    // Audit log verifies effective_force == true
+    let manual_records = audit.read_recent_manual_records(10).unwrap();
+    assert_eq!(manual_records.len(), 3);
+    assert_eq!(manual_records[2].result, ManualAuditResult::Attempted);
+    assert!(manual_records[2].requested_force);
+    assert!(manual_records[2].effective_force);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_manual_force_suspend_capability_failure() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let executor = Arc::new(UnavailableExecutor::new("Host not capable"));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let audit_file = tmp.path().join("audit.jsonl");
+    let audit = IdleSuspendServerAudit::new(audit_file.clone());
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        Some(audit.clone()),
+        executor,
+        pty_manager.clone(),
+    );
+
+    let cmd = ForceSuspendCommand {
+        actor: "operator-user".to_string(),
+        wake_after_seconds: 0,
+        force: false,
+    };
+
+    let result = coordinator.force_suspend(cmd).await;
+    match result {
+        CoordinatorForceSuspendResult::CapabilityUnavailable(detail) => {
+            assert!(detail.contains("capability probe failed"));
+        }
+        other => panic!("Expected CapabilityUnavailable, got: {other:?}"),
+    }
+
+    assert!(!pty_manager.fleet_snapshot().handoff_active);
+    let manual_records = audit.read_recent_manual_records(10).unwrap();
+    assert_eq!(manual_records.len(), 1);
+    assert_eq!(
+        manual_records[0].result,
+        ManualAuditResult::RejectedCapability
+    );
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_manual_force_suspend_wake_seconds_and_actor_validation() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let audit = IdleSuspendServerAudit::new(tmp.path().join("audit.jsonl"));
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        Some(audit),
+        executor,
+        pty_manager,
+    );
+
+    // 1. Invalid wake seconds (e.g. 15 seconds, below minimum 60 and not 0)
+    let res_invalid_wake = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "valid-actor".to_string(),
+            wake_after_seconds: 15,
+            force: false,
+        })
+        .await;
+    assert!(matches!(
+        res_invalid_wake,
+        CoordinatorForceSuspendResult::ValidationFailed(_)
+    ));
+
+    // 2. Overlong wake seconds (e.g. 100_000, above maximum 86400)
+    let res_overlong_wake = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "valid-actor".to_string(),
+            wake_after_seconds: 100_000,
+            force: false,
+        })
+        .await;
+    assert!(matches!(
+        res_overlong_wake,
+        CoordinatorForceSuspendResult::ValidationFailed(_)
+    ));
+
+    // 3. Empty actor
+    let res_empty_actor = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "   ".to_string(),
+            wake_after_seconds: 0,
+            force: false,
+        })
+        .await;
+    assert!(matches!(
+        res_empty_actor,
+        CoordinatorForceSuspendResult::ValidationFailed(_)
+    ));
+
+    // 4. Overlong actor (>128 chars)
+    let res_overlong_actor = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "a".repeat(129),
+            wake_after_seconds: 0,
+            force: false,
+        })
+        .await;
+    assert!(matches!(
+        res_overlong_actor,
+        CoordinatorForceSuspendResult::ValidationFailed(_)
+    ));
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_manual_force_suspend_with_policy_disabled() {
+    let tmp = tempdir().unwrap();
+    // Policy disabled!
+    let policy = create_test_policy(tmp.path(), false);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let audit = IdleSuspendServerAudit::new(tmp.path().join("audit.jsonl"));
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        Some(audit),
+        executor.clone(),
+        pty_manager.clone(),
+    );
+
+    // Initial state is Disabled
+    assert_eq!(coordinator.status().state, CoordinatorState::Disabled);
+
+    // Manual action succeeds!
+    let cmd = ForceSuspendCommand {
+        actor: "admin".to_string(),
+        wake_after_seconds: 0,
+        force: false,
+    };
+
+    let result = coordinator.force_suspend(cmd).await;
+    assert!(matches!(result, CoordinatorForceSuspendResult::Accepted { .. }));
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let status = coordinator.status();
+    assert_eq!(status.state, CoordinatorState::Disabled);
+    assert!(matches!(status.last_outcome, Some(SuspendOutcome::ResumedSuccessfully { .. })));
+    assert!(!pty_manager.fleet_snapshot().handoff_active);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_manual_force_suspend_cancels_automatic_armed_grace() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let executor = Arc::new(BlockingTestExecutor {
+        release_rx: parking_lot::Mutex::new(Some(release_rx)),
+    });
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let audit = IdleSuspendServerAudit::new(tmp.path().join("audit.jsonl"));
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        Some(audit),
+        executor.clone(),
+        pty_manager.clone(),
+    );
+    let mut status_rx = coordinator.subscribe_status();
+
+    // Transition fleet from quiescent to active
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.begin_create("t_temp", 1).unwrap();
+        fleet.publish_live("t_temp", 1);
+    });
+
+    while status_rx.borrow().fleet_snapshot.live_count != 1 {
+        status_rx.changed().await.unwrap();
+    }
+
+    // Transition fleet from active to quiescent -> coordinator arms
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.remove_live("t_temp", 1);
+    });
+
+    while status_rx.borrow().state != CoordinatorState::Armed {
+        status_rx.changed().await.unwrap();
+    }
+    assert_eq!(status_rx.borrow().state, CoordinatorState::Armed);
+
+    // Manual suspend is issued while grace is armed
+    let result = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "admin".to_string(),
+            wake_after_seconds: 0,
+            force: false,
+        })
+        .await;
+    assert!(matches!(result, CoordinatorForceSuspendResult::Accepted { .. }));
+
+    // Status is now HandedOff and arm deadline is cleared
+    assert_eq!(coordinator.status().state, CoordinatorState::HandedOff);
+    assert!(coordinator.status().arm_deadline_ms.is_none());
+
+    // Release in-flight executor
+    let _ = release_tx.send(());
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(coordinator.status().state, CoordinatorState::Resumed);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_manual_force_suspend_duplicate_click_and_timing_contention() {
+    let tmp = tempdir().unwrap();
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let executor = Arc::new(BlockingTestExecutor {
+        release_rx: parking_lot::Mutex::new(Some(release_rx)),
+    });
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let audit = IdleSuspendServerAudit::new(tmp.path().join("audit.jsonl"));
+
+    let coordinator = IdleSuspendCoordinator::start(
+        policy,
+        timing,
+        None,
+        Some(audit),
+        executor.clone(),
+        pty_manager.clone(),
+    );
+
+    // First click: accepted
+    let res1 = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "admin".to_string(),
+            wake_after_seconds: 0,
+            force: false,
+        })
+        .await;
+    assert!(matches!(res1, CoordinatorForceSuspendResult::Accepted { .. }));
+
+    // Second click while in-flight: rejected with HandoffInProgress
+    let res2 = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "admin".to_string(),
+            wake_after_seconds: 0,
+            force: false,
+        })
+        .await;
+    assert!(matches!(res2, CoordinatorForceSuspendResult::HandoffInProgress));
+
+    // Timing update while in-flight: rejected with HandoffInProgress
+    let res_timing = coordinator
+        .update_timing(UpdateTimingCommand {
+            actor: "admin".to_string(),
+            quiet_period_seconds: 120,
+            wake_after_seconds: 900,
+        })
+        .await;
+    assert!(matches!(res_timing, CoordinatorTimingResult::HandoffInProgress));
+
+    // Release handoff
+    let _ = release_tx.send(());
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!pty_manager.fleet_snapshot().handoff_active);
+
+    coordinator.shutdown().await;
 }

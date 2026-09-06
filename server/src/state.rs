@@ -117,8 +117,8 @@ pub struct AppState {
     pub idle_suspend_timing: Arc<RwLock<crate::idle_suspend::RuntimeIdleSuspendTiming>>,
     /// Narrow atomic pair store for canonical registry persistence.
     pub idle_suspend_store: Arc<crate::idle_suspend::IdleSuspendTimingStore>,
-    /// Server-private audit log for idle suspend timing mutations.
-    pub idle_suspend_audit: Arc<crate::idle_suspend::IdleSuspendTimingAudit>,
+    /// Server-private audit log for idle suspend timing and manual force mutations.
+    pub idle_suspend_audit: Arc<crate::idle_suspend::IdleSuspendServerAudit>,
     /// Active idle suspend coordinator, initialized after persistence restoration.
     pub idle_suspend_coordinator:
         Arc<RwLock<Option<Arc<crate::idle_suspend::IdleSuspendCoordinator>>>>,
@@ -320,7 +320,7 @@ impl AppState {
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from(".config/dam-hopper"));
         let idle_suspend_audit = Arc::new(
-            crate::idle_suspend::IdleSuspendTimingAudit::new(
+            crate::idle_suspend::IdleSuspendServerAudit::new(
                 idle_suspend_audit_dir.join("idle-suspend-audit.jsonl"),
             ),
         );

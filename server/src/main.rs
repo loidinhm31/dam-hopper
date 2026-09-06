@@ -367,29 +367,26 @@ async fn main() -> anyhow::Result<()> {
     // Start idle-suspend coordinator after persistence restore completes.
     // In Phase 03, resolve executor: if idle-suspend is enabled and helper socket exists,
     // enroll SystemdIdleSuspendExecutor; otherwise fallback closed to UnavailableExecutor.
-    let idle_suspend_executor: Arc<dyn dam_hopper_server::idle_suspend::IdleSuspendExecutor> =
-        if state.idle_suspend_policy.enabled {
-            let socket_path = std::env::var("DAM_HOPPER_IDLE_SUSPEND_SOCKET")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("/run/dam-hopper/idle-suspend.sock"));
-            if socket_path.exists() {
-                tracing::info!(
-                    socket = %socket_path.display(),
-                    "Enrolling SystemdIdleSuspendExecutor with privileged helper"
-                );
-                Arc::new(dam_hopper_server::idle_suspend::SystemdIdleSuspendExecutor::new(&socket_path))
-            } else {
-                tracing::warn!(
-                    socket = %socket_path.display(),
-                    "Idle suspend enabled but helper socket not found; falling back to UnavailableExecutor"
-                );
-                Arc::new(dam_hopper_server::idle_suspend::UnavailableExecutor::new(
-                    "Privileged helper socket not found at expected path",
-                ))
-            }
+    let idle_suspend_executor: Arc<dyn dam_hopper_server::idle_suspend::IdleSuspendExecutor> = {
+        let socket_path = std::env::var("DAM_HOPPER_IDLE_SUSPEND_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/run/dam-hopper/idle-suspend.sock"));
+        if socket_path.exists() {
+            tracing::info!(
+                socket = %socket_path.display(),
+                "Enrolling SystemdIdleSuspendExecutor with privileged helper"
+            );
+            Arc::new(dam_hopper_server::idle_suspend::SystemdIdleSuspendExecutor::new(&socket_path))
         } else {
-            Arc::new(dam_hopper_server::idle_suspend::UnavailableExecutor::default())
-        };
+            tracing::info!(
+                socket = %socket_path.display(),
+                "Privileged helper socket not found; idle suspend executor will be unavailable"
+            );
+            Arc::new(dam_hopper_server::idle_suspend::UnavailableExecutor::new(
+                "Privileged helper socket not found at expected path",
+            ))
+        }
+    };
     state.start_idle_suspend_coordinator(idle_suspend_executor).await;
 
     let host_resource_monitor_shutdown = state.host_resource_monitor.clone();

@@ -61,6 +61,10 @@ Protocol, helper, backend, preflight, audit, and regression-test changes are
 implemented in the Phase 01 source scope. Real-host timed/indefinite canaries
 remain separate operational gates and are not implied by automated tests.
 
+### Phase 02 status (2026-09-06)
+
+Coordinator force-suspend command handling, fail-closed generation-fenced forced fleet claim (`try_claim_forced_handoff`), generalized server audit writer (`server_audit.rs`), active-fleet confirmation enforcement, independent helper executor enrollment on startup, and deterministic outcome reconciliation are implemented and verified across 1151 tests.
+
 ## Approval Gates for Privileged Execution (Phase 03) — Approved (2026-09-05)
 
 Phase 03 (privileged systemd helper and unit enrollment) was reviewed and approved on 2026-09-05 with the following agreed architectural specifications:

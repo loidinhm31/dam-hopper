@@ -997,6 +997,18 @@ impl PtySessionManager {
             .try_claim_handoff(expected_generation)
     }
 
+    pub fn try_claim_forced_handoff(
+        &self,
+        expected_generation: u64,
+    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError>
+    {
+        self.inner
+            .lock()
+            .unwrap()
+            .fleet
+            .try_claim_forced_handoff(expected_generation)
+    }
+
     pub fn release_handoff(&self) {
         self.inner.lock().unwrap().fleet.release_handoff();
     }

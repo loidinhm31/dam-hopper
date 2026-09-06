@@ -14,12 +14,16 @@ use crate::idle_suspend::executor::{BoxFuture, IdleSuspendExecutor};
 use crate::idle_suspend::policy::{
     validate_timing_pair, RuntimeIdleSuspendTiming, StartupIdleSuspendPolicy,
 };
-use crate::idle_suspend::protocol::{SuspendOutcome, SuspendWithRtcWakeRequest};
-use crate::idle_suspend::status::{CoordinatorState, IdleSuspendStatusV1};
-use crate::idle_suspend::timing_audit::{
-    IdleSuspendTimingAudit, TimingAuditRecord, TimingAuditResult,
+use crate::idle_suspend::protocol::{
+    validate_suspend_wake_seconds, SuspendOutcome, SuspendWithRtcWakeRequest,
 };
+use crate::idle_suspend::server_audit::{
+    validate_actor, IdleSuspendServerAudit, ManualAuditRecord, ManualAuditResult,
+    TimingAuditRecord, TimingAuditResult,
+};
+use crate::idle_suspend::status::{CoordinatorState, IdleSuspendStatusV1};
 use crate::idle_suspend::timing_store::IdleSuspendTimingStore;
+use crate::pty::fleet_state::{HandoffClaimError, PtyFleetSnapshot};
 use crate::pty::manager::PtySessionManager;
 
 /// Command to request a timing update through the idle suspend coordinator.
@@ -58,10 +62,56 @@ pub enum CoordinatorTimingResult {
     ValidationFailed(String),
 }
 
+/// Command to request manual force machine sleep.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForceSuspendCommand {
+    pub actor: String,
+    pub wake_after_seconds: u64,
+    pub force: bool,
+}
+
+/// Result returned from processing a coordinator manual force-suspend command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CoordinatorForceSuspendResult {
+    /// Handoff admitted and accepted; in-flight execution begun.
+    Accepted {
+        request_id: String,
+        status_revision: u64,
+        fleet_snapshot: PtyFleetSnapshot,
+    },
+    /// Active fleet requires explicit confirmation; no claim or executor side-effects.
+    ActiveFleetRequiresConfirmation {
+        fleet_snapshot: PtyFleetSnapshot,
+    },
+    /// A handoff is currently in flight; caller must retry after resume.
+    HandoffInProgress,
+    /// Generation mismatch between confirmation/snapshot and claim.
+    GenerationConflict {
+        expected: u64,
+        actual: u64,
+        fleet_snapshot: PtyFleetSnapshot,
+    },
+    /// Audit logging failed before mutation could be admitted.
+    AuditFailed(String),
+    /// Host lacks RTC alarm or suspend capability, or helper probe failed.
+    CapabilityUnavailable(String),
+    /// Input bounds or actor validation failed.
+    ValidationFailed(String),
+    /// Coordinator is disabled.
+    Disabled,
+    /// Coordinator is shutting down.
+    ShuttingDown,
+}
+
 enum CommandMessage {
     UpdateTiming {
         cmd: UpdateTimingCommand,
         reply: oneshot::Sender<CoordinatorTimingResult>,
+    },
+    ForceSuspend {
+        cmd: ForceSuspendCommand,
+        reply: oneshot::Sender<CoordinatorForceSuspendResult>,
     },
 }
 
@@ -79,7 +129,7 @@ impl IdleSuspendCoordinator {
         startup_policy: StartupIdleSuspendPolicy,
         runtime_timing: Arc<RwLock<RuntimeIdleSuspendTiming>>,
         timing_store: Option<IdleSuspendTimingStore>,
-        timing_audit: Option<IdleSuspendTimingAudit>,
+        server_audit: Option<IdleSuspendServerAudit>,
         executor: Arc<dyn IdleSuspendExecutor>,
         pty_manager: PtySessionManager,
     ) -> Self {
@@ -87,7 +137,7 @@ impl IdleSuspendCoordinator {
             startup_policy,
             runtime_timing,
             timing_store,
-            timing_audit,
+            server_audit,
             executor,
             pty_manager,
             None,
@@ -98,7 +148,7 @@ impl IdleSuspendCoordinator {
         startup_policy: StartupIdleSuspendPolicy,
         runtime_timing: Arc<RwLock<RuntimeIdleSuspendTiming>>,
         timing_store: Option<IdleSuspendTimingStore>,
-        timing_audit: Option<IdleSuspendTimingAudit>,
+        server_audit: Option<IdleSuspendServerAudit>,
         executor: Arc<dyn IdleSuspendExecutor>,
         pty_manager: PtySessionManager,
         event_sink: Option<Arc<dyn crate::pty::EventSink>>,
@@ -154,7 +204,7 @@ impl IdleSuspendCoordinator {
                 startup_policy,
                 runtime_timing,
                 timing_store,
-                timing_audit,
+                server_audit,
                 executor,
                 pty_manager,
                 event_sink,
@@ -199,6 +249,19 @@ impl IdleSuspendCoordinator {
         reply_rx.await.unwrap_or(CoordinatorTimingResult::Disabled)
     }
 
+    /// Submit an authenticated manual force sleep command to the coordinator.
+    pub async fn force_suspend(&self, cmd: ForceSuspendCommand) -> CoordinatorForceSuspendResult {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let msg = CommandMessage::ForceSuspend {
+            cmd,
+            reply: reply_tx,
+        };
+        if self.command_tx.send(msg).await.is_err() {
+            return CoordinatorForceSuspendResult::ShuttingDown;
+        }
+        reply_rx.await.unwrap_or(CoordinatorForceSuspendResult::ShuttingDown)
+    }
+
     /// Gracefully shutdown the coordinator, cancelling any active grace.
     pub async fn shutdown(&self) {
         self.shutdown_token.cancel();
@@ -209,11 +272,12 @@ impl IdleSuspendCoordinator {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_coordinator(
     startup_policy: StartupIdleSuspendPolicy,
     runtime_timing: Arc<RwLock<RuntimeIdleSuspendTiming>>,
     timing_store: Option<IdleSuspendTimingStore>,
-    timing_audit: Option<IdleSuspendTimingAudit>,
+    server_audit: Option<IdleSuspendServerAudit>,
     executor: Arc<dyn IdleSuspendExecutor>,
     pty_manager: PtySessionManager,
     event_sink: Arc<dyn crate::pty::EventSink>,
@@ -254,6 +318,7 @@ async fn run_coordinator(
     );
 
     let mut in_flight_suspend: Option<BoxFuture<'static, SuspendOutcome>> = None;
+    let mut in_flight_manual_audit: Option<ManualAuditRecord> = None;
 
     loop {
         let sleep_fut = async {
@@ -282,6 +347,17 @@ async fn run_coordinator(
             }
             outcome = suspend_fut => {
                 in_flight_suspend = None;
+                if let Some(mut manual_audit_rec) = in_flight_manual_audit.take() {
+                    if let Some(audit) = server_audit.as_ref() {
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        manual_audit_rec.timestamp_ms = now_ms;
+                        manual_audit_rec.result = ManualAuditResult::TerminalOutcome(outcome.clone());
+                        let _ = audit.record_manual_event(&manual_audit_rec);
+                    }
+                }
                 handle_outcome(
                     outcome,
                     &mut state,
@@ -299,26 +375,49 @@ async fn run_coordinator(
                 );
             }
             msg = command_rx.recv() => {
-                let Some(CommandMessage::UpdateTiming { cmd, reply }) = msg else {
+                let Some(command_msg) = msg else {
                     break;
                 };
-                let result = handle_timing(
-                    cmd,
-                    &mut state,
-                    &mut status_revision,
-                    &mut arm_deadline,
-                    &mut armed_generation,
-                    &mut quiet_period_seconds,
-                    &mut wake_after_seconds,
-                    &startup_policy,
-                    &runtime_timing,
-                    timing_store.as_ref(),
-                    timing_audit.as_ref(),
-                    &pty_manager,
-                    epoch_ready,
-                ).await;
-                publish_status(&status_tx, Some(&*event_sink), state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, pty_manager.fleet_snapshot(), arm_deadline, &last_outcome, &detail);
-                let _ = reply.send(result);
+                match command_msg {
+                    CommandMessage::UpdateTiming { cmd, reply } => {
+                        let result = handle_timing(
+                            cmd,
+                            &mut state,
+                            &mut status_revision,
+                            &mut arm_deadline,
+                            &mut armed_generation,
+                            &mut quiet_period_seconds,
+                            &mut wake_after_seconds,
+                            &startup_policy,
+                            &runtime_timing,
+                            timing_store.as_ref(),
+                            server_audit.as_ref(),
+                            &pty_manager,
+                            epoch_ready,
+                        ).await;
+                        publish_status(&status_tx, Some(&*event_sink), state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, pty_manager.fleet_snapshot(), arm_deadline, &last_outcome, &detail);
+                        let _ = reply.send(result);
+                    }
+                    CommandMessage::ForceSuspend { cmd, reply } => {
+                        let (result, maybe_fut, maybe_audit) = handle_force_suspend(
+                            cmd,
+                            &mut state,
+                            &mut status_revision,
+                            &mut arm_deadline,
+                            &mut armed_generation,
+                            &executor,
+                            &pty_manager,
+                            server_audit.as_ref(),
+                            in_flight_suspend.is_some(),
+                        ).await;
+                        if maybe_fut.is_some() {
+                            in_flight_suspend = maybe_fut;
+                            in_flight_manual_audit = maybe_audit;
+                        }
+                        publish_status(&status_tx, Some(&*event_sink), state, &startup_policy, quiet_period_seconds, wake_after_seconds, status_revision, current_epoch, pty_manager.fleet_snapshot(), arm_deadline, &last_outcome, &detail);
+                        let _ = reply.send(result);
+                    }
+                }
             }
             changed = fleet_watcher.changed() => {
                 if changed.is_err() {
@@ -440,7 +539,7 @@ async fn handle_timing(
     startup_policy: &StartupIdleSuspendPolicy,
     runtime_timing: &Arc<RwLock<RuntimeIdleSuspendTiming>>,
     timing_store: Option<&IdleSuspendTimingStore>,
-    timing_audit: Option<&IdleSuspendTimingAudit>,
+    server_audit: Option<&IdleSuspendServerAudit>,
     pty_manager: &PtySessionManager,
     epoch_ready: bool,
 ) -> CoordinatorTimingResult {
@@ -448,7 +547,7 @@ async fn handle_timing(
     let cur_wake = *wake_after_seconds;
 
     if let Err(e) = validate_timing_pair(cmd.quiet_period_seconds, cmd.wake_after_seconds) {
-        if let Some(audit) = timing_audit {
+        if let Some(audit) = server_audit {
             if let Ok(rec) = TimingAuditRecord::new(
                 cmd.actor.clone(),
                 cur_quiet,
@@ -458,14 +557,14 @@ async fn handle_timing(
                 format!("tx-{}", *status_revision),
                 TimingAuditResult::RejectedInvalidInput,
             ) {
-                let _ = audit.record_event(&rec);
+                let _ = audit.record_timing_event(&rec);
             }
         }
         return CoordinatorTimingResult::ValidationFailed(e.to_string());
     }
 
     if *state == CoordinatorState::HandedOff || pty_manager.fleet_snapshot().handoff_active {
-        if let Some(audit) = timing_audit {
+        if let Some(audit) = server_audit {
             if let Ok(rec) = TimingAuditRecord::new(
                 cmd.actor.clone(),
                 cur_quiet,
@@ -475,14 +574,14 @@ async fn handle_timing(
                 format!("tx-{}", *status_revision),
                 TimingAuditResult::RejectedHandoffInProgress,
             ) {
-                let _ = audit.record_event(&rec);
+                let _ = audit.record_timing_event(&rec);
             }
         }
         return CoordinatorTimingResult::HandoffInProgress;
     }
 
     let tx_id = format!("tx-{}", *status_revision);
-    if let Some(audit) = timing_audit {
+    if let Some(audit) = server_audit {
         let rec = match TimingAuditRecord::new(
             cmd.actor.clone(),
             cur_quiet,
@@ -495,7 +594,7 @@ async fn handle_timing(
             Ok(r) => r,
             Err(e) => return CoordinatorTimingResult::AuditFailed(e.to_string()),
         };
-        if let Err(e) = audit.record_event(&rec) {
+        if let Err(e) = audit.record_timing_event(&rec) {
             return CoordinatorTimingResult::AuditFailed(e.to_string());
         }
     }
@@ -503,7 +602,7 @@ async fn handle_timing(
     if let Some(store) = timing_store {
         if let Err(e) = store.persist_timing_pair(cmd.quiet_period_seconds, cmd.wake_after_seconds)
         {
-            if let Some(audit) = timing_audit {
+            if let Some(audit) = server_audit {
                 if let Ok(rec) = TimingAuditRecord::new(
                     cmd.actor.clone(),
                     cur_quiet,
@@ -513,14 +612,14 @@ async fn handle_timing(
                     tx_id.clone(),
                     TimingAuditResult::PersistenceFailed,
                 ) {
-                    let _ = audit.record_event(&rec);
+                    let _ = audit.record_timing_event(&rec);
                 }
             }
             return CoordinatorTimingResult::PersistenceFailed(e.to_string());
         }
     }
 
-    if let Some(audit) = timing_audit {
+    if let Some(audit) = server_audit {
         if let Ok(rec) = TimingAuditRecord::new(
             cmd.actor.clone(),
             cur_quiet,
@@ -530,7 +629,7 @@ async fn handle_timing(
             tx_id,
             TimingAuditResult::Committed,
         ) {
-            let _ = audit.record_event(&rec);
+            let _ = audit.record_timing_event(&rec);
         }
     }
 
@@ -742,4 +841,333 @@ fn handle_outcome(
         last_outcome,
         detail,
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_force_suspend(
+    cmd: ForceSuspendCommand,
+    state: &mut CoordinatorState,
+    status_revision: &mut u64,
+    arm_deadline: &mut Option<tokio::time::Instant>,
+    armed_generation: &mut Option<u64>,
+    executor: &Arc<dyn IdleSuspendExecutor>,
+    pty_manager: &PtySessionManager,
+    server_audit: Option<&IdleSuspendServerAudit>,
+    in_flight_suspend_active: bool,
+) -> (
+    CoordinatorForceSuspendResult,
+    Option<BoxFuture<'static, SuspendOutcome>>,
+    Option<ManualAuditRecord>,
+) {
+    let actor = match validate_actor(&cmd.actor) {
+        Ok(a) => a,
+        Err(_) => {
+            return (
+                CoordinatorForceSuspendResult::ValidationFailed(
+                    "Actor identifier invalid or exceeds maximum length".into(),
+                ),
+                None,
+                None,
+            );
+        }
+    };
+
+    if let Err(e) = validate_suspend_wake_seconds(cmd.wake_after_seconds) {
+        let snapshot = pty_manager.fleet_snapshot();
+        let request_id = format!("manual-{}", uuid::Uuid::new_v4());
+        if let Some(audit) = server_audit {
+            if let Ok(rec) = ManualAuditRecord::new(
+                actor.clone(),
+                request_id,
+                cmd.wake_after_seconds,
+                cmd.force,
+                false,
+                snapshot.generation,
+                snapshot.live_count,
+                snapshot.creating_count,
+                snapshot.restart_pending_count,
+                ManualAuditResult::RejectedValidation,
+            ) {
+                let _ = audit.record_manual_event(&rec);
+            }
+        }
+        return (
+            CoordinatorForceSuspendResult::ValidationFailed(e.to_string()),
+            None,
+            None,
+        );
+    }
+
+    let request_id = format!("manual-{}", uuid::Uuid::new_v4());
+
+    if *state == CoordinatorState::HandedOff
+        || pty_manager.fleet_snapshot().handoff_active
+        || in_flight_suspend_active
+    {
+        let snapshot = pty_manager.fleet_snapshot();
+        if let Some(audit) = server_audit {
+            if let Ok(rec) = ManualAuditRecord::new(
+                actor.clone(),
+                request_id,
+                cmd.wake_after_seconds,
+                cmd.force,
+                false,
+                snapshot.generation,
+                snapshot.live_count,
+                snapshot.creating_count,
+                snapshot.restart_pending_count,
+                ManualAuditResult::RejectedHandoffInProgress,
+            ) {
+                let _ = audit.record_manual_event(&rec);
+            }
+        }
+        return (
+            CoordinatorForceSuspendResult::HandoffInProgress,
+            None,
+            None,
+        );
+    }
+
+    // Bounded capability probe (3s timeout)
+    let has_capability = tokio::time::timeout(Duration::from_secs(3), executor.check_capability())
+        .await
+        .unwrap_or_default();
+
+    if !has_capability {
+        let snapshot = pty_manager.fleet_snapshot();
+        if let Some(audit) = server_audit {
+            if let Ok(rec) = ManualAuditRecord::new(
+                actor.clone(),
+                request_id,
+                cmd.wake_after_seconds,
+                cmd.force,
+                false,
+                snapshot.generation,
+                snapshot.live_count,
+                snapshot.creating_count,
+                snapshot.restart_pending_count,
+                ManualAuditResult::RejectedCapability,
+            ) {
+                let _ = audit.record_manual_event(&rec);
+            }
+        }
+        return (
+            CoordinatorForceSuspendResult::CapabilityUnavailable(
+                "Privileged helper capability probe failed or executor is unavailable".into(),
+            ),
+            None,
+            None,
+        );
+    }
+
+    let snapshot = pty_manager.fleet_snapshot();
+    let is_active = !snapshot.is_quiescent();
+
+    if is_active && !cmd.force {
+        if let Some(audit) = server_audit {
+            if let Ok(rec) = ManualAuditRecord::new(
+                actor.clone(),
+                request_id,
+                cmd.wake_after_seconds,
+                cmd.force,
+                false,
+                snapshot.generation,
+                snapshot.live_count,
+                snapshot.creating_count,
+                snapshot.restart_pending_count,
+                ManualAuditResult::RejectedConfirmationRequired,
+            ) {
+                let _ = audit.record_manual_event(&rec);
+            }
+        }
+        return (
+            CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation {
+                fleet_snapshot: snapshot,
+            },
+            None,
+            None,
+        );
+    }
+
+    let effective_force = is_active && cmd.force;
+
+    // Durable actor admission audit before claiming
+    if let Some(audit) = server_audit {
+        let attempt_rec = match ManualAuditRecord::new(
+            actor.clone(),
+            request_id.clone(),
+            cmd.wake_after_seconds,
+            cmd.force,
+            effective_force,
+            snapshot.generation,
+            snapshot.live_count,
+            snapshot.creating_count,
+            snapshot.restart_pending_count,
+            ManualAuditResult::Attempted,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    CoordinatorForceSuspendResult::AuditFailed(e.to_string()),
+                    None,
+                    None,
+                );
+            }
+        };
+        if let Err(e) = audit.record_manual_event(&attempt_rec) {
+            return (
+                CoordinatorForceSuspendResult::AuditFailed(e.to_string()),
+                None,
+                None,
+            );
+        }
+    }
+
+    let claim_res = if effective_force {
+        pty_manager.try_claim_forced_handoff(snapshot.generation)
+    } else {
+        pty_manager.try_claim_handoff(snapshot.generation)
+    };
+
+    match claim_res {
+        Ok(_claim) => {
+            let accepted_snapshot = pty_manager.fleet_snapshot();
+            let accepted_rec = ManualAuditRecord::new(
+                actor.clone(),
+                request_id.clone(),
+                cmd.wake_after_seconds,
+                cmd.force,
+                effective_force,
+                accepted_snapshot.generation,
+                accepted_snapshot.live_count,
+                accepted_snapshot.creating_count,
+                accepted_snapshot.restart_pending_count,
+                ManualAuditResult::Accepted,
+            );
+            if let (Some(audit), Ok(rec)) = (server_audit, &accepted_rec) {
+                let _ = audit.record_manual_event(rec);
+            }
+
+            // Cancel any automatic arming
+            *arm_deadline = None;
+            *armed_generation = None;
+
+            *state = CoordinatorState::HandedOff;
+            *status_revision = status_revision.wrapping_add(1);
+
+            let req = SuspendWithRtcWakeRequest {
+                request_id: request_id.clone(),
+                wake_after_seconds: cmd.wake_after_seconds,
+            };
+            let exec = Arc::clone(executor);
+            let fut = Box::pin(async move {
+                exec.execute_suspend(req).await
+            });
+
+            (
+                CoordinatorForceSuspendResult::Accepted {
+                    request_id,
+                    status_revision: *status_revision,
+                    fleet_snapshot: accepted_snapshot,
+                },
+                Some(fut),
+                accepted_rec.ok(),
+            )
+        }
+        Err(err) => {
+            let latest_snapshot = pty_manager.fleet_snapshot();
+            match err {
+                HandoffClaimError::GenerationMismatch { expected, actual } => {
+                    if let Some(audit) = server_audit {
+                        if let Ok(rec) = ManualAuditRecord::new(
+                            actor.clone(),
+                            request_id,
+                            cmd.wake_after_seconds,
+                            cmd.force,
+                            effective_force,
+                            latest_snapshot.generation,
+                            latest_snapshot.live_count,
+                            latest_snapshot.creating_count,
+                            latest_snapshot.restart_pending_count,
+                            ManualAuditResult::RejectedConflict,
+                        ) {
+                            let _ = audit.record_manual_event(&rec);
+                        }
+                    }
+                    (
+                        CoordinatorForceSuspendResult::GenerationConflict {
+                            expected,
+                            actual,
+                            fleet_snapshot: latest_snapshot,
+                        },
+                        None,
+                        None,
+                    )
+                }
+                HandoffClaimError::NotQuiescent => {
+                    if let Some(audit) = server_audit {
+                        if let Ok(rec) = ManualAuditRecord::new(
+                            actor.clone(),
+                            request_id,
+                            cmd.wake_after_seconds,
+                            cmd.force,
+                            effective_force,
+                            latest_snapshot.generation,
+                            latest_snapshot.live_count,
+                            latest_snapshot.creating_count,
+                            latest_snapshot.restart_pending_count,
+                            ManualAuditResult::RejectedConfirmationRequired,
+                        ) {
+                            let _ = audit.record_manual_event(&rec);
+                        }
+                    }
+                    (
+                        CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation {
+                            fleet_snapshot: latest_snapshot,
+                        },
+                        None,
+                        None,
+                    )
+                }
+                HandoffClaimError::HandoffAlreadyActive => {
+                    if let Some(audit) = server_audit {
+                        if let Ok(rec) = ManualAuditRecord::new(
+                            actor.clone(),
+                            request_id,
+                            cmd.wake_after_seconds,
+                            cmd.force,
+                            effective_force,
+                            latest_snapshot.generation,
+                            latest_snapshot.live_count,
+                            latest_snapshot.creating_count,
+                            latest_snapshot.restart_pending_count,
+                            ManualAuditResult::RejectedHandoffInProgress,
+                        ) {
+                            let _ = audit.record_manual_event(&rec);
+                        }
+                    }
+                    (CoordinatorForceSuspendResult::HandoffInProgress, None, None)
+                }
+                HandoffClaimError::Closing | HandoffClaimError::Disposing => {
+                    if let Some(audit) = server_audit {
+                        if let Ok(rec) = ManualAuditRecord::new(
+                            actor.clone(),
+                            request_id,
+                            cmd.wake_after_seconds,
+                            cmd.force,
+                            effective_force,
+                            latest_snapshot.generation,
+                            latest_snapshot.live_count,
+                            latest_snapshot.creating_count,
+                            latest_snapshot.restart_pending_count,
+                            ManualAuditResult::RejectedShuttingDown,
+                        ) {
+                            let _ = audit.record_manual_event(&rec);
+                        }
+                    }
+                    (CoordinatorForceSuspendResult::ShuttingDown, None, None)
+                }
+            }
+        }
+    }
 }

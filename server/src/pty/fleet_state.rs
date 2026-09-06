@@ -332,11 +332,7 @@ impl PtyFleetState {
         }
     }
 
-    /// Attempt to claim handoff admission for idle suspend.
-    ///
-    /// Atomic check: must be quiescent, generation must match expected,
-    /// and neither closing, disposing, nor handoff active.
-    pub fn try_claim_handoff(&mut self, expected_generation: u64) -> Result<HandoffClaim, HandoffClaimError> {
+    fn check_claim_common(&self, expected_generation: u64) -> Result<(), HandoffClaimError> {
         if self.closing {
             return Err(HandoffClaimError::Closing);
         }
@@ -346,15 +342,38 @@ impl PtyFleetState {
         if self.handoff_active {
             return Err(HandoffClaimError::HandoffAlreadyActive);
         }
-        if !self.is_quiescent() {
-            return Err(HandoffClaimError::NotQuiescent);
-        }
         if self.generation != expected_generation {
             return Err(HandoffClaimError::GenerationMismatch {
                 expected: expected_generation,
                 actual: self.generation,
             });
         }
+        Ok(())
+    }
+
+    /// Attempt to claim handoff admission for idle suspend.
+    ///
+    /// Atomic check: must be quiescent, generation must match expected,
+    /// and neither closing, disposing, nor handoff active.
+    pub fn try_claim_handoff(&mut self, expected_generation: u64) -> Result<HandoffClaim, HandoffClaimError> {
+        self.check_claim_common(expected_generation)?;
+        if !self.is_quiescent() {
+            return Err(HandoffClaimError::NotQuiescent);
+        }
+
+        self.handoff_active = true;
+        self.publish();
+        Ok(HandoffClaim {
+            generation: self.generation,
+        })
+    }
+
+    /// Attempt to claim forced handoff admission for manual force sleep.
+    ///
+    /// Atomic check: generation must match expected, and neither closing, disposing,
+    /// nor handoff active. Bypasses only the quiescence predicate.
+    pub fn try_claim_forced_handoff(&mut self, expected_generation: u64) -> Result<HandoffClaim, HandoffClaimError> {
+        self.check_claim_common(expected_generation)?;
 
         self.handoff_active = true;
         self.publish();
