@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -45,7 +45,9 @@ export function ForceSleepDialog({
     String(getInitialTimedWakeSeconds(initialStatus)),
   );
 
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
     if (open) {
       setWakeMode("indefinite");
       setFleetSnapshot(initialStatus.fleetSnapshot);
@@ -54,7 +56,7 @@ export function ForceSleepDialog({
       setErrorMsg(null);
       setWakeSecondsInput(String(getInitialTimedWakeSeconds(initialStatus)));
     }
-  }, [open, initialStatus]);
+  }
 
   const activeCount = getActiveSessionCount(fleetSnapshot);
   const isPending = forceSuspend.isPending;

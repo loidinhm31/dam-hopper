@@ -1,12 +1,13 @@
 ---
 title: "Authenticated Manual Force Sleep"
 description: "Add a fail-closed, audited Force Machine to Sleep action with active-terminal confirmation and optional RTC auto-wake."
-status: in-progress
+status: completed
 priority: P1
 effort: 38h
 branch: feat/terminal-idle-suspend
 tags: [feature, backend, frontend, api, auth, security, linux]
 created: 2026-09-06
+completed: 2026-09-06T15:45:00+07:00
 ---
 
 # Authenticated Manual Force Sleep
@@ -23,7 +24,7 @@ Add a permanent production action in the Host Resource Popover for authenticated
 | 2 | Coordinator and fleet forced handoff | DONE (2026-09-06 10:48:00 +07:00) | 100% | 8h | [Phase 02](./phase-02-coordinator-and-fleet-forced-handoff.md) |
 | 3 | Authenticated force-suspend REST API | DONE (2026-09-06 12:00:21 +07:00) | 100% | 6h | [Phase 03](./phase-03-rest-api-force-suspend-endpoint.md) |
 | 4 | Host popover action and confirmation dialog | DONE (2026-09-06 12:20:00 +07:00) | 100% | 8h | [Phase 04](./phase-04-host-popover-ui-and-confirmation-dialog.md) |
-| 5 | Integration testing and docs | Pending | 0% | 10h | [Phase 05](./phase-05-integration-testing-and-docs.md) |
+| 5 | Integration testing and docs | DONE (2026-09-06 15:45:00 +07:00) | 100% | 10h | [Phase 05](./phase-05-integration-testing-and-docs.md) |
 
 ## Dependencies
 
@@ -48,12 +49,12 @@ Add a permanent production action in the Host Resource Popover for authenticated
 Auth/session → cookie-origin check → strict DTO/bounds → enabled actor/database auth → coordinator/capability → authoritative fleet confirmation → durable server audit → generation-fenced handoff → helper peer/dedupe/inhibitor/RTC audit → fixed suspend.
 
 ## Side-Effect Review Checklist
-
-- [ ] No automatic timing default/bounds change and no config persistence from the dialog.
-- [ ] No terminal kill, restart, output inspection, shell, sudo, arbitrary path/device/mode, or generic host command.
-- [ ] No foreign RTC alarm overwrite; indefinite mode writes only the reviewed clear operation.
-- [ ] New terminal starts are blocked only while handoff is active and resume/outcome always releases the gate.
-- [ ] Browser/network loss after suspend cannot trigger retry; status/audit reconcile on resume.
+- [x] No automatic timing default/bounds change and no config persistence from the dialog.
+- [x] No terminal kill, restart, output inspection, shell, sudo, arbitrary path/device/mode, or generic host command.
+- [x] No foreign RTC alarm overwrite; indefinite mode writes only the reviewed clear operation.
+- [x] New terminal starts are blocked only while handoff is active and resume/outcome always releases the gate.
+- [x] Browser/network loss after suspend cannot trigger retry; status/audit reconcile on resume.
+- [x] Automated checks and documentation preserve the reviewed side-effect boundary.
 
 ## Unresolved Questions
 

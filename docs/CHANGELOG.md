@@ -31,6 +31,9 @@
   bounded RTC wake duration input, active managed session warning and
   confirmation checkbox, authoritative 409 conflict refresh, disabled
   controls during pending mutation, live regions, and 44px touch targets.
+- **Authenticated Manual Force Sleep — Phase 05 integration, qualification, and documentation complete (2026-09-06 15:45:00 +07:00).**
+  Closed the requirements-to-evidence matrix, protocol/coordinator/REST/UI integration gates, non-privileged boundary verifier, rollback review, and synchronized architecture, API, configuration, security, operations, product, and codebase documentation.
+- Validation passed: 81/81 Rust idle-suspend tests, 3/3 UI Vitest tests, 10/10 Chromium browser tests, 12/12 boundary checks, and `cargo check`. Automated evidence uses fakes and temporary files only; the indefinite real-host canary remains explicitly deferred pending Operations approval and verified physical/out-of-band recovery.
 
 # 2026-09-02
 
