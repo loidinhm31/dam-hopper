@@ -50,10 +50,13 @@ function mockStatus(overrides: Partial<IdleSuspendStatusV1> = {}): IdleSuspendSt
   };
 }
 
-function markup() {
-  return renderToStaticMarkup(<HostIdleSuspendStatus />);
+function markup(props?: Parameters<typeof HostIdleSuspendStatus>[0]) {
+  return renderToStaticMarkup(<HostIdleSuspendStatus {...props} />);
 }
 
+function isButtonDisabled(html: string): boolean {
+  return /<button\b[^>]*?\sdisabled(?:=""|(?=[\s>]))/.test(html);
+}
 describe("HostIdleSuspendStatus", () => {
   beforeEach(() => {
     mocks.status = mockStatus();
@@ -95,10 +98,84 @@ describe("HostIdleSuspendStatus", () => {
     expect(output).toContain("Handed off");
   });
 
-  it("remains strictly read-only with no inputs or buttons", () => {
+  it("renders Force Machine to Sleep button disabled when onForceSleep is not provided", () => {
     const output = markup();
-    expect(output).not.toContain("<input");
-    expect(output).not.toContain("<button");
-    expect(output).not.toContain("<form");
+    expect(output).toContain("Force Machine to Sleep");
+    expect(isButtonDisabled(output)).toBe(true);
+  });
+
+  it("renders Force Machine to Sleep button enabled when onForceSleep is provided", () => {
+    const onForceSleep = vi.fn();
+    const output = markup({ onForceSleep });
+    expect(output).toContain("Force Machine to Sleep");
+    expect(isButtonDisabled(output)).toBe(false);
+  });
+
+  it("disables button during handedOff state or handoffActive", () => {
+    const onForceSleep = vi.fn();
+    mocks.status = mockStatus({ state: "handedOff" });
+    let output = markup({ onForceSleep });
+    expect(isButtonDisabled(output)).toBe(true);
+
+    mocks.status = mockStatus({
+      state: "watching",
+      fleetSnapshot: {
+        generation: 3,
+        liveCount: 0,
+        creatingCount: 0,
+        restartPendingCount: 0,
+        quiescent: false,
+        disposing: false,
+        handoffActive: true,
+      },
+    });
+    output = markup({ onForceSleep });
+    expect(isButtonDisabled(output)).toBe(true);
+  });
+
+  it("disables button during closing or disposing", () => {
+    const onForceSleep = vi.fn();
+    mocks.status = mockStatus({
+      fleetSnapshot: {
+        generation: 3,
+        liveCount: 0,
+        creatingCount: 0,
+        restartPendingCount: 0,
+        quiescent: false,
+        disposing: true,
+        handoffActive: false,
+      },
+    });
+    let output = markup({ onForceSleep });
+    expect(isButtonDisabled(output)).toBe(true);
+
+    mocks.status = mockStatus({
+      fleetSnapshot: {
+        generation: 3,
+        liveCount: 0,
+        creatingCount: 0,
+        restartPendingCount: 0,
+        quiescent: false,
+        disposing: false,
+        closing: true,
+        handoffActive: false,
+      },
+    });
+    output = markup({ onForceSleep });
+    expect(isButtonDisabled(output)).toBe(true);
+  });
+
+  it("disables button when isForceSleepPending is true", () => {
+    const onForceSleep = vi.fn();
+    const output = markup({ onForceSleep, isForceSleepPending: true });
+    expect(isButtonDisabled(output)).toBe(true);
+  });
+
+  it("keeps button enabled when automatic idle suspend is disabled", () => {
+    const onForceSleep = vi.fn();
+    mocks.status = mockStatus({ enabled: false, state: "disabled" });
+    const output = markup({ onForceSleep });
+    expect(output).toContain("Force Machine to Sleep");
+    expect(isButtonDisabled(output)).toBe(false);
   });
 });

@@ -17,6 +17,8 @@ import { HostResourceDiagnosis } from "@/components/organisms/HostResourceDiagno
 import { HostResourceGlance } from "@/components/organisms/HostResourceGlance.js";
 import { useHostResourceAlertPresentation } from "@/hooks/use-host-resource-alert-presentation.js";
 import { HostIdleSuspendStatus } from "@/components/organisms/HostIdleSuspendStatus.js";
+import { ForceSleepDialog } from "@/components/organisms/ForceSleepDialog.js";
+import type { IdleSuspendStatusV1 } from "@/api/client.js";
 import {
   formatAlertState,
   resolveHostResourceStatus,
@@ -32,6 +34,9 @@ export function HostResourcePopover() {
   const panelId = useId();
   const [open, setOpen] = useState(false);
   const [diagnosisOpen, setDiagnosisOpen] = useState(false);
+  const [forceSleepOpen, setForceSleepOpen] = useState(false);
+  const [forceSleepStatus, setForceSleepStatus] =
+    useState<IdleSuspendStatusV1 | null>(null);
   const { data: globalConfig } = useGlobalConfig();
   const updateUiConfig = useUpdateUiConfig();
   const snapshot = useHostResourceSnapshot();
@@ -69,6 +74,17 @@ export function HostResourcePopover() {
 
   const closeAndRestoreFocus = () => {
     setOpen(false);
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
+  const handleOpenForceSleep = (status: IdleSuspendStatusV1) => {
+    setForceSleepStatus(status);
+    setOpen(false);
+    setForceSleepOpen(true);
+  };
+
+  const handleCloseForceSleep = () => {
+    setForceSleepOpen(false);
     requestAnimationFrame(() => triggerRef.current?.focus());
   };
 
@@ -148,7 +164,7 @@ export function HostResourcePopover() {
             : undefined
         }
         aria-haspopup="dialog"
-        aria-expanded={open}
+        aria-expanded={open || forceSleepOpen}
         aria-controls={panelId}
       >
         <Activity aria-hidden="true" size={16} />
@@ -189,7 +205,7 @@ export function HostResourcePopover() {
                 Host resources
               </h2>
               <p className="min-w-0 [overflow-wrap:anywhere] text-[10px] text-[var(--color-text-muted)]">
-                Read-only monitoring and diagnosis
+                Monitoring, diagnosis, and host sleep control
               </p>
               <div
                 aria-label={`Host resource status: ${effectiveStatus.label}`}
@@ -254,7 +270,7 @@ export function HostResourcePopover() {
               />
             )}
             <div className="mt-3">
-              <HostIdleSuspendStatus />
+              <HostIdleSuspendStatus onForceSleep={handleOpenForceSleep} />
             </div>
             {snapshot.data && (
               <section className="mt-3 border-t border-[var(--color-border)] pt-3">
@@ -300,6 +316,15 @@ export function HostResourcePopover() {
             )}
           </div>
         </section>
+      )}
+      {forceSleepStatus && (
+        <ForceSleepDialog
+          open={forceSleepOpen}
+          onOpenChange={(isOpen) => {
+            if (!isOpen) handleCloseForceSleep();
+          }}
+          initialStatus={forceSleepStatus}
+        />
       )}
     </div>
   );

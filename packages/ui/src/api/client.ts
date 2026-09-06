@@ -39,6 +39,7 @@ export class ApiRequestError extends Error {
     message: string,
     public readonly status: number,
     public readonly code?: string,
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = "ApiRequestError";
@@ -576,8 +577,9 @@ export interface IdleSuspendFleetSnapshot {
   liveCount: number;
   creatingCount: number;
   restartPendingCount: number;
-  quiescent: boolean;
+  quiescent?: boolean;
   disposing: boolean;
+  closing?: boolean;
   handoffActive: boolean;
 }
 
@@ -647,6 +649,74 @@ export interface IdleSuspendTimingPatchResponse {
   statusRevision: number;
   quietPeriodSeconds: number;
   wakeAfterSeconds: number;
+}
+
+export interface ForceSuspendRequest {
+  wakeAfterSeconds: number;
+  force: boolean;
+}
+
+export interface ForceSuspendAcceptedResponse {
+  version: number;
+  requestId: string;
+  statusRevision: number;
+  state: "handedOff" | string;
+  wakeAfterSeconds: number;
+  forced: boolean;
+  fleetSnapshot: IdleSuspendFleetSnapshot;
+}
+
+export interface IdleSuspendConflictResponse {
+  error: string;
+  code: string;
+  activeSessionCount: number;
+  fleetSnapshot: IdleSuspendFleetSnapshot;
+}
+
+export function isForceSuspendAcceptedResponse(
+  value: unknown,
+): value is ForceSuspendAcceptedResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const s = value as Record<string, unknown>;
+  return (
+    typeof s.version === "number" &&
+    typeof s.requestId === "string" &&
+    typeof s.statusRevision === "number" &&
+    typeof s.state === "string" &&
+    typeof s.wakeAfterSeconds === "number" &&
+    typeof s.forced === "boolean" &&
+    typeof s.fleetSnapshot === "object" &&
+    s.fleetSnapshot !== null
+  );
+}
+
+export function isIdleSuspendConflictResponse(
+  value: unknown,
+): value is IdleSuspendConflictResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const s = value as Record<string, unknown>;
+  return (
+    typeof s.error === "string" &&
+    typeof s.code === "string" &&
+    typeof s.activeSessionCount === "number" &&
+    typeof s.fleetSnapshot === "object" &&
+    s.fleetSnapshot !== null
+  );
+}
+
+export function asIdleSuspendConflictResponse(
+  error: unknown,
+): IdleSuspendConflictResponse | null {
+  if (
+    error instanceof ApiRequestError &&
+    error.status === 409 &&
+    error.details
+  ) {
+    if (isIdleSuspendConflictResponse(error.details)) {
+      return error.details;
+    }
+  }
+  return null;
 }
 
 // ── Memory + Import Types ─────────────────────────────────────────────────────
@@ -1771,6 +1841,11 @@ export const api = {
       getTransport().invoke<IdleSuspendTimingPatchResponse>(
         "system:updateIdleSuspendTiming",
         timing,
+      ),
+    forceSuspend: (request: ForceSuspendRequest) =>
+      getTransport().invoke<ForceSuspendAcceptedResponse>(
+        "system:forceSuspend",
+        request,
       ),
   },
   usage: {

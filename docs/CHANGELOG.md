@@ -23,9 +23,14 @@
   with strict DTOs and wake bounds, cookie same-origin and enabled-actor
   enforcement, a 16 KiB body cap, coordinator-only dispatch, audited `202`
   admission, typed fleet/handoff conflicts, sanitized closed errors, and
-  `Cache-Control: no-store` responses. API reference and Phase 03 plan now
-  document the contract; host popover UI and final integration gates remain
-  pending.
+  `Cache-Control: no-store` responses.
+- **Authenticated Manual Force Sleep — Phase 04 host popover UI and confirmation dialog complete (2026-09-06 12:20:00 +07:00).**
+  Added the destructive "Force Machine to Sleep" action within
+  HostIdleSuspendStatus and HostResourcePopover with clean modal handoff to
+  Radix ForceSleepDialog, indefinite default (`wakeAfterSeconds: 0`), optional
+  bounded RTC wake duration input, active managed session warning and
+  confirmation checkbox, authoritative 409 conflict refresh, disabled
+  controls during pending mutation, live regions, and 44px touch targets.
 
 # 2026-09-02
 

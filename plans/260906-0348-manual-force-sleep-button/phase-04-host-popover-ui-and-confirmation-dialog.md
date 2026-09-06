@@ -13,9 +13,10 @@
 
 - Date: 2026-09-06
 - Priority: P1
-- Status: Pending
+- Status: DONE — 2026-09-06 12:20:00 +07:00
 - Effort: 8h
-- Description: Add a Force Machine to Sleep action inside the Host Resource Popover and an accessible Radix confirmation dialog with authoritative active-session warning, indefinite default, optional timed wake, and no-retry mutation behavior.
+- Progress: 100% (10/10 implementation steps; 10/10 todo items)
+- Description: Added the Force Machine to Sleep action inside the Host Resource Popover and an accessible Radix confirmation dialog with authoritative active-session warning, indefinite default, optional timed wake, and no-retry mutation behavior.
 
 ## Key Insights
 
@@ -112,16 +113,16 @@ ForceSleepDialog
 
 ## Todo List
 
-- [ ] Add force-suspend client DTOs and API method
-- [ ] Add POST transport mapping
-- [ ] Add no-retry `useForceSuspend()`
-- [ ] Add popover action and disabled-state semantics
-- [ ] Implement popover-to-Radix modal handoff
-- [ ] Implement indefinite-default/timed-wake dialog
-- [ ] Implement authoritative active-count reconfirmation
-- [ ] Add pending/error/live-region behavior
-- [ ] Replace obsolete read-only UI assertions
-- [ ] Add focused unit and real-browser coverage
+- [x] Add force-suspend client DTOs and API method
+- [x] Add POST transport mapping
+- [x] Add no-retry `useForceSuspend()`
+- [x] Add popover action and disabled-state semantics
+- [x] Implement popover-to-Radix modal handoff
+- [x] Implement indefinite-default/timed-wake dialog
+- [x] Implement authoritative active-count reconfirmation
+- [x] Add pending/error/live-region behavior
+- [x] Replace obsolete read-only UI assertions
+- [x] Add focused unit and real-browser coverage
 
 ## Success Criteria
 

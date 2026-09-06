@@ -6,6 +6,7 @@ import type { IdleSuspendStatusV1 } from "@/api/client.js";
 import { ApiRequestError } from "@/api/client.js";
 import { SettingsIdleSuspendTimingSection } from "@/components/organisms/SettingsIdleSuspendTimingSection.js";
 import { HostIdleSuspendStatus } from "@/components/organisms/HostIdleSuspendStatus.js";
+import { ForceSleepDialog } from "@/components/organisms/ForceSleepDialog.js";
 import "@/index.css";
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   isError: false,
   isPending: false,
   mutateAsync: vi.fn(),
+  forcePending: false,
+  forceMutateAsync: vi.fn(),
 }));
 
 vi.mock("@/api/queries.js", () => ({
@@ -25,6 +28,10 @@ vi.mock("@/api/queries.js", () => ({
   useUpdateIdleSuspendTiming: () => ({
     isPending: mocks.isPending,
     mutateAsync: mocks.mutateAsync,
+  }),
+  useForceSuspend: () => ({
+    isPending: mocks.forcePending,
+    mutateAsync: mocks.forceMutateAsync,
   }),
 }));
 
@@ -79,8 +86,9 @@ describe("Idle Suspend Settings & Status Browser Tests", () => {
     mocks.isError = false;
     mocks.isPending = false;
     mocks.mutateAsync.mockReset();
+    mocks.forcePending = false;
+    mocks.forceMutateAsync.mockReset();
   });
-
   afterEach(async () => {
     await act(async () => {
       root.unmount();
@@ -192,10 +200,10 @@ describe("Idle Suspend Settings & Status Browser Tests", () => {
     );
   });
 
-  it("renders HostIdleSuspendStatus read-only with correct state badges and no interactive inputs", async () => {
+  it("renders HostIdleSuspendStatus with correct state badges and action button", async () => {
     mocks.status = mockStatus({
       state: "armed",
-      armDeadlineMs: Date.now() + 120_000,
+      armDeadlineMs: Date.now() + 150_000,
       lastOutcome: {
         type: "resumedSuccessfully",
         resumedAtMs: Date.now() - 300_000,
@@ -206,20 +214,19 @@ describe("Idle Suspend Settings & Status Browser Tests", () => {
       root.render(<HostIdleSuspendStatus />);
     });
 
-    // State badge "Armed" displayed
     expect(container.textContent).toContain("Armed");
     expect(container.textContent).toContain("Timing: 300s / 600s");
     expect(container.textContent).toContain(
       "Fleet: 0 live / 0 creating / 0 restarting",
     );
 
-    // Read-only invariant: zero input fields or button controls exist in this widget
     const inputs = container.querySelectorAll("input");
     const buttons = container.querySelectorAll("button");
     expect(inputs.length).toBe(0);
-    expect(buttons.length).toBe(0);
+    expect(buttons.length).toBe(1);
+    expect(buttons[0].textContent).toContain("Force Machine to Sleep");
+    expect(buttons[0].disabled).toBe(true);
   });
-
   it("renders HostIdleSuspendStatus for suppressed and disabled states", async () => {
     mocks.status = mockStatus({
       state: "suppressed",
@@ -236,5 +243,208 @@ describe("Idle Suspend Settings & Status Browser Tests", () => {
 
     expect(container.textContent).toContain("Suppressed");
     expect(container.textContent).toContain("inhibited by system-update");
+  });
+
+  it("renders enabled Force Machine to Sleep button when onForceSleep callback is provided and triggers callback", async () => {
+    const onForceSleep = vi.fn();
+    mocks.status = mockStatus({ state: "watching" });
+
+    await act(async () => {
+      root.render(<HostIdleSuspendStatus onForceSleep={onForceSleep} />);
+    });
+
+    const button = container.querySelector<HTMLButtonElement>("button");
+    expect(button).not.toBeNull();
+    expect(button?.disabled).toBe(false);
+
+    await act(async () => {
+      button?.click();
+    });
+    expect(onForceSleep).toHaveBeenCalledTimes(1);
+    expect(onForceSleep.mock.calls[0][0]).toMatchObject({
+      state: "watching",
+      quietPeriodSeconds: 300,
+      wakeAfterSeconds: 600,
+    });
+  });
+
+  it("submits wakeAfterSeconds 0 on indefinite default when active count is 0", async () => {
+    const onOpenChange = vi.fn();
+    mocks.status = mockStatus({
+      fleetSnapshot: {
+        generation: 1,
+        liveCount: 0,
+        creatingCount: 0,
+        restartPendingCount: 0,
+        disposing: false,
+        closing: false,
+        handoffActive: false,
+        quiescent: true,
+      },
+    });
+    mocks.forceMutateAsync.mockResolvedValueOnce({
+      version: 1,
+      state: "handedOff",
+      wakeAfterSeconds: 0,
+      forced: false,
+    });
+
+    await act(async () => {
+      root.render(
+        <ForceSleepDialog
+          open={true}
+          onOpenChange={onOpenChange}
+          initialStatus={mocks.status!}
+        />,
+      );
+    });
+
+    const submitButton = page.getByRole("button", {
+      name: "Force Machine to Sleep",
+    });
+    await expect.element(submitButton).toBeVisible();
+    await expect.element(submitButton).toBeEnabled();
+
+    await act(async () => userEvent.click(submitButton));
+
+    expect(mocks.forceMutateAsync).toHaveBeenCalledWith({
+      wakeAfterSeconds: 0,
+      force: false,
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("requires explicit confirmation when managed sessions are active before sending force=true", async () => {
+    const onOpenChange = vi.fn();
+    mocks.status = mockStatus({
+      fleetSnapshot: {
+        generation: 2,
+        liveCount: 1,
+        creatingCount: 1,
+        restartPendingCount: 0,
+        disposing: false,
+        closing: false,
+        handoffActive: false,
+        quiescent: false,
+      },
+    });
+    mocks.forceMutateAsync.mockResolvedValueOnce({
+      version: 1,
+      state: "handedOff",
+      wakeAfterSeconds: 0,
+      forced: true,
+    });
+
+    await act(async () => {
+      root.render(
+        <ForceSleepDialog
+          open={true}
+          onOpenChange={onOpenChange}
+          initialStatus={mocks.status!}
+        />,
+      );
+    });
+
+    const submitButton = page.getByRole("button", {
+      name: "Force Machine to Sleep",
+    });
+    await expect.element(submitButton).toBeDisabled();
+
+    const checkbox = page.getByRole("checkbox", {
+      name: "Confirm pausing active managed sessions",
+    });
+    await expect.element(checkbox).toBeVisible();
+    await act(async () => userEvent.click(checkbox));
+
+    await expect.element(submitButton).toBeEnabled();
+    await act(async () => userEvent.click(submitButton));
+
+    expect(mocks.forceMutateAsync).toHaveBeenCalledWith({
+      wakeAfterSeconds: 0,
+      force: true,
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("handles 409 conflict by refreshing counts and requiring a new explicit confirmation", async () => {
+    const onOpenChange = vi.fn();
+    mocks.status = mockStatus({
+      fleetSnapshot: {
+        generation: 1,
+        liveCount: 0,
+        creatingCount: 0,
+        restartPendingCount: 0,
+        disposing: false,
+        closing: false,
+        handoffActive: false,
+        quiescent: true,
+      },
+    });
+
+    mocks.forceMutateAsync.mockRejectedValueOnce(
+      new ApiRequestError(
+        "active fleet confirmation required",
+        409,
+        "idleSuspendActiveFleetConfirmationRequired",
+        {
+          error: "active fleet confirmation required",
+          code: "idleSuspendActiveFleetConfirmationRequired",
+          activeSessionCount: 2,
+          fleetSnapshot: {
+            generation: 2,
+            liveCount: 2,
+            creatingCount: 0,
+            restartPendingCount: 0,
+            disposing: false,
+            closing: false,
+            handoffActive: false,
+            quiescent: false,
+          },
+        },
+      ),
+    );
+
+    await act(async () => {
+      root.render(
+        <ForceSleepDialog
+          open={true}
+          onOpenChange={onOpenChange}
+          initialStatus={mocks.status!}
+        />,
+      );
+    });
+
+    const submitButton = page.getByRole("button", {
+      name: "Force Machine to Sleep",
+    });
+    await act(async () => userEvent.click(submitButton));
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    const alert = page.getByRole("alert");
+    await expect.element(alert.first()).toBeVisible();
+
+    const checkbox = page.getByRole("checkbox", {
+      name: "Confirm pausing active managed sessions",
+    });
+    await expect.element(checkbox).toBeVisible();
+    await expect.element(submitButton).toBeDisabled();
+
+    mocks.forceMutateAsync.mockResolvedValueOnce({
+      version: 1,
+      state: "handedOff",
+      wakeAfterSeconds: 0,
+      forced: true,
+    });
+
+    await act(async () => userEvent.click(checkbox));
+    await expect.element(submitButton).toBeEnabled();
+    await act(async () => userEvent.click(submitButton));
+
+    expect(mocks.forceMutateAsync).toHaveBeenLastCalledWith({
+      wakeAfterSeconds: 0,
+      force: true,
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

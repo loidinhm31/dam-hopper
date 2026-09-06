@@ -1106,6 +1106,12 @@ function channelToEndpoint(
         url: "/api/system/idle-suspend/v1/timing",
         body: data,
       };
+    case "system:forceSuspend":
+      return {
+        method: "POST",
+        url: "/api/system/idle-suspend/v1/force-suspend",
+        body: data,
+      };
 
     // Usage analytics (REST only; never sent to the terminal WebSocket).
     case "usage:summary": {
@@ -2218,6 +2224,7 @@ export class WsTransport implements Transport {
           err.error ?? `HTTP ${response.status}`,
           response.status,
           err.code,
+          err,
         );
       }
       const ct = response.headers.get("content-type") ?? "";
