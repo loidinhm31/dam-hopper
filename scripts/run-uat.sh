@@ -10,7 +10,8 @@ WEB_PORT="4804"
 API_HOST="0.0.0.0"
 WEB_HOST="0.0.0.0"
 NO_AUTH=0
-
+CUSTOM_CONFIG=""
+ENV_FILE=""
 usage() {
     cat <<EOF
 DamHopper UAT Environment Runner
@@ -25,6 +26,8 @@ Commands:
   logs        View logs (pass 'api' or 'web'; defaults to both)
 
 Options:
+  --config <file>     Path to dam-hopper.toml (default: /tmp/dam-hopper-uat/dam-hopper.toml)
+  --env-file <file>   Path to env file with MONGODB_URI etc. (default: /tmp/dam-hopper-uat/uat.env)
   --api-port <port>   API server port (default: 4803)
   --web-port <port>   Web host port (default: 4804)
   --no-auth           Run API server in development mode without authentication
@@ -32,7 +35,6 @@ Options:
 EOF
     exit 0
 }
-
 COMMAND="${1:-}"
 if [[ -z "$COMMAND" || "$COMMAND" == "-h" || "$COMMAND" == "--help" ]]; then
     usage
@@ -53,6 +55,14 @@ while [[ $# -gt 0 ]]; do
             NO_AUTH=1
             shift
             ;;
+        --config)
+            CUSTOM_CONFIG="$2"
+            shift 2
+            ;;
+        --env-file)
+            ENV_FILE="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             ;;
@@ -72,8 +82,7 @@ PID_WEB="$UAT_DIR/web.pid"
 LOG_SERVER="$UAT_DIR/server.log"
 LOG_WEB="$UAT_DIR/web.log"
 RUNTIME_CONFIG="$UAT_DIR/runtime-config.json"
-UAT_CONFIG="$UAT_DIR/dam-hopper.toml"
-
+UAT_CONFIG="${CUSTOM_CONFIG:-$UAT_DIR/dam-hopper.toml}"
 check_prerequisites() {
     if [[ ! -x "$API_BIN" ]]; then
         echo "Error: API binary not found at $API_BIN. Run 'cargo build --release --bins' first." >&2
@@ -133,6 +142,24 @@ start_services() {
     check_prerequisites
     setup_uat_environment
 
+    # Load environment variables if provided or present in UAT_DIR
+    if [[ -n "$ENV_FILE" ]]; then
+        if [[ ! -f "$ENV_FILE" ]]; then
+            echo "Error: Env file '$ENV_FILE' not found" >&2
+            exit 1
+        fi
+        echo "Loading environment from: $ENV_FILE"
+        set -a
+        # shellcheck disable=SC1090
+        . "$ENV_FILE"
+        set +a
+    elif [[ -f "$UAT_DIR/uat.env" ]]; then
+        echo "Loading environment from: $UAT_DIR/uat.env"
+        set -a
+        # shellcheck disable=SC1090
+        . "$UAT_DIR/uat.env"
+        set +a
+    fi
     echo "=== Starting DamHopper UAT Environment ==="
     echo "API Server Port : ${API_PORT}"
     echo "Web Host Port   : ${WEB_PORT}"
