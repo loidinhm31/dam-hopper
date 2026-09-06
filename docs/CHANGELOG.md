@@ -1,3 +1,8 @@
+# 2026-09-07
+
+- **Plan item notes and editing.** Restored selected Plan item note rendering with multiline bodies, semantic timestamps, and per-note deletion. Added inline title/summary editing across desktop Deck and compact Sheet, reusing existing workflow PATCH/delete-note mutations with fresh request IDs and exact CAS timestamps.
+- Validation: focused workflow Vitest suites **27/27 passed** across action hooks, selected-item UI, responsive Surface, Deck, and Sheet. Changed-file TypeScript checks passed; coverage provider unavailable and an unrelated `use-clipboard.ts` type error remains. Code review 8.5/10, no critical issues; asynchronous edit rejection retention remains a non-blocking follow-up. [Plan](../plans/260907-0013-plan-item-notes-and-edit/plan.md) · [QA report](../plans/reports/qa-260907-0029-plan-item-notes-and-edit.md) · [Review report](../plans/reports/code-review-260907-0031-restore-plan-item-notes-and-edit.md).
+
 # 2026-09-02
 
 - **Phase 01: Workflow tracking domain and relational persistence.** Added the

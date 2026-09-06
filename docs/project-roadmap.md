@@ -2,6 +2,11 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Plan Item Notes and Editing (2026-09-07)
+
+- **Completed 2026-09-07**: Restored selected Plan item note rendering (all note bodies, semantic timestamps, per-note deletion) and inline title/summary editing across desktop Deck and compact Sheet. Existing workflow PATCH/delete-note mutations retain request IDs and exact CAS timestamps.
+- Validation: focused workflow Vitest suites **27/27 passed** across action hooks, selected-item UI, responsive Surface, Deck, and Sheet. Changed-file TypeScript checks passed; coverage provider unavailable and unrelated `use-clipboard.ts` type error remains. Code review 8.5/10, no critical issues; asynchronous edit rejection retention remains a non-blocking follow-up. [Plan](../plans/260907-0013-plan-item-notes-and-edit/plan.md) · [QA report](../plans/reports/qa-260907-0029-plan-item-notes-and-edit.md) · [Review report](../plans/reports/code-review-260907-0031-restore-plan-item-notes-and-edit.md).
+
 ### Workflow Tracking and Continuity (2026-09-02)
 
 - **Phase 01 — Domain and relational persistence [COMPLETED / DONE 2026-09-02]**: Delivered snapshot-first workflow persistence in the existing SQLite `SessionStore`, including migration 010, Plan/Phase/Task hierarchy and invariants, manual sessions, terminal/agent resource links, durable notes, bounded activity events, factual overview aggregation, keyset history pagination, idempotent transactional mutations, and bounded retention purge.

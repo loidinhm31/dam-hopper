@@ -1115,6 +1115,9 @@ the UI does not infer missing child items.
 | `WorkflowContextSheet` | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `35dvh` collapsed and `90dvh` expanded. |
 | `WorkflowProjectList` | Exact target selection plus plan, task, and running-session counts. |
 | `WorkflowItemList` / `WorkflowItemRow` | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy. |
+| `WorkflowSelectedItemBar` | Selected-item status/session/child actions, note drafting, ordered note display/deletion, item deletion, and edit entry point. |
+| `WorkflowSelectedItemEditForm` | Local title/summary drafts, normalization, keyboard shortcuts, and Save/Cancel presentation. |
+| `WorkflowSelectedItemNotesList` | Bounded independently scrollable note detail with semantic timestamps and note-scoped deletion. |
 | `WorkflowQuickCapture` | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request. |
 | `WorkflowExecutionList` / `WorkflowSessionCard` | Explicit start/end timestamps, Now actions, elapsed duration, abandon, observed links, and manual Agent Harness/Agent Run metadata. |
 
@@ -1132,18 +1135,19 @@ semantics. The focus helper restores a connected element defensively.
 
 `use-workflow-surface-actions.ts` maps UI actions to typed workflow mutations,
 generates a UUID `requestId` per request, preserves the selected target, and
-uses current ISO timestamps for status/session writes. Observed resource
-`suggestedEndTime` values only prefill a draft after an explicit user action;
-observation never changes manual workflow-session status or timestamps. Creating
-an item with immediate start creates the follow-up session with the current
-time.
+uses current ISO timestamps for status/session writes. Item edits pass the
+selected item's current `updatedAt`; note deletion passes the note's current
+`updatedAt`. Observed resource `suggestedEndTime` values only prefill a draft
+after an explicit user action; observation never changes manual workflow-session
+status or timestamps. Creating an item with immediate start creates the
+follow-up session with the current time.
 
 The focused Phase 05 report records 62/62 targeted UI/workflow tests, with
 1,493/1,493 full UI tests and 907/907 Rust tests (two ignored). Those tests do
 not qualify browser geometry, safe-area/touch behavior, focus continuity, or
-real host integration. Current implementation notes: resource-attention fields
-from `selectAttentionSummary` remain false/zero, and item-list action
-callbacks are broader than the controls currently rendered by the list.
+real host integration. Resource-attention fields from `selectAttentionSummary`
+remain false/zero; selected-item note and edit controls are now rendered by
+`WorkflowSelectedItemBar` and its focused molecules.
 
 ### WorkspacePage and shell integration (UI Phase 06)
 

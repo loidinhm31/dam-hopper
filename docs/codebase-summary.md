@@ -8,8 +8,8 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-02): 1,538 files, 3,237,062 tokens, and 13,124,780 characters.
-- Repomix security scanning excluded three suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
+- Repomix snapshot (2026-09-07): 1,693 processed files, 3,505,732 tokens, and 14,240,047 characters.
+- Repomix security scanning excluded four suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
 The snapshot is a compaction aid, not a release artifact; generated
@@ -195,18 +195,26 @@ and native hosts:
   `WorkflowSessionCard` provide target switching, Plan-first hierarchy,
   minimal capture, explicit session timestamps/Now/abandon, and manual Agent
   Harness/Agent Run linking.
+- `WorkflowSelectedItemBar` renders selected-item notes and exposes per-note
+  deletion plus inline title/summary editing. `WorkflowSelectedItemEditForm`
+  normalizes drafts (empty summary becomes `null`), while
+  `WorkflowSelectedItemNotesList` preserves note order and bounds its own
+  scrolling region.
+- `use-workflow-surface-actions.ts` supplies item-update and note-delete
+  callbacks with fresh request IDs and the selected DTO's `updatedAt` for CAS;
+  successful mutations invalidate the workflow root for an authoritative
+  overview refresh.
 - `workflow-focus.ts` owns the `Mod+Shift+KeyW` shortcut guard for editable,
   Monaco, xterm, dialog, and explicitly suppressed/native-input surfaces.
-  `use-workflow-surface-actions.ts` maps UI actions to request-ID-bearing
-  `api.workflow` mutations.
 
 Selectors use exact project/worktree matching, prefer active descendants before
 status/update ordering, and expose factual tracked-Task labels. Query data
-remains memory-only; presentation state is not persisted. Current resource
-attention fields remain false/zero, and several item-list action callbacks are
-accepted but not rendered as controls. Browser geometry, touch/safe-area, focus
-continuity and host-integration qualification were completed in Phase 07; see
-the verification section below.
+remains memory-only; presentation state is not persisted. Selected-item edit and
+note controls are forwarded through both desktop and compact containers, while
+resource-attention fields remain false/zero. Browser geometry, touch/safe-area,
+focus continuity and host-integration qualification were completed in Phase 07;
+see [Workflow Context Surface](./workflow-context-surface.md) for the selected
+item notes/edit contract.
 
 ### WorkspacePage and shell integration (Phase 06)
 

@@ -939,6 +939,28 @@ action state, and elapsed-clock ticks component-local; workflow hooks must not
 read/write `useSearchParams`, terminal registries, editor state, or Zustand
 workflow stores.
 
+### Workflow Surface Mutation Callbacks (Phase 05+)
+
+Keep selected-item presentation separate from workflow transport:
+
+- `WorkflowContextSurface` obtains mutation handlers from
+  `use-workflow-surface-actions.ts` and forwards typed callbacks through both
+  Deck and Sheet; molecules must not call `api.workflow` directly.
+- `WorkflowSelectedItemBar` owns selected-item actions. Keep note rendering in
+  `WorkflowSelectedItemNotesList` and title/summary drafts in
+  `WorkflowSelectedItemEditForm`; do not duplicate these states in containers.
+- Pass the complete `ItemDto` or `NoteDto` to callbacks. The action hook adds a
+  fresh request UUID and uses the DTO's current `updatedAt` for CAS.
+- Normalize title/summary at the edit boundary: reject a blank trimmed title
+  and represent an intentionally cleared summary as `null`. Notes stay
+  append-only in the surface; note deletion is the existing CAS mutation.
+- Preserve local-only drafts and rely on successful mutation invalidation for
+  authoritative overview refreshes; do not add optimistic cache writes,
+  URL/localStorage persistence, or responsive-specific mutation behavior.
+
+See [Workflow Context Surface](./workflow-context-surface.md) for the
+selected-item notes/edit contract.
+
 For the complete Phase 04 contract and operation table, see
 [Workflow Client State](./workflow-client-state.md).
 
