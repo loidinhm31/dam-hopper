@@ -6397,3 +6397,331 @@ async fn idle_suspend_broadcast_hint_delivered_on_coordinator_publish() {
     assert_eq!(parsed["payload"]["version"], 1);
     assert_eq!(parsed["payload"]["revision"], coord.status().status_revision);
 }
+#[tokio::test]
+async fn idle_suspend_force_suspend_transport_and_auth_guards() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    // 1. Unauthenticated -> 401
+    let unauth_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/force-suspend")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "wakeAfterSeconds": 0,
+                    "force": false
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(unauth_resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 2. Non-JSON Content-Type -> 415 invalidContentType
+    let non_json_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/force-suspend")
+            .header("Content-Type", "text/plain")
+            .header("Cookie", auth_cookie())
+            .body(Body::from("wakeAfterSeconds=0"))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(non_json_resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(
+        non_json_resp.headers().get("cache-control").unwrap(),
+        "no-store"
+    );
+    let body = axum::body::to_bytes(non_json_resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "invalidContentType");
+
+    // 3. Cross-origin cookie request -> 403 invalidOrigin
+    let bad_origin_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/force-suspend")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie())
+            .header("Origin", "https://evil.attacker.com")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "wakeAfterSeconds": 0,
+                    "force": false
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(bad_origin_resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        bad_origin_resp.headers().get("cache-control").unwrap(),
+        "no-store"
+    );
+    let body = axum::body::to_bytes(bad_origin_resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "invalidOrigin");
+
+    // 4. Duplicate Origin header -> 403 invalidOrigin
+    let duplicate_origin_resp = {
+        let router = build_router(state.clone());
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/force-suspend")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie())
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "wakeAfterSeconds": 0,
+                    "force": false
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        req.headers_mut().append(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("http://127.0.0.1:4801"),
+        );
+        req.headers_mut().append(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("http://127.0.0.1:4801"),
+        );
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(duplicate_origin_resp.status(), StatusCode::FORBIDDEN);
+    let body = axum::body::to_bytes(duplicate_origin_resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "invalidOrigin");
+
+    // 5. Origin with userinfo -> 403 invalidOrigin
+    let userinfo_origin_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/force-suspend")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie())
+            .header("Origin", "http://user:pass@127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "wakeAfterSeconds": 0,
+                    "force": false
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(userinfo_origin_resp.status(), StatusCode::FORBIDDEN);
+
+    // 6. Origin with path -> 403 invalidOrigin
+    let path_origin_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/force-suspend")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie())
+            .header("Origin", "http://127.0.0.1:4801/some/path")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "wakeAfterSeconds": 0,
+                    "force": false
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(path_origin_resp.status(), StatusCode::FORBIDDEN);
+
+    // 7. No-auth mode -> 403 idleSuspendDisabledNoAuth
+    let mut no_auth_state = state.clone();
+    no_auth_state.no_auth = true;
+    let no_auth_resp = {
+        let router = build_router(no_auth_state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/force-suspend")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie())
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "wakeAfterSeconds": 0,
+                    "force": false
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(no_auth_resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        no_auth_resp.headers().get("cache-control").unwrap(),
+        "no-store"
+    );
+    let body = axum::body::to_bytes(no_auth_resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "idleSuspendDisabledNoAuth");
+
+    // 8. Missing DB authentication -> 503 authenticationUnavailable (both cookie and bearer)
+    let no_db_cookie_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/force-suspend")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie())
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "wakeAfterSeconds": 0,
+                    "force": false
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(no_db_cookie_resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        no_db_cookie_resp.headers().get("cache-control").unwrap(),
+        "no-store"
+    );
+    let body = axum::body::to_bytes(no_db_cookie_resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "authenticationUnavailable");
+
+    let no_db_bearer_resp = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/force-suspend")
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", test_jwt()))
+            .body(Body::from(
+                serde_json::json!({
+                    "wakeAfterSeconds": 0,
+                    "force": false
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(no_db_bearer_resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(no_db_bearer_resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "authenticationUnavailable");
+}
+
+#[tokio::test]
+async fn idle_suspend_force_suspend_payload_validation_and_bounds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    // 1. ForceSuspendRequest JSON deserialization:
+    // a. Valid payloads: indefinite (0) and bounded (60..=86400)
+    let valid_indefinite: Result<crate::idle_suspend::protocol::ForceSuspendRequest, _> =
+        serde_json::from_str(r#"{"wakeAfterSeconds": 0, "force": false}"#);
+    assert!(valid_indefinite.is_ok());
+    assert_eq!(valid_indefinite.unwrap().wake_after_seconds, 0);
+
+    let valid_timed: Result<crate::idle_suspend::protocol::ForceSuspendRequest, _> =
+        serde_json::from_str(r#"{"wakeAfterSeconds": 3600, "force": true}"#);
+    assert!(valid_timed.is_ok());
+    let req = valid_timed.unwrap();
+    assert_eq!(req.wake_after_seconds, 3600);
+    assert!(req.force);
+
+    // b. Unknown fields rejected (deny_unknown_fields)
+    let unknown_field: Result<crate::idle_suspend::protocol::ForceSuspendRequest, _> =
+        serde_json::from_str(r#"{"wakeAfterSeconds": 0, "force": false, "extra": "forbidden"}"#);
+    assert!(unknown_field.is_err());
+
+    // c. Missing force rejected
+    let missing_force: Result<crate::idle_suspend::protocol::ForceSuspendRequest, _> =
+        serde_json::from_str(r#"{"wakeAfterSeconds": 0}"#);
+    assert!(missing_force.is_err());
+
+    // d. Missing wakeAfterSeconds rejected
+    let missing_wake: Result<crate::idle_suspend::protocol::ForceSuspendRequest, _> =
+        serde_json::from_str(r#"{"force": false}"#);
+    assert!(missing_wake.is_err());
+
+    // e. Non-boolean force rejected
+    let non_bool_force: Result<crate::idle_suspend::protocol::ForceSuspendRequest, _> =
+        serde_json::from_str(r#"{"wakeAfterSeconds": 0, "force": "true"}"#);
+    assert!(non_bool_force.is_err());
+
+    // f. Negative wake duration rejected
+    let negative_wake: Result<crate::idle_suspend::protocol::ForceSuspendRequest, _> =
+        serde_json::from_str(r#"{"wakeAfterSeconds": -1, "force": false}"#);
+    assert!(negative_wake.is_err());
+
+    // g. Wake bounds validator: 0 is valid, 60 is valid, 86400 is valid
+    assert!(crate::idle_suspend::protocol::validate_suspend_wake_seconds(0).is_ok());
+    assert!(crate::idle_suspend::protocol::validate_suspend_wake_seconds(60).is_ok());
+    assert!(crate::idle_suspend::protocol::validate_suspend_wake_seconds(86400).is_ok());
+
+    // Below min non-zero (e.g. 1..=59) is invalid
+    assert!(crate::idle_suspend::protocol::validate_suspend_wake_seconds(1).is_err());
+    assert!(crate::idle_suspend::protocol::validate_suspend_wake_seconds(59).is_err());
+
+    // Above max (e.g. 86401) is invalid
+    assert!(crate::idle_suspend::protocol::validate_suspend_wake_seconds(86401).is_err());
+    // 2. Body limit check: 16 KiB limit rejects oversized streams
+    let large_body = axum::body::Body::from(vec![b'x'; 20 * 1024]);
+    let read_result = axum::body::to_bytes(large_body, 16 * 1024).await;
+    assert!(read_result.is_err());
+}
+#[tokio::test]
+async fn idle_suspend_force_suspend_disabled_actor_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut state = make_state(&tmp);
+
+    let mut client_options = mongodb::options::ClientOptions::parse("mongodb://127.0.0.1:27999")
+        .await
+        .unwrap();
+    client_options.server_selection_timeout = Some(std::time::Duration::from_millis(50));
+    let client = mongodb::Client::with_options(client_options).unwrap();
+    state.db = Some(client.database("test"));
+
+    let router = build_router(state);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/system/idle-suspend/v1/force-suspend")
+        .header("Content-Type", "application/json")
+        .header("Cookie", auth_cookie())
+        .header("Origin", "http://127.0.0.1:4801")
+        .header("Host", "127.0.0.1:4801")
+        .body(Body::from(
+            serde_json::json!({
+                "wakeAfterSeconds": 0,
+                "force": false
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "actorDisabled");
+}

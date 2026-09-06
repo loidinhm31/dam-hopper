@@ -30,7 +30,10 @@ use dam_hopper_server::{
             UpdateTimingCommand,
         },
         executor::{BoxFuture, FakeExecutor, IdleSuspendExecutor},
-        protocol::{SuspendOutcome, SuspendWithRtcWakeRequest},
+        protocol::{
+            ForceSuspendAcceptedResponse, IdleSuspendConflictResponse, SuspendOutcome,
+            SuspendWithRtcWakeRequest,
+        },
         status::{CoordinatorState, IdleSuspendStatusV1},
         UnavailableExecutor,
     },
@@ -794,4 +797,81 @@ async fn test_idle_suspend_forced_handoff_with_active_ptys_and_outcome_release()
     // 5. Clean up session
     let _ = fixture.state.pty_manager.kill(&session1.id);
     coordinator.shutdown().await;
+}
+#[tokio::test]
+async fn test_idle_suspend_force_suspend_dtos_and_conflict_responses() {
+    let snapshot = dam_hopper_server::pty::PtyFleetSnapshot {
+        generation: 42,
+        live_count: 2,
+        creating_count: 1,
+        restart_pending_count: 0,
+        disposing: false,
+        closing: false,
+        handoff_active: false,
+    };
+    assert_eq!(snapshot.running_count(), 3);
+
+    // 1. Accepted response construction and serialization
+    let accepted = ForceSuspendAcceptedResponse::new(
+        "req-abc-123".to_string(),
+        10,
+        0,
+        true,
+        snapshot,
+    );
+    assert_eq!(accepted.version, 1);
+    assert_eq!(accepted.state, "handedOff");
+    assert_eq!(accepted.request_id, "req-abc-123");
+    assert_eq!(accepted.status_revision, 10);
+    assert_eq!(accepted.wake_after_seconds, 0);
+    assert!(accepted.forced);
+    assert_eq!(accepted.fleet_snapshot.running_count(), 3);
+
+    let accepted_json = serde_json::to_value(&accepted).unwrap();
+    assert_eq!(accepted_json["version"], 1);
+    assert_eq!(accepted_json["state"], "handedOff");
+    assert_eq!(accepted_json["requestId"], "req-abc-123");
+    assert_eq!(accepted_json["statusRevision"], 10);
+    assert_eq!(accepted_json["wakeAfterSeconds"], 0);
+    assert_eq!(accepted_json["forced"], true);
+    assert_eq!(accepted_json["fleetSnapshot"]["generation"], 42);
+    assert_eq!(accepted_json["fleetSnapshot"]["liveCount"], 2);
+
+    // 2. Conflict response construction and serialization
+    let conflict = IdleSuspendConflictResponse::new(
+        "idleSuspendActiveFleetConfirmationRequired",
+        "active fleet requires confirmation",
+        snapshot,
+    );
+    assert_eq!(conflict.code, "idleSuspendActiveFleetConfirmationRequired");
+    assert_eq!(conflict.active_session_count, 3);
+    assert_eq!(conflict.fleet_snapshot.live_count, 2);
+
+    let conflict_json = serde_json::to_value(&conflict).unwrap();
+    assert_eq!(conflict_json["code"], "idleSuspendActiveFleetConfirmationRequired");
+    assert_eq!(conflict_json["activeSessionCount"], 3);
+    assert_eq!(conflict_json["fleetSnapshot"]["generation"], 42);
+
+    // 3. API helper response construction and Cache-Control: no-store
+    let resp_conflict = dam_hopper_server::api::idle_suspend::idle_suspend_conflict_response(
+        "idleSuspendActiveFleetConfirmationRequired",
+        "active fleet requires confirmation",
+        snapshot,
+    );
+    assert_eq!(resp_conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        resp_conflict.headers().get("cache-control").unwrap(),
+        "no-store"
+    );
+
+    let resp_error = dam_hopper_server::api::idle_suspend::idle_suspend_error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "idleSuspendCapabilityUnavailable",
+        "host lacks RTC alarm or suspend capability",
+    );
+    assert_eq!(resp_error.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        resp_error.headers().get("cache-control").unwrap(),
+        "no-store"
+    );
 }

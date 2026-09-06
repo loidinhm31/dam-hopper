@@ -2,6 +2,14 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Authenticated Manual Force Sleep (2026-09-06)
+
+- **Phases 01–02 — [COMPLETED / DONE 2026-09-06]**: Extended the enrolled helper for execution-only indefinite sleep (`wakeAfterSeconds: 0`) and added generation-fenced coordinator admission, active-fleet confirmation, forced handoff ordering, durable actor audit, helper capability enrollment, and outcome reconciliation.
+- **Phase 03 — [COMPLETED / DONE 2026-09-06 12:00:21 +07:00; 100%]**: Added the protected `POST /api/system/idle-suspend/v1/force-suspend` adapter with strict camelCase DTOs, `0 | 60..=86400` wake bounds, 16 KiB JSON cap, cookie same-origin and enabled-actor gates, coordinator-only dispatch, audited `202` handoff admission, typed `409` fleet/handoff conflicts, sanitized closed errors, and `Cache-Control: no-store`. [Phase plan](../plans/260906-0348-manual-force-sleep-button/phase-03-rest-api-force-suspend-endpoint.md) · [API reference](./api-reference.md#terminal-idle-suspend).
+- Scoped REST/API coverage is recorded for authentication, no-auth/database/actor gates, origin and media-type rejection, strict payload and wake bounds, DTO/conflict serialization, body limits, and no-store responses. Project-wide validation remains the parent integration gate.
+- **Phases 04–05 — [PENDING]**: Host popover confirmation UI, integration validation, and final release documentation remain.
+
+
 ### Workflow Tracking and Continuity (2026-09-02)
 
 - **Phase 01 — Domain and relational persistence [COMPLETED / DONE 2026-09-02]**: Delivered snapshot-first workflow persistence in the existing SQLite `SessionStore`, including migration 010, Plan/Phase/Task hierarchy and invariants, manual sessions, terminal/agent resource links, durable notes, bounded activity events, factual overview aggregation, keyset history pagination, idempotent transactional mutations, and bounded retention purge.

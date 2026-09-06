@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::pty::PtyFleetSnapshot;
+
 /// Exact payload for `PATCH /api/system/idle-suspend/v1/timing`.
 ///
 /// Disallows unknown fields and requires both integer fields.
@@ -54,6 +56,75 @@ impl IdleSuspendChangedPayload {
     }
 }
 
+/// Exact payload for `POST /api/system/idle-suspend/v1/force-suspend`.
+///
+/// Disallows unknown fields and requires both integer wake duration and boolean force flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForceSuspendRequest {
+    pub wake_after_seconds: u64,
+    pub force: bool,
+}
+
+/// Accepted response for `POST /api/system/idle-suspend/v1/force-suspend` (202 Accepted).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForceSuspendAcceptedResponse {
+    pub version: u32,
+    pub request_id: String,
+    pub status_revision: u64,
+    pub state: String,
+    pub wake_after_seconds: u64,
+    pub forced: bool,
+    pub fleet_snapshot: PtyFleetSnapshot,
+}
+
+impl ForceSuspendAcceptedResponse {
+    pub fn new(
+        request_id: String,
+        status_revision: u64,
+        wake_after_seconds: u64,
+        forced: bool,
+        fleet_snapshot: PtyFleetSnapshot,
+    ) -> Self {
+        Self {
+            version: 1,
+            request_id,
+            status_revision,
+            state: "handedOff".to_string(),
+            wake_after_seconds,
+            forced,
+            fleet_snapshot,
+        }
+    }
+}
+
+/// Conflict response for `POST /api/system/idle-suspend/v1/force-suspend` (409 Conflict).
+///
+/// Returned when active fleet requires confirmation or generation changes during review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdleSuspendConflictResponse {
+    pub error: String,
+    pub code: String,
+    pub active_session_count: usize,
+    pub fleet_snapshot: PtyFleetSnapshot,
+}
+
+impl IdleSuspendConflictResponse {
+    pub fn new(
+        code: &'static str,
+        error: impl Into<String>,
+        fleet_snapshot: PtyFleetSnapshot,
+    ) -> Self {
+        Self {
+            error: error.into(),
+            code: code.to_string(),
+            active_session_count: fleet_snapshot.running_count(),
+            fleet_snapshot,
+        }
+    }
+}
 
 /// Standard error code strings for idle suspend operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +141,14 @@ pub enum IdleSuspendErrorCode {
     AuditUnavailable,
     PersistenceUnavailable,
     ReconciliationRequired,
+    ActiveFleetConfirmationRequired,
+    FleetChanged,
+    InvalidForceSuspendPayload,
+    ForceSuspendDisabledNoAuth,
+    CapabilityUnavailable,
+    ForceSuspendAuditUnavailable,
+    CoordinatorShuttingDown,
+    CoordinatorDisabled,
 }
 
 impl IdleSuspendErrorCode {
@@ -87,6 +166,14 @@ impl IdleSuspendErrorCode {
             Self::AuditUnavailable => "idleSuspendTimingAuditUnavailable",
             Self::PersistenceUnavailable => "idleSuspendTimingPersistenceUnavailable",
             Self::ReconciliationRequired => "idleSuspendTimingReconciliationRequired",
+            Self::ActiveFleetConfirmationRequired => "idleSuspendActiveFleetConfirmationRequired",
+            Self::FleetChanged => "idleSuspendFleetChanged",
+            Self::InvalidForceSuspendPayload => "invalidForceSuspendPayload",
+            Self::ForceSuspendDisabledNoAuth => "idleSuspendDisabledNoAuth",
+            Self::CapabilityUnavailable => "idleSuspendCapabilityUnavailable",
+            Self::ForceSuspendAuditUnavailable => "idleSuspendAuditUnavailable",
+            Self::CoordinatorShuttingDown => "idleSuspendShuttingDown",
+            Self::CoordinatorDisabled => "idleSuspendDisabled",
         }
     }
 }
