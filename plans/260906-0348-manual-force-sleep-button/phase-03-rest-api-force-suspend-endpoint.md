@@ -15,7 +15,7 @@
 - Priority: P1
 - Status: DONE — 2026-09-06 12:00:21 +07:00
 - Effort: 6h
-- Progress: 100% (7/7 implementation steps; 7/7 todo items)
+- Progress: 100% (8/8 implementation steps; 7/7 todo items)
 - Description: Implemented `POST /api/system/idle-suspend/v1/force-suspend` as a strict authenticated adapter to the coordinator, with cookie same-origin enforcement, enabled-account verification, body limits, closed errors, and server-enforced active-fleet confirmation.
 
 ## Key Insights
