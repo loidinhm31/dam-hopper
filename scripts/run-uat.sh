@@ -12,6 +12,9 @@ WEB_HOST="0.0.0.0"
 NO_AUTH=0
 CUSTOM_CONFIG=""
 ENV_FILE=""
+PUBLIC_HOST="${DAM_HOPPER_PUBLIC_HOST:-}"
+USER_CORS="${DAM_HOPPER_CORS_ORIGINS:-}"
+
 usage() {
     cat <<EOF
 DamHopper UAT Environment Runner
@@ -30,6 +33,8 @@ Options:
   --env-file <file>   Path to env file with MONGODB_URI etc. (default: /tmp/dam-hopper-uat/uat.env)
   --api-port <port>   API server port (default: 4803)
   --web-port <port>   Web host port (default: 4804)
+  --public-host <host> Public/Tailscale IP or hostname (e.g. 100.91.26.60)
+  --cors-origins <url> Additional CORS origins (comma-separated, trailing slashes auto-cleaned)
   --no-auth           Run API server in development mode without authentication
   -h, --help          Show this help message
 EOF
@@ -61,6 +66,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --env-file)
             ENV_FILE="$2"
+            shift 2
+            ;;
+        --public-host)
+            PUBLIC_HOST="$2"
+            shift 2
+            ;;
+        --cors-origins)
+            USER_CORS="$2"
             shift 2
             ;;
         -h|--help)
@@ -98,6 +111,50 @@ check_prerequisites() {
     fi
 }
 
+resolve_network_config() {
+    local raw_cors="${USER_CORS:-${DAM_HOPPER_CORS_ORIGINS:-}}"
+    local clean_user_cors=""
+    if [[ -n "$raw_cors" ]]; then
+        clean_user_cors=$(echo "$raw_cors" | sed -E 's|/+([,$])|\1|g' | sed -E 's|/+$||')
+    fi
+
+    if [[ -z "$PUBLIC_HOST" && -n "$clean_user_cors" ]]; then
+        local candidate_host
+        candidate_host=$(echo "$clean_user_cors" | grep -oE 'https?://[^/,:]+' | head -1 | sed -E 's|https?://||' || true)
+        if [[ -n "$candidate_host" && "$candidate_host" != "localhost" && "$candidate_host" != "127.0.0.1" ]]; then
+            PUBLIC_HOST="$candidate_host"
+        fi
+    fi
+
+    local origins=("http://localhost:${WEB_PORT}" "http://127.0.0.1:${WEB_PORT}")
+    if [[ -n "$PUBLIC_HOST" && "$PUBLIC_HOST" != "localhost" && "$PUBLIC_HOST" != "127.0.0.1" ]]; then
+        origins+=("http://${PUBLIC_HOST}:${WEB_PORT}")
+    fi
+    if [[ -n "$clean_user_cors" ]]; then
+        IFS=',' read -ra user_items <<< "$clean_user_cors"
+        for item in "${user_items[@]}"; do
+            item="$(echo "$item" | xargs)"
+            item="${item%/}"
+            if [[ -n "$item" ]]; then
+                origins+=("$item")
+            fi
+        done
+    fi
+
+    local unique_origins=()
+    local seen_str=" "
+    for o in "${origins[@]}"; do
+        if [[ "$seen_str" != *" $o "* ]]; then
+            unique_origins+=("$o")
+            seen_str+="$o "
+        fi
+    done
+
+    FINAL_CORS=$(IFS=','; echo "${unique_origins[*]}")
+    TARGET_API_HOST="${PUBLIC_HOST:-127.0.0.1}"
+    FINAL_API_URL="http://${TARGET_API_HOST}:${API_PORT}"
+}
+
 setup_uat_environment() {
     mkdir -p "$UAT_DIR"
 
@@ -108,7 +165,7 @@ setup_uat_environment() {
   "role": "both",
   "releaseVersion": "0.3.0",
   "profileId": "00000000-0000-4000-8000-000000000001",
-  "apiUrl": "http://127.0.0.1:${API_PORT}"
+  "apiUrl": "${FINAL_API_URL}"
 }
 EOF
 
@@ -140,7 +197,6 @@ is_running() {
 
 start_services() {
     check_prerequisites
-    setup_uat_environment
 
     # Load environment variables if provided or present in UAT_DIR
     if [[ -n "$ENV_FILE" ]]; then
@@ -160,11 +216,15 @@ start_services() {
         . "$UAT_DIR/uat.env"
         set +a
     fi
-    echo "=== Starting DamHopper UAT Environment ==="
+
+    resolve_network_config
+    setup_uat_environment
     echo "API Server Port : ${API_PORT}"
     echo "Web Host Port   : ${WEB_PORT}"
+    echo "Public Host     : ${PUBLIC_HOST:-(loopback only)}"
+    echo "API URL (Web)   : ${FINAL_API_URL}"
+    echo "CORS Origins    : ${FINAL_CORS}"
 
-    # 1. Start API Server
     if is_running "$PID_SERVER"; then
         echo "API server already running (PID $(cat "$PID_SERVER"))"
     else
@@ -173,7 +233,7 @@ start_services() {
             auth_args+=("--no-auth")
         fi
 
-        DAM_HOPPER_CORS_ORIGINS="http://localhost:${WEB_PORT},http://127.0.0.1:${WEB_PORT}" \
+        DAM_HOPPER_CORS_ORIGINS="${FINAL_CORS}" \
         "$API_BIN" \
             --config "$UAT_CONFIG" \
             --host "$API_HOST" \
