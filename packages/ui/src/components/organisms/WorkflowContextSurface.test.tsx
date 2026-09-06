@@ -279,4 +279,141 @@ describe("WorkflowContextSurface", () => {
       }),
     );
   });
+
+  it("edits a selected item and triggers api.workflow.patchItem with CAS updated_at", async () => {
+    const patchSpy = vi.spyOn(api.workflow, "patchItem").mockResolvedValue({
+      resource: {
+        ...mockOverview.plans[0].item,
+        title: "Edited Plan Title",
+        summary: "Edited Plan Summary",
+        updatedAt: "2026-09-01T12:00:00.000Z",
+      },
+      replayed: false,
+      eventId: "ev-edit-1",
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <WorkflowContextSurface target={{ project: "hopper-core" }} />
+        </QueryClientProvider>,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Workflow Context UI");
+    });
+
+    // Open deck
+    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    await act(async () => {
+      ribbonTrigger?.click();
+    });
+
+    // Select the plan row to display selected item bar
+    const planRow = container.querySelector('#workflow-context-deck [role="button"]') as HTMLElement;
+    await act(async () => {
+      planRow?.click();
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Selected: Workflow Context UI");
+    });
+
+    // Click edit button in WorkflowSelectedItemBar
+    const editBtn = container.querySelector('button[title="Edit item"]') as HTMLButtonElement;
+    expect(editBtn).not.toBeNull();
+    await act(async () => {
+      editBtn.click();
+    });
+
+    const titleInput = container.querySelector("#wf-edit-title") as HTMLInputElement;
+    const summaryTextarea = container.querySelector("#wf-edit-summary") as HTMLTextAreaElement;
+    expect(titleInput).not.toBeNull();
+    expect(summaryTextarea).not.toBeNull();
+
+    act(() => {
+      const titleSetter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      titleSetter?.call(titleInput, "Edited Plan Title");
+      titleInput.dispatchEvent(new Event("input", { bubbles: true }));
+      titleInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+      const summarySetter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+      summarySetter?.call(summaryTextarea, "Edited Plan Summary");
+      summaryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+      summaryTextarea.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    const saveBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Save",
+    ) as HTMLButtonElement;
+
+    await act(async () => {
+      saveBtn.click();
+    });
+    expect(patchSpy).toHaveBeenCalledWith(
+      "plan-1",
+      expect.objectContaining({
+        title: "Edited Plan Title",
+        summary: "Edited Plan Summary",
+        updatedAt: "2026-09-01T10:00:00.000Z",
+      }),
+    );
+  });
+
+  it("deletes a note from selected item and triggers api.workflow.deleteNote", async () => {
+    const deleteNoteSpy = vi.spyOn(api.workflow, "deleteNote").mockResolvedValue({
+      resource: { id: "n-1", deletedAt: "2026-09-01T12:05:00.000Z" },
+      replayed: false,
+      eventId: "ev-del-note-1",
+    });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <WorkflowContextSurface target={{ project: "hopper-core" }} />
+        </QueryClientProvider>,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Workflow Context UI");
+    });
+
+    // Open deck
+    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    await act(async () => {
+      ribbonTrigger?.click();
+    });
+
+    // Select the plan row to display selected item bar
+    const planRow = container.querySelector('#workflow-context-deck [role="button"]') as HTMLElement;
+    await act(async () => {
+      planRow?.click();
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Selected: Workflow Context UI");
+      expect(container.textContent).toContain("Notes (1)");
+    });
+
+    // Click delete note button in WorkflowSelectedItemBar
+    const deleteNoteBtn = container.querySelector('button[title="Delete note"]') as HTMLButtonElement;
+    expect(deleteNoteBtn).not.toBeNull();
+    await act(async () => {
+      deleteNoteBtn.click();
+    });
+
+    expect(deleteNoteSpy).toHaveBeenCalledWith(
+      "n-1",
+      expect.objectContaining({
+        updatedAt: "2026-09-01T10:00:00.000Z",
+      }),
+    );
+  });
 });

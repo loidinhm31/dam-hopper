@@ -609,6 +609,14 @@ and [code review](../plans/reports/code-reviewer-260902-1144-phase-04-client-typ
 notes, paths, external IDs, or request bodies. Server validation remains
 authoritative for workspace/target ownership, limits, errors, and replay.
 
+**Current selected-item surface extension (2026-09-07):** The responsive
+workflow context surface renders authoritative item notes and supports inline
+title/summary editing in both Deck and Sheet layouts.
+- Note deletion passes the complete `NoteDto` and its `updatedAt` through
+  `useWorkflowSurfaceActions`; item updates use the same CAS contract.
+- Notes remain append-only in the UI; blank summaries serialize as `null`, and
+  successful mutations refresh the workflow overview without optimistic writes.
+
 
 ## Non-Functional Requirements
 

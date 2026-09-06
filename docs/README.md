@@ -14,6 +14,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 - **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage profile-scoped server connections and storage
 - **[Frontend Components](./frontend-components.md)** — Shared React component architecture and host lifecycle
+- **[Workflow Context Surface](./workflow-context-surface.md)** — Responsive Plan/item details, notes, and inline editing
 - **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries
 - **[Worktree Operations](./worktree-operation.md)** — Target selection and safe worktree lifecycle
 

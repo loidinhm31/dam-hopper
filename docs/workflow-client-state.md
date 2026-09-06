@@ -7,6 +7,9 @@ workflow REST API. The server contract, authorization rules, persistence model,
 and response examples remain in [Workflow API](./workflow-api.md). Phase 04
 adds typed client boundaries and query state; it does not add workflow UI,
 terminal navigation, or a browser-persisted workflow store.
+The responsive presentation and selected-item note/edit controls are documented
+in [Workflow Context Surface](./workflow-context-surface.md); this document
+keeps the Phase 04 transport/query contract authoritative.
 
 ## Module map
 
