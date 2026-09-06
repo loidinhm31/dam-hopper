@@ -2506,4 +2506,83 @@ mod fleet_state_tests {
         assert!(cloned_watcher.changed().await.is_ok());
         assert!(cloned_watcher.snapshot().is_quiescent());
     }
+
+    #[test]
+    fn test_forced_handoff_gate_admission_and_conflict() {
+        let (mut state, _) = PtyFleetState::new();
+
+        // 1. Begin create to make fleet active
+        state.begin_create("t_forced", 10).unwrap();
+        assert!(!state.is_quiescent());
+        let active_gen = state.generation();
+
+        // Normal handoff claim fails when fleet is active
+        let normal_res = state.try_claim_handoff(active_gen);
+        assert_eq!(normal_res, Err(HandoffClaimError::NotQuiescent));
+
+        // Forced claim with stale generation fails
+        let stale_res = state.try_claim_forced_handoff(active_gen - 1);
+        assert!(matches!(stale_res, Err(HandoffClaimError::GenerationMismatch { .. })));
+
+        // Forced claim succeeds with active fleet and matching generation
+        let claim = state.try_claim_forced_handoff(active_gen).expect("claim forced handoff");
+        assert!(claim.generation > active_gen);
+        assert!(state.is_handoff_active());
+
+        // Second forced claim fails with HandoffAlreadyActive
+        let second_claim = state.try_claim_forced_handoff(state.generation());
+        assert_eq!(second_claim, Err(HandoffClaimError::HandoffAlreadyActive));
+
+        // New terminal creation is rejected
+        let create_res = state.begin_create("t_another", 20);
+        assert!(matches!(create_res, Err(AppError::IdleSuspendHandoffInProgress(_))));
+
+        // Release handoff
+        state.release_handoff();
+        assert!(!state.is_handoff_active());
+
+        // Disposing and closing reject forced claim
+        state.mark_disposing(true);
+        assert_eq!(
+            state.try_claim_forced_handoff(state.generation()),
+            Err(HandoffClaimError::Disposing)
+        );
+        state.mark_disposing(false);
+
+        state.mark_closing(true);
+        assert_eq!(
+            state.try_claim_forced_handoff(state.generation()),
+            Err(HandoffClaimError::Closing)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pty_session_manager_forced_handoff_wrapper() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let gen = manager.fleet_snapshot().generation;
+
+        let claim = manager.try_claim_forced_handoff(gen).expect("claim forced handoff on manager");
+        assert!(claim.generation > gen);
+        assert!(manager.fleet_snapshot().handoff_active);
+
+        // Session creation is rejected
+        let create_opts = PtyCreateOpts {
+            id: "blocked-forced-pty".to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: std::collections::HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: crate::config::schema::RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        let err = manager.create(create_opts).expect_err("create should fail during handoff");
+        assert!(matches!(err, AppError::IdleSuspendHandoffInProgress(_)));
+
+        manager.release_handoff();
+        assert!(!manager.fleet_snapshot().handoff_active);
+    }
 }
