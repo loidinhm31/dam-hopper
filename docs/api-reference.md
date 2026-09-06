@@ -360,7 +360,11 @@ incidents, while an omitted additive field preserves them for old-server
 compatibility until REST establishes current state.
 ### Terminal idle suspend
 
-Server-authoritative, fail-closed terminal idle suspend subsystem with protected status, bounded authenticated timing settings, out-of-band push hints, and read-only host-resource popover status. Manual force-suspend REST admission is a later phase; Phase 01 changes only the enrolled helper execution contract.
+Server-authoritative, fail-closed terminal idle suspend subsystem with protected
+status, bounded authenticated timing settings, an authenticated manual
+force-suspend action, and out-of-band push hints. Automatic idle timing and the
+manual action remain separate: a manual request does not change the persisted
+automatic policy.
 
 #### GET /api/system/idle-suspend/v1/status
 
@@ -406,6 +410,80 @@ Protected, atomic timing pair mutation endpoint. Accepts only the complete bound
   - `409 Conflict`: Returned when helper handoff is actively in progress (`idleSuspendHandoffInProgress`). Performs zero memory or disk mutation; clients and UI do NOT auto-retry until resume/failure reconciliation.
   - `503 Service Unavailable`: Subsystem, authentication, or persistence unavailable (`authenticationUnavailable`, `idleSuspendTimingUnavailable`, `idleSuspendTimingAuditUnavailable`, `idleSuspendTimingPersistenceUnavailable`).
 
+#### POST `/api/system/idle-suspend/v1/force-suspend`
+
+Initiates one authenticated manual force-suspend handoff. The endpoint admits
+the request to the coordinator; it does not wait for the host to suspend or
+resume.
+
+- **Auth**: Protected route. Requires a valid session cookie or Bearer token,
+  database-backed authentication, and an enabled actor account. Requests are
+  rejected under `--no-auth` (`403 idleSuspendDisabledNoAuth`) or when
+  authentication is unavailable (`503 authenticationUnavailable`).
+- **Guards**: Requires `Content-Type: application/json` (`415
+  invalidContentType`) and a request body no larger than 16 KiB. Cookie
+  requests must contain exactly one parseable `Origin` and `Host`, with the
+  origin equal to `http://Host` or `https://Host`; missing, duplicate,
+  malformed, foreign, path-bearing, query-bearing, or userinfo-bearing origins
+  return `403 invalidOrigin`. Bearer requests still require an enabled actor
+  but do not use the cookie same-origin check.
+- **Body**: Strict camelCase JSON; both fields are required and unknown fields
+  are rejected:
+  ```json
+  {
+    "wakeAfterSeconds": 0,
+    "force": false
+  }
+  ```
+  `wakeAfterSeconds` is exactly `0` (indefinite sleep) or an integer in
+  `60..=86400` seconds. `force` is boolean. The `force` flag bypasses only
+  active-fleet quiescence confirmation; it does not bypass authentication,
+  generation, handoff, audit, capability, inhibitor, peer, or RTC checks.
+- **`202 Accepted`**: Returned after the coordinator accepts the audited
+  handoff admission:
+  ```json
+  {
+    "version": 1,
+    "requestId": "req-abc-123",
+    "statusRevision": 10,
+    "state": "handedOff",
+    "wakeAfterSeconds": 0,
+    "forced": false,
+    "fleetSnapshot": {
+      "generation": 42,
+      "liveCount": 0,
+      "creatingCount": 0,
+      "restartPendingCount": 0,
+      "disposing": false,
+      "closing": false,
+      "handoffActive": true
+    }
+  }
+  ```
+  `requestId` and `statusRevision` identify the accepted handoff. The
+  response is not proof that suspend or resume completed.
+- **`409 Conflict`**: Every conflict uses `Cache-Control: no-store`.
+  - `idleSuspendActiveFleetConfirmationRequired`: `force` was `false` while
+    the authoritative fleet was active. The body includes
+    `activeSessionCount` and a content-free `fleetSnapshot`.
+  - `idleSuspendFleetChanged`: the reviewed fleet generation changed before
+    claim. The body includes the latest `activeSessionCount` and
+    `fleetSnapshot`; the client must require a new explicit confirmation.
+  - `idleSuspendHandoffInProgress`: another automatic or manual handoff is
+    active. This uses the standard `{ "error", "code" }` error shape.
+- **Other errors**: Closed `{ "error", "code" }` responses cover invalid
+  payloads (`400 invalidForceSuspendPayload`), missing/disabled authentication
+  (`401 unauthorized`, `403 actorDisabled`), coordinator/audit/capability
+  failures (`503`), and shutdown/disabled states. Error text is sanitized and
+  never includes helper, host, terminal, or credential details.
+- **Caching and retry**: Accepted and error responses always set
+  `Cache-Control: no-store`; the endpoint does not emit `Retry-After`. Clients
+  must not retry an ambiguous POST. Reconcile accepted, conflict, and
+  post-resume outcomes through the authoritative status GET and
+  `host:idleSuspendChanged` revision hint.
+
+The route is registered only under the protected API router; there is no
+unauthenticated WebSocket or native bypass.
 #### `host:idleSuspendChanged` transport event
 
 Out-of-band revision-only push hint broadcast over a dedicated event channel isolated from terminal output pressure.
