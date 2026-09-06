@@ -152,4 +152,84 @@ describe("useWorkflowSurfaceActions", () => {
       }),
     );
   });
+
+  it("updates item passing item.updatedAt for CAS optimistic concurrency and trimmed title/summary", async () => {
+    const patchSpy = vi.spyOn(api.workflow, "patchItem").mockResolvedValue({
+      resource: { ...mockItem, title: "Updated Title", summary: "Updated Summary", updatedAt: "2026-09-01T10:30:00.000Z" },
+      replayed: false,
+      eventId: "ev-patch-2",
+    });
+
+    let actionsResult!: WorkflowSurfaceActions;
+
+    function TestComponent() {
+      actionsResult = useWorkflowSurfaceActions({ project: "test-proj" });
+      return null;
+    }
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TestComponent />
+        </QueryClientProvider>,
+      );
+    });
+
+    await act(async () => {
+      await actionsResult.handleUpdateItem(mockItem, {
+        title: "Updated Title",
+        summary: "Updated Summary",
+      });
+    });
+
+    expect(patchSpy).toHaveBeenCalledWith(
+      "item-1",
+      expect.objectContaining({
+        title: "Updated Title",
+        summary: "Updated Summary",
+        updatedAt: "2026-09-01T10:15:00.000Z", // exact item.updatedAt for CAS check
+      }),
+    );
+  });
+
+  it("deletes note passing note.updatedAt for CAS optimistic concurrency", async () => {
+    const deleteNoteSpy = vi.spyOn(api.workflow, "deleteNote").mockResolvedValue({
+      resource: { id: "note-1", deletedAt: "2026-09-01T10:35:00.000Z" },
+      replayed: false,
+      eventId: "ev-del-note-1",
+    });
+
+    let actionsResult!: WorkflowSurfaceActions;
+
+    function TestComponent() {
+      actionsResult = useWorkflowSurfaceActions({ project: "test-proj" });
+      return null;
+    }
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TestComponent />
+        </QueryClientProvider>,
+      );
+    });
+
+    await act(async () => {
+      await actionsResult.handleDeleteNote({
+        id: "note-1",
+        itemId: "item-1",
+        body: "Note to delete",
+        source: "manual",
+        createdAt: "2026-09-01T10:00:00.000Z",
+        updatedAt: "2026-09-01T10:20:00.000Z",
+      });
+    });
+
+    expect(deleteNoteSpy).toHaveBeenCalledWith(
+      "note-1",
+      expect.objectContaining({
+        updatedAt: "2026-09-01T10:20:00.000Z", // exact note.updatedAt for CAS check
+      }),
+    );
+  });
 });
