@@ -46,7 +46,7 @@ export function useCopyToClipboard(resetMs = 2000) {
       if (ok) {
         setCopied(true);
         clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => setCopied(false), resetMs);
+        timerRef.current = window.setTimeout(() => setCopied(false), resetMs);
       }
     },
     [resetMs],

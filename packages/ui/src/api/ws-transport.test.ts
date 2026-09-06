@@ -1151,6 +1151,89 @@ describe("WsTransport idle suspend endpoints", () => {
         wakeAfterSeconds: 600,
       }),
     });
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          version: 1,
+          requestId: "req-1",
+          statusRevision: 5,
+          state: "handedOff",
+          wakeAfterSeconds: 0,
+          forced: false,
+          fleetSnapshot: {
+            generation: 1,
+            liveCount: 0,
+            creatingCount: 0,
+            restartPendingCount: 0,
+            disposing: false,
+            closing: false,
+            handoffActive: true,
+          },
+        }),
+        {
+          status: 202,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    const result = await transport.invoke("system:forceSuspend", {
+      wakeAfterSeconds: 0,
+      force: false,
+    });
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      "http://localhost:4800/api/system/idle-suspend/v1/force-suspend",
+    );
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        wakeAfterSeconds: 0,
+        force: false,
+      }),
+    });
+    expect(result).toMatchObject({
+      version: 1,
+      state: "handedOff",
+      wakeAfterSeconds: 0,
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: "active fleet confirmation required",
+          code: "idleSuspendActiveFleetConfirmationRequired",
+          activeSessionCount: 2,
+          fleetSnapshot: {
+            generation: 2,
+            liveCount: 2,
+            creatingCount: 0,
+            restartPendingCount: 0,
+            disposing: false,
+            closing: false,
+            handoffActive: false,
+          },
+        }),
+        {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(
+      transport.invoke("system:forceSuspend", {
+        wakeAfterSeconds: 0,
+        force: false,
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiRequestError",
+      status: 409,
+      code: "idleSuspendActiveFleetConfirmationRequired",
+      details: {
+        activeSessionCount: 2,
+      },
+    });
     transport.destroy();
   });
 });

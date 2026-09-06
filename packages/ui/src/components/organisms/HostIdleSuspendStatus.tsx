@@ -1,6 +1,14 @@
 import { useIdleSuspendStatus } from "@/api/queries.js";
-import type { IdleSuspendCoordinatorState } from "@/api/client.js";
+import type {
+  IdleSuspendCoordinatorState,
+  IdleSuspendStatusV1,
+} from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
+
+export interface HostIdleSuspendStatusProps {
+  onForceSleep?: (status: IdleSuspendStatusV1) => void;
+  isForceSleepPending?: boolean;
+}
 
 const STATE_BADGES: Record<
   IdleSuspendCoordinatorState,
@@ -40,7 +48,10 @@ const STATE_BADGES: Record<
   },
 };
 
-export function HostIdleSuspendStatus() {
+export function HostIdleSuspendStatus({
+  onForceSleep,
+  isForceSleepPending,
+}: HostIdleSuspendStatusProps = {}) {
   const { data: status, isLoading, isError } = useIdleSuspendStatus();
 
   if (isLoading) {
@@ -110,6 +121,40 @@ export function HostIdleSuspendStatus() {
       <div className="flex items-center justify-between text-[9px] text-[var(--color-text-muted)]">
         <span>Capability: {status.capabilityCode}</span>
         <span>Sampled {sampleTime}</span>
+      </div>
+
+      <div className="pt-1">
+        <button
+          type="button"
+          aria-label="Force Machine to Sleep"
+          onClick={() => onForceSleep?.(status)}
+          disabled={
+            !onForceSleep ||
+            status.state === "handedOff" ||
+            Boolean(fleet.handoffActive) ||
+            Boolean(fleet.closing) ||
+            Boolean(fleet.disposing) ||
+            Boolean(isForceSleepPending)
+          }
+          title={
+            status.state === "handedOff" || Boolean(fleet.handoffActive)
+              ? "Host suspend handoff is currently in progress."
+              : Boolean(fleet.closing) || Boolean(fleet.disposing)
+                ? "Terminal shutdown or disposal is currently in progress."
+                : Boolean(isForceSleepPending)
+                  ? "Force sleep request is currently in progress."
+                  : !onForceSleep
+                    ? "Force sleep action is unavailable."
+                    : undefined
+          }
+          className={cn(
+            "flex min-h-11 w-full items-center justify-center rounded border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-danger)] transition-colors cursor-pointer",
+            "hover:bg-[var(--color-danger)]/20 focus-visible:outline-2 focus-visible:outline-[var(--color-ring)]",
+            "disabled:cursor-not-allowed disabled:opacity-50",
+          )}
+        >
+          Force Machine to Sleep
+        </button>
       </div>
     </div>
   );

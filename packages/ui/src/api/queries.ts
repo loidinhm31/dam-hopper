@@ -51,6 +51,8 @@ import type {
   IdleSuspendStatusV1,
   IdleSuspendTimingPatchRequest,
   IdleSuspendTimingPatchResponse,
+  ForceSuspendRequest,
+  ForceSuspendAcceptedResponse,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
@@ -468,6 +470,18 @@ export function useUpdateIdleSuspendTiming() {
       api.system.updateIdleSuspendTiming(timing),
     retry: false,
     onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: IDLE_SUSPEND_STATUS_QUERY_KEY });
+    },
+  });
+}
+
+export function useForceSuspend() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (request: ForceSuspendRequest) =>
+      api.system.forceSuspend(request),
+    retry: false,
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: IDLE_SUSPEND_STATUS_QUERY_KEY });
     },
   });
