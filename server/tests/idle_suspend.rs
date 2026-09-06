@@ -875,3 +875,122 @@ async fn test_idle_suspend_force_suspend_dtos_and_conflict_responses() {
         "no-store"
     );
 }
+#[tokio::test]
+async fn test_idle_suspend_manual_force_suspend_policy_disabled_still_succeeds() {
+    let fixture = setup_test_fixture(false, 300, 600);
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(executor.clone())
+        .await;
+
+    // Policy is disabled, but manual force suspend with capable executor succeeds
+    let res = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "admin-actor".to_string(),
+            wake_after_seconds: 0,
+            force: false,
+        })
+        .await;
+
+    assert!(matches!(res, CoordinatorForceSuspendResult::Accepted { .. }));
+
+    // Wait for fake resume outcome
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(executor.recorded_requests().len(), 1);
+    assert_eq!(coordinator.status().state, CoordinatorState::Disabled);
+    assert!(matches!(
+        coordinator.status().last_outcome,
+        Some(SuspendOutcome::ResumedSuccessfully { .. })
+    ));
+    assert!(!fixture.state.pty_manager.fleet_snapshot().handoff_active);
+
+    coordinator.shutdown().await;
+}
+#[tokio::test]
+async fn test_idle_suspend_manual_force_suspend_cancels_armed_grace() {
+    let fixture = setup_test_fixture(true, 60, 600);
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(executor.clone())
+        .await;
+
+    // 1. Create a managed PTY so fleet becomes active
+    let session = fixture
+        .state
+        .pty_manager
+        .create(make_pty_opts("pty-armed-cancel", "cat"))
+        .expect("create pty");
+    tokio::task::yield_now().await;
+    assert_eq!(coordinator.status().state, CoordinatorState::Watching);
+
+    // 2. Kill PTY -> fleet becomes quiescent -> coordinator transitions to Armed
+    let _ = fixture.state.pty_manager.kill(&session.id);
+    tokio::task::yield_now().await;
+    assert_eq!(coordinator.status().state, CoordinatorState::Armed);
+    assert!(coordinator.status().arm_deadline_ms.is_some());
+
+    // 3. Manual command arrives while armed -> immediately cancels armed grace and hands off
+    let res = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "operator".to_string(),
+            wake_after_seconds: 0,
+            force: false,
+        })
+        .await;
+
+    assert!(matches!(res, CoordinatorForceSuspendResult::Accepted { .. }));
+
+    // Wait for fake resume outcome
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(coordinator.status().state, CoordinatorState::Resumed);
+    assert!(!fixture.state.pty_manager.fleet_snapshot().handoff_active);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_idle_suspend_manual_force_suspend_zero_side_effect_on_active_fleet_without_force() {
+    let fixture = setup_test_fixture(true, 300, 600);
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(executor.clone())
+        .await;
+
+    // 1. Create a managed PTY to make fleet active
+    let session = fixture
+        .state
+        .pty_manager
+        .create(make_pty_opts("pty-zero-effect", "cat"))
+        .expect("create pty");
+    assert_eq!(fixture.state.pty_manager.fleet_snapshot().live_count, 1);
+
+    // 2. Submit manual suspend with force: false
+    let res = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "operator".to_string(),
+            wake_after_seconds: 0,
+            force: false,
+        })
+        .await;
+
+    // 3. Must return ActiveFleetRequiresConfirmation
+    match res {
+        CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation { fleet_snapshot } => {
+            assert_eq!(fleet_snapshot.live_count, 1);
+            assert!(!fleet_snapshot.handoff_active);
+        }
+        other => panic!("Expected ActiveFleetRequiresConfirmation, got: {other:?}"),
+    }
+
+    // 4. Assert zero side-effects
+    assert_eq!(executor.recorded_requests().len(), 0);
+    assert_eq!(coordinator.status().state, CoordinatorState::Watching);
+    assert!(coordinator.status().last_outcome.is_none());
+    assert!(!fixture.state.pty_manager.fleet_snapshot().handoff_active);
+
+    let _ = fixture.state.pty_manager.kill(&session.id);
+    coordinator.shutdown().await;
+}

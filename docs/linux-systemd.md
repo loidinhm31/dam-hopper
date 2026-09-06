@@ -301,15 +301,17 @@ journalctl -u dam-hopper-recovery.service --no-tail
 
 ---
 
-## 10. Retired Commands and Obsolete Paths
+## 10. Retired Checkout-Runner Commands and Obsolete Paths
 
-The following checkout-runner scripts, fixed units, and package scripts have been completely removed:
-- ❌ `deploy/run-linux-production.sh`
-- ❌ `deploy/reset-linux-production.sh`
-- ❌ `deploy/systemd/dam-hopper.service`
-- ❌ `pnpm linux:production` / `pnpm linux:reset`
+The old checkout-runner production workflow is retired:
+- `deploy/run-linux-production.sh`
+- the fixed `deploy/systemd/dam-hopper.service` unit
+- `pnpm linux:production` / `pnpm linux:reset`
 
-Do not recreate, document, or execute these paths. All host management is performed via `dam-hopper-install.sh` and the `dam-hopper` CLI binary.
+Use `dam-hopper-install.sh` and the `dam-hopper` CLI for release lifecycle
+operations. `deploy/reset-linux-production.sh` is retained only as the
+idle-suspend helper reset/rollback tool documented in section 11.4; it is not
+a general release manager.
 
 ---
 
@@ -335,6 +337,12 @@ The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed
 - **Peer Credential Verification**: The helper validates peer UID and PID on connection via `SO_PEERCRED`, rejecting unauthorized callers.
 - **Audit Trail**: Every request, intent, and completion is recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`).
 
+The server enrolls the helper executor when the configured socket exists
+(`DAM_HOPPER_IDLE_SUSPEND_SOCKET` overrides the default path), even when
+automatic `[server.idle_suspend] enabled = false`. Automatic scheduling policy
+and manual execution availability are separate; both still fail closed on
+missing capability, RTC ownership, inhibitor, audit, or handoff prerequisites.
+
 #### Phase 01 RTC and wake semantics
 
 The helper protocol remains version 1 and accepts `wakeAfterSeconds: 0` or
@@ -347,7 +355,9 @@ Peer authentication, protocol version checks, request-ID deduplication,
 capability/inhibitor/RTC preflight, and the intent audit occur before RTC
 mutation. Any busy alarm, audit-intent failure, clear/readback/write failure,
 or unsupported capability suppresses suspend. Intent and completion records
-retain `wakeAfterSeconds: 0`; audit files remain mode `0600` and bounded.
+retain `wakeAfterSeconds: 0`; the helper audit remains mode `0600` and bounded.
+The server audit's recent-read APIs are capped; its append retention and
+rotation are operator-managed.
 
 Do not qualify indefinite sleep from an automated test: repository tests use
 temporary files and fake backends and never invoke `systemctl`, logind, or a
@@ -372,9 +382,37 @@ To completely disenroll the privileged helper, revert configuration, and restore
 sudo ./deploy/reset-linux-production.sh
 ```
 Rollback guarantees:
-1. Verifies no helper handoff is actively executing.
+1. The operator first verifies the authoritative server status has no active or in-flight handoff. The reset script checks socket presence only; it cannot inspect coordinator state.
 2. Atomically disables `enabled = false` under `[server.idle_suspend]`.
 3. Stops and disables helper socket and service units.
 4. Preserves external RTC alarms (never clears unrelated alarms).
 5. Removes only manifest-owned helper assets and runs `systemctl daemon-reload`.
 6. Preserves audit logs for post-mortem operator analysis.
+
+### 11.5 Manual Force Sleep Qualification & Canary Runbook
+
+This is an operator procedure, not automated-test evidence. Automated checks use
+fake RTC/executor backends and never invoke `systemctl`, logind, real RTC
+hardware, or host suspend.
+
+1. **Prerequisites Verification**:
+   - Host kernel must support `/sys/class/rtc/rtc0/wakealarm`.
+   - Verify exclusive RTC ownership: ensure `/sys/class/rtc/rtc0/wakealarm` is empty; preserve and investigate any foreign alarm.
+   - Verify `systemctl is-active dam-hopper-idle-suspend-helper.socket` returns `active`.
+   - Verify database-backed authentication is functioning; `--no-auth` mode strictly prohibits manual sleep.
+   - Verify the server status has no active/in-flight handoff and record the current status revision.
+
+2. **Timed Canary Qualification (Required First)**:
+   - Perform during an approved maintenance window with physical or out-of-band recovery.
+   - Using the active authenticated profile, make exactly one manual POST with a bounded timer (for example `{ "wakeAfterSeconds": 120, "force": false }` when the fleet is quiescent). Do not retry an ambiguous response.
+   - Monitor `/var/log/dam-hopper/idle-suspend-helper.jsonl` for helper intent then completion and the server `idle-suspend-audit.jsonl` for the actor/request outcome.
+   - Confirm the machine suspends and automatically resumes within the approved tolerance.
+   - Upon resume, refetch status and verify the status revision/`host:idleSuspendChanged` reconciliation, handoff release, and no duplicate suspend request.
+
+3. **Indefinite Sleep Canary Protocol (High Risk)**:
+   - **Warning**: Indefinite sleep (`wakeAfterSeconds: 0`) clears the RTC wakealarm (no auto-wake). The machine will NOT wake on a timer.
+   - **Mandatory Requirements**:
+     - Operations owner approval with assigned physical or out-of-band recovery personnel (for example IPMI/iLO/BMC, Wake-on-LAN, or physical power button).
+     - Never execute an indefinite canary on a remote host without verified out-of-band power cycling capability.
+     - Submit exactly one POST and never replay it after a network interruption.
+   - Confirm post-resume status, audit, handoff, and PTY reconciliation once manually awakened.

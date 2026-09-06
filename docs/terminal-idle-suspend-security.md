@@ -8,8 +8,8 @@ Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with
 
 1. **Startup Ownership**: Feature enablement (`enabled`), helper enrollment (`enrollment_reference`), and capability mode (`capability_selection`) are captured immutably at server startup from the canonical registry configuration. They cannot be enabled, disabled, or re-enrolled via workspace switch, config reload, full config replacement (`PUT /api/config`), or settings import.
 2. **No Unrestricted Sudo or Shell Execution**: The server never accepts sudo, shell pipelines, arbitrary command strings, or user-supplied executable paths. The enrolled helper accepts one fixed request shape over local IPC and invokes only its resolved `systemctl suspend` path after validation.
-3. **Dedicated Narrow Timing Authority**: Browser actors cannot trigger, cancel, or override suspend operations. Authenticated actors can only tune the bounded quiet period and wake delay pair via `PATCH /api/system/idle-suspend/v1/timing`.
-4. **No-Auth Mode Rejection**: The timing mutation endpoint explicitly rejects `--no-auth` / development mode (`403 idleSuspendTimingDisabledNoAuth`) to prevent unauthenticated timing tampering on untrusted local networks.
+3. **Dedicated Narrow Action & Timing Authority**: Browser actors cannot execute arbitrary commands, shell scripts, or generic host remediation. Manual suspend is available only through the dedicated, audited `POST /api/system/idle-suspend/v1/force-suspend` endpoint requiring an enabled database-authenticated actor, cookie same-origin protection, strict DTO validation, and explicit active-fleet confirmation. It is independent of automatic `enabled` policy but remains unavailable without the enrolled helper/capability path. Timing mutations remain restricted to the bounded quiet period and wake delay pair via `PATCH /api/system/idle-suspend/v1/timing`.
+4. **No-Auth Mode Rejection**: The timing mutation and manual force-suspend endpoints explicitly reject `--no-auth` / development mode (`403 idleSuspendTimingDisabledNoAuth`, `403 idleSuspendDisabledNoAuth`) to prevent unauthenticated host suspension or timing tampering on untrusted local networks.
 5. **Fail-Closed by Default**: Unsupported platforms, unconfigured helper enrollment, sleep inhibitors, missing RTC alarms, or audit/persistence failures prevent suspend entirely without automatic retries.
 
 ## Threat Analysis and Mitigations
@@ -21,19 +21,26 @@ Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with
 | **Workspace Switch Hijack** | High | Canonical startup registry path is captured at boot; workspace switches preserve immutable startup policy. |
 | **Timing Bounds Abuse / DoS** | Medium | Automatic configuration and timing PATCH remain `60..=86400`; helper execution accepts exactly `0` or `60..=86400`, rejecting `1..=59`, overflow, and malformed JSON. |
 | **Audit Log Tampering / Leakage** | Medium | Server-private mode-0600 JSONL audit log with `libc::O_NOFOLLOW`. Excludes credentials, auth tokens, command strings, environment variables, and terminal contents. |
-| **Fleet Activity Race Condition** | High | Serialized coordinator command queue. Pre-handoff checks require zero live/creating PTYs and an unadvanced fleet generation. |
+| **Fleet Activity Race Condition** | High | Serialized coordinator command queue. Automatic claims require zero live/creating PTYs and an unadvanced fleet generation; manual forced claims retain generation and handoff fencing while explicitly bypassing only the quiescence count. |
+| **CSRF / Cross-Origin Trigger** | Critical | Strict same-origin enforcement on cookie sessions: validates exact Host match and rejects foreign, duplicate, userinfo-bearing, and path-bearing origins. Bearer tokens require enabled database-authenticated actor. |
+| **Ambiguous or duplicate manual POST** | Critical | Accepted delivery may be interrupted by host suspend. The UI uses `retry: false`; request ID, audit records, status revision, and post-resume GET reconcile state. Clients never replay an ambiguous action. |
 
 ## Audit Retention and Path Policy
 
 - **Path**: Located at `idle-suspend-audit.jsonl` adjacent to the canonical server configuration directory.
 - **Permissions**: Created with mode `0600` (read/write by server process owner only), opened with `O_NOFOLLOW` on Unix.
-- **Retention**: Bounded to the most recent 10,000 records.
+- **Retention**: Server audit reads cap each result at the most recent 10,000 records, but the append-only server JSONL is not pruned or rotated by the process. Operators must apply secure filesystem retention. The privileged helper audit performs bounded pruning at 10,000 records.
 - **Audited Events**:
   - `admitted`: Timing update validated and admitted before disk write.
   - `committed`: Timing update persisted atomically to the canonical registry file.
   - `persistence_failed`: Atomic replacement failed; runtime state retained.
   - `rejected_handoff_in_progress`: Timing change rejected due to active suspend handoff (409).
   - `rejected_disabled`: Timing change rejected because feature is disabled at startup.
+  - Manual force-suspend attempt, accepted handoff, confirmation-required/conflict/handoff/capability/validation rejection, and terminal outcome.
+
+Manual records contain actor subject, request ID, wake mode, requested/effective force,
+fleet generation and aggregate counts, and typed result only. They exclude tokens,
+cookies, command strings, environment variables, terminal IDs/content, and raw IPC.
 
 ### Phase 01 execution-domain safeguards
 
@@ -63,7 +70,7 @@ remain separate operational gates and are not implied by automated tests.
 
 ### Phase 02 status (2026-09-06)
 
-Coordinator force-suspend command handling, fail-closed generation-fenced forced fleet claim (`try_claim_forced_handoff`), generalized server audit writer (`server_audit.rs`), active-fleet confirmation enforcement, independent helper executor enrollment on startup, and deterministic outcome reconciliation are implemented and verified across 1151 tests.
+Coordinator force-suspend handling, generation-fenced forced fleet claims, generalized server audit writing, active-fleet confirmation enforcement, independent helper executor enrollment at startup, and deterministic outcome reconciliation are implemented. Focused coordinator, cross-module, REST, and browser coverage verifies the contract; no automated test performs real host suspend or RTC mutation.
 
 ## Approval Gates for Privileged Execution (Phase 03) — Approved (2026-09-05)
 
@@ -85,4 +92,18 @@ Phase 03 (privileged systemd helper and unit enrollment) was reviewed and approv
 ### Sign-Off Record
 - **Security Owner**: Approved (2026-09-05)
 - **Infrastructure / Operator**: Approved (2026-09-05)
-- **Phase 3 Status**: Completed (Implemented & Verified 2026-09-05)
+
+### Phase 04 status (2026-09-06)
+
+Authenticated manual force-suspend REST API (`POST /api/system/idle-suspend/v1/force-suspend`) and UI dialog (`ForceSleepDialog.tsx`) are implemented. Same-origin protection for cookie sessions, database-backed auth validation, 16 KiB body limit, active fleet detection and confirmation dialog, indefinite sleep default (`wakeAfterSeconds: 0`), and zero-retry reconciliation contracts are verified across unit and browser test suites.
+
+### Phase 05 status (2026-09-06)
+
+Integration testing, traceability, boundary verification, and documentation synchronization are complete. Focused helper/coordinator/REST/cross-module/UI tests verify negative dependencies, denial side effects, race ordering, gate release, one-POST/no-retry behavior, and resume reconciliation. Automated tests use fakes and temporary files; they never invoke `systemctl`, logind, real RTC hardware, or host suspend.
+
+The required timed real-host canary remains an operations procedure, not repository test evidence. An indefinite canary is deferred until explicit operations approval, verified physical or out-of-band wake, and rollback ownership are recorded.
+
+## Unresolved Questions
+
+- Can every target host guarantee DamHopper-exclusive `rtc0` ownership, or should any pre-existing alarm keep manual suspend unavailable?
+- Who owns physical/out-of-band wake and final go/no-go approval for indefinite-sleep qualification?

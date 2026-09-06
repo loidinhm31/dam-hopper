@@ -78,4 +78,64 @@ if [[ ! -f "packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx" 
 fi
 echo "PASS: UI browser test suite present."
 
+# 8. Verify protected force-suspend route registration with body limit
+echo "--> Verifying force-suspend route registration and body limit..."
+if ! grep -q '/api/system/idle-suspend/v1/force-suspend' server/src/api/router.rs; then
+    echo "FAIL: force-suspend route not registered in server/src/api/router.rs" >&2
+    exit 1
+fi
+if ! grep -q 'RequestBodyLimitLayer::new(16 \* 1024)' server/src/api/router.rs; then
+    echo "FAIL: force-suspend route missing 16 KiB RequestBodyLimitLayer" >&2
+    exit 1
+fi
+echo "PASS: force-suspend route registered with 16 KiB body limit."
+
+# 9. Verify helper execution domain accepts zero while automatic timing enforces minimum
+echo "--> Verifying wake duration domain and bounds enforcement..."
+if ! grep -q 'pub const MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS: u64 = 60;' server/src/config/schema.rs; then
+    echo "FAIL: Automatic minimum quiet period not 60s in server/src/config/schema.rs" >&2
+    exit 1
+fi
+if ! grep -q 'pub const MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS: u64 = 60;' server/src/config/schema.rs; then
+    echo "FAIL: Automatic minimum wake duration not 60s in server/src/config/schema.rs" >&2
+    exit 1
+fi
+if ! grep -q 'pub fn validate_suspend_wake_seconds(wake_after_seconds: u64)' server/src/idle_suspend/protocol.rs; then
+    echo "FAIL: validate_suspend_wake_seconds missing from protocol.rs" >&2
+    exit 1
+fi
+echo "PASS: Automatic timing minimums (60s) and execution wake domain verified."
+
+# 10. Verify server audit asset permissions and security policy
+echo "--> Verifying server audit security invariants..."
+if ! grep -q 'O_NOFOLLOW' server/src/idle_suspend/server_audit.rs; then
+    echo "FAIL: Server audit missing O_NOFOLLOW protection" >&2
+    exit 1
+fi
+if ! grep -q '0o600' server/src/idle_suspend/server_audit.rs; then
+    echo "FAIL: Server audit missing mode 0600 permissions" >&2
+    exit 1
+fi
+echo "PASS: Server audit mode 0600 and O_NOFOLLOW verified."
+
+# 11. Verify UI ForceSleepDialog component and test existence
+echo "--> Verifying UI ForceSleepDialog components..."
+if [[ ! -f "packages/ui/src/components/organisms/ForceSleepDialog.tsx" ]]; then
+    echo "FAIL: ForceSleepDialog.tsx is missing" >&2
+    exit 1
+fi
+if [[ ! -f "packages/ui/src/components/organisms/ForceSleepDialog.test.tsx" ]]; then
+    echo "FAIL: ForceSleepDialog.test.tsx is missing" >&2
+    exit 1
+fi
+echo "PASS: UI ForceSleepDialog component and tests present."
+
+# 12. Verify no arbitrary shell/command execution in force-suspend handler
+echo "--> Verifying zero generic shell or command execution in api/idle_suspend.rs..."
+if grep -rn -E 'Command::new' server/src/api/idle_suspend.rs 2>/dev/null; then
+    echo "FAIL: Found Command::new in server/src/api/idle_suspend.rs" >&2
+    exit 1
+fi
+echo "PASS: Zero Command::new in server/src/api/idle_suspend.rs."
+
 echo "=== All Idle Suspend Boundary Checks Passed ==="

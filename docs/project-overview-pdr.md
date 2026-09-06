@@ -631,11 +631,11 @@ authoritative for workspace/target ownership, limits, errors, and replay.
 - [x] Post-resume capability, fleet, and revision reconciliation without repeat suspend.
 - [x] Automated test suite runs with 100% fake-time/executor mocks; no automated CI/local command triggers host sleep or RTC writes.
 
-### PR-016: Authenticated Manual Force Sleep — Phase 01 Protocol and Helper
+### PR-016: Authenticated Manual Force Sleep — Phases 01–05
 
-**Status:** Phase 01 complete / DONE on 2026-09-06. Coordinator, REST,
-confirmation-dialog, and integration/documentation phases remain pending in
-the [Authenticated Manual Force Sleep plan](../plans/260906-0348-manual-force-sleep-button/plan.md).
+**Status:** Complete / DONE on 2026-09-06 15:45:00 +07:00. Protocol/helper, coordinator/fleet, protected REST API, Host Resource Popover confirmation UI, integration testing, and documentation are complete. Automated evidence passed: 81/81 Rust idle-suspend tests, 3/3 UI Vitest tests, 10/10 Chromium browser tests, 12/12 non-privileged boundary checks, and `cargo check`. No automated check performs host power or RTC mutation. The indefinite real-host canary remains explicitly deferred pending Operations approval and verified physical/out-of-band wake and recovery.
+
+**Phase 02–05 boundary:** The manual action is a dedicated authenticated `POST /api/system/idle-suspend/v1/force-suspend` route with exact cookie same-origin and enabled-actor gates, content-free active-fleet confirmation, generation-fenced audited handoff, fixed helper execution, explicit indefinite/timed wake semantics, no-retry reconciliation, accessible confirmation UI, and fail-closed rollback/runbook documentation.
 
 **Functional Requirements:**
 
