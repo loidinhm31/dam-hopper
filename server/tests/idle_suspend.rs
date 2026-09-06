@@ -25,7 +25,10 @@ use dam_hopper_server::{
     diagnostics::DiagnosticStore,
     fs::FsSubsystem,
     idle_suspend::{
-        coordinator::{CoordinatorTimingResult, UpdateTimingCommand},
+        coordinator::{
+            CoordinatorForceSuspendResult, CoordinatorTimingResult, ForceSuspendCommand,
+            UpdateTimingCommand,
+        },
         executor::{BoxFuture, FakeExecutor, IdleSuspendExecutor},
         protocol::{SuspendOutcome, SuspendWithRtcWakeRequest},
         status::{CoordinatorState, IdleSuspendStatusV1},
@@ -739,5 +742,56 @@ async fn test_idle_suspend_unavailable_executor_fails_closed() {
         .unwrap()
         .contains("unsupported capability"));
 
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_idle_suspend_forced_handoff_with_active_ptys_and_outcome_release() {
+    let fixture = setup_test_fixture(true, 300, 600);
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture.state.start_idle_suspend_coordinator(executor).await;
+
+    // 1. Create a managed PTY session to make fleet active
+    let opts1 = make_pty_opts("pty-active-1", "cat");
+    let session1 = fixture.state.pty_manager.create(opts1).expect("create pty");
+    assert_eq!(fixture.state.pty_manager.fleet_snapshot().live_count, 1);
+
+    // 2. force: false returns ActiveFleetRequiresConfirmation
+    let res_no_force = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "admin-actor".to_string(),
+            wake_after_seconds: 0,
+            force: false,
+        })
+        .await;
+    match res_no_force {
+        CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation { fleet_snapshot } => {
+            assert_eq!(fleet_snapshot.live_count, 1);
+            assert!(!fleet_snapshot.handoff_active);
+        }
+        other => panic!("Expected ActiveFleetRequiresConfirmation, got: {other:?}"),
+    }
+
+    // 3. force: true succeeds
+    let res_force = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "admin-actor".to_string(),
+            wake_after_seconds: 0,
+            force: true,
+        })
+        .await;
+    assert!(matches!(res_force, CoordinatorForceSuspendResult::Accepted { .. }));
+
+    // 4. Wait for resume outcome
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(coordinator.status().state, CoordinatorState::Watching);
+    assert!(matches!(
+        coordinator.status().last_outcome,
+        Some(SuspendOutcome::ResumedSuccessfully { .. })
+    ));
+    assert!(!fixture.state.pty_manager.fleet_snapshot().handoff_active);
+
+    // 5. Clean up session
+    let _ = fixture.state.pty_manager.kill(&session1.id);
     coordinator.shutdown().await;
 }

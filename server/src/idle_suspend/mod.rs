@@ -1,7 +1,7 @@
 pub mod policy;
 pub mod protocol;
 pub mod timing_store;
-pub mod timing_audit;
+pub mod server_audit;
 pub mod coordinator;
 pub mod status;
 pub mod executor;
@@ -32,7 +32,10 @@ pub use preflight::{
     PreflightChecker, PreflightError, SysfsPreflightChecker, SystemdInhibitCliProvider,
 };
 pub use timing_store::IdleSuspendTimingStore;
-pub use timing_audit::{IdleSuspendTimingAudit, TimingAuditRecord, TimingAuditResult};
+pub use server_audit::{
+    AuditError, IdleSuspendServerAudit, IdleSuspendTimingAudit, ManualAuditRecord,
+    ManualAuditResult, ServerAuditRecord, TimingAuditRecord, TimingAuditResult,
+};
 pub use coordinator::{
     CoordinatorTimingCommand, CoordinatorTimingResult, IdleSuspendCoordinator,
     UpdateTimingCommand,
