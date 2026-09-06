@@ -22,7 +22,7 @@ Add a permanent production action in the Host Resource Popover for authenticated
 | 1 | Protocol and helper indefinite sleep | DONE (2026-09-06 04:36:40 +07:00) | 100% | 6h | [Phase 01](./phase-01-protocol-and-helper-indefinite-sleep.md) |
 | 2 | Coordinator and fleet forced handoff | DONE (2026-09-06 10:48:00 +07:00) | 100% | 8h | [Phase 02](./phase-02-coordinator-and-fleet-forced-handoff.md) |
 | 3 | Authenticated force-suspend REST API | DONE (2026-09-06 12:00:21 +07:00) | 100% | 6h | [Phase 03](./phase-03-rest-api-force-suspend-endpoint.md) |
-| 4 | Host popover action and confirmation dialog | Pending | 0% | 8h | [Phase 04](./phase-04-host-popover-ui-and-confirmation-dialog.md) |
+| 4 | Host popover action and confirmation dialog | DONE (2026-09-06 12:20:00 +07:00) | 100% | 8h | [Phase 04](./phase-04-host-popover-ui-and-confirmation-dialog.md) |
 | 5 | Integration testing and docs | Pending | 0% | 10h | [Phase 05](./phase-05-integration-testing-and-docs.md) |
 
 ## Dependencies
