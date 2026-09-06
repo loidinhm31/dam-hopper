@@ -13,9 +13,10 @@
 
 - Date: 2026-09-06
 - Priority: P1
-- Status: Pending
+- Status: DONE — 2026-09-06 12:00:21 +07:00
 - Effort: 6h
-- Description: Add `POST /api/system/idle-suspend/v1/force-suspend` as a strict authenticated adapter to the coordinator, with cookie same-origin enforcement, enabled-account verification, body limits, closed errors, and server-enforced active-fleet confirmation.
+- Progress: 100% (7/7 implementation steps; 7/7 todo items)
+- Description: Implemented `POST /api/system/idle-suspend/v1/force-suspend` as a strict authenticated adapter to the coordinator, with cookie same-origin enforcement, enabled-account verification, body limits, closed errors, and server-enforced active-fleet confirmation.
 
 ## Key Insights
 
@@ -83,6 +84,14 @@ Recommended response/error types live with the idle-suspend protocol DTOs so Rus
 | `server/src/idle_suspend/mod.rs` | Modify | Export API DTOs and force result types |
 | `server/src/api/tests.rs` | Modify | Cover router/middleware/auth/origin/body-limit behavior if conventions place route tests here |
 | `server/tests/idle_suspend.rs` | Modify | End-to-end protected endpoint and coordinator side-effect assertions |
+## Implementation Evidence
+
+- `ForceSuspendRequest`, `ForceSuspendAcceptedResponse`, `IdleSuspendConflictResponse`, and closed error codes are defined in `server/src/idle_suspend/protocol.rs`; request JSON uses camelCase and denies unknown fields.
+- `server/src/api/idle_suspend.rs` enforces JSON/cookie-origin guards, production authentication and enabled actors, execution wake bounds, coordinator-only admission, `202`/`409` mappings, sanitized failures, and `Cache-Control: no-store`.
+- `server/src/api/router.rs` registers the protected POST route with a 16 KiB request-body limit; `server/src/idle_suspend/mod.rs` exports the DTOs and result types.
+- REST coverage is present in `server/src/api/tests.rs` for authentication, origin, media type, payload bounds, and disabled actors. DTO/conflict/no-store coverage is present in `server/tests/idle_suspend.rs`.
+
+The accepted response represents audited handoff admission only. Suspend/resume completion remains authoritative through the status endpoint and `host:idleSuspendChanged`; clients must not retry an ambiguous POST.
 
 ## Implementation Steps
 
@@ -97,13 +106,13 @@ Recommended response/error types live with the idle-suspend protocol DTOs so Rus
 
 ## Todo List
 
-- [ ] Add strict request/response DTOs
-- [ ] Add closed force-suspend error codes
-- [ ] Reuse idle-suspend actor and origin guards
-- [ ] Implement total coordinator-result mapping
-- [ ] Register protected 16 KiB POST route
-- [ ] Add auth/CSRF/validation/side-effect API tests
-- [ ] Confirm no alternate unauthenticated transport exists
+- [x] Add strict request/response DTOs
+- [x] Add closed force-suspend error codes
+- [x] Reuse idle-suspend actor and origin guards
+- [x] Implement total coordinator-result mapping
+- [x] Register protected 16 KiB POST route
+- [x] Add auth/CSRF/validation/side-effect API tests
+- [x] Confirm no alternate unauthenticated transport exists
 
 ## Success Criteria
 
@@ -135,12 +144,12 @@ Recommended response/error types live with the idle-suspend protocol DTOs so Rus
 
 ## Side-Effect Review Checklist
 
-- [ ] Handler cannot invoke helper or fleet manager directly.
-- [ ] Failed transport/auth/origin/validation requests produce zero audit/claim/executor effects.
-- [ ] 409 confirmation and generation conflicts are never auto-retried.
-- [ ] Accepted response does not claim suspend/resume success.
-- [ ] Timing PATCH and status GET contracts remain backward compatible.
-- [ ] Route is unreachable through public-health/auth exceptions.
+- [x] Handler cannot invoke helper or fleet manager directly.
+- [x] Failed transport/auth/origin/validation requests produce zero audit/claim/executor effects.
+- [x] 409 confirmation and generation conflicts are never auto-retried.
+- [x] Accepted response does not claim suspend/resume success.
+- [x] Timing PATCH and status GET contracts remain backward compatible.
+- [x] Route is unreachable through public-health/auth exceptions.
 
 ## Next Steps
 

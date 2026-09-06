@@ -14,6 +14,19 @@
   regression coverage using temporary files and fake backends only; tests never
   invoke host suspend, logind, or real RTC hardware.
 
+- **Authenticated Manual Force Sleep — Phase 02 coordinator/fleet complete.**
+  Added generation-fenced forced fleet admission that bypasses only active-fleet
+  quiescence, preserves audit/capability/inhibitor/RTC/peer gates, serializes
+  manual work with automatic timing, and releases the handoff on every outcome.
+- **Authenticated Manual Force Sleep — Phase 03 REST API complete (2026-09-06 12:00:21 +07:00).**
+  Added the protected `POST /api/system/idle-suspend/v1/force-suspend` endpoint
+  with strict DTOs and wake bounds, cookie same-origin and enabled-actor
+  enforcement, a 16 KiB body cap, coordinator-only dispatch, audited `202`
+  admission, typed fleet/handoff conflicts, sanitized closed errors, and
+  `Cache-Control: no-store` responses. API reference and Phase 03 plan now
+  document the contract; host popover UI and final integration gates remain
+  pending.
+
 # 2026-09-02
 
 - **Phase 01: Workflow tracking domain and relational persistence.** Added the

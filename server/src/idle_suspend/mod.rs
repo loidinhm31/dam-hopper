@@ -21,10 +21,11 @@ pub use policy::{
 pub use protocol::{
     decode_frame, encode_frame, read_frame_async, validate_request_id,
     validate_suspend_wake_seconds, write_frame_async,
-    HelperRequestFrame, HelperRequestPayload, HelperResponseFrame, HelperResponsePayload,
-    IdleSuspendErrorCode, IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse,
-    ProtocolError, RequestDeduplicator, SuspendOutcome, SuspendWithRtcWakeRequest,
-    HELPER_PROTOCOL_VERSION, MAX_HELPER_FRAME_BYTES,
+    ForceSuspendAcceptedResponse, ForceSuspendRequest, HelperRequestFrame,
+    HelperRequestPayload, HelperResponseFrame, HelperResponsePayload,
+    IdleSuspendConflictResponse, IdleSuspendErrorCode, IdleSuspendTimingPatchRequest,
+    IdleSuspendTimingPatchResponse, ProtocolError, RequestDeduplicator, SuspendOutcome,
+    SuspendWithRtcWakeRequest, HELPER_PROTOCOL_VERSION, MAX_HELPER_FRAME_BYTES,
 };
 pub use peer_auth::{EnrolledPeerPolicy, PeerAuthError, PeerCredentials};
 pub use preflight::{
@@ -37,8 +38,8 @@ pub use server_audit::{
     ManualAuditResult, ServerAuditRecord, TimingAuditRecord, TimingAuditResult,
 };
 pub use coordinator::{
-    CoordinatorTimingCommand, CoordinatorTimingResult, IdleSuspendCoordinator,
-    UpdateTimingCommand,
+    CoordinatorForceSuspendResult, CoordinatorTimingCommand, CoordinatorTimingResult,
+    ForceSuspendCommand, IdleSuspendCoordinator, UpdateTimingCommand,
 };
 pub use executor::{FakeExecutor, IdleSuspendExecutor, SystemdIdleSuspendExecutor, UnavailableExecutor};
 pub use status::{CoordinatorState, IdleSuspendStatusV1};
