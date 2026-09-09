@@ -49,6 +49,9 @@ pub const WEB_SERVICE_HEALTH_PATH: &str = "/__dam-hopper/health";
 /// Systemd unit name for the boot recovery service.
 pub const RECOVERY_SERVICE_UNIT: &str = "dam-hopper-recovery.service";
 
+/// Systemd unit name for the idle-suspend helper service.
+pub const HELPER_SERVICE_UNIT: &str = "dam-hopper-idle-suspend-helper.service";
+
 /// All managed release systemd service unit names.
 pub const ALL_SERVICE_UNITS: &[&str] = &[API_SERVICE_UNIT, WEB_SERVICE_UNIT, RECOVERY_SERVICE_UNIT];
 
