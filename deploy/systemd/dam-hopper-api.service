@@ -5,23 +5,23 @@ After=network-online.target
 
 [Service]
 Type=exec
-User=@API_USER@
-Group=@API_GROUP@
+User=dam-hopper
+Group=dam-hopper
 StateDirectory=dam-hopper
 RuntimeDirectory=dam-hopper
 PIDFile=/run/dam-hopper/server.pid
-WorkingDirectory=@API_HOME@
-Environment=HOME=@API_HOME@
-Environment=XDG_CONFIG_HOME=@API_HOME@/.config
+WorkingDirectory=/var/lib/dam-hopper
+Environment=HOME=/var/lib/dam-hopper
+Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config
 Environment=RUST_LOG=info
 Environment=RUST_ENV=production
 Environment=GIT_CONFIG_COUNT=1
 Environment=GIT_CONFIG_KEY_0=safe.directory
 Environment=GIT_CONFIG_VALUE_0=*
-Environment=DAM_HOPPER_CORS_ORIGINS=@API_ORIGINS@
+Environment=DAM_HOPPER_CORS_ORIGINS=*
 EnvironmentFile=-/etc/dam-hopper/server.env
 EnvironmentFile=-/etc/dam-hopper/server-safety.env
-ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config /etc/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801
+ExecStart=/opt/dam-hopper/current/bin/dam-hopper-server --config /etc/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801
 ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'
 ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid
 Restart=on-failure

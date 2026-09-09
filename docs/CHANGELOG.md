@@ -1,3 +1,15 @@
+# 2026-09-09
+
+- **Production CLI Deployment Setup for Idle Suspend Helper & Socket — Phase 01 complete.** Systemd API/helper units now create and remove `/run/dam-hopper/server.pid`, share a group-writable runtime directory, and expose the helper socket to the authorized API service group.
+- Validation passed: systemd unit verification, release/unit-policy tests, idle-suspend tests, and boundary checks **102/102**; cycle-2 review approved **10/10**. Release-manager staging, lifecycle, and end-to-end phases remain pending.
+
+# 2026-09-07
+
+- **Cross-Origin Port Transport Guard Fix.**
+  Aligned privileged mutation CSRF guards on idle-suspend (`force-suspend`, `timing`) and host actions (`intents`, `approve`, `executions`) with validated Bearer authentication and the server's exact CORS origin allowlist (`AppState::origin_is_allowed`).
+  Resolved `403 invalidOrigin` failure on split-port architectures (e.g. UAT web `:4804` / API `:4803`; production `:4802` / `:4801`) where browsers send `credentials: "include"`.
+  Applied zero-allocation iterator checks to header cardinality validation; strict foreign, duplicate-Origin, and userinfo rejection preserved.
+
 # 2026-09-06
 
 - **Authenticated Manual Force Sleep — Phase 01 protocol/helper complete.**

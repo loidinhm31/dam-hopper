@@ -2,6 +2,21 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Production CLI Deployment Setup for Idle Suspend Helper & Socket (2026-09-09)
+
+- **Plan status: IN PROGRESS.** Phase 01 complete; Phases 02–04 pending.
+- **Phase 01 — [COMPLETED / DONE 2026-09-09; 100%]**: systemd API/helper unit templates now manage `/run/dam-hopper/server.pid`, shared runtime-directory permissions, enrolled PID linkage, and API-group socket access.
+- Validation: `systemd-analyze verify` 3/3; scoped release, idle-suspend, and boundary checks **102/102 passed**; cycle-2 code review **10/10**.
+- Task checklist:
+  - [x] Add API `PIDFile`, `ExecStartPost`, and `ExecStopPost` PID lifecycle hooks.
+  - [x] Sync checked-in API unit with the template.
+  - [x] Align helper PID path, runtime-directory, group, umask, and socket permissions.
+  - [x] Run systemd, unit-policy, release, idle-suspend, and boundary validation.
+  - [ ] Phase 02: stage helper unit through release manager.
+  - [ ] Phase 03: coordinate helper/API service lifecycle.
+  - [ ] Phase 04: complete end-to-end verification and release gates.
+- [Plan](../plans/260909-1836-production-idle-suspend-cli-setup/plan.md) · [Phase 01](../plans/260909-1836-production-idle-suspend-cli-setup/phase-01-systemd-service-templates-and-pid-management.md) · [Test report](../plans/reports/tester-260909-2250-phase-01-systemd-unit-templates-pid-management-recheck.md) · [Review](../plans/reports/code-review-260909-2251-phase-01-systemd-unit-templates-pid-management-cycle-2.md).
+
 ### Authenticated Manual Force Sleep (2026-09-06)
 
 - **Phases 01–02 — [COMPLETED / DONE 2026-09-06]**: Extended the enrolled helper for execution-only indefinite sleep (`wakeAfterSeconds: 0`) and added generation-fenced coordinator admission, active-fleet confirmation, forced handoff ordering, durable actor audit, helper capability enrollment, and outcome reconciliation.

@@ -6,8 +6,9 @@ After=network.target
 [Service]
 Type=simple
 User=root
-Group=root
+Group=dam-hopper
 RuntimeDirectory=dam-hopper
+RuntimeDirectoryMode=0775
 StateDirectory=dam-hopper
 LogsDirectory=dam-hopper
 ExecStart=/opt/dam-hopper/current/bin/dam-hopper-idle-suspend-helper --socket /run/dam-hopper/idle-suspend.sock --audit-file /var/log/dam-hopper/idle-suspend-helper.jsonl --enrolled-pid-file /run/dam-hopper/server.pid
@@ -16,7 +17,7 @@ RestartSec=5s
 KillSignal=SIGTERM
 KillMode=mixed
 TimeoutStopSec=15s
-UMask=0077
+UMask=0007
 
 # Sandboxing and security hardening (Approved 2026-09-05)
 NoNewPrivileges=yes
