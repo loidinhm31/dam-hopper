@@ -128,6 +128,14 @@ impl RequiredPathsTracker {
                 }
                 self.has_api_unit = true;
             }
+            "systemd/dam-hopper-idle-suspend-helper.service"
+            | "systemd/dam-hopper-idle-suspend-helper.service.in" => {
+                if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Server) {
+                    return Err(ReleaseError::InvalidRequiredPath {
+                        path: "systemd/dam-hopper-idle-suspend-helper.service",
+                    });
+                }
+            }
             "systemd/dam-hopper-web.service" | "systemd/dam-hopper-web.service.in" => {
                 if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Web) {
                     return Err(ReleaseError::InvalidRequiredPath {

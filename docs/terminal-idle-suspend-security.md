@@ -106,6 +106,10 @@ Phase 03 (privileged systemd helper and unit enrollment) was reviewed and approv
 4. **Hardened Systemd Helper**:
    - `dam-hopper-idle-suspend-helper.service` sandboxed with `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, and minimal Linux capabilities (`CAP_WAKE_ALARM`, `CAP_SYS_ADMIN` restricted).
 
+### Release-manager staging integration (Phase 02)
+
+When the selected release role includes `server`, the release manager stages `dam-hopper-idle-suspend-helper.service` beside the API unit in the transaction-scoped pending-units directory. It loads the release template (with the checked-in fallback available to local/test staging), renders the release root and API group, applies `validate_helper_unit_policy`, and performs production `systemd-analyze verify` before the candidate can become pending. Activation remains explicit through `dam-hopper start`; staging does not start or enable the helper.
+
 ### Sign-Off Record
 - **Security Owner**: Approved (2026-09-05)
 - **Infrastructure / Operator**: Approved (2026-09-05)

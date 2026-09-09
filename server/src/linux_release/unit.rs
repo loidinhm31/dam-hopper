@@ -3,7 +3,9 @@
 use super::error::ReleaseError;
 use super::origin::validate_web_origins;
 use super::unit_parser::ParsedUnit;
-use super::unit_policy::{validate_api_unit_policy, validate_web_unit_policy};
+use super::unit_policy::{
+    validate_api_unit_policy, validate_helper_unit_policy, validate_web_unit_policy,
+};
 use super::version::validate_version;
 use std::path::{Path, PathBuf};
 
@@ -179,6 +181,17 @@ pub fn render_web_unit(template: &str, ctx: &UnitRenderContext) -> Result<String
     let rendered = render_unit(template, ctx)?;
     let parsed = ParsedUnit::parse(&rendered)?;
     validate_web_unit_policy(&parsed, ctx)?;
+    Ok(rendered)
+}
+
+/// Render idle suspend helper unit and validate its strict systemd policy.
+pub fn render_helper_unit(
+    template: &str,
+    ctx: &UnitRenderContext,
+) -> Result<String, ReleaseError> {
+    let rendered = render_unit(template, ctx)?;
+    let parsed = ParsedUnit::parse(&rendered)?;
+    validate_helper_unit_policy(&parsed, ctx)?;
     Ok(rendered)
 }
 

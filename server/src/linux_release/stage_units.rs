@@ -1,5 +1,6 @@
 //! Staging and isolated verification of candidate systemd units and public host config.
 
+use super::constants::HELPER_SERVICE_UNIT;
 use super::durable_fs::atomic_write_file;
 use super::error::ReleaseError;
 use super::host_config::{HostPublicConfig, load_host_public_config, save_host_public_config};
@@ -7,7 +8,9 @@ use super::inventory::TargetRole;
 use super::layout::Layout;
 use super::manifest::ReleaseManifest;
 use super::systemd::systemd_analyze_verify;
-use super::unit::{UnitRenderContext, render_api_unit, render_recovery_unit, render_web_unit};
+use super::unit::{
+    UnitRenderContext, render_api_unit, render_helper_unit, render_recovery_unit, render_web_unit,
+};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -164,6 +167,17 @@ fn stage_candidate_units_inner(
         let unit_path = pending_units_dir.join("dam-hopper-api.service");
         write_file_with_mode(&unit_path, rendered.as_bytes(), 0o644)?;
         staged_unit_paths.push(unit_path);
+
+        let helper_template = load_release_template(
+            target_dir,
+            "systemd/dam-hopper-idle-suspend-helper.service.in",
+            "systemd/dam-hopper-idle-suspend-helper.service",
+            allow_checked_in_fallback,
+        )?;
+        let rendered_helper = render_helper_unit(&helper_template, &ctx)?;
+        let helper_unit_path = pending_units_dir.join(HELPER_SERVICE_UNIT);
+        write_file_with_mode(&helper_unit_path, rendered_helper.as_bytes(), 0o644)?;
+        staged_unit_paths.push(helper_unit_path);
     }
 
     if role.includes_web() {
@@ -303,6 +317,9 @@ fn load_template(
             }
             p if p.contains("dam-hopper-web") => {
                 include_str!("../../../deploy/systemd/dam-hopper-web.service.in")
+            }
+            p if p.contains("dam-hopper-idle-suspend-helper") => {
+                include_str!("../../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in")
             }
             _ => "",
         };
