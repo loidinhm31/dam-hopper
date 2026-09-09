@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-06): 1,730 files, 3,565,165 tokens, and 14,537,973 characters.
+- Repomix snapshot (2026-09-09): 1,753 files, 3,652,861 tokens, and 14,832,008 characters.
 - Repomix security scanning excluded five suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
@@ -67,6 +67,10 @@ The snapshot is a compaction aid, not a release artifact; generated
   - Helper order: peer/protocol validation → dedupe → suspend/RTC/inhibitor preflight → synced intent audit → clear/readback (and timed write/readback) → fixed suspend → completion audit.
   - REST API: Protected `POST /api/system/idle-suspend/v1/force-suspend` with same-origin cookie protection, Bearer auth, enabled actor checks, 16 KiB body limit, and `Cache-Control: no-store`.
   - UI: `ForceSleepDialog` inside `HostResourcePopover` with active session detection/warning, checkbox confirmation, and indefinite sleep (`wakeAfterSeconds: 0`) default.
+- **systemd PID enrollment**: API units publish/remove `$MAINPID` at
+  `/run/dam-hopper/server.pid` via `ExecStartPost`/`ExecStopPost` and
+  `PIDFile`; the helper consumes the dynamic PID with 0775 runtime/socket
+  parent directories and 0660 group-owned socket access.
 - **Tests**: `server/src/idle_suspend/tests.rs` (unit, IPC, preflight, races), `server/tests/idle_suspend.rs` (cross-module, PTY lifecycle, REST DTOs), `server/src/api/tests.rs` (transport, auth, CSRF), `packages/ui/src/components/organisms/ForceSleepDialog.test.tsx` (UI unit), `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx` (Chromium browser), and `scripts/verify-idle-suspend-boundary.sh` (non-privileged boundary checks); automated coverage uses fakes/temp files rather than host suspend.
 
 ### Terminal idle suspend module map

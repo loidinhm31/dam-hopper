@@ -68,6 +68,23 @@ Protocol, helper, backend, preflight, audit, and regression-test changes are
 implemented in the Phase 01 source scope. Real-host timed/indefinite canaries
 remain separate operational gates and are not implied by automated tests.
 
+### Phase 01 systemd PID enrollment and runtime permissions — DONE (2026-09-09)
+
+- `dam-hopper-api.service` declares `PIDFile=/run/dam-hopper/server.pid`.
+  `ExecStartPost` writes systemd `$MAINPID` after startup; `ExecStopPost`
+  removes the file on shutdown. The API unit's `UMask=0077` keeps the
+  ephemeral PID file server-private.
+- Both API unit templates and concrete units use the `dam-hopper` runtime
+  directory. The helper unit passes
+  `/run/dam-hopper/server.pid` as `--enrolled-pid-file`; for each IPC peer it
+  reads the current PID and requires the Unix peer PID to match that enrolled
+  systemd MainPID (plus UID policy). A stale, missing, malformed, or mismatched
+  PID fails authentication.
+- The helper service sets `RuntimeDirectoryMode=0775`; the helper socket sets
+  `DirectoryMode=0775`, `SocketGroup=dam-hopper`, and `SocketMode=0660`.
+  These modes permit the enrolled server/helper group to reach the runtime
+  socket while keeping the PID file mode controlled by the API unit.
+
 ### Phase 02 status (2026-09-06)
 
 Coordinator force-suspend handling, generation-fenced forced fleet claims, generalized server audit writing, active-fleet confirmation enforcement, independent helper executor enrollment at startup, and deterministic outcome reconciliation are implemented. Focused coordinator, cross-module, REST, and browser coverage verifies the contract; no automated test performs real host suspend or RTC mutation.
@@ -102,6 +119,13 @@ Authenticated manual force-suspend REST API (`POST /api/system/idle-suspend/v1/f
 Integration testing, traceability, boundary verification, and documentation synchronization are complete. Focused helper/coordinator/REST/cross-module/UI tests verify negative dependencies, denial side effects, race ordering, gate release, one-POST/no-retry behavior, and resume reconciliation. Automated tests use fakes and temporary files; they never invoke `systemctl`, logind, real RTC hardware, or host suspend.
 
 The required timed real-host canary remains an operations procedure, not repository test evidence. An indefinite canary is deferred until explicit operations approval, verified physical or out-of-band wake, and rollback ownership are recorded.
+
+### Cross-Origin Port & Transport Guard Policy (2026-09-07)
+
+Deployments using split web/API ports (e.g., UAT `:4804`/`:4803` or production `:4802`/`:4801`) interact with privileged mutations (`force-suspend`, `timing`, host actions) under a unified origin policy:
+1. **Bearer Token CSRF Exemption**: Requests presenting a valid `Authorization: Bearer <jwt>` header are exempt from cookie CSRF origin checks even when ambient cookies are attached by the browser client (`credentials: "include"`). Browsers cannot forge custom authorization headers across origins without explicit preflight authorization.
+2. **Exact CORS Origin Trust**: Cookie-only requests are permitted if the request `Origin` matches an exact configured allowlist entry in `DAM_HOPPER_CORS_ORIGINS` or satisfies strict same-origin (`http(s)://Host`).
+3. **Fail-Closed Rejection**: Foreign origins, duplicate `Origin` headers, malformed URIs, and origins bearing userinfo continue to fail closed with `403 invalidOrigin` before any coordinator handoff or side effect.
 
 ## Unresolved Questions
 
