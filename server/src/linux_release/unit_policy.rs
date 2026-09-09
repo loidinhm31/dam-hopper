@@ -38,6 +38,21 @@ pub fn validate_api_unit_policy(
     assert_eq_prop(unit, name, "Service", "UMask", "0077")?;
     assert_eq_prop(unit, name, "Service", "NoNewPrivileges", "false")?;
     assert_eq_prop(unit, name, "Service", "SyslogIdentifier", "dam-hopper-api")?;
+    assert_eq_prop(unit, name, "Service", "PIDFile", "/run/dam-hopper/server.pid")?;
+    assert_eq_prop(
+        unit,
+        name,
+        "Service",
+        "ExecStartPost",
+        "/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'",
+    )?;
+    assert_eq_prop(
+        unit,
+        name,
+        "Service",
+        "ExecStopPost",
+        "/usr/bin/rm -f /run/dam-hopper/server.pid",
+    )?;
 
     let env_entries = unit.get_all_values("Service", "Environment");
     let exp_home = format!("HOME={}", ctx.api_home);

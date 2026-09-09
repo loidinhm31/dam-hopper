@@ -33,6 +33,9 @@ fn test_render_api_unit_success() {
     );
     assert!(rendered.contains("Environment=DAM_HOPPER_CORS_ORIGINS=http://localhost:4802"));
     assert!(rendered.contains("SyslogIdentifier=dam-hopper-api"));
+    assert!(rendered.contains("PIDFile=/run/dam-hopper/server.pid"));
+    assert!(rendered.contains("ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'"));
+    assert!(rendered.contains("ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid"));
     assert!(!rendered.contains('@'));
 }
 
