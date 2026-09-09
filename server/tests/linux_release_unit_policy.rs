@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 const API_TEMPLATE: &str = include_str!("../../deploy/systemd/dam-hopper-api.service.in");
 const WEB_TEMPLATE: &str = include_str!("../../deploy/systemd/dam-hopper-web.service.in");
+const HELPER_TEMPLATE: &str =
+    include_str!("../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in");
 
 fn create_valid_context() -> UnitRenderContext {
     UnitRenderContext::new(
@@ -71,6 +73,33 @@ fn test_render_web_unit_success() {
     assert!(!rendered.contains('@'));
 }
 
+
+#[test]
+fn test_render_helper_unit_success() {
+    let ctx = create_valid_context();
+    let rendered = render_helper_unit(HELPER_TEMPLATE, &ctx).expect("helper unit render should succeed");
+
+    assert!(rendered.contains("User=root"));
+    assert!(rendered.contains("Group=dam-hopper"));
+    assert!(rendered.contains("RuntimeDirectory=dam-hopper"));
+    assert!(rendered.contains("RuntimeDirectoryMode=0775"));
+    assert!(rendered.contains("StateDirectory=dam-hopper"));
+    assert!(rendered.contains("LogsDirectory=dam-hopper"));
+    assert!(rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-idle-suspend-helper --socket /run/dam-hopper/idle-suspend.sock --audit-file /var/log/dam-hopper/idle-suspend-helper.jsonl --enrolled-pid-file /run/dam-hopper/server.pid"));
+    assert!(rendered.contains("Restart=on-failure"));
+    assert!(rendered.contains("RestartSec=5s"));
+    assert!(rendered.contains("KillSignal=SIGTERM"));
+    assert!(rendered.contains("KillMode=mixed"));
+    assert!(rendered.contains("TimeoutStopSec=15s"));
+    assert!(rendered.contains("UMask=0007"));
+    assert!(rendered.contains("NoNewPrivileges=yes"));
+    assert!(rendered.contains("ProtectSystem=strict"));
+    assert!(rendered.contains("ProtectHome=yes"));
+    assert!(rendered.contains("PrivateTmp=yes"));
+    assert!(rendered.contains("CapabilityBoundingSet=CAP_WAKE_ALARM"));
+    assert!(rendered.contains("SyslogIdentifier=dam-hopper-idle-suspend-helper"));
+    assert!(!rendered.contains('@'));
+}
 #[test]
 fn test_reject_unresolved_or_unknown_tokens() {
     let ctx = create_valid_context();
@@ -150,10 +179,13 @@ fn test_stage_candidate_units_roles() {
     std::fs::write(&server_bin, "server").unwrap();
     std::fs::write(&web_bin, "web").unwrap();
     std::fs::write(&mgr_bin, "manager").unwrap();
+    let helper_bin = target_dir.join("bin/dam-hopper-idle-suspend-helper");
+    std::fs::write(&helper_bin, "helper").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&server_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&web_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&mgr_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&helper_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Create dummy manifest
     let manifest = ReleaseManifest {
         schema_version: 1,
@@ -227,6 +259,7 @@ fn test_stage_candidate_units_roles() {
     let pending_units = layout.pending_units_dir();
     assert!(pending_units.join("dam-hopper-api.service").exists());
     assert!(pending_units.join("dam-hopper-recovery.service").exists());
+    assert!(pending_units.join("dam-hopper-idle-suspend-helper.service").exists());
     assert!(!pending_units.join("dam-hopper-web.service").exists());
 
     let pending_cfg = load_host_public_config(&layout.pending_host_config_json_path())
@@ -239,10 +272,20 @@ fn test_stage_candidate_units_roles() {
         .expect("stage candidate units for both");
     assert!(pending_units.join("dam-hopper-api.service").exists());
     assert!(pending_units.join("dam-hopper-web.service").exists());
+    assert!(pending_units.join("dam-hopper-idle-suspend-helper.service").exists());
     assert!(pending_units.join("dam-hopper-web.conf").exists());
 
     let pending_cfg = load_host_public_config(&layout.pending_host_config_json_path())
         .unwrap()
         .expect("pending host config");
     assert_eq!(pending_cfg.role, TargetRole::Both);
+
+    // Stage for Web role
+    stage_candidate_units(&layout, &target_dir, &manifest, TargetRole::Web, &origins)
+        .expect("stage candidate units for web");
+    assert!(!pending_units.join("dam-hopper-api.service").exists());
+    assert!(!pending_units.join("dam-hopper-idle-suspend-helper.service").exists());
+    assert!(pending_units.join("dam-hopper-web.service").exists());
+    assert!(pending_units.join("dam-hopper-web.conf").exists());
+    assert!(pending_units.join("dam-hopper-recovery.service").exists());
 }

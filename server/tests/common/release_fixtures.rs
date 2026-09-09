@@ -40,13 +40,17 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
     let f7_data = include_bytes!("../../../deploy/sysusers.d/dam-hopper-web.conf");
     let f8_data = b"<!doctype html><html>web</html>";
     let f9_data = b"MIT License";
+    let f10_data = include_bytes!("../../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in");
+    let f11_data = b"helper binary content";
 
     let entries = vec![
         ("bin/dam-hopper-manager", false, &f1_data[..], 0o755),
         ("bin/dam-hopper-server", false, &f2_data[..], 0o755),
         ("bin/dam-hopper-web", false, &f3_data[..], 0o755),
+        ("bin/dam-hopper-idle-suspend-helper", false, &f11_data[..], 0o755),
         ("systemd/dam-hopper-api.service", false, &f4_data[..], 0o644),
         ("systemd/dam-hopper-web.service", false, &f5_data[..], 0o644),
+        ("systemd/dam-hopper-idle-suspend-helper.service", false, &f10_data[..], 0o644),
         ("systemd/dam-hopper-recovery.service", false, &f6_data[..], 0o644),
         ("sysusers.d/dam-hopper-web.conf", false, &f7_data[..], 0o644),
         ("web", true, &[][..], 0o755),
@@ -75,6 +79,14 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             sha256: Some(hex::encode(Sha256::digest(f2_data))),
         },
         InventoryEntry {
+            path: "bin/dam-hopper-idle-suspend-helper".to_string(),
+            kind: EntryKind::File,
+            roles: vec![ReleaseRole::Server],
+            mode: 0o755,
+            size: Some(f11_data.len() as u64),
+            sha256: Some(hex::encode(Sha256::digest(f11_data))),
+        },
+        InventoryEntry {
             path: "bin/dam-hopper-web".to_string(),
             kind: EntryKind::File,
             roles: vec![ReleaseRole::Web],
@@ -89,6 +101,14 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             mode: 0o644,
             size: Some(f4_data.len() as u64),
             sha256: Some(hex::encode(Sha256::digest(f4_data))),
+        },
+        InventoryEntry {
+            path: "systemd/dam-hopper-idle-suspend-helper.service".to_string(),
+            kind: EntryKind::File,
+            roles: vec![ReleaseRole::Server],
+            mode: 0o644,
+            size: Some(f10_data.len() as u64),
+            sha256: Some(hex::encode(Sha256::digest(f10_data))),
         },
         InventoryEntry {
             path: "systemd/dam-hopper-web.service".to_string(),

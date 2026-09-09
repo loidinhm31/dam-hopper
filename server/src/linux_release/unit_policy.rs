@@ -90,6 +90,43 @@ pub fn validate_api_unit_policy(
     Ok(())
 }
 
+/// Validate rendered idle suspend helper unit strictly matches the security and staging contract.
+pub fn validate_helper_unit_policy(
+    unit: &ParsedUnit,
+    ctx: &UnitRenderContext,
+) -> Result<(), ReleaseError> {
+    let name = "dam-hopper-idle-suspend-helper.service";
+
+    assert_eq_prop(unit, name, "Service", "Type", "simple")?;
+    assert_eq_prop(unit, name, "Service", "User", "root")?;
+    assert_eq_prop(unit, name, "Service", "Group", &ctx.api_group)?;
+    assert_eq_prop(unit, name, "Service", "RuntimeDirectory", "dam-hopper")?;
+    assert_eq_prop(unit, name, "Service", "RuntimeDirectoryMode", "0775")?;
+    assert_eq_prop(unit, name, "Service", "StateDirectory", "dam-hopper")?;
+    assert_eq_prop(unit, name, "Service", "LogsDirectory", "dam-hopper")?;
+    assert_eq_prop(unit, name, "Service", "Restart", "on-failure")?;
+    assert_eq_prop(unit, name, "Service", "RestartSec", "5s")?;
+    assert_eq_prop(unit, name, "Service", "KillSignal", "SIGTERM")?;
+    assert_eq_prop(unit, name, "Service", "KillMode", "mixed")?;
+    assert_eq_prop(unit, name, "Service", "TimeoutStopSec", "15s")?;
+    assert_eq_prop(unit, name, "Service", "UMask", "0007")?;
+    assert_eq_prop(unit, name, "Service", "NoNewPrivileges", "yes")?;
+    assert_eq_prop(unit, name, "Service", "ProtectSystem", "strict")?;
+    assert_eq_prop(unit, name, "Service", "ProtectHome", "yes")?;
+    assert_eq_prop(unit, name, "Service", "PrivateTmp", "yes")?;
+    assert_eq_prop(unit, name, "Service", "CapabilityBoundingSet", "CAP_WAKE_ALARM")?;
+    assert_eq_prop(unit, name, "Service", "SyslogIdentifier", "dam-hopper-idle-suspend-helper")?;
+
+    let expected_exec = format!(
+        "{}/bin/dam-hopper-idle-suspend-helper --socket /run/dam-hopper/idle-suspend.sock --audit-file /var/log/dam-hopper/idle-suspend-helper.jsonl --enrolled-pid-file /run/dam-hopper/server.pid",
+        ctx.release_root.display()
+    );
+    assert_eq_prop(unit, name, "Service", "ExecStart", &expected_exec)?;
+
+    assert_eq_prop(unit, name, "Install", "WantedBy", "multi-user.target")?;
+    Ok(())
+}
+
 /// Validate rendered Web unit strictly matches the Phase 04 isolation contract.
 pub fn validate_web_unit_policy(
     unit: &ParsedUnit,

@@ -8,11 +8,12 @@
 - Relevant Docs: `docs/linux-release-manager.md`, `docs/terminal-idle-suspend-security.md`
 
 ## 2. Overview
-- **Date**: 2026-09-09
+- **Date**: 2026-09-10
 - **Description**: Update `server/src/linux_release/stage_units.rs` to load, render, and stage `dam-hopper-idle-suspend-helper.service` whenever the release role includes `server`.
 - **Priority**: P2
-- **Implementation Status**: Pending
-- **Review Status**: Pending
+- **Implementation Status**: DONE (2026-09-10)
+- **Review Status**: Complete (2026-09-10, 9.5/10 review)
+- **Progress**: 100% (4/4 implementation steps; 4/4 todo items)
 
 ## 3. Key Insights
 - In `server/src/linux_release/stage_units.rs`, `stage_candidate_units_inner` dynamically renders systemd templates using placeholders (`@RELEASE_ROOT@`, `@API_USER@`, `@API_GROUP@`, etc.).
@@ -60,10 +61,10 @@ Candidate Release Directory (/opt/dam-hopper/releases/vX.Y.Z/server)
 4. Add unit test in `server/src/linux_release/tests.rs` asserting helper unit is rendered and staged for `server` role.
 
 ## 8. Todo List
-- [ ] Define `HELPER_SERVICE_UNIT` constant
-- [ ] Add helper unit template loading and rendering to `stage_units.rs`
-- [ ] Register staged unit path in validation vector
-- [ ] Add unit test verifying helper unit rendering and staging
+- [x] Define `HELPER_SERVICE_UNIT` constant
+- [x] Add helper unit template loading and rendering to `stage_units.rs`
+- [x] Register staged unit path in validation vector
+- [x] Add unit test verifying helper unit rendering and staging
 
 ## 9. Success Criteria
 - Running `dam-hopper install` on a server bundle places `/etc/systemd/system/dam-hopper-idle-suspend-helper.service`.

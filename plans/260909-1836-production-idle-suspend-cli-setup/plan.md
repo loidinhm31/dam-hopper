@@ -32,11 +32,11 @@ While the core idle-suspend engine is functional, production CLI deployment via 
 | Phase | Description | Deliverable | Status |
 |---|---|---|---|
 | **Phase 01** | Systemd Service Unit Templates & PID Management | Updated `.service.in` templates with PID file and socket group configuration | DONE (2026-09-09) |
-| **Phase 02** | Release Manager Unit Staging (`stage_units.rs`) | Dynamic helper unit rendering and staging in `stage_units.rs` | Pending |
+| **Phase 02** | Release Manager Unit Staging (`stage_units.rs`) | Dynamic helper unit rendering and staging in `stage_units.rs` | DONE (2026-09-10) |
 | **Phase 03** | Release Manager Service Lifecycle (`activate.rs`, `rollback.rs`, `status.rs`) | Coordinated start, stop, and status inspection in `dam-hopper` CLI | Pending |
 | **Phase 04** | Verification, Boundary Enforcement & End-to-End Testing | Unit tests, security boundary validation, and UAT CLI test | Pending |
 
-**Current plan status:** IN PROGRESS — Phase 01 DONE (2026-09-09; 100%); Phases 02–04 pending.
+**Current plan status:** IN PROGRESS — Phases 01–02 DONE (Phase 01: 2026-09-09; Phase 02: 2026-09-10; 50% overall); Phases 03–04 pending.
 
 ## Phase Links
 - [cmd-plan.md](./cmd-plan.md)
@@ -59,5 +59,5 @@ While the core idle-suspend engine is functional, production CLI deployment via 
 4. **Helper Restart Policy**: `Restart=on-failure` with `RestartSec=5s`. Restarts the daemon process on crash; does not trigger or affect host machine reboots.
 
 ### Action Items
-- Phase 01 DONE (2026-09-09); proceed to Phase 02 unit staging.
-- Complete Phases 02–04 and run the parent integration/release gates.
+- Phases 01–02 DONE (Phase 01: 2026-09-09; Phase 02: 2026-09-10); proceed to Phase 03 service lifecycle.
+- Complete Phases 03–04 and run the parent integration/release gates.

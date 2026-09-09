@@ -321,6 +321,14 @@ root install / role set
   └─ fsync and atomically update the `pending` field in state.json
 ```
 
+### Role-aware unit staging (Phase 02)
+
+After role projection is extracted, `stage_units.rs` builds the transaction-scoped unit set. Every role receives the recovery unit; a selected role that includes `server` also stages the API unit and `dam-hopper-idle-suspend-helper.service`. The helper is loaded from `systemd/dam-hopper-idle-suspend-helper.service.in` in the role view (or the checked-in template fallback used by local/test staging; a plain `.service` path is accepted as the bundle fallback).
+
+`render_helper_unit` substitutes the allowlisted `@RELEASE_ROOT@` and `@API_GROUP@` values from `UnitRenderContext`, parses the rendered unit, and enforces `validate_helper_unit_policy`. Unknown or unresolved tokens and policy mismatches abort staging. The rendered helper is written under the transaction's `/var/lib/dam-hopper-manager/pending-units-<tx-id>/` directory using the `HELPER_SERVICE_UNIT` constant (`dam-hopper-idle-suspend-helper.service`).
+
+Production staging requires `systemd-analyze` and runs `systemd-analyze verify` against all staged units before pending state is committed. Generic/local staging runs the same verification when the binary is available.
+
 The archive inspector rejects normalized-path violations, duplicate entries,
 manifest-set mismatches, disallowed runtime/configuration names, links,
 devices, FIFOs, other special entries, wrong file/directory kinds, mode drift,

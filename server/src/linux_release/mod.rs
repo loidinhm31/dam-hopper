@@ -136,7 +136,7 @@ pub use unit::render_recovery_unit;
 pub use unit::{
     TOKEN_API_GROUP, TOKEN_API_HOME, TOKEN_API_ORIGINS, TOKEN_API_USER, TOKEN_PUBLIC_CONFIG,
     TOKEN_RELEASE_ROOT, TOKEN_RELEASE_VERSION, UnitRenderContext, render_api_unit, render_unit,
-    render_web_unit,
+    render_helper_unit, render_web_unit,
 };
 pub use unit_parser::ParsedUnit;
 pub use version::{
