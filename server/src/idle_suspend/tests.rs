@@ -32,8 +32,8 @@ use crate::idle_suspend::protocol::{
     MAX_HELPER_FRAME_BYTES,
 };
 use crate::idle_suspend::server_audit::{
-    AuditError, IdleSuspendServerAudit, IdleSuspendTimingAudit, ManualAuditRecord,
-    ManualAuditResult, ServerAuditRecord, TimingAuditRecord, TimingAuditResult,
+    AuditError, IdleSuspendServerAudit, IdleSuspendTimingAudit, ManualAuditResult,
+    TimingAuditRecord, TimingAuditResult,
 };
 use crate::idle_suspend::timing_store::{IdleSuspendTimingStore, TimingStoreError};
 
@@ -53,8 +53,194 @@ fn test_default_idle_suspend_config() {
         cfg.capability_selection,
         IdleSuspendCapabilitySelection::Auto
     );
+    assert_eq!(
+        cfg.automatic_policy,
+        crate::config::IdleSuspendAutomaticPolicy::EmptyFleet
+    );
+    assert_eq!(
+        cfg.agent_executables,
+        crate::config::default_idle_suspend_agent_executables()
+    );
     assert!(cfg.enrollment_reference.is_none());
     assert!(cfg.validate().is_ok());
+}
+
+#[test]
+fn test_idle_suspend_automatic_policy_serialization_and_defaults() {
+    use crate::config::IdleSuspendAutomaticPolicy;
+
+    // Direct JSON serialization/deserialization
+    let empty_fleet_json = serde_json::to_string(&IdleSuspendAutomaticPolicy::EmptyFleet).unwrap();
+    assert_eq!(empty_fleet_json, "\"empty-fleet\"");
+    let parsed_empty: IdleSuspendAutomaticPolicy = serde_json::from_str("\"empty-fleet\"").unwrap();
+    assert_eq!(parsed_empty, IdleSuspendAutomaticPolicy::EmptyFleet);
+
+    let agent_activity_json = serde_json::to_string(&IdleSuspendAutomaticPolicy::AgentActivity).unwrap();
+    assert_eq!(agent_activity_json, "\"agent-activity\"");
+    let parsed_activity: IdleSuspendAutomaticPolicy = serde_json::from_str("\"agent-activity\"").unwrap();
+    assert_eq!(parsed_activity, IdleSuspendAutomaticPolicy::AgentActivity);
+
+    // Default as_str representation
+    assert_eq!(IdleSuspendAutomaticPolicy::EmptyFleet.as_str(), "empty-fleet");
+    assert_eq!(IdleSuspendAutomaticPolicy::AgentActivity.as_str(), "agent-activity");
+
+    // Deserializing IdleSuspendConfig with camelCase JSON
+    let json = r#"{
+        "automaticPolicy": "agent-activity",
+        "agentExecutables": ["codex", "omp", "claude"]
+    }"#;
+    let cfg: IdleSuspendConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(cfg.automatic_policy, IdleSuspendAutomaticPolicy::AgentActivity);
+    assert_eq!(cfg.agent_executables, vec!["codex", "omp", "claude"]);
+
+    // Deserializing with snake_case aliases (as from TOML or legacy)
+    let json_snake = r#"{
+        "automatic_policy": "agent-activity",
+        "agent_executables": ["codex", "agy"]
+    }"#;
+    let cfg_snake: IdleSuspendConfig = serde_json::from_str(json_snake).unwrap();
+    assert_eq!(cfg_snake.automatic_policy, IdleSuspendAutomaticPolicy::AgentActivity);
+    assert_eq!(cfg_snake.agent_executables, vec!["codex", "agy"]);
+
+    // Omitted fields resolve to defaults
+    let json_empty = "{}";
+    let cfg_default: IdleSuspendConfig = serde_json::from_str(json_empty).unwrap();
+    assert_eq!(cfg_default.automatic_policy, IdleSuspendAutomaticPolicy::EmptyFleet);
+    assert_eq!(cfg_default.agent_executables, crate::config::default_idle_suspend_agent_executables());
+}
+
+#[test]
+fn test_agent_executables_validation() {
+    use crate::config::{validate_agent_executables, validate_agent_executable_entry};
+
+    // Valid basenames
+    assert!(validate_agent_executable_entry("codex").is_ok());
+    assert!(validate_agent_executable_entry("omp").is_ok());
+    assert!(validate_agent_executable_entry("claude").is_ok());
+    assert!(validate_agent_executable_entry("agy").is_ok());
+    assert!(validate_agent_executable_entry("my-agent_v1.0+beta@dev").is_ok());
+
+    // Valid absolute paths
+    assert!(validate_agent_executable_entry("/usr/local/bin/codex").is_ok());
+    assert!(validate_agent_executable_entry("/opt/agents/bin/claude").is_ok());
+
+    // Generic interpreter basenames rejected (both basename and in absolute path)
+    let generic_interpreters = [
+        "node", "nodejs", "bun", "python", "python3", "python3.11", "python3.12",
+        "python2", "python2.7", "sh", "bash", "dash", "zsh", "ksh", "fish",
+    ];
+    for interp in generic_interpreters {
+        assert!(validate_agent_executable_entry(interp).is_err(), "should reject generic interpreter basename '{interp}'");
+        let abs_path = format!("/usr/bin/{interp}");
+        assert!(validate_agent_executable_entry(&abs_path).is_err(), "should reject generic interpreter in absolute path '{abs_path}'");
+    }
+
+    // Relative slash-containing paths rejected
+    assert!(validate_agent_executable_entry("bin/codex").is_err());
+    assert!(validate_agent_executable_entry("./codex").is_err());
+    assert!(validate_agent_executable_entry("../codex").is_err());
+
+    // Invalid path formatting: trailing slash, repeated slashes, root alone
+    assert!(validate_agent_executable_entry("/").is_err());
+    assert!(validate_agent_executable_entry("/usr/bin/").is_err());
+    assert!(validate_agent_executable_entry("/usr//bin/codex").is_err());
+
+    // Invalid components: '.' or '..'
+    assert!(validate_agent_executable_entry(".").is_err());
+    assert!(validate_agent_executable_entry("..").is_err());
+    assert!(validate_agent_executable_entry("/usr/./bin/codex").is_err());
+    assert!(validate_agent_executable_entry("/usr/../bin/codex").is_err());
+
+    // Invalid characters: spaces, shell/glob/regex syntax
+    assert!(validate_agent_executable_entry("codex*").is_err());
+    assert!(validate_agent_executable_entry("codex?").is_err());
+    assert!(validate_agent_executable_entry("agent [1]").is_err());
+    assert!(validate_agent_executable_entry("agent 1").is_err());
+    assert!(validate_agent_executable_entry("agent$").is_err());
+    assert!(validate_agent_executable_entry("agent`").is_err());
+    assert!(validate_agent_executable_entry("agent\0").is_err());
+    assert!(validate_agent_executable_entry("agent\n").is_err());
+
+    // Empty string rejected
+    assert!(validate_agent_executable_entry("").is_err());
+
+    // Oversized entry rejected (> 256 bytes)
+    let long_entry = "a".repeat(257);
+    assert!(validate_agent_executable_entry(&long_entry).is_err());
+    let valid_256 = "a".repeat(256);
+    assert!(validate_agent_executable_entry(&valid_256).is_ok());
+
+    // List validation: 1..=32 entries
+    assert!(validate_agent_executables(&[]).is_err());
+    let entries_32: Vec<String> = (0..32).map(|i| format!("agent-{i}")).collect();
+    assert!(validate_agent_executables(&entries_32).is_ok());
+    let entries_33: Vec<String> = (0..33).map(|i| format!("agent-{i}")).collect();
+    assert!(validate_agent_executables(&entries_33).is_err());
+
+    // Duplicate detection
+    assert!(validate_agent_executables(&["codex".into(), "codex".into()]).is_err());
+    assert!(validate_agent_executables(&["codex".into(), "omp".into(), "codex".into()]).is_err());
+
+    // Full config validate() catches invalid executables even when disabled
+    let mut cfg = IdleSuspendConfig::default();
+    cfg.enabled = false;
+    cfg.agent_executables = vec!["node".to_string()];
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn test_toml_roundtrip_agent_activity_policy_and_custom_executables() {
+    use crate::config::IdleSuspendAutomaticPolicy;
+
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+
+    let toml_content = r#"
+[workspace]
+name = "test-agent-activity-ws"
+
+[server.idle_suspend]
+enabled = false
+quiet_period_seconds = 900
+wake_after_seconds = 600
+automatic_policy = "agent-activity"
+agent_executables = ["codex", "/opt/bin/my-claude-wrapper"]
+"#;
+    fs::write(&config_path, toml_content).unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert!(!cfg.server.idle_suspend.enabled);
+    assert_eq!(
+        cfg.server.idle_suspend.automatic_policy,
+        IdleSuspendAutomaticPolicy::AgentActivity
+    );
+    assert_eq!(
+        cfg.server.idle_suspend.agent_executables,
+        vec!["codex", "/opt/bin/my-claude-wrapper"]
+    );
+
+    // Test writing back preserves and roundtrips
+    let out_path = dir.path().join("out.toml");
+    write_config(&out_path, &cfg).unwrap();
+    let written = read_config(&out_path).unwrap();
+    assert_eq!(written.server.idle_suspend, cfg.server.idle_suspend);
+
+    // Check StartupIdleSuspendPolicy captures the agent activity policy and compiled set
+    let policy = StartupIdleSuspendPolicy::from_config(&out_path, &written.server.idle_suspend);
+    assert_eq!(policy.automatic_policy(), IdleSuspendAutomaticPolicy::AgentActivity);
+    assert!(policy.is_agent_activity_policy());
+    assert_eq!(policy.agent_executables().len(), 2);
+    assert_eq!(
+        policy.agent_executables().raw(),
+        &["codex".to_string(), "/opt/bin/my-claude-wrapper".to_string()]
+    );
+    assert_eq!(
+        policy.agent_executables().entries(),
+        &[
+            crate::idle_suspend::AgentExecutableEntry::Basename("codex".to_string()),
+            crate::idle_suspend::AgentExecutableEntry::AbsolutePath(std::path::PathBuf::from("/opt/bin/my-claude-wrapper")),
+        ]
+    );
 }
 
 #[test]
@@ -381,6 +567,8 @@ wake_after_seconds = 600
         canonical_registry_path: registry_path,
         enrollment_reference: None,
         capability_selection: IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::EmptyFleet,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
     }
 }
 

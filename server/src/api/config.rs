@@ -128,6 +128,23 @@ fn preserve_and_reject_idle_suspend_mutation(
             Value::String(current.server.idle_suspend.capability_selection.as_str().to_string()),
         );
     }
+    if current.server.idle_suspend.automatic_policy != Default::default() {
+        idle_map.insert(
+            "automatic_policy".to_string(),
+            Value::String(current.server.idle_suspend.automatic_policy.as_str().to_string()),
+        );
+    }
+    if current.server.idle_suspend.agent_executables != crate::config::default_idle_suspend_agent_executables() {
+        let execs: Vec<Value> = current
+            .server
+            .idle_suspend
+            .agent_executables
+            .iter()
+            .cloned()
+            .map(Value::String)
+            .collect();
+        idle_map.insert("agent_executables".to_string(), Value::Array(execs));
+    }
     server.insert("idle_suspend".to_string(), Value::Object(idle_map));
     Ok(())
 }
@@ -598,13 +615,9 @@ async fn reload_config(state: &AppState) -> Result<(), ApiError> {
     let _workspace_context = state.workspace_context_guard.write().await;
     let config_path = state.config.read().await.config_path.clone();
     let mut new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
-    new_cfg.server.idle_suspend.enabled = state.idle_suspend_policy.enabled;
-    new_cfg.server.idle_suspend.enrollment_reference = state.idle_suspend_policy.enrollment_reference.clone();
-    new_cfg.server.idle_suspend.capability_selection = state.idle_suspend_policy.capability_selection;
     {
         let timing = state.idle_suspend_timing.read().await;
-        new_cfg.server.idle_suspend.quiet_period_seconds = timing.quiet_period_seconds;
-        new_cfg.server.idle_suspend.wake_after_seconds = timing.wake_after_seconds;
+        state.idle_suspend_policy.apply_to_config(&mut new_cfg, &timing);
     }
     state.media_tickets.revoke_all();
     state.fs.reinit_sandbox(project_roots_from_config(&new_cfg));

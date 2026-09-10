@@ -6160,6 +6160,56 @@ async fn config_put_rejects_idle_suspend_delta() {
 }
 
 #[tokio::test]
+async fn config_put_rejects_automatic_policy_delta() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "policy-delta-test", "root": "." },
+            "server": {
+                "idleSuspend": {
+                    "automaticPolicy": "agent-activity"
+                }
+            },
+            "projects": [{ "name": "test-project", "path": ".", "type": "custom" }]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let err_str = String::from_utf8_lossy(&body);
+    assert!(err_str.contains("Terminal idle-suspend timing must be configured via PATCH"));
+}
+
+#[tokio::test]
+async fn config_put_rejects_agent_executables_delta() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "execs-delta-test", "root": "." },
+            "server": {
+                "idleSuspend": {
+                    "agentExecutables": ["custom-agent"]
+                }
+            },
+            "projects": [{ "name": "test-project", "path": ".", "type": "custom" }]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let err_str = String::from_utf8_lossy(&body);
+    assert!(err_str.contains("Terminal idle-suspend timing must be configured via PATCH"));
+}
+
+#[tokio::test]
 async fn settings_import_rejects_idle_suspend_delta() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state_with_project(&tmp);
@@ -6633,7 +6683,7 @@ async fn idle_suspend_force_suspend_transport_and_auth_guards() {
 #[tokio::test]
 async fn idle_suspend_force_suspend_payload_validation_and_bounds() {
     let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
+    let _state = make_state(&tmp);
 
     // 1. ForceSuspendRequest JSON deserialization:
     // a. Valid payloads: indefinite (0) and bounded (60..=86400)

@@ -108,6 +108,22 @@ unsupported capabilities, and inhibitors produce no suspend call. Tests use
 `tempfile` RTC/audit paths and fake preflight/backends; never use real power
 management or host RTC state.
 
+Keep the Phase 01 policy/configuration contract separate from runtime
+observation:
+
+- `IdleSuspendAutomaticPolicy` serializes as `empty-fleet` (the default) or
+  `agent-activity`.
+- `IdleSuspendConfig` uses camelCase JSON fields (`automaticPolicy` and
+  `agentExecutables`) with snake_case input aliases; canonical TOML writes
+  `automatic_policy` and `agent_executables`.
+- Agent entries are literal, case-sensitive basenames or absolute paths. Keep
+  validation lexical and deterministic: require 1–32 unique entries, bound
+  each entry to 1–256 UTF-8 bytes, and reject controls, traversal, path
+  metacharacters, and generic interpreter basenames.
+- `StartupIdleSuspendPolicy` owns the validated policy and matcher set after
+  startup. Reload, import, and workspace activation must reapply those
+  startup-owned values; only the runtime timing pair is mutable.
+
 ### Linux release manager service lifecycle and verification (Production CLI Phases 03–04)
 
 Keep helper lifecycle ownership centralized in `server/src/linux_release/`:
