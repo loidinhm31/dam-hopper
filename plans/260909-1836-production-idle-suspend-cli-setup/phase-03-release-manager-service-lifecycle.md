@@ -11,8 +11,9 @@
 - **Date**: 2026-09-09
 - **Description**: Integrate `dam-hopper-idle-suspend-helper.service` into `dam-hopper start`, `dam-hopper status`, and `dam-hopper rollback`/`recover` workflows.
 - **Priority**: P2
-- **Implementation Status**: Pending
-- **Review Status**: Pending
+- **Implementation Status**: DONE (2026-09-10)
+- **Review Status**: Completed (2026-09-10)
+- **Progress**: 100% (4/4 implementation steps; 4/4 todo items)
 
 ## 3. Key Insights
 - When `sudo dam-hopper start` is invoked, `server/src/linux_release/activate.rs` starts services according to role.
@@ -62,10 +63,10 @@ sudo dam-hopper start
 4. Update unit tests in `server/src/linux_release/` covering activation and status reporting.
 
 ## 8. Todo List
-- [ ] Add helper service startup to `activate.rs`
-- [ ] Add helper service stop/restart to `rollback.rs` and `recover.rs`
-- [ ] Include helper status in `status.rs`
-- [ ] Add unit tests for release manager lifecycle transitions
+- [x] Add helper service startup to `activate.rs`
+- [x] Add helper service stop/restart to `rollback.rs` and `recover.rs`
+- [x] Include helper status in `status.rs`
+- [x] Add unit tests for release manager lifecycle transitions
 
 ## 9. Success Criteria
 - `sudo dam-hopper start` starts both `dam-hopper-idle-suspend-helper.service` and `dam-hopper-api.service`.

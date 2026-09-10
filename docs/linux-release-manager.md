@@ -203,6 +203,82 @@ The binary defaults to `0.0.0.0:4802`, serves GET/HEAD static requests, and
 reports web-role health at `/__dam-hopper/health`. The machine-local
 runtime-config file supplies the exact API origin; it is not packaged.
 
+## Helper service lifecycle (Production CLI Phase 03)
+
+`dam-hopper-idle-suspend-helper.service` is a managed `server`-role unit
+alongside `dam-hopper-api.service`. The unit name is the
+`HELPER_SERVICE_UNIT` constant and is included in `ALL_SERVICE_UNITS`.
+Server-role staging renders the helper into the transaction's
+`pending-units-<tx-id>` directory; staging never starts or enables services.
+
+### Start order and non-fatal fallback
+
+`sudo dam-hopper start` uses the same ordering for an ordinary start of a
+committed release and for activation of a pending candidate:
+
+1. When activating a candidate, install the rendered units and run
+   `systemctl daemon-reload`.
+2. If the selected role includes `server`, attempt
+   `systemctl start dam-hopper-idle-suspend-helper.service`.
+3. If the helper start fails, log a warning and continue; then start
+   `dam-hopper-api.service`.
+4. If the selected role includes `web`, start
+   `dam-hopper-web.service`.
+5. Run the API/web health-stability gate. The helper has no HTTP probe target.
+
+The helper start failure is intentionally non-fatal. Hosts without the
+required suspend capability, or hosts where the helper cannot start, retain
+ordinary API operations; idle-suspend requests fail closed until the helper is
+available. Candidate activation still fails if API/web startup or health
+verification fails. After a successful health gate, helper enablement is also
+best-effort and warns without blocking API enablement or the commit.
+
+### Stop, rollback, and recovery behavior
+
+- Candidate activation first stops every unit in `ALL_SERVICE_UNITS`, including
+  the helper, and backs up the installed unit files before replacing them.
+- `sudo dam-hopper stop` iterates the same managed-unit list. A stop error is
+  printed as a warning for that unit; the command continues stopping other
+  units. `--clean` additionally removes the active view/state selected by the
+  CLI, but does not broaden cleanup to unrelated paths.
+- Automatic activation rollback stops the helper with the other managed units,
+  restores transaction-owned unit/configuration backups, reloads systemd, and
+  starts the helper before the API for a restored server role. Helper startup
+  or enablement failure remains a warning; API/web restoration and health
+  verification determine whether recovery succeeds.
+- Manual rollback promotes the recorded `previous` release through the same
+  activation transaction. The special imported format-2 path stops, disables,
+  and removes all current managed v1 units, including the helper, before
+  restoring the legacy unit.
+- Boot recovery disables the helper with the API/web units while a
+  `PENDING` candidate is retained. For an interrupted `QUIESCED`,
+  `SWITCHED`, or `PROBING` transaction it invokes the backup restoration path.
+  For a committed server role it repairs helper enablement; an inconsistent
+  state stops and disables every managed unit and returns `RECOVERY_REQUIRED`.
+
+### Status inspection
+
+`collect_all_services_status()` reports four managed units: API and helper
+under `role: "server"`, web under `role: "web"`, and recovery under
+`role: "recovery"`. Each record contains the systemd active result plus
+best-effort `pid` and `uid` process evidence; missing process evidence does not
+make an inactive or stopped helper an error.
+
+```bash
+dam-hopper status
+dam-hopper status --json
+systemctl status dam-hopper-idle-suspend-helper.service
+journalctl -u dam-hopper-idle-suspend-helper.service --no-tail
+test -S /run/dam-hopper/idle-suspend.sock
+```
+
+Plaintext status groups the helper with server services. JSON status exposes the
+same records in its `services` array, so automation can distinguish an active
+API from an inactive helper. The socket check is separate evidence: status
+reports unit/process state, not socket protocol readiness. The helper's socket
+is `/run/dam-hopper/idle-suspend.sock`; it may be absent when helper startup
+failed or the selected role does not include `server`.
+
 ## Durable activation, rollback, and recovery (Phase 05)
 
 The authoritative deployment state is one generation-numbered

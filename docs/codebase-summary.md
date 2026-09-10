@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-10): 1,756 files, 3,659,571 tokens, and 14,858,183 characters.
+- Repomix snapshot (2026-09-10): 1,759 files, 3,664,161 tokens, and 14,877,492 characters.
 - Repomix security scanning excluded five suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
@@ -71,6 +71,10 @@ The snapshot is a compaction aid, not a release artifact; generated
   role projections, and transaction-stages rendered units; server roles render
   `HELPER_SERVICE_UNIT` and enforce `validate_helper_unit_policy` before
   `systemd-analyze verify`.
+  - `dam-hopper start` starts the helper before the API; helper start/enable
+    failures warn and fall back to API availability.
+  - Managed stop, activation rollback, manual rollback, and boot recovery
+    include the helper; `status` reports API, helper, web, and recovery evidence.
 - **systemd PID enrollment**: API units publish/remove `$MAINPID` at
   `/run/dam-hopper/server.pid`; the helper uses 0775 runtime/socket directories
   and 0660 group-owned socket access.
