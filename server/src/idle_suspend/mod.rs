@@ -16,7 +16,8 @@ pub mod helper_server;
 pub mod tests;
 
 pub use policy::{
-    validate_timing_pair, RuntimeIdleSuspendTiming, StartupIdleSuspendPolicy,
+    validate_timing_pair, AgentExecutableEntry, AgentExecutableSet, RuntimeIdleSuspendTiming,
+    StartupIdleSuspendPolicy,
 };
 pub use protocol::{
     decode_frame, encode_frame, read_frame_async, validate_request_id,
@@ -29,8 +30,9 @@ pub use protocol::{
 };
 pub use peer_auth::{EnrolledPeerPolicy, PeerAuthError, PeerCredentials};
 pub use preflight::{
-    ActiveInhibitor, FakeInhibitorProvider, FakePreflightChecker, InhibitorProvider,
-    PreflightChecker, PreflightError, SysfsPreflightChecker, SystemdInhibitCliProvider,
+    parse_systemd_inhibit_output, ActiveInhibitor, FakeInhibitorProvider, FakePreflightChecker,
+    InhibitorProvider, PreflightChecker, PreflightError, SysfsPreflightChecker,
+    SystemdInhibitCliProvider,
 };
 pub use timing_store::IdleSuspendTimingStore;
 pub use server_audit::{

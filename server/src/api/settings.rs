@@ -18,13 +18,9 @@ pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
     let config_path = state.config.read().await.config_path.clone();
     match read_config(&config_path) {
         Ok(mut cfg) => {
-            cfg.server.idle_suspend.enabled = state.idle_suspend_policy.enabled;
-            cfg.server.idle_suspend.enrollment_reference = state.idle_suspend_policy.enrollment_reference.clone();
-            cfg.server.idle_suspend.capability_selection = state.idle_suspend_policy.capability_selection;
             {
                 let timing = state.idle_suspend_timing.read().await;
-                cfg.server.idle_suspend.quiet_period_seconds = timing.quiet_period_seconds;
-                cfg.server.idle_suspend.wake_after_seconds = timing.wake_after_seconds;
+                state.idle_suspend_policy.apply_to_config(&mut cfg, &timing);
             }
             state.media_tickets.revoke_all();
             state.fs.reinit_sandbox(project_roots_from_config(&cfg));

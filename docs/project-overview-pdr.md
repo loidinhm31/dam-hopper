@@ -676,6 +676,22 @@ isolation and the four-service `dam-hopper status` projection are covered. See
   regressions cover boundaries and compatibility without touching host power.
 
 
+### PR-017: Configured-Agent Activity Idle-Suspend Policy Contract (Phase 01)
+
+**Status:** Policy and configuration contract implemented; process/TCP
+observation and automatic eligibility remain pending in later phases.
+
+**Requirements:** Persist `automatic_policy` (`empty-fleet` by default or
+`agent-activity`) and a validated `agent_executables` list under
+`[server.idle_suspend]`. TOML uses snake_case; config-shaped JSON uses
+`server.idleSuspend.automaticPolicy` and
+`server.idleSuspend.agentExecutables`. Entries are literal, case-sensitive
+basenames or absolute paths; 1–32 unique entries, 1–256 UTF-8 bytes per
+entry, and the allowed ASCII component characters are enforced; generic
+interpreter basenames are rejected. Startup-owned policy fields survive config
+reloads, full-config updates, settings imports, and workspace switching; only
+the timing pair remains runtime-mutable.
+
 ## Non-Functional Requirements
 
 ### Performance

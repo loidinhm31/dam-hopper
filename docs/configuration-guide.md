@@ -224,25 +224,59 @@ The server-authoritative terminal idle suspend feature monitors active PTY fleet
 
 The feature is **disabled by default** (`enabled = false`) and requires explicit host configuration under `[server.idle_suspend]` in the loaded registry TOML (`~/.config/dam-hopper/dam-hopper.toml`).
 
-```toml
 [server.idle_suspend]
 enabled = false
 quiet_period_seconds = 900
 wake_after_seconds = 600
 capability_selection = "auto"
+automatic_policy = "empty-fleet"
+agent_executables = ["codex", "omp", "claude", "agy"]
 # enrollment_reference = "systemd:dam-hopper-idle-suspend.service"
-```
+
+### Policy and agent-executable fields (Phase 01)
+
+`automatic_policy` accepts `empty-fleet` (the default) or `agent-activity`.
+Phase 01 freezes this selector and its configuration contract; process/TCP
+observation and automatic agent-activity eligibility are implemented by later
+enhancement phases. Existing deployments therefore retain empty-fleet behavior
+when the key is omitted.
+
+`agent_executables` defaults to `["codex", "omp", "claude", "agy"]`. Entries
+are literal, case-sensitive basenames or absolute paths, never regular
+expressions. The list must contain 1–32 unique entries; each entry is
+1–256 UTF-8 bytes and each path component may contain only ASCII letters,
+digits, `_`, `-`, `.`, `+`, and `@`. Whitespace/control/NUL characters,
+disallowed shell/glob/regex metacharacters, relative slash-containing paths,
+`.`/`..`, repeated or trailing `/`, and generic interpreter basenames (`node`,
+`nodejs`, `bun`, `sh`, `bash`, `dash`, `zsh`, `ksh`, `fish`, `python`, or
+`python` followed by an ASCII digit) are rejected. Validation is lexical and
+does not expand variables, inspect the filesystem, launch a process, or
+silently deduplicate input; invalid lists are rejected even when idle suspend
+is disabled.
+
+TOML uses the snake_case keys shown above. Config-shaped JSON uses
+`server.idleSuspend.automaticPolicy` and
+`server.idleSuspend.agentExecutables`; snake_case aliases are accepted on
+input. The canonical writer may omit default-valued policy/list keys, and
+omission resolves to the defaults.
 
 ### Startup Ownership and Immutability
 
-- **Enablement and Enrollment**: `enabled`, `enrollment_reference`, and `capability_selection` are captured immutably at server boot. Workspace switches, config reload, full-config update (`PUT /api/config`), or settings imports cannot enable or re-enroll idle suspend.
-- **Timing Updates**: Authenticated users can tune `quiet_period_seconds` and `wake_after_seconds` via the dedicated endpoint `PATCH /api/system/idle-suspend/v1/timing`. Unrestricted full-config updates preserve the current idle-suspend configuration and reject incoming modifications.
+- **Startup policy**: `StartupIdleSuspendPolicy` captures `enabled`,
+  `enrollment_reference`, `capability_selection`, `automatic_policy`, and the
+  validated executable set at server boot. Workspace switches, config reloads,
+  full-config updates (`PUT /api/config`), and settings imports cannot change
+  these fields on a running server; the matcher list remains private to this
+  startup authority.
+- **Timing Updates**: Authenticated users can tune `quiet_period_seconds` and
+  `wake_after_seconds` via the dedicated endpoint `PATCH /api/system/idle-suspend/v1/timing`. Unrestricted full-config updates preserve the current idle-suspend configuration and reject incoming modifications.
 - **Timing Bounds**:
   - `quiet_period_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 900 (15 min).
   - `wake_after_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 600 (10 min).
 - **Security Safeguards**: Both the timing mutation route and manual force-suspend route are strictly unavailable in development mode (`--no-auth`). All suspend requests fail closed if sleep inhibitors are active, helper enrollment is missing, host capabilities are unsupported, or RTC ownership is ambiguous.
 - **Manual Execution Independence**: Manual force sleep (`POST /api/system/idle-suspend/v1/force-suspend`) is independent of the automatic idle suspend `enabled` setting; it is accessible only to an authenticated enabled actor when helper enrollment and capability checks are satisfied.
 - **Rollback & Verification**: Non-privileged boundary verification is performed with `scripts/verify-idle-suspend-boundary.sh`. The release manager owns release rollback/recovery (`sudo dam-hopper rollback` and `sudo dam-hopper recover`); `deploy/reset-linux-production.sh` remains the separate helper disenrollment/reset runbook (supporting `--dry-run`) and preserves audit logs.
+
 
 ### Release-manager helper service (Production CLI Phase 03)
 

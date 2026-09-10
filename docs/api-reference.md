@@ -365,6 +365,46 @@ status, bounded authenticated timing settings, an authenticated manual
 force-suspend action, and out-of-band push hints. Automatic idle timing and the
 manual action remain separate: a manual request does not change the persisted
 automatic policy.
+### Phase 01 policy/configuration contract
+
+The automatic policy and executable matcher list are startup configuration,
+not status fields or runtime mutation inputs. The registry stores the block
+under `[server.idle_suspend]` with snake_case keys. Config-shaped JSON (for
+`GET /api/config` and settings export) uses `server.idleSuspend` and camelCase
+field names; snake_case aliases are accepted when decoding this block.
+
+| TOML key | Config JSON key | Contract |
+| --- | --- | --- |
+| `enabled` | `enabled` | `false` by default; startup-owned |
+| `quiet_period_seconds` | `quietPeriodSeconds` | bounded automatic timing |
+| `wake_after_seconds` | `wakeAfterSeconds` | bounded automatic timing |
+| `enrollment_reference` | `enrollmentReference` | optional startup enrollment |
+| `capability_selection` | `capabilitySelection` | startup capability selector |
+| `automatic_policy` | `automaticPolicy` | `empty-fleet` (default) or `agent-activity` |
+| `agent_executables` | `agentExecutables` | literal executable matcher list |
+
+The default executable list is `["codex", "omp", "claude", "agy"]`. Entries
+are literal, case-sensitive basenames or absolute paths, not regular
+expressions. The list must contain 1–32 unique entries; each entry is 1–256
+UTF-8 bytes and may use only ASCII letters, digits, `_`, `-`, `.`, `+`, and
+`@` in path components. Whitespace, controls/NUL, disallowed shell/glob/regex
+metacharacters, relative slash-containing paths, `.`/`..`, repeated or
+trailing `/`, and generic interpreter basenames (`node`, `nodejs`, `bun`, `sh`,
+`bash`, `dash`, `zsh`, `ksh`, `fish`, `python`, or `python` followed by an
+ASCII digit) are rejected. Validation is lexical: it does not expand
+variables, inspect the filesystem, launch a process, or silently
+deduplicate/normalize input.
+
+`StartupIdleSuspendPolicy` captures enablement, enrollment, capability
+selection, `automaticPolicy`, and the validated executable set once at
+startup. Config reload, settings import, and workspace switching reapply those
+startup-owned values; only the timing pair remains mutable through the
+dedicated timing endpoint. A full-config update rejects a changed idle-suspend
+block and preserves it when omitted. The status endpoint intentionally does
+not expose the matcher list or policy selector. `agent-activity` is a stored
+selector in Phase 01; process/TCP observation and automatic eligibility remain
+owned by later enhancement phases.
+
 
 #### GET /api/system/idle-suspend/v1/status
 
@@ -396,7 +436,7 @@ Returns the immutable authoritative `IdleSuspendStatusV1` snapshot.
 
 Protected, atomic timing pair mutation endpoint. Accepts only the complete bounded quiet/wake pair from an authenticated, enabled operator account with database authentication.
 - **Auth**: Requires valid session cookie or Bearer token; rejected under `--no-auth` (`403 idleSuspendTimingDisabledNoAuth`) and without database authentication (`503 authenticationUnavailable`).
-- **Guards**: Requires `Content-Type: application/json` (`415 invalidContentType`); cookie-authenticated requests enforce same-origin check (`403 invalidOrigin`). Request body limited to 16 KB.
+- **Guards**: Requires `Content-Type: application/json` (`415 invalidContentType`); cookie-only requests enforce origin allowlist / same-origin check (`403 invalidOrigin`). Requests presenting `Authorization: Bearer` are exempt from cookie CSRF constraints even when ambient cookies are present. Request body limited to 16 KB.
 - **Body**:
   ```json
   {
@@ -421,12 +461,14 @@ resume.
   rejected under `--no-auth` (`403 idleSuspendDisabledNoAuth`) or when
   authentication is unavailable (`503 authenticationUnavailable`).
 - **Guards**: Requires `Content-Type: application/json` (`415
-  invalidContentType`) and a request body no larger than 16 KiB. Cookie
-  requests must contain exactly one parseable `Origin` and `Host`, with the
-  origin equal to `http://Host` or `https://Host`; missing, duplicate,
-  malformed, foreign, path-bearing, query-bearing, or userinfo-bearing origins
-  return `403 invalidOrigin`. Bearer requests still require an enabled actor
-  but do not use the cookie same-origin check.
+  invalidContentType`) and a request body no larger than 16 KiB. Cookie-only
+  requests must contain exactly one parseable `Origin`, matching either an
+  exact configured CORS origin (`DAM_HOPPER_CORS_ORIGINS`) or strict
+  same-origin (`http(s)://Host`); missing, duplicate, malformed, foreign,
+  path-bearing, query-bearing, or userinfo-bearing origins return `403
+  invalidOrigin`. Callers presenting a valid `Authorization: Bearer` token
+  are exempt from cookie CSRF origin checks even when ambient cookies are
+  attached.
 - **Body**: Strict camelCase JSON; both fields are required and unknown fields
   are rejected:
   ```json

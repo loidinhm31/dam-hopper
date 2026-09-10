@@ -436,6 +436,21 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
                 Value::String(idle_suspend.capability_selection.as_str().to_string()),
             );
         }
+        if idle_suspend.automatic_policy != Default::default() {
+            table.insert(
+                "automatic_policy".to_string(),
+                Value::String(idle_suspend.automatic_policy.as_str().to_string()),
+            );
+        }
+        if idle_suspend.agent_executables != super::schema::default_idle_suspend_agent_executables() {
+            let execs = idle_suspend
+                .agent_executables
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect();
+            table.insert("agent_executables".to_string(), Value::Array(execs));
+        }
         config.insert("idle_suspend".to_string(), Value::Table(table));
     }
     Value::Table(config)
