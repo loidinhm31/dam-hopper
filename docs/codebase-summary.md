@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-11): 1,782 files, 3,756,148 tokens, and 15,340,623 characters.
+- Repomix snapshot (2026-09-11): 1,785 files, 3,766,987 tokens, and 15,388,901 characters.
 - Repomix security scanning excluded five suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
@@ -67,6 +67,13 @@ The snapshot is a compaction aid, not a release artifact; generated
   - Coordinator & Fleet: PTY fleet watcher with generation fencing, active session tracking (`live + creating + restartPending`), automatic armed grace latching, forced handoff claim (`force: true` bypasses quiescence only), and status revision broadcast hints (`host:idleSuspendChanged`).
   - Helper order: peer/protocol validation → dedupe → suspend/RTC/inhibitor preflight → synced intent audit → clear/readback (and timed write/readback) → fixed suspend → completion audit.
   - REST/UI: protected `POST /api/system/idle-suspend/v1/force-suspend` with same-origin/Bearer checks and `Cache-Control: no-store`; `ForceSleepDialog` handles active-session confirmation and indefinite sleep (`wakeAfterSeconds: 0`).
+- **Configured-agent PTY activity seam (Phase 02)**: `server/src/pty/activity.rs`
+  defines `ProcessIdentity`, `TerminalIdentity`, `RootQualification`,
+  `PtyActivitySnapshot`, `PtyActivityWatcher`, proc-stat parsing, and a
+  saturating per-incarnation raw-read sequence. `manager.rs` captures bounded
+  content-free state, records accepted input revision/time, gates handoff and
+  manager admission before writing, and leaves lifecycle authority with the
+  fleet state. See [PTY Activity Observation](./pty-activity-observation.md).
 - **Linux release manager**: `server/src/linux_release/` validates Manifest v1,
   role projections, transaction-scoped units, helper policy, and
   `systemd-analyze verify`.
@@ -689,6 +696,7 @@ dam-hopper/
 │   ├── system-architecture.md
 │   ├── api-reference.md
 │   ├── project-overview-pdr.md
+│   ├── pty-activity-observation.md # Phase 02 PTY evidence and input admission
 │   └── frontend-components.md # Shared React component architecture
 ├── plans/                     # Feature plans and reports
 └── CLAUDE.md                  # Development commands
@@ -720,6 +728,10 @@ dam-hopper/
   13 pure-helper, 26 WorkspacePage, 6 IdeShell, 12 TerminalWorkspaceShell,
   and 5 MobileWorkspaceShell assertions.
 - **Idle-suspend Phase 01**: `server/src/idle_suspend/tests.rs` covers policy defaults, JSON/TOML naming, executable defaults and lexical validation (bounds, duplicates, generic interpreters, traversal, controls, and metacharacters), startup policy retention, execution-domain boundaries (`0`, `1..=59`, `60`, max, overflow), automatic zero rejection, clear-only/timed RTC verification, busy alarms, audit ordering, peer/dedupe/preflight failures, and helper IPC; integration tests retain bounded automatic timing. Fake backends and temporary files prevent host suspend/RTC.
+- **Configured-agent activity Phase 02**: focused coverage proves root identity,
+  raw-read saturation, input/handoff, incarnation/replay, local PTY observation,
+  and incomplete reasons. Evidence: 8/8 focused tests; PTY module suite 159
+  passed, one pre-existing performance test ignored.
 - **Web**: Component tests with Vitest, 80% coverage target
 
 ### Known Limitations (Pre-existing)
@@ -766,6 +778,7 @@ dam-hopper/
 | [workflow-client-state.md](./workflow-client-state.md)          | Phase 04 shared UI DTO, transport, and query contract |
 | [frontend-components.md](./frontend-components.md)                | Shared React components and shell integration |
 | [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
+| [pty-activity-observation.md](./pty-activity-observation.md) | Phase 02 private PTY identity, output, input, snapshot, and watcher contract |
 | [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
 | [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
 | [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
@@ -776,20 +789,11 @@ dam-hopper/
 ---
 
 **Last Updated**: September 11, 2026
-**Phase Status**: Production CLI deployment setup for the idle-suspend
-helper/socket (Phases 01–04) is complete and verified (2026-09-10);
-configured-agent idle-suspend Phase 01 policy/configuration contracts are
-implemented and documented; observer/eligibility phases remain pending.
-Validation evidence: `linux_release_staging` 9/9, `linux_release_unit_policy`
-10/10, `idle_suspend` library 69/69, `idle_suspend` integration 14/14,
-boundary verifier 14/14, and `dam-hopper status --json` service-role output.
-The version-1 helper accepts exactly `wakeAfterSeconds: 0` or `60..=86400`;
-zero clears and verifies the RTC alarm without target-epoch arithmetic, while
-automatic timing remains bounded. No automated check invokes host suspend,
-logind, or real RTC hardware. The timed canary is an operational procedure;
-the indefinite canary remains deferred pending Operations approval and verified
-physical/out-of-band wake and rollback ownership.
-**Generated by**: Repomix v1.18.0 snapshot (1,782 files / 3,756,148 tokens /
-15,340,623 characters). Five security-flagged files were excluded from the
-compaction output; review them separately before relying on a complete-file
-inventory.
+**Phase Status**: Production CLI idle-suspend helper/socket deployment is
+complete and verified (2026-09-10). Configured-agent policy/configuration and
+Phase 02 PTY evidence/input admission are implemented and documented
+(Phase 02 complete 2026-09-11); process/TCP observation and automatic
+eligibility remain pending.
+**Phase 02 evidence**: focused activity 8/8; PTY module 159 passed, one
+pre-existing performance test ignored; review 9.5/10; no host power/RTC tests.
+**Generated by**: Repomix v1.18.0 (1,786 files / 3,771,904 tokens / 15,411,376 characters); five security-flagged files were excluded.

@@ -11,7 +11,8 @@
 - Date: 2026-09-10.
 - Description: expose bounded private evidence from actual PTY boundaries and serialize accepted input with suspend handoff.
 - Priority: P2. Estimated implementation effort: 8h.
-- Implementation status: Pending. Review status: user validation incorporated; implementation contract review remains required.
+- Implementation status: Completed — 2026-09-11. Review status: Passed code review.
+- Progress: 100% (9/9 todo items; focused PTY validation passed).
 - Dependencies: Phase01 policy/type decisions. No procfs collector or coordinator state machine in this phase.
 
 ## Key Insights
@@ -83,15 +84,15 @@ Do not modify shell adapters, terminal persistence format, transcript rendering,
 
 ## Todo list
 
-- [ ] Capture actual root PID and qualified start identity.
-- [ ] Add per-incarnation saturating raw output counter.
-- [ ] Cover create respawn restore and stale-reader paths.
-- [ ] Track accepted input before writer dispatch.
-- [ ] Reject writes under existing handoff gate.
-- [ ] Expose bounded private root/input snapshots.
-- [ ] Verify no content or filesystem I/O enters admission lock.
-- [ ] Prove real PTY evidence and input rejection.
-- [ ] Keep validated diagnostic reporting downstream of PTY hot paths and lifecycle events.
+- [x] Capture actual root PID and qualified start identity.
+- [x] Add per-incarnation saturating raw output counter.
+- [x] Cover create respawn restore and stale-reader paths.
+- [x] Track accepted input before writer dispatch.
+- [x] Reject writes under existing handoff gate.
+- [x] Expose bounded private root/input snapshots.
+- [x] Verify no content or filesystem I/O enters admission lock.
+- [x] Prove real PTY evidence and input rejection.
+- [x] Keep validated diagnostic reporting downstream of PTY hot paths and lifecycle events.
 
 ## Success Criteria
 
@@ -127,7 +128,7 @@ No raw command text, arguments, output, environment or input content in activity
 
 ## Next steps
 
-Phase03 consumes qualified roots and retains discovered lineage. Phase04 consumes its owned sockets. Phase05 combines them with raw output/input and implements the final ticketed claim. No automatic agent-policy claim may ship from Phase02 alone.
+Phase03 is next: it consumes qualified roots and the shared stat/identity parser while retaining discovered lineage. Phase04 consumes typed owned sockets. Phase05 combines raw output/input with process and TCP evidence and owns the final ticketed claim. No automatic agent-policy claim may ship from Phase02 alone.
 
 ## Unresolved questions
 
