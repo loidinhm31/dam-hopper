@@ -53,7 +53,12 @@ pub const RECOVERY_SERVICE_UNIT: &str = "dam-hopper-recovery.service";
 pub const HELPER_SERVICE_UNIT: &str = "dam-hopper-idle-suspend-helper.service";
 
 /// All managed release systemd service unit names.
-pub const ALL_SERVICE_UNITS: &[&str] = &[API_SERVICE_UNIT, WEB_SERVICE_UNIT, RECOVERY_SERVICE_UNIT];
+pub const ALL_SERVICE_UNITS: &[&str] = &[
+    API_SERVICE_UNIT,
+    WEB_SERVICE_UNIT,
+    RECOVERY_SERVICE_UNIT,
+    HELPER_SERVICE_UNIT,
+];
 
 /// Standard rollback declaration compatibility flag.
 pub const ROLLBACK_PREVIOUS_COMPATIBLE: bool = true;

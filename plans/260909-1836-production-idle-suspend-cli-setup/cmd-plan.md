@@ -13,7 +13,7 @@
 |---|---|---|---|---|
 | **Phase 01** | Systemd Service Templates & PID Management | DONE (2026-09-09) | 100% | [phase-01-systemd-service-templates-and-pid-management.md](./phase-01-systemd-service-templates-and-pid-management.md) |
 | **Phase 02** | Release Manager Unit Staging (`stage_units.rs`) | DONE (2026-09-10) | 100% | [phase-02-release-manager-unit-staging.md](./phase-02-release-manager-unit-staging.md) |
-| **Phase 03** | Service Lifecycle (`activate.rs`, `rollback.rs`, `status.rs`) | Pending | 0% | [phase-03-release-manager-service-lifecycle.md](./phase-03-release-manager-service-lifecycle.md) |
+| **Phase 03** | Service Lifecycle (`activate.rs`, `rollback.rs`, `status.rs`) | DONE (2026-09-10) | 100% | [phase-03-release-manager-service-lifecycle.md](./phase-03-release-manager-service-lifecycle.md) |
 | **Phase 04** | Verification, Boundary Enforcement & E2E Validation | Pending | 0% | [phase-04-verification-boundary-enforcement-and-e2e.md](./phase-04-verification-boundary-enforcement-and-e2e.md) |
 
 ---

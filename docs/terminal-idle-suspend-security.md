@@ -110,6 +110,23 @@ Phase 03 (privileged systemd helper and unit enrollment) was reviewed and approv
 
 When the selected release role includes `server`, the release manager stages `dam-hopper-idle-suspend-helper.service` beside the API unit in the transaction-scoped pending-units directory. It loads the release template (with the checked-in fallback available to local/test staging), renders the release root and API group, applies `validate_helper_unit_policy`, and performs production `systemd-analyze verify` before the candidate can become pending. Activation remains explicit through `dam-hopper start`; staging does not start or enable the helper.
 
+### Release-manager lifecycle integration (Production CLI Phase 03, 2026-09-10)
+
+`HELPER_SERVICE_UNIT` is registered in the release manager's
+`ALL_SERVICE_UNITS` set. For every `server` role, `dam-hopper start` starts
+the helper before the API, both for ordinary startup and pending-candidate
+activation. A helper start or enable failure logs a warning and does not block
+the API; suspend remains unavailable through the existing fail-closed helper,
+capability, RTC, inhibitor, audit, and peer checks.
+
+Activation first stops the managed-unit set and backs up concrete units before
+installing a candidate. Activation failure rollback, manual rollback, and boot
+recovery stop/restore the helper with the API and web units; `RECOVERY_REQUIRED`
+stops and disables all managed units. `dam-hopper status` and
+`status --json` expose helper active state plus best-effort PID/UID evidence
+alongside API, web, and recovery records. See the [Linux Release Manager](./linux-release-manager.md#helper-service-lifecycle-production-cli-phase-03)
+for operator commands and ordering.
+
 ### Sign-Off Record
 - **Security Owner**: Approved (2026-09-05)
 - **Infrastructure / Operator**: Approved (2026-09-05)

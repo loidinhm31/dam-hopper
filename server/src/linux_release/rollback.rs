@@ -3,8 +3,8 @@
 use super::account::get_user_by_name;
 use super::activate_preflight::build_candidate_health_targets;
 use super::constants::{
-    ALL_SERVICE_UNITS, API_SERVICE_HEALTH_PATH, API_SERVICE_UNIT, RECOVERY_SERVICE_UNIT,
-    WEB_SERVICE_UNIT,
+    ALL_SERVICE_UNITS, API_SERVICE_HEALTH_PATH, API_SERVICE_UNIT, HELPER_SERVICE_UNIT,
+    RECOVERY_SERVICE_UNIT, WEB_SERVICE_UNIT,
 };
 use super::durable_fs::{atomic_symlink, copy_file_durable};
 use super::error::ReleaseError;
@@ -595,10 +595,13 @@ pub async fn rollback_activation_failure(
     systemctl_enable(RECOVERY_SERVICE_UNIT)?;
 
     if active.role.includes_server() {
-        systemctl_start("dam-hopper-api.service")?;
+        if let Err(e) = systemctl_start(HELPER_SERVICE_UNIT) {
+            tracing::warn!("idle-suspend helper service startup failed on rollback: {e}");
+        }
+        systemctl_start(API_SERVICE_UNIT)?;
     }
     if active.role.includes_web() {
-        systemctl_start("dam-hopper-web.service")?;
+        systemctl_start(WEB_SERVICE_UNIT)?;
     }
 
     let cand = release_to_candidate(&active);

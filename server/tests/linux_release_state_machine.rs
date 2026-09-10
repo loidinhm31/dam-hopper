@@ -325,3 +325,44 @@ fn test_systemctl_disable_idempotent_on_nonexistent_unit() {
     let res = systemctl_disable("dam-hopper-nonexistent-unit-12345.service");
     assert!(res.is_ok(), "systemctl_disable on nonexistent unit must treat missing unit as already disabled");
 }
+
+#[test]
+fn test_helper_service_lifecycle_invariants() {
+    // 1. HELPER_SERVICE_UNIT must be in ALL_SERVICE_UNITS
+    assert!(
+        ALL_SERVICE_UNITS.contains(&HELPER_SERVICE_UNIT),
+        "ALL_SERVICE_UNITS must contain HELPER_SERVICE_UNIT"
+    );
+
+    // 2. Status inspection includes all required services and roles
+    let statuses = collect_all_services_status();
+    assert_eq!(statuses.len(), 4);
+
+    let helper_status = statuses
+        .iter()
+        .find(|s| s.unit_name == HELPER_SERVICE_UNIT)
+        .expect("helper service status must be reported");
+    assert_eq!(helper_status.role, "server");
+
+    let api_status = statuses
+        .iter()
+        .find(|s| s.unit_name == API_SERVICE_UNIT)
+        .expect("api service status must be reported");
+    assert_eq!(api_status.role, "server");
+
+    let web_status = statuses
+        .iter()
+        .find(|s| s.unit_name == WEB_SERVICE_UNIT)
+        .expect("web service status must be reported");
+    assert_eq!(web_status.role, "web");
+
+    let recovery_status = statuses
+        .iter()
+        .find(|s| s.unit_name == RECOVERY_SERVICE_UNIT)
+        .expect("recovery service status must be reported");
+    assert_eq!(recovery_status.role, "recovery");
+
+    // 3. Disable helper unit on unprivileged/unconfigured host is idempotent
+    let res = disable_if_enabled(HELPER_SERVICE_UNIT);
+    assert!(res.is_ok(), "disable_if_enabled on helper unit must be idempotent");
+}

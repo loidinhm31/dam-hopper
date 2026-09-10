@@ -48,24 +48,35 @@ DamHopper releases are distributed as four immutable, reproducible release asset
 
 ## 3. Host Architecture and Service Roles
 
-DamHopper provides two independently managed services coordinated by a root-only recovery unit:
+DamHopper provides three independently managed runtime services coordinated by
+a root-only recovery unit:
 
 | Unit | Process Binary | User / Group | Listener | Sandboxing & Capabilities |
 |---|---|---|---|---|
 | `dam-hopper-recovery.service` | `dam-hopper recover --boot` | `root:root` | None | Oneshot pre-boot gate before application units |
+| `dam-hopper-idle-suspend-helper.service` | `dam-hopper-idle-suspend-helper` | `root:dam-hopper` (rendered API group) | `/run/dam-hopper/idle-suspend.sock` | `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `CAP_WAKE_ALARM` |
 | `dam-hopper-api.service` | `dam-hopper-server` | `root:root` | `0.0.0.0:4801` | Dedicated PTY/auth/file operations; `NoNewPrivileges=false` |
 | `dam-hopper-web.service` | `dam-hopper-web` | `dam-hopper-web:dam-hopper-web` | `0.0.0.0:4802` | Read-only static host; `ProtectSystem=strict`, `NoNewPrivileges=true` |
 
-> ⚠️ **Security Notice on API Identity:** Running `dam-hopper-api.service` as `root:root` is an accepted v1 MVP operational decision for host PTY and development container operations. An API or PTY compromise equals root compromise. Host firewall and Tailscale ACLs must strictly limit access to port `4801`. The web service runs under a dedicated, unprivileged system account (`dam-hopper-web`) with strict filesystem sandboxing.
+> **Security Notice on API Identity:** Running `dam-hopper-api.service` as
+> `root:root` is an accepted v1 MVP operational decision for host PTY and
+> development container operations. An API or PTY compromise equals root
+> compromise. Host firewall and Tailscale ACLs must strictly limit access to
+> port `4801`. The web service runs under a dedicated, unprivileged system
+> account (`dam-hopper-web`) with strict filesystem sandboxing. The helper is
+> root-owned but accepts only the enrolled API peer over its local socket.
 
 ### Deployment Roles
 
-- `server`: Deploys only `dam-hopper-api.service` (listening on `0.0.0.0:4801`).
+- `server`: Deploys and manages `dam-hopper-idle-suspend-helper.service` and
+  `dam-hopper-api.service` (API listens on `0.0.0.0:4801`).
 - `web`: Deploys only `dam-hopper-web.service` (listening on `0.0.0.0:4802`).
-- `both`: Deploys both `dam-hopper-api.service` and `dam-hopper-web.service` in lockstep.
+- `both`: Deploys the server and web units in lockstep.
 
-Neither application unit depends on the other. Both units depend on `dam-hopper-recovery.service` having completed successfully.
-
+The recovery unit is staged for every role. Neither application unit depends on
+the other. The helper is a server-role companion and is started before the API
+by `dam-hopper start`; a helper start/enable failure is logged as a warning so
+non-suspend API operations remain available.
 ---
 
 ## 4. Filesystem Hierarchy and Permissions
@@ -94,8 +105,13 @@ DamHopper enforces strict separation between immutable release assets, durable m
 
 /etc/systemd/system/
 ├── dam-hopper-recovery.service
+├── dam-hopper-idle-suspend-helper.service # Present only if role is 'server' or 'both'
 ├── dam-hopper-api.service   # Present only if role is 'server' or 'both'
 └── dam-hopper-web.service   # Present only if role is 'web' or 'both'
+
+The helper service opens `/run/dam-hopper/idle-suspend.sock` from its fixed
+`ExecStart` arguments. The optional socket-unit template is an archive asset;
+the release manager's managed lifecycle list covers the helper service itself.
 
 /run/lock/dam-hopper/
 └── deploy.lock              # Nonblocking file lock serializing deployment operations
@@ -146,12 +162,13 @@ The `dam-hopper start` command is the sole activation entrypoint. Under `/run/lo
 1. Quiesces existing services and verifies cgroups, listeners (4801/4802), and SQLite file holders are completely released.
 2. Backs up active systemd units and configuration to `/var/lib/dam-hopper-manager/backups/<tx_id>/`.
 3. Installs concrete units to `/etc/systemd/system/` and runs `systemctl daemon-reload`.
-4. Starts selected role units and enters state `PROBING`.
-5. **Health Stability Gate:**
-   - Units must report active within a **20-second startup deadline**.
-   - Units must then satisfy **20 consecutive successful probes spaced at 500 ms** (10 seconds of uninterrupted stability).
+4. For a server role, starts `dam-hopper-idle-suspend-helper.service` **before** `dam-hopper-api.service`. A helper start failure emits a warning and does not block API startup.
+5. Starts the selected web unit when the role includes `web`, then enters state `PROBING`.
+6. **Health Stability Gate:**
+   - API/web units must report active within a **20-second startup deadline**.
+   - API/web units must then satisfy **20 consecutive successful probes spaced at 500 ms** (10 seconds of uninterrupted stability).
    - Probes verify: expected MainPID, executable path, process UID/GID, exact listener, and valid JSON response (`status: "ok"`, `schemaVersion: 1`, expected `version` and `role`).
-6. On success, units are enabled, `current` symlink is updated, and state advances to `COMMITTED`.
+7. On success, API/web units are enabled, helper enablement is best-effort, `current` symlink is updated, and state advances to `COMMITTED`.
 
 ### 5.3 Upgrading to a New Release
 
@@ -224,12 +241,21 @@ sudo dam-hopper start
 ## 7. Rollback, Crash Recovery, and Boot Ordering
 
 ### Automatic Rollback
-If candidate units fail to start within 20 seconds, crash during probing, or fail any of the 20 consecutive health checks:
-1. Candidate units are stopped and disabled.
-2. Previous concrete units and configuration are restored from `/var/lib/dam-hopper-manager/backups/<tx_id>/`.
-3. `systemctl daemon-reload` is executed and previous units are restarted.
-4. Previous units are verified against the 10-second health gate.
-5. On a clean first install with no previous release, application units are stopped and disabled.
+If candidate API/web units fail to start within 20 seconds, crash during
+probing, or fail any of the 20 consecutive health checks:
+1. Candidate units, including the helper for a server role, are stopped and
+   disabled.
+2. Previous concrete units and configuration are restored from
+   `/var/lib/dam-hopper-manager/backups/<tx_id>/`.
+3. `systemctl daemon-reload` is executed. For a previous server role, the
+   helper is started before the API; helper start failure is warning-only.
+4. Previous API/web units are verified against the 10-second health gate.
+5. On a clean first install with no previous release, all managed units
+   (including the helper) are stopped and disabled.
+
+Manual `sudo dam-hopper rollback` promotes the recorded `previous` release
+through the same activation path, so the helper stop/start ordering and
+non-fatal fallback also apply.
 
 ### Manual Rollback
 To revert an active release to the recorded `previous` version:
@@ -242,9 +268,11 @@ The manager executes the rollback transaction using the recorded backup artifact
 `dam-hopper-recovery.service` is a root-owned oneshot unit ordered after `local-fs.target` and before `dam-hopper-api.service` and `dam-hopper-web.service`.
 At boot:
 - Reconciles any interrupted transaction in `/var/lib/dam-hopper-manager/state.json`.
-- Restores backups if a crash occurred during `QUIESCED`, `SWITCHED`, or `PROBING`.
-- Repairs `current` and systemd enablement for `COMMITTED` releases.
-- Fails closed and blocks application startup if state is corrupted, marking status as `RECOVERY_REQUIRED`.
+- Disables helper/API/web units while a `PENDING` candidate is retained.
+- Restores backups, including the helper, if a crash occurred during `QUIESCED`, `SWITCHED`, or `PROBING`.
+- Repairs `current` and systemd enablement for `COMMITTED` releases; helper enablement is best-effort for server roles and disabled for non-server roles.
+- Fails closed, stops/disables all managed units, and blocks application startup if state is corrupted, marking status as `RECOVERY_REQUIRED`.
+
 
 ---
 
@@ -284,6 +312,9 @@ dam-hopper status --json
 
 ### Inspecting Service Logs
 ```bash
+# Idle-suspend helper journal
+journalctl -u dam-hopper-idle-suspend-helper.service -f --no-tail
+
 # API service journal
 journalctl -u dam-hopper-api.service -f --no-tail
 
@@ -326,18 +357,20 @@ Before enabling terminal idle suspend on a production host:
 3. **RTC ownership and inhibitors**: DamHopper must be the approved owner of `rtc0` wakealarm. A non-empty existing alarm is rejected as busy; active system inhibitors (for example system update locks or backup operations) are respected and cause suspend requests to fail closed without retry.
 
 ### 11.2 Privileged Helper Enrollment & Hardening
-The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed suspend request with RTC wakealarm programming over a local Unix domain socket:
-- **Socket Unit**: `deploy/systemd/dam-hopper-idle-suspend-helper.socket` creates `/run/dam-hopper/idle-suspend.sock` with `SocketMode=0660`.
-- **Service Unit**: `deploy/systemd/dam-hopper-idle-suspend-helper.service` executes the helper under strict systemd hardening:
+The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed suspend request with RTC wakealarm programming over a local Unix domain socket. In the Phase 03 release-manager path, the helper service itself binds `/run/dam-hopper/idle-suspend.sock` from its ExecStart arguments:
+- **Manager-managed service**: `deploy/systemd/dam-hopper-idle-suspend-helper.service` runs the helper under strict systemd hardening:
   - `NoNewPrivileges=yes`
   - `ProtectSystem=strict`
   - `ProtectHome=yes`
   - `PrivateTmp=yes`
   - `CapabilityBoundingSet=CAP_WAKE_ALARM`
+- **Socket permissions**: The service uses `RuntimeDirectory=dam-hopper` with mode `0775`; the helper binds the socket and sets mode `0660`.
+- **Optional socket unit**: `deploy/systemd/dam-hopper-idle-suspend-helper.socket` is a packaged manual/socket-activation asset. The Phase 03 release manager stages and manages the helper **service**, not this `.socket` unit. Do not enable both direct-binding service mode and the socket unit for the same path.
 - **Peer Credential Verification**: The helper validates peer UID and PID on connection via `SO_PEERCRED`, rejecting unauthorized callers.
 - **Audit Trail**: Every request, intent, and completion is recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`).
 
-The server enrolls the helper executor when the configured socket exists
+The server always configures the systemd helper executor and checks the
+configured socket's presence and health per request
 (`DAM_HOPPER_IDLE_SUSPEND_SOCKET` overrides the default path), even when
 automatic `[server.idle_suspend] enabled = false`. Automatic scheduling policy
 and manual execution availability are separate; both still fail closed on
@@ -384,7 +417,7 @@ sudo ./deploy/reset-linux-production.sh
 Rollback guarantees:
 1. The operator first verifies the authoritative server status has no active or in-flight handoff. The reset script checks socket presence only; it cannot inspect coordinator state.
 2. Atomically disables `enabled = false` under `[server.idle_suspend]`.
-3. Stops and disables helper socket and service units.
+3. Stops and disables the manager-managed helper service; it also stops, disables, and removes the optional helper socket unit when present.
 4. Preserves external RTC alarms (never clears unrelated alarms).
 5. Removes only manifest-owned helper assets and runs `systemctl daemon-reload`.
 6. Preserves audit logs for post-mortem operator analysis.
@@ -398,7 +431,7 @@ hardware, or host suspend.
 1. **Prerequisites Verification**:
    - Host kernel must support `/sys/class/rtc/rtc0/wakealarm`.
    - Verify exclusive RTC ownership: ensure `/sys/class/rtc/rtc0/wakealarm` is empty; preserve and investigate any foreign alarm.
-   - Verify `systemctl is-active dam-hopper-idle-suspend-helper.socket` returns `active`.
+   - In manager-managed service mode, verify `systemctl is-active dam-hopper-idle-suspend-helper.service` returns `active` and `test -S /run/dam-hopper/idle-suspend.sock` succeeds. The release manager does not enable the `.socket` unit. If a separate socket-unit enrollment is used, verify that socket instead and do not run the direct-binding service concurrently.
    - Verify database-backed authentication is functioning; `--no-auth` mode strictly prohibits manual sleep.
    - Verify the server status has no active/in-flight handoff and record the current status revision.
 

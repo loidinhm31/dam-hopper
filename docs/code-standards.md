@@ -108,6 +108,25 @@ unsupported capabilities, and inhibitors produce no suspend call. Tests use
 `tempfile` RTC/audit paths and fake preflight/backends; never use real power
 management or host RTC state.
 
+### Linux release manager service lifecycle (Production CLI Phase 03)
+
+Keep helper lifecycle ownership centralized in `server/src/linux_release/`:
+
+- Define `HELPER_SERVICE_UNIT` once and include it in `ALL_SERVICE_UNITS`; use
+  those constants for stop, backup, restore, enable, and status paths.
+- For every server-role `start`, attempt the helper before the API. Log helper
+  start/enable errors with `tracing::warn!` and continue API activation; API
+  startup and API/web health-gate errors remain fatal.
+- Stop the managed-unit set before replacing units or release pointers. Restore
+  transaction-owned files before `daemon-reload`, then restart helper before API
+  and re-run the health gate.
+- Boot recovery must disable the helper with application units for pending
+  state, repair helper enablement only for server roles, and stop/disable every
+  managed unit on `RECOVERY_REQUIRED`.
+- Keep `status` read-only: report systemd active state and best-effort process
+  evidence for API, helper, web, and recovery; do not treat missing helper
+  process evidence as a suspend or API-operation exception.
+
 ### Async Patterns
 
 **Never hold locks across `.await`:**
