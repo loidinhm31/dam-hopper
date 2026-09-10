@@ -13,7 +13,8 @@
 - Date: 2026-09-10.
 - Description: discover configured agent processes and their socket-owning descendants from qualified managed PTY roots, with bounded identity-safe procfs traversal and retained attribution across reparenting.
 - Priority: P2. Estimated implementation effort: 14h.
-- Implementation status: Pending. Review status: validated warning contract incorporated; pending implementation review.
+- Implementation status: DONE (2026-09-11). Review status: Complete (Score: 9.0/10; see plans/reports/code-review-260911-0237-phase-03-process-discovery.md).
+- Progress: 100% (13/13 todo items; 16/16 focused process-discovery tests passed).
 - Dependencies: Phase01 provides the immutable, already-compiled executable set; Phase02 provides qualified root identities, fleet snapshots, raw-output handles and the sole shared process-stat parser. Phase04 consumes this phase's typed owned-socket preparation and representative-owner evidence. Phase05 owns the all-or-nothing process-plus-TCP commit and the authenticated warning projection.
 
 ## Key Insights
@@ -234,19 +235,19 @@ No files are deleted. No helper protocol, API DTO, UI, port-forward detector, ho
 
 ## Todo list
 
-- [ ] Reuse Phase02's sole stat/identity parser.
-- [ ] Add complete bounded adjacency scan with exact-at-limit success.
-- [ ] Consume Phase01's compiled literal matcher without per-sample compilation.
-- [ ] Implement exact native and finite interpreted entrypoint matching.
-- [ ] Reject ambiguous wrapper/command forms without substring fallback.
-- [ ] Retain detached lineage plus terminal/output handles across root removal and invalidation.
-- [ ] Detect multi-root ambiguity, PID reuse, exit and exec/image changes.
-- [ ] Enforce relevant-process, cmdline, FD and socket-inode caps without truncation.
-- [ ] Verify same-thread/current network namespace ownership.
-- [ ] Prepare typed process/socket state and pair-commit only after TCP succeeds.
-- [ ] Prove fake-proc boundaries and harmless real-process behavior.
-- [ ] Supply bounded safe process evidence and deterministic representative socket ownership.
-- [ ] Preserve useful failure evidence without committing failed eligibility baselines.
+- [x] Reuse Phase02's sole stat/identity parser.
+- [x] Add complete bounded adjacency scan with exact-at-limit success.
+- [x] Consume Phase01's compiled literal matcher without per-sample compilation.
+- [x] Implement exact native and finite interpreted entrypoint matching.
+- [x] Reject ambiguous wrapper/command forms without substring fallback.
+- [x] Retain detached lineage plus terminal/output handles across root removal and invalidation.
+- [x] Detect multi-root ambiguity, PID reuse, exit and exec/image changes.
+- [x] Enforce relevant-process, cmdline, FD and socket-inode caps without truncation.
+- [x] Verify same-thread/current network namespace ownership.
+- [x] Prepare typed process/socket state and pair-commit only after TCP succeeds.
+- [x] Prove fake-proc boundaries and harmless real-process behavior.
+- [x] Supply bounded safe process evidence and deterministic representative socket ownership.
+- [x] Preserve useful failure evidence without committing failed eligibility baselines.
 
 ## Success Criteria
 

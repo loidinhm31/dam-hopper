@@ -121,9 +121,36 @@ are outside the manager lock; no snapshot or watcher value includes terminal
 content, credentials, socket details, or command arguments. See
 [PTY Activity Observation](./pty-activity-observation.md).
 
-## Approval Gates for Privileged Execution (Phase 03) — Approved (2026-09-05)
+### Configured-agent process discovery — Phase 03 (2026-09-11)
 
-Phase 03 (privileged systemd helper and unit enrollment) was reviewed and approved on 2026-09-05 with the following agreed architectural specifications:
+Process discovery is a private server seam. Production uses bounded Linux
+procfs reads through `LinuxProcSource`; tests inject a deterministic
+`ProcessSource`. The engine starts from qualified managed PTY roots and
+retained `(pid, start_ticks)` identities, walks only attributable descendants,
+and rejects stale, reused, ambiguous, or multi-root identities. It never uses
+PGIDs or PID-only attribution.
+
+All deep reads have explicit caps: 256 live roots, 8,192 scanned processes,
+1,024 relevant processes, 4,096 FDs per process, 8,192 owned socket inodes,
+and 16 KiB command lines. Executable matching is exact or finite
+entrypoint-aware grammar; substring matches, eval/print forms, unknown flags,
+and shell stdin/`-c` forms do not qualify. Relevant processes must remain in
+the terminal network namespace, and executable/stat reads are checked before
+and after mutable procfs operations.
+
+The prepared result retains only bounded counts, output handles, owned socket
+identities, and an optional safe executable identity. It does not retain
+terminal bytes, raw arguments, environment, credentials, or raw socket
+diagnostics. Permission, timeout, disappearance, malformed-socket, identity,
+namespace, and limit failures become typed unavailable outcomes; retryable
+close races are not converted into quiet activity. Discovery cannot change
+namespaces, execute processes, signal processes, or request suspend, and it
+does not publish REST, WebSocket, audit, or log payloads. TCP observation and
+automatic eligibility remain later phases.
+
+## Approval Gates for Privileged Execution (Production CLI Phase 03) — Approved (2026-09-05)
+
+The Production CLI Phase 03 helper (privileged systemd helper and unit enrollment) was reviewed and approved on 2026-09-05 with the following agreed architectural specifications:
 
 1. **Execution Backend**:
    - Suspend uses the fixed `systemctl suspend` path, which delegates to systemd/logind and honors host policy.

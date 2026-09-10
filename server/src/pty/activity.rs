@@ -193,6 +193,16 @@ pub struct ParsedProcStat {
 
 /// Parse Linux `/proc/<pid>/stat` content safely.
 ///
+pub type ProcessStat = ParsedProcStat;
+
+/// Read and parse /proc/<pid>/stat from a specified procfs directory.
+pub fn read_process_stat(proc_dir: &Path, pid: u32) -> Result<ParsedProcStat, String> {
+    let stat_path = proc_dir.join(pid.to_string()).join("stat");
+    let contents = std::fs::read_to_string(&stat_path)
+        .map_err(|e| format!("Failed to read {}: {e}", stat_path.display()))?;
+    parse_proc_stat(&contents)
+}
+
 /// Handles arbitrary command names in parentheses containing spaces or nested parentheses.
 pub fn parse_proc_stat(contents: &str) -> Result<ParsedProcStat, String> {
     let trimmed = contents.trim();
