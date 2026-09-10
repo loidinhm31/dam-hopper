@@ -155,14 +155,21 @@ The protected endpoint accepts strict JSON `{ "wakeAfterSeconds": 0, "force": fa
 
 Manual suspend remains separate from the planned generic host-resource remediation helper. Monitoring and alert surfaces describe host state; only the explicit, authenticated ForceSleepDialog action can request suspend.
 
-### Configured-agent activity eligibility (runtime pending)
+### Configured-agent activity eligibility (Phase 02 PTY evidence shipped; runtime eligibility pending)
 
-Phase 01 implements the policy/configuration contract above. Process and TCP
+Phase 01 implements the policy/configuration contract above. Phase 02 now
+supplies private PTY root identity, raw-read evidence, accepted-input
+admission, bounded snapshots, and invalidation handles. Process and TCP
 observation, activity eligibility, blocked-measurement warnings, and automatic
-agent-activity claims remain design-only until the later phases of the pending
+`agent-activity` claims remain design-only until the later phases of the
 [agent-activity enhancement plan](../plans/260910-1604-agent-activity-idle-suspend/plan.md).
+See [PTY Activity Observation](./pty-activity-observation.md) for the
+implemented seam and its fail-closed boundaries.
 
-- Recognize configured agent process identities inside managed PTYs; observe new raw PTY bytes and attributable Linux TCP byte-counter changes, not terminal text, CPU, listening ports, or connection presence.
+- Recognize configured agent process identities inside managed PTYs; observe
+  new raw PTY reads through per-incarnation sequence evidence and attributable
+  Linux TCP byte-counter changes, not terminal text, CPU, listening ports, or
+  connection presence.
 - Keep live PTY counts and manual force confirmation unchanged. Automatic eligibility is separate: ordinary service-only terminals may remain alive; recognized-agent inactivity is a heuristic, never proof of completed reasoning or background work.
 - Capture monotonic activity at the PTY boundary; sample process/socket state outside manager locks. Unknown, stale, incomplete, or unsupported required observation blocks automatic handoff.
 - Blocked measurement includes an authenticated, no-store warning with reason, continuous blocked duration and attributable PID/safe executable identity when qualified. No arguments, credentials, terminal contents or socket details; warning identities never enter logs, audits or WebSocket hints.
@@ -2209,7 +2216,7 @@ hash-bound packaged runtime evidence owned by a release engineer. Windows/macOS/
 show the listener works for a second local process before Stop and is unreachable after Stop, scope
 switch, and graceful app exit; missing/manual-pending evidence is not a release pass.
 
-### pty/ (Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅ / Phase 03: Workflow correlation ✅)
+### pty/ (Phase 02: Activity evidence ✅ / Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅ / Phase 03: Workflow correlation ✅)
 
 Manages portable terminal sessions with automatic restart capabilities and idempotent creation.
 
@@ -2231,6 +2238,27 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
   restarted, final-exit, and removal facts through non-blocking `try_send` to
   the separate workflow observation worker. It carries no command, CWD, env, or
   output data and never opens SQLite from PTY reader/supervisor paths.
+
+**activity.rs** — Phase 02 private PTY activity seam:
+
+- `ProcessIdentity` pairs child PID with Linux `/proc/<pid>/stat`
+  `start_ticks` to reject PID reuse; `RootQualification` preserves qualified,
+  uncertain, and unavailable probe results without blocking terminal use.
+- `PtyActivitySnapshot` captures content-free fleet/input state, bounded live
+  root records, cloned per-incarnation raw-read counters, and explicit
+  incompleteness reasons. `PtyActivityWatcher` is a private coalescing
+  invalidation receiver; it is not a public event stream.
+- `parse_proc_stat` safely handles parenthesized command names and is the
+  shared identity parser for the next process-discovery phase.
+
+`manager.rs` initializes root identity and a zeroed `Arc<AtomicU64>` counter
+for every create, restored session, and respawn. The reader increments the
+counter once per successful nonempty raw chunk before parser/buffer/event work.
+`PtySessionManager::write` gates nonempty input on handoff/manager/session
+state, records the manager-wide input revision/time before writer dispatch, and
+rolls the evidence back on writer failure. See
+[PTY Activity Observation](./pty-activity-observation.md) for the full
+admission order and watcher/fleet-watcher boundary.
 
 **api/terminal.rs** — terminal creation env resolution:
 
@@ -3342,6 +3370,12 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 - SshCredStore: Mutex<...>
 
 **Broadcast channels:** PTY output fan-out to multiple WebSocket clients.
+
+- Private PTY activity invalidation uses a coalescing `watch` revision for
+  accepted input and create/respawn boundaries; `PtyFleetWatcher` remains the
+  authoritative source for all lifecycle counts, generations, handoff, and
+  disposal transitions. Consumers capture a fresh private activity snapshot
+  after wakeup rather than treating either watcher as an event log.
 
 **Important:** Never hold FsSubsystem, PtySessionManager locks across `.await` — clone fields out first.
 

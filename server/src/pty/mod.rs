@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod buffer;
 pub mod event_sink;
 pub mod fleet_state;
@@ -15,4 +16,9 @@ pub use manager::{PtyCreateOpts, PtySessionManager, PtyTargetContext, SessionDet
 pub use session::SessionMeta;
 pub use fleet_state::{
     HandoffClaim, HandoffClaimError, PtyFleetSnapshot, PtyFleetState, PtyFleetWatcher,
+};
+pub use activity::{
+    parse_proc_stat, ActivityIncompleteReason, ParsedProcStat, ProcessIdentity,
+    PtyActivitySnapshot, PtyActivityWatcher, RootActivityRecord, RootQualification,
+    TerminalIdentity, MAX_LIVE_ROOTS_LIMIT, SATURATED_COUNTER_SENTINEL,
 };

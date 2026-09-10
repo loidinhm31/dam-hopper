@@ -236,10 +236,11 @@ agent_executables = ["codex", "omp", "claude", "agy"]
 ### Policy and agent-executable fields (Phase 01)
 
 `automatic_policy` accepts `empty-fleet` (the default) or `agent-activity`.
-Phase 01 freezes this selector and its configuration contract; process/TCP
-observation and automatic agent-activity eligibility are implemented by later
-enhancement phases. Existing deployments therefore retain empty-fleet behavior
-when the key is omitted.
+Phase 01 freezes this selector and its configuration contract. Phase 02
+provides private PTY root/raw-output/input evidence; process/TCP observation
+and automatic agent-activity eligibility remain owned by later enhancement
+phases. Existing deployments therefore retain empty-fleet behavior when the
+key is omitted. See [PTY Activity Observation](./pty-activity-observation.md).
 
 `agent_executables` defaults to `["codex", "omp", "claude", "agy"]`. Entries
 are literal, case-sensitive basenames or absolute paths, never regular

@@ -17,6 +17,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries
 - **[Worktree Operations](./worktree-operation.md)** — Target selection and safe worktree lifecycle
 - **[Terminal Idle Suspend Security](./terminal-idle-suspend-security.md)** — Automatic timing bounds, helper IPC, RTC ownership, audit, and fail-closed rules
+- **[PTY Activity Observation](./pty-activity-observation.md)** — Phase 02 private root identity, raw output, input admission, snapshot, and watcher contract
 
 ## Reference Documentation
 
@@ -98,8 +99,10 @@ bounded automatic timing and a fixed enrolled helper.
 - Status: `GET /api/system/idle-suspend/v1/status`; timing: `PATCH .../timing`
 - Automatic persisted wake values remain `60..=86400` seconds.
 - Phase 01 configuration stores `automaticPolicy` and `agentExecutables`
-  under `server.idleSuspend`; the selector defaults to `empty-fleet`, while
-  process/TCP observation for `agent-activity` remains pending later phases.
+  under `server.idleSuspend`; the selector defaults to `empty-fleet`.
+- Phase 02 PTY evidence and input admission are implemented; process/TCP
+  observation and automatic eligibility remain pending in later phases. See
+  [PTY Activity Observation](./pty-activity-observation.md).
 - Phase 01 helper execution accepts `wakeAfterSeconds: 0` for clear-only,
   indefinite sleep; it clears and verifies RTC state without target arithmetic.
 - Unexpected pre-existing RTC alarms, inhibitors, capability failures, and RTC

@@ -28,7 +28,7 @@ In opt-in `agent-activity` mode, configured agents (`codex`, `omp`, `claude`, `a
 | Phase                                                                 | Status  | Progress | Estimate | Dependency                         |
 | --------------------------------------------------------------------- | ------- | -------- | -------- | ---------------------------------- |
 | [01 — Policy/configuration contracts](phase-01-policy-contracts.md)   | DONE (2026-09-11) | 100%      | 6h       | None                               |
-| [02 — PTY evidence and input admission](phase-02-pty-observation.md)  | Pending | 0%       | 8h       | 01                                 |
+| [02 — PTY evidence and input admission](phase-02-pty-observation.md)  | DONE (2026-09-11) | 100%      | 8h       | 01                                 |
 | [03 — Process discovery and retention](phase-03-process-discovery.md) | Pending | 0%       | 14h      | 01–02                              |
 | [04 — Owned TCP byte observation](phase-04-tcp-observation.md)        | Pending | 0%       | 14h      | 01–02 + frozen 03 input types      |
 | [05 — Sampler/coordinator admission](phase-05-sampler-coordinator.md) | Pending | 0%       | 20h      | 02–04                              |
@@ -53,7 +53,9 @@ In opt-in `agent-activity` mode, configured agents (`codex`, `omp`, `claude`, `a
 
 ## Planning delivery
 
-Phase 01 is complete (DONE 2026-09-11). Implementation phases 02–08 remain pending. This new plan does not extend or rewrite the completed original plan. The architecture document contains a clearly marked design-only pointer. [Planning review evidence](reports/plan-review.md) records document checks, not application execution.
+Phase 01 and Phase 02 are complete (2/8 phases; 14/111h estimated, approximately 13%; DONE 2026-09-11). Phase 02 delivered qualified PTY root identity, incarnation-scoped raw output evidence, accepted-input admission fencing, handoff rejection, and bounded private snapshots. Implementation phases 03–08 remain pending. This new plan does not extend or rewrite the completed original plan. The architecture document contains a clearly marked design-only pointer. [Planning review evidence](reports/plan-review.md) records document checks, not application execution.
+
+Phase 02 evidence: focused PTY activity tests passed **8/8**; the PTY module suite passed **159 tests** with one pre-existing performance test ignored; code review scored **9.5/10** with no critical issues. [Test report](../reports/tester-260911-0152-phase02-pty-activity-contracts.md) · [Code review](../reports/code-review-260911-0156-phase02-pty-root-identity-and-input-admission.md).
 
 Active-plan state was registered using the current OMP session UUID after supplying the missing `EVCRATE_SESSION_ID`. Pass this directory explicitly to implementation commands/workers; do not reuse the completed suggested plan.
 

@@ -89,6 +89,38 @@ remain separate operational gates and are not implied by automated tests.
 
 Coordinator force-suspend handling, generation-fenced forced fleet claims, generalized server audit writing, active-fleet confirmation enforcement, independent helper executor enrollment at startup, and deterministic outcome reconciliation are implemented. Focused coordinator, cross-module, REST, and browser coverage verifies the contract; no automated test performs real host suspend or RTC mutation.
 
+### Configured-agent PTY observation — Phase 02 (2026-09-11)
+
+The PTY evidence seam is private and content-free. Each live incarnation keeps
+the public session ID paired with a monotonic incarnation and captures the
+child's `(pid, start_ticks)` identity when Linux procfs permits it. An uncertain
+or unavailable probe never blocks ordinary terminal creation or execution and
+never guesses a later process identity; downstream automatic handoff must treat
+that root as unavailable.
+
+The reader increments one per-incarnation `Arc<AtomicU64>` raw-output sequence
+once for each successful nonempty raw PTY read, before parser, scrollback,
+persistence, or event work. It does not inspect or retain terminal bytes,
+commands, arguments, or environment. `u64::MAX` is a saturated/unavailable
+sentinel, not a wrapping counter. Replayed or hydrated output, resize, and
+attach operations are not new activity.
+
+The manager-wide `input_revision` and monotonic `last_input_at` update only for
+accepted nonempty input. Empty input is a no-op. Handoff, closing/disposal,
+missing-session, and saturated-revision gates reject before writer dispatch;
+writer failures roll back the observation state. Rejected bytes are not queued
+or replayed. Input activity is private and is not emitted as a public status or
+audit payload.
+
+`PtyActivitySnapshot` bounds live-root capture at 256 and records fleet state,
+input revision/time, root qualification, cloned atomic handles, capture time,
+and an explicit incomplete reason. `PtyActivityWatcher` is a coalescing private
+watch revision, not an event log or public hint. It is combined with the
+authoritative fleet watcher for complete lifecycle transitions. Procfs reads
+are outside the manager lock; no snapshot or watcher value includes terminal
+content, credentials, socket details, or command arguments. See
+[PTY Activity Observation](./pty-activity-observation.md).
+
 ## Approval Gates for Privileged Execution (Phase 03) — Approved (2026-09-05)
 
 Phase 03 (privileged systemd helper and unit enrollment) was reviewed and approved on 2026-09-05 with the following agreed architectural specifications:

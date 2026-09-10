@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use std::sync::atomic::AtomicU64;
 use portable_pty::{Child as PtyChild, CommandBuilder, NativePtySystem, PtySize, PtySystem as _};
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
@@ -27,6 +28,11 @@ use crate::{
     persistence::SessionStore,
     port_forward::PortForwardManager,
     pty::{
+        activity::{
+            increment_raw_output_sequence, probe_process_identity, ActivityIncompleteReason,
+            PtyActivitySnapshot, PtyActivityWatcher, RootActivityRecord, RootQualification,
+            TerminalIdentity, MAX_LIVE_ROOTS_LIMIT, SATURATED_COUNTER_SENTINEL,
+        },
         event_sink::EventSink,
         output_control_parser::Utf8StreamDecoder,
         session::{DeadSession, LiveSession, RespawnOpts, SessionMeta, SessionType},
@@ -565,6 +571,7 @@ pub struct PtySessionManager {
     /// persistence worker.
     active_reader_count: Arc<AtomicUsize>,
     fleet_watcher: crate::pty::fleet_state::PtyFleetWatcher,
+    activity_watcher: PtyActivityWatcher,
     #[cfg(test)]
     respawn_test_hook: Arc<RespawnTestHook>,
     #[cfg(test)]
@@ -603,6 +610,12 @@ struct Inner {
     /// a slow stale create/respawn from publishing after a newer replacement
     /// has started.
     pending_replacements: HashMap<String, u64>,
+    /// Monotonic revision of admitted nonempty terminal input across all sessions.
+    input_revision: u64,
+    /// Instant when nonempty terminal input was last admitted.
+    last_input_at: Option<std::time::Instant>,
+    /// Broadcast watch channel for private coalescing activity invalidation.
+    activity_watch_tx: tokio::sync::watch::Sender<u64>,
 }
 
 struct FailedReplacement {
@@ -635,7 +648,10 @@ impl From<&PtyCreateOpts> for FailedReplacementPersistence {
 }
 
 impl Inner {
-    fn new(fleet: crate::pty::fleet_state::PtyFleetState) -> Self {
+    fn new(
+        fleet: crate::pty::fleet_state::PtyFleetState,
+        activity_watch_tx: tokio::sync::watch::Sender<u64>,
+    ) -> Self {
         Self {
             fleet,
             live: HashMap::new(),
@@ -647,13 +663,104 @@ impl Inner {
             killed: HashSet::new(),
             suppress_exit_counts: HashMap::new(),
             pending_replacements: HashMap::new(),
+            input_revision: 0,
+            last_input_at: None,
+            activity_watch_tx,
         }
     }
 
     #[cfg(test)]
     fn new_test() -> Self {
         let (fleet, _) = crate::pty::fleet_state::PtyFleetState::new();
-        Self::new(fleet)
+        let (activity_watch_tx, _) = tokio::sync::watch::channel(1);
+        Self::new(fleet, activity_watch_tx)
+    }
+
+    fn publish_activity_invalidation(&mut self) {
+        let current = *self.activity_watch_tx.borrow();
+        let next = current.wrapping_add(1);
+        let _ = self.activity_watch_tx.send(next);
+    }
+
+    fn capture_activity_snapshot(&self) -> PtyActivitySnapshot {
+        let fleet_snapshot = self.fleet.snapshot();
+        let live_count = self.live.len();
+        let input_revision = self.input_revision;
+        let last_input_at = self.last_input_at;
+        let captured_at = std::time::Instant::now();
+
+        if live_count > MAX_LIVE_ROOTS_LIMIT {
+            return PtyActivitySnapshot {
+                fleet: fleet_snapshot,
+                input_revision,
+                last_input_at,
+                roots: Vec::new(),
+                captured_at,
+                incomplete_reason: Some(ActivityIncompleteReason::ScanLimitExceeded {
+                    count: live_count,
+                    limit: MAX_LIVE_ROOTS_LIMIT,
+                }),
+            };
+        }
+
+        let mut roots = Vec::with_capacity(live_count);
+        let mut incomplete_reason = None;
+
+        if input_revision == u64::MAX {
+            incomplete_reason = Some(ActivityIncompleteReason::RevisionSaturated);
+        }
+
+        for (id, session) in &self.live {
+            let raw_seq = session.raw_output_sequence.load(Ordering::Relaxed);
+            if raw_seq == SATURATED_COUNTER_SENTINEL && incomplete_reason.is_none() {
+                incomplete_reason = Some(ActivityIncompleteReason::CounterSaturated {
+                    session_id: id.clone(),
+                    incarnation: session.incarnation,
+                });
+            }
+
+            match &session.root_qualification {
+                RootQualification::Qualified { .. } => {}
+                RootQualification::Uncertain { pid, reason } => {
+                    if incomplete_reason.is_none() {
+                        incomplete_reason = Some(ActivityIncompleteReason::RootUnqualified {
+                            session_id: id.clone(),
+                            incarnation: session.incarnation,
+                            pid: Some(*pid),
+                            details: reason.clone(),
+                        });
+                    }
+                }
+                RootQualification::Unavailable { reason } => {
+                    if incomplete_reason.is_none() {
+                        incomplete_reason = Some(ActivityIncompleteReason::RootUnqualified {
+                            session_id: id.clone(),
+                            incarnation: session.incarnation,
+                            pid: None,
+                            details: reason.clone(),
+                        });
+                    }
+                }
+            }
+
+            roots.push(RootActivityRecord {
+                terminal: TerminalIdentity {
+                    session_id: id.clone(),
+                    incarnation: session.incarnation,
+                },
+                qualification: session.root_qualification.clone(),
+                raw_output_sequence: session.raw_output_sequence_ref(),
+            });
+        }
+
+        PtyActivitySnapshot {
+            fleet: fleet_snapshot,
+            input_revision,
+            last_input_at,
+            roots,
+            captured_at,
+            incomplete_reason,
+        }
     }
 
     fn allocate_incarnation(&mut self) -> u64 {
@@ -899,7 +1006,8 @@ impl PtySessionManager {
         let session_store_clone = session_store.clone();
 
         let (fleet_state, fleet_watcher) = crate::pty::fleet_state::PtyFleetState::new();
-        let mut initial_inner = Inner::new(fleet_state);
+        let (activity_watch_tx, activity_watch_rx) = tokio::sync::watch::channel(1);
+        let mut initial_inner = Inner::new(fleet_state, activity_watch_tx);
         if let Some(store) = &session_store {
             match store.max_session_incarnation() {
                 Ok(maximum) => initial_inner.advance_past(maximum),
@@ -924,6 +1032,7 @@ impl PtySessionManager {
             ))),
             active_reader_count: Arc::new(AtomicUsize::new(0)),
             fleet_watcher,
+            activity_watcher: PtyActivityWatcher::new(activity_watch_rx),
             #[cfg(test)]
             respawn_test_hook: Arc::new(RespawnTestHook::new()),
             #[cfg(test)]
@@ -975,6 +1084,24 @@ impl PtySessionManager {
         let mut watcher = self.fleet_watcher.clone();
         watcher.mark_seen();
         watcher
+    }
+
+    pub fn activity_watcher(&self) -> PtyActivityWatcher {
+        let mut watcher = self.activity_watcher.clone();
+        watcher.mark_seen();
+        watcher
+    }
+
+    pub fn capture_activity_snapshot(&self) -> PtyActivitySnapshot {
+        self.inner.lock().unwrap().capture_activity_snapshot()
+    }
+
+    pub fn input_revision(&self) -> u64 {
+        self.inner.lock().unwrap().input_revision
+    }
+
+    pub fn last_input_at(&self) -> Option<std::time::Instant> {
+        self.inner.lock().unwrap().last_input_at
     }
 
     pub fn fleet_snapshot(&self) -> crate::pty::fleet_state::PtyFleetSnapshot {
@@ -1059,6 +1186,28 @@ impl PtySessionManager {
     #[cfg(test)]
     pub(crate) fn test_is_disposing(&self) -> bool {
         self.lifecycle_gate.is_disposing()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_raw_output_sequence(&self, id: &str, value: u64) {
+        let inner = self.inner.lock().unwrap();
+        if let Some(session) = inner.live.get(id) {
+            session.raw_output_sequence.store(value, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_root_qualification(&self, id: &str, qualification: RootQualification) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(session) = inner.live.get_mut(id) {
+            session.root_qualification = qualification;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_input_revision(&self, revision: u64) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.input_revision = revision;
     }
 
     /// Wire the workflow observation recorder after construction (Phase 03).
@@ -1146,6 +1295,7 @@ impl PtySessionManager {
             let mut inner = self.inner.lock().unwrap();
             let incarnation = inner.begin_replacement(&opts.id);
             inner.fleet.begin_create(&opts.id, incarnation)?;
+            inner.publish_activity_invalidation();
             incarnation
         };
         let mut failure_meta = SessionMeta::new_with_target(
@@ -1226,6 +1376,17 @@ impl PtySessionManager {
             );
             AppError::PtyError(error)
         })?;
+        let child_pid = child.process_id();
+        let root_qualification = match child_pid {
+            Some(pid) => match probe_process_identity(pid) {
+                Ok(identity) => RootQualification::Qualified { identity },
+                Err(reason) => RootQualification::Uncertain { pid, reason },
+            },
+            None => RootQualification::Unavailable {
+                reason: "PTY child did not provide a process ID".into(),
+            },
+        };
+        let raw_output_sequence = Arc::new(AtomicU64::new(0));
 
         // portable-pty requires clone_reader before take_writer
         let reader = match pair.master.try_clone_reader() {
@@ -1280,6 +1441,8 @@ impl PtySessionManager {
             respawn_opts,
             lifecycle,
             integration,
+            root_qualification,
+            Arc::clone(&raw_output_sequence),
         );
         let buffer = session.buffer_ref();
         let shutdown = session.shutdown_ref();
@@ -1324,6 +1487,7 @@ impl PtySessionManager {
             inner.killed.remove(&opts.id);
             inner.live.insert(opts.id.clone(), session);
             inner.fleet.publish_live(&opts.id, incarnation);
+            inner.publish_activity_invalidation();
             creation_generation
         };
 
@@ -1416,6 +1580,7 @@ impl PtySessionManager {
         self.active_reader_count.fetch_add(1, Ordering::AcqRel);
         let workflow_recorder = self.workflow_recorder.read().unwrap().clone();
         let active_reader_count = Arc::clone(&self.active_reader_count);
+        let raw_output_sequence_for_reader = Arc::clone(&raw_output_sequence);
         let reader_handle = std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
             .spawn(move || {
@@ -1441,6 +1606,7 @@ impl PtySessionManager {
                     published_editing,
                     active_reader_count,
                     workflow_recorder,
+                    raw_output_sequence_for_reader,
                 );
             })
             .map_err(|e| {
@@ -1481,14 +1647,53 @@ impl PtySessionManager {
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), AppError> {
-        let inner = self.inner.lock().unwrap();
-        let session = inner
-            .live
-            .get(id)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
-        session
-            .write(data)
-            .map_err(|e| AppError::PtyError(e.to_string()))
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let mut inner = self.inner.lock().unwrap();
+        if inner.fleet.is_handoff_active() {
+            return Err(AppError::IdleSuspendHandoffInProgress(
+                "Cannot send terminal input while host suspend handoff is in progress".into(),
+            ));
+        }
+        if inner.closing {
+            return Err(AppError::Unavailable(
+                "PTY manager is shutting down".into(),
+            ));
+        }
+        if inner.fleet.is_disposing() {
+            return Err(AppError::Unavailable(
+                "PTY manager is disposing sessions".into(),
+            ));
+        }
+
+        if !inner.live.contains_key(id) {
+            return Err(AppError::SessionNotFound(id.to_string()));
+        }
+
+        if inner.input_revision == u64::MAX {
+            return Err(AppError::Unavailable(
+                "Terminal input revision saturated".into(),
+            ));
+        }
+
+        let prev_revision = inner.input_revision;
+        let prev_last_input_at = inner.last_input_at;
+
+        inner.input_revision = inner.input_revision.saturating_add(1);
+        inner.last_input_at = Some(std::time::Instant::now());
+        inner.publish_activity_invalidation();
+
+        let write_res = inner.live.get(id).unwrap().write(data);
+        match write_res {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                inner.input_revision = prev_revision;
+                inner.last_input_at = prev_last_input_at;
+                Err(AppError::PtyError(e.to_string()))
+            }
+        }
     }
 
     /// Capture replay bytes and lifecycle state at one PTY boundary.
@@ -2460,6 +2665,7 @@ fn reader_thread(
     published_editing: Arc<std::sync::atomic::AtomicBool>,
     active_reader_count: Arc<AtomicUsize>,
     workflow_recorder: Arc<dyn crate::workflow::WorkflowObservationRecorder>,
+    raw_output_sequence: Arc<AtomicU64>,
 ) {
     let _reader_guard = ReaderGuard(active_reader_count);
     // Local helper to record a terminal lifecycle event from the reader thread.
@@ -2580,6 +2786,9 @@ fn reader_thread(
                 break;
             }
             Ok(n) => {
+                if n > 0 {
+                    increment_raw_output_sequence(&raw_output_sequence);
+                }
                 process_chunk(&chunk[..n]);
             }
             Err(e) if is_eof_error(&e) => {
@@ -3733,6 +3942,7 @@ async fn respawn_internal(
         guard
             .fleet
             .transition_restart_pending_to_creating(session_id, source_incarnation, inc)?;
+        guard.publish_activity_invalidation();
         (inc, preserve_target_unavailable, source_buffer)
     };
     let opts = &cmd.respawn_opts;
@@ -3828,6 +4038,17 @@ async fn respawn_internal(
             return Err(AppError::PtyError(format!("spawn failed: {error}")));
         }
     };
+    let child_pid = child.process_id();
+    let root_qualification = match child_pid {
+        Some(pid) => match probe_process_identity(pid) {
+            Ok(identity) => RootQualification::Qualified { identity },
+            Err(reason) => RootQualification::Uncertain { pid, reason },
+        },
+        None => RootQualification::Unavailable {
+            reason: "PTY child did not provide a process ID".into(),
+        },
+    };
+    let raw_output_sequence = Arc::new(AtomicU64::new(0));
 
     let reader = match pair.master.try_clone_reader() {
         Ok(reader) => reader,
@@ -3897,6 +4118,8 @@ async fn respawn_internal(
         opts.clone(),
         lifecycle,
         integration,
+        root_qualification,
+        Arc::clone(&raw_output_sequence),
     );
     let buffer = session.buffer_ref();
     let shutdown = session.shutdown_ref();
@@ -3957,6 +4180,7 @@ async fn respawn_internal(
         inner_guard.dead.remove(session_id);
         inner_guard.live.insert(session_id.to_string(), session);
         inner_guard.fleet.publish_live(session_id, incarnation);
+        inner_guard.publish_activity_invalidation();
     }
 
     if let Some(pfm) = &port_forward_manager {
@@ -4001,6 +4225,7 @@ async fn respawn_internal(
     let port_forward_manager_for_failure = port_forward_manager.clone();
     active_reader_count.fetch_add(1, Ordering::AcqRel);
     let active_reader_count_for_reader = Arc::clone(&active_reader_count);
+    let raw_output_sequence_for_reader = Arc::clone(&raw_output_sequence);
     let reader_handle = std::thread::Builder::new()
         .name(format!("pty-reader:{id_clone}"))
         .spawn(move || {
@@ -4026,6 +4251,7 @@ async fn respawn_internal(
                 published_editing,
                 active_reader_count_for_reader,
                 workflow_recorder,
+                raw_output_sequence_for_reader,
             );
         })
         .map_err(|error| {

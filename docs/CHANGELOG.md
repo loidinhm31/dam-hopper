@@ -1,3 +1,8 @@
+# 2026-09-11
+
+- **Configured-agent activity idle suspend — Phase 02 complete.** PTY sessions now capture qualified root `(pid, start_ticks)` identity per incarnation, count raw PTY reads with a saturating counter, fence accepted input before writer dispatch, reject writes during handoff, and expose bounded private observation snapshots without leaking terminal content.
+- Validation passed: focused PTY activity tests **8/8**; PTY module suite **159 passed, 1 ignored** (pre-existing performance gate). Code review scored **9.5/10** with no critical issues. Phases 03–08 remain pending; Phase 03 consumes the qualified root/stat seam next.
+
 # 2026-09-10
 
 - **Production CLI Deployment Setup for Idle Suspend Helper & Socket — Phases 01–04 complete.** Phase 04 closes staged-unit, rendered-policy, role-isolation, boundary, and CLI status verification; release-manager activation starts the helper before the API with non-fatal fallback, and rollback/recovery retain helper ownership.

@@ -2,6 +2,13 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Configured-agent activity idle suspend (2026-09-11)
+
+- **Plan status: IN PROGRESS (~13%; 2/8 phases, 14/111h estimated). Phase 02 — PTY evidence and input admission: DONE (2026-09-11; 100%).** Phase 01 is complete; Phases 03–08 remain pending.
+- Phase 02 captures qualified PTY root identity `(pid, start_ticks)` per terminal incarnation, saturating raw-output evidence, accepted-input revision/time, handoff admission fencing, and bounded private snapshots. Observation failure leaves the terminal usable and unavailable for automatic agent policy.
+- Validation: focused PTY activity tests **8/8**; PTY module suite **159 passed, 1 ignored** (pre-existing performance gate); code review **9.5/10**, no critical issues. [Parent plan](../plans/260910-1604-agent-activity-idle-suspend/plan.md) · [Phase 02 plan](../plans/260910-1604-agent-activity-idle-suspend/phase-02-pty-observation.md) · [Test report](../plans/reports/tester-260911-0152-phase02-pty-activity-contracts.md) · [Code review](../plans/reports/code-review-260911-0156-phase02-pty-root-identity-and-input-admission.md).
+- **Next steps:** Phase 03 consumes qualified roots/stat identities and retains detached lineage; Phase 04 consumes typed owned sockets; Phase 05 owns transactional process/TCP/raw evidence and the final automatic claim. No automatic agent-policy claim ships from Phase 02 alone.
+
 ### Production CLI Deployment Setup for Idle Suspend Helper & Socket (2026-09-09)
 
 - **Plan status: COMPLETE (100%).** Phases 01–04 completed between

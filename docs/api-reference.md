@@ -401,9 +401,10 @@ startup. Config reload, settings import, and workspace switching reapply those
 startup-owned values; only the timing pair remains mutable through the
 dedicated timing endpoint. A full-config update rejects a changed idle-suspend
 block and preserves it when omitted. The status endpoint intentionally does
-not expose the matcher list or policy selector. `agent-activity` is a stored
-selector in Phase 01; process/TCP observation and automatic eligibility remain
-owned by later enhancement phases.
+not expose the matcher list or policy selector. Phase 02 adds private PTY root
+identity, raw-read, accepted-input, bounded-snapshot, and invalidation evidence;
+process/TCP observation and automatic eligibility remain owned by later
+enhancement phases.
 
 
 #### GET /api/system/idle-suspend/v1/status
@@ -1378,6 +1379,16 @@ Fire-and-forget message to send input to PTY stdin.
 
 **terminalResize(id: string, cols: number, rows: number): void**
 Fire-and-forget message to resize PTY dimensions.
+
+#### PTY activity observation (server-internal Phase 02)
+
+The REST and WebSocket terminal contracts do not expose activity snapshots,
+root identities, raw-output counters, input revisions, or watcher revisions.
+`terminalWrite` remains fire-and-forget: nonempty input passes through the
+manager's handoff/closing/disposal/session admission gate, while empty input is
+a no-op. Rejected input has no acknowledgement or replay path. See
+[PTY Activity Observation](./pty-activity-observation.md) for the private
+server contract consumed by later process/TCP observation phases.
 
 ### Event Subscriptions
 

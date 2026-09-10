@@ -124,6 +124,43 @@ observation:
   startup. Reload, import, and workspace activation must reapply those
   startup-owned values; only the runtime timing pair is mutable.
 
+### PTY activity observation and input admission (Phase 02)
+
+Keep PTY activity evidence at the existing manager/session boundaries; do not
+derive authority from terminal text, display labels, retained scrollback, or
+foreground process-group IDs. The detailed contract is in
+[PTY Activity Observation](./pty-activity-observation.md).
+
+- Store each concrete PTY incarnation as `TerminalIdentity { session_id,
+  incarnation }` plus `RootQualification`. A qualified `ProcessIdentity`
+  requires both the child PID and `/proc/<pid>/stat` `start_ticks`; failed or
+  unsupported probes remain explicit `Uncertain`/`Unavailable` states while
+  the terminal stays usable.
+- Allocate one `Arc<AtomicU64>` raw-output sequence per incarnation. Start it
+  at zero for create, restore, and respawn; increment once for each successful
+  nonempty raw reader chunk before parser, buffer, persistence, or event work.
+  Use the shared saturating helper and treat `u64::MAX` as unavailable; never
+  wrap or convert the sequence into a byte count.
+- Keep `input_revision` and `last_input_at` manager-wide and private. Empty
+  input is a no-op. Under the existing manager lock, gate nonempty writes on
+  handoff/manager/session state, record evidence before `LiveSession::write`,
+  and roll back the evidence if the writer returns an error. Rejected input is
+  not queued or replayed, and no client-side expected revision is implied.
+- `PtyActivitySnapshot` is bounded and content-free. Capture fleet state,
+  input revision/time, root identities, and cloned counter handles under the
+  manager lock; never perform procfs I/O or copy terminal content there.
+  Exceeding 256 live roots, an unqualified root, counter saturation, or
+  revision saturation must be represented as incomplete, not as quiet.
+- `PtyActivityWatcher` is a private coalescing `watch` receiver, not an event
+  log or public status channel. Mark cloned receivers seen before waiting.
+  Combine it with `PtyFleetWatcher` when complete lifecycle wakeups are
+  required.
+
+No PTY reader/input path may log or persist command text, arguments,
+environment, terminal bytes, or socket details. Later process/TCP sampling and
+automatic eligibility must consume this seam without adding a permissive claim
+or a second writer path.
+
 ### Linux release manager service lifecycle and verification (Production CLI Phases 03–04)
 
 Keep helper lifecycle ownership centralized in `server/src/linux_release/`:
