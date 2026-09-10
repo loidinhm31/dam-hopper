@@ -127,6 +127,48 @@ stops and disables all managed units. `dam-hopper status` and
 alongside API, web, and recovery records. See the [Linux Release Manager](./linux-release-manager.md#helper-service-lifecycle-production-cli-phase-03)
 for operator commands and ordering.
 
+### Production CLI deployment Phase 04 verification (2026-09-10)
+
+The release-manager integration is verified across staged-unit integration
+tests, rendered-unit policy tests, the idle-suspend suites, the non-privileged
+boundary script, and a `dam-hopper status` CLI smoke check. The focused Rust
+evidence is 9/9 `linux_release_staging`, 10/10 `linux_release_unit_policy`,
+69/69 `idle_suspend` library, and 14/14 `idle_suspend` integration tests
+(102/102 tests total).
+
+`server/tests/linux_release_staging.rs` verifies that a server-role candidate:
+
+- stages the helper beside the API in the transaction-scoped pending-units
+  directory;
+- renders the fixed helper socket, audit, enrolled-PID, identity, restart, and
+  systemd-hardening values without unresolved template tokens;
+- retains the API `PIDFile=/run/dam-hopper/server.pid`,
+  `ExecStartPost` `$MAINPID` write, and `ExecStopPost` cleanup hooks; and
+- preserves role isolation: `web` stages web plus recovery only, while `both`
+  stages API, helper, web, and recovery.
+
+The same integration file verifies `HELPER_SERVICE_UNIT` registration in
+`ALL_SERVICE_UNITS` and that `collect_all_services_status()` reports the
+helper with `role: "server"`. The CLI status smoke check confirms the API and
+helper are grouped under `Server`; JSON status exposes all four managed records
+(API, helper, web, and recovery) with best-effort active/PID/UID evidence.
+
+The boundary verifier now executes 14 checks. Checks 13 and 14 are the
+production-CLI additions:
+
+| Check | Boundary assertion |
+| --- | --- |
+| 13 | Both API unit files exist and declare `PIDFile=/run/dam-hopper/server.pid`, an `ExecStartPost` `$MAINPID` write, and an `ExecStopPost` `rm -f` cleanup hook. |
+| 14 | `HELPER_SERVICE_UNIT` is defined in `constants.rs`, staged by `stage_units.rs`, started by `activate.rs`, and included by `status.rs`. |
+
+`./scripts/verify-idle-suspend-boundary.sh` passed all 14/14 checks with zero
+failures. Repository checks use temporary files, fakes, static assertions, and
+read-only service inspection; they do not invoke host suspend, logind, or real
+RTC hardware. A timed real-host canary remains an operational gate.
+
+[Phase 04 test report](../plans/reports/tester-260910-0732-phase-04-boundary-verification.md)
+and [review](../plans/reports/reviewer-260910-0733-phase-04-verification-boundary.md).
+
 ### Sign-Off Record
 - **Security Owner**: Approved (2026-09-05)
 - **Infrastructure / Operator**: Approved (2026-09-05)

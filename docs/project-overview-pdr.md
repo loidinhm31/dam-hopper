@@ -624,14 +624,16 @@ authoritative for workspace/target ownership, limits, errors, and replay.
 - Read-only live monitoring surfaced in host-resource popover; timing tuning in Settings.
 - Safe operator rollback runbook and non-privileged boundary verification (`scripts/verify-idle-suspend-boundary.sh`, `deploy/reset-linux-production.sh`).
 
-**Release-manager lifecycle integration (Production CLI Phase 03, 2026-09-10):**
+**Release-manager lifecycle and verification (Production CLI Phases 03–04, 2026-09-10):**
 When a selected role includes `server`, the release manager stages
 `dam-hopper-idle-suspend-helper.service`, starts it before the API during both
 ordinary and pending-candidate `dam-hopper start`, and treats helper start or
 enable failure as a warning-only fallback. Stop, activation rollback, manual
 rollback, and boot recovery include the helper in their managed-unit set.
-`dam-hopper status` reports helper active state and best-effort process evidence
-with the API, web, and recovery units. See [Linux Release Manager](./linux-release-manager.md#helper-service-lifecycle-production-cli-phase-03).
+Phase 04 verification passed `linux_release_staging` 9/9,
+`linux_release_unit_policy` 10/10, and the boundary verifier 14/14; role
+isolation and the four-service `dam-hopper status` projection are covered. See
+[Linux Release Manager](./linux-release-manager.md#verification-and-end-to-end-coverage-production-cli-phase-04).
 
 **Acceptance Criteria:**
 - [x] Disabled by default at startup; requires explicit operator configuration.
