@@ -7,11 +7,12 @@
 - Relevant Docs: `docs/terminal-idle-suspend-security.md`, `docs/linux-release-manager.md`
 
 ## 2. Overview
-- **Date**: 2026-09-09
+- **Date**: 2026-09-10
 - **Description**: Add unit and integration tests covering helper unit staging, lifecycle management, and boundary verification for the Integrated Release Manager deployment.
 - **Priority**: P2
-- **Implementation Status**: Pending
-- **Review Status**: Pending
+- **Implementation Status**: DONE (2026-09-10)
+- **Review Status**: Complete (2026-09-10)
+- **Progress**: 100% (5/5 implementation steps; 4/4 todo items)
 
 ## 3. Key Insights
 - The codebase relies on automated test suites (`server/src/linux_release/tests.rs`) and security verification scripts (`./scripts/verify-idle-suspend-boundary.sh`) to prevent architectural regressions.
@@ -60,10 +61,10 @@ Verification Pipeline
 5. Execute end-to-end CLI smoke test on candidate release.
 
 ## 8. Todo List
-- [ ] Add test cases to `server/src/linux_release/tests.rs`
-- [ ] Update `scripts/verify-idle-suspend-boundary.sh` checks
-- [ ] Run cargo tests across release and idle-suspend modules
-- [ ] Run boundary script and verify 100% pass
+- [x] Add test cases to `server/src/linux_release/tests.rs`
+- [x] Update `scripts/verify-idle-suspend-boundary.sh` checks
+- [x] Run cargo tests across release and idle-suspend modules
+- [x] Run boundary script and verify 100% pass
 
 ## 9. Success Criteria
 - 100% pass on all cargo unit/integration tests in `server/`.
@@ -78,4 +79,5 @@ Verification Pipeline
 - Ensure no root credentials or hardcoded paths are exposed in tests or CLI output.
 
 ## 12. Next Steps
-- Complete phase and prepare for plan execution via `/cmd-code`.
+- Phase 04 completed and verified with 100% test and boundary passes.
+- Production CLI deployment setup for idle suspend helper & socket is ready for release build.

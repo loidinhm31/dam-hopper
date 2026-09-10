@@ -135,19 +135,28 @@ The inventory must contain the required release paths below with the stated
 role and kind. The recovery template is validated as a `common` asset when
 packaged; `stage_units.rs` always stages a recovery unit for activation and
 uses its checked-in template fallback when the archive omits that asset.
-Executable binaries must have at least one execute bit.
+Current publisher archives also carry the server-role helper service (and may
+carry the optional helper socket); the validator enforces regular-file kind and
+server-role assignment for those entries, while local/test staging can use the
+checked-in helper template fallback. Executable binaries must have at least one
+execute bit.
 
-| Path                                  | Kind      | Required role | Additional requirement                    |
-| ------------------------------------- | --------- | ------------- | ----------------------------------------- |
-| `bin/dam-hopper-manager`              | file      | `common`      | executable                                |
-| `bin/dam-hopper-server`               | file      | `server`      | executable                                |
-| `bin/dam-hopper-web`                  | file      | `web`         | executable                                |
-| `systemd/dam-hopper-recovery.service` | file      | `common`      | boot recovery unit template when packaged |
-| `systemd/dam-hopper-api.service`      | file      | `server`      | unit template                             |
-| `systemd/dam-hopper-web.service`      | file      | `web`         | unit template                             |
-| `sysusers.d/dam-hopper-web.conf`      | file      | `web`         | sysusers input                            |
-| `web`                                 | directory | `web`         | web payload has `web` role                |
-| `LICENSE` or `NOTICES`                | file      | `common`      | at least one is required                  |
+| Path                                             | Kind      | Required role | Additional requirement                    |
+| ------------------------------------------------ | --------- | ------------- | ----------------------------------------- |
+| `bin/dam-hopper-manager`                         | file      | `common`      | executable                                |
+| `bin/dam-hopper-server`                          | file      | `server`      | executable                                |
+| `bin/dam-hopper-web`                             | file      | `web`         | executable                                |
+| `systemd/dam-hopper-recovery.service`           | file      | `common`      | boot recovery unit template when packaged |
+| `systemd/dam-hopper-api.service`                | file      | `server`      | unit template                             |
+| `systemd/dam-hopper-idle-suspend-helper.service` | file     | `server`      | helper unit template when packaged        |
+| `systemd/dam-hopper-web.service`                | file      | `web`         | unit template                             |
+| `sysusers.d/dam-hopper-web.conf`                 | file      | `web`         | sysusers input                            |
+| `web`                                            | directory | `web`         | web payload has `web` role                |
+| `LICENSE` or `NOTICES`                           | file      | `common`      | at least one is required                  |
+
+The helper socket unit is a separate optional server-role archive asset. The
+release manager directly manages the helper service and must not enable both
+direct-binding service mode and socket activation for the same socket path.
 
 The publisher must compute exact inventory set equality for each projection; a
 prefix check is not sufficient. Runtime/configuration material is forbidden,
@@ -293,8 +302,11 @@ The focused release suites passed 45/45 tests across seven suites. Manifest
 contract tests remain authoritative for metadata rules; CLI, platform,
 acquisition, archive, and staging suites cover the manager consumer boundary.
 
-Phase 06 publisher evidence adds
-`cargo test --test linux_release_publisher_contract` (7/7 in the focused
-publisher suite) plus archive/manifest script syntax and alignment checks. The
-publisher guide records the broader 24/24 release-matrix result and workflow
-limitations; this document remains the runtime metadata authority.
+Production CLI Phase 04 evidence adds the staged helper/API contract:
+`linux_release_staging` passed 9/9 tests, `linux_release_unit_policy` passed
+10/10, and the boundary verifier passed 14/14 checks. Coverage includes
+server/web/both role projections, helper hardening and fixed arguments,
+API PID-file hooks, and helper status-role mapping; the CLI smoke check
+confirms API and helper are exposed under the `server` role. See the
+[Linux Release Manager](./linux-release-manager.md#verification-and-end-to-end-coverage-production-cli-phase-04)
+guide for the complete command set.

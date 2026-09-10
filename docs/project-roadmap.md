@@ -4,22 +4,30 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Production CLI Deployment Setup for Idle Suspend Helper & Socket (2026-09-09)
 
-- **Plan status: IN PROGRESS (75%).** Phase 01 complete; Phases 02–03 complete; Phase 04 pending.
-- **Phase 01 — [COMPLETED / DONE 2026-09-09; 100%]**: systemd API/helper unit templates now manage `/run/dam-hopper/server.pid`, shared runtime-directory permissions, enrolled PID linkage, and API-group socket access.
-- Validation: `systemd-analyze verify` 3/3; scoped release, idle-suspend, and boundary checks **102/102 passed**; cycle-2 code review **10/10**.
-- **Phase 02 — [COMPLETED / DONE 2026-09-10; 100%]**: release-manager staging renders and validates `dam-hopper-idle-suspend-helper.service` for server-capable roles.
-- **Phase 03 — [COMPLETED / DONE 2026-09-10; 100%]**: release-manager activation starts helper before API with non-fatal fallback; rollback/recovery stop and restart the helper; status reports helper state.
-- Validation: targeted release, idle-suspend, and lifecycle invariant suites **96/96 passed**; code review **9.2/10**, no critical issues.
-
+- **Plan status: COMPLETE (100%).** Phases 01–04 completed between
+  2026-09-09 and 2026-09-10.
+- **Phase 01 — [COMPLETED / DONE 2026-09-09; 100%]**: systemd API/helper unit
+  templates manage `/run/dam-hopper/server.pid`, shared runtime-directory
+  permissions, enrolled PID linkage, and API-group socket access.
+- **Phase 02 — [COMPLETED / DONE 2026-09-10; 100%]**: release-manager
+  staging renders and validates `dam-hopper-idle-suspend-helper.service` for
+  server-capable roles.
+- **Phase 03 — [COMPLETED / DONE 2026-09-10; 100%]**: release-manager
+  activation starts helper before API with non-fatal fallback; rollback,
+  recovery, and status include the helper.
+- **Phase 04 — [COMPLETED / DONE 2026-09-10; 100%]**: staged-unit,
+  role-isolation, boundary, and CLI status verification completed.
+- Validation: focused Rust tests **102/102**; boundary verifier **14/14**;
+  `dam-hopper status --json` reports API and helper under the `server` role.
 - Task checklist:
   - [x] Add API `PIDFile`, `ExecStartPost`, and `ExecStopPost` PID lifecycle hooks.
   - [x] Sync checked-in API unit with the template.
   - [x] Align helper PID path, runtime-directory, group, umask, and socket permissions.
   - [x] Run systemd, unit-policy, release, idle-suspend, and boundary validation.
-  - [x] Phase 02: stage helper unit through release manager (DONE 2026-09-10).
-  - [x] Phase 03: coordinate helper/API service lifecycle (DONE 2026-09-10).
-  - [ ] Phase 04: complete end-to-end verification and release gates.
-- [Plan](../plans/260909-1836-production-idle-suspend-cli-setup/plan.md) · [Phase 01](../plans/260909-1836-production-idle-suspend-cli-setup/phase-01-systemd-service-templates-and-pid-management.md) · [Phase 02](../plans/260909-1836-production-idle-suspend-cli-setup/phase-02-release-manager-unit-staging.md) · [Phase 03](../plans/260909-1836-production-idle-suspend-cli-setup/phase-03-release-manager-service-lifecycle.md) · [Phase 04](../plans/260909-1836-production-idle-suspend-cli-setup/phase-04-verification-boundary-enforcement-and-e2e.md) · [Tests](../plans/reports/tester-260910-0413-phase-03-service-lifecycle.md) · [Review](../plans/reports/code-review-260910-0414-phase-03-release-manager-service-lifecycle.md).
+  - [x] Phase 02: stage helper unit through release manager.
+  - [x] Phase 03: coordinate helper/API service lifecycle.
+  - [x] Phase 04: complete end-to-end verification and release gates.
+- [Plan](../plans/260909-1836-production-idle-suspend-cli-setup/plan.md) · [Phase 01](../plans/260909-1836-production-idle-suspend-cli-setup/phase-01-systemd-service-templates-and-pid-management.md) · [Phase 02](../plans/260909-1836-production-idle-suspend-cli-setup/phase-02-release-manager-unit-staging.md) · [Phase 03](../plans/260909-1836-production-idle-suspend-cli-setup/phase-03-release-manager-service-lifecycle.md) · [Phase 04](../plans/260909-1836-production-idle-suspend-cli-setup/phase-04-verification-boundary-enforcement-and-e2e.md) · [Phase 04 tests](../plans/reports/tester-260910-0732-phase-04-boundary-verification.md) · [Phase 04 review](../plans/reports/reviewer-260910-0733-phase-04-verification-boundary.md).
 
 ### Authenticated Manual Force Sleep (2026-09-06)
 

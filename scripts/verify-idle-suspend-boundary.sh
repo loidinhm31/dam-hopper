@@ -29,23 +29,40 @@ echo "PASS: Zero shell invocations in idle_suspend modules."
 # 3. Verify systemd helper unit files integrity and hardening directives
 echo "--> Verifying systemd helper service & socket configurations..."
 HELPER_SVC="deploy/systemd/dam-hopper-idle-suspend-helper.service"
+HELPER_SVC_IN="deploy/systemd/dam-hopper-idle-suspend-helper.service.in"
 HELPER_SOCK="deploy/systemd/dam-hopper-idle-suspend-helper.socket"
+HELPER_SOCK_IN="deploy/systemd/dam-hopper-idle-suspend-helper.socket.in"
 
-# Check hardening directives in service unit
-for directive in "ProtectSystem=strict" "CapabilityBoundingSet=CAP_WAKE_ALARM"; do
-    if ! grep -q "$directive" "$HELPER_SVC"; then
-        echo "FAIL: Helper service missing required hardening directive: $directive" >&2
+# Check existence of helper service and socket files + templates
+for file in "$HELPER_SVC" "$HELPER_SVC_IN" "$HELPER_SOCK" "$HELPER_SOCK_IN"; do
+    if [[ ! -f "$file" ]]; then
+        echo "FAIL: Required helper systemd unit or template missing: $file" >&2
         exit 1
     fi
 done
-for directive in "ProtectHome" "PrivateTmp" "NoNewPrivileges"; do
-    if ! grep -E -q "${directive}=(yes|true)" "$HELPER_SVC"; then
-        echo "FAIL: Helper service missing required hardening directive: $directive" >&2
-        exit 1
-    fi
-done
-echo "PASS: All systemd hardening directives present."
 
+# Check hardening directives in service unit and template
+for unit_file in "$HELPER_SVC" "$HELPER_SVC_IN"; do
+    for directive in "ProtectSystem=strict" "CapabilityBoundingSet=CAP_WAKE_ALARM"; do
+        if ! grep -q "$directive" "$unit_file"; then
+            echo "FAIL: $unit_file missing required hardening directive: $directive" >&2
+            exit 1
+        fi
+    done
+    for directive in "ProtectHome" "PrivateTmp" "NoNewPrivileges"; do
+        if ! grep -E -q "${directive}=(yes|true)" "$unit_file"; then
+            echo "FAIL: $unit_file missing required hardening directive: $directive" >&2
+            exit 1
+        fi
+    done
+    for flag in "--socket /run/dam-hopper/idle-suspend.sock" "--enrolled-pid-file /run/dam-hopper/server.pid"; do
+        if ! grep -q -- "$flag" "$unit_file"; then
+            echo "FAIL: $unit_file missing required flag: $flag" >&2
+            exit 1
+        fi
+    done
+done
+echo "PASS: All systemd helper hardening directives and flags present in units and templates."
 # 4. Verify default config has idle_suspend disabled
 echo "--> Verifying default-off configuration invariant..."
 if ! grep -q 'assert!(!cfg.enabled);' server/src/idle_suspend/tests.rs; then
@@ -137,5 +154,49 @@ if grep -rn -E 'Command::new' server/src/api/idle_suspend.rs 2>/dev/null; then
     exit 1
 fi
 echo "PASS: Zero Command::new in server/src/api/idle_suspend.rs."
+
+# 13. Verify API server PIDFile configuration and lifecycle hooks
+echo "--> Verifying API service PID file configuration and lifecycle hooks..."
+API_SVC="deploy/systemd/dam-hopper-api.service"
+API_SVC_IN="deploy/systemd/dam-hopper-api.service.in"
+for api_file in "$API_SVC" "$API_SVC_IN"; do
+    if [[ ! -f "$api_file" ]]; then
+        echo "FAIL: API systemd unit or template missing: $api_file" >&2
+        exit 1
+    fi
+    if ! grep -q 'PIDFile=/run/dam-hopper/server.pid' "$api_file"; then
+        echo "FAIL: $api_file missing PIDFile directive" >&2
+        exit 1
+    fi
+    if ! grep -q "echo \$MAINPID > /run/dam-hopper/server.pid" "$api_file"; then
+        echo "FAIL: $api_file missing ExecStartPost PID file write hook" >&2
+        exit 1
+    fi
+    if ! grep -q "ExecStopPost=.*/rm -f /run/dam-hopper/server.pid" "$api_file"; then
+        echo "FAIL: $api_file missing ExecStopPost PID file cleanup hook" >&2
+        exit 1
+    fi
+done
+echo "PASS: API service PIDFile and lifecycle hooks verified in unit and template."
+
+# 14. Verify release manager lifecycle integration for helper unit
+echo "--> Verifying release manager lifecycle integration for helper service..."
+if ! grep -q 'HELPER_SERVICE_UNIT' server/src/linux_release/constants.rs; then
+    echo "FAIL: HELPER_SERVICE_UNIT not defined in linux_release/constants.rs" >&2
+    exit 1
+fi
+if ! grep -q 'HELPER_SERVICE_UNIT' server/src/linux_release/stage_units.rs; then
+    echo "FAIL: HELPER_SERVICE_UNIT not staged in linux_release/stage_units.rs" >&2
+    exit 1
+fi
+if ! grep -q 'systemctl_start(HELPER_SERVICE_UNIT)' server/src/linux_release/activate.rs; then
+    echo "FAIL: HELPER_SERVICE_UNIT not started in linux_release/activate.rs" >&2
+    exit 1
+fi
+if ! grep -q 'HELPER_SERVICE_UNIT' server/src/linux_release/status.rs; then
+    echo "FAIL: HELPER_SERVICE_UNIT not inspected in linux_release/status.rs" >&2
+    exit 1
+fi
+echo "PASS: Release manager helper unit staging, activation, and status verified."
 
 echo "=== All Idle Suspend Boundary Checks Passed ==="

@@ -107,13 +107,14 @@ The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automa
    Privileged helper operations are recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`). Server timing and manual-action records are appended to `idle-suspend-audit.jsonl` beside the canonical registry/config directory (mode `0600`; recent-read APIs cap results at 10,000). No tokens, credentials, terminal contents, or command strings are ever audited.
 5. **Authenticated Manual Force Sleep & Active Fleet Confirmation**:
    Manual force sleep (`POST /api/system/idle-suspend/v1/force-suspend`) provides a production action for authenticated, enabled operators with database authentication. When the PTY fleet is active (`live + creating + restartPending > 0`), the request requires explicit confirmation (`force: true`); `force: false` returns `409 idleSuspendActiveFleetConfirmationRequired` with content-free counts. `force: true` bypasses fleet quiescence only—never authentication, CSRF/same-origin checks, generation verification, durable audit logging, capability preflight, inhibitor checks, or helper peer authentication. Once admitted, the coordinator admits one handoff (`CoordinatorState::HandedOff`), cancels any in-flight automatic armed grace period, audits the intent, dispatches the helper request, and reconciles state upon resume.
-6. **Release-manager helper lifecycle**:
-   When the selected release role includes `server`, `dam-hopper start` starts
+6. **Release-manager helper lifecycle and verification**:
+   When the selected role includes `server`, `dam-hopper start` starts
    `dam-hopper-idle-suspend-helper.service` before `dam-hopper-api.service`.
-   A helper start or enable failure is warning-only, while API/web startup and
-   health failures trigger the existing activation rollback. The release
-   manager stops, backs up, restores, and reports the helper with the other
-   managed units; `status --json` exposes all four service records.
+   Helper start or enable failure is warning-only; API/web startup and health
+   failures trigger activation rollback. Stop, backup, restore, and recovery
+   manage the helper with the other units; Phase 04 staging/policy suites pass
+   9/9 and 10/10, the boundary verifier passes 14/14, and `status --json`
+   exposes the API, helper, web, and recovery service records.
 ### Manual force-suspend admission and reconciliation
 
 The protected endpoint accepts strict JSON `{ "wakeAfterSeconds": 0, "force": false }` (or a bounded nonzero wake value) under the 16 KiB request limit. Execution accepts exactly `0` or `60..=86400`; persisted automatic timing remains `60..=86400`. The fleet snapshot exposes only `generation`, `liveCount`, `creatingCount`, `restartPendingCount`, `disposing`, `closing`, and `handoffActive`.

@@ -1,7 +1,8 @@
 # 2026-09-10
 
-- **Production CLI Deployment Setup for Idle Suspend Helper & Socket — Phase 03 complete.** Release-manager activation starts the helper before the API with non-fatal startup fallback; rollback/recovery stop and restart the helper; status reports helper state. Phase 03 plan and command roadmap marked **DONE (2026-09-10)**.
-- Validation passed: targeted release, idle-suspend, and helper lifecycle invariant suites **96/96**; code review approved **9.2/10** with no critical issues. Phase 04 verification and end-to-end release gates remain pending.
+- **Production CLI Deployment Setup for Idle Suspend Helper & Socket — Phases 01–04 complete.** Phase 04 closes staged-unit, rendered-policy, role-isolation, boundary, and CLI status verification; release-manager activation starts the helper before the API with non-fatal fallback, and rollback/recovery retain helper ownership.
+- Validation passed: `linux_release_staging` **9/9**, `linux_release_unit_policy` **10/10**, `idle_suspend` library **69/69**, `idle_suspend` integration **14/14** (**102/102** focused Rust tests); `verify-idle-suspend-boundary.sh` **14/14** checks; `dam-hopper status --json` reports API and helper under `server`.
+- Boundary checks 13 and 14 assert API `PIDFile`/`ExecStartPost`/`ExecStopPost` hooks and helper release-manager registration, staging, activation, and status inspection. Automated tests use temporary files/fakes and do not invoke host suspend or real RTC hardware.
 
 # 2026-09-09
 

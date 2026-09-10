@@ -108,7 +108,7 @@ unsupported capabilities, and inhibitors produce no suspend call. Tests use
 `tempfile` RTC/audit paths and fake preflight/backends; never use real power
 management or host RTC state.
 
-### Linux release manager service lifecycle (Production CLI Phase 03)
+### Linux release manager service lifecycle and verification (Production CLI Phases 03–04)
 
 Keep helper lifecycle ownership centralized in `server/src/linux_release/`:
 
@@ -124,8 +124,11 @@ Keep helper lifecycle ownership centralized in `server/src/linux_release/`:
   state, repair helper enablement only for server roles, and stop/disable every
   managed unit on `RECOVERY_REQUIRED`.
 - Keep `status` read-only: report systemd active state and best-effort process
-  evidence for API, helper, web, and recovery; do not treat missing helper
-  process evidence as a suspend or API-operation exception.
+  evidence for API, helper, web, and recovery; Phase 04 check 14 confirms the
+  helper constant, server-role staging/start wiring, and status projection.
+- Do not treat missing helper process evidence as a suspend or API-operation
+  exception. Check 13 separately protects API `PIDFile`, `ExecStartPost`, and
+  `ExecStopPost` enrollment hooks.
 
 ### Async Patterns
 

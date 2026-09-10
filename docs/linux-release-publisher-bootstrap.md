@@ -91,23 +91,35 @@ requires `^v[0-9]+\.[0-9]+\.[0-9]+$`, and runs:
 node deploy/release/check-version-alignment.mjs vX.Y.Z
 ```
 
-`build-rust` builds all three binaries with release optimizations, the
-`vendored` feature, and target `x86_64-unknown-linux-gnu`, then runs each
-binary's `--version`. `build-web` installs with `pnpm install --frozen-lockfile`
-using pnpm 9 and Node 20, builds `@dam-hopper/web`, requires `apps/web/dist/index.html`,
-and rejects the host-specific `VITE_DAM_HOPPER_SERVER_URL` string in the output.
+`build-rust` invokes Cargo's `--bins` build (including the optional
+`dam-hopper-idle-suspend-helper`) with release optimizations, the `vendored`
+feature, and target `x86_64-unknown-linux-gnu`; the workflow version-checks and
+uploads the manager/server/web binaries, while archive assembly copies the
+helper when that output is present. `build-web` installs with
+`pnpm install --frozen-lockfile` using pnpm 9 and Node 24, builds
+`@dam-hopper/web`, requires `apps/web/dist/index.html`, and rejects the
+host-specific `VITE_DAM_HOPPER_SERVER_URL` string in the output.
 
 ### Archive assembly
 
 `deploy/release/build-release-archive.sh` takes `--version`, `--target-dir`,
-`--web-dist`, `--output-dir`, and `--source-date-epoch`. It stages only:
+`--web-dist`, `--output-dir`, and `--source-date-epoch`. It stages:
 
 - `bin/dam-hopper-manager` (from `dam-hopper` or `dam-hopper-manager`),
   `bin/dam-hopper-server`, and `bin/dam-hopper-web`;
+- `bin/dam-hopper-idle-suspend-helper` when the optional helper build output
+  is present;
 - API, web, and recovery systemd templates under `systemd/`;
+- the helper service and socket templates under `systemd/` when those optional
+  source assets are present;
 - `sysusers.d/dam-hopper-web.conf`;
 - `LICENSE`; and
 - the built web tree under `web/`.
+
+Archive assembly accepts helper binary and unit assets as optional for older or
+non-helper builds. A server-role production archive must nevertheless include
+`bin/dam-hopper-idle-suspend-helper` for runtime enrollment; a checked-in
+template fallback used by local/test staging does not provide that executable.
 
 Staged directories are `0755`, binaries `0755`, and other regular files `0644`.
 The script sets every mtime to the selected epoch, sorts the file list under

@@ -401,9 +401,30 @@ first.
 ### 11.3 Boundary Verification
 
 Run the non-privileged boundary verification script before deployment:
+
 ```bash
 ./scripts/verify-idle-suspend-boundary.sh
 ```
+
+The script executes 14 static and presence checks. Check 13 verifies that both
+API unit files declare `PIDFile=/run/dam-hopper/server.pid`, write `$MAINPID`
+from `ExecStartPost`, and remove the PID from `ExecStopPost`. Check 14 verifies
+that `HELPER_SERVICE_UNIT` is defined, staged, started by activation, and
+included in status inspection.
+
+For release-manager integration coverage, run:
+
+```bash
+cargo test --manifest-path server/Cargo.toml --test linux_release_staging
+cargo test --manifest-path server/Cargo.toml --test linux_release_unit_policy
+cargo run --manifest-path server/Cargo.toml --bin dam-hopper -- status --json
+```
+
+The staging suite covers helper hardening and fixed paths, API PID hooks,
+server/web/both role projections, and helper status-role mapping. The status
+smoke check should list API and helper under `role: "server"` (plus web and
+recovery records when present). These checks do not invoke host suspend, logind,
+or real RTC hardware; qualify a real host separately.
 
 ### 11.4 Rollback and Emergency Reset
 To completely disenroll the privileged helper, revert configuration, and restore host integrity:
