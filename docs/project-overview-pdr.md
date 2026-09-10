@@ -676,10 +676,11 @@ isolation and the four-service `dam-hopper status` projection are covered. See
   regressions cover boundaries and compatibility without touching host power.
 
 
-### PR-017: Configured-Agent Activity Idle-Suspend Policy Contract (Phase 01)
+### PR-017: Configured-Agent Activity Idle-Suspend Policy and PTY Evidence (Phases 01–02)
 
-**Status:** Policy and configuration contract implemented; process/TCP
-observation and automatic eligibility remain pending in later phases.
+**Status:** Phase 01 policy/configuration and Phase 02 PTY evidence are
+implemented (Phase 02 complete 2026-09-11). Process/TCP observation and
+automatic eligibility remain pending in later phases.
 
 **Requirements:** Persist `automatic_policy` (`empty-fleet` by default or
 `agent-activity`) and a validated `agent_executables` list under
@@ -691,6 +692,40 @@ entry, and the allowed ASCII component characters are enforced; generic
 interpreter basenames are rejected. Startup-owned policy fields survive config
 reloads, full-config updates, settings imports, and workspace switching; only
 the timing pair remains runtime-mutable.
+
+#### Phase 02 — PTY root identity, raw output, and input admission
+
+Phase 02 establishes the private evidence boundary consumed by the later
+agent-activity sampler. Each concrete PTY incarnation carries a
+`TerminalIdentity`, a qualified `(pid, start_ticks)` `ProcessIdentity` when
+available, and a zeroed saturating raw-read sequence. The manager records
+accepted nonempty input with a manager-wide revision and monotonic
+`last_input_at`, rejects input during an active handoff, and exposes bounded
+content-free snapshots plus a private coalescing invalidation watcher.
+
+**Changed implementation files:** `server/src/pty/activity.rs`,
+`manager.rs`, `session.rs`, `mod.rs`, and `tests.rs`.
+
+**Acceptance criteria:**
+
+- [x] Root PID/start-ticks identity is captured after spawn; uncertain or
+  unavailable probes preserve terminal usability and fail closed downstream.
+- [x] Raw output increments once per successful nonempty reader chunk before
+  parser/buffer/event work; the per-incarnation atomic saturates at `u64::MAX`
+  and never wraps.
+- [x] Empty input is a no-op; accepted nonempty input advances revision/time
+  and invalidation, while handoff, closing/disposal, missing-session, and
+  saturated-revision gates reject without recording activity.
+- [x] Create, restore, respawn, stale-reader, hydration, resize, attach, and
+  real-PTY boundaries retain independent evidence and do not copy terminal
+  content.
+- [x] Snapshots bound live roots at 256 and report explicit incomplete
+  reasons; no procfs I/O occurs under the manager lock.
+
+No public endpoint or automatic `agent-activity` claim is introduced by this
+phase. See [PTY Activity Observation](./pty-activity-observation.md) for the
+implementation contract and [project roadmap](./project-roadmap.md) for the
+phase handoff to process discovery, TCP observation, and coordinator work.
 
 ## Non-Functional Requirements
 

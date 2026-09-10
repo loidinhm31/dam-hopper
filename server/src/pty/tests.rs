@@ -2586,3 +2586,328 @@ mod fleet_state_tests {
         assert!(!manager.fleet_snapshot().handoff_active);
     }
 }
+#[cfg(test)]
+#[cfg(unix)]
+mod pty_activity_tests {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::config::schema::RestartPolicy;
+    use crate::error::AppError;
+    use crate::pty::activity::{
+        increment_raw_output_sequence, probe_process_identity, ActivityIncompleteReason,
+        RootQualification, SATURATED_COUNTER_SENTINEL,
+    };
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::manager::{PtyCreateOpts, PtySessionManager};
+
+    async fn tokio_wait_for(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while tokio::time::Instant::now() < deadline {
+            if predicate() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
+    #[test]
+    fn test_raw_output_sequence_increments_and_saturates() {
+        let counter = AtomicU64::new(0);
+        increment_raw_output_sequence(&counter);
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+
+        counter.store(SATURATED_COUNTER_SENTINEL - 1, Ordering::Relaxed);
+        increment_raw_output_sequence(&counter);
+        assert_eq!(counter.load(Ordering::Relaxed), SATURATED_COUNTER_SENTINEL);
+
+        // Never wraps
+        increment_raw_output_sequence(&counter);
+        assert_eq!(counter.load(Ordering::Relaxed), SATURATED_COUNTER_SENTINEL);
+    }
+
+    #[test]
+    fn test_proc_stat_parser_and_self_probe() {
+        let pid = std::process::id();
+        let identity = probe_process_identity(pid).expect("probe self process identity");
+        assert_eq!(identity.pid, pid);
+        assert!(identity.start_ticks > 0);
+    }
+
+    #[tokio::test]
+    async fn test_input_revision_advances_only_on_nonempty_input() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:input-rev-test";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        manager.create(opts).expect("create session");
+
+        assert_eq!(manager.input_revision(), 0);
+        assert!(manager.last_input_at().is_none());
+
+        let watcher = manager.activity_watcher();
+        let initial_watch = watcher.revision();
+
+        // Empty input is a no-op
+        manager.write(id, b"").expect("empty write ok");
+        assert_eq!(manager.input_revision(), 0);
+        assert!(manager.last_input_at().is_none());
+        assert_eq!(watcher.revision(), initial_watch);
+
+        // Non-empty input advances revision and watcher
+        manager.write(id, b"a").expect("write ok");
+        assert_eq!(manager.input_revision(), 1);
+        assert!(manager.last_input_at().is_some());
+        assert!(watcher.revision() > initial_watch);
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_handoff_gate_rejects_write_without_recording_activity() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:handoff-write-test";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        manager.create(opts).expect("create session");
+
+        let gen = manager.fleet_snapshot().generation;
+        let _claim = manager.try_claim_forced_handoff(gen).expect("claim handoff");
+
+        // Write during handoff is rejected
+        let err = manager.write(id, b"test").expect_err("write must fail during handoff");
+        assert!(matches!(err, AppError::IdleSuspendHandoffInProgress(_)));
+        assert_eq!(manager.input_revision(), 0);
+
+        // Release handoff
+        manager.release_handoff();
+
+        // Write now succeeds and increments input revision
+        manager.write(id, b"valid").expect("write after release succeeds");
+        assert_eq!(manager.input_revision(), 1);
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_reused_session_id_has_independent_output_counter() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:reused-counter-test";
+        let make_opts = || PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sleep 10".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+
+        let meta1 = manager.create(make_opts()).expect("create session 1");
+        let snap1 = manager.capture_activity_snapshot();
+        assert_eq!(snap1.roots.len(), 1);
+        let counter1 = snap1.roots[0].raw_output_sequence.clone();
+        assert_eq!(counter1.load(Ordering::Relaxed), 0);
+
+        // Kill session 1 and recreate with same public ID
+        let _ = manager.kill(id);
+        let meta2 = manager.create(make_opts()).expect("create session 2");
+        assert!(meta2.incarnation > meta1.incarnation);
+
+        let snap2 = manager.capture_activity_snapshot();
+        assert_eq!(snap2.roots.len(), 1);
+        let counter2 = snap2.roots[0].raw_output_sequence.clone();
+        assert_eq!(counter2.load(Ordering::Relaxed), 0);
+
+        // Mutating old counter does not affect replacement's counter
+        let c1_before = counter1.load(Ordering::Relaxed);
+        increment_raw_output_sequence(&counter1);
+        assert_eq!(counter1.load(Ordering::Relaxed), c1_before + 1);
+        assert_eq!(counter2.load(Ordering::Relaxed), 0);
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_hydration_and_resize_does_not_advance_raw_output_counter() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:hydrate-no-output";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sleep 10".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+
+        let initial_buffer = Some((b"pre-existing scrollback\n".to_vec(), 24));
+        manager.create_with_buffer(opts, initial_buffer).expect("create with buffer");
+
+        let snap = manager.capture_activity_snapshot();
+        assert_eq!(snap.roots.len(), 1);
+        let root = &snap.roots[0];
+        assert_eq!(root.raw_output_sequence.load(Ordering::Relaxed), 0);
+
+        // Resize the terminal
+        manager.resize(id, 100, 50).expect("resize succeeds");
+        let snap_after_resize = manager.capture_activity_snapshot();
+        assert_eq!(snap_after_resize.roots[0].raw_output_sequence.load(Ordering::Relaxed), 0);
+
+        // Attach snapshot read does not increment raw output
+        let attach = manager.get_attach_snapshot(id, None).expect("attach snapshot");
+        assert!(attach.replay.data.contains("pre-existing scrollback"));
+        let snap_after_attach = manager.capture_activity_snapshot();
+        assert_eq!(snap_after_attach.roots[0].raw_output_sequence.load(Ordering::Relaxed), 0);
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_real_pty_root_activity_smoke_and_observation() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:real-smoke";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        let meta = manager.create(opts).expect("create real shell");
+        assert!(meta.alive);
+
+        let snap = manager.capture_activity_snapshot();
+        assert_eq!(snap.roots.len(), 1);
+        let root = &snap.roots[0];
+        assert_eq!(root.terminal.session_id, id);
+        assert_eq!(root.terminal.incarnation, meta.incarnation);
+
+        #[cfg(target_os = "linux")]
+        {
+            assert!(root.qualification.is_qualified(), "Root must be qualified on Linux");
+            let identity = root.qualification.process_identity().unwrap();
+            assert!(identity.pid > 0);
+            assert!(identity.start_ticks > 0);
+        }
+
+        // Send a command to produce raw PTY output
+        manager.write(id, b"echo __ACTIVE__\n").expect("write command");
+        assert_eq!(manager.input_revision(), 1);
+
+        // Wait for PTY reader to process chunk and increment counter
+        let counter = root.raw_output_sequence.clone();
+        let saw_output = tokio_wait_for(Duration::from_secs(3), || {
+            counter.load(Ordering::Relaxed) > 0
+        }).await;
+        assert!(saw_output, "Raw output counter must increment after child emits output");
+
+        let snap_after_output = manager.capture_activity_snapshot();
+        assert!(snap_after_output.roots[0].raw_output_sequence.load(Ordering::Relaxed) > 0);
+        assert!(snap_after_output.is_complete());
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_activity_snapshot_incomplete_reasons() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:incomplete-test";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sleep 10".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        manager.create(opts).expect("create session");
+
+        // 1. Initially complete (on Linux)
+        let snap = manager.capture_activity_snapshot();
+        #[cfg(target_os = "linux")]
+        assert!(snap.is_complete());
+
+        // 2. Counter saturated makes snapshot incomplete
+        manager.test_set_raw_output_sequence(id, SATURATED_COUNTER_SENTINEL);
+        let snap_saturated = manager.capture_activity_snapshot();
+        assert!(!snap_saturated.is_complete());
+        assert!(matches!(
+            snap_saturated.incomplete_reason,
+            Some(ActivityIncompleteReason::CounterSaturated { .. })
+        ));
+
+        // Reset counter
+        manager.test_set_raw_output_sequence(id, 1);
+
+        // 3. Uncertain qualification makes snapshot incomplete
+        manager.test_set_root_qualification(
+            id,
+            RootQualification::Uncertain {
+                pid: 99999,
+                reason: "mock uncertain probe".into(),
+            },
+        );
+        let snap_uncertain = manager.capture_activity_snapshot();
+        assert!(!snap_uncertain.is_complete());
+        assert!(matches!(
+            snap_uncertain.incomplete_reason,
+            Some(ActivityIncompleteReason::RootUnqualified { pid: Some(99999), .. })
+        ));
+
+        // 4. Revision saturated makes snapshot incomplete and rejects write
+        manager.test_set_input_revision(u64::MAX);
+        let snap_rev = manager.capture_activity_snapshot();
+        assert!(!snap_rev.is_complete());
+        assert!(matches!(
+            snap_rev.incomplete_reason,
+            Some(ActivityIncompleteReason::RevisionSaturated)
+        ));
+        let write_err = manager.write(id, b"blocked").expect_err("write must fail when saturated");
+        assert!(matches!(write_err, AppError::Unavailable(_)));
+        let _ = manager.kill(id);
+    }
+}
