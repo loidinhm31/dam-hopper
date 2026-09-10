@@ -161,6 +161,11 @@ pub async fn init_workspace(
             load_workspace_config(&path).map_err(ApiError::from_app)?
         }
     };
+    let mut cfg = cfg;
+    {
+        let timing = state.idle_suspend_timing.read().await;
+        state.idle_suspend_policy.apply_to_config(&mut cfg, &timing);
+    }
 
     let _workspace_context = state.workspace_context_guard.write().await;
     state.media_tickets.revoke_all();
@@ -184,13 +189,9 @@ pub async fn switch_workspace(
 ) -> Result<impl IntoResponse, ApiError> {
     let path = std::path::PathBuf::from(&body.path);
     let mut cfg = load_config_from_workspace_or_file(&path).map_err(ApiError::from_app)?;
-    cfg.server.idle_suspend.enabled = state.idle_suspend_policy.enabled;
-    cfg.server.idle_suspend.enrollment_reference = state.idle_suspend_policy.enrollment_reference.clone();
-    cfg.server.idle_suspend.capability_selection = state.idle_suspend_policy.capability_selection;
     {
         let timing = state.idle_suspend_timing.read().await;
-        cfg.server.idle_suspend.quiet_period_seconds = timing.quiet_period_seconds;
-        cfg.server.idle_suspend.wake_after_seconds = timing.wake_after_seconds;
+        state.idle_suspend_policy.apply_to_config(&mut cfg, &timing);
     }
     state.pty_manager.dispose().map_err(ApiError::from_app)?;
 

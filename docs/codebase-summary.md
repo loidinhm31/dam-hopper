@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-10): 1,762 files, 3,672,379 tokens, and 14,911,056 characters.
+- Repomix snapshot (2026-09-11): 1,782 files, 3,756,148 tokens, and 15,340,623 characters.
 - Repomix security scanning excluded five suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
@@ -61,12 +61,12 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **WebSocket Transport**: Bi-directional communication for real-time updates
 - **Workflow Store**: Domain-first Plan/Phase/Task hierarchy, scoped sessions,
   terminal/agent resource links, notes, events, and bounded overview queries
-- **Terminal Idle Suspend**: `server/src/idle_suspend/` owns server-authoritative fleet quiescence, bounded automatic timing, helper IPC, RTC/inhibitor preflight, server audit JSONL with capped recent reads (the append file is not pruned by the process), bounded root mode-0600 audits, and authenticated manual force sleep.
+- **Terminal Idle Suspend**: `server/src/idle_suspend/` owns server-authoritative fleet quiescence, bounded automatic timing, helper IPC, RTC/inhibitor preflight, server audit JSONL with capped recent reads (the append file is not pruned by the process), bounded root mode-0600 audits, authenticated manual force sleep, and the Phase 01 policy/configuration contract (`automatic_policy` is `empty-fleet` by default or `agent-activity`; TOML is snake_case and config JSON is camelCase).
+  - `agent_executables` defaults to `codex`, `omp`, `claude`, and `agy`; literal basename/absolute-path validation enforces 1–32 unique entries and 1–256 bytes, rejecting controls, metacharacters, traversal, and generic interpreters. `StartupIdleSuspendPolicy` retains startup fields across reload/import/workspace; only timing is mutable.
   - Protocol: version 1, required camelCase fields, deny-unknown-fields JSON, 4 KiB length-prefixed helper frames, request-ID dedupe, and strict REST DTOs (`ForceSuspendRequest`, `ForceSuspendAcceptedResponse`, `IdleSuspendConflictResponse`).
   - Coordinator & Fleet: PTY fleet watcher with generation fencing, active session tracking (`live + creating + restartPending`), automatic armed grace latching, forced handoff claim (`force: true` bypasses quiescence only), and status revision broadcast hints (`host:idleSuspendChanged`).
   - Helper order: peer/protocol validation → dedupe → suspend/RTC/inhibitor preflight → synced intent audit → clear/readback (and timed write/readback) → fixed suspend → completion audit.
-  - REST API: Protected `POST /api/system/idle-suspend/v1/force-suspend` with same-origin cookie protection, Bearer auth, enabled actor checks, 16 KiB body limit, and `Cache-Control: no-store`.
-  - UI: `ForceSleepDialog` inside `HostResourcePopover` with active session detection/warning, checkbox confirmation, and indefinite sleep (`wakeAfterSeconds: 0`) default.
+  - REST/UI: protected `POST /api/system/idle-suspend/v1/force-suspend` with same-origin/Bearer checks and `Cache-Control: no-store`; `ForceSleepDialog` handles active-session confirmation and indefinite sleep (`wakeAfterSeconds: 0`).
 - **Linux release manager**: `server/src/linux_release/` validates Manifest v1,
   role projections, transaction-scoped units, helper policy, and
   `systemd-analyze verify`.
@@ -719,12 +719,7 @@ dam-hopper/
   (2 ignored), and UI TypeScript compilation passed. The focused breakdown is
   13 pure-helper, 26 WorkspacePage, 6 IdeShell, 12 TerminalWorkspaceShell,
   and 5 MobileWorkspaceShell assertions.
-- **Idle-suspend Phase 01**: `server/src/idle_suspend/tests.rs` covers
-  execution-domain boundaries (`0`, `1..=59`, `60`, max, overflow), automatic
-  zero rejection, clear-only/timed RTC verification, busy alarms, audit
-  ordering, peer/dedupe/preflight failures, and helper IPC. The integration
-  regression in `server/tests/idle_suspend.rs` proves automatic timing remains
-  bounded. Tests use fake backends and temporary files; no host suspend/RTC.
+- **Idle-suspend Phase 01**: `server/src/idle_suspend/tests.rs` covers policy defaults, JSON/TOML naming, executable defaults and lexical validation (bounds, duplicates, generic interpreters, traversal, controls, and metacharacters), startup policy retention, execution-domain boundaries (`0`, `1..=59`, `60`, max, overflow), automatic zero rejection, clear-only/timed RTC verification, busy alarms, audit ordering, peer/dedupe/preflight failures, and helper IPC; integration tests retain bounded automatic timing. Fake backends and temporary files prevent host suspend/RTC.
 - **Web**: Component tests with Vitest, 80% coverage target
 
 ### Known Limitations (Pre-existing)
@@ -780,9 +775,11 @@ dam-hopper/
 
 ---
 
-**Last Updated**: September 10, 2026
+**Last Updated**: September 11, 2026
 **Phase Status**: Production CLI deployment setup for the idle-suspend
-helper/socket (Phases 01–04) is complete and verified (2026-09-10).
+helper/socket (Phases 01–04) is complete and verified (2026-09-10);
+configured-agent idle-suspend Phase 01 policy/configuration contracts are
+implemented and documented; observer/eligibility phases remain pending.
 Validation evidence: `linux_release_staging` 9/9, `linux_release_unit_policy`
 10/10, `idle_suspend` library 69/69, `idle_suspend` integration 14/14,
 boundary verifier 14/14, and `dam-hopper status --json` service-role output.
@@ -792,7 +789,7 @@ automatic timing remains bounded. No automated check invokes host suspend,
 logind, or real RTC hardware. The timed canary is an operational procedure;
 the indefinite canary remains deferred pending Operations approval and verified
 physical/out-of-band wake and rollback ownership.
-**Generated by**: Repomix v1.18.0 snapshot (1,762 files / 3,672,379 tokens /
-14,911,056 characters). Five security-flagged files were excluded from the
+**Generated by**: Repomix v1.18.0 snapshot (1,782 files / 3,756,148 tokens /
+15,340,623 characters). Five security-flagged files were excluded from the
 compaction output; review them separately before relying on a complete-file
 inventory.

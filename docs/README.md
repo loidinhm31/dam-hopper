@@ -97,6 +97,9 @@ bounded automatic timing and a fixed enrolled helper.
 
 - Status: `GET /api/system/idle-suspend/v1/status`; timing: `PATCH .../timing`
 - Automatic persisted wake values remain `60..=86400` seconds.
+- Phase 01 configuration stores `automaticPolicy` and `agentExecutables`
+  under `server.idleSuspend`; the selector defaults to `empty-fleet`, while
+  process/TCP observation for `agent-activity` remains pending later phases.
 - Phase 01 helper execution accepts `wakeAfterSeconds: 0` for clear-only,
   indefinite sleep; it clears and verifies RTC state without target arithmetic.
 - Unexpected pre-existing RTC alarms, inhibitors, capability failures, and RTC

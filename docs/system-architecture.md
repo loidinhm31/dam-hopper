@@ -95,6 +95,36 @@ The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automa
 │  └─ HelperAudit (/var/log/dam-hopper/idle-suspend-helper.jsonl)
 └─────────────────────────────────────────────────────────────┘
 ```
+### Phase 01 policy/configuration contract
+
+`IdleSuspendConfig` accepts an `automatic_policy` selector and an
+`agent_executables` list. The selector defaults to `empty-fleet` and also
+accepts `agent-activity`; selecting the latter is a stored startup policy, not
+yet an activity observer. The default executable list is `codex`, `omp`,
+`claude`, and `agy`.
+
+Executable entries are literal, case-sensitive basenames or absolute paths.
+Validation requires 1–32 unique entries, 1–256 UTF-8 bytes per entry, and only
+ASCII letters, digits, `_`, `-`, `.`, `+`, and `@` in path components.
+Whitespace, controls/NUL, disallowed shell/glob/regex metacharacters,
+relative slash-containing paths, `.`/`..`, repeated or trailing `/`, and
+generic interpreter basenames (`node`, `nodejs`, `bun`, `python`, names
+beginning with `python` followed by an ASCII digit, `sh`, `bash`, `dash`, `zsh`,
+`ksh`, and `fish`) are rejected.
+Validation is lexical: it does not expand variables, launch a process, or
+require the executable to exist.
+
+`StartupIdleSuspendPolicy` captures `enabled`, enrollment, capability
+selection, the automatic policy, and the validated executable set once at
+startup. Config reload, settings import, and workspace activation overlay
+those startup-owned values back onto the newly loaded config; only the timing
+pair remains runtime-mutable. The canonical TOML writer emits
+`[server.idle_suspend]` with snake_case keys; config-shaped JSON serializes the
+same fields as `server.idleSuspend`, `automaticPolicy`, and
+`agentExecutables` (snake_case aliases are accepted on input). Default policy
+and list values may be omitted from TOML and then resolve to their defaults.
+The matcher list is retained by startup authority and is not a status or
+WebSocket field.
 
 ### Key Invariants
 1. **Fleet Quiescence & Latching**:
@@ -124,6 +154,21 @@ The protected endpoint accepts strict JSON `{ "wakeAfterSeconds": 0, "force": fa
 - Automatic scheduling may be disabled while manual execution remains available to an authenticated enabled actor when the helper is enrolled and capability checks pass. Missing helper, capability, inhibitor, RTC ownership, audit, generation, or handoff preconditions still fail closed.
 
 Manual suspend remains separate from the planned generic host-resource remediation helper. Monitoring and alert surfaces describe host state; only the explicit, authenticated ForceSleepDialog action can request suspend.
+
+### Configured-agent activity eligibility (runtime pending)
+
+Phase 01 implements the policy/configuration contract above. Process and TCP
+observation, activity eligibility, blocked-measurement warnings, and automatic
+agent-activity claims remain design-only until the later phases of the pending
+[agent-activity enhancement plan](../plans/260910-1604-agent-activity-idle-suspend/plan.md).
+
+- Recognize configured agent process identities inside managed PTYs; observe new raw PTY bytes and attributable Linux TCP byte-counter changes, not terminal text, CPU, listening ports, or connection presence.
+- Keep live PTY counts and manual force confirmation unchanged. Automatic eligibility is separate: ordinary service-only terminals may remain alive; recognized-agent inactivity is a heuristic, never proof of completed reasoning or background work.
+- Capture monotonic activity at the PTY boundary; sample process/socket state outside manager locks. Unknown, stale, incomplete, or unsupported required observation blocks automatic handoff.
+- Blocked measurement includes an authenticated, no-store warning with reason, continuous blocked duration and attributable PID/safe executable identity when qualified. No arguments, credentials, terminal contents or socket details; warning identities never enter logs, audits or WebSocket hints.
+- Serialize accepted terminal input, lifecycle admission, observation publication, and final generation-fenced automatic claim; polling cannot eliminate invisible activity between samples.
+- No harness hooks, API gateway, provider-cache control, CPU detector, eBPF privilege expansion, or cgroup delegation. TCP-only observation and mixed-session service noise are explicit limitations.
+- Existing enablement, bounded timing route, helper/inhibitor security, and one-attempt-per-activity-epoch protections remain. The plan specifies rollout opt-in and operational qualification before enabling the new policy.
 
 ### Phase 01 helper execution contract
 
