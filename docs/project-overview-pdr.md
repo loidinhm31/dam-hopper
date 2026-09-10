@@ -676,11 +676,12 @@ isolation and the four-service `dam-hopper status` projection are covered. See
   regressions cover boundaries and compatibility without touching host power.
 
 
-### PR-017: Configured-Agent Activity Idle-Suspend Policy and PTY Evidence (Phases 01–02)
+### PR-017: Configured-Agent Activity Idle-Suspend Policy and PTY/Process Evidence (Phases 01–03)
 
-**Status:** Phase 01 policy/configuration and Phase 02 PTY evidence are
-implemented (Phase 02 complete 2026-09-11). Process/TCP observation and
-automatic eligibility remain pending in later phases.
+**Status:** Phase 01 policy/configuration, Phase 02 PTY evidence, and Phase 03
+bounded process discovery are implemented (Phase 03 complete 2026-09-11).
+TCP observation, automatic eligibility, and the final automatic handoff claim
+remain pending in later phases.
 
 **Requirements:** Persist `automatic_policy` (`empty-fleet` by default or
 `agent-activity`) and a validated `agent_executables` list under
@@ -722,10 +723,48 @@ content-free snapshots plus a private coalescing invalidation watcher.
 - [x] Snapshots bound live roots at 256 and report explicit incomplete
   reasons; no procfs I/O occurs under the manager lock.
 
-No public endpoint or automatic `agent-activity` claim is introduced by this
-phase. See [PTY Activity Observation](./pty-activity-observation.md) for the
-implementation contract and [project roadmap](./project-roadmap.md) for the
-phase handoff to process discovery, TCP observation, and coordinator work.
+#### Phase 03 — Bounded process discovery and agent attribution
+
+Phase 03 adds the private `ProcessDiscovery<S>` engine and synchronous
+`ProcessSource` abstraction. Production discovery reads Linux procfs through
+`LinuxProcSource`; tests can inject deterministic sources. A preparation pass
+validates exact process identities, attributes live and retained descendants
+to one managed PTY root, classifies configured native/interpreter processes,
+collects same-network-namespace socket ownership, and commits only complete
+samples.
+
+**Changed implementation files:** `server/src/idle_suspend/activity/mod.rs`,
+`server/src/idle_suspend/activity/process.rs`,
+`server/src/idle_suspend/mod.rs`, and `server/src/pty/activity.rs`.
+
+**Acceptance criteria:**
+
+- [x] `ProcessSource` isolates PID/stat/executable/cmdline/cwd/namespace/FD
+  reads; disappearance, permission, timeout, malformed socket, identity, and
+  namespace failures are explicit unavailable outcomes.
+- [x] Attribution uses `(pid, start_ticks)`, stat-before/stat-after checks,
+  root/retained descendant closure, and unique-root qualification; PID-only
+  or process-group matching is not used.
+- [x] Native executable matching is exact. Node, Bun, Python, and supported
+  shell forms use finite entrypoint grammars; eval/print/`-c`/stdin/unknown
+  forms and substring matches do not qualify.
+- [x] Hard bounds cap 256 roots, 8,192 scanned processes, 1,024 relevant
+  processes, 4,096 FDs per process, 8,192 owned socket inodes, and 16 KiB
+  command lines. Zero recognized agents skips FD/socket scanning.
+- [x] Prepared samples expose only bounded counts, output handles, socket
+  identities, and safe executable evidence; terminal bytes, arguments,
+  environment, credentials, and raw socket diagnostics are not retained.
+- [x] `commit_sample` advances discovery state only after a complete accepted
+  sample, while invalidation preserves retained identities for reparenting.
+
+See [Configured-Agent Process Discovery](./agent-activity-process-discovery.md)
+for the implementation contract.
+
+No public endpoint or automatic `agent-activity` claim is introduced by
+Phases 02–03. See [PTY Activity Observation](./pty-activity-observation.md)
+and [Configured-Agent Process Discovery](./agent-activity-process-discovery.md)
+for the private evidence contracts. Phase 04 TCP observation and later
+coordinator/sampling work own the final automatic policy claim.
 
 ## Non-Functional Requirements
 

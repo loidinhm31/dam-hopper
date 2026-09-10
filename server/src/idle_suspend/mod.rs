@@ -12,6 +12,8 @@ pub mod backend;
 pub mod helper_client;
 pub mod helper_server;
 
+pub(crate) mod activity;
+
 #[cfg(test)]
 pub mod tests;
 

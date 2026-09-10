@@ -157,9 +157,41 @@ foreground process-group IDs. The detailed contract is in
   required.
 
 No PTY reader/input path may log or persist command text, arguments,
-environment, terminal bytes, or socket details. Later process/TCP sampling and
-automatic eligibility must consume this seam without adding a permissive claim
-or a second writer path.
+environment, terminal bytes, or socket details. Phase 03 process discovery
+consumes this seam through a bounded `ProcessSource`; Phase 04 TCP sampling
+and later automatic eligibility must preserve fail-closed behavior and must
+not add a second writer path.
+
+### Bounded process discovery and attribution (Phase 03)
+
+Keep Linux process discovery behind the synchronous, private
+`ProcessSource` trait. `LinuxProcSource` is the production `/proc`
+implementation; tests should use `ProcessDiscovery::with_source` with a
+deterministic source rather than host process state. Preparation must happen
+outside PTY manager locks and must commit state only after the complete sample
+is accepted.
+
+- Use exact `(pid, start_ticks)` identities and stat-before/stat-after checks
+  around mutable procfs reads. Walk managed-root and retained descendants,
+  require exactly one root attribution, and retain detached lineage across
+  samples. Never substitute process-group IDs or a PID-only match.
+- Match native executables by exact configured basename or normalized absolute
+  path. For `node`, `bun`, Python, and supported shells, use the finite
+  entrypoint grammar; reject eval/print/`-c`/stdin/unknown forms and
+  substring matches. Store only the bounded safe executable identity needed
+  for evidence.
+- Enforce hard limits of 256 live roots, 8,192 listed processes, 1,024
+  relevant processes, 4,096 file descriptors per process, 8,192 owned socket
+  inodes, and 16 KiB command lines. Require relevant processes to share the
+  terminal network namespace.
+- Treat procfs permission, timeout, disappearance, identity, namespace,
+  malformed-socket, counter, and bound failures as typed unavailable outcomes.
+  Never convert partial discovery into a quiet/eligible result. A zero-agent
+  sample must not perform file-descriptor or socket scanning.
+- Keep `PreparedProcessSample` transactional: compare against committed
+  identity/output observations, then call `commit_sample` only once the sample
+  passes all checks. Invalidation may clear the baseline while preserving
+  retained attribution needed for reparenting.
 
 ### Linux release manager service lifecycle and verification (Production CLI Phases 03–04)
 

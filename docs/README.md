@@ -18,6 +18,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Worktree Operations](./worktree-operation.md)** — Target selection and safe worktree lifecycle
 - **[Terminal Idle Suspend Security](./terminal-idle-suspend-security.md)** — Automatic timing bounds, helper IPC, RTC ownership, audit, and fail-closed rules
 - **[PTY Activity Observation](./pty-activity-observation.md)** — Phase 02 private root identity, raw output, input admission, snapshot, and watcher contract
+- **[Configured-Agent Process Discovery](./agent-activity-process-discovery.md)** — Phase 03 bounded procfs discovery, attribution, and `ProcessSource` contract
 
 ## Reference Documentation
 
@@ -100,9 +101,11 @@ bounded automatic timing and a fixed enrolled helper.
 - Automatic persisted wake values remain `60..=86400` seconds.
 - Phase 01 configuration stores `automaticPolicy` and `agentExecutables`
   under `server.idleSuspend`; the selector defaults to `empty-fleet`.
-- Phase 02 PTY evidence and input admission are implemented; process/TCP
-  observation and automatic eligibility remain pending in later phases. See
-  [PTY Activity Observation](./pty-activity-observation.md).
+- Phase 02 PTY evidence and input admission are implemented. Phase 03 now
+  provides bounded configured-agent process discovery and retained attribution;
+  Phase 04 TCP observation and Phase 05 automatic eligibility remain pending.
+- See [PTY Activity Observation](./pty-activity-observation.md) and
+  [Configured-Agent Process Discovery](./agent-activity-process-discovery.md).
 - Phase 01 helper execution accepts `wakeAfterSeconds: 0` for clear-only,
   indefinite sleep; it clears and verifies RTC state without target arithmetic.
 - Unexpected pre-existing RTC alarms, inhibitors, capability failures, and RTC

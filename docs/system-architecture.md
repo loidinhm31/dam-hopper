@@ -155,27 +155,40 @@ The protected endpoint accepts strict JSON `{ "wakeAfterSeconds": 0, "force": fa
 
 Manual suspend remains separate from the planned generic host-resource remediation helper. Monitoring and alert surfaces describe host state; only the explicit, authenticated ForceSleepDialog action can request suspend.
 
-### Configured-agent activity eligibility (Phase 02 PTY evidence shipped; runtime eligibility pending)
+### Configured-agent activity evidence (Phases 01–03; TCP/eligibility pending)
 
-Phase 01 implements the policy/configuration contract above. Phase 02 now
+Phase 01 implements the persisted policy/configuration contract. Phase 02
 supplies private PTY root identity, raw-read evidence, accepted-input
-admission, bounded snapshots, and invalidation handles. Process and TCP
+admission, bounded snapshots, and invalidation handles. Phase 03 now adds
+bounded configured-agent process discovery and retained attribution; TCP
 observation, activity eligibility, blocked-measurement warnings, and automatic
-`agent-activity` claims remain design-only until the later phases of the
-[agent-activity enhancement plan](../plans/260910-1604-agent-activity-idle-suspend/plan.md).
-See [PTY Activity Observation](./pty-activity-observation.md) for the
-implemented seam and its fail-closed boundaries.
+`agent-activity` claims remain later work. See
+[Configured-Agent Process Discovery](./agent-activity-process-discovery.md) for
+the implementation contract.
 
-- Recognize configured agent process identities inside managed PTYs; observe
-  new raw PTY reads through per-incarnation sequence evidence and attributable
-  Linux TCP byte-counter changes, not terminal text, CPU, listening ports, or
-  connection presence.
-- Keep live PTY counts and manual force confirmation unchanged. Automatic eligibility is separate: ordinary service-only terminals may remain alive; recognized-agent inactivity is a heuristic, never proof of completed reasoning or background work.
-- Capture monotonic activity at the PTY boundary; sample process/socket state outside manager locks. Unknown, stale, incomplete, or unsupported required observation blocks automatic handoff.
-- Blocked measurement includes an authenticated, no-store warning with reason, continuous blocked duration and attributable PID/safe executable identity when qualified. No arguments, credentials, terminal contents or socket details; warning identities never enter logs, audits or WebSocket hints.
-- Serialize accepted terminal input, lifecycle admission, observation publication, and final generation-fenced automatic claim; polling cannot eliminate invisible activity between samples.
-- No harness hooks, API gateway, provider-cache control, CPU detector, eBPF privilege expansion, or cgroup delegation. TCP-only observation and mixed-session service noise are explicit limitations.
-- Existing enablement, bounded timing route, helper/inhibitor security, and one-attempt-per-activity-epoch protections remain. The plan specifies rollout opt-in and operational qualification before enabling the new policy.
+- `ProcessDiscovery<S>` performs one bounded, synchronous preparation pass
+  through the private `ProcessSource` seam. Production uses `LinuxProcSource`
+  over `/proc`; tests can supply a deterministic source. The pass validates
+  exact `(pid, start_ticks)` identities, walks root/retained descendants, and
+  commits only after the complete sample is accepted.
+- Attribution is lineage-based rather than PGID-based. A process must resolve
+  to exactly one managed PTY root; reparented descendants remain attributable
+  through retained identity state, while ambiguous or stale identities fail
+  closed. Native executables match exact configured basename/path entries.
+  Supported `node`, `bun`, Python, and shell invocations use finite,
+  entrypoint-aware grammars; substring matches and arbitrary command forms do
+  not qualify.
+- Deep procfs reads are bounded: 256 live roots, 8,192 listed processes,
+  1,024 relevant processes, 4,096 file descriptors per process, 8,192 owned
+  socket inodes, and 16 KiB command lines. Relevant processes must remain in
+  the terminal's network namespace, and stat/executable identity is checked
+  around reads to detect reuse or races.
+- The result contains recognized-agent count, monitored PTY output handles,
+  owned socket identities, and sanitized process evidence. It contains no
+  terminal bytes, command arguments, environment, credentials, or raw socket
+  diagnostics. Procfs permission, timeout, disappearance, namespace, identity,
+  and bound failures are explicit unavailable outcomes; no automatic suspend
+  claim is made here.
 
 ### Phase 01 helper execution contract
 
