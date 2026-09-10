@@ -46,6 +46,7 @@ pub mod stage_transaction;
 pub mod stage_units;
 pub mod state;
 pub mod state_record;
+pub mod status;
 pub mod systemd;
 pub mod systemd_backup;
 pub mod transaction;
@@ -123,6 +124,7 @@ pub use state::{ManagerState, backup_state_file, load_or_init_manager_state, sav
 pub use state_record::{
     FailureRecord, PendingCandidateRecord, ReleaseRecord, TransactionPhase, TransactionRecord,
 };
+pub use status::{ServiceStatus, collect_all_services_status, inspect_unit_status};
 pub use systemd::{
     disable_if_enabled, systemctl_daemon_reload, systemctl_disable, systemctl_enable,
     systemctl_is_active, systemctl_is_enabled, systemctl_restart, systemctl_show_property,

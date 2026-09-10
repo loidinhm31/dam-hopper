@@ -620,9 +620,18 @@ authoritative for workspace/target ownership, limits, errors, and replay.
 - Single-flight idle epoch: exactly one suspend execution per empty period; zero auto-retry loops while fleet remains empty.
 - Atomically mutable timing pair (`quiet_period_seconds`, `wake_after_seconds`) via dedicated `PATCH /api/system/idle-suspend/v1/timing` endpoint.
 - Out-of-band revision notifications broadcast via `host:idleSuspendChanged` WebSocket hints.
-- Privileged execution seam via socket-activated root helper (`dam-hopper-idle-suspend-helper`) using `SO_PEERCRED` authentication, RTC sysfs wakealarm programming, and the fixed `systemctl suspend` path that delegates to systemd/logind.
+- Privileged execution seam via a root-owned helper service with a Unix-domain socket (`/run/dam-hopper/idle-suspend.sock`), `SO_PEERCRED` authentication, RTC sysfs wakealarm programming, and the fixed `systemctl suspend` path that delegates to systemd/logind.
 - Read-only live monitoring surfaced in host-resource popover; timing tuning in Settings.
 - Safe operator rollback runbook and non-privileged boundary verification (`scripts/verify-idle-suspend-boundary.sh`, `deploy/reset-linux-production.sh`).
+
+**Release-manager lifecycle integration (Production CLI Phase 03, 2026-09-10):**
+When a selected role includes `server`, the release manager stages
+`dam-hopper-idle-suspend-helper.service`, starts it before the API during both
+ordinary and pending-candidate `dam-hopper start`, and treats helper start or
+enable failure as a warning-only fallback. Stop, activation rollback, manual
+rollback, and boot recovery include the helper in their managed-unit set.
+`dam-hopper status` reports helper active state and best-effort process evidence
+with the API, web, and recovery units. See [Linux Release Manager](./linux-release-manager.md#helper-service-lifecycle-production-cli-phase-03).
 
 **Acceptance Criteria:**
 - [x] Disabled by default at startup; requires explicit operator configuration.

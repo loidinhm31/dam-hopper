@@ -1,3 +1,8 @@
+# 2026-09-10
+
+- **Production CLI Deployment Setup for Idle Suspend Helper & Socket — Phase 03 complete.** Release-manager activation starts the helper before the API with non-fatal startup fallback; rollback/recovery stop and restart the helper; status reports helper state. Phase 03 plan and command roadmap marked **DONE (2026-09-10)**.
+- Validation passed: targeted release, idle-suspend, and helper lifecycle invariant suites **96/96**; code review approved **9.2/10** with no critical issues. Phase 04 verification and end-to-end release gates remain pending.
+
 # 2026-09-09
 
 - **Production CLI Deployment Setup for Idle Suspend Helper & Socket — Phase 01 complete.** Systemd API/helper units now create and remove `/run/dam-hopper/server.pid`, share a group-writable runtime directory, and expose the helper socket to the authorized API service group.

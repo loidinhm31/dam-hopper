@@ -6,7 +6,8 @@
 //! - Quiesced/Switched/Probing: automatically restores previous or clean baseline
 //! - Committed: repairs unit enablement and current symlink without version rollback
 use super::constants::{
-    ALL_SERVICE_UNITS, API_SERVICE_UNIT, RECOVERY_SERVICE_UNIT, WEB_SERVICE_UNIT,
+    ALL_SERVICE_UNITS, API_SERVICE_UNIT, HELPER_SERVICE_UNIT, RECOVERY_SERVICE_UNIT,
+    WEB_SERVICE_UNIT,
 };
 use super::legacy_format2::LEGACY_FORMAT2_UNIT;
 
@@ -43,6 +44,7 @@ pub async fn execute_recovery(layout: &Layout, is_boot: bool) -> Result<(), Rele
         RecoveryAction::ResumePending => {
             if is_boot {
                 disable_if_enabled(API_SERVICE_UNIT)?;
+                let _ = disable_if_enabled(HELPER_SERVICE_UNIT);
                 disable_if_enabled(WEB_SERVICE_UNIT)?;
                 if let Some(active) = &state.active {
                     if active.tag == super::legacy_format2::LEGACY_FORMAT2_TAG {
@@ -84,12 +86,15 @@ fn repair_active_pointers(
 ) -> Result<(), ReleaseError> {
     if active.tag == super::legacy_format2::LEGACY_FORMAT2_TAG {
         disable_if_enabled(API_SERVICE_UNIT)?;
+        let _ = disable_if_enabled(HELPER_SERVICE_UNIT);
         disable_if_enabled(WEB_SERVICE_UNIT)?;
         systemctl_enable(LEGACY_FORMAT2_UNIT)?;
     } else {
         if active.role.includes_server() {
+            let _ = systemctl_enable(HELPER_SERVICE_UNIT);
             systemctl_enable(API_SERVICE_UNIT)?;
         } else {
+            let _ = disable_if_enabled(HELPER_SERVICE_UNIT);
             disable_if_enabled(API_SERVICE_UNIT)?;
         }
 

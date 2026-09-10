@@ -242,7 +242,19 @@ capability_selection = "auto"
   - `wake_after_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 600 (10 min).
 - **Security Safeguards**: Both the timing mutation route and manual force-suspend route are strictly unavailable in development mode (`--no-auth`). All suspend requests fail closed if sleep inhibitors are active, helper enrollment is missing, host capabilities are unsupported, or RTC ownership is ambiguous.
 - **Manual Execution Independence**: Manual force sleep (`POST /api/system/idle-suspend/v1/force-suspend`) is independent of the automatic idle suspend `enabled` setting; it is accessible only to an authenticated enabled actor when helper enrollment and capability checks are satisfied.
-- **Rollback & Verification**: Non-privileged boundary verification is performed with `scripts/verify-idle-suspend-boundary.sh`. Production resets or rollbacks are executed safely via `deploy/reset-linux-production.sh` (supporting `--dry-run`), which disables startup policy, stops helper units, verifies RTC alarm state, and preserves audit logs.
+- **Rollback & Verification**: Non-privileged boundary verification is performed with `scripts/verify-idle-suspend-boundary.sh`. The release manager owns release rollback/recovery (`sudo dam-hopper rollback` and `sudo dam-hopper recover`); `deploy/reset-linux-production.sh` remains the separate helper disenrollment/reset runbook (supporting `--dry-run`) and preserves audit logs.
+
+### Release-manager helper service (Production CLI Phase 03)
+
+For a `server` or `both` release role, `install` stages
+`dam-hopper-idle-suspend-helper.service` but does not start it. Explicit
+`sudo dam-hopper start` starts the helper before the API; a helper start or
+enable failure logs a warning and leaves ordinary API operations available.
+`stop`, activation rollback, `rollback`, and boot recovery include the helper
+in the managed-unit lifecycle. Inspect it with `dam-hopper status --json` or
+`systemctl status dam-hopper-idle-suspend-helper.service`; see the
+[Linux Release Manager](./linux-release-manager.md#helper-service-lifecycle-production-cli-phase-03)
+guide for ordering and recovery details.
 
 ### Execution-only indefinite sleep (Phase 01)
 

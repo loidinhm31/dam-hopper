@@ -5,7 +5,8 @@ use super::activate_preflight::{
     build_candidate_health_targets, validate_active_preflight, validate_candidate_preflight,
 };
 use super::constants::{
-    ALL_SERVICE_UNITS, API_SERVICE_UNIT, RECOVERY_SERVICE_UNIT, WEB_SERVICE_UNIT,
+    ALL_SERVICE_UNITS, API_SERVICE_UNIT, HELPER_SERVICE_UNIT, RECOVERY_SERVICE_UNIT,
+    WEB_SERVICE_UNIT,
 };
 use super::durable_fs::{atomic_symlink, copy_file_durable};
 use super::error::ReleaseError;
@@ -128,7 +129,10 @@ pub async fn execute_activation_locked_with_args(
                     ensure_user_config_ownership(&user_info.home, user_info.uid, user_info.gid);
                 }
                 ensure_etc_config_permissions(layout);
-                systemctl_start("dam-hopper-api.service")?;
+                if let Err(e) = systemctl_start(HELPER_SERVICE_UNIT) {
+                    tracing::warn!("idle-suspend helper service startup failed (continuing API startup): {e}");
+                }
+                systemctl_start(API_SERVICE_UNIT)?;
             }
             if active_candidate.role.includes_web() {
                 super::systemd::systemd_sysusers(&layout.sysusers_conf_path(), None)?;
@@ -407,7 +411,7 @@ async fn execute_activation_pipeline(
             });
         }
         match entry.file_name().to_string_lossy().as_ref() {
-            API_SERVICE_UNIT | WEB_SERVICE_UNIT | RECOVERY_SERVICE_UNIT => {
+            API_SERVICE_UNIT | WEB_SERVICE_UNIT | RECOVERY_SERVICE_UNIT | HELPER_SERVICE_UNIT => {
                 install_unit_file(&path, &layout.systemd_unit_dir)?;
             }
             "dam-hopper-web.conf" if candidate.role.includes_web() => {
@@ -479,6 +483,9 @@ async fn execute_activation_pipeline(
     ensure_etc_config_permissions(layout);
 
     if candidate.role.includes_server() {
+        if let Err(e) = systemctl_start(HELPER_SERVICE_UNIT) {
+            tracing::warn!("idle-suspend helper service startup failed (continuing API startup): {e}");
+        }
         systemctl_start(API_SERVICE_UNIT)?;
     }
     if candidate.role.includes_web() {
@@ -503,8 +510,12 @@ async fn execute_activation_pipeline(
 
     // Enable/disable units, propagating any failure
     if candidate.role.includes_server() {
+        if let Err(e) = systemctl_enable(HELPER_SERVICE_UNIT) {
+            tracing::warn!("idle-suspend helper service enable failed: {e}");
+        }
         systemctl_enable(API_SERVICE_UNIT)?;
     } else {
+        let _ = disable_if_enabled(HELPER_SERVICE_UNIT);
         disable_if_enabled(API_SERVICE_UNIT)?;
     }
     systemctl_enable(RECOVERY_SERVICE_UNIT)?;
