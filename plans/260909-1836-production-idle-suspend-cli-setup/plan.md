@@ -1,7 +1,7 @@
 ---
 title: "Production CLI Deployment Setup for Idle Suspend Helper & Socket"
 description: "Integrate dam-hopper-idle-suspend-helper.service and /run/dam-hopper/idle-suspend.sock into dam-hopper-manager CLI"
-status: in-progress
+status: complete
 priority: P2
 effort: 3h
 branch: feat/terminal-idle-suspend
@@ -29,14 +29,16 @@ While the core idle-suspend engine is functional, production CLI deployment via 
 
 ## Phases Overview
 
-| Phase | Description | Deliverable | Status |
-|---|---|---|---|
-| **Phase 01** | Systemd Service Unit Templates & PID Management | Updated `.service.in` templates with PID file and socket group configuration | DONE (2026-09-09) |
-| **Phase 02** | Release Manager Unit Staging (`stage_units.rs`) | Dynamic helper unit rendering and staging in `stage_units.rs` | DONE (2026-09-10) |
-| **Phase 03** | Release Manager Service Lifecycle (`activate.rs`, `rollback.rs`, `status.rs`) | Coordinated start, stop, and status inspection in `dam-hopper` CLI | DONE (2026-09-10) |
-| **Phase 04** | Verification, Boundary Enforcement & End-to-End Testing | Unit tests, security boundary validation, and UAT CLI test | Pending |
+| Phase | Description | Deliverable | Status | Progress |
+|---|---|---|---|---|
+| **Phase 01** | Systemd Service Unit Templates & PID Management | Updated `.service.in` templates with PID file and socket group configuration | DONE (2026-09-09) | 100% |
+| **Phase 02** | Release Manager Unit Staging (`stage_units.rs`) | Dynamic helper unit rendering and staging in `stage_units.rs` | DONE (2026-09-10) | 100% |
+| **Phase 03** | Release Manager Service Lifecycle (`activate.rs`, `rollback.rs`, `status.rs`) | Coordinated start, stop, and status inspection in `dam-hopper` CLI | DONE (2026-09-10) | 100% |
+| **Phase 04** | Verification, Boundary Enforcement & End-to-End Testing | Unit tests, security boundary validation, and UAT CLI test | DONE (2026-09-10) | 100% |
 
-**Current plan status:** IN PROGRESS — Phases 01–03 DONE (Phase 01: 2026-09-09; Phases 02–03: 2026-09-10; 75% overall); Phase 04 pending.
+**Current plan status:** COMPLETE — All phases (01–04) DONE (100% overall; 4/4 phases at 100%).
+
+**Progress:** 100% (4/4 phases complete).
 
 ## Phase Links
 - [cmd-plan.md](./cmd-plan.md)
@@ -49,7 +51,8 @@ While the core idle-suspend engine is functional, production CLI deployment via 
 
 ## Validation Summary
 
-**Validated:** 2026-09-09  
+**Validated:** 2026-09-10  
+
 **Questions asked:** 4  
 
 ### Confirmed Decisions
@@ -59,5 +62,5 @@ While the core idle-suspend engine is functional, production CLI deployment via 
 4. **Helper Restart Policy**: `Restart=on-failure` with `RestartSec=5s`. Restarts the daemon process on crash; does not trigger or affect host machine reboots.
 
 ### Action Items
-- Phases 01–03 DONE (Phase 01: 2026-09-09; Phases 02–03: 2026-09-10); proceed to Phase 04 verification, boundary enforcement, and end-to-end testing.
-- Complete Phase 04 and run the parent integration/release gates.
+- Phases 01–04 DONE (Phase 01: 2026-09-09; Phases 02–04: 2026-09-10); production CLI deployment setup complete.
+- Parent plan status: COMPLETE (100%).

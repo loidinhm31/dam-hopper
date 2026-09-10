@@ -1,12 +1,14 @@
 # Linux Release Manager (Phases 02–07)
 
-Status: Phases 02–07 implementation complete and reviewed (2026-09-04). The
-manager provides unprivileged acquisition, root-only staging, durable
-activation, exact health gating, rollback, crash recovery, and the one-time
-format-2 migration from the retired checkout runner for the Fedora 44 x86_64
-systemd release profile. Phase 03 adds the separate `dam-hopper-web` binary;
-Phase 04 defines role-aware units and ownership; Phase 06 adds the central
-GitHub publisher and non-root bootstrap; Phase 07 retires the old runner.
+Status: Core release-manager Phases 02–07 are complete and reviewed
+(2026-09-04). The production CLI idle-suspend helper/socket integration
+(Phases 01–04) is complete and verified (2026-09-10). The manager provides
+unprivileged acquisition, root-only staging, durable activation, exact health
+gating, rollback, crash recovery, and the one-time format-2 migration from the
+retired checkout runner for the Fedora 44 x86_64 systemd release profile.
+Phase 03 adds the separate `dam-hopper-web` binary; Phase 04 defines role-aware
+units and ownership; Phase 06 adds the central GitHub publisher and non-root
+bootstrap; Phase 07 retires the old runner.
 
 This guide documents the executable from downloaded bundle through committed
 release. The manifest field contract remains in [Linux Release Manifest v1](./linux-release-manifest.md).
@@ -278,6 +280,55 @@ API from an inactive helper. The socket check is separate evidence: status
 reports unit/process state, not socket protocol readiness. The helper's socket
 is `/run/dam-hopper/idle-suspend.sock`; it may be absent when helper startup
 failed or the selected role does not include `server`.
+
+## Verification and end-to-end coverage (Production CLI Phase 04)
+
+The production CLI gate covers rendered-unit policy, transaction-scoped
+staging, role isolation, idle-suspend integration, static boundary assertions,
+and read-only status inspection. Run the focused checks from the repository
+root:
+
+```bash
+cargo test --manifest-path server/Cargo.toml --test linux_release_staging
+cargo test --manifest-path server/Cargo.toml --test linux_release_unit_policy
+cargo test --manifest-path server/Cargo.toml --lib idle_suspend
+cargo test --manifest-path server/Cargo.toml --test idle_suspend
+./scripts/verify-idle-suspend-boundary.sh
+cargo run --manifest-path server/Cargo.toml --bin dam-hopper -- status --json
+```
+
+Evidence recorded for this phase:
+
+| Scope | Result |
+| --- | ---: |
+| `linux_release_staging` integration tests | 9/9 |
+| `linux_release_unit_policy` rendered-unit tests | 10/10 |
+| `idle_suspend` library tests | 69/69 |
+| `idle_suspend` integration tests | 14/14 |
+| Combined focused Rust tests | 102/102 |
+| Boundary verifier | 14/14 checks |
+
+`server/tests/linux_release_staging.rs` checks helper/API staging for a server
+role, helper hardening and fixed socket/audit/enrolled-PID arguments, API
+`PIDFile`/`ExecStartPost`/`ExecStopPost` hooks, and the absence of server units
+in a web-only role. A `both` role must stage API, helper, web, and recovery
+units. The same file verifies `HELPER_SERVICE_UNIT` registration and its
+`server` status role.
+
+Boundary check 13 asserts both API unit files contain
+`PIDFile=/run/dam-hopper/server.pid`, an `ExecStartPost` `$MAINPID` write, and
+an `ExecStopPost` PID cleanup. Check 14 asserts that the helper unit constant
+is registered, staged, started by activation, and included in status
+inspection. The boundary script passed 14/14 with zero failures.
+
+`dam-hopper status` groups API and helper under `Server`; `status --json`
+exposes API, helper, web, and recovery records in `services`, with active state
+and best-effort PID/UID evidence. Status is read-only and does not prove socket
+protocol readiness. Automated tests use temporary files/fakes and do not invoke
+host suspend, logind, or real RTC hardware.
+
+[Phase 04 test report](../plans/reports/tester-260910-0732-phase-04-boundary-verification.md)
+and [review](../plans/reports/reviewer-260910-0733-phase-04-verification-boundary.md).
 
 ## Durable activation, rollback, and recovery (Phase 05)
 
