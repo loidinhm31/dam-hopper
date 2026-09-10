@@ -1,7 +1,10 @@
 # 2026-09-11
 
 - **Configured-agent activity idle suspend — Phase 02 complete.** PTY sessions now capture qualified root `(pid, start_ticks)` identity per incarnation, count raw PTY reads with a saturating counter, fence accepted input before writer dispatch, reject writes during handoff, and expose bounded private observation snapshots without leaking terminal content.
-- Validation passed: focused PTY activity tests **8/8**; PTY module suite **159 passed, 1 ignored** (pre-existing performance gate). Code review scored **9.5/10** with no critical issues. Phases 03–08 remain pending; Phase 03 consumes the qualified root/stat seam next.
+- Validation passed: focused PTY activity tests **8/8**; PTY module suite **159 passed, 1 ignored** (pre-existing performance gate). Code review scored **9.5/10** with no critical issues. Phases 04–08 remain pending after the Phase 03 process-discovery completion below.
+- **Configured-agent activity idle suspend — Phase 03 complete.** Added private bounded `ProcessDiscovery<S>` over `ProcessSource`/`LinuxProcSource`, exact identity-safe root/retained descendant attribution, finite executable matching, same-namespace socket ownership, and transactional prepared samples.
+- Enforced caps for 256 roots, 8,192 scanned processes, 1,024 relevant processes, 4,096 FDs per process, 8,192 socket inodes, and 16 KiB command lines; incomplete, stale, and ambiguous observations fail closed.
+- Validation passed: targeted process discovery **18/18** in the focused module filter, idle-suspend **100/100**, and PTY **187/187** (one pre-existing performance test ignored). Code review approved **9.0/10** with no critical issues. Phases 04–08 remain pending.
 
 # 2026-09-10
 

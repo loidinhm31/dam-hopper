@@ -29,7 +29,7 @@ In opt-in `agent-activity` mode, configured agents (`codex`, `omp`, `claude`, `a
 | --------------------------------------------------------------------- | ------- | -------- | -------- | ---------------------------------- |
 | [01 — Policy/configuration contracts](phase-01-policy-contracts.md)   | DONE (2026-09-11) | 100%      | 6h       | None                               |
 | [02 — PTY evidence and input admission](phase-02-pty-observation.md)  | DONE (2026-09-11) | 100%      | 8h       | 01                                 |
-| [03 — Process discovery and retention](phase-03-process-discovery.md) | Pending | 0%       | 14h      | 01–02                              |
+| [03 — Process discovery and retention](phase-03-process-discovery.md) | DONE (2026-09-11) | 100%      | 14h      | 01–02                              |
 | [04 — Owned TCP byte observation](phase-04-tcp-observation.md)        | Pending | 0%       | 14h      | 01–02 + frozen 03 input types      |
 | [05 — Sampler/coordinator admission](phase-05-sampler-coordinator.md) | Pending | 0%       | 20h      | 02–04                              |
 | [06 — Protected status and UI](phase-06-api-ui.md)                    | Pending | 0%       | 10h      | Frozen DTO; runtime proof after 05 |
@@ -53,9 +53,10 @@ In opt-in `agent-activity` mode, configured agents (`codex`, `omp`, `claude`, `a
 
 ## Planning delivery
 
-Phase 01 and Phase 02 are complete (2/8 phases; 14/111h estimated, approximately 13%; DONE 2026-09-11). Phase 02 delivered qualified PTY root identity, incarnation-scoped raw output evidence, accepted-input admission fencing, handoff rejection, and bounded private snapshots. Implementation phases 03–08 remain pending. This new plan does not extend or rewrite the completed original plan. The architecture document contains a clearly marked design-only pointer. [Planning review evidence](reports/plan-review.md) records document checks, not application execution.
+Phase 01, Phase 02, and Phase 03 are complete (3/8 phases complete; 28/111h estimated, approximately 25%; DONE 2026-09-11). Phase 02 delivered qualified PTY root identity, incarnation-scoped raw output evidence, accepted-input admission fencing, handoff rejection, and bounded private snapshots. Phase 03 delivered bounded process discovery, strict configured-agent attribution, retained detached lineage, deterministic socket ownership, and bounded private process evidence. Implementation phases 04–08 remain pending. This new plan does not extend or rewrite the completed original plan. The architecture document contains a clearly marked design-only pointer. [Planning review evidence](reports/plan-review.md) records document checks, not application execution.
 
 Phase 02 evidence: focused PTY activity tests passed **8/8**; the PTY module suite passed **159 tests** with one pre-existing performance test ignored; code review scored **9.5/10** with no critical issues. [Test report](../reports/tester-260911-0152-phase02-pty-activity-contracts.md) · [Code review](../reports/code-review-260911-0156-phase02-pty-root-identity-and-input-admission.md).
+Phase 03 evidence: targeted process discovery tests passed **16/16**; the idle-suspend suite passed **100/100**; the PTY suite passed **187/187** with one pre-existing performance test ignored; code review scored **9.0/10** with no critical issues. [Test report](../reports/tester-260911-0236-phase-03-process-discovery.md) · [Code review](../reports/code-review-260911-0237-phase-03-process-discovery.md).
 
 Active-plan state was registered using the current OMP session UUID after supplying the missing `EVCRATE_SESSION_ID`. Pass this directory explicitly to implementation commands/workers; do not reuse the completed suggested plan.
 
@@ -66,7 +67,7 @@ Active-plan state was registered using the current OMP session UUID after supply
 - Confirmed existing 15-minute quiet default and explicit startup opt-in.
 - Unknown coverage blocks suspend **with a warning report**: PID, blocked duration and executable identity without arguments; authenticated access only.
 - Exact warning DTO, privacy boundaries, per-phase steps and verification cases are integrated into the shared contract and phase files. [Decision reference](warning-report-contract.md) records the validation; it is not an override or extra implementation task.
-- All phase estimates include validated reporting work and sum directly to 111h. No additional amendment surcharge, unresolved decision or deferred phase rewrite; Phase 01 implementation is complete, while phases 02–08 remain pending.
+- All phase estimates include validated reporting work and sum directly to 111h. No additional amendment surcharge, unresolved decision or deferred phase rewrite; Phase 01–03 implementation is complete, while phases 04–08 remain pending.
 
 ## Unresolved questions
 

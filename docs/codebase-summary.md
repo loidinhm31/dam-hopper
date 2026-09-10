@@ -74,6 +74,11 @@ The snapshot is a compaction aid, not a release artifact; generated
   content-free state, records accepted input revision/time, gates handoff and
   manager admission before writing, and leaves lifecycle authority with the
   fleet state. See [PTY Activity Observation](./pty-activity-observation.md).
+- **Configured-agent process discovery (Phase 03)**: private bounded
+  `ProcessDiscovery<S>`/`ProcessSource` procfs attribution, finite matching,
+  namespace-qualified sockets, and transactional samples; see
+  [Configured-Agent Process Discovery](./agent-activity-process-discovery.md).
+
 - **Linux release manager**: `server/src/linux_release/` validates Manifest v1,
   role projections, transaction-scoped units, helper policy, and
   `systemd-analyze verify`.
@@ -99,7 +104,7 @@ The snapshot is a compaction aid, not a release artifact; generated
 | `helper_server.rs` | Peer auth, frame validation, dedupe, preflight, audit-before-mutation, fixed execution |
 | `audit.rs` | Root helper bounded mode-0600 JSONL records with explicit zero sentinel |
 | `api/idle_suspend.rs` | Protected REST handlers (`GET /status`, `PATCH /timing`, `POST /force-suspend`) and CSRF guards |
-| `ForceSleepDialog.tsx` | React 19 dialog for manual sleep configuration, active session confirmation, and 409 handling |
+| `idle_suspend/activity/{mod,process}.rs` | Phase 03 private evidence types, bounds, `ProcessSource`, attribution, executable matching, and socket discovery |
 
 ### Frontend (React + Vite)
 
@@ -697,6 +702,7 @@ dam-hopper/
 │   ├── api-reference.md
 │   ├── project-overview-pdr.md
 │   ├── pty-activity-observation.md # Phase 02 PTY evidence and input admission
+│   ├── agent-activity-process-discovery.md # Phase 03 bounded procfs discovery and attribution
 │   └── frontend-components.md # Shared React component architecture
 ├── plans/                     # Feature plans and reports
 └── CLAUDE.md                  # Development commands
@@ -710,28 +716,19 @@ dam-hopper/
   Phase 03 review reports 28 workflow tests and 907 full-server tests passing;
   the workflow lifecycle cases are in `server/src/workflow/observation_tests.rs`.
 - **Workflow API**: `server/tests/workflow_api.rs` covers auth, overview,
-  Plan-first hierarchy, replay/CAS, sessions, links, notes, limits, event
-  pagination, and history purge.
+  Plan-first hierarchy, replay/CAS, sessions, links, notes, limits, event pagination, and history purge.
 - **Workflow lifecycle**: observation tests cover terminal state mapping,
-  incarnation ordering, duplicate suppression, startup reconciliation, bounded
-  queue overflow, direct Plan/manual harness links, manual timestamp
-  preservation, and real PTY observation delivery.
-- **Workflow client**: `workflow-types.test.ts` covers pure helper semantics;
-  `ws-transport.test.ts` covers all 13 workflow channel mappings and URL
-  encoding; `workflow-queries.test.tsx` covers profile hash isolation,
-  transport-generation keys, query behavior, request IDs, invalidation, and
-  failure preservation. The dated Phase 04 report records 51/51 targeted
-  assertions passing.
-- **WorkspacePage and shell integration**: Phase 06 targeted UI 62/62,
-  full UI 1,515/1,515, relevant Chromium smoke 8/8, Rust 907/907 executed
-  (2 ignored), and UI TypeScript compilation passed. The focused breakdown is
-  13 pure-helper, 26 WorkspacePage, 6 IdeShell, 12 TerminalWorkspaceShell,
-  and 5 MobileWorkspaceShell assertions.
+  incarnation ordering, duplicate suppression, startup reconciliation, bounded queues, direct Plan/manual links, timestamp preservation, and real PTY delivery.
+- **Workflow client**: `workflow-types.test.ts` covers helper semantics;
+  `ws-transport.test.ts` covers 13 mappings/URL encoding;
+  `workflow-queries.test.tsx` covers profile isolation, generations, request IDs, invalidation, and failure preservation (51/51 targeted in the dated report).
+- **WorkspacePage and shell integration**: Phase 06 targeted UI 62/62 and full UI
+  1,515/1,515; Chromium smoke 8/8, Rust 907/907 (2 ignored), and TypeScript
+  compilation passed; breakdown: 13 pure-helper, 26 WorkspacePage, 6 IdeShell, 12 TerminalWorkspaceShell, 5 MobileWorkspaceShell.
 - **Idle-suspend Phase 01**: `server/src/idle_suspend/tests.rs` covers policy defaults, JSON/TOML naming, executable defaults and lexical validation (bounds, duplicates, generic interpreters, traversal, controls, and metacharacters), startup policy retention, execution-domain boundaries (`0`, `1..=59`, `60`, max, overflow), automatic zero rejection, clear-only/timed RTC verification, busy alarms, audit ordering, peer/dedupe/preflight failures, and helper IPC; integration tests retain bounded automatic timing. Fake backends and temporary files prevent host suspend/RTC.
 - **Configured-agent activity Phase 02**: focused coverage proves root identity,
-  raw-read saturation, input/handoff, incarnation/replay, local PTY observation,
-  and incomplete reasons. Evidence: 8/8 focused tests; PTY module suite 159
-  passed, one pre-existing performance test ignored.
+  raw-read/input/handoff/incarnation/replay, local PTY observation, and incomplete reasons (8/8 focused; PTY module 159 passed, 1 ignored pre-existing performance test).
+- **Configured-agent process discovery Phase 03**: focused module tests **18/18** cover the source seam, identity/lineage, finite matching, namespace/socket bounds, typed unavailable outcomes, and transactional prepare/commit.
 - **Web**: Component tests with Vitest, 80% coverage target
 
 ### Known Limitations (Pre-existing)
@@ -779,6 +776,7 @@ dam-hopper/
 | [frontend-components.md](./frontend-components.md)                | Shared React components and shell integration |
 | [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
 | [pty-activity-observation.md](./pty-activity-observation.md) | Phase 02 private PTY identity, output, input, snapshot, and watcher contract |
+| [agent-activity-process-discovery.md](./agent-activity-process-discovery.md) | Phase 03 bounded process discovery, attribution, and `ProcessSource` contract |
 | [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
 | [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
 | [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
@@ -789,11 +787,11 @@ dam-hopper/
 ---
 
 **Last Updated**: September 11, 2026
-**Phase Status**: Production CLI idle-suspend helper/socket deployment is
-complete and verified (2026-09-10). Configured-agent policy/configuration and
-Phase 02 PTY evidence/input admission are implemented and documented
-(Phase 02 complete 2026-09-11); process/TCP observation and automatic
-eligibility remain pending.
-**Phase 02 evidence**: focused activity 8/8; PTY module 159 passed, one
-pre-existing performance test ignored; review 9.5/10; no host power/RTC tests.
-**Generated by**: Repomix v1.18.0 (1,786 files / 3,771,904 tokens / 15,411,376 characters); five security-flagged files were excluded.
+**Phase Status**: Helper deployment is complete and verified (2026-09-10).
+Policy/configuration, PTY Phase 02, and bounded process discovery Phase 03 are
+implemented; TCP Phase 04 and automatic eligibility/claim Phase 05+ remain
+pending.
+**Phase 03 evidence**: `ProcessSource`/`LinuxProcSource`, retained lineage,
+finite matching, namespace-qualified sockets, explicit bounds, transactional
+commit; review approved 9.0/10, no critical issues.
+**Generated by**: Repomix v1.18.0 (1,790 files / 3,798,285 tokens / 15,533,295 characters); five security-flagged files were excluded.
