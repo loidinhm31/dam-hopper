@@ -237,12 +237,14 @@ agent_executables = ["codex", "omp", "claude", "agy"]
 
 `automatic_policy` accepts `empty-fleet` (the default) or `agent-activity`.
 Phase 01 freezes this selector and its configuration contract. Phase 02
-provides private PTY root/raw-output/input evidence, and Phase 03 provides
-bounded configured-agent process discovery and retained attribution through a
-private procfs seam. Phase 04 TCP observation and later automatic eligibility
-remain pending; existing deployments therefore retain empty-fleet behavior
-when the key is omitted. See [PTY Activity Observation](./pty-activity-observation.md)
-and [Configured-Agent Process Discovery](./agent-activity-process-discovery.md).
+provides private PTY root/raw-output/input evidence, Phase 03 provides bounded
+configured-agent process discovery and retained attribution through a private
+procfs seam, and Phase 04 provides owned TCP byte observation and per-socket
+baseline comparison. Phase 05 still owns automatic eligibility and the final
+handoff claim; existing deployments therefore retain empty-fleet behavior when
+the key is omitted. See [PTY Activity Observation](./pty-activity-observation.md),
+[Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
+and [Owned TCP Byte Observation](./tcp-activity-observation.md).
 
 `agent_executables` defaults to `["codex", "omp", "claude", "agy"]`. Entries
 are literal, case-sensitive basenames or absolute paths, never regular

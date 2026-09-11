@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::pty::activity::{ProcessIdentity, TerminalIdentity};
 
 pub(crate) mod process;
+mod netlink;
+mod tcp_info;
+pub(crate) mod tcp;
 
 // ---------------------------------------------------------------------------
 // Limits and bounds
@@ -41,6 +44,33 @@ pub(crate) const MAX_SAFE_EXECUTABLE_IDENTITY_BYTES: usize = 256;
 pub(crate) struct NetworkNamespaceIdentity {
     pub(crate) device: u64,
     pub(crate) inode: u64,
+}
+
+impl NetworkNamespaceIdentity {
+    /// Read the network namespace identity of the current observing thread.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn current_thread() -> Result<Self, ActivityUnavailable> {
+        use std::os::unix::fs::MetadataExt;
+        let thread_path = std::path::Path::new("/proc/thread-self/ns/net");
+        let path = if thread_path.exists() {
+            thread_path
+        } else {
+            std::path::Path::new("/proc/self/ns/net")
+        };
+        let meta = std::fs::metadata(path).map_err(|e| {
+            tracing::debug!("Failed to read thread netns metadata {}: {e}", path.display());
+            ActivityUnavailable::new(ActivityUnavailableReason::ProcAccess)
+        })?;
+        Ok(Self {
+            device: meta.dev(),
+            inode: meta.ino(),
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn current_thread() -> Result<Self, ActivityUnavailable> {
+        Err(ActivityUnavailable::new(ActivityUnavailableReason::ProcAccess))
+    }
 }
 
 /// Deduplicated owned socket inode with representative owner information.
