@@ -260,6 +260,35 @@ create a parallel observer.
 - `is_meaningful_change` must ignore heartbeat/timestamp and elapsed-duration
   churn while preserving semantic state, activity, warning, fleet, timing, and
   epoch changes. Join the sampler before PTY teardown during shutdown.
+### Protected status decoding and presentation (Phase 06)
+
+Keep external status data at an explicit `unknown` boundary. The
+`api.system.idleSuspendStatus()` transport call must decode through
+`decodeIdleSuspendStatusV1`; TypeScript generic casts are not runtime
+validation. Validate the base version-1 fields and all additive policy/activity
+constraints before exposing data to React Query.
+
+- Normalize only a valid base payload with both additive own properties absent.
+  Reject XOR omission, present `undefined`, unknown enums, unsafe numeric
+  domains, invalid warning ordering/identity bounds, and policy/activity
+  mismatches. Preserve transport/auth errors; never catch and fabricate legacy
+  status, zero counts, or quiet state.
+- Keep warning reason mappings exhaustive and local to the UI. Render nullable
+  counts as `Unknown`, and keep coordinator state independent from measurement
+  state. Initializing/unavailable measurement must not claim quiet or completion.
+- Derive the only browser countdown from server `armDeadlineMs`. A bounded
+  local display tick may render elapsed warning duration, but it must not poll,
+  invalidate queries, publish events, persist status, or make eligibility
+  decisions. Stop the tick when no deadline/warning remains.
+- Preserve manual force behavior: confirmation uses
+  `liveCount + creatingCount + restartPendingCount`, never observer counts or
+  reason codes. Keep existing handoff, pending, conflict, retry, auth, origin,
+  and audit gates.
+- Expose only the bounded warning projection (PID and safe executable identity).
+  Do not log or render command arguments, matcher lists, environment, terminal
+  or socket identities, bytes, tokens, counters, or raw diagnostics. Use
+  accessible persistent text; do not make limitations hover-only or color-only.
+
 
 ### Linux release manager service lifecycle and verification (Production CLI Phases 03–04)
 

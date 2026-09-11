@@ -93,6 +93,43 @@ unread`. Opening acknowledges the presentation count only; this read-only UI
 does not change query, acknowledgement, bounds, fallback, active incidents, or
 dismissal behavior.
 
+## Terminal idle-suspend status (Phase 06)
+
+**Locations:** `packages/ui/src/api/client.ts`,
+`packages/ui/src/api/queries.ts`, and
+`packages/ui/src/components/organisms/HostIdleSuspendStatus.tsx`.
+
+`api.system.idleSuspendStatus()` invokes the strict
+`decodeIdleSuspendStatusV1` boundary on an `unknown` transport response. The
+decoder accepts the existing version-1 status plus required
+`automaticPolicy`/`activity` additive fields, normalizes only a valid old
+server that omits both fields, and leaves malformed, partial, authentication,
+and transport failures as query errors. It never echoes rejected payloads.
+
+`HostIdleSuspendStatus` keeps coordinator state, actual fleet counts, timing,
+capability, detail, generated-at time, and the manual Force Machine to Sleep
+action. Agent mode adds independent measurement state/reason, nullable
+recognized-agent and monitored-terminal counts (`Unknown` when null),
+`tcp4-tcp6` coverage, and a persistent accessible heuristic notice. The notice
+states that silence does not prove completion, only attributable TCP4/TCP6 is
+measured, and service-only terminals may still be suspended.
+
+Initializing/unavailable observation is never rendered as quiet, zero, or
+automatic-ready. Measurement warnings use a persistent `role="alert"` with
+reason, elapsed blocked duration, bounded PID/safe identity examples, an
+identity-unavailable label, and a truncation/incomplete label. The warning's
+process projection excludes command arguments, matcher data, environment,
+terminal/session/root/start identities, socket details, bytes, tokens, and raw
+diagnostics.
+
+One local display clock serves both the `armDeadlineMs` countdown and warning
+elapsed duration, ticks at most once per second, clamps negative values at zero,
+and stops when neither display is present. Sample and activity timestamps are
+display-only; ticks never refetch, publish a status hint, or affect admission.
+Manual confirmation continues to use actual
+`liveCount + creatingCount + restartPendingCount`, independent of agent counts
+or measurement warnings. See [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md).
+
 ## Error Boundary and stale lazy-chunk recovery
 
 **Location:** `packages/ui/src/components/ui/ErrorBoundary.tsx`

@@ -416,6 +416,14 @@ The public `activity` object is diagnostic status, not a process inventory or
 authorization token. It is null for `empty-fleet` and present for
 `agent-activity`; unavailable measurement fails closed and cannot arm automatic
 suspend.
+The browser consumes this DTO through `decodeIdleSuspendStatusV1` in
+`packages/ui/src/api/client.ts`, which validates the complete v1 base shape and
+the additive policy/activity relationship before the React Query boundary.
+An otherwise valid old-server payload is normalized only when both additive
+properties are absent; partial omission, malformed values, and rejected
+transport/auth requests remain errors. See the [Protected Idle-Suspend Status
+and Browser UI](./idle-suspend-status-ui.md) guide for decoder, UI, warning,
+countdown, and manual-force semantics.
 
 
 #### GET /api/system/idle-suspend/v1/status
@@ -435,10 +443,12 @@ Returns the immutable authoritative `IdleSuspendStatusV1` snapshot.
     - `recognizedAgentCount`, `monitoredTerminalCount`: optional bounded counts
     - `sampledAtMs`, `lastActivityAtMs`: optional epoch timestamps
     - `networkCoverage`: currently `"tcp4-tcp6"`
-    - `measurementWarning`: nullable; when present it contains a closed
-      `reasonCode`, `blockedSinceMs`, and at most 32 `{ "pid", "executableIdentity" }`
-      process records plus `processesTruncated`. Arguments, socket details,
-      terminal bytes, and raw diagnostics are never exposed.
+    - `measurementWarning`: `null` when `measurementState` is `"available"`;
+      required otherwise. When present it contains a closed warning reason,
+      non-negative `blockedSinceMs`, and at most 32 strictly ascending positive
+      PID records `{ "pid", "executableIdentity" }` plus
+      `processesTruncated`. Arguments, socket details, terminal bytes, and raw
+      diagnostics are never exposed.
   - `timingMutable`: boolean (`true` when enabled and not currently handed off)
   - `timingMutableReason`: optional string (e.g. `"disabled"`, `"handoffInProgress"`)
   - `capabilityCode`: string (e.g. `"unavailable"`, `"fake"`, `"systemd"`)

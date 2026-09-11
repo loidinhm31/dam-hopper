@@ -1,5 +1,21 @@
 # 2026-09-11
 
+- **Configured-agent activity idle suspend — Phase 06 complete.** Added a
+  strict `unknown`-to-`IdleSuspendStatusV1` decoder with exact two-field
+  old-server normalization and fail-closed malformed/partial response
+  handling. The protected status remains version 1, authenticated, and
+  `Cache-Control: no-store`.
+- Extended `HostIdleSuspendStatus` with policy, aggregate measurement state and
+  reason, nullable/unknown counts, TCP4/TCP6 coverage, persistent heuristic
+  limits, bounded measurement-warning duration and PID/safe identity examples,
+  and the sole `armDeadlineMs` countdown. Manual force confirmation still uses
+  actual fleet counts and existing handoff/409/no-retry behavior.
+- Validation passed: protected API **9/9**, frontend unit **41/41**, Chromium
+  **13/13**; code review approved **9.7/10**. Warning serialization tests
+  reject command arguments, matcher data, socket details, terminal/session
+  identities, and tokens. Integrated real-observer qualification remains Phase
+  07 work.
+
 - **Configured-agent activity idle suspend — Phase 05 complete.** Added the
   dedicated joinable transactional sampler worker, sequential process/TCP
   prepare with raw-output and manager invalidation fences, one-deep

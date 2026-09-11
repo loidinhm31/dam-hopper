@@ -242,10 +242,13 @@ configured-agent process discovery and retained attribution through a private
 procfs seam, and Phase 04 provides owned TCP byte observation and per-socket
 baseline comparison. Phase 05 completes the dedicated transactional sampler,
 manager-locked final admission, bounded warning projection, and
-`agent-activity` coordinator path. See [PTY Activity Observation](./pty-activity-observation.md),
+`agent-activity` coordinator path. Phase 06 adds protected status decoding and
+aggregate browser presentation without adding a policy/matcher editor or
+mutation route. See [PTY Activity Observation](./pty-activity-observation.md),
 [Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
-[Owned TCP Byte Observation](./tcp-activity-observation.md), and [Agent Activity
-Automatic Admission](./agent-activity-automatic-admission.md).
+[Owned TCP Byte Observation](./tcp-activity-observation.md), [Agent Activity
+Automatic Admission](./agent-activity-automatic-admission.md), and
+[Protected Status and Browser UI](./idle-suspend-status-ui.md).
 
 Under `agent-activity`, the server starts one joinable sampler worker after
 persistence restoration. It samples on a two-second cadence, performs a fresh

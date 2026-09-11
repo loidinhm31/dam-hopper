@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
 };
 use tower::ServiceExt;
 
@@ -14,7 +14,7 @@ use crate::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
     crypto::DamHopperOpaqueSuite,
-    diagnostics::{now_ms, DiagnosticEvent, DiagnosticStore},
+    diagnostics::{DiagnosticEvent, DiagnosticStore, now_ms},
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
@@ -23,10 +23,10 @@ use crate::{
         ResourceAlertState, ResourceAlertSummary,
     },
     telemetry::{
+        CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality,
+        TELEMETRY_SCHEMA_VERSION, TelemetryCmd, TelemetryKeyRing, TelemetryStore,
+        TokenCounterSemantic, TokenQuality,
         worker::{TelemetryControl, TelemetryHandle},
-        CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality, TelemetryCmd,
-        TelemetryKeyRing, TelemetryStore, TokenCounterSemantic, TokenQuality,
-        TELEMETRY_SCHEMA_VERSION,
     },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
     workspace_target::ProjectTargetRef,
@@ -123,6 +123,62 @@ fn make_state(tmp: &TempDir) -> AppState {
         ),
     )
 }
+fn make_state_with_idle_suspend_config(
+    tmp: &TempDir,
+    idle_suspend: crate::config::IdleSuspendConfig,
+) -> AppState {
+    let workspace_dir = tmp.path().to_path_buf();
+    let config_file = workspace_dir.join("dam-hopper.toml");
+    std::fs::write(&config_file, "[workspace]\nname = \"test-workspace\"\n").ok();
+
+    let mut config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "test-workspace".into(),
+            root: ".".into(),
+        },
+        agent_store: None,
+        server: crate::config::ServerConfig::default(),
+        projects: vec![],
+        features: FeaturesConfig::default(),
+        config_path: workspace_dir.join("dam-hopper.toml"),
+    };
+    config.server.idle_suspend = idle_suspend;
+    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
+
+    let (event_sink, _rx) = BroadcastEventSink::new(64);
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
+    let fs = FsSubsystem::new(vec![]);
+    let tunnel_manager = make_tunnel_manager(&event_sink);
+
+    AppState::new(
+        workspace_dir,
+        config,
+        GlobalConfig::default(),
+        pty_manager,
+        agent_store,
+        event_sink,
+        TEST_TOKEN.to_string(),
+        fs,
+        None,
+        false,
+        tunnel_manager,
+        None,
+        test_opaque_setup(),
+        DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
+        crate::telemetry::TelemetryRuntime::with_paths(
+            tmp.path().join("telemetry-key"),
+            tmp.path().join("collector-token"),
+        ),
+    )
+    .expect("make_state_with_idle_suspend_config failed")
+    .with_codex_exporter(
+        crate::telemetry::codex_otlp::CodexExporterManager::with_paths(
+            tmp.path().join(".codex/config.toml"),
+            tmp.path().join("collector-token"),
+        ),
+    )
+}
 
 fn resource_disk_alert(incident_id: &str) -> ResourceAlertSummary {
     ResourceAlertSummary {
@@ -149,7 +205,7 @@ fn resource_disk_alert(incident_id: &str) -> ResourceAlertSummary {
 }
 
 fn test_jwt() -> String {
-    use jsonwebtoken::{encode, EncodingKey, Header};
+    use jsonwebtoken::{EncodingKey, Header, encode};
     #[derive(serde::Serialize)]
     struct Claims {
         sub: String,
@@ -345,10 +401,12 @@ async fn backend_emits_no_cors_headers_or_preflight_behavior_without_allowlist()
         .unwrap();
     let origin_response = router.clone().oneshot(origin_request).await.unwrap();
     assert_eq!(origin_response.status(), StatusCode::OK);
-    assert!(origin_response
-        .headers()
-        .keys()
-        .all(|name| !name.as_str().starts_with("access-control-")));
+    assert!(
+        origin_response
+            .headers()
+            .keys()
+            .all(|name| !name.as_str().starts_with("access-control-"))
+    );
 
     let preflight = Request::builder()
         .method("OPTIONS")
@@ -563,13 +621,23 @@ async fn api_router_defaults_to_api_only_and_returns_404_for_web_routes() {
     let tmp = tempfile::tempdir().unwrap();
     let router = build_router(make_state(&tmp));
 
-    for path in ["/", "/index.html", "/dashboard", "/assets/app.js", "/favicon.ico"] {
+    for path in [
+        "/",
+        "/index.html",
+        "/dashboard",
+        "/assets/app.js",
+        "/favicon.ico",
+    ] {
         let res = router
             .clone()
             .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(res.status(), StatusCode::NOT_FOUND, "path {path} should be 404");
+        assert_eq!(
+            res.status(),
+            StatusCode::NOT_FOUND,
+            "path {path} should be 404"
+        );
     }
 }
 
@@ -579,12 +647,19 @@ async fn api_health_payload_contains_schema_and_role() {
     let router = build_router(make_state(&tmp));
 
     let res = router
-        .oneshot(Request::builder().uri("/api/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/api/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
-    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["schemaVersion"], 1);
     assert_eq!(json["status"], "ok");
@@ -891,15 +966,21 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
         Some(backend_events.len() as u64)
     );
     assert_eq!(json["manifest"]["terminalSessionCount"], 1);
-    assert!(backend_events
-        .iter()
-        .any(|event| event["message"] == "terminal.a"));
-    assert!(backend_events
-        .iter()
-        .any(|event| event["message"] == "global"));
-    assert!(!backend_events
-        .iter()
-        .any(|event| event["message"] == "terminal.b"));
+    assert!(
+        backend_events
+            .iter()
+            .any(|event| event["message"] == "terminal.a")
+    );
+    assert!(
+        backend_events
+            .iter()
+            .any(|event| event["message"] == "global")
+    );
+    assert!(
+        !backend_events
+            .iter()
+            .any(|event| event["message"] == "terminal.b")
+    );
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0]["id"], "shell:diag-a");
 
@@ -922,12 +1003,16 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
     assert_eq!(json["scope"]["terminalIds"].as_array().unwrap().len(), 0);
     assert_eq!(json["terminals"]["sessions"].as_array().unwrap().len(), 0);
     assert_eq!(json["terminals"]["tails"].as_array().unwrap().len(), 0);
-    assert!(backend_events
-        .iter()
-        .any(|event| event["message"] == "global"));
-    assert!(!backend_events
-        .iter()
-        .any(|event| event["message"] == "terminal.a"));
+    assert!(
+        backend_events
+            .iter()
+            .any(|event| event["message"] == "global")
+    );
+    assert!(
+        !backend_events
+            .iter()
+            .any(|event| event["message"] == "terminal.a")
+    );
 
     state.pty_manager.kill("shell:diag-a").unwrap();
     state.pty_manager.kill("shell:diag-b").unwrap();
@@ -1847,9 +1932,11 @@ async fn language_files_returns_normalized_contract_and_enforces_project_boundar
     assert_eq!(json["files"][0]["language"], "rust");
     assert!(json["files"][0]["size"].is_u64());
     assert!(json["files"][0]["mtime"].is_i64());
-    assert!(!bytes
-        .windows(alpha.to_string_lossy().len())
-        .any(|window| { window == alpha.to_string_lossy().as_bytes() }));
+    assert!(
+        !bytes
+            .windows(alpha.to_string_lossy().len())
+            .any(|window| { window == alpha.to_string_lossy().as_bytes() })
+    );
 
     let empty = get(state.clone(), "/api/fs/language-files?project=beta").await;
     assert_eq!(empty.status(), StatusCode::OK);
@@ -2101,14 +2188,18 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
         "gpt-5.6-sol"
     );
     assert_eq!(list_value["sessions"][0]["models"][0]["responseCount"], 1);
-    assert!(!list_value["sessions"][0]
-        .as_object()
-        .unwrap()
-        .contains_key("terminals"));
-    assert!(!list_value["sessions"][0]
-        .as_object()
-        .unwrap()
-        .contains_key("lineage"));
+    assert!(
+        !list_value["sessions"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("terminals")
+    );
+    assert!(
+        !list_value["sessions"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("lineage")
+    );
     let serialized = String::from_utf8(list_body.to_vec()).unwrap();
     for forbidden in [
         "raw-provider-session",
@@ -2205,10 +2296,12 @@ async fn usage_session_cursor_preserves_active_null_end() {
     let first_sessions = first_value["sessions"].as_array().unwrap();
     assert_eq!(first_sessions.len(), 2);
     assert_eq!(first_sessions[1]["id"], "b".repeat(64));
-    assert!(first_sessions[1]
-        .as_object()
-        .unwrap()
-        .contains_key("endedAtUtcMs"));
+    assert!(
+        first_sessions[1]
+            .as_object()
+            .unwrap()
+            .contains_key("endedAtUtcMs")
+    );
     assert!(first_sessions[1]["endedAtUtcMs"].is_null());
     let cursor = first_value["nextCursor"].as_str().unwrap();
 
@@ -2286,12 +2379,14 @@ async fn usage_session_cursor_bounds_and_ids_are_strict() {
         .unwrap();
     let second_value: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
     assert_eq!(second_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(!first_ids.contains(
-        &second_value["sessions"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    ));
+    assert!(
+        !first_ids.contains(
+            &second_value["sessions"][0]["id"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        )
+    );
     let changed_scope = get(
         state.clone(),
         &format!(
@@ -2505,10 +2600,12 @@ async fn usage_session_detail_is_flat_and_caps_model_summaries() {
         .unwrap();
     let filtered_value: serde_json::Value = serde_json::from_slice(&filtered_body).unwrap();
     assert_eq!(filtered_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(!filtered_value["sessions"][0]
-        .as_object()
-        .unwrap()
-        .contains_key("terminals"));
+    assert!(
+        !filtered_value["sessions"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("terminals")
+    );
 }
 
 #[tokio::test]
@@ -2577,9 +2674,11 @@ async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation(
     assert_eq!(updated.status(), StatusCode::OK);
     let telemetry = state.telemetry.read().unwrap().clone();
     assert!(!telemetry.control.is_enabled());
-    assert!(std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
-        .unwrap()
-        .contains("paused = true"));
+    assert!(
+        std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
+            .unwrap()
+            .contains("paused = true")
+    );
 
     let rejected = delete_json(
         state.clone(),
@@ -3687,11 +3786,13 @@ async fn terminal_create_preserves_explicit_otel_attributes_without_usage_work()
             .get_buffer("terminal:otel-conflict")
             .is_ok_and(|buffer| buffer.contains("user.attribute=preserved"))
     }));
-    assert!(!state
-        .pty_manager
-        .get_buffer("terminal:otel-conflict")
-        .unwrap()
-        .contains("dam_hopper.run_id="));
+    assert!(
+        !state
+            .pty_manager
+            .get_buffer("terminal:otel-conflict")
+            .unwrap()
+            .contains("dam_hopper.run_id=")
+    );
     state.pty_manager.remove("terminal:otel-conflict").unwrap();
 }
 
@@ -3801,11 +3902,13 @@ async fn terminal_create_loads_target_worktree_env_file() {
             .get_buffer("target-env-session")
             .is_ok_and(|buffer| buffer.contains("feature"))
     }));
-    assert!(!state
-        .pty_manager
-        .get_buffer("target-env-session")
-        .unwrap()
-        .contains("root"));
+    assert!(
+        !state
+            .pty_manager
+            .get_buffer("target-env-session")
+            .unwrap()
+            .contains("root")
+    );
     state.pty_manager.remove("target-env-session").unwrap();
 }
 
@@ -4125,11 +4228,13 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
             .unwrap(),
     )
     .unwrap();
-    assert!(branches_json
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|branch| branch["name"] == "feature" && branch["isCurrent"] == true));
+    assert!(
+        branches_json
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|branch| branch["name"] == "feature" && branch["isCurrent"] == true)
+    );
 
     let status = get(
         state.clone(),
@@ -4157,11 +4262,13 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
             .unwrap(),
     )
     .unwrap();
-    assert!(roots_json
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|root| root["rootId"] == "nested"));
+    assert!(
+        roots_json
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|root| root["rootId"] == "nested")
+    );
 
     let nested_branches = get(
         state.clone(),
@@ -4185,9 +4292,11 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
         .filter_map(|entry| entry["path"].as_str())
         .collect();
     assert!(root_paths.contains(&"root-only.txt"));
-    assert!(!root_paths
-        .iter()
-        .any(|path| path.ends_with("worktree-only.txt")));
+    assert!(
+        !root_paths
+            .iter()
+            .any(|path| path.ends_with("worktree-only.txt"))
+    );
 
     let target_diff = get(
         state,
@@ -4207,12 +4316,16 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
         .iter()
         .filter_map(|entry| entry["path"].as_str())
         .collect();
-    assert!(target_paths
-        .iter()
-        .any(|path| path.ends_with("worktree-only.txt")));
-    assert!(!target_paths
-        .iter()
-        .any(|path| path.ends_with("root-only.txt")));
+    assert!(
+        target_paths
+            .iter()
+            .any(|path| path.ends_with("worktree-only.txt"))
+    );
+    assert!(
+        !target_paths
+            .iter()
+            .any(|path| path.ends_with("root-only.txt"))
+    );
 }
 
 #[tokio::test]
@@ -4303,9 +4416,11 @@ async fn git_bulk_routes_accept_and_validate_selected_targets() {
     assert_eq!(invalid_json[0]["projectName"], "test-project");
     assert_eq!(invalid_json[0]["success"], false);
     assert_eq!(invalid_json[0]["targetUnavailable"], true);
-    assert!(invalid_json[0]["error"]
-        .as_str()
-        .is_some_and(|error| error.contains("registered worktree")));
+    assert!(
+        invalid_json[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("registered worktree"))
+    );
 }
 
 #[tokio::test]
@@ -4396,10 +4511,12 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json["error"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("configured project root cannot be removed"));
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("configured project root cannot be removed")
+    );
 
     let resp = post_json(
         state.clone(),
@@ -4652,10 +4769,12 @@ async fn terminal_target_metadata_blocks_concurrent_worktree_removal() {
         .await
         .unwrap();
     let blocked_json: serde_json::Value = serde_json::from_slice(&blocked_body).unwrap();
-    assert!(blocked_json["error"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("live terminal session"));
+    assert!(
+        blocked_json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("live terminal session")
+    );
 
     let killed = delete_json(
         state.clone(),
@@ -5221,14 +5340,18 @@ async fn workspace_reinitialization_revokes_every_media_ticket() {
     .await;
     assert!(reinitialized.is_ok());
 
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(&ticket)
-        .is_none());
-    assert!(state
-        .image_stream_tickets
-        .lookup_and_touch(&image_ticket)
-        .is_none());
+    assert!(
+        state
+            .video_stream_tickets
+            .lookup_and_touch(&ticket)
+            .is_none()
+    );
+    assert!(
+        state
+            .image_stream_tickets
+            .lookup_and_touch(&image_ticket)
+            .is_none()
+    );
 }
 
 #[cfg(unix)]
@@ -5385,10 +5508,12 @@ async fn video_stream_uses_bound_ticket_capability_and_logout_revokes_it() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert!(response.headers()[header::SET_COOKIE]
-        .to_str()
-        .unwrap()
-        .contains("Max-Age=0"));
+    assert!(
+        response.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
     assert_eq!(
         stream_video(state, &ticket, "GET", &origin).await.status(),
         StatusCode::NOT_FOUND
@@ -5484,10 +5609,12 @@ async fn video_stream_serves_zero_byte_files_but_rejects_zero_byte_ranges() {
     let full = stream_video(state.clone(), &ticket, "GET", &[]).await;
     assert_eq!(full.status(), StatusCode::OK);
     assert_eq!(full.headers()["content-length"], "0");
-    assert!(axum::body::to_bytes(full.into_body(), 1)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        axum::body::to_bytes(full.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let range = stream_video(state, &ticket, "GET", &[("range", "bytes=0-0")]).await;
     assert_eq!(range.status(), StatusCode::RANGE_NOT_SATISFIABLE);
@@ -5536,10 +5663,12 @@ async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full
         assert!(stale.headers().get(name).is_none());
     }
     assert_eq!(stale.headers()[axum::http::header::CONTENT_LENGTH], "0");
-    assert!(axum::body::to_bytes(stale.into_body(), 1)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        axum::body::to_bytes(stale.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         stream_video(state.clone(), &stale_ticket, "GET", &[])
             .await
@@ -5733,12 +5862,14 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
     )
     .await;
     assert_eq!(traversal.status(), StatusCode::FORBIDDEN);
-    assert!(!String::from_utf8_lossy(
-        &axum::body::to_bytes(traversal.into_body(), usize::MAX)
-            .await
-            .unwrap()
-    )
-    .contains("outside.png"));
+    assert!(
+        !String::from_utf8_lossy(
+            &axum::body::to_bytes(traversal.into_body(), usize::MAX)
+                .await
+                .unwrap()
+        )
+        .contains("outside.png")
+    );
 }
 
 #[cfg(unix)]
@@ -5752,11 +5883,13 @@ async fn image_ticket_issuance_rejects_symlinks_and_fifos() {
     std::fs::write(real_dir.join("nested.png"), b"png").unwrap();
     std::os::unix::fs::symlink(&real_dir, tmp.path().join("link-dir")).unwrap();
     let fifo = tmp.path().join("trap.gif");
-    assert!(Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
     let state = make_state_with_project(&tmp);
 
     for path in ["link.png", "link-dir/nested.png", "trap.gif"] {
@@ -5934,10 +6067,12 @@ async fn image_stream_is_session_bound_inline_mime_typed_and_rangeable() {
     assert_eq!(head.status(), StatusCode::OK);
     assert_eq!(head.headers()["content-length"], "10");
     assert!(head.headers().get("content-range").is_none());
-    assert!(axum::body::to_bytes(head.into_body(), usize::MAX)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        axum::body::to_bytes(head.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let invalid = stream_image(state, &ticket, "GET", &[("range", "bytes=0-1,2-3")]).await;
     assert_eq!(invalid.status(), StatusCode::RANGE_NOT_SATISFIABLE);
@@ -6056,14 +6191,18 @@ async fn image_revoke_requires_auth_and_context_reload_revokes_both_media_kinds(
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
     state.media_tickets.revoke_all();
-    assert!(state
-        .image_stream_tickets
-        .lookup_and_touch(&image_ticket)
-        .is_none());
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(&video_ticket)
-        .is_none());
+    assert!(
+        state
+            .image_stream_tickets
+            .lookup_and_touch(&image_ticket)
+            .is_none()
+    );
+    assert!(
+        state
+            .video_stream_tickets
+            .lookup_and_touch(&video_ticket)
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -6085,14 +6224,18 @@ async fn config_and_settings_reload_revoke_shared_media_tickets() {
     )
     .await;
     assert_eq!(config_response.status(), StatusCode::OK);
-    assert!(state
-        .image_stream_tickets
-        .lookup_and_touch(&config_image)
-        .is_none());
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(&config_video)
-        .is_none());
+    assert!(
+        state
+            .image_stream_tickets
+            .lookup_and_touch(&config_image)
+            .is_none()
+    );
+    assert!(
+        state
+            .video_stream_tickets
+            .lookup_and_touch(&config_video)
+            .is_none()
+    );
 
     let settings_image = issue_image_stream_ticket(state.clone(), "cover.png").await;
     let settings_video = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
@@ -6103,14 +6246,18 @@ async fn config_and_settings_reload_revoke_shared_media_tickets() {
     )
     .await;
     assert_eq!(settings_response.status(), StatusCode::OK);
-    assert!(state
-        .image_stream_tickets
-        .lookup_and_touch(&settings_image)
-        .is_none());
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(&settings_video)
-        .is_none());
+    assert!(
+        state
+            .image_stream_tickets
+            .lookup_and_touch(&settings_image)
+            .is_none()
+    );
+    assert!(
+        state
+            .video_stream_tickets
+            .lookup_and_touch(&settings_video)
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -6129,7 +6276,10 @@ async fn config_put_preserves_idle_suspend() {
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(state.config.read().await.workspace.name, "preserved-test");
-    assert_eq!(state.config.read().await.server.idle_suspend, crate::config::IdleSuspendConfig::default());
+    assert_eq!(
+        state.config.read().await.server.idle_suspend,
+        crate::config::IdleSuspendConfig::default()
+    );
 }
 
 #[tokio::test]
@@ -6154,7 +6304,9 @@ async fn config_put_rejects_idle_suspend_delta() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let err_str = String::from_utf8_lossy(&body);
     assert!(err_str.contains("Terminal idle-suspend timing must be configured via PATCH"));
 }
@@ -6179,7 +6331,9 @@ async fn config_put_rejects_automatic_policy_delta() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let err_str = String::from_utf8_lossy(&body);
     assert!(err_str.contains("Terminal idle-suspend timing must be configured via PATCH"));
 }
@@ -6204,7 +6358,9 @@ async fn config_put_rejects_agent_executables_delta() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let err_str = String::from_utf8_lossy(&body);
     assert!(err_str.contains("Terminal idle-suspend timing must be configured via PATCH"));
 }
@@ -6283,10 +6439,7 @@ async fn idle_suspend_status_returns_authoritative_snapshot_with_no_store() {
 
     let resp = get(state, "/api/system/idle-suspend/v1/status").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        resp.headers().get("cache-control").unwrap(),
-        "no-store"
-    );
+    assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
 
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
@@ -6302,6 +6455,85 @@ async fn idle_suspend_status_returns_authoritative_snapshot_with_no_store() {
     assert_eq!(json["maxWakeAfterSeconds"], 86400);
     assert_eq!(json["timingMutable"], false);
     assert_eq!(json["timingMutableReason"], "disabled");
+    assert_eq!(json["automaticPolicy"], "empty-fleet");
+    assert!(json["activity"].is_null());
+}
+
+#[tokio::test]
+async fn idle_suspend_status_agent_activity_fallback_and_privacy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut idle_suspend_cfg = crate::config::IdleSuspendConfig::default();
+    idle_suspend_cfg.automatic_policy =
+        crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentActivity;
+    let state = make_state_with_idle_suspend_config(&tmp, idle_suspend_cfg);
+    let resp = get(state, "/api/system/idle-suspend/v1/status").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["automaticPolicy"], "agent-activity");
+    assert_eq!(json["state"], "disabled");
+    assert!(json["armDeadlineMs"].is_null());
+
+    let activity = &json["activity"];
+    assert!(activity.is_object());
+    assert_eq!(activity["measurementState"], "initializing");
+    assert_eq!(activity["reasonCode"], "reconciling");
+    assert!(activity["recognizedAgentCount"].is_null());
+    assert!(activity["monitoredTerminalCount"].is_null());
+    assert!(activity["sampledAtMs"].is_null());
+    assert!(activity["lastActivityAtMs"].is_null());
+    assert_eq!(activity["networkCoverage"], "tcp4-tcp6");
+
+    let warning = &activity["measurementWarning"];
+    assert!(warning.is_object());
+    assert_eq!(warning["reasonCode"], "reconciling");
+    assert!(warning["blockedSinceMs"].is_number());
+    assert_eq!(warning["processes"], serde_json::json!([]));
+    assert_eq!(warning["processesTruncated"], false);
+
+    // Privacy checks: prohibited fields MUST NOT appear in serialized JSON
+    let body_str = std::str::from_utf8(&body).unwrap();
+    assert!(!body_str.contains("cmdline"));
+    assert!(!body_str.contains("arguments"));
+    assert!(!body_str.contains("matcher"));
+    assert!(!body_str.contains("socketDetails"));
+    assert!(!body_str.contains("terminalId"));
+    assert!(!body_str.contains("token"));
+}
+
+#[tokio::test]
+async fn idle_suspend_status_disabled_observing_agent_activity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut idle_suspend_cfg = crate::config::IdleSuspendConfig::default();
+    idle_suspend_cfg.enabled = false;
+    idle_suspend_cfg.automatic_policy =
+        crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentActivity;
+    let state = make_state_with_idle_suspend_config(&tmp, idle_suspend_cfg);
+    let _coord = state
+        .start_idle_suspend_coordinator(std::sync::Arc::new(
+            crate::idle_suspend::UnavailableExecutor::default(),
+        ))
+        .await;
+
+    let resp = get(state, "/api/system/idle-suspend/v1/status").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["enabled"], false);
+    assert_eq!(json["state"], "disabled");
+    assert_eq!(json["automaticPolicy"], "agent-activity");
+    assert!(json["armDeadlineMs"].is_null());
+    assert!(json["activity"].is_object());
 }
 
 #[tokio::test]
@@ -6341,7 +6573,9 @@ async fn idle_suspend_timing_patch_guards() {
         router.oneshot(req).await.unwrap()
     };
     assert_eq!(non_json_resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    let body = axum::body::to_bytes(non_json_resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(non_json_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "invalidContentType");
 
@@ -6366,7 +6600,9 @@ async fn idle_suspend_timing_patch_guards() {
         router.oneshot(req).await.unwrap()
     };
     assert_eq!(bad_origin_resp.status(), StatusCode::FORBIDDEN);
-    let body = axum::body::to_bytes(bad_origin_resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(bad_origin_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "invalidOrigin");
 
@@ -6391,7 +6627,9 @@ async fn idle_suspend_timing_patch_guards() {
         router.oneshot(req).await.unwrap()
     };
     assert_eq!(no_db_resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = axum::body::to_bytes(no_db_resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(no_db_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "authenticationUnavailable");
 
@@ -6418,7 +6656,9 @@ async fn idle_suspend_timing_patch_guards() {
         router.oneshot(req).await.unwrap()
     };
     assert_eq!(no_auth_resp.status(), StatusCode::FORBIDDEN);
-    let body = axum::body::to_bytes(no_auth_resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(no_auth_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "idleSuspendTimingDisabledNoAuth");
 }
@@ -6445,7 +6685,10 @@ async fn idle_suspend_broadcast_hint_delivered_on_coordinator_publish() {
     let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
     assert_eq!(parsed["kind"], "host:idleSuspendChanged");
     assert_eq!(parsed["payload"]["version"], 1);
-    assert_eq!(parsed["payload"]["revision"], coord.status().status_revision);
+    assert_eq!(
+        parsed["payload"]["revision"],
+        coord.status().status_revision
+    );
 }
 #[tokio::test]
 async fn idle_suspend_force_suspend_transport_and_auth_guards() {
@@ -6488,7 +6731,9 @@ async fn idle_suspend_force_suspend_transport_and_auth_guards() {
         non_json_resp.headers().get("cache-control").unwrap(),
         "no-store"
     );
-    let body = axum::body::to_bytes(non_json_resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(non_json_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "invalidContentType");
 
@@ -6517,7 +6762,9 @@ async fn idle_suspend_force_suspend_transport_and_auth_guards() {
         bad_origin_resp.headers().get("cache-control").unwrap(),
         "no-store"
     );
-    let body = axum::body::to_bytes(bad_origin_resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(bad_origin_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "invalidOrigin");
 
@@ -6549,7 +6796,9 @@ async fn idle_suspend_force_suspend_transport_and_auth_guards() {
         router.oneshot(req).await.unwrap()
     };
     assert_eq!(duplicate_origin_resp.status(), StatusCode::FORBIDDEN);
-    let body = axum::body::to_bytes(duplicate_origin_resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(duplicate_origin_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "invalidOrigin");
 
@@ -6624,7 +6873,9 @@ async fn idle_suspend_force_suspend_transport_and_auth_guards() {
         no_auth_resp.headers().get("cache-control").unwrap(),
         "no-store"
     );
-    let body = axum::body::to_bytes(no_auth_resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(no_auth_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "idleSuspendDisabledNoAuth");
 
@@ -6653,7 +6904,9 @@ async fn idle_suspend_force_suspend_transport_and_auth_guards() {
         no_db_cookie_resp.headers().get("cache-control").unwrap(),
         "no-store"
     );
-    let body = axum::body::to_bytes(no_db_cookie_resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(no_db_cookie_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "authenticationUnavailable");
 
@@ -6675,7 +6928,9 @@ async fn idle_suspend_force_suspend_transport_and_auth_guards() {
         router.oneshot(req).await.unwrap()
     };
     assert_eq!(no_db_bearer_resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = axum::body::to_bytes(no_db_bearer_resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(no_db_bearer_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "authenticationUnavailable");
 }
@@ -6771,7 +7026,9 @@ async fn idle_suspend_force_suspend_disabled_actor_rejected() {
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "actorDisabled");
 }

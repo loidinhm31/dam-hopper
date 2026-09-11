@@ -676,12 +676,16 @@ isolation and the four-service `dam-hopper status` projection are covered. See
   regressions cover boundaries and compatibility without touching host power.
 
 
-### PR-017: Configured-Agent Activity Idle-Suspend Policy and Evidence (Phases 01–05)
+### PR-017: Configured-Agent Activity Idle-Suspend Policy, Evidence, and Status UI (Phases 01–06)
 
-**Status:** Phase 01 policy/configuration, Phase 02 PTY evidence, Phase 03
-bounded process discovery, Phase 04 owned TCP byte observation, and Phase 05
-transactional sampling, automatic eligibility, bounded warnings, and the final
-automatic handoff claim are implemented (Phase 05 complete 2026-09-11).
+**Phase 06 status:** Protected status and browser UI complete 2026-09-11;
+integrated qualification and opt-in rollout remain pending.
+
+**Implementation status:** Phase 01 policy/configuration, Phase 02 PTY
+evidence, Phase 03 bounded process discovery, Phase 04 owned TCP byte
+observation, Phase 05 transactional sampling/automatic admission, and Phase 06
+protected status/browser UI are implemented (2026-09-11). Integrated
+qualification and opt-in rollout remain pending.
 
 **Requirements:** Persist `automatic_policy` (`empty-fleet` by default or
 `agent-activity`) and a validated `agent_executables` list under
@@ -843,6 +847,40 @@ an opaque claim ticket.
 See [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md)
 for the transaction sequence, ticket fields, status shape, state transitions,
 privacy contract, and verification map.
+#### Phase 06 — Protected status and browser UI
+
+Phase 06 consumes the frozen additive status DTO without changing the v1 route
+or server authority. The browser client decodes the transport result as
+`unknown`, validates base and activity/warning fields, and normalizes only a
+valid old-server response with both additive properties absent.
+
+**Changed implementation files:** `packages/ui/src/api/client.ts`,
+`packages/ui/src/components/organisms/HostIdleSuspendStatus.tsx`,
+`packages/ui/src/api/idle-suspend-client.test.ts`,
+`packages/ui/src/components/organisms/HostIdleSuspendStatus.test.tsx`,
+`packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx`, and
+`server/src/api/tests.rs`.
+
+**Requirements and acceptance criteria:**
+
+- [x] New status data validates closed policy/measurement/reason values,
+  nullable unknown counts, epoch domains, warning PID ordering, identity
+  bounds, warning nullability, and policy/activity consistency.
+- [x] Old-server compatibility is limited to both additive fields being absent;
+  partial/malformed data and rejected transport/auth requests remain errors.
+- [x] The status card separates coordinator state from measurement, renders
+  `Unknown` counts, TCP4/TCP6 coverage, persistent heuristic limitations, and
+  bounded warning reason/duration/PID-safe identity examples.
+- [x] `armDeadlineMs` is the only countdown. One local display clock serves the
+  countdown and warning elapsed duration without polling, invalidation, or
+  admission side effects.
+- [x] Manual force confirmation remains based on actual fleet counts and all
+  existing handoff, conflict, retry, and wake-choice gates.
+- [x] Protected API tests pass 9/9, frontend unit tests pass 41/41, Chromium
+  tests pass 13/13, and review approves 9.7/10.
+
+See [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md)
+for the exact browser contract and privacy boundary.
 
 ## Non-Functional Requirements
 
