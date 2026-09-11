@@ -67,6 +67,8 @@ function mockStatus(
     armDeadlineMs: null,
     lastOutcome: null,
     detail: null,
+    automaticPolicy: "empty-fleet",
+    activity: null,
     timestampMs: 1724500000000,
     ...overrides,
   };
@@ -446,5 +448,111 @@ describe("Idle Suspend Settings & Status Browser Tests", () => {
       force: true,
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("renders HostIdleSuspendStatus with agent-activity mode, counts, notice, and allows force sleep", async () => {
+    const onForceSleep = vi.fn();
+    mocks.status = mockStatus({
+      automaticPolicy: "agent-activity",
+      activity: {
+        measurementState: "available",
+        reasonCode: "quiet",
+        recognizedAgentCount: 2,
+        monitoredTerminalCount: 3,
+        sampledAtMs: 1724500001000,
+        lastActivityAtMs: 1724500000500,
+        networkCoverage: "tcp4-tcp6",
+        measurementWarning: null,
+      },
+    });
+
+    await act(async () => {
+      root.render(<HostIdleSuspendStatus onForceSleep={onForceSleep} />);
+    });
+
+    expect(container.textContent).toContain("Policy: Agent Activity");
+    expect(container.textContent).toContain("Available");
+    expect(container.textContent).toContain("Quiet (suspend candidate)");
+    expect(container.textContent).toContain("Recognized agents: 2");
+    expect(container.textContent).toContain("Monitored terminals: 3");
+    expect(container.textContent).toContain("tcp4-tcp6");
+    expect(container.textContent).toContain(
+      "Silence does not prove agent completion",
+    );
+
+    const forceButton = page.getByRole("button", {
+      name: "Force Machine to Sleep",
+    });
+    await expect.element(forceButton).toBeEnabled();
+    await act(async () => userEvent.click(forceButton));
+    expect(onForceSleep).toHaveBeenCalledWith(mocks.status);
+  });
+
+  it("renders HostIdleSuspendStatus with measurement warning alert and truncation note", async () => {
+    const fakeNow = 1724500030000;
+    vi.spyOn(Date, "now").mockReturnValue(fakeNow);
+
+    mocks.status = mockStatus({
+      automaticPolicy: "agent-activity",
+      activity: {
+        measurementState: "unavailable",
+        reasonCode: "procAccess",
+        recognizedAgentCount: null,
+        monitoredTerminalCount: null,
+        sampledAtMs: null,
+        lastActivityAtMs: null,
+        networkCoverage: "tcp4-tcp6",
+        measurementWarning: {
+          reasonCode: "procAccess",
+          blockedSinceMs: fakeNow - 25000,
+          processes: [
+            { pid: 4321, executableIdentity: "/usr/bin/omp" },
+            { pid: 8765, executableIdentity: null },
+          ],
+          processesTruncated: true,
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(<HostIdleSuspendStatus />);
+    });
+
+    const alert = page.getByRole("alert");
+    await expect.element(alert.first()).toBeVisible();
+    expect(alert.first().element().textContent).toContain(
+      "Measurement Blocked: Process inspection restricted",
+    );
+    expect(alert.first().element().textContent).toContain("Blocked for 25s");
+    expect(alert.first().element().textContent).toContain(
+      "PID 4321: /usr/bin/omp",
+    );
+    expect(alert.first().element().textContent).toContain(
+      "PID 8765: Identity unavailable",
+    );
+    expect(alert.first().element().textContent).toContain(
+      "(examples truncated, list incomplete)",
+    );
+
+    vi.restoreAllMocks();
+  });
+
+  it("renders HostIdleSuspendStatus active countdown derived from armDeadlineMs", async () => {
+    const fakeNow = 1724500000000;
+    vi.spyOn(Date, "now").mockReturnValue(fakeNow);
+
+    mocks.status = mockStatus({
+      state: "armed",
+      armDeadlineMs: fakeNow + 30000,
+    });
+
+    await act(async () => {
+      root.render(<HostIdleSuspendStatus />);
+    });
+
+    expect(container.textContent).toContain("Arm Countdown:");
+    expect(container.textContent).toContain("30s");
+
+    vi.restoreAllMocks();
   });
 });

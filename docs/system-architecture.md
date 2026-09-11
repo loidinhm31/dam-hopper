@@ -252,6 +252,34 @@ only PID plus optional safe executable identity. Status meaningful-change
 filtering ignores heartbeat timestamp and elapsed-duration churn. Coordinator
 shutdown joins the sampler before `main.rs` stops PTY readers and tears down
 the manager.
+### Phase 06 protected status and browser presentation
+
+The protected `GET /api/system/idle-suspend/v1/status` remains the single
+server-authoritative snapshot. `packages/ui/src/api/client.ts` receives the
+transport result as `unknown`, validates the complete version-1 base and
+additive policy/activity shape, and returns a normalized object to the existing
+query. It performs only one compatibility branch: a valid old response with
+both additive keys absent becomes `automaticPolicy: "empty-fleet"` and
+`activity: null`; partial or malformed responses and rejected requests remain
+errors.
+
+`HostIdleSuspendStatus` renders coordinator state separately from observer
+measurement. Empty-fleet has no invented observer values. Agent mode displays
+measurement state/reason, nullable aggregate counts, `tcp4-tcp6` coverage, and
+the bounded warning projection. A warning contains only sorted PID/safe
+identity examples, blocked onset, reason, and truncation; no private process,
+terminal, socket, command, or credential material crosses the REST/UI
+boundary. The visible notice describes the heuristic limitation and service-
+only blind spot.
+
+The browser derives its sole arm countdown from `armDeadlineMs`. A local
+one-second display clock may also compute warning elapsed duration, but neither
+wall-clock display fact nor timer tick changes coordinator eligibility, query
+state, status revisions, or WebSocket payloads. The existing
+`host:idleSuspendChanged` message remains a revision-only GET invalidation hint.
+Manual force confirmation continues to use actual fleet counts and existing
+handoff/closing/disposal/pending gates, never recognized-agent counts.
+
 
 ### Phase 01 helper execution contract
 

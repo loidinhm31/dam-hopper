@@ -14,7 +14,8 @@
 - Date: 2026-09-10.
 - Description: consume the frozen additive status DTO, reject malformed new-server data, normalize only genuine old-server omission, and render honest aggregate activity state without changing manual force authority.
 - Priority: P2. Estimated implementation effort: 10h.
-- Implementation status: Pending. Review status: user validation incorporated; implementation remains pending.
+- Implementation status: DONE (2026-09-11). Review status: Passed (Score: 9.7/10).
+- Progress: 100% (20/20 implementation steps; 13/13 todo items).
 - Dependencies: Phase 05 owns `status.rs`, all backend DTO constructors, the API disabled/not-started fallback constructor, meaningful status revision publication, and runtime semantics. This phase owns client decoding, view behavior, API serialization regressions, component tests, and real-browser regressions.
 
 ## Key Insights
@@ -207,19 +208,19 @@ No file deletion. No new endpoint, query store, telemetry, matcher editor, polic
 
 ## Todo list
 
-- [ ] Freeze additive DTO casing, enum, and nullability with Phase 05.
-- [ ] Add strict new-server decoding and exact old-server normalization.
-- [ ] Keep malformed/partial/fetch failures as errors, never zero/quiet.
-- [ ] Render policy, validity, reason, counts, coverage, and one countdown.
-- [ ] Add visible heuristic and TCP-only limitations.
-- [ ] Preserve actual fleet counts and manual force behavior.
-- [ ] Keep matcher configuration out of UI/API mutation surfaces.
-- [ ] Add protected API/no-store/privacy regressions.
-- [ ] Add focused component and actual Chromium behavior coverage.
-- [ ] Verify disabled agent mode observes only and has no automatic countdown.
-- [ ] Remove disposable browser artifacts after proof.
-- [ ] Validate required warning shape and fail malformed new-server warnings.
-- [ ] Render safe blocker examples and continuous duration without polling or new authority.
+- [x] Freeze additive DTO casing, enum, and nullability with Phase 05.
+- [x] Add strict new-server decoding and exact old-server normalization.
+- [x] Keep malformed/partial/fetch failures as errors, never zero/quiet.
+- [x] Render policy, validity, reason, counts, coverage, and one countdown.
+- [x] Add visible heuristic and TCP-only limitations.
+- [x] Preserve actual fleet counts and manual force behavior.
+- [x] Keep matcher configuration out of UI/API mutation surfaces.
+- [x] Add protected API/no-store/privacy regressions.
+- [x] Add focused component and actual Chromium behavior coverage.
+- [x] Verify disabled agent mode observes only and has no automatic countdown.
+- [x] Remove disposable browser artifacts after proof.
+- [x] Validate required warning shape and fail malformed new-server warnings.
+- [x] Render safe blocker examples and continuous duration without polling or new authority.
 
 ## Success Criteria
 

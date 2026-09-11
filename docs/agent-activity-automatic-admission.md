@@ -203,6 +203,12 @@ snapshot timestamp, sample timestamp churn, and elapsed warning duration. It
 still publishes semantic changes to coordinator state, policy, timing, fleet,
 epoch, arm deadline, activity reason/state/counts, last qualifying activity,
 network coverage, warning reason, process identities, or truncation.
+The browser-side decoder and presentation are documented in [Protected
+Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md). The client
+keeps coordinator state separate from measurement validity, renders nullable
+counts as unknown, derives its only display countdown from `armDeadlineMs`,
+and preserves actual-fleet manual confirmation. Browser timers and warning
+duration do not publish revisions or create scheduling authority.
 
 ## Coordinator state machine
 
