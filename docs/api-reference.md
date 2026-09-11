@@ -404,9 +404,11 @@ block and preserves it when omitted.
 The status endpoint intentionally does not expose the matcher list or policy
 selector. Phase 02 adds private PTY root identity, raw-read, accepted-input,
 bounded-snapshot, and invalidation evidence. Phase 03 adds private bounded
-process discovery and retained attribution through `ProcessSource`; TCP
-observation and automatic eligibility remain owned by later enhancement
-phases. See [Configured-Agent Process Discovery](./agent-activity-process-discovery.md).
+process discovery and retained attribution through `ProcessSource`; Phase 04
+adds private owned TCP byte observation and per-socket baseline comparison.
+Neither phase changes this public API; automatic eligibility remains owned by
+Phase 05. See [Configured-Agent Process Discovery](./agent-activity-process-discovery.md)
+and [Owned TCP Byte Observation](./tcp-activity-observation.md).
 
 
 #### GET /api/system/idle-suspend/v1/status
@@ -1382,20 +1384,22 @@ Fire-and-forget message to send input to PTY stdin.
 **terminalResize(id: string, cols: number, rows: number): void**
 Fire-and-forget message to resize PTY dimensions.
 
-#### PTY and process activity observation (server-internal Phases 02–03)
+#### PTY, process, and owned TCP observation (server-internal Phases 02–04)
 
 The REST and WebSocket terminal contracts do not expose activity snapshots,
 root identities, raw-output counters, input revisions, watcher revisions,
-process evidence, or socket ownership. `terminalWrite` remains fire-and-forget:
-nonempty input passes through the manager's handoff/closing/disposal/session
-admission gate, while empty input is a no-op. Rejected input has no
-acknowledgement or replay path.
+process evidence, socket ownership, TCP counters, or diagnostic payloads.
+`terminalWrite` remains fire-and-forget: nonempty input passes through the
+manager's handoff/closing/disposal/session admission gate, while empty input is
+a no-op. Rejected input has no acknowledgement or replay path.
 
-Phase 03 `ProcessDiscovery` and `ProcessSource` are private server seams; they
-do not add an endpoint, WebSocket message, or automatic suspend claim. See
-[PTY Activity Observation](./pty-activity-observation.md) and
-[Configured-Agent Process Discovery](./agent-activity-process-discovery.md).
-TCP observation and later automatic eligibility remain future phases.
+Phase 03 `ProcessDiscovery`/`ProcessSource` and Phase 04
+`SocketDiagnosticsSource`/`LinuxSocketDiagnostics` are private server seams;
+they do not add an endpoint, WebSocket message, or automatic suspend claim.
+See [PTY Activity Observation](./pty-activity-observation.md),
+[Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
+and [Owned TCP Byte Observation](./tcp-activity-observation.md). Automatic
+eligibility and final handoff remain Phase 05 work.
 
 ### Event Subscriptions
 

@@ -99,9 +99,10 @@ The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automa
 
 `IdleSuspendConfig` accepts an `automatic_policy` selector and an
 `agent_executables` list. The selector defaults to `empty-fleet` and also
-accepts `agent-activity`; selecting the latter is a stored startup policy, not
-yet an activity observer. The default executable list is `codex`, `omp`,
-`claude`, and `agy`.
+accepts `agent-activity`; selecting the latter stores the startup policy while
+Phase 04 supplies private TCP evidence. The Phase 05 eligibility/claim layer
+still decides whether that evidence can authorize automatic handoff. The
+default executable list is `codex`, `omp`, `claude`, and `agy`.
 
 Executable entries are literal, case-sensitive basenames or absolute paths.
 Validation requires 1–32 unique entries, 1–256 UTF-8 bytes per entry, and only
@@ -155,16 +156,19 @@ The protected endpoint accepts strict JSON `{ "wakeAfterSeconds": 0, "force": fa
 
 Manual suspend remains separate from the planned generic host-resource remediation helper. Monitoring and alert surfaces describe host state; only the explicit, authenticated ForceSleepDialog action can request suspend.
 
-### Configured-agent activity evidence (Phases 01–03; TCP/eligibility pending)
+### Configured-agent activity evidence (Phases 01–04; eligibility pending)
 
 Phase 01 implements the persisted policy/configuration contract. Phase 02
 supplies private PTY root identity, raw-read evidence, accepted-input
-admission, bounded snapshots, and invalidation handles. Phase 03 now adds
-bounded configured-agent process discovery and retained attribution; TCP
-observation, activity eligibility, blocked-measurement warnings, and automatic
-`agent-activity` claims remain later work. See
-[Configured-Agent Process Discovery](./agent-activity-process-discovery.md) for
-the implementation contract.
+admission, bounded snapshots, and invalidation handles. Phase 03 adds bounded
+configured-agent process discovery, retained attribution, and an
+observer-namespace-qualified `OwnedSocketSet`. Phase 04 consumes that set,
+reads cumulative TCP counters through an unprivileged Linux socket-diagnostics
+transport, and compares per-socket baselines. Phase 05 owns pair commit,
+automatic eligibility, blocked-measurement warnings, and the final handoff
+claim. See [PTY Activity Observation](./pty-activity-observation.md),
+[Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
+and [Owned TCP Byte Observation](./tcp-activity-observation.md).
 
 - `ProcessDiscovery<S>` performs one bounded, synchronous preparation pass
   through the private `ProcessSource` seam. Production uses `LinuxProcSource`
@@ -183,12 +187,30 @@ the implementation contract.
   socket inodes, and 16 KiB command lines. Relevant processes must remain in
   the terminal's network namespace, and stat/executable identity is checked
   around reads to detect reuse or races.
-- The result contains recognized-agent count, monitored PTY output handles,
-  owned socket identities, and sanitized process evidence. It contains no
-  terminal bytes, command arguments, environment, credentials, or raw socket
-  diagnostics. Procfs permission, timeout, disappearance, namespace, identity,
-  and bound failures are explicit unavailable outcomes; no automatic suspend
-  claim is made here.
+- `tcp_info` parsing requires a 208-byte prefix and decodes
+  `tcpi_bytes_received` at bytes `128..136` and `tcpi_bytes_sent` at
+  `200..208` with checked slices/native-endian decoding. Extended payloads are
+  accepted; raw bytes are never cast to a local C structure.
+- `LinuxSocketDiagnostics` opens an unprivileged nonblocking
+  `NETLINK_SOCK_DIAG` socket and sends `SOCK_DIAG_BY_FAMILY` dump requests for
+  TCP v4/v6, then unresolved UDP/Unix inodes. Polling uses one monotonic
+  deadline. Datagram lengths are obtained with `MSG_PEEK | MSG_TRUNC`, and a
+  global 16 MiB response budget prevents unbounded allocation.
+- Multipart parsing validates sender/sequence identity, framing/alignment,
+  attributes, `NLMSG_DONE`, `NLMSG_ERROR`, and `NLM_F_DUMP_INTR`. Interrupted,
+  malformed, duplicate, truncated, or overrun streams fail closed. The thread
+  network namespace is checked before and after collection; unresolved owned
+  inodes are classified as retryable close races.
+- `TcpObserver` keeps a transactional baseline keyed by network namespace,
+  address family, and diagnostic cookie. `BaselineEstablished` is returned
+  for the first valid baseline, `Unchanged` requires identical keys/inodes and
+  counters, and `Activity` covers byte changes/resets, new or retired sockets,
+  and inode replacement. The inode is comparison metadata, not identity.
+- The result contains no terminal bytes, command arguments, environment,
+  credentials, addresses, or raw diagnostic payloads. Procfs/netlink
+  permission, timeout, disappearance, namespace, identity, malformed-frame,
+  unsupported-transport, and bound failures are explicit unavailable
+  outcomes; no automatic suspend claim is made here.
 
 ### Phase 01 helper execution contract
 
