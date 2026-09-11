@@ -1,6 +1,6 @@
 use axum::{
     extract::{Extension, Request, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -19,7 +19,7 @@ use crate::{
             IdleSuspendConflictResponse, IdleSuspendErrorCode, IdleSuspendTimingPatchRequest,
             IdleSuspendTimingPatchResponse,
         },
-        status::{CoordinatorState, IdleSuspendStatusV1},
+        status::IdleSuspendStatusV1,
     },
     pty::PtyFleetSnapshot,
     state::AppState,
@@ -40,10 +40,8 @@ pub fn idle_suspend_error_response(
         })),
     )
         .into_response();
-    resp.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
 }
 
@@ -63,74 +61,14 @@ pub fn idle_suspend_conflict_response(
         )),
     )
         .into_response();
-    resp.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
 }
 
-/// Helper to verify same-origin on browser requests that use session cookies.
-///
-/// Accepts exactly one parseable `Origin` and one `Host`.
-/// Requires `Origin == http(s)://Host`.
-/// Rejects missing, malformed, duplicate, foreign, or userinfo-bearing values.
-pub fn same_origin(headers: &HeaderMap) -> bool {
-    let origin_values: Vec<_> = headers.get_all(header::ORIGIN).iter().collect();
-    if origin_values.len() != 1 {
-        return false;
-    }
-    let Ok(origin_str) = origin_values[0].to_str() else {
-        return false;
-    };
-
-    let host_values: Vec<_> = headers.get_all(header::HOST).iter().collect();
-    if host_values.len() != 1 {
-        return false;
-    }
-    let Ok(host_str) = host_values[0].to_str() else {
-        return false;
-    };
-
-    let Ok(origin_uri) = origin_str.parse::<Uri>() else {
-        return false;
-    };
-
-    let Some(scheme) = origin_uri.scheme_str() else {
-        return false;
-    };
-    if scheme != "http" && scheme != "https" {
-        return false;
-    }
-
-    let Some(authority) = origin_uri.authority() else {
-        return false;
-    };
-
-    if authority.as_str().contains('@') {
-        return false;
-    }
-
-    let path = origin_uri.path();
-    if path != "" && path != "/" {
-        return false;
-    }
-    if origin_uri.query().is_some() {
-        return false;
-    }
-
-    if !authority.as_str().eq_ignore_ascii_case(host_str) {
-        return false;
-    }
-
-    let expected_http = format!("http://{}", authority.as_str());
-    let expected_https = format!("https://{}", authority.as_str());
-    origin_str.eq_ignore_ascii_case(&expected_http)
-        || origin_str.eq_ignore_ascii_case(&expected_https)
-}
-
-/// Verify media type and cookie same-origin guards before body or coordinator admission.
+/// Verify media type and cookie origin guards before body or coordinator admission.
 pub fn verify_transport_guards(
+    state: &AppState,
     headers: &HeaderMap,
     content_type_msg: &'static str,
     origin_msg: &'static str,
@@ -147,8 +85,9 @@ pub fn verify_transport_guards(
         ));
     }
 
-    let uses_cookie = headers.get(header::COOKIE).is_some();
-    if uses_cookie && !same_origin(headers) {
+    let is_bearer = auth::extract_bearer_token(headers).is_some();
+    let uses_cookie = !is_bearer && headers.get(header::COOKIE).is_some();
+    if uses_cookie && !state.origin_is_allowed(headers) {
         return Err(idle_suspend_error_response(
             StatusCode::FORBIDDEN,
             IdleSuspendErrorCode::InvalidOrigin.as_code_str(),
@@ -206,7 +145,6 @@ pub async fn verify_enabled_actor(
     Ok(actor.clone())
 }
 
-
 /// GET /api/system/idle-suspend/v1/status
 ///
 /// Returns the authoritative status snapshot for the idle suspend subsystem.
@@ -223,34 +161,19 @@ pub async fn get_status(
             (guard.quiet_period_seconds, guard.wake_after_seconds)
         };
         let fleet = state.pty_manager.fleet_watcher().snapshot();
-        IdleSuspendStatusV1 {
-            version: 1,
-            status_revision: 0,
-            state: CoordinatorState::Disabled,
-            enabled: state.idle_suspend_policy.enabled,
-            timing_mutable: false,
-            timing_mutable_reason: Some("disabled".to_string()),
-            capability_code: state.idle_suspend_policy.capability_selection.as_str().to_string(),
-            current_epoch: 0,
-            quiet_period_seconds: quiet,
-            wake_after_seconds: wake,
-            min_quiet_period_seconds: crate::config::MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
-            max_quiet_period_seconds: crate::config::MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
-            min_wake_after_seconds: crate::config::MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
-            max_wake_after_seconds: crate::config::MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
-            fleet_snapshot: fleet,
-            arm_deadline_ms: None,
-            last_outcome: None,
-            detail: Some("coordinatorNotStarted".to_string()),
-            timestamp_ms: IdleSuspendStatusV1::now_ms(),
-        }
+        IdleSuspendStatusV1::fallback_status(
+            &state.idle_suspend_policy,
+            quiet,
+            wake,
+            fleet,
+            state.fallback_warning_onset_ms,
+        )
     };
 
     let mut response = Json(status).into_response();
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
 }
 
@@ -264,8 +187,9 @@ pub async fn update_timing(
     actor: Option<Extension<AuthenticatedActor>>,
     request: Request,
 ) -> Response {
-    // 1 & 2. Transport guards (Content-Type + cookie same-origin)
+    // 1 & 2. Transport guards (Content-Type + cookie origin)
     if let Err(resp) = verify_transport_guards(
+        &state,
         request.headers(),
         "timing mutation requires application/json",
         "timing mutation origin is not allowed",
@@ -311,10 +235,9 @@ pub async fn update_timing(
     };
 
     // 8. Validate timing pair bounds
-    if let Err(err) = validate_timing_pair(
-        patch_req.quiet_period_seconds,
-        patch_req.wake_after_seconds,
-    ) {
+    if let Err(err) =
+        validate_timing_pair(patch_req.quiet_period_seconds, patch_req.wake_after_seconds)
+    {
         return idle_suspend_error_response(
             StatusCode::BAD_REQUEST,
             IdleSuspendErrorCode::InvalidTiming.as_code_str(),
@@ -360,10 +283,8 @@ pub async fn update_timing(
                 )),
             )
                 .into_response();
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-store"),
-            );
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             resp
         }
         CoordinatorTimingResult::HandoffInProgress => idle_suspend_error_response(
@@ -405,8 +326,9 @@ pub async fn force_suspend(
     actor: Option<Extension<AuthenticatedActor>>,
     request: Request,
 ) -> Response {
-    // 1 & 2. Transport guards (Content-Type + cookie same-origin)
+    // 1 & 2. Transport guards (Content-Type + cookie origin)
     if let Err(resp) = verify_transport_guards(
+        &state,
         request.headers(),
         "force suspend requires application/json",
         "force suspend origin is not allowed",
@@ -499,10 +421,8 @@ pub async fn force_suspend(
                 )),
             )
                 .into_response();
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-store"),
-            );
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             resp
         }
         CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation { fleet_snapshot } => {

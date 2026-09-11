@@ -8,8 +8,9 @@ Phase 02 records evidence at the PTY boundary without adding a public REST
 route, a WebSocket acknowledgement, terminal-content inspection, or an
 automatic agent-policy claim. Phase 03 consumes the root/stat seam and
 implements bounded configured-agent process discovery and retained attribution.
-Phase 04 consumes the resulting owned-socket set for TCP byte observation;
-Phase 05 owns sampling, eligibility, and the final handoff claim.
+Phase 04 consumes the resulting owned-socket set for TCP byte observation.
+Phase 05 combines all evidence in the transactional sampler and performs the
+generation-fenced final handoff claim.
 
 ## Source map
 
@@ -238,8 +239,6 @@ The focused `pty_activity_tests` module covers the observable boundaries:
 The Phase 02 evidence report records 8/8 focused activity tests and 159 passed
 PTY-module tests with one pre-existing ignored performance test.
 
-## Next phases and limitations
-
 Phase 02 remains an evidence seam only. It does not inspect descendants,
 classify configured agent executables, read owned TCP counters, calculate
 blocked durations, expose status warnings, or claim automatic suspend
@@ -251,8 +250,9 @@ exact identity checks, namespace/FD ownership reads, and hard scan bounds are
 documented in [Configured-Agent Process Discovery](./agent-activity-process-discovery.md).
 Phase 04 consumes its `OwnedSocketSet` and is documented in
 [Owned TCP Byte Observation](./tcp-activity-observation.md). Phase 05 combines
-all evidence under a final generation-fenced claim. No automatic
-`agent-activity` policy claim ships from these evidence seams alone.
+all evidence under a final generation-fenced claim and publishes the
+content-free activity status contract in
+[Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).
 
 ## Unresolved questions
 

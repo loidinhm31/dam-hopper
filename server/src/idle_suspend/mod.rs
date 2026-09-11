@@ -18,8 +18,8 @@ pub(crate) mod activity;
 pub mod tests;
 
 pub use policy::{
-    validate_timing_pair, AgentExecutableEntry, AgentExecutableSet, RuntimeIdleSuspendTiming,
-    StartupIdleSuspendPolicy,
+    validate_timing_pair, AgentExecutableEntry, AgentExecutableSet, IdleSuspendAutomaticPolicy,
+    RuntimeIdleSuspendTiming, StartupIdleSuspendPolicy,
 };
 pub use protocol::{
     decode_frame, encode_frame, read_frame_async, validate_request_id,
@@ -46,7 +46,11 @@ pub use coordinator::{
     ForceSuspendCommand, IdleSuspendCoordinator, UpdateTimingCommand,
 };
 pub use executor::{FakeExecutor, IdleSuspendExecutor, SystemdIdleSuspendExecutor, UnavailableExecutor};
-pub use status::{CoordinatorState, IdleSuspendStatusV1};
+pub use status::{
+    ActivityMeasurementState, ActivityObservationReason, CoordinatorState,
+    IdleSuspendActivityStatusV1, IdleSuspendMeasurementWarningV1, IdleSuspendStatusV1,
+    IdleSuspendWarningProcessV1, MeasurementWarningReasonCode,
+};
 pub use audit::{HelperAudit, HelperAuditError, HelperAuditRecord, HelperAuditRecordType};
 pub use backend::{FakeActionBackend, SuspendActionBackend, SystemdLogindBackend};
 pub use helper_client::HelperClient;

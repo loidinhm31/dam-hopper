@@ -159,8 +159,8 @@ foreground process-group IDs. The detailed contract is in
 No PTY reader/input path may log or persist command text, arguments,
 environment, terminal bytes, or socket details. Phase 03 process discovery
 consumes this seam through a bounded `ProcessSource`; Phase 04 TCP sampling
-and later automatic eligibility must preserve fail-closed behavior and must
-not add a second writer path.
+and the Phase 05 transactional sampler preserve fail-closed behavior and do
+not add a second writer path. See [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).
 
 ### Bounded process discovery and attribution (Phase 03)
 
@@ -227,6 +227,39 @@ instead of depending on host sockets or network traffic.
   Commit the next baseline only after the caller accepts the complete sample;
   invalidation must force a new baseline. Do not expose raw netlink payloads,
   addresses, command data, credentials, or terminal content.
+
+### Transactional sampling and automatic admission (Phase 05)
+
+Keep the configured-agent integration private and single-owner. Construct one
+sampler worker per coordinator; the worker owns `ProcessDiscovery` and
+`TcpObserver` state and exposes only bounded observations or opaque final
+tickets to the coordinator. Do not move either baseline into a Tokio task or
+create a parallel observer.
+
+- Use a one-slot mailbox with scheduled coalescing. Final requests supersede
+  queued work and cancel in-flight work cooperatively. Recovery requests
+  invalidate both baselines after resume or handoff release.
+- Carry one monotonic deadline through process preparation, TCP diagnostics,
+  output fencing, and the post-snapshot check. Retry one retryable close race
+  only while that original deadline remains; never retry arbitrary diagnostics
+  failures.
+- Prepare process and TCP samples sequentially. Enrich TCP failures with at
+  most 32 safe process identities from the uncommitted process preparation,
+  then drop that preparation. Commit both prepared states back-to-back only
+  after cancellation, deadline, raw-output, fleet-generation, and input
+  revision checks pass.
+- Treat only an unchanged final sample as ticket-eligible. The manager gate
+  must verify policy, request/activity/epoch/timing revisions, quiet deadline,
+  observation age, input revision, fleet generation, exact root incarnation
+  identities, raw output counters, and closing/disposal/lifecycle flags under
+  one `PtySessionManager` lock.
+- Keep `automaticPolicy` required in v1 status. Emit `activity` only for
+  `agent-activity`; warnings contain a closed reason and at most 32 sorted,
+  deduplicated PID/safe-identity records. Never expose args, environment,
+  terminal bytes, socket addresses, inodes, or raw diagnostics.
+- `is_meaningful_change` must ignore heartbeat/timestamp and elapsed-duration
+  churn while preserving semantic state, activity, warning, fleet, timing, and
+  epoch changes. Join the sampler before PTY teardown during shutdown.
 
 ### Linux release manager service lifecycle and verification (Production CLI Phases 03–04)
 

@@ -99,6 +99,13 @@ pub enum HandoffClaimError {
     HandoffAlreadyActive,
     NotQuiescent,
     GenerationMismatch { expected: u64, actual: u64 },
+    LifecycleBusy,
+    PolicyMismatch,
+    DeadlineNotExpired,
+    ObservationStale,
+    InputRevisionMismatch,
+    RootIdentityMismatch,
+    RawOutputAdvanced,
 }
 
 /// Internal authoritative state tracker for the PTY fleet.
@@ -381,6 +388,24 @@ impl PtyFleetState {
             generation: self.generation,
         })
     }
+    /// Attempt to claim agent activity handoff admission.
+    ///
+    /// Atomic check: generation must match expected, no creating or restart-pending
+    /// sessions, and neither closing, disposing, nor handoff active.
+    /// Live sessions are permitted if all activity fences have passed.
+    pub fn try_claim_agent_handoff(&mut self, expected_generation: u64) -> Result<HandoffClaim, HandoffClaimError> {
+        self.check_claim_common(expected_generation)?;
+        if !self.creating.is_empty() || !self.restart_pending.is_empty() {
+            return Err(HandoffClaimError::LifecycleBusy);
+        }
+
+        self.handoff_active = true;
+        self.publish();
+        Ok(HandoffClaim {
+            generation: self.generation,
+        })
+    }
+
 
     /// Release handoff admission gate (upon completion, resume, or enqueue failure).
     pub fn release_handoff(&mut self) {
