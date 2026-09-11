@@ -33,7 +33,7 @@ In opt-in `agent-activity` mode, configured agents (`codex`, `omp`, `claude`, `a
 | [04 — Owned TCP byte observation](phase-04-tcp-observation.md)        | DONE (2026-09-11) | 100%      | 14h      | 01–02 + frozen 03 input types      |
 | [05 — Sampler/coordinator admission](phase-05-sampler-coordinator.md) | DONE (2026-09-11) | 100%      | 20h      | 02–04                              |
 | [06 — Protected status and UI](phase-06-api-ui.md)                    | DONE (2026-09-11) | 100%      | 10h       | Frozen DTO; runtime proof after 05 |
-| [07 — Integrated qualification](phase-07-verification.md)             | Pending | 0%       | 26h      | 01–06                              |
+| [07 — Integrated qualification](phase-07-verification.md)             | DONE (2026-09-11) | 100%      | 26h      | 01–06                              |
 | [08 — Docs and opt-in rollout](phase-08-docs-rollout.md)              | Pending | 0%       | 13h      | 07 proof                           |
 
 ## Execution and ownership
@@ -53,14 +53,15 @@ In opt-in `agent-activity` mode, configured agents (`codex`, `omp`, `claude`, `a
 
 ## Planning delivery
 
-Phase 01, Phase 02, Phase 03, Phase 04, Phase 05, and Phase 06 are complete (6/8 phases complete; 72/111h estimated, approximately 65%; DONE 2026-09-11). Phase 02 delivered qualified PTY root identity, incarnation-scoped raw output evidence, accepted-input admission fencing, handoff rejection, and bounded private snapshots. Phase 03 delivered bounded process discovery, strict configured-agent attribution, retained detached lineage, deterministic socket ownership, and bounded private process evidence. Phase 04 delivered direct unprivileged NETLINK_SOCK_DIAG TCP4/TCP6 byte observation, bounded multipart parsing, cookie/family/namespace identity, per-socket deltas, transactional prepare/commit, fail-closed transport/namespace/diagnostic handling, and privacy-safe failure…
+Phase 01 through Phase 07 are complete (7/8 phases complete; 98/111h estimated, approximately 88%; DONE 2026-09-11). Phase 02 delivered qualified PTY root identity, incarnation-scoped raw output evidence, accepted-input admission fencing, handoff rejection, and bounded private snapshots. Phase 03 delivered bounded process discovery, strict configured-agent attribution, retained detached lineage, deterministic socket ownership, and bounded private process evidence. Phase 04 delivered direct unprivileged NETLINK_SOCK_DIAG TCP4/TCP6 byte observation, bounded multipart parsing, cookie/family/namespace identity, per-socket deltas, transactional prepare/commit, fail-closed transport/namespace/diagnostic handling, and privacy-safe socket diagnostics. Phase 05 delivered transactional sampler coordinator, fresh final checks, and epoch fencing. Phase 06 delivered protected status, measurement warning DTO, and browser UI. Phase 07 delivered integrated qualification, end-to-end PTY/agent scenarios, live Linux smoke test, and boundary enforcement.
 
 Phase 02 evidence: focused PTY activity tests passed **8/8**; the PTY module suite passed **159 tests** with one pre-existing performance test ignored; code review scored **9.5/10** with no critical issues. [Test report](../reports/tester-260911-0152-phase02-pty-activity-contracts.md) · [Code review](../reports/code-review-260911-0156-phase02-pty-root-identity-and-input-admission.md).
 Phase 03 evidence: latest focused process discovery validation passed **18/18**; the idle-suspend suite passed **100/100**; the PTY suite passed **187/187** with one pre-existing performance test ignored; code review scored **9.0/10** with no critical issues. [Documentation/test validation](../reports/docs-260911-0246-phase-03-process-discovery.md) · [Implementation test report](../reports/tester-260911-0236-phase-03-process-discovery.md) · [Code review](../reports/code-review-260911-0237-phase-03-process-discovery.md).
 Phase 04 evidence: TCP/netlink focus passed **40/40**; latest activity suite passed **59/59**; full idle-suspend library passed **128/128** and crate-wide tests passed **142/142**; Cycle 2 code review approved **9.8/10** with no critical issues. [Test report](../reports/tester-260911-0313-phase04-tcp-byte-observation.md) · [Cycle 2 code review](../reports/code-review-260911-0738-phase04-tcp-byte-observation-cycle2.md).
 Phase 05 evidence: **1031/1031 server tests passed**, **131/131 idle_suspend tests passed**, **7/7 sampler tests passed**, **7/7 manager fence tests passed**, code review **9.6/10 approved**, advisor checkpoint verified. [Test report](../reports/tester-260911-0847-phase05-transactional-sampler-admission-coordinator.md) · [Code review](../reports/code-review-260911-0849-phase05-transactional-sampler-coordinator.md).
 Phase 06 evidence: **9/9 backend API tests passed**, **41/41 frontend unit tests passed**, **13/13 Chromium browser tests passed**, code review **9.7/10 approved**. [Test report](../reports/tester-260911-1028-phase06-protected-status-browser-ui.md).
-Next active phase: **Phase 07 — Integrated qualification** (Pending; 0%).
+Phase 07 evidence: **323 backend/PTY/API/integration tests passed**, **14/14 security boundary checks passed**, **16/16 Chromium browser tests passed**, live Linux smoke test passed in 0.72s, code review **9.4/10 approved**. [Test report](../reports/qa-260911-1107-phase07-integrated-qualification.md).
+Next active phase: **Phase 08 — Documentation, operations runbooks, and controlled rollout** (Pending; 0%).
 
 Active-plan state was registered using the current OMP session UUID after supplying the missing `EVCRATE_SESSION_ID`. Pass this directory explicitly to implementation commands/workers; do not reuse the completed suggested plan.
 
@@ -71,7 +72,7 @@ Active-plan state was registered using the current OMP session UUID after supply
 - Confirmed existing 15-minute quiet default and explicit startup opt-in.
 - Unknown coverage blocks suspend **with a warning report**: PID, blocked duration and executable identity without arguments; authenticated access only.
 - Exact warning DTO, privacy boundaries, per-phase steps and verification cases are integrated into the shared contract and phase files. [Decision reference](warning-report-contract.md) records the validation; it is not an override or extra implementation task.
-- All phase estimates include validated reporting work and sum directly to 111h. No additional amendment surcharge, unresolved decision or deferred phase rewrite; Phase 01–06 implementation is complete, while phases 07–08 remain pending.
+- All phase estimates include validated reporting work and sum directly to 111h. No additional amendment surcharge, unresolved decision or deferred phase rewrite; Phase 01–07 are complete, while Phase 08 remains pending.
 
 ## Unresolved questions
 

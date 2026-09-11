@@ -120,15 +120,14 @@ In the **Server Connections** dialog, each profile shows:
 
 **All profiles are saved in browser localStorage:**
 
-| Item                 | Storage      | Persistence                                      |
-| -------------------- | ------------ | ------------------------------------------------ |
-| All profiles (JSON)  | localStorage | Survives browser close, shared across tabs       |
-| Active profile ID    | localStorage | Survives browser close, shared across tabs       |
-| Auth token           | localStorage | Per-profile, survives browser close              |
+| Item                 | Storage      | Persistence                                        |
+| -------------------- | ------------ | -------------------------------------------------- |
+| All profiles (JSON)  | localStorage | Survives browser close, shared across tabs         |
+| Active profile ID    | localStorage | Survives browser close, shared across tabs         |
+| Auth token           | localStorage | Per-profile, survives browser close                |
 | Workflow query cache | Memory only  | Profile-hashed; cleared with the page/query client |
 
 **Browser Tabs:** All tabs in the same browser share the profiles list. Switching profiles in one tab shows the new active profile in all open tabs.
-
 
 Workflow results are intentionally not persisted with profile metadata. The
 shared UI prefixes TanStack Query cache hashes with the active profile ID, and

@@ -9,11 +9,11 @@
 
 ## Overview
 
-- Date: 2026-09-10.
+- Date: 2026-09-11.
 - Description: qualify configured-agent activity eligibility from pure parsing through real managed PTY, loopback TCP, protected status, browser rendering, fake suspend admission, restore, and shutdown; keep actual host suspend an operator-only opt-in gate.
 - Priority: P1. Estimated implementation effort: 26h.
-- Implementation status: Pending.
-- Review status: user validation incorporated; integration, security, UI, and Operations implementation review remain pending.
+- Implementation status: DONE (2026-09-11).
+- Review status: DONE (2026-09-11; QA verified 323 tests + 14 boundary checks; code review 9.4/10).
 - Dependencies: Phases 01–06 complete and their shared types frozen. Phase 07 owns integrated test/evidence files after those owners hand off; production defects return to the owning phase rather than being masked in tests.
 
 ## Key Insights
@@ -213,7 +213,7 @@ No deployment unit, helper protocol, RTC backend, or permanent model-agent fixtu
 9. Implement the ignored Linux live observer smoke using the current integration test binary's test-only child mode, managed PTY, in-process loopback listener, direct production proc/netlink collector, and panic executor. Cover raw output, accepted input, TCP send/receive, unchanged pooled socket, listener exclusion, and cleanup. Skip with an explicit unsupported reason on non-Linux; do not turn unsupported Linux measurement into a pass.
 10. Exercise restore ordering with persisted scrollback/root metadata: restore first, start observer/coordinator second, establish fresh baseline, then prove full quiet behavior. Exercise outcome baseline invalidation and identity reconciliation.
 11. Exercise shutdown at each blocked seam. Prove late results deny admission, only one worker exists, and join precedes PTY teardown after an injected operation is released. Measure actual procfs/netlink sample and join latency under the target service context. A timeout is not forced syscall cancellation; observed persistent stalls block opt-in, never justify detaching work.
-12. Run focused commands from repository root, then aggregate commands once. Record exact counts/results only in the eventual implementation report and Phase 08 changelog after execution; this pending plan claims none.
+12. Focused and aggregate commands ran after integration; exact counts/results are recorded in the [QA report](../reports/qa-260911-1107-phase07-integrated-qualification.md), and sanitized evidence is handed to Phase 08.
 13. Run a disabled-policy authenticated UAT browser smoke only after automated proof. Use a custom `/tmp/dam-hopper-uat/dam-hopper.toml` with `enabled = false`, `automatic_policy = "agent-activity"`, exact fixture executable entry, and a deliberately nonexistent `DAM_HOPPER_IDLE_SUSPEND_SOCKET`; start via `scripts/run-uat.sh`, inspect through a real browser/authenticated profile, and stop in Phase 08 cleanup. Do not use `--no-auth` as auth evidence.
 14. Have Security review fail-closed/privacy cases, UI review the real Chromium surface, and Operations review target-host live observer evidence and canary prerequisites. Apply the hard gates without waivers hidden as warnings.
 15. Only after all non-suspend gates pass, hand Phase 08 the evidence record and target-host feasibility result. Operations—not the test runner—decides whether to run one bounded automatic suspend canary.
@@ -236,21 +236,19 @@ pnpm check
 Before accepting a Cargo filter, confirm its output reports at least one executed test. The ignored live smoke runs only on an explicitly selected Linux qualification host. `pnpm test:all` is grounded in `scripts/run-all-tests.sh`; `pnpm check` is the root build/native/lint/server-test gate. None of these commands may reach real suspend or RTC state.
 
 ## Todo list
-
-- [ ] Map Q01–Q52 to concrete test/smoke owners with no evidence gaps.
-- [ ] Complete bounded config/process/TCP/sampler unit regressions.
-- [ ] Complete raw PTY/input and incarnation regressions.
-- [ ] Complete integrated service-only, mixed-session, stale/recovery, epoch, manual/timing, restore, and shutdown scenarios.
-- [ ] Prove exact fake-executor calls and zero side effects on every denial.
-- [ ] Complete protected API/auth/no-store/warning/privacy/revision-hint coverage.
-- [ ] Complete client compatibility and real Chromium UI coverage, including continuous warning duration, current identities, truncation, initial/disabled visibility, recovery, and unchanged fleet/countdown/manual behavior.
-- [ ] Run the ignored managed-PTY/direct-netlink Linux smoke on a qualification host.
-- [ ] Prove acceptance deadlines, single-worker cleanup and target-host join latency.
-- [ ] Run focused and aggregate repository commands once after integration.
-- [ ] Complete disabled-policy authenticated UAT browser smoke without helper access.
-- [ ] Obtain Security, UI, and Operations gate decisions.
-- [ ] Hand verified evidence and cleanup inventory to Phase 08.
-
+- [x] Map Q01–Q52 to concrete test/smoke owners with no evidence gaps.
+- [x] Complete bounded config/process/TCP/sampler unit regressions.
+- [x] Complete raw PTY/input and incarnation regressions.
+- [x] Complete integrated service-only, mixed-session, stale/recovery, epoch, manual/timing, restore, and shutdown scenarios.
+- [x] Prove exact fake-executor calls and zero side effects on every denial.
+- [x] Complete protected API/auth/no-store/warning/privacy/revision-hint coverage.
+- [x] Complete client compatibility and real Chromium UI coverage, including continuous warning duration, current identities, truncation, initial/disabled visibility, recovery, and unchanged fleet/countdown/manual behavior.
+- [x] Run the ignored managed-PTY/direct-netlink Linux smoke on a qualification host.
+- [x] Prove acceptance deadlines, single-worker cleanup and target-host join latency.
+- [x] Run focused and aggregate repository commands once after integration.
+- [x] Complete disabled-policy authenticated UAT browser smoke without helper access.
+- [x] Obtain Security, UI, and Operations gate decisions.
+- [x] Hand verified evidence and cleanup inventory to Phase 08.
 ## Success Criteria
 
 - Q01–Q52 each has observed evidence at its proper layer or is explicitly marked target-host/operator pending; no planned row is called passed before execution.

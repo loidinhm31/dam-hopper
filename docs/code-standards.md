@@ -132,7 +132,7 @@ foreground process-group IDs. The detailed contract is in
 [PTY Activity Observation](./pty-activity-observation.md).
 
 - Store each concrete PTY incarnation as `TerminalIdentity { session_id,
-  incarnation }` plus `RootQualification`. A qualified `ProcessIdentity`
+incarnation }` plus `RootQualification`. A qualified `ProcessIdentity`
   requires both the child PID and `/proc/<pid>/stat` `start_ticks`; failed or
   unsupported probes remain explicit `Uncertain`/`Unavailable` states while
   the terminal stays usable.
@@ -260,6 +260,7 @@ create a parallel observer.
 - `is_meaningful_change` must ignore heartbeat/timestamp and elapsed-duration
   churn while preserving semantic state, activity, warning, fleet, timing, and
   epoch changes. Join the sampler before PTY teardown during shutdown.
+
 ### Protected status decoding and presentation (Phase 06)
 
 Keep external status data at an explicit `unknown` boundary. The
@@ -289,6 +290,31 @@ constraints before exposing data to React Query.
   or socket identities, bytes, tokens, counters, or raw diagnostics. Use
   accessible persistent text; do not make limitations hover-only or color-only.
 
+### Integrated qualification and test-surface ownership (Phase 07)
+
+Keep integrated verification at the public boundary it protects:
+
+- `server/tests/idle_suspend.rs` uses the real `PtySessionManager`, public
+  coordinator, fixture-owned PTYs, and a fake executor. Assert state,
+  eligibility/deadline, lifecycle counts, and exact executor calls; do not
+  reach into crate-private observer state.
+- `server/src/api/tests.rs` uses the Axum router boundary for authentication,
+  `Cache-Control: no-store`, policy/activity nullability, warning bounds, and
+  privacy omissions. Serialize and inspect consumer-visible DTOs rather than
+  echoing constructor fields.
+- `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx` uses
+  Chromium and rendered/accessibility assertions for status, warnings,
+  countdown, manual action, and old-server compatibility. Keep jsdom/unit
+  tests for pure decode or component behavior, not browser proof.
+- `activity_live_linux_pty_tcp_smoke` is an explicitly ignored Linux
+  qualification test. It may use test-owned loopback TCP and direct procfs/
+  netlink observation, but its executor must panic on suspend. It must never
+  invoke the helper, RTC, `systemctl suspend`, `sudo`, root installation, or
+  external services.
+
+Record command-level results and the target-host context in the Phase 07 QA
+report. A passing fake or live observer test is not evidence of a real suspend
+canary; that decision belongs to Operations.
 
 ### Linux release manager service lifecycle and verification (Production CLI Phases 03–04)
 
@@ -807,7 +833,7 @@ ship a harness-specific producer.
 - `SessionStatus` is `Running | Ended | Abandoned`.
 - `ResourceLinkType` is `Terminal | Agent`.
 - `ResourceObservedState` is `Attached | Exited | Stale | Detached | Crashed |
-  `Unknown`; terminal lifecycle processing emits the first five as applicable.
+`Unknown`; terminal lifecycle processing emits the first five as applicable.
 - `WorkflowSource` identifies `Manual | Terminal | Git | Agent | System`.
 - `WorkflowEventType` is a closed set of item, session, resource, note, and
   workspace activity classifications.
@@ -832,11 +858,11 @@ it is a canonical filesystem path, not client data.
 
 **Plan-first hierarchy invariant:**
 
-| Child kind | Allowed parent |
-| --- | --- |
-| `Plan` | None (root only) |
-| `Phase` | `Plan` (required) |
-| `Task` | None, `Plan`, or `Phase` |
+| Child kind | Allowed parent           |
+| ---------- | ------------------------ |
+| `Plan`     | None (root only)         |
+| `Phase`    | `Plan` (required)        |
+| `Task`     | None, `Plan`, or `Phase` |
 
 `Task` cannot parent another task. Item creation reads the parent inside the
 same transaction, checks workspace and project scope, walks ancestors, rejects
@@ -862,15 +888,15 @@ after commit. Any error drops the transaction and rolls back both entity and
 event. Read methods use the locked connection and include workspace scope in
 entity lookups.
 
-| Repository area | Required behavior |
-| --- | --- |
-| Workspace | Get-or-create by unique canonical locator; look up by ID or locator. |
-| Items | Create/update/delete with hierarchy and transition checks; list with project/status filters and bounded limits. |
-| Sessions | Start with optional item, resource link, and event atomically; end/abandon only through validated transitions; overlapping sessions are allowed. |
-| Resources | Upsert by session/type/external ID; observations update link state and suggested end time only, never session status or timestamps; compare terminal incarnations and keep unlink idempotent. |
-| Notes | Require an item or session target in the same workspace; soft-delete first; list can include deleted rows. |
-| Events | `INSERT OR IGNORE` by event ID for retry idempotency; keyset page by `(recorded_at DESC, id DESC)`; purge expiry in bounded transactions. |
-| Overview | Bound project/item/session counts, include a `truncated` flag, attach non-deleted notes and active sessions, and compute factual task progress. |
+| Repository area | Required behavior                                                                                                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace       | Get-or-create by unique canonical locator; look up by ID or locator.                                                                                                                          |
+| Items           | Create/update/delete with hierarchy and transition checks; list with project/status filters and bounded limits.                                                                               |
+| Sessions        | Start with optional item, resource link, and event atomically; end/abandon only through validated transitions; overlapping sessions are allowed.                                              |
+| Resources       | Upsert by session/type/external ID; observations update link state and suggested end time only, never session status or timestamps; compare terminal incarnations and keep unlink idempotent. |
+| Notes           | Require an item or session target in the same workspace; soft-delete first; list can include deleted rows.                                                                                    |
+| Events          | `INSERT OR IGNORE` by event ID for retry idempotency; keyset page by `(recorded_at DESC, id DESC)`; purge expiry in bounded transactions.                                                     |
+| Overview        | Bound project/item/session counts, include a `truncated` flag, attach non-deleted notes and active sessions, and compute factual task progress.                                               |
 
 `WorkflowStoreError` is the public repository error boundary. Keep SQLite
 errors, model validation errors, not-found errors, duplicate requests, and

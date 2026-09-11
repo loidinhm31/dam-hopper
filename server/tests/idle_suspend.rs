@@ -17,10 +17,11 @@ use tower::ServiceExt;
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
-    config::{
-        DamHopperConfig, FeaturesConfig, GlobalConfig, IdleSuspendConfig, RestartPolicy,
-        ServerConfig, WorkspaceInfo, DEFAULT_RESTART_MAX_RETRIES,
-    },
+        config::{
+            DamHopperConfig, FeaturesConfig, GlobalConfig, IdleSuspendAutomaticPolicy,
+            IdleSuspendConfig, RestartPolicy, ServerConfig, WorkspaceInfo,
+            DEFAULT_RESTART_MAX_RETRIES,
+        },
     crypto::DamHopperOpaqueSuite,
     diagnostics::DiagnosticStore,
     fs::FsSubsystem,
@@ -166,6 +167,124 @@ wake_after_seconds = {}
         state,
         config_path,
     }
+}
+async fn setup_agent_activity_fixture(
+    idle_enabled: bool,
+    quiet: u64,
+    wake: u64,
+    agent_executables: Option<Vec<String>>,
+) -> TestFixture {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace_dir = tmp.path().to_path_buf();
+    let config_path = workspace_dir.join("dam-hopper.toml");
+
+    let agent_execs = agent_executables.unwrap_or_else(|| {
+        vec![
+            "codex".to_string(),
+            "omp".to_string(),
+            "claude".to_string(),
+            "agy".to_string(),
+        ]
+    });
+    let execs_toml = agent_execs
+        .iter()
+        .map(|e| format!("\"{}\"", e))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let safe_quiet = quiet.max(60);
+    let safe_wake = wake.max(60);
+    let initial_toml = format!(
+        r#"[workspace]
+name = "test-idle-suspend-ws"
+root = "{}"
+
+[server.idle_suspend]
+enabled = {}
+quiet_period_seconds = {}
+wake_after_seconds = {}
+automatic_policy = "agent-activity"
+agent_executables = [{}]
+"#,
+        workspace_dir.display(),
+        idle_enabled,
+        safe_quiet,
+        safe_wake,
+        execs_toml
+    );
+    std::fs::write(&config_path, initial_toml).expect("write initial toml");
+
+    let (event_sink, _rx) = BroadcastEventSink::new(512);
+    let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
+
+    let mut config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "test-idle-suspend-ws".into(),
+            root: workspace_dir.display().to_string(),
+        },
+        agent_store: None,
+        server: ServerConfig {
+            idle_suspend: IdleSuspendConfig {
+                enabled: idle_enabled,
+                quiet_period_seconds: safe_quiet,
+                wake_after_seconds: safe_wake,
+                automatic_policy: IdleSuspendAutomaticPolicy::AgentActivity,
+                agent_executables: agent_execs,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        projects: vec![],
+        features: FeaturesConfig::default(),
+        config_path: config_path.clone(),
+    };
+    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
+
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
+    let fs = FsSubsystem::new(vec![]);
+    let tunnel_manager = common::make_tunnel_manager(&event_sink);
+    let diagnostics = DiagnosticStore::new(workspace_dir.join("diagnostics.jsonl"));
+
+    let state = AppState::new(
+        workspace_dir,
+        config,
+        GlobalConfig::default(),
+        pty_manager,
+        agent_store,
+        event_sink,
+        TEST_SECRET.to_string(),
+        fs,
+        None,
+        false,
+        tunnel_manager,
+        None,
+        ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+        diagnostics,
+        TelemetryRuntime::new(),
+    )
+    .expect("AppState::new");
+
+    if quiet < 60 || wake < 60 {
+        let mut timing_guard = state.idle_suspend_timing.write().await;
+        timing_guard.quiet_period_seconds = quiet;
+        timing_guard.wake_after_seconds = wake;
+    }
+
+    TestFixture {
+        _tmp: tmp,
+        state,
+        config_path,
+    }
+}
+
+async fn wait_for_predicate<F: Fn() -> bool>(timeout: Duration, predicate: F) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if predicate() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -993,4 +1112,346 @@ async fn test_idle_suspend_manual_force_suspend_zero_side_effect_on_active_fleet
 
     let _ = fixture.state.pty_manager.kill(&session.id);
     coordinator.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// 7. Integrated Agent Activity Scenarios (Phase 07)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_integrated_agent_activity_service_only_pty_does_not_block_suspend() {
+    let fixture = setup_agent_activity_fixture(
+        true,
+        2,
+        600,
+        Some(vec!["codex".to_string(), "omp".to_string()]),
+    )
+    .await;
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(executor.clone())
+        .await;
+
+    // 1. Create a service-only PTY (cat, not in agent_executables)
+    let session = fixture
+        .state
+        .pty_manager
+        .create(make_pty_opts("pty-service-only", "cat"))
+        .expect("create service pty");
+
+    // Fleet has 1 active session
+    assert_eq!(fixture.state.pty_manager.fleet_snapshot().live_count, 1);
+
+    // Initial state is Watching, automatic policy is AgentActivity
+    assert_eq!(coordinator.status().state, CoordinatorState::Watching);
+    assert_eq!(
+        coordinator.status().automatic_policy,
+        IdleSuspendAutomaticPolicy::AgentActivity
+    );
+
+    // 2. Service-only output does not count as agent activity, so coordinator will reach Resumed after quiet
+    let resumed = wait_for_predicate(Duration::from_secs(8), || {
+        coordinator.status().state == CoordinatorState::Resumed
+    })
+    .await;
+    assert!(
+        resumed,
+        "Coordinator must resume after automatic suspend for service-only PTY, state: {:?}",
+        coordinator.status().state
+    );
+
+    // 3. FakeExecutor received exactly 1 request
+    assert_eq!(executor.recorded_requests().len(), 1);
+
+    // 4. Live fleet count remains 1 (never relabeled as 0)
+    assert_eq!(fixture.state.pty_manager.fleet_snapshot().live_count, 1);
+
+    let _ = fixture.state.pty_manager.kill(&session.id);
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_integrated_agent_activity_accepted_input_invalidates_quiet() {
+    let fixture = setup_agent_activity_fixture(true, 3, 600, Some(vec!["cat".to_string()])).await;
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(executor.clone())
+        .await;
+
+    let session = fixture
+        .state
+        .pty_manager
+        .create(make_pty_opts("pty-agent-input", "cat"))
+        .expect("create agent pty");
+
+    // Wait for coordinator to reach Armed state (quiet = 3s)
+    let armed = wait_for_predicate(Duration::from_secs(6), || {
+        coordinator.status().state == CoordinatorState::Armed
+    })
+    .await;
+    assert!(armed, "Coordinator must reach Armed state");
+
+    // Write accepted terminal input to invalidate countdown
+    let _ = fixture.state.pty_manager.write(&session.id, b"echo active\n");
+
+    // Verify coordinator transitions back to Watching
+    let returned_to_watching = wait_for_predicate(Duration::from_secs(3), || {
+        coordinator.status().state == CoordinatorState::Watching
+    })
+    .await;
+    assert!(
+        returned_to_watching,
+        "Accepted input must invalidate countdown and return coordinator to Watching, current state: {:?}",
+        coordinator.status().state
+    );
+    assert_eq!(executor.recorded_requests().len(), 0);
+
+    let _ = fixture.state.pty_manager.kill(&session.id);
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_integrated_agent_activity_manual_force_race_with_final_check() {
+    let fixture = setup_agent_activity_fixture(true, 10, 600, None).await;
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(executor.clone())
+        .await;
+
+    let session = fixture
+        .state
+        .pty_manager
+        .create(make_pty_opts("pty-manual-race", "cat"))
+        .expect("create pty");
+
+    // Submit manual force suspend
+    let res = coordinator
+        .force_suspend(ForceSuspendCommand {
+            actor: "operator".to_string(),
+            wake_after_seconds: 0,
+            force: true,
+        })
+        .await;
+    assert!(matches!(res, CoordinatorForceSuspendResult::Accepted { .. }));
+
+    // Wait for resume
+    let resumed = wait_for_predicate(Duration::from_secs(4), || {
+        coordinator.status().state == CoordinatorState::Resumed
+    })
+    .await;
+    assert!(resumed);
+
+    // Exactly 1 request recorded
+    assert_eq!(executor.recorded_requests().len(), 1);
+
+    let _ = fixture.state.pty_manager.kill(&session.id);
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_integrated_agent_activity_disabled_observation() {
+    let fixture = setup_agent_activity_fixture(false, 300, 600, None).await;
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(executor.clone())
+        .await;
+
+    let status = coordinator.status();
+    assert_eq!(status.state, CoordinatorState::Disabled);
+    assert!(!status.enabled);
+    assert_eq!(
+        status.automatic_policy,
+        IdleSuspendAutomaticPolicy::AgentActivity
+    );
+    assert!(status.arm_deadline_ms.is_none());
+    assert!(status.activity.is_some());
+    assert_eq!(executor.recorded_requests().len(), 0);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_integrated_agent_activity_shutdown_cleanly_joins() {
+    let fixture = setup_agent_activity_fixture(true, 300, 600, None).await;
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(executor.clone())
+        .await;
+
+    let session = fixture
+        .state
+        .pty_manager
+        .create(make_pty_opts("pty-shutdown-test", "cat"))
+        .expect("create pty");
+
+    // Shutdown must complete within 3 seconds
+    let shutdown_fut = coordinator.shutdown();
+    tokio::time::timeout(Duration::from_secs(3), shutdown_fut)
+        .await
+        .expect("shutdown must join before timeout");
+
+    let _ = fixture.state.pty_manager.kill(&session.id);
+}
+
+struct PanicExecutor;
+
+impl IdleSuspendExecutor for PanicExecutor {
+    fn check_capability(&self) -> BoxFuture<'static, bool> {
+        Box::pin(async { true })
+    }
+
+    fn execute_suspend(
+        &self,
+        _request: SuspendWithRtcWakeRequest,
+    ) -> BoxFuture<'static, SuspendOutcome> {
+        panic!("PanicExecutor: execute_suspend MUST NOT be called in live smoke test!");
+    }
+}
+
+#[test]
+#[ignore]
+fn activity_live_linux_pty_tcp_child_worker() {
+    if std::env::var("DAM_HOPPER_TEST_CHILD_MODE").as_deref() != Ok("1") {
+        return;
+    }
+    let port: u16 = std::env::var("DAM_HOPPER_TEST_PORT")
+        .expect("DAM_HOPPER_TEST_PORT")
+        .parse()
+        .expect("valid port");
+    let byte_count: usize = std::env::var("DAM_HOPPER_TEST_BYTES")
+        .expect("DAM_HOPPER_TEST_BYTES")
+        .parse()
+        .expect("valid byte count");
+
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    println!("CHILD_START");
+    std::io::stdout().flush().ok();
+
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to listener");
+    let send_data = vec![b'Z'; byte_count];
+    stream.write_all(&send_data).expect("write data");
+    stream.flush().expect("flush data");
+
+    let mut recv_data = vec![0u8; byte_count];
+    stream.read_exact(&mut recv_data).expect("read data");
+
+    println!("CHILD_DONE");
+    std::io::stdout().flush().ok();
+    // Keep child alive so parent can verify live root and snapshot
+    std::thread::sleep(Duration::from_secs(3));
+}
+
+#[tokio::test]
+#[ignore]
+async fn activity_live_linux_pty_tcp_smoke() {
+    #[cfg(not(target_os = "linux"))]
+    {
+        eprintln!("Skipping activity_live_linux_pty_tcp_smoke: Linux only");
+        return;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let current_exe = std::env::current_exe()
+            .expect("current_exe")
+            .canonicalize()
+            .expect("canonicalize");
+        let exe_str = current_exe.display().to_string();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let port = listener.local_addr().expect("local addr").port();
+        listener
+            .set_nonblocking(true)
+            .expect("set_nonblocking listener");
+
+        // Spawn listener handler in thread
+        let (listener_tx, listener_rx) = tokio::sync::oneshot::channel();
+        let listener_handle = std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let mut accepted_stream = None;
+            while start.elapsed() < Duration::from_secs(5) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        accepted_stream = Some(stream);
+                        break;
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(e) => panic!("accept error: {e}"),
+                }
+            }
+            if let Some(mut stream) = accepted_stream {
+                let mut buf = vec![0u8; 1024];
+                let n = stream.read(&mut buf).expect("read from child");
+                stream.write_all(&buf[..n]).expect("echo to child");
+                stream.flush().expect("flush echo");
+                let _ = listener_tx.send(n);
+            }
+        });
+
+        // Setup fixture recognizing current_exe as agent
+        let fixture = setup_agent_activity_fixture(true, 300, 600, Some(vec![exe_str.clone()])).await;
+        let panic_executor = Arc::new(PanicExecutor);
+        let coordinator = fixture
+            .state
+            .start_idle_suspend_coordinator(panic_executor)
+            .await;
+
+        let mut pty_opts = make_pty_opts(
+            "live-smoke-session",
+            &format!(
+                "{} activity_live_linux_pty_tcp_child_worker --ignored --exact --nocapture",
+                exe_str
+            ),
+        );
+        pty_opts
+            .env
+            .insert("DAM_HOPPER_TEST_CHILD_MODE".to_string(), "1".to_string());
+        pty_opts
+            .env
+            .insert("DAM_HOPPER_TEST_PORT".to_string(), port.to_string());
+        pty_opts
+            .env
+            .insert("DAM_HOPPER_TEST_BYTES".to_string(), "1024".to_string());
+
+        let session = fixture
+            .state
+            .pty_manager
+            .create(pty_opts)
+            .expect("create child session");
+
+        // Wait for child exchange
+        let exchanged_bytes = tokio::time::timeout(Duration::from_secs(10), listener_rx)
+            .await
+            .expect("child exchange timeout")
+            .expect("receive from listener");
+        assert_eq!(exchanged_bytes, 1024);
+
+        listener_handle.join().expect("join listener thread");
+
+        // Allow snapshot to capture output and process observation
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let snap = fixture.state.pty_manager.capture_activity_snapshot();
+        assert_eq!(snap.roots.len(), 1);
+        let root = &snap.roots[0];
+        assert_eq!(root.terminal.session_id, "live-smoke-session");
+        // Output sequence must have advanced from child output
+        assert!(root.raw_output_sequence.load(Ordering::Relaxed) > 0);
+
+        // Clean up
+        let _ = fixture.state.pty_manager.kill(&session.id);
+        coordinator.shutdown().await;
+    }
 }

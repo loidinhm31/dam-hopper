@@ -1,7 +1,8 @@
 # Protected Idle-Suspend Status and Browser UI
 
-**Status:** Phase 06 complete (2026-09-11)  
-**Scope:** Protected status decoding, aggregate activity presentation, measurement warnings, and manual force-sleep preservation.
+**Status:** Phase 07 integrated qualification complete (2026-09-11)  
+**Implementation scope:** Phase 06 protected status decoding, aggregate activity
+presentation, measurement warnings, and manual force-sleep preservation.
 
 This guide records the browser-facing contract for configured-agent activity idle
 suspend. The server remains authoritative for policy, measurement validity,
@@ -20,10 +21,10 @@ A valid response is version `1`, requires the existing session cookie or Bearer
 authentication, and carries `Cache-Control: no-store`. The response always
 contains `automaticPolicy` and `activity`:
 
-| `automaticPolicy` | `activity` | Meaning |
-| --- | --- | --- |
-| `empty-fleet` | `null` | Existing active-to-empty policy; no observer facts are invented. |
-| `agent-activity` | Object | Aggregate observer state, counts, timestamps, TCP coverage, and optional measurement warning. |
+| `automaticPolicy` | `activity` | Meaning                                                                                       |
+| ----------------- | ---------- | --------------------------------------------------------------------------------------------- |
+| `empty-fleet`     | `null`     | Existing active-to-empty policy; no observer facts are invented.                              |
+| `agent-activity`  | Object     | Aggregate observer state, counts, timestamps, TCP coverage, and optional measurement warning. |
 
 `enabled` controls automatic execution, not whether an authenticated operator
 may use the existing manual force action. Disabled `agent-activity` still
@@ -130,12 +131,33 @@ Phase 06 targeted proof (all passed):
 - Chromium browser tests: **13/13**;
 - code review: **9.7/10**, approved.
 
-The suites cover valid new and legacy payloads, malformed/partial payloads,
-transport rejection, disabled observation, warning identity/duration/truncation,
-countdown rendering, narrow status semantics, keyboard/click force flow, and
-privacy-negative serialization checks. Integrated real-observer qualification,
-target-host observer fit, and any automatic real-host canary remain Phase 07/08
-work; this document does not claim those gates passed.
+Phase 07 integrated qualification (all passed):
+
+| Surface                           | Evidence                                                              |
+| --------------------------------- | --------------------------------------------------------------------- |
+| Activity unit module              | `cargo test --lib idle_suspend::activity`: **66/66**                  |
+| PTY unit module                   | `cargo test --lib pty::`: **166/166**, one pre-existing ignored test  |
+| Protected API idle-suspend filter | `cargo test --lib api::tests::idle_suspend`: **11/11**                |
+| Cross-module integration          | `cargo test --test idle_suspend`: **19/19**, two ignored tests        |
+| Linux observer smoke              | `activity_live_linux_pty_tcp_smoke`: **1/1** ignored smoke, **0.72s** |
+| Chromium status/settings surface  | **16/16**                                                             |
+| Static security boundary          | `verify-idle-suspend-boundary.sh`: **14/14**                          |
+
+The QA report records **323 backend/PTY/API/integration tests**, **14/14
+boundary checks**, and **16/16 Chromium tests**, with code review approved at
+**9.4/10**. The integration cases cover service-only PTYs, accepted-input
+invalidation, manual/final-check ordering, disabled observation, protected
+warning serialization, and clean sampler shutdown. Chromium covers available,
+initializing, unavailable, disabled-observer, truncation, elapsed-warning,
+countdown, manual-action, and old-server payload behavior.
+
+The Linux smoke is explicitly ignored and selected by an operator on a Linux
+qualification host. It uses a test-owned managed PTY, the current integration
+test binary as child, a loopback TCP echo, production proc/netlink observation,
+and a panic executor. Automated qualification never invokes the enrolled
+helper, `systemctl suspend`, RTC programming, `sudo`, root installation, or
+external model/network services. A passing smoke does not authorize a real
+automatic suspend canary; that remains an Operations gate.
 
 ## Related documentation
 
@@ -144,5 +166,5 @@ work; this document does not claim those gates passed.
 - [System Architecture](./system-architecture.md#server-authoritative-terminal-idle-suspend-architecture)
 - [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md)
 - [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md)
-- [Phase 06 plan](../plans/260910-1604-agent-activity-idle-suspend/phase-06-api-ui.md)
-- [Phase 06 verification report](../plans/reports/tester-260911-1028-phase06-protected-status-browser-ui.md)
+- [Phase 07 plan](../plans/260910-1604-agent-activity-idle-suspend/phase-07-verification.md)
+- [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md)
