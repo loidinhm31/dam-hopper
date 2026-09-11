@@ -4,10 +4,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Configured-agent activity idle suspend (2026-09-11)
 
-- **Phases 01–07 — DONE (2026-09-11).** Policy/configuration, PTY evidence,
+- **Phases 01–08 — DONE (2026-09-11).** Policy/configuration, PTY evidence,
   bounded process discovery, owned TCP observation, transactional sampler and
-  coordinator admission, protected status/browser UI, and integrated qualification
-  are complete.
+  coordinator admission, protected status/browser UI, integrated qualification,
+  and operator documentation/rollout runbooks are complete.
 - Phase 03 adds private `ProcessDiscovery<S>` over `ProcessSource`, production
   `LinuxProcSource`, exact `(pid, start_ticks)` lineage with retained
   reparenting, finite native/interpreter matching, same-namespace owned-socket
@@ -37,10 +37,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   **0.72s**; code review approved **9.4/10**. See the [Phase 07
   qualification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md)
   and [parent plan](../plans/260910-1604-agent-activity-idle-suspend/plan.md).
-- **Plan progress: 7/8 phases done; 98/111h (~88%). Active phase: Phase 08 —
-  Documentation, operations runbooks, and controlled rollout (Pending; 0%).**
-- Automatic real-host suspend remains an explicit Operations gate; Phase 08 owns
-  documentation, controlled rollout, rollback, and canary prerequisites.
+- Phase 08 evidence: operator docs, operations runbooks, controlled rollout stages, and rollback procedures completed across 14 documentation/assets including the docs index. Validation passed: boundary checks **14/14**, idle-suspend integration **20/20** including live Linux PTY/TCP smoke in **0.74s**, Chromium **16/16**, and full UI **1606/1606**; code review approved **9.6/10**. Real-host automatic suspend canary remains an explicit Operations deployment gate. [QA report](../plans/reports/qa-260911-1207-phase08-idle-suspend-rollout.md) · [Code review](../plans/reports/code-review-260911-1208-phase08-docs-rollout-rollback.md).
+- **Plan progress: COMPLETE (100%; 8/8 phases done; 111/111h).** All eight phases
+  complete. Real-host automatic suspend canary remains an explicit Operations
+  deployment gate with host qualification, exclusive RTC ownership, and bounded wake.
 
 ### Production CLI Deployment Setup for Idle Suspend Helper & Socket (2026-09-09)
 

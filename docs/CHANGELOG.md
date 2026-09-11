@@ -1,9 +1,12 @@
 # 2026-09-11
 
+- **Configured-agent activity idle suspend — Phase 08 documentation, runbooks, and controlled rollout complete (2026-09-11).** Integrated operator documentation, operations runbooks, controlled rollout stages, and rollback procedures across all system guides.
+- Delivered across: `system-architecture.md` (implemented dataflow & heuristic boundaries), `api-reference.md` (v1 status DTO, all enums, nullable counts, privacy boundaries), `configuration-guide.md` (exact paths, startup immutability, TOML examples, rollout stages, two-level rollback), `terminal-idle-suspend-security.md` (unprivileged procfs/netlink boundaries, fail-closed policy, warning exclusions, final race caveat, canary prerequisites), `linux-systemd.md` (observer qualification, operator reason guide, observation soak, bounded canary, stop criteria, rollback runbooks), `linux-release-manager.md`, `code-standards.md`, `codebase-summary.md`, `project-overview-pdr.md`, `project-roadmap.md`, `docs/README.md`, `README.md`, and `scripts/run-uat.sh`.
+- Validation passed: boundary checks **14/14**; idle-suspend integration exercised **20/20** scenarios (**19/19** default tests plus **1/1** ignored live Linux smoke in **0.74s**, with 2 other tests ignored); Chromium browser tests **16/16**; full UI suite **1606/1606** across 233 files (1,642 qualified tests plus 14 boundary checks); code review approved **9.6/10**. See [Phase 08 QA](../plans/reports/qa-260911-1207-phase08-idle-suspend-rollout.md) and [code review](../plans/reports/code-review-260911-1208-phase08-docs-rollout-rollback.md).
+- Plan progress: **COMPLETE (100%; 8/8 phases done; 111/111h)**. Real-host automatic suspend canary remains an explicit Operations-supervised deployment gate with host qualification, exclusive RTC ownership, and bounded wake.
+
 - **Configured-agent activity idle suspend — Phase 07 integrated qualification complete (2026-09-11).** Qualified managed PTY output/input, attributable TCP traffic, protected status/API warnings, Chromium rendering, fake suspend admission, recovery, and shutdown.
 - Validation passed: backend/PTY/API/integration **323 passed**, security boundary **14/14**, Chromium **16/16**, and the ignored live Linux PTY/TCP smoke **1/1 in 0.72s**; code review approved **9.4/10**. Automated evidence used fake suspend outcomes and did not invoke host suspend, RTC programming, helper execution, sudo, or root installation.
-- Plan progress: **7/8 phases complete; 98/111h (~88%)**. Phase 08 documentation, operations runbooks, controlled rollout, and rollback is now the active pending phase; real-host automatic suspend remains an Operations approval gate.
-
 - **Configured-agent activity idle suspend — Phase 06 complete.** Added a
   strict `unknown`-to-`IdleSuspendStatusV1` decoder with exact two-field
   old-server normalization and fail-closed malformed/partial response
