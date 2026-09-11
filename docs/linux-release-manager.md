@@ -40,9 +40,10 @@ Acquisition and installation have intentionally different privilege boundaries:
   following symlinks, hashes the copied archive, validates the manifest and
   archive, and extracts only the requested role projection.
 - `status` and `version` are read-only and may run under either EUID.
-- The API unit is specified as running as `root` for the v1 MVP owner decision;
-  the dedicated web unit uses the unprivileged `dam-hopper-web` identity. This
-  is a release contract, not a general recommendation for host services.
+- The API unit defaults to the validated non-root `dam-hopper:dam-hopper`
+  identity; `validate_api_unit_policy` rejects `root`. A deployment may select
+  another validated non-root service account, so operators must verify the
+  effective `User=`/`Group=` before observer qualification.
 
 The one-time format-2 migration is part of this manager. It accepts only the
 verified legacy layout described in [Linux systemd](./linux-systemd.md), stages
@@ -280,6 +281,24 @@ API from an inactive helper. The socket check is separate evidence: status
 reports unit/process state, not socket protocol readiness. The helper's socket
 is `/run/dam-hopper/idle-suspend.sock`; it may be absent when helper startup
 failed or the selected role does not include `server`.
+
+
+### Configured-agent activity policy integration and configuration authority
+
+The opt-in `agent-activity` idle suspend enhancement interacts cleanly with the release manager without altering unit staging or service lifecycle:
+
+1. **Canonical Production Configuration**:
+   In systemd deployments, `dam-hopper-api.service` reads its canonical registry from `/etc/dam-hopper/dam-hopper.toml`. Operators configure `[server.idle_suspend]` options (`automatic_policy`, `agent_executables`, `quiet_period_seconds`, `wake_after_seconds`) directly in this file.
+
+2. **Helper Lifecycle Unchanged**:
+   The helper service (`dam-hopper-idle-suspend-helper.service`) and its socket (`/run/dam-hopper/idle-suspend.sock`) remain entirely unchanged. The helper continues to execute privileged host suspend actions; the activity observer operates entirely within the unprivileged API server process.
+
+3. **Per-Host Qualification Requirement**:
+   Do not assume fleet-wide compatibility from release deployment. Each target host must qualify procfs visibility and `NETLINK_SOCK_DIAG` socket diagnostics under the deployed API service user context before enabling the policy.
+
+4. **Restart vs. Release Rollback Ordering**:
+   - **Policy Change**: Setting `automatic_policy = "agent-activity"` or `"empty-fleet"` in `/etc/dam-hopper/dam-hopper.toml` takes effect upon running `sudo systemctl restart dam-hopper-api.service`. It does not require a release-manager transaction or candidate redeployment.
+   - **Policy Rollback**: Reverting from `agent-activity` to `empty-fleet` is an immediate configuration edit and API service restart. `sudo dam-hopper rollback` is reserved for binary release rollbacks, while `./deploy/reset-linux-production.sh` is reserved for complete helper disenrollment.
 
 ## Verification and end-to-end coverage (Production CLI Phase 04)
 

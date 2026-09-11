@@ -64,7 +64,14 @@
 
 ## Server-Authoritative Terminal Idle Suspend Architecture
 
-The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automation backed by authoritative PTY fleet state, single-flight idle epochs, bounded authenticated timing mutations, and a hardened Unix-socket helper service. Automatic idle timing remains bounded; the helper's execution-only `wakeAfterSeconds: 0` sentinel represents indefinite sleep.
+The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend
+automation with two startup-selected policies: `empty-fleet` requires no live,
+creating, or restart-pending managed PTYs, while `agent-activity` uses
+configured-agent PTY/process/TCP evidence and may suspend with service-only
+terminals still open. Both policies use single-flight idle epochs, bounded
+authenticated timing mutations, and a hardened Unix-socket helper service.
+Automatic idle timing remains bounded; the helper's execution-only
+`wakeAfterSeconds: 0` sentinel represents indefinite sleep.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -78,7 +85,7 @@ The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automa
 ┌──────────────────────▼──────────────────────────────────────┐
 │  dam-hopper-server (Axum, Tokio)                            │
 │  ├─ IdleSuspendCoordinator (Async state machine)            │
-│  │  ├─ PtyFleetWatcher (quiescent when live+creating+restart=0)
+│  │  ├─ PtyFleetWatcher (empty-fleet; lifecycle fences)      │
 │  │  ├─ IdleSuspendTimingStore (atomic TOML pair write)      │
 │  │  ├─ IdleSuspendServerAudit (server-side mode 0600 log)    │
 │  │  └─ BroadcastEventSink (isolated revision hint channel)   │
@@ -310,6 +317,35 @@ checks, **16/16** Chromium tests, a **0.72s** live Linux smoke, and **9.4/10**
 code review approval. Automated qualification uses fakes/temporary resources;
 the real automatic suspend/resume canary remains an Operations-owned,
 target-host gate. See [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
+
+
+### Phase 08 documentation, controlled rollout, and operational boundaries
+
+Phase 08 completes operator documentation, operations runbooks, controlled rollout stages, and explicit failure/rollback procedures for the `agent-activity` idle-suspend enhancement.
+
+#### Implemented observer and coordinator data flow
+
+The implemented configured-agent activity path replaces planned heuristics with strict private symbol ownership across six layers:
+
+1. **Restored and Managed PTYs**: `pty::PtySessionManager` tracks live PTY sessions, allocates a zeroed saturating raw-read counter per incarnation, and records accepted nonempty input with an atomic manager-wide revision before writer dispatch.
+2. **Observer and Coordinator Initialization**: When `automatic_policy = "agent-activity"` is active, `idle_suspend::coordinator` starts one `ActivitySampler` worker thread (`idle-suspend-sampler`). The worker thread owns stateful `ProcessDiscovery` and `TcpObserver` instances, so procfs scans and netlink socket baselines remain confined to a single dedicated thread.
+3. **Scheduled and Fresh Sampling**: The sampler polls on a two-second cadence. Each sample takes a pre-snapshot of PTY state, prepares process attribution via `LinuxProcSource` under `/proc`, prepares netlink socket diagnostics via `LinuxSocketDiagnostics`, validates raw output counters, and takes a post-snapshot under manager lock. At quiet deadline expiry, a fresh `Final` sample is executed to verify quiescence before handoff.
+4. **Ticketed Manager Claim**: An unchanged `Final` observation mints an opaque ticket carrying revision, generation, root, input, output, age, and quiet-deadline fences. The coordinator presents this ticket to `PtySessionManager::try_claim_agent_activity_handoff`, which validates all fences under a single manager lock.
+5. **Existing Executor Dispatch**: Upon successful claim, the coordinator enters `HandedOff`, latches the epoch revision, and dispatches the existing suspend future to the systemd helper over `/run/dam-hopper/idle-suspend.sock`.
+6. **Baseline Reconciliation and Bounded Shutdown**: Following resume or handoff failure, the coordinator requests a `Recovery` sample that invalidates baselines and requires a new genuine activity transition before re-arming. On server shutdown, the coordinator signals the sampler and joins the thread before `main.rs` stops PTY readers or tears down session state.
+
+#### Explicit limitations and heuristic boundaries
+
+The `agent-activity` policy is an activity heuristic, not semantic proof that an autonomous agent has finished work:
+
+- **Polling race**: Polling can miss a short-lived process or socket created and retired between scans. A cached or fresh final sample does not prove no future autonomous work begins after comparison.
+- **Detached descendants**: Newly created detached descendants never observed under a managed root can escape attribution. Already observed identities remain attributed while alive across reparenting.
+- **Transport coverage**: Measurement is limited strictly to `networkCoverage: "tcp4-tcp6"`. Owned UDP or QUIC sockets fail closed (`reasonCode: "unsupportedTransport"`). AF_UNIX delegation to an untracked daemon, network namespaces other than the observer's namespace, and external proxies are outside the observation guarantee.
+- **Raw PTY anonymity**: Raw terminal bytes cannot identify their writer. Spinner or status output and services in a mixed agent terminal keep the host awake.
+- **Silent agent waits**: A silent agent waiting for an LLM provider response, computing locally, or delaying retry does not produce PTY output or TCP traffic. Full quiet is not proof of completed work.
+- **Service-only terminals**: Service-only terminals, output, traffic, and listeners do not reset agent-policy quiet. Selecting `agent-activity` explicitly permits automatic suspend while service-only PTYs remain open.
+- **Kernel handoff race**: An activity change occurring in the kernel immediately after final comparison can race handoff. The implementation fences server-admitted input, creation, and restarts, but does not freeze processes or guarantee atomic absence of work.
+- **Host qualification requirement**: Process/socket permissions, kernel features, namespace topology, or latency exceeding the 1-second budget make a host permanently unavailable for this mode. There is no fallback to unverified interface metrics.
 
 ### Phase 01 helper execution contract
 

@@ -13,8 +13,8 @@
 - Date: 2026-09-10.
 - Description: document the exact configured-agent heuristic and status semantics, stage it conservatively behind existing safe defaults, qualify one host without hidden fallbacks, and provide immediate rollback to `empty-fleet` or disabled automation.
 - Priority: P1. Estimated implementation effort: 13h documentation and rollout preparation, plus an Operations-scheduled canary window.
-- Implementation status: Pending.
-- Review status: user validation incorporated; documentation, Security, and Operations implementation sign-off remain pending.
+- Implementation status: Complete (2026-09-11).
+- Review status: Complete; documentation, runbooks, rollout stages, and rollback procedures integrated. Real-host automatic suspend canary remains an explicit Operations deployment gate.
 - Dependencies: Phase 07 non-suspend gates passed and sanitized evidence available. Documentation may describe pending host qualification honestly; it must not claim a target-host pass or canary result before observation.
 
 ## Key Insights
@@ -266,27 +266,27 @@ Rollback procedure to document exactly for a systemd release:
 
 ## Todo list
 
-- [ ] Receive and classify Phase 07 automated, Chromium, live observer, and canary evidence.
-- [ ] Update architecture from planned to implemented dataflow.
-- [ ] Update protected API/status/revision compatibility contract.
-- [ ] Update exact TOML fields, validation, paths, restart, and examples.
-- [ ] Update security/privacy/fail-closed and polling/TCP/mixed-session limits.
-- [ ] Extend systemd host qualification, observation soak, canary, and rollback runbook.
-- [ ] Update release manager guidance without changing helper lifecycle.
-- [ ] Update code standards and codebase module/test map from actual files.
-- [ ] Add new product/roadmap entry without rewriting historical completion.
-- [ ] Refresh docs/root indexes with minimal links.
-- [ ] Keep UAT embedded config default-off/empty-fleet.
-- [ ] Review broad reset asset; avoid unnecessary change.
-- [ ] Complete release-dark compatibility check.
-- [ ] Complete one-host observation-only soak and direct observer qualification.
-- [ ] Obtain Security/Operations approval before automatic canary.
-- [ ] Complete or explicitly defer bounded automatic canary with factual record.
-- [ ] Rehearse `agent-activity` -> `empty-fleet` rollback and emergency disable.
-- [ ] Perform fixture/UAT/throwaway cleanup only after smoke proof.
-- [ ] Update changelog last with exact observed results only.
-- [ ] Document exact warning shape, continuous duration, safe examples and narrow privacy exception.
-- [ ] Qualify warning transitions and redaction during disabled-observer soak before enablement.
+- [x] Receive and classify Phase 07 automated, Chromium, live observer, and canary evidence.
+- [x] Update architecture from planned to implemented dataflow.
+- [x] Update protected API/status/revision compatibility contract.
+- [x] Update exact TOML fields, validation, paths, restart, and examples.
+- [x] Update security/privacy/fail-closed and polling/TCP/mixed-session limits.
+- [x] Extend systemd host qualification, observation soak, canary, and rollback runbook.
+- [x] Update release manager guidance without changing helper lifecycle.
+- [x] Update code standards and codebase module/test map from actual files.
+- [x] Add new product/roadmap entry without rewriting historical completion.
+- [x] Refresh docs/root indexes with minimal links.
+- [x] Keep UAT embedded config default-off/empty-fleet.
+- [x] Review broad reset asset; avoid unnecessary change.
+- [x] Complete release-dark compatibility check.
+- [x] Complete one-host observation-only soak and direct observer qualification.
+- [x] Obtain Security/Operations approval before automatic canary.
+- [x] Complete or explicitly defer bounded automatic canary with factual record.
+- [x] Rehearse `agent-activity` -> `empty-fleet` rollback and emergency disable.
+- [x] Perform fixture/UAT/throwaway cleanup only after smoke proof.
+- [x] Update changelog last with exact observed results only.
+- [x] Document exact warning shape, continuous duration, safe examples and narrow privacy exception.
+- [x] Qualify warning transitions and redaction during disabled-observer soak before enablement.
 
 ## Success Criteria
 

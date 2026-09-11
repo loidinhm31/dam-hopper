@@ -177,7 +177,8 @@ name = "uat-workspace"
 
 [server.idle_suspend]
 enabled = false
-quiet_period_seconds = 300
+automatic_policy = "empty-fleet"
+quiet_period_seconds = 900
 wake_after_seconds = 600
 EOF
     fi

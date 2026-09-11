@@ -2,7 +2,7 @@
 
 ## Overview
 
-Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with RTC wake when all managed PTY sessions have remained quiet for a bounded duration. The manual force-sleep plan adds an execution-only indefinite mode while preserving the automatic scheduler's bounded timing domain. This document establishes the security invariants, threat model, approval requirements, and audit policies for Phase 01 through Phase 07.
+Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with RTC wake after a bounded quiet period. The default `empty-fleet` policy requires no live, creating, or restart-pending managed PTYs; the opt-in `agent-activity` policy uses configured-agent PTY/process/TCP activity evidence and may suspend with service-only terminals still open. It is an activity heuristic, not proof of agent completion. The manual force-sleep plan adds an execution-only indefinite mode while preserving the automatic scheduler's bounded timing domain. This document establishes the security invariants, threat model, approval requirements, and audit policies for Phase 01 through Phase 08.
 
 ## Security Invariants
 
@@ -382,6 +382,56 @@ The live smoke must run under the target service's actual procfs and network
 namespace visibility before `agent-activity` is enabled. If required
 `TCP_INFO`, ownership, namespace, or one-second deadline behavior is unavailable,
 the status remains unavailable and automatic policy execution stays disabled.
+
+
+### Configured-agent observation security, privacy, and canary boundaries — Phase 08 (2026-09-11)
+
+Phase 08 establishes the operational security, privacy, and canary approval boundaries for the `agent-activity` automatic suspend policy:
+
+1. **Unprivileged Kernel and Procfs Boundary**:
+   The activity observer runs with the API service's existing UID/GID and
+   current procfs, mount, and network namespace. It performs read-only `/proc`
+   access and opens an unprivileged `NETLINK_SOCK_DIAG` socket for TCP
+   diagnostics; it requires no additional root privileges, `sudo` invocations,
+   elevated Linux capabilities, eBPF programs, cgroup controllers, or shell
+   invocations (`sh`, `bash`, etc.). Any environment that denies the required
+   procfs reads or netlink diagnostics fails closed.
+
+2. **Fail-Closed Measurement States**:
+   Automatic suspend is never authorized on ambiguous, partial, or failed observation. Any of the following conditions marks measurement state as `unavailable` with an explicit reason code, inhibiting automatic suspend:
+   - `procAccess`: Inaccessible `/proc` entries or permission denial.
+   - `scanLimit`: Workload exceeding hard bounds (256 live roots, 8,192 scanned processes, 1,024 relevant processes, 4,096 file descriptors, or 8,192 socket inodes).
+   - `scanTimeout`: Observation preparation exceeding the strict 1-second deadline.
+   - `socketDiagnostics`: Kernel socket diagnostic failures, framing errors, or incomplete readbacks.
+   - `unsupportedTransport`: Detection of attributable UDP or QUIC sockets.
+   - `namespaceMismatch`: Sockets or processes crossing network namespaces.
+   - `staleObservation`: Samples older than 5 seconds or invalidated by concurrent PTY writes.
+   - `identityUncertain`: Inability to verify `(pid, start_ticks)` lineage to a managed root.
+   - `counterOverflow`: Monotonic counter saturation.
+   - `reconciling`: In-progress post-resume or post-failure baseline rebuild.
+
+3. **Strict Warning Privacy Boundary and Channel Exclusions**:
+   Warning process details are exposed exclusively through the protected, authenticated `GET /api/system/idle-suspend/v1/status` endpoint under `Cache-Control: no-store`. The projection is bounded to at most 32 current attributable examples containing only positive PID and safe executable identity (maximum 256 UTF-8 bytes without controls; null if unknown).
+   - **Strictly Excluded**: Command-line arguments, environment variables, matcher lists, session IDs, root IDs, terminal IDs, socket addresses/ports, socket inodes, terminal output bytes, authentication tokens, and raw kernel diagnostic payloads are never exposed.
+   - **Channel Exclusions**: Server application logs, systemd helper logs, server JSONL audit trails, helper JSONL audit trails, WebSocket revision hints, and exported diagnostic bundles strictly omit warning process details. No verbose logging mode may bypass this boundary.
+
+4. **Final Comparison Race Window**:
+   A heuristic observer cannot freeze the kernel or arbitrary child processes. Activity initiated in the kernel immediately after final check comparison can race coordinator handoff. The implementation gates server-admitted terminal input, session creation, and restarts under a single manager lock, but does not guarantee atomic absence of kernel work.
+
+5. **Service-Only Terminal Policy Consequence**:
+   Under `agent-activity`, service-only terminals (build runners, daemons, background watchers) and their network traffic do not reset quiet time. Selecting `agent-activity` explicitly permits automatic host suspend while service-only PTYs remain open. Workloads requiring zero active terminals must remain on the default `empty-fleet` policy.
+
+6. **Manual Force Independence**:
+   Automatic `agent-activity` policy execution never uses or bypasses the manual force claim path. Manual force sleep (`POST /api/system/idle-suspend/v1/force-suspend`) remains an independent production action requiring enabled database authentication, explicit confirmation when fleet count > 0, CSRF guards, capability verification, and immutable server/helper auditing.
+
+7. **Automatic Canary Approval Prerequisites**:
+   Before enabling automatic suspend on any production host (`enabled = true` and `automatic_policy = "agent-activity"`):
+   - Obtain explicit Operations and host-owner consent for a scheduled maintenance window.
+   - Verify exclusive RTC ownership (no foreign wakealarm in `/sys/class/rtc/rtc0/wakealarm`).
+   - Verify absence of system sleep inhibitors (`systemd-inhibit --list`).
+   - Confirm verified physical or out-of-band power-cycling access (IPMI, iLO, BMC, or physical button).
+   - Configure a bounded `wake_after_seconds` (e.g. 600s); never use indefinite sleep for an automatic canary.
+   - Designate an on-call rollback owner with immediate access to revert configuration to `empty-fleet`.
 
 ### Cross-Origin Port & Transport Guard Policy (2026-09-07)
 

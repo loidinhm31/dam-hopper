@@ -97,11 +97,15 @@ exists before linking it from a new document.
 - See: [API Reference](./api-reference.md#terminals)
 
 **Terminal Idle Suspend** — Server-authoritative, opt-in Linux suspend with
-bounded automatic timing, a fixed enrolled helper, and an observation-only
-configured-agent activity policy.
+bounded automatic timing, a fixed enrolled helper, and two automatic policies:
+`empty-fleet` (zero live/creating/restart-pending PTYs) and `agent-activity`
+(configured-agent PTY/process/TCP activity heuristic; service-only terminals may
+remain open). Quiet is not proof of agent completion, and `tcp4-tcp6` is not
+generic network coverage.
 
 - Status: `GET /api/system/idle-suspend/v1/status`; timing: `PATCH .../timing`
-- Automatic persisted wake values remain `60..=86400` seconds.
+- Automatic persisted wake values remain `60..=86400` seconds; quiet default is
+  900 seconds (15 minutes).
 - Phase 01 configuration stores `automaticPolicy` and `agentExecutables`
   under `server.idleSuspend`; the selector defaults to `empty-fleet`.
 - Phase 02 PTY evidence and input admission are implemented. Phase 03
@@ -120,9 +124,11 @@ configured-agent activity policy.
   checks, **16/16** Chromium tests, and the ignored Linux PTY/TCP smoke passed
   in **0.72s**; code review approved **9.4/10**. See the
   [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
-- Phase 08 owns the remaining documentation, Operations rollout, rollback, and
-  real automatic suspend canary gates. Automated qualification never invokes
-  host suspend, RTC programming, the helper, `sudo`, or root installation.
+- Phase 08 documentation, operations runbooks, controlled rollout, and rollback
+  are complete. QA evidence: **14/14** boundary checks, **20/20** idle-suspend
+  integration scenarios including the ignored live smoke (**0.74s**), **16/16**
+  Chromium tests, and **1606/1606** UI tests. The real automatic suspend canary
+  remains an Operations gate; see the [Phase 08 QA report](../plans/reports/qa-260911-1207-phase08-idle-suspend-rollout.md).
 - See [PTY Activity Observation](./pty-activity-observation.md),
   [Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
   [Owned TCP Byte Observation](./tcp-activity-observation.md), [Agent Activity

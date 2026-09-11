@@ -55,16 +55,18 @@ a root-only recovery unit:
 | ---------------------------------------- | -------------------------------- | -------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `dam-hopper-recovery.service`            | `dam-hopper recover --boot`      | `root:root`                            | None                                | Oneshot pre-boot gate before application units                                                       |
 | `dam-hopper-idle-suspend-helper.service` | `dam-hopper-idle-suspend-helper` | `root:dam-hopper` (rendered API group) | `/run/dam-hopper/idle-suspend.sock` | `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `CAP_WAKE_ALARM` |
-| `dam-hopper-api.service`                 | `dam-hopper-server`              | `root:root`                            | `0.0.0.0:4801`                      | Dedicated PTY/auth/file operations; `NoNewPrivileges=false`                                          |
+| `dam-hopper-api.service`                 | `dam-hopper-server`              | `dam-hopper:dam-hopper` (default rendered identity) | `0.0.0.0:4801`                      | Dedicated PTY/auth/file operations; `NoNewPrivileges=false`                                          |
 | `dam-hopper-web.service`                 | `dam-hopper-web`                 | `dam-hopper-web:dam-hopper-web`        | `0.0.0.0:4802`                      | Read-only static host; `ProtectSystem=strict`, `NoNewPrivileges=true`                                |
 
-> **Security Notice on API Identity:** Running `dam-hopper-api.service` as
-> `root:root` is an accepted v1 MVP operational decision for host PTY and
-> development container operations. An API or PTY compromise equals root
-> compromise. Host firewall and Tailscale ACLs must strictly limit access to
-> port `4801`. The web service runs under a dedicated, unprivileged system
-> account (`dam-hopper-web`) with strict filesystem sandboxing. The helper is
-> root-owned but accepts only the enrolled API peer over its local socket.
+> **Security Notice on API Identity:** The checked-in API unit and default
+> release-manager render run `dam-hopper-api.service` as the unprivileged
+> `dam-hopper:dam-hopper` account. A custom rendered identity must remain
+> non-root; verify the effective `User=`/`Group=` on each host. An API or PTY
+> compromise is therefore bounded by that service account's access, while host
+> firewall and Tailscale ACLs still must limit port `4801`. The web service
+> runs under a dedicated, unprivileged system account (`dam-hopper-web`) with
+> strict filesystem sandboxing. The helper is root-owned but accepts only the
+> enrolled API peer over its local socket.
 
 ### Deployment Roles
 
@@ -378,7 +380,14 @@ a general release manager.
 
 ## 11. Terminal Idle Suspend Helper Enrollment & Rollback Runbook
 
-The server-authoritative terminal idle suspend subsystem provides opt-in, fail-closed host suspend with RTC wake after a bounded quiet period with zero active or starting PTY terminals. The enrolled helper also supports the Phase 01 execution-only indefinite-sleep sentinel; automatic persisted timing remains bounded.
+The server-authoritative terminal idle suspend subsystem provides two automatic
+policies. `empty-fleet` requests host suspend only after all managed PTYs are no
+longer live, creating, or restart-pending. `agent-activity` uses configured-agent
+PTY/process/TCP evidence and may suspend while service-only terminals remain
+open; it is an activity heuristic, not proof that an agent has finished. Both
+policies use RTC wake after a bounded quiet period. The enrolled helper also
+supports the Phase 01 execution-only indefinite-sleep sentinel; automatic
+persisted timing remains bounded.
 
 ### 11.1 Host Qualification Requirements
 
@@ -508,3 +517,185 @@ hardware, or host suspend.
      - Never execute an indefinite canary on a remote host without verified out-of-band power cycling capability.
      - Submit exactly one POST and never replay it after a network interruption.
    - Confirm post-resume status, audit, handoff, and PTY reconciliation once manually awakened.
+
+### 11.6 Target-Host Observer Qualification (Phase 07 Gate)
+
+Before enabling the `agent-activity` automatic policy on any host, qualify that host's kernel, permissions, and service context:
+
+1. **Kernel and Socket Diagnostic Prerequisite**:
+   Verify that the kernel supports `NETLINK_SOCK_DIAG` socket diagnostics for `INET` and `INET6` sockets, and that `TCP_INFO` byte counters (`tcpi_bytes_received`, `tcpi_bytes_sent`) are populated.
+
+2. **Procfs Visibility**:
+   Verify that the user running `dam-hopper-api.service` can inspect `/proc/<pid>/stat`, `/proc/<pid>/cmdline`, and `/proc/<pid>/fd` for child processes spawned under managed PTY sessions.
+
+3. **Execute Live Linux Smoke Suite**:
+   Run the canonical integration check from a source checkout on the target host:
+
+   ```bash
+   cargo test --manifest-path server/Cargo.toml --test idle_suspend \
+     activity_live_linux_pty_tcp_smoke -- --ignored --exact --nocapture --test-threads=1
+   ```
+
+   *Expected Result*: Test passes within 1.00 second (the Phase 08 QA run measured 0.74s). This is observer evidence only, not a target-host or suspend-canary guarantee. The test uses real Linux loopback TCP, managed PTYs, and direct procfs/netlink observation, with a panic executor that guarantees zero host suspend calls.
+   Run the command from a source checkout with the deployed API service's
+   effective UID/GID, procfs visibility, mount view, and network namespace (or
+   an equivalent `systemd-run` sandbox). Do not add root privileges, capabilities,
+   shell wrappers, or a broader namespace just to make the test pass; record the
+   actual service-context result and shutdown/join latency.
+
+4. **Sample Budget and Bounded Join**:
+   Verify that observation samples consistently complete within the 1-second budget and that worker thread shutdown joins cleanly without hanging on stalled syscalls.
+
+### 11.7 Protected Status Interpretation & Operator Reason Guide
+
+The protected status endpoint (`GET /api/system/idle-suspend/v1/status`) reports `activity.measurementState` and `activity.reasonCode`. Use this guide to interpret status and determine appropriate operator action:
+
+| Measurement / reason                   | Operator interpretation                                  | Action                                                                                |
+| -------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `initializing` / null                  | No qualified baseline yet                                | Wait for a complete sample; do not enable automatic action based on it                |
+| `available` / `recentInput`            | Accepted terminal input reset quiet globally             | Expected; countdown restarts                                                          |
+| `available` / `recentOutput`           | Raw bytes arrived in an agent-owned/mixed terminal       | Expected; investigate noisy spinner/service only if false-busy matters                |
+| `available` / `recentNetwork`          | Attributable TCP4/TCP6 socket changed                    | Expected; unchanged connection alone does not count                                   |
+| `available` / `agentChanged`           | Relevant identity/socket baseline changed                | Expected conservative activity and fresh quiet window                                 |
+| `available` / `lifecycleBusy`          | Create/restart/dispose/close/handoff blocks admission    | Wait for lifecycle settlement; do not override automatically                          |
+| `available` / `quiet`                  | Complete heuristic sample, no recent qualifying activity | Candidate only; final fresh scan and admission checks still required                  |
+| `available` / `epochSpent`             | This genuine-activity epoch already attempted            | No automatic retry until new genuine activity                                         |
+| `unavailable` / `procAccess`           | Required proc identity/ownership inaccessible            | Fix service/proc permissions or roll back to `empty-fleet`                            |
+| `unavailable` / `scanLimit`            | A hard bound made the sample incomplete                  | Reduce managed workload or stay on `empty-fleet`; never tune away bounds casually     |
+| `unavailable` / `scanTimeout`          | Complete sample missed the 1s budget                     | Investigate target-host latency; no automatic claim                                   |
+| `unavailable` / `socketDiagnostics`    | Direct kernel socket diagnostics/counters incomplete     | Verify kernel support/service sandbox; no fallback to interface traffic               |
+| `unavailable` / `unsupportedTransport` | Attributable UDP/QUIC is present                         | Policy cannot qualify while present; use `empty-fleet` if workload requires it        |
+| `unavailable` / `namespaceMismatch`    | Ownership crosses current network namespace              | Unsupported boundary; do not claim coverage                                           |
+| `unavailable` / `staleObservation`     | Sample/ticket exceeded age or was invalidated            | Wait for fresh sample; repeated events indicate load/race issue                       |
+| `unavailable` / `identityUncertain`    | PID/incarnation/root attribution cannot be proven        | Let workload settle/restart naturally or use `empty-fleet`; never kill it as recovery |
+| `unavailable` / `counterOverflow`      | Monotonic evidence cannot be compared safely             | New incarnation/reconciliation required; no automatic claim                           |
+| `unavailable` / `reconciling`          | Resume/outcome identity and baseline rebuild in progress | Wait; recovery is not new activity and does not re-arm a spent epoch                  |
+
+### 11.8 Observation-Only Canary Soak Runbook
+
+To validate activity observation on a candidate host without risking unexpected automatic sleep:
+
+1. In `/etc/dam-hopper/dam-hopper.toml`, set:
+   ```toml
+   [server.idle_suspend]
+   enabled = false
+   automatic_policy = "agent-activity"
+   agent_executables = ["codex", "omp", "claude", "agy"]
+   ```
+2. Restart the API service:
+   ```bash
+   sudo systemctl restart dam-hopper-api.service
+   ```
+3. Poll protected status and observe activity state:
+   ```bash
+   curl -s -H "Authorization: Bearer <operator-token>" \
+     http://127.0.0.1:4801/api/system/idle-suspend/v1/status | jq .activity
+   ```
+4. Exercise workloads:
+   - Start recognized agents (`claude`, `omp`, etc.) and observe `recentOutput` or `recentNetwork`.
+   - Send interactive input to any terminal and observe `recentInput`.
+   - Run service-only terminals and observe that they do not reset quiet.
+   - Verify that when quiet time elapses, status reports `quiet`, but **zero** automatic suspend requests are made because `enabled = false`.
+   - Verify that any measurement warning contains safe PID/identity examples without leaking command arguments or socket details.
+
+The warning is an operational measurement report, not a countdown or completion
+signal. When unavailable, `activity.measurementWarning` contains one continuous
+`blockedSinceMs` interval, the closed reason, and at most 32 current attributable
+`{ pid, executableIdentity }` examples in positive PID order. Identity is nullable
+and capped at 256 UTF-8 bytes without controls. Cause/PID changes preserve the
+interval; complete available recovery clears it, and a later failure starts a new
+interval. The warning appears only in authenticated, `Cache-Control: no-store`
+status; logs, audits, WebSocket hints, and rollout artifacts contain no process
+details.
+### 11.9 Bounded Automatic Canary Runbook (Operations Gate)
+
+Executing a real automatic host suspend canary is an explicit Operations procedure requiring written approval:
+
+1. **Approval Prerequisites**:
+   - Designated host owner, scheduled maintenance window, and on-call rollback engineer.
+   - Verified physical or BMC/IPMI out-of-band power access.
+   - Clean RTC status: `/sys/class/rtc/rtc0/wakealarm` must be empty.
+   - Zero system sleep inhibitors: `systemd-inhibit --list` must show no active inhibitors.
+   - Verify database-backed authentication, helper service/socket capability, and
+     a clean status with no active or in-flight handoff.
+
+2. **Enablement**:
+   In `/etc/dam-hopper/dam-hopper.toml`, set:
+   ```toml
+   [server.idle_suspend]
+   enabled = true
+   automatic_policy = "agent-activity"
+   quiet_period_seconds = 900
+   wake_after_seconds = 180
+   ```
+   Restart API: `sudo systemctl restart dam-hopper-api.service`.
+
+3. **Execution and Verification**:
+   - Generate one genuine activity epoch with a recognized agent.
+   - Allow the agent to finish and the quiet period to elapse.
+   - Observe machine suspension and automatic wake at the scheduled RTC time (180s).
+   - Upon wake, refetch status and verify:
+     - `state` reconciled to `watching` or `armed`.
+     - `currentEpoch` advanced, latching the spent epoch.
+     - Helper audit `/var/log/dam-hopper/idle-suspend-helper.jsonl` contains exactly one intent and completion record.
+     - Server audit `idle-suspend-audit.jsonl` contains the matching handoff record.
+     - No duplicate suspend request is issued while conditions remain unchanged.
+
+### 11.10 Controlled Rollout Stop Criteria
+
+Immediately halt rollout and execute rollback upon encountering any of the following:
+
+1. **Unexpected Suspend**: Host suspends while an attributable agent is actively producing network or PTY traffic, or while a service-only workload was unintentionally treated as eligible.
+2. **Missed RTC Wake**: Host fails to resume automatically within approved timer tolerance.
+3. **Duplicate Handoff**: More than one handoff is dispatched within the same activity epoch.
+4. **Stuck Handoff**: Server remains in `handedOff` state without post-resume reconciliation.
+5. **False Quiet**: Status reports `quiet` during known active agent computation or unobserved transport activity.
+6. **Persistent Unavailable**: Repeated `scanTimeout`, `scanLimit`, `procAccess`, `socketDiagnostics`, `unsupportedTransport`, `namespaceMismatch`, `identityUncertain`, `counterOverflow`, or `reconciling` warnings.
+7. **Budget or Join Failure**: Sampling exceeds the one-second deadline, or shutdown cannot join the sampler cleanly.
+8. **Privacy Leakage**: Any command arguments, environment variables, matcher entries, socket addresses, terminal content, or raw diagnostics appear in status warnings, logs, audits, WebSocket hints, or rollout artifacts.
+9. **Lost Reconciliation**: PTY/process baselines, helper outcome, audit chain, or status revision cannot be reconciled after resume.
+
+### 11.11 Rollback and Emergency Disable Procedures
+
+#### Level 1: Activity Policy Rollback
+
+Restores legacy zero-active-fleet behavior without disturbing helper enrollment or manual sleep:
+
+1. Refetch protected status and ensure there is no `finalCheck`, `handedOff`, or
+   active handoff. Reconcile an accepted handoff before restarting; a config edit
+   is not cancellation.
+2. Back up `/etc/dam-hopper/dam-hopper.toml` while preserving owner and mode.
+3. Edit the active registry:
+   ```toml
+   [server.idle_suspend]
+   automatic_policy = "empty-fleet"
+   ```
+4. Restart the API:
+   ```bash
+   sudo systemctl restart dam-hopper-api.service
+   ```
+5. Verify status:
+   ```bash
+   curl -s -H "Authorization: Bearer <operator-token>" \
+     http://127.0.0.1:4801/api/system/idle-suspend/v1/status | jq '{automaticPolicy, activity, state}'
+   ```
+   Require `automaticPolicy: "empty-fleet"` and `activity: null`.
+
+#### Emergency Disable
+
+Immediately disables all automatic idle-suspend scheduling:
+
+1. Refetch protected status and resolve any accepted handoff before restarting.
+2. In `/etc/dam-hopper/dam-hopper.toml`, set `enabled = false` and
+   `automatic_policy = "empty-fleet"`.
+3. Restart the API: `sudo systemctl restart dam-hopper-api.service`.
+4. Verify `state: "disabled"` and `activity: null`.
+
+#### Level 2: Complete Disenrollment & Helper Removal
+
+To completely remove helper units and restore pristine host configuration, use the root disenrollment script:
+
+```bash
+sudo ./deploy/reset-linux-production.sh --dry-run
+sudo ./deploy/reset-linux-production.sh
+```

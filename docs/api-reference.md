@@ -440,17 +440,49 @@ Returns the immutable authoritative `IdleSuspendStatusV1` snapshot.
   - `enabled`: boolean (operator startup policy)
   - `automaticPolicy`: required enum (`"empty-fleet"` or `"agent-activity"`)
   - `activity`: nullable activity status; null for `empty-fleet`, otherwise:
-    - `measurementState`: `"initializing"`, `"available"`, or `"unavailable"`
-    - `reasonCode`: optional closed activity reason
-    - `recognizedAgentCount`, `monitoredTerminalCount`: optional bounded counts
-    - `sampledAtMs`, `lastActivityAtMs`: optional epoch timestamps
-    - `networkCoverage`: currently `"tcp4-tcp6"`
-    - `measurementWarning`: `null` when `measurementState` is `"available"`;
-      required otherwise. When present it contains a closed warning reason,
-      non-negative `blockedSinceMs`, and at most 32 strictly ascending positive
-      PID records `{ "pid", "executableIdentity" }` plus
-      `processesTruncated`. Arguments, socket details, terminal bytes, and raw
-      diagnostics are never exposed.
+    - `measurementState`: enum (`"initializing"`, `"available"`, or `"unavailable"`)
+    - `reasonCode`: optional closed activity reason enum:
+      - `"recentInput"`: Accepted terminal input reset quiet globally
+      - `"recentOutput"`: Raw bytes arrived in an agent-owned or mixed terminal
+      - `"recentNetwork"`: Attributable TCP4/TCP6 socket byte activity observed
+      - `"agentChanged"`: Relevant process identity or socket baseline changed
+      - `"lifecycleBusy"`: PTY create, restart, dispose, close, or handoff in progress
+      - `"quiet"`: Complete heuristic sample, no recent qualifying activity
+      - `"procAccess"`: Required proc identity or ownership is inaccessible
+      - `"scanLimit"`: A hard observation bound was reached
+      - `"scanTimeout"`: Sample preparation exceeded the one-second deadline
+      - `"socketDiagnostics"`: TCP socket diagnostics or counters are incomplete
+      - `"unsupportedTransport"`: An attributable UDP or QUIC socket was detected
+      - `"namespaceMismatch"`: Process/socket ownership crosses the current network namespace
+      - `"staleObservation"`: The sample exceeded its accepted age or was invalidated
+      - `"identityUncertain"`: PID/incarnation/start_ticks attribution cannot be proven
+      - `"counterOverflow"`: A monotonic observation counter saturated
+      - `"reconciling"`: Resume or handoff outcome baseline rebuild is in progress
+      - `"epochSpent"`: Genuine-activity epoch already attempted; awaits new activity
+    - `recognizedAgentCount`: optional integer (nullable; null represents unknown, not zero)
+    - `monitoredTerminalCount`: optional integer (nullable; null represents unknown, not zero)
+    - `sampledAtMs`: optional epoch ms display timestamp (display-only wall clock; scheduling uses monotonic clocks)
+    - `lastActivityAtMs`: optional epoch ms display timestamp (display-only wall clock)
+    - `networkCoverage`: string, currently `"tcp4-tcp6"` (names the only measured transport; not proof of complete networking or non-TCP protocols)
+    - `measurementWarning`: `null` when `measurementState` is `"available"`; required object when `"initializing"` or `"unavailable"`:
+      - `reasonCode`: closed warning reason enum:
+        - `"procAccess"`: Required proc identity or ownership inaccessible
+        - `"scanLimit"`: Hard bound reached (256 roots, 8,192 scanned procs, 1,024 relevant procs, 4,096 FDs, 8,192 socket inodes)
+        - `"scanTimeout"`: Sample preparation exceeded 1-second deadline
+        - `"socketDiagnostics"`: Netlink socket diagnostics or counters incomplete
+        - `"unsupportedTransport"`: Attributable UDP or QUIC socket detected
+        - `"namespaceMismatch"`: Process/socket ownership crosses current network namespace
+        - `"staleObservation"`: Sample exceeded accepted age (5s) or invalidated by concurrent PTY write
+        - `"identityUncertain"`: PID/incarnation/start_ticks attribution cannot be proven
+        - `"counterOverflow"`: Saturating monotonic counters overflowed
+        - `"reconciling"`: System resume or handoff outcome baseline rebuild in progress
+      - `blockedSinceMs`: non-negative integer (epoch ms display timestamp of the single continuous blocked interval; unchanged across cause/PID changes until full available recovery)
+      - `processes`: array of up to 32 current attributable process records sorted in strictly ascending positive PID order:
+        - `pid`: positive integer
+        - `executableIdentity`: string (up to 256 UTF-8 bytes without controls; safe executable basename or configured path; null if unknown)
+      - `processesTruncated`: boolean (true if additional attributable processes exist beyond the 32-entry cap or shared owners were omitted)
+    - **Privacy and Data Exclusions**: Protected status GET is the only interface exposing warning PID and safe executable identity. It never exposes command-line arguments, environment variables, full matcher lists, terminal/session/root/start IDs, socket addresses/ports/inodes, terminal output bytes, tokens, or raw kernel diagnostics. Server/helper logs, JSONL audit trails, and WebSocket notifications strictly exclude warning process details.
+    - **Client Normalization & Old-Server Fallback**: A client receiving a valid v1 response with both `automaticPolicy` and `activity` absent normalizes them to `automaticPolicy: "empty-fleet"` and `activity: null`. Any partial omission, malformed enum, out-of-domain number, or policy/activity mismatch is rejected as a decode error.
   - `timingMutable`: boolean (`true` when enabled and not currently handed off)
   - `timingMutableReason`: optional string (e.g. `"disabled"`, `"handoffInProgress"`)
   - `capabilityCode`: string (e.g. `"unavailable"`, `"fake"`, `"systemd"`)
