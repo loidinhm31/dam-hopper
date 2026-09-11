@@ -402,13 +402,20 @@ startup-owned values; only the timing pair remains mutable through the
 dedicated timing endpoint. A full-config update rejects a changed idle-suspend
 block and preserves it when omitted.
 The status endpoint intentionally does not expose the matcher list or policy
-selector. Phase 02 adds private PTY root identity, raw-read, accepted-input,
-bounded-snapshot, and invalidation evidence. Phase 03 adds private bounded
-process discovery and retained attribution through `ProcessSource`; Phase 04
-adds private owned TCP byte observation and per-socket baseline comparison.
-Neither phase changes this public API; automatic eligibility remains owned by
-Phase 05. See [Configured-Agent Process Discovery](./agent-activity-process-discovery.md)
-and [Owned TCP Byte Observation](./tcp-activity-observation.md).
+selector's private executable entries. Phase 02 adds private PTY root identity,
+raw-read, accepted-input, bounded-snapshot, and invalidation evidence. Phase 03
+adds private bounded process discovery and retained attribution through
+`ProcessSource`; Phase 04 adds private owned TCP byte observation and per-socket
+baseline comparison. Phase 05 combines those seams through a dedicated
+transactional sampler and manager-locked final admission. See [Configured-Agent
+Process Discovery](./agent-activity-process-discovery.md), [Owned TCP Byte
+Observation](./tcp-activity-observation.md), and [Agent Activity Automatic
+Admission](./agent-activity-automatic-admission.md).
+
+The public `activity` object is diagnostic status, not a process inventory or
+authorization token. It is null for `empty-fleet` and present for
+`agent-activity`; unavailable measurement fails closed and cannot arm automatic
+suspend.
 
 
 #### GET /api/system/idle-suspend/v1/status
@@ -421,6 +428,17 @@ Returns the immutable authoritative `IdleSuspendStatusV1` snapshot.
   - `statusRevision`: integer (monotonic revision)
   - `state`: enum (`"disabled"`, `"watching"`, `"armed"`, `"finalCheck"`, `"handedOff"`, `"suppressed"`, `"failed"`, `"resumed"`)
   - `enabled`: boolean (operator startup policy)
+  - `automaticPolicy`: required enum (`"empty-fleet"` or `"agent-activity"`)
+  - `activity`: nullable activity status; null for `empty-fleet`, otherwise:
+    - `measurementState`: `"initializing"`, `"available"`, or `"unavailable"`
+    - `reasonCode`: optional closed activity reason
+    - `recognizedAgentCount`, `monitoredTerminalCount`: optional bounded counts
+    - `sampledAtMs`, `lastActivityAtMs`: optional epoch timestamps
+    - `networkCoverage`: currently `"tcp4-tcp6"`
+    - `measurementWarning`: nullable; when present it contains a closed
+      `reasonCode`, `blockedSinceMs`, and at most 32 `{ "pid", "executableIdentity" }`
+      process records plus `processesTruncated`. Arguments, socket details,
+      terminal bytes, and raw diagnostics are never exposed.
   - `timingMutable`: boolean (`true` when enabled and not currently handed off)
   - `timingMutableReason`: optional string (e.g. `"disabled"`, `"handoffInProgress"`)
   - `capabilityCode`: string (e.g. `"unavailable"`, `"fake"`, `"systemd"`)
@@ -1384,7 +1402,7 @@ Fire-and-forget message to send input to PTY stdin.
 **terminalResize(id: string, cols: number, rows: number): void**
 Fire-and-forget message to resize PTY dimensions.
 
-#### PTY, process, and owned TCP observation (server-internal Phases 02–04)
+#### PTY, process, TCP, and automatic admission observation (server-internal Phases 02–05)
 
 The REST and WebSocket terminal contracts do not expose activity snapshots,
 root identities, raw-output counters, input revisions, watcher revisions,
@@ -1393,13 +1411,16 @@ process evidence, socket ownership, TCP counters, or diagnostic payloads.
 manager's handoff/closing/disposal/session admission gate, while empty input is
 a no-op. Rejected input has no acknowledgement or replay path.
 
-Phase 03 `ProcessDiscovery`/`ProcessSource` and Phase 04
-`SocketDiagnosticsSource`/`LinuxSocketDiagnostics` are private server seams;
-they do not add an endpoint, WebSocket message, or automatic suspend claim.
+Phase 03 `ProcessDiscovery`/`ProcessSource`, Phase 04
+`SocketDiagnosticsSource`/`LinuxSocketDiagnostics`, and Phase 05's sampler and
+manager admission are private server seams. Phase 05's only public activity
+surface is the bounded `activity` member of
+`GET /api/system/idle-suspend/v1/status`; it does not expose an endpoint,
+WebSocket message, process arguments, socket details, or raw diagnostics.
 See [PTY Activity Observation](./pty-activity-observation.md),
 [Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
-and [Owned TCP Byte Observation](./tcp-activity-observation.md). Automatic
-eligibility and final handoff remain Phase 05 work.
+[Owned TCP Byte Observation](./tcp-activity-observation.md), and [Agent Activity
+Automatic Admission](./agent-activity-automatic-admission.md).
 
 ### Event Subscriptions
 

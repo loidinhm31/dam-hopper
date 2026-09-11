@@ -86,6 +86,7 @@ pub(crate) struct PreparedNetworkSample {
 
 impl PreparedNetworkSample {
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn sample(&self) -> &NetworkSample {
         &self.sample
     }

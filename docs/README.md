@@ -20,6 +20,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[PTY Activity Observation](./pty-activity-observation.md)** — Phase 02 private root identity, raw output, input admission, snapshot, and watcher contract
 - **[Configured-Agent Process Discovery](./agent-activity-process-discovery.md)** — Phase 03 bounded procfs discovery, attribution, and `ProcessSource` contract
 - **[Owned TCP Byte Observation](./tcp-activity-observation.md)** — Phase 04 bounded `NETLINK_SOCK_DIAG`, `tcp_info`, and per-socket baseline contract
+- **[Agent Activity Automatic Admission](./agent-activity-automatic-admission.md)** — Phase 05 transactional sampler, generation-fenced final claim, status warning, and coordinator lifecycle
 
 ## Reference Documentation
 
@@ -104,11 +105,13 @@ bounded automatic timing and a fixed enrolled helper.
   under `server.idleSuspend`; the selector defaults to `empty-fleet`.
 - Phase 02 PTY evidence and input admission are implemented. Phase 03
   provides bounded configured-agent process discovery and retained attribution.
-  Phase 04 now provides owned TCP byte observation and per-socket baseline
-  comparison; Phase 05 owns automatic eligibility and final handoff admission.
+  Phase 04 provides owned TCP byte observation and per-socket baseline
+  comparison. Phase 05 adds the dedicated transactional sampler, manager-locked
+  final admission, bounded status warnings, and the `agent-activity` state path.
 - See [PTY Activity Observation](./pty-activity-observation.md),
   [Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
-  and [Owned TCP Byte Observation](./tcp-activity-observation.md).
+  [Owned TCP Byte Observation](./tcp-activity-observation.md), and
+  [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).
 - Phase 01 helper execution accepts `wakeAfterSeconds: 0` for clear-only,
   indefinite sleep; it clears and verifies RTC state without target arithmetic.
 - Unexpected pre-existing RTC alarms, inhibitors, capability failures, and RTC

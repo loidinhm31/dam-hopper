@@ -21,7 +21,7 @@ Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with
 | **Workspace Switch Hijack** | High | Canonical startup registry path is captured at boot; workspace switches preserve immutable startup policy. |
 | **Timing Bounds Abuse / DoS** | Medium | Automatic configuration and timing PATCH remain `60..=86400`; helper execution accepts exactly `0` or `60..=86400`, rejecting `1..=59`, overflow, and malformed JSON. |
 | **Audit Log Tampering / Leakage** | Medium | Server-private mode-0600 JSONL audit log with `libc::O_NOFOLLOW`. Excludes credentials, auth tokens, command strings, environment variables, and terminal contents. |
-| **Fleet Activity Race Condition** | High | Serialized coordinator command queue. Automatic claims require zero live/creating PTYs and an unadvanced fleet generation; manual forced claims retain generation and handoff fencing while explicitly bypassing only the quiescence count. |
+| **Fleet Activity Race Condition** | High | Serialized coordinator command queue. `empty-fleet` claims require zero live/creating/restart-pending PTYs and an unadvanced generation; `agent-activity` claims require a fresh unchanged ticket with matching generation, exact roots, input revision, output fences, and no lifecycle blockers. Manual forced claims retain generation and handoff fencing while explicitly bypassing only the quiescence count. |
 | **CSRF / Cross-Origin Trigger** | Critical | Strict same-origin enforcement on cookie sessions: validates exact Host match and rejects foreign, duplicate, userinfo-bearing, and path-bearing origins. Bearer tokens require enabled database-authenticated actor. |
 | **Ambiguous or duplicate manual POST** | Critical | Accepted delivery may be interrupted by host suspend. The UI uses `retry: false`; request ID, audit records, status revision, and post-resume GET reconcile state. Clients never replay an ambiguous action. |
 
@@ -146,8 +146,9 @@ namespace, and limit failures become typed unavailable outcomes; retryable
 close races are not converted into quiet activity. Discovery cannot change
 namespaces, execute processes, signal processes, or request suspend, and it
 does not publish REST, WebSocket, audit, or log payloads. Phase 04 consumes
-these identities through the private TCP observer; automatic eligibility
-remains a later phase.
+these identities through the private TCP observer; Phase 05 performs the
+transactional pair decision and final manager-locked admission. See [Agent
+Activity Automatic Admission](./agent-activity-automatic-admission.md).
 
 ### Configured-agent owned TCP observation — Phase 04 (2026-09-11)
 
@@ -266,15 +267,41 @@ and [review](../plans/reports/reviewer-260910-0733-phase-04-verification-boundar
 - **Security Owner**: Approved (2026-09-05)
 - **Infrastructure / Operator**: Approved (2026-09-05)
 
-### Phase 04 status (2026-09-06)
+### Manual force-suspend integration status (2026-09-06)
 
 Authenticated manual force-suspend REST API (`POST /api/system/idle-suspend/v1/force-suspend`) and UI dialog (`ForceSleepDialog.tsx`) are implemented. Same-origin protection for cookie sessions, database-backed auth validation, 16 KiB body limit, active fleet detection and confirmation dialog, indefinite sleep default (`wakeAfterSeconds: 0`), and zero-retry reconciliation contracts are verified across unit and browser test suites.
 
-### Phase 05 status (2026-09-06)
+### Manual force-suspend Phase 05 status (2026-09-06)
 
 Integration testing, traceability, boundary verification, and documentation synchronization are complete. Focused helper/coordinator/REST/cross-module/UI tests verify negative dependencies, denial side effects, race ordering, gate release, one-POST/no-retry behavior, and resume reconciliation. Automated tests use fakes and temporary files; they never invoke `systemctl`, logind, real RTC hardware, or host suspend.
 
 The required timed real-host canary remains an operations procedure, not repository test evidence. An indefinite canary is deferred until explicit operations approval, verified physical or out-of-band wake, and rollback ownership are recorded.
+
+### Configured-agent automatic admission Phase 05 status (2026-09-11)
+
+The configured-agent path is private and fail closed. One joinable sampler
+worker owns process and TCP baselines; a sample prepares both observations,
+verifies raw-output and manager generation/input fences, and commits both
+baselines only after all checks pass. A retryable close race receives at most
+one retry within the original monotonic deadline. No partial preparation can
+authorize a suspend claim.
+
+Only an unchanged, fresh final sample produces an opaque ticket. The PTY
+manager validates policy/enabled state, request and activity revisions,
+quiet-deadline expiry, five-second observation age, input revision, fleet
+generation, exact root incarnation identities, raw-output checkpoints, and
+closing/disposal/creation/restart/handoff blockers under one lock before
+setting `handoff_active`. Any mismatch leaves the epoch unspent and returns to
+watching.
+
+Public `agent-activity` warnings contain only a closed reason, blocked-since
+time, and up to 32 sorted/deduplicated PID plus optional safe executable
+identity records. They never expose arguments, environment, terminal bytes,
+socket addresses/inodes, or raw diagnostics. `empty-fleet` leaves the activity
+field null and does not start the sampler. Coordinator shutdown joins the
+worker before PTY readers and manager teardown. See [Agent Activity Automatic
+Admission](./agent-activity-automatic-admission.md) for the implementation
+contract.
 
 ### Cross-Origin Port & Transport Guard Policy (2026-09-07)
 

@@ -9,6 +9,17 @@ pub(crate) mod process;
 mod netlink;
 mod tcp_info;
 pub(crate) mod tcp;
+pub(crate) mod sampler;
+
+#[allow(unused_imports)]
+pub(crate) use crate::idle_suspend::status::{ActivityMeasurementState, ActivityObservationReason};
+#[allow(unused_imports)]
+pub(crate) use sampler::{
+    ActivityClaimTicket, ActivityDelta, ActivityObservation, ActivitySampler,
+    ActivitySamplerResult, AgentActivityAdmission, MonitoredOutputFence,
+    QualifyingActivityKind, SampleKind, SampleRequest,
+    MAX_ACCEPTED_OBSERVATION_AGE, SAMPLE_ACCEPTANCE_TIMEOUT, SAMPLE_CADENCE,
+};
 
 // ---------------------------------------------------------------------------
 // Limits and bounds
@@ -90,6 +101,7 @@ pub(crate) struct OwnedSocketSet {
 }
 
 impl OwnedSocketSet {
+    #[allow(dead_code)]
     pub(crate) fn empty(namespace: NetworkNamespaceIdentity) -> Self {
         Self {
             namespace,

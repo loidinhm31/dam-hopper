@@ -2507,3 +2507,446 @@ async fn test_manual_force_suspend_duplicate_click_and_timing_contention() {
 
     coordinator.shutdown().await;
 }
+async fn tokio_wait_for(timeout: std::time::Duration, mut predicate: impl FnMut() -> bool) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if predicate() {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    predicate()
+}
+
+#[tokio::test]
+async fn test_coordinator_agent_activity_disabled_mode_observer_only() {
+    use crate::idle_suspend::activity::process::tests::MockProcessSource;
+    use crate::idle_suspend::activity::tcp::tests::FakeDiagnosticsSource;
+    use crate::idle_suspend::activity::ActivitySampler;
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::manager::PtySessionManager;
+    use tokio::sync::mpsc;
+
+    let mut cfg = IdleSuspendConfig::default();
+    cfg.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentActivity;
+    cfg.enabled = false;
+    let policy = StartupIdleSuspendPolicy::from_config(&PathBuf::from("test.toml"), &cfg);
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::from_config(&cfg).unwrap(),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let proc_source = MockProcessSource::new();
+    let diag_source = FakeDiagnosticsSource::default();
+    let (tx, rx) = mpsc::channel(16);
+    let sampler = ActivitySampler::with_sources(
+        Arc::new(pty_manager.clone()),
+        Arc::clone(&policy.agent_executables),
+        tx,
+        proc_source,
+        diag_source,
+    );
+
+    let coordinator = IdleSuspendCoordinator::start_with_sampler(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager,
+        None,
+        sampler,
+        rx,
+    );
+
+    let status = coordinator.status();
+    assert_eq!(status.state, CoordinatorState::Disabled);
+    assert!(!status.enabled);
+    assert!(status.arm_deadline_ms.is_none());
+    // Activity status is present (not null) in agent-activity policy
+    assert!(status.activity.is_some());
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_agent_activity_clean_boot_no_auto_arm() {
+    use crate::idle_suspend::activity::process::tests::MockProcessSource;
+    use crate::idle_suspend::activity::tcp::tests::FakeDiagnosticsSource;
+    use crate::idle_suspend::activity::ActivitySampler;
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::manager::PtySessionManager;
+    use tokio::sync::mpsc;
+
+    let mut cfg = IdleSuspendConfig::default();
+    cfg.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentActivity;
+    cfg.enabled = true;
+    let policy = StartupIdleSuspendPolicy::from_config(&PathBuf::from("test.toml"), &cfg);
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::from_config(&cfg).unwrap(),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let proc_source = MockProcessSource::new();
+    let diag_source = FakeDiagnosticsSource::default();
+    let (tx, rx) = mpsc::channel(16);
+    let sampler = ActivitySampler::with_sources(
+        Arc::new(pty_manager.clone()),
+        Arc::clone(&policy.agent_executables),
+        tx,
+        proc_source,
+        diag_source,
+    );
+
+    let coordinator = IdleSuspendCoordinator::start_with_sampler(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager,
+        None,
+        sampler,
+        rx,
+    );
+
+    // Let the first background sample establish baseline
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let status = coordinator.status();
+    assert_eq!(status.state, CoordinatorState::Watching);
+    assert!(status.enabled);
+    // Clean boot never auto-arms without prior activity
+    assert!(status.arm_deadline_ms.is_none());
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_agent_activity_countdown_and_final_claim() {
+    use crate::idle_suspend::activity::process::tests::MockProcessSource;
+    use crate::idle_suspend::activity::tcp::tests::FakeDiagnosticsSource;
+    use crate::idle_suspend::activity::ActivitySampler;
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::manager::{PtyCreateOpts, PtySessionManager};
+    use tokio::sync::mpsc;
+
+    let mut cfg = IdleSuspendConfig::default();
+    cfg.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentActivity;
+    cfg.enabled = true;
+    cfg.quiet_period_seconds = 1; // 1 second quiet for fast test
+    let policy = StartupIdleSuspendPolicy::from_config(&PathBuf::from("test.toml"), &cfg);
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(cfg.quiet_period_seconds, cfg.wake_after_seconds),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let id = "coord-agent-term";
+    let opts = PtyCreateOpts {
+        id: id.to_string(),
+        project: None,
+        worktree_path: None,
+        command: "/bin/sleep 60".to_string(),
+        cwd: "/tmp".to_string(),
+        env: std::collections::HashMap::new(),
+        rows: 24,
+        cols: 80,
+        name: None,
+        restart_policy: crate::config::schema::RestartPolicy::Never,
+        restart_max_retries: 0,
+    };
+    pty_manager.create(opts).expect("create session");
+    let snap = pty_manager.capture_activity_snapshot();
+    let root = snap.roots.iter().find(|r| r.terminal.session_id == id).unwrap();
+    let pid = root.qualification.pid().unwrap_or(33333);
+    let identity = root.qualification.process_identity().unwrap_or(crate::pty::activity::ProcessIdentity {
+        pid,
+        start_ticks: 100,
+    });
+    pty_manager.test_set_root_qualification(id, crate::pty::activity::RootQualification::Qualified { identity });
+
+    let mut proc_source = MockProcessSource::new();
+    proc_source.set_proc(
+        identity.pid,
+        1,
+        PathBuf::from("/usr/bin/codex"),
+        vec!["codex".to_string()],
+        PathBuf::from("/tmp"),
+        (1, 1),
+        identity.start_ticks,
+    );
+
+    let diag_source = FakeDiagnosticsSource::default();
+    let (tx, rx) = mpsc::channel(16);
+    let sampler = ActivitySampler::with_sources(
+        Arc::new(pty_manager.clone()),
+        Arc::clone(&policy.agent_executables),
+        tx,
+        proc_source,
+        diag_source,
+    );
+
+    let coordinator = IdleSuspendCoordinator::start_with_sampler(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager.clone(),
+        None,
+        sampler,
+        rx,
+    );
+
+    // Wait for countdown and final claim (cadence is 2s, quiet is 1s, so ~3-4s total)
+    // Wait for countdown and final claim (coordinator moves to HandedOff, then Resumed via FakeExecutor)
+    let claimed = tokio_wait_for(std::time::Duration::from_secs(8), || {
+        let s = coordinator.status();
+        s.state == CoordinatorState::HandedOff || s.state == CoordinatorState::Resumed
+    }).await;
+    assert!(claimed, "Coordinator must transition to HandedOff or Resumed after quiet deadline, current: {:?}", coordinator.status().state);
+    // Verify executor was invoked
+    let calls = executor.recorded_requests();
+    assert_eq!(calls.len(), 1);
+
+    coordinator.shutdown().await;
+    let _ = pty_manager.kill(id);
+}
+
+#[tokio::test]
+async fn test_coordinator_agent_activity_invalidation_resets_countdown() {
+    use crate::idle_suspend::activity::process::tests::MockProcessSource;
+    use crate::idle_suspend::activity::tcp::tests::FakeDiagnosticsSource;
+    use crate::idle_suspend::activity::ActivitySampler;
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::manager::{PtyCreateOpts, PtySessionManager};
+    use tokio::sync::mpsc;
+
+    let mut cfg = IdleSuspendConfig::default();
+    cfg.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentActivity;
+    cfg.enabled = true;
+    cfg.quiet_period_seconds = 2;
+    let policy = StartupIdleSuspendPolicy::from_config(&PathBuf::from("test.toml"), &cfg);
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(cfg.quiet_period_seconds, cfg.wake_after_seconds),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let id = "coord-invalidation-term";
+    let opts = PtyCreateOpts {
+        id: id.to_string(),
+        project: None,
+        worktree_path: None,
+        command: "/bin/sleep 60".to_string(),
+        cwd: "/tmp".to_string(),
+        env: std::collections::HashMap::new(),
+        rows: 24,
+        cols: 80,
+        name: None,
+        restart_policy: crate::config::schema::RestartPolicy::Never,
+        restart_max_retries: 0,
+    };
+    pty_manager.create(opts).expect("create session");
+    let snap = pty_manager.capture_activity_snapshot();
+    let root = snap.roots.iter().find(|r| r.terminal.session_id == id).unwrap();
+    let pid = root.qualification.pid().unwrap_or(44444);
+    let identity = root.qualification.process_identity().unwrap_or(crate::pty::activity::ProcessIdentity {
+        pid,
+        start_ticks: 100,
+    });
+    pty_manager.test_set_root_qualification(id, crate::pty::activity::RootQualification::Qualified { identity });
+
+    let mut proc_source = MockProcessSource::new();
+    proc_source.set_proc(
+        identity.pid,
+        1,
+        PathBuf::from("/usr/bin/codex"),
+        vec!["codex".to_string()],
+        PathBuf::from("/tmp"),
+        (1, 1),
+        identity.start_ticks,
+    );
+
+    let diag_source = FakeDiagnosticsSource::default();
+    let (tx, rx) = mpsc::channel(16);
+    let sampler = ActivitySampler::with_sources(
+        Arc::new(pty_manager.clone()),
+        Arc::clone(&policy.agent_executables),
+        tx,
+        proc_source,
+        diag_source,
+    );
+
+    let coordinator = IdleSuspendCoordinator::start_with_sampler(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager.clone(),
+        None,
+        sampler,
+        rx,
+    );
+
+    // Wait until Armed
+    let armed = tokio_wait_for(std::time::Duration::from_secs(3), || {
+        coordinator.status().state == CoordinatorState::Armed
+    }).await;
+    assert!(armed, "Coordinator must reach Armed state");
+
+    // Write terminal input to invalidate countdown
+    let _ = pty_manager.write(id, b"echo active\n");
+
+    // Verify coordinator transitions back to Watching
+    let watched = tokio_wait_for(std::time::Duration::from_secs(2), || {
+        coordinator.status().state == CoordinatorState::Watching
+    }).await;
+    assert!(watched, "Input must invalidate countdown and return state to Watching");
+
+    coordinator.shutdown().await;
+    let _ = pty_manager.kill(id);
+}
+
+#[tokio::test]
+async fn test_coordinator_agent_activity_spent_epoch_latch() {
+    use crate::idle_suspend::activity::process::tests::MockProcessSource;
+    use crate::idle_suspend::activity::tcp::tests::FakeDiagnosticsSource;
+    use crate::idle_suspend::activity::ActivitySampler;
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::manager::{PtyCreateOpts, PtySessionManager};
+    use tokio::sync::mpsc;
+
+    let mut cfg = IdleSuspendConfig::default();
+    cfg.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentActivity;
+    cfg.enabled = true;
+    cfg.quiet_period_seconds = 1;
+    let policy = StartupIdleSuspendPolicy::from_config(&PathBuf::from("test.toml"), &cfg);
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(cfg.quiet_period_seconds, cfg.wake_after_seconds),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let id = "coord-spent-epoch-term";
+    let opts = PtyCreateOpts {
+        id: id.to_string(),
+        project: None,
+        worktree_path: None,
+        command: "/bin/sleep 60".to_string(),
+        cwd: "/tmp".to_string(),
+        env: std::collections::HashMap::new(),
+        rows: 24,
+        cols: 80,
+        name: None,
+        restart_policy: crate::config::schema::RestartPolicy::Never,
+        restart_max_retries: 0,
+    };
+    pty_manager.create(opts).expect("create session");
+    let snap = pty_manager.capture_activity_snapshot();
+    let root = snap.roots.iter().find(|r| r.terminal.session_id == id).unwrap();
+    let pid = root.qualification.pid().unwrap_or(55555);
+    let identity = root.qualification.process_identity().unwrap_or(crate::pty::activity::ProcessIdentity {
+        pid,
+        start_ticks: 100,
+    });
+    pty_manager.test_set_root_qualification(id, crate::pty::activity::RootQualification::Qualified { identity });
+
+    let mut proc_source = MockProcessSource::new();
+    proc_source.set_proc(
+        identity.pid,
+        1,
+        PathBuf::from("/usr/bin/codex"),
+        vec!["codex".to_string()],
+        PathBuf::from("/tmp"),
+        (1, 1),
+        identity.start_ticks,
+    );
+
+    let diag_source = FakeDiagnosticsSource::default();
+    let (tx, rx) = mpsc::channel(16);
+    let sampler = ActivitySampler::with_sources(
+        Arc::new(pty_manager.clone()),
+        Arc::clone(&policy.agent_executables),
+        tx,
+        proc_source,
+        diag_source,
+    );
+
+    let coordinator = IdleSuspendCoordinator::start_with_sampler(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager.clone(),
+        None,
+        sampler,
+        rx,
+    );
+
+    // Wait for HandedOff and executor completion
+    let resumed = tokio_wait_for(std::time::Duration::from_secs(8), || {
+        coordinator.status().state == CoordinatorState::Resumed
+    }).await;
+    assert!(resumed, "Coordinator must resume after fake executor outcome, current: {:?}", coordinator.status().state);
+    // Epoch is now spent. Status reason should reflect EpochSpent after recovery sample
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Epoch is now spent. Status reason should reflect EpochSpent after recovery sample completes
+    let spent = tokio_wait_for(std::time::Duration::from_secs(4), || {
+        coordinator.status().activity.and_then(|a| a.reason_code) == Some(crate::idle_suspend::status::ActivityObservationReason::EpochSpent)
+    }).await;
+    assert!(spent, "Status reason must reflect EpochSpent after recovery sample, current: {:?}", coordinator.status().activity.and_then(|a| a.reason_code));
+    coordinator.shutdown().await;
+    let _ = pty_manager.kill(id);
+}
+
+#[tokio::test]
+async fn test_coordinator_agent_activity_shutdown() {
+    use crate::idle_suspend::activity::process::tests::MockProcessSource;
+    use crate::idle_suspend::activity::tcp::tests::FakeDiagnosticsSource;
+    use crate::idle_suspend::activity::ActivitySampler;
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::manager::PtySessionManager;
+    use tokio::sync::mpsc;
+
+    let mut cfg = IdleSuspendConfig::default();
+    cfg.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentActivity;
+    cfg.enabled = true;
+    let policy = StartupIdleSuspendPolicy::from_config(&PathBuf::from("test.toml"), &cfg);
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::from_config(&cfg).unwrap(),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let proc_source = MockProcessSource::new();
+    let diag_source = FakeDiagnosticsSource::default();
+    let (tx, rx) = mpsc::channel(16);
+    let sampler = ActivitySampler::with_sources(
+        Arc::new(pty_manager.clone()),
+        Arc::clone(&policy.agent_executables),
+        tx,
+        proc_source,
+        diag_source,
+    );
+
+    let coordinator = IdleSuspendCoordinator::start_with_sampler(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager,
+        None,
+        sampler,
+        rx,
+    );
+
+    // Shutdown must complete cleanly
+    coordinator.shutdown().await;
+}

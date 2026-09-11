@@ -240,11 +240,20 @@ Phase 01 freezes this selector and its configuration contract. Phase 02
 provides private PTY root/raw-output/input evidence, Phase 03 provides bounded
 configured-agent process discovery and retained attribution through a private
 procfs seam, and Phase 04 provides owned TCP byte observation and per-socket
-baseline comparison. Phase 05 still owns automatic eligibility and the final
-handoff claim; existing deployments therefore retain empty-fleet behavior when
-the key is omitted. See [PTY Activity Observation](./pty-activity-observation.md),
+baseline comparison. Phase 05 completes the dedicated transactional sampler,
+manager-locked final admission, bounded warning projection, and
+`agent-activity` coordinator path. See [PTY Activity Observation](./pty-activity-observation.md),
 [Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
-and [Owned TCP Byte Observation](./tcp-activity-observation.md).
+[Owned TCP Byte Observation](./tcp-activity-observation.md), and [Agent Activity
+Automatic Admission](./agent-activity-automatic-admission.md).
+
+Under `agent-activity`, the server starts one joinable sampler worker after
+persistence restoration. It samples on a two-second cadence, performs a fresh
+final sample at the quiet deadline, and requests recovery sampling after
+resume or handoff release. Measurement failures remain visible as bounded
+status warnings and never authorize automatic suspend. The default
+`empty-fleet` policy keeps its fleet-transition behavior and does not start the
+activity sampler.
 
 `agent_executables` defaults to `["codex", "omp", "claude", "agy"]`. Entries
 are literal, case-sensitive basenames or absolute paths, never regular

@@ -100,9 +100,9 @@ The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automa
 `IdleSuspendConfig` accepts an `automatic_policy` selector and an
 `agent_executables` list. The selector defaults to `empty-fleet` and also
 accepts `agent-activity`; selecting the latter stores the startup policy while
-Phase 04 supplies private TCP evidence. The Phase 05 eligibility/claim layer
-still decides whether that evidence can authorize automatic handoff. The
-default executable list is `codex`, `omp`, `claude`, and `agy`.
+Phase 05 combines private PTY, process, and TCP evidence for automatic
+eligibility and final admission. The default executable list is `codex`, `omp`,
+`claude`, and `agy`.
 
 Executable entries are literal, case-sensitive basenames or absolute paths.
 Validation requires 1–32 unique entries, 1–256 UTF-8 bytes per entry, and only
@@ -129,7 +129,7 @@ WebSocket field.
 
 ### Key Invariants
 1. **Fleet Quiescence & Latching**:
-   The coordinator arms only after transitioning from active to empty fleet. It remains single-flight: exactly one suspend execution occurs per empty period; resume or failure reconciles state and will never re-trigger suspend while the fleet stays empty.
+   `empty-fleet` arms only after an active-to-empty transition; `agent-activity` arms only after a complete baseline, qualifying activity context, clear lifecycle, and an unspent epoch revision. Both policies are single-flight: one admitted execution per eligible period; resume/failure reconciles state, and agent recovery does not advance `current_epoch` or silently re-trigger a spent epoch.
 2. **Admission & Handoff Order**:
    A timing update received while armed cancels the arm deadline, commits both values to canonical TOML and memory, and re-evaluates the fleet. Once a handoff claim is accepted (`CoordinatorState::HandedOff`), incoming timing updates immediately return `409 idleSuspendHandoffInProgress` with zero memory or disk mutation until resume reconciliation.
 3. **Non-blocking In-Flight Handoff**:
@@ -156,7 +156,7 @@ The protected endpoint accepts strict JSON `{ "wakeAfterSeconds": 0, "force": fa
 
 Manual suspend remains separate from the planned generic host-resource remediation helper. Monitoring and alert surfaces describe host state; only the explicit, authenticated ForceSleepDialog action can request suspend.
 
-### Configured-agent activity evidence (Phases 01–04; eligibility pending)
+### Configured-agent activity evidence (Phases 01–05)
 
 Phase 01 implements the persisted policy/configuration contract. Phase 02
 supplies private PTY root identity, raw-read evidence, accepted-input
@@ -164,11 +164,13 @@ admission, bounded snapshots, and invalidation handles. Phase 03 adds bounded
 configured-agent process discovery, retained attribution, and an
 observer-namespace-qualified `OwnedSocketSet`. Phase 04 consumes that set,
 reads cumulative TCP counters through an unprivileged Linux socket-diagnostics
-transport, and compares per-socket baselines. Phase 05 owns pair commit,
-automatic eligibility, blocked-measurement warnings, and the final handoff
-claim. See [PTY Activity Observation](./pty-activity-observation.md),
+transport, and compares per-socket baselines. Phase 05 combines both prepared
+samples in a dedicated worker, performs automatic eligibility and
+manager-locked final admission, projects bounded measurement warnings, and
+drives the `agent-activity` coordinator path. See [PTY Activity Observation](./pty-activity-observation.md),
 [Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
-and [Owned TCP Byte Observation](./tcp-activity-observation.md).
+and [Owned TCP Byte Observation](./tcp-activity-observation.md); the complete
+integration contract is [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).
 
 - `ProcessDiscovery<S>` performs one bounded, synchronous preparation pass
   through the private `ProcessSource` seam. Production uses `LinuxProcSource`
@@ -211,6 +213,45 @@ and [Owned TCP Byte Observation](./tcp-activity-observation.md).
   permission, timeout, disappearance, namespace, identity, malformed-frame,
   unsupported-transport, and bound failures are explicit unavailable
   outcomes; no automatic suspend claim is made here.
+
+### Phase 05 transactional sampler and automatic admission
+
+Under `agent-activity`, `coordinator.rs` starts one `ActivitySampler` with a
+joinable `idle-suspend-sampler` thread. The worker owns the stateful
+`ProcessDiscovery` and `TcpObserver`, accepts one coalescing mailbox slot, and
+handles `Scheduled`, `Final`, and `Recovery` requests. `Final` supersedes
+queued work and cancels an in-flight sample cooperatively; recovery invalidates
+both baselines.
+
+Each sample captures an initial PTY snapshot, prepares process evidence, prepares
+owned-TCP diagnostics, verifies raw-output checkpoints, and captures a second
+manager snapshot. A generation or input revision change, cancellation, deadline,
+counter overflow, or incomplete root fails the sample before commit. TCP
+retryable close races receive one retry within the one-second acceptance
+deadline; TCP failure context may include at most 32 safe process identities.
+Only after all checks pass does the worker commit process and TCP baselines
+back-to-back, classify input/output/network/process/lifecycle activity, and
+emit an available observation. An unchanged `Final` observation additionally
+mints an opaque ticket with revision, generation, root, input, output, age, and
+quiet-deadline fences.
+
+The coordinator presents that ticket to
+`PtySessionManager::try_claim_agent_activity_handoff`, which checks policy,
+all revisions, deadline, five-second observation age, manager input revision,
+fleet generation, exact live root incarnations, raw output counters, and
+closing/disposal/creating/restart/handoff lifecycle state under one manager
+lock. A successful claim latches the epoch revision, enters `HandedOff`, and
+dispatches one executor future. Any failed gate returns to `Watching` without
+spending the epoch.
+
+The v1 status snapshot always includes `automaticPolicy`; `activity` is null
+for `empty-fleet` and contains measurement state, reason, bounded counts,
+timestamps, TCP coverage, and an optional warning for `agent-activity`.
+Warnings are sorted and deduplicated by PID, capped at 32 records, and expose
+only PID plus optional safe executable identity. Status meaningful-change
+filtering ignores heartbeat timestamp and elapsed-duration churn. Coordinator
+shutdown joins the sampler before `main.rs` stops PTY readers and tears down
+the manager.
 
 ### Phase 01 helper execution contract
 

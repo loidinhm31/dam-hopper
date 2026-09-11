@@ -975,6 +975,7 @@ pub(crate) struct ProcessImageKey {
 }
 
 /// Retained attribution entry carrying terminal identity and raw-output counter handle.
+#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct RetainedAttribution {
     pub(crate) identity: ProcessIdentity,
@@ -1004,6 +1005,7 @@ pub(crate) struct ProcessDiscovery<S = LinuxProcSource> {
 }
 
 impl ProcessDiscovery<LinuxProcSource> {
+    #[allow(dead_code)]
     pub(crate) fn new() -> Self {
         Self {
             source: LinuxProcSource::new(),
@@ -1798,7 +1800,7 @@ pub(crate) mod tests {
     // -----------------------------------------------------------------------
 
     #[derive(Default, Clone)]
-    struct MockProcessSource {
+    pub(crate) struct MockProcessSource {
         pids: Vec<u32>,
         stats: HashMap<u32, ProcessStat>,
         exes: HashMap<u32, PathBuf>,
@@ -1815,14 +1817,14 @@ pub(crate) mod tests {
     }
 
     impl MockProcessSource {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 thread_netns: NetworkNamespaceIdentity { device: 10, inode: 100 },
                 ..Default::default()
             }
         }
 
-        fn set_proc(
+        pub(crate) fn set_proc(
             &mut self,
             pid: u32,
             ppid: u32,
@@ -1854,7 +1856,7 @@ pub(crate) mod tests {
             self.fds.insert(pid, Vec::new());
         }
 
-        fn add_socket(&mut self, pid: u32, fd: u32, inode: u64) {
+        pub(crate) fn add_socket(&mut self, pid: u32, fd: u32, inode: u64) {
             self.fds.entry(pid).or_default().push(fd);
             self.sockets.insert((pid, fd), Some(inode));
         }

@@ -4,7 +4,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Configured-agent activity idle suspend (2026-09-11)
 
-- **Plan status: IN PROGRESS (~38%; 4/8 phases, 42/111h estimated). Phase 04 — owned TCP byte observation: DONE (2026-09-11; 100%).** Phases 01–03 are complete; Phases 05–08 remain pending.
+- **Phase 05 — transactional sampler and automatic admission: DONE (2026-09-11).** Phases 01–05 of configured-agent activity idle suspend are implemented; later plan phases remain pending.
 - Phase 03 adds private `ProcessDiscovery<S>` over the `ProcessSource` seam, production `LinuxProcSource`, exact `(pid, start_ticks)` lineage with retained reparenting, finite native/interpreter matching, same-namespace owned-socket discovery, and transactional sample commit.
 - Hard bounds are 256 live roots, 8,192 scanned processes, 1,024 relevant processes, 4,096 FDs per process, 8,192 owned socket inodes, and 16 KiB command lines. Incomplete or stale observations remain unavailable.
 - Validation: latest focused process discovery validation **18/18**; the idle-suspend suite **100/100**; and PTY **187/187** (one pre-existing performance test ignored). [Parent plan](../plans/260910-1604-agent-activity-idle-suspend/plan.md) · [Phase 03 plan](../plans/260910-1604-agent-activity-idle-suspend/phase-03-process-discovery.md) · [Documentation/test validation](../plans/reports/docs-260911-0246-phase-03-process-discovery.md) · [Implementation test report](../plans/reports/tester-260911-0236-phase-03-process-discovery.md).
@@ -12,7 +12,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - Phase 04 adds direct unprivileged `NETLINK_SOCK_DIAG` TCP4/TCP6 byte observation, bounded multipart framing and `TCP_INFO` parsing, persistent cookie/family/namespace identity, per-socket differential activity, transactional prepare/commit, and fail-closed transport/privacy handling.
 - Validation: Phase 04 TCP/netlink focus **40/40**; latest activity suite **59/59**; full idle-suspend library **128/128** and crate-wide **142/142**; all reported runs passed. [Phase 04 plan](../plans/260910-1604-agent-activity-idle-suspend/phase-04-tcp-observation.md) · [Test report](../plans/reports/tester-260911-0313-phase04-tcp-byte-observation.md).
 - Code review approved Phase 04 at **9.8/10** with no critical issues. [Cycle 2 review](../plans/reports/code-review-260911-0738-phase04-tcp-byte-observation-cycle2.md).
-- **Next steps:** Phase 05 owns all-or-nothing process/TCP sampling and the authenticated warning projection. No automatic `agent-activity` claim ships from Phase 04 alone.
+- **Next steps:** Complete the remaining plan phases after Phase 05; the implementation contract is [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).
 
 ### Production CLI Deployment Setup for Idle Suspend Helper & Socket (2026-09-09)
 

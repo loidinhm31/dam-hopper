@@ -13,7 +13,10 @@
 - Date: 2026-09-10.
 - Description: combine PTY, process and TCP evidence transactionally in one cooperative worker, keep final sampling asynchronous, add a manager-locked agent-policy claim, and project bounded same-sample failure evidence into the protected measurement warning.
 - Priority: P1. Estimated implementation effort: 20h.
-- Implementation status: Pending. Review status: validated warning contract incorporated; implementation and concurrency/safety review pending.
+- Implementation status: DONE (2026-09-11). Review status: Code review complete (approved with fixes for eligibility deadline, epoch spent status latching, MT-safe account resolution, and debug log cleanup).
+- Progress: 100% (27/27 implementation steps; 20/20 todo items).
+- Validation: 1031/1031 server tests passed; 131/131 idle_suspend tests passed; 7/7 sampler tests passed; 7/7 manager fence tests passed.
+- Evidence: [Test report](../reports/tester-260911-0847-phase05-transactional-sampler-admission-coordinator.md) · [Code review](../reports/code-review-260911-0849-phase05-transactional-sampler-coordinator.md) · advisor checkpoint verified.
 - Dependencies: Phases 02–04 behavior and types must be implemented and frozen. Phase 02 hands `manager.rs` ownership to this phase; Phase 03 hands `activity/mod.rs` ownership to this phase. Phase 04 retains ownership only of TCP/netlink implementation files.
 
 ## Key Insights
@@ -445,26 +448,26 @@ No UI/client file belongs to Phase 05. No database migration, persistent baselin
 
 ## Todo list
 
-- [ ] Take `activity/mod.rs` and `manager.rs` ownership only after prerequisite handoff.
-- [ ] Add one bounded joinable activity worker with no overlap/detach.
-- [ ] Implement exact process/TCP prepare-then-commit transaction.
-- [ ] Enforce 2s cadence, 1s acceptance, 5s age, one bounded full retry.
-- [ ] Separate observation, activity and epoch activity revisions.
-- [ ] Preserve retained identity/output/socket ownership through root removal/recovery.
-- [ ] Compare raw output across and within samples using one transactional prior-end map.
-- [ ] Implement initial/restored baseline and genuine-activity epoch rules.
-- [ ] Keep fresh final sampling asynchronous and command-responsive.
-- [ ] Add opaque manager-locked policy/ticket/fleet/input/root/raw admission.
-- [ ] Preserve empty-fleet and manual forced claim behavior.
-- [ ] Run observer status-only when agent policy is disabled.
-- [ ] Preserve timing transaction and exact handoff conflict.
-- [ ] Reconcile after every manual/automatic outcome without rearming spent epoch.
-- [ ] Publish meaningful status changes without heartbeat hints.
-- [ ] Join sampler/coordinator before PTY teardown.
-- [ ] Keep scripted injection in library tests and public integration on real observer.
-- [ ] Project bounded current blocker examples before aborting failed preparation.
-- [ ] Track continuous warning onset independently of quiet/epoch authority.
-- [ ] Cover warning recovery, stale identity, truncation, disabled/fallback and privacy.
+- [x] Take `activity/mod.rs` and `manager.rs` ownership only after prerequisite handoff.
+- [x] Add one bounded joinable activity worker with no overlap/detach.
+- [x] Implement exact process/TCP prepare-then-commit transaction.
+- [x] Enforce 2s cadence, 1s acceptance, 5s age, one bounded full retry.
+- [x] Separate observation, activity and epoch activity revisions.
+- [x] Preserve retained identity/output/socket ownership through root removal/recovery.
+- [x] Compare raw output across and within samples using one transactional prior-end map.
+- [x] Implement initial/restored baseline and genuine-activity epoch rules.
+- [x] Keep fresh final sampling asynchronous and command-responsive.
+- [x] Add opaque manager-locked policy/ticket/fleet/input/root/raw admission.
+- [x] Preserve empty-fleet and manual forced claim behavior.
+- [x] Run observer status-only when agent policy is disabled.
+- [x] Preserve timing transaction and exact handoff conflict.
+- [x] Reconcile after every manual/automatic outcome without rearming spent epoch.
+- [x] Publish meaningful status changes without heartbeat hints.
+- [x] Join sampler/coordinator before PTY teardown.
+- [x] Keep scripted injection in library tests and public integration on real observer.
+- [x] Project bounded current blocker examples before aborting failed preparation.
+- [x] Track continuous warning onset independently of quiet/epoch authority.
+- [x] Cover warning recovery, stale identity, truncation, disabled/fallback and privacy.
 
 ## Success Criteria
 

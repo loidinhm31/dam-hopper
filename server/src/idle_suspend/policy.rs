@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::config::{
+pub use crate::config::{
     default_idle_suspend_agent_executables, validate_agent_executables,
     IdleSuspendAutomaticPolicy, IdleSuspendCapabilitySelection, IdleSuspendConfig,
     MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
@@ -164,6 +164,15 @@ impl RuntimeIdleSuspendTiming {
             status_revision: 1,
         })
     }
+    #[cfg(test)]
+    pub fn new_unvalidated(quiet_period_seconds: u64, wake_after_seconds: u64) -> Self {
+        Self {
+            quiet_period_seconds,
+            wake_after_seconds,
+            status_revision: 1,
+        }
+    }
+
 
     pub fn from_config(config: &IdleSuspendConfig) -> Result<Self, String> {
         Self::new(config.quiet_period_seconds, config.wake_after_seconds)
