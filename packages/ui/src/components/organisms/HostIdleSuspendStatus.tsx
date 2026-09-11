@@ -134,11 +134,16 @@ export function HostIdleSuspendStatus({
     if (!hasArmDeadline && !hasMeasurementWarning) {
       return;
     }
-    setNowMs(Date.now());
+    const initialTimer = setTimeout(() => {
+      setNowMs(Date.now());
+    }, 0);
     const interval = setInterval(() => {
       setNowMs(Date.now());
     }, 1000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+    };
   }, [hasArmDeadline, hasMeasurementWarning]);
 
   if (isLoading) {

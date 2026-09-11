@@ -8,8 +8,9 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-11): 1,806 files, 3,882,732 tokens, and 15,921,030 characters.
+- Repomix snapshot (2026-09-11): 1,810 files, 3,895,142 tokens, and 15,975,398 characters.
 - Repomix security scanning excluded five suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
+
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
 The snapshot is a compaction aid, not a release artifact; generated
@@ -67,6 +68,7 @@ The snapshot is a compaction aid, not a release artifact; generated
   - Coordinator & Fleet: dual automatic policies, PTY generation/lifecycle fencing, automatic armed grace and epoch latching, Phase 05 final admission, forced handoff (`force: true` bypasses quiescence only), and status revision hints (`host:idleSuspendChanged`).
   - Agent-activity sampler: one joinable worker owns `ProcessDiscovery`/`TcpObserver`, commits both prepared baselines only after raw-output and manager invalidation checks, retries close races once, and emits bounded warning/status data.
   - Phase 06 client/UI: `decodeIdleSuspendStatusV1` validates unknown transport data and narrowly normalizes old servers; `HostIdleSuspendStatus` renders policy/measurement/unknown counts, TCP coverage, bounded warnings, the sole arm countdown, and preserves actual-fleet manual force confirmation. See [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md).
+- **Integrated qualification (Phase 07)**: public-manager service-only/input/manual-race/disabled/shutdown scenarios, protected API warning/privacy checks, Chromium status fixtures, 14/14 boundary checks, and the ignored Linux PTY/TCP observer smoke (0.72s). See [Phase 07 report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
 - **Configured-agent PTY activity seam (Phase 02)**: `server/src/pty/activity.rs`
   defines `ProcessIdentity`, `TerminalIdentity`, `RootQualification`,
   `PtyActivitySnapshot`, `PtyActivityWatcher`, proc-stat parsing, and a
@@ -81,7 +83,8 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **Owned TCP byte observation (Phase 04)**: private unprivileged
   `NETLINK_SOCK_DIAG`, bounded `tcp_info` parsing and framing, namespace
   fencing, retryable close-race classification, and transactional baselines.
-- **Configured-agent automatic admission and status UI (Phases 05–06)**: dedicated transactional sampler, manager-locked revision/root/output/lifecycle gates, bounded status warnings, opaque final tickets, epoch latching, recovery sampling, strict client decoding, aggregate warning presentation, and worker join; see [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) and [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md).
+- **Configured-agent automatic admission and status UI (Phases 05–07)**: dedicated transactional sampler, manager-locked revision/root/output/lifecycle gates, bounded status warnings, opaque final tickets, epoch latching, recovery sampling, strict client decoding, aggregate warning presentation, worker join, and integrated qualification; see [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) and [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md).
+
 - **Linux release manager**: `server/src/linux_release/` validates Manifest v1,
   role projections, transaction-scoped units, helper policy, and
   `systemd-analyze verify`.
@@ -97,18 +100,18 @@ The snapshot is a compaction aid, not a release artifact; generated
 
 ### Terminal idle suspend module map
 
-| Module | Responsibility |
-| --- | --- |
-| `protocol.rs` | Version-1 frames, 4 KiB framing, request IDs, execution wake validation, REST request/response DTOs |
-| `coordinator.rs`, `status.rs` | Async dual-policy state machine, final admission, epoch/recovery reconciliation, v1 status DTO, bounded warnings, and meaningful-change filtering |
-| `server_audit.rs` | Mode-0600 JSONL durable server audit logger for timing and manual force-suspend intents; recent reads are capped while deployment owns file rotation |
-| `backend.rs` | `Option<u64>` RTC seam; clear/readback; checked timed epoch; fixed suspend command; fake observability |
-| `preflight.rs` | Suspend mode, RTC path/ownership, and inhibitor checks with typed fail-closed errors |
-| `helper_server.rs` | Peer auth, frame validation, dedupe, preflight, audit-before-mutation, fixed execution |
-| `audit.rs` | Root helper bounded mode-0600 JSONL records with explicit zero sentinel |
-| `api/idle_suspend.rs` | Protected REST handlers (`GET /status`, `PATCH /timing`, `POST /force-suspend`) and CSRF guards |
-| `idle_suspend/activity/{mod,process,sampler}.rs` | Phase 03 private evidence/bounds and process attribution plus Phase 05 worker, transactional pair, revisions, and final tickets |
-| `idle_suspend/activity/{tcp_info,netlink,tcp}.rs` | Phase 04 bounded `tcp_info` parser, `NETLINK_SOCK_DIAG` transport, and transactional TCP observer |
+| Module                                            | Responsibility                                                                                                                                       |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol.rs`                                     | Version-1 frames, 4 KiB framing, request IDs, execution wake validation, REST request/response DTOs                                                  |
+| `coordinator.rs`, `status.rs`                     | Async dual-policy state machine, final admission, epoch/recovery reconciliation, v1 status DTO, bounded warnings, and meaningful-change filtering    |
+| `server_audit.rs`                                 | Mode-0600 JSONL durable server audit logger for timing and manual force-suspend intents; recent reads are capped while deployment owns file rotation |
+| `backend.rs`                                      | `Option<u64>` RTC seam; clear/readback; checked timed epoch; fixed suspend command; fake observability                                               |
+| `preflight.rs`                                    | Suspend mode, RTC path/ownership, and inhibitor checks with typed fail-closed errors                                                                 |
+| `helper_server.rs`                                | Peer auth, frame validation, dedupe, preflight, audit-before-mutation, fixed execution                                                               |
+| `audit.rs`                                        | Root helper bounded mode-0600 JSONL records with explicit zero sentinel                                                                              |
+| `api/idle_suspend.rs`                             | Protected REST handlers (`GET /status`, `PATCH /timing`, `POST /force-suspend`) and CSRF guards                                                      |
+| `idle_suspend/activity/{mod,process,sampler}.rs`  | Phase 03 private evidence/bounds and process attribution plus Phase 05 worker, transactional pair, revisions, and final tickets                      |
+| `idle_suspend/activity/{tcp_info,netlink,tcp}.rs` | Phase 04 bounded `tcp_info` parser, `NETLINK_SOCK_DIAG` transport, and transactional TCP observer                                                    |
 
 ### Frontend (React + Vite)
 
@@ -208,8 +211,8 @@ protected REST surface:
   URL-encodes dynamic IDs/cursors, and preserves typed request bodies.
 - `workflow-queries.ts` uses `['workflow']` keys, includes transport generation
   in overview keys, and invalidates the root only after successful mutations.
-`queries.ts` re-exports `workflow-queries.ts` so existing shared query imports
-can consume the focused workflow hooks.
+  `queries.ts` re-exports `workflow-queries.ts` so existing shared query imports
+  can consume the focused workflow hooks.
 - `query-client.ts` supplies the host-level profile-aware key hash. Workflow
   query data is memory-only; presentation state stays local to components.
 
@@ -548,12 +551,12 @@ See [Native Browser Debug Support](./native-browser-debug-support.md), [Configur
   project, validated target, server time, exit/restart metadata, and action.
   Command lines, arguments, CWD, env, prompts, output, and arbitrary adapter
   payloads are excluded.
-`server/src/workflow/reconcile.rs` runs after restored PTYs are known:
-live links become `attached`; missing/dead links transition to `detached` only
-when their persisted state is `attached` or `stale`, while final
-`exited`/`crashed` outcomes remain unchanged. Manual session
-status/timestamps remain unchanged. Older incarnations are ignored; final
-exit/removal can set only a suggested end time.
+  `server/src/workflow/reconcile.rs` runs after restored PTYs are known:
+  live links become `attached`; missing/dead links transition to `detached` only
+  when their persisted state is `attached` or `stale`, while final
+  `exited`/`crashed` outcomes remain unchanged. Manual session
+  status/timestamps remain unchanged. Older incarnations are ignored; final
+  exit/removal can set only a suggested end time.
 - Overview reads are bounded to 100 projects, 500 items, and 100 running
   sessions; event pages default to 50 and cap at 100. The API exposes factual
   descendant-Task counts without fabricated percentages.
@@ -733,7 +736,8 @@ dam-hopper/
 - **Configured-agent activity Phase 02**: focused coverage proves root identity,
   raw-read/input/handoff/incarnation/replay, local PTY observation, and incomplete reasons (8/8 focused; PTY module 159 passed, 1 ignored pre-existing performance test).
 - **Configured-agent process discovery Phase 03**: focused module tests **18/18** cover the source seam, identity/lineage, finite matching, namespace/socket bounds, typed unavailable outcomes, and transactional prepare/commit.
-- **Owned TCP byte observation, transactional admission, and status/UI (Phases 04–06)**: Phase 04 TCP/netlink and crate coverage completed; Phase 05 server **1031/1031**, idle-suspend **131/131**, sampler **7/7**, and manager-fence **7/7**; Phase 06 protected API **9/9**, frontend unit **41/41**, and Chromium **13/13**; no real host suspend is performed.
+- **Owned TCP byte observation, transactional admission, and status/UI (Phases 04–07)**: Phase 04 TCP/netlink and crate coverage completed; Phase 05 server **1031/1031**, idle-suspend **131/131**, sampler **7/7**, and manager-fence **7/7**; Phase 06 protected API **9/9**, frontend unit **41/41**, and Chromium **13/13**; **Phase 07** integrated qualification reports **323 backend/PTY/API/integration tests**, **14/14** boundary checks, **16/16** Chromium tests, and a **0.72s** Linux smoke; no host suspend is performed.
+
 - **Web**: Component tests with Vitest, 80% coverage target
 
 ### Known Limitations (Pre-existing)
@@ -772,23 +776,24 @@ dam-hopper/
 
 ## Documentation Library
 
-| Document                                                       | Purpose                                       |
-| -------------------------------------------------------------- | --------------------------------------------- |
-| [system-architecture.md](./system-architecture.md)             | Component interactions, data flow             |
-| [api-reference.md](./api-reference.md)                         | HTTP endpoints, request/response schemas      |
-| [workflow-api.md](./workflow-api.md)                            | Phase 02–03 workflow REST and lifecycle contract |
-| [workflow-client-state.md](./workflow-client-state.md)          | Phase 04 shared UI DTO, transport, and query contract |
-| [frontend-components.md](./frontend-components.md)                | Shared React components and shell integration |
-| [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
-| [pty-activity-observation.md](./pty-activity-observation.md) | Phase 02 private PTY identity, output, input, snapshot, and watcher contract |
-| [agent-activity-process-discovery.md](./agent-activity-process-discovery.md) | Phase 03 bounded process discovery, attribution, and `ProcessSource` contract |
-| [tcp-activity-observation.md](./tcp-activity-observation.md) | Phase 04 bounded TCP diagnostics and per-socket baseline; [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) covers Phase 05 transaction/claim; [idle-suspend-status-ui.md](./idle-suspend-status-ui.md) covers Phase 06 decoder/UI |
-| [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
-| [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
-| [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
-| [ws-protocol-guide.md](./ws-protocol-guide.md)                 | WebSocket message types, terminal protocol    |
-| [project-roadmap.md](./project-roadmap.md)                     | Planned features and phases                   |
-| [CHANGELOG.md](./CHANGELOG.md)                               | Dated implementation and release notes           |
+| Document                                                                     | Purpose                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [system-architecture.md](./system-architecture.md)                           | Component interactions, data flow                                                                                                                                                                                                                              |
+| [api-reference.md](./api-reference.md)                                       | HTTP endpoints, request/response schemas                                                                                                                                                                                                                       |
+| [workflow-api.md](./workflow-api.md)                                         | Phase 02–03 workflow REST and lifecycle contract                                                                                                                                                                                                               |
+| [workflow-client-state.md](./workflow-client-state.md)                       | Phase 04 shared UI DTO, transport, and query contract                                                                                                                                                                                                          |
+| [frontend-components.md](./frontend-components.md)                           | Shared React components and shell integration                                                                                                                                                                                                                  |
+| [code-standards.md](./code-standards.md)                                     | Naming conventions, patterns, best practices                                                                                                                                                                                                                   |
+| [pty-activity-observation.md](./pty-activity-observation.md)                 | Phase 02 private PTY identity, output, input, snapshot, and watcher contract                                                                                                                                                                                   |
+| [agent-activity-process-discovery.md](./agent-activity-process-discovery.md) | Phase 03 bounded process discovery, attribution, and `ProcessSource` contract                                                                                                                                                                                  |
+| [tcp-activity-observation.md](./tcp-activity-observation.md)                 | Phase 04 bounded TCP diagnostics and per-socket baseline; [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) covers Phase 05 transaction/claim; [idle-suspend-status-ui.md](./idle-suspend-status-ui.md) covers Phase 06 decoder/UI |
+| [configuration-guide.md](./configuration-guide.md)                           | Setup, environment variables, config files                                                                                                                                                                                                                     |
+| [native-browser-debug-support.md](./native-browser-debug-support.md)         | Native Browser Debug platform gate and security boundaries                                                                                                                                                                                                     |
+| [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy                                                                                                                                                                                                            |
+| [ws-protocol-guide.md](./ws-protocol-guide.md)                               | WebSocket message types, terminal protocol                                                                                                                                                                                                                     |
+| [project-roadmap.md](./project-roadmap.md)                                   | Planned features and phases                                                                                                                                                                                                                                    |
+| [CHANGELOG.md](./CHANGELOG.md)                                               | Dated implementation and release notes                                                                                                                                                                                                                         |
+
 ---
 
-**Last Updated**: September 11, 2026. **Phase Status**: Helper deployment is complete and verified (2026-09-10); configured-agent policy, PTY Phase 02, process discovery Phase 03, TCP observation Phase 04, transactional sampler/admission Phase 05, and protected status/browser UI Phase 06 are implemented. Phase 07 integrated qualification and Phase 08 rollout remain pending. **Generated by**: Repomix v1.18.0 (1,806 files / 3,882,732 tokens / 15,921,030 characters); five security-flagged files were excluded.
+**Last Updated**: September 11, 2026. **Phase Status**: Helper deployment is complete and verified (2026-09-10); configured-agent policy, PTY Phase 02, process discovery Phase 03, TCP observation Phase 04, transactional sampler/admission Phase 05, protected status/browser UI Phase 06, and integrated Phase 07 qualification are complete. Phase 08 controlled rollout and real-host canary gates remain pending. **Generated by**: Repomix v1.18.0 (1,810 files / 3,895,142 tokens / 15,975,398 characters); five security-flagged files were excluded.

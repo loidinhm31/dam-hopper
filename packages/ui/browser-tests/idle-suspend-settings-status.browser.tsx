@@ -555,4 +555,95 @@ describe("Idle Suspend Settings & Status Browser Tests", () => {
 
     vi.restoreAllMocks();
   });
+
+  it("renders HostIdleSuspendStatus for initializing reconciling warning state", async () => {
+    const fakeNow = 1724500010000;
+    vi.spyOn(Date, "now").mockReturnValue(fakeNow);
+
+    mocks.status = mockStatus({
+      automaticPolicy: "agent-activity",
+      activity: {
+        measurementState: "initializing",
+        reasonCode: "reconciling",
+        recognizedAgentCount: null,
+        monitoredTerminalCount: null,
+        sampledAtMs: null,
+        lastActivityAtMs: null,
+        networkCoverage: "tcp4-tcp6",
+        measurementWarning: {
+          reasonCode: "reconciling",
+          blockedSinceMs: fakeNow - 10000,
+          processes: [],
+          processesTruncated: false,
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(<HostIdleSuspendStatus />);
+    });
+
+    const alert = page.getByRole("alert");
+    await expect.element(alert.first()).toBeVisible();
+    expect(alert.first().element().textContent).toContain(
+      "Measurement Blocked: Reconciling observation baseline",
+    );
+    expect(alert.first().element().textContent).toContain("Blocked for 10s");
+
+    vi.restoreAllMocks();
+  });
+
+  it("renders HostIdleSuspendStatus for disabled observer state with agent-activity policy", async () => {
+    const fakeNow = 1724500015000;
+    vi.spyOn(Date, "now").mockReturnValue(fakeNow);
+
+    mocks.status = mockStatus({
+      automaticPolicy: "agent-activity",
+      enabled: false,
+      state: "disabled",
+      activity: {
+        measurementState: "unavailable",
+        reasonCode: "scanTimeout",
+        recognizedAgentCount: null,
+        monitoredTerminalCount: null,
+        sampledAtMs: null,
+        lastActivityAtMs: null,
+        networkCoverage: "tcp4-tcp6",
+        measurementWarning: {
+          reasonCode: "scanTimeout",
+          blockedSinceMs: fakeNow - 15000,
+          processes: [],
+          processesTruncated: false,
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(<HostIdleSuspendStatus />);
+    });
+
+    expect(container.textContent).toContain("Disabled");
+    const alert = page.getByRole("alert");
+    await expect.element(alert.first()).toBeVisible();
+    expect(alert.first().element().textContent).toContain(
+      "Measurement Blocked: Process scan timed out",
+    );
+    expect(alert.first().element().textContent).toContain("Blocked for 15s");
+
+    vi.restoreAllMocks();
+  });
+
+  it("renders HostIdleSuspendStatus safely with legacy old-server payload", async () => {
+    mocks.status = mockStatus({
+      automaticPolicy: "empty-fleet",
+      activity: null,
+    });
+
+    await act(async () => {
+      root.render(<HostIdleSuspendStatus />);
+    });
+
+    expect(container.textContent).toContain("Policy: Legacy empty-fleet");
+    expect(container.textContent).not.toContain("Measurement Blocked");
+  });
 });

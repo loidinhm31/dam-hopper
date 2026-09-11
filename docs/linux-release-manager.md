@@ -299,14 +299,14 @@ cargo run --manifest-path server/Cargo.toml --bin dam-hopper -- status --json
 
 Evidence recorded for this phase:
 
-| Scope | Result |
-| --- | ---: |
-| `linux_release_staging` integration tests | 9/9 |
-| `linux_release_unit_policy` rendered-unit tests | 10/10 |
-| `idle_suspend` library tests | 69/69 |
-| `idle_suspend` integration tests | 14/14 |
-| Combined focused Rust tests | 102/102 |
-| Boundary verifier | 14/14 checks |
+| Scope                                           |       Result |
+| ----------------------------------------------- | -----------: |
+| `linux_release_staging` integration tests       |          9/9 |
+| `linux_release_unit_policy` rendered-unit tests |        10/10 |
+| `idle_suspend` library tests                    |        69/69 |
+| `idle_suspend` integration tests                |        14/14 |
+| Combined focused Rust tests                     |      102/102 |
+| Boundary verifier                               | 14/14 checks |
 
 `server/tests/linux_release_staging.rs` checks helper/API staging for a server
 role, helper hardening and fixed socket/audit/enrolled-PID arguments, API
@@ -404,21 +404,21 @@ version, `fedora44-x86_64-systemd` profile, and manifest schema version.
 `Layout::new` uses the host root. Tests use `Layout::with_root` so all paths are
 under a temporary root and no host files are changed.
 
-| Path                                                   | Purpose                                   |
-| ------------------------------------------------------ | ----------------------------------------- |
-| `/opt/dam-hopper/`                                     | Release installation root                 |
-| `/opt/dam-hopper/.staging/<tx-id>/`                    | Root-private staging workspace (`0700`)   |
-| `/opt/dam-hopper/releases/<tag>/<role>/`               | Immutable unpacked role view              |
-| `/opt/dam-hopper/current`                              | Convenience active-view symlink           |
-| `/etc/dam-hopper/host.toml`                            | Recorded role and exact web origins       |
-| `/etc/dam-hopper/server.env`                           | Machine-local API environment             |
-| `/etc/dam-hopper/web.env`                              | Machine-local web environment             |
+| Path                                                           | Purpose                                   |
+| -------------------------------------------------------------- | ----------------------------------------- |
+| `/opt/dam-hopper/`                                             | Release installation root                 |
+| `/opt/dam-hopper/.staging/<tx-id>/`                            | Root-private staging workspace (`0700`)   |
+| `/opt/dam-hopper/releases/<tag>/<role>/`                       | Immutable unpacked role view              |
+| `/opt/dam-hopper/current`                                      | Convenience active-view symlink           |
+| `/etc/dam-hopper/host.toml`                                    | Recorded role and exact web origins       |
+| `/etc/dam-hopper/server.env`                                   | Machine-local API environment             |
+| `/etc/dam-hopper/web.env`                                      | Machine-local web environment             |
 | `/var/lib/dam-hopper-manager/pending-units-<tx_id>/`           | Rendered candidate units/sysusers         |
 | `/var/lib/dam-hopper-manager/pending-host-config-<tx_id>.json` | Candidate public config                   |
 | `/var/lib/dam-hopper-manager/state.json`                       | Authoritative state envelope (mode 0600)  |
-| `/var/lib/dam-hopper-manager/backups/<tx-id>/`         | Transaction-owned restore backups         |
-| `/etc/systemd/system/`                                 | Concrete active unit destinations         |
-| `/run/lock/dam-hopper/deploy.lock`                     | Nonblocking deployment serialization lock |
+| `/var/lib/dam-hopper-manager/backups/<tx-id>/`                 | Transaction-owned restore backups         |
+| `/etc/systemd/system/`                                         | Concrete active unit destinations         |
+| `/run/lock/dam-hopper/deploy.lock`                             | Nonblocking deployment serialization lock |
 
 The release path is derived only from the validated tag and selected role. A
 role view contains manifest entries with `common` plus the selected role; a

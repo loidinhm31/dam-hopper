@@ -80,6 +80,7 @@ impl LinuxProcSource {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn with_root(proc_root: PathBuf) -> Self {
         Self { proc_root }
     }
@@ -2355,10 +2356,9 @@ pub(crate) mod tests {
     fn test_harmless_real_process_tree_on_linux() {
         use std::process::Command;
 
-        // Spawn a harmless fixture child process: `sh -c 'sleep 5'`
-        let mut child = Command::new("sh")
-            .arg("-c")
-            .arg("sleep 5")
+        // Spawn a harmless fixture child process: `sleep 5`
+        let mut child = Command::new("sleep")
+            .arg("5")
             .spawn()
             .expect("should spawn fixture child");
 

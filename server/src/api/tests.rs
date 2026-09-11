@@ -6537,6 +6537,150 @@ async fn idle_suspend_status_disabled_observing_agent_activity() {
 }
 
 #[tokio::test]
+async fn idle_suspend_status_agent_activity_available_measurement_warning_is_null() {
+    use crate::idle_suspend::status::{
+        ActivityMeasurementState, ActivityObservationReason, IdleSuspendActivityStatusV1,
+        IdleSuspendStatusV1,
+    };
+    use crate::pty::fleet_state::PtyFleetSnapshot;
+
+    let activity = IdleSuspendActivityStatusV1 {
+        measurement_state: ActivityMeasurementState::Available,
+        reason_code: Some(ActivityObservationReason::Quiet),
+        recognized_agent_count: Some(1),
+        monitored_terminal_count: Some(1),
+        sampled_at_ms: Some(1724500001000),
+        last_activity_at_ms: Some(1724500000000),
+        network_coverage: "tcp4-tcp6".to_string(),
+        measurement_warning: None,
+    };
+
+    let status = IdleSuspendStatusV1 {
+        version: 1,
+        status_revision: 1,
+        state: crate::idle_suspend::status::CoordinatorState::Watching,
+        automatic_policy: crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentActivity,
+        enabled: true,
+        timing_mutable: true,
+        timing_mutable_reason: None,
+        capability_code: "systemdLogindRtc".to_string(),
+        current_epoch: 1,
+        quiet_period_seconds: 300,
+        wake_after_seconds: 600,
+        min_quiet_period_seconds: 60,
+        max_quiet_period_seconds: 86400,
+        min_wake_after_seconds: 60,
+        max_wake_after_seconds: 86400,
+        fleet_snapshot: PtyFleetSnapshot {
+            generation: 1,
+            live_count: 1,
+            creating_count: 0,
+            restart_pending_count: 0,
+            disposing: false,
+            closing: false,
+            handoff_active: false,
+        },
+        arm_deadline_ms: None,
+        last_outcome: None,
+        detail: None,
+        activity: Some(activity),
+        timestamp_ms: 1724500001000,
+    };
+
+    let json_bytes = serde_json::to_vec(&status).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json_bytes).unwrap();
+    assert_eq!(json["automaticPolicy"], "agent-activity");
+    assert_eq!(json["activity"]["measurementState"], "available");
+    assert!(json["activity"]["measurementWarning"].is_null());
+}
+
+#[tokio::test]
+async fn idle_suspend_status_warning_serialization_privacy_and_bounds() {
+    use crate::idle_suspend::status::{
+        ActivityMeasurementState, ActivityObservationReason, IdleSuspendActivityStatusV1,
+        IdleSuspendMeasurementWarningV1, IdleSuspendStatusV1, IdleSuspendWarningProcessV1,
+        MeasurementWarningReasonCode,
+    };
+    use crate::pty::fleet_state::PtyFleetSnapshot;
+
+    // Construct warning with 35 processes (exceeding 32 limit) and check serialization
+    let mut procs = Vec::new();
+    for i in (1..=35).rev() {
+        procs.push(IdleSuspendWarningProcessV1 {
+            pid: i,
+            executable_identity: Some(format!("/usr/bin/agent_{i}")),
+        });
+    }
+
+    let warning = IdleSuspendMeasurementWarningV1 {
+        reason_code: MeasurementWarningReasonCode::ProcAccess,
+        blocked_since_ms: 1724500000000,
+        processes: procs,
+        processes_truncated: true,
+    };
+
+    let activity = IdleSuspendActivityStatusV1 {
+        measurement_state: ActivityMeasurementState::Unavailable,
+        reason_code: Some(ActivityObservationReason::ProcAccess),
+        recognized_agent_count: None,
+        monitored_terminal_count: Some(2),
+        sampled_at_ms: None,
+        last_activity_at_ms: None,
+        network_coverage: "tcp4-tcp6".to_string(),
+        measurement_warning: Some(warning),
+    };
+
+    let status = IdleSuspendStatusV1 {
+        version: 1,
+        status_revision: 1,
+        state: crate::idle_suspend::status::CoordinatorState::Disabled,
+        automatic_policy: crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentActivity,
+        enabled: false,
+        timing_mutable: false,
+        timing_mutable_reason: Some("disabled".to_string()),
+        capability_code: "auto".to_string(),
+        current_epoch: 0,
+        quiet_period_seconds: 300,
+        wake_after_seconds: 600,
+        min_quiet_period_seconds: 60,
+        max_quiet_period_seconds: 86400,
+        min_wake_after_seconds: 60,
+        max_wake_after_seconds: 86400,
+        fleet_snapshot: PtyFleetSnapshot {
+            generation: 1,
+            live_count: 0,
+            creating_count: 0,
+            restart_pending_count: 0,
+            disposing: false,
+            closing: false,
+            handoff_active: false,
+        },
+        arm_deadline_ms: None,
+        last_outcome: None,
+        detail: None,
+        activity: Some(activity),
+        timestamp_ms: 1724500000000,
+    };
+
+    let json_bytes = serde_json::to_vec(&status).unwrap();
+    let json_str = std::str::from_utf8(&json_bytes).unwrap();
+
+    // Positive checks
+    assert!(json_str.contains("\"measurementWarning\""));
+    assert!(json_str.contains("\"procAccess\""));
+    assert!(json_str.contains("\"processesTruncated\":true"));
+
+    // Privacy checks: ensure prohibited fields are absent
+    assert!(!json_str.contains("startTicks"));
+    assert!(!json_str.contains("start_ticks"));
+    assert!(!json_str.contains("argv"));
+    assert!(!json_str.contains("cmdline"));
+    assert!(!json_str.contains("socketDetails"));
+    assert!(!json_str.contains("terminalId"));
+    assert!(!json_str.contains("auth_token"));
+}
+
+#[tokio::test]
 async fn idle_suspend_timing_patch_guards() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);

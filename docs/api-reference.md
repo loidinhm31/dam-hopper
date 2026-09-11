@@ -358,6 +358,7 @@ client then invalidates snapshot and history queries. An explicit
 `currentAlerts: []` from the authoritative snapshot clears retained resource
 incidents, while an omitted additive field preserves them for old-server
 compatibility until REST establishes current state.
+
 ### Terminal idle suspend
 
 Server-authoritative, fail-closed terminal idle suspend subsystem with protected
@@ -365,6 +366,7 @@ status, bounded authenticated timing settings, an authenticated manual
 force-suspend action, and out-of-band push hints. Automatic idle timing and the
 manual action remain separate: a manual request does not change the persisted
 automatic policy.
+
 ### Phase 01 policy/configuration contract
 
 The automatic policy and executable matcher list are startup configuration,
@@ -373,15 +375,15 @@ under `[server.idle_suspend]` with snake_case keys. Config-shaped JSON (for
 `GET /api/config` and settings export) uses `server.idleSuspend` and camelCase
 field names; snake_case aliases are accepted when decoding this block.
 
-| TOML key | Config JSON key | Contract |
-| --- | --- | --- |
-| `enabled` | `enabled` | `false` by default; startup-owned |
-| `quiet_period_seconds` | `quietPeriodSeconds` | bounded automatic timing |
-| `wake_after_seconds` | `wakeAfterSeconds` | bounded automatic timing |
-| `enrollment_reference` | `enrollmentReference` | optional startup enrollment |
-| `capability_selection` | `capabilitySelection` | startup capability selector |
-| `automatic_policy` | `automaticPolicy` | `empty-fleet` (default) or `agent-activity` |
-| `agent_executables` | `agentExecutables` | literal executable matcher list |
+| TOML key               | Config JSON key       | Contract                                    |
+| ---------------------- | --------------------- | ------------------------------------------- |
+| `enabled`              | `enabled`             | `false` by default; startup-owned           |
+| `quiet_period_seconds` | `quietPeriodSeconds`  | bounded automatic timing                    |
+| `wake_after_seconds`   | `wakeAfterSeconds`    | bounded automatic timing                    |
+| `enrollment_reference` | `enrollmentReference` | optional startup enrollment                 |
+| `capability_selection` | `capabilitySelection` | startup capability selector                 |
+| `automatic_policy`     | `automaticPolicy`     | `empty-fleet` (default) or `agent-activity` |
+| `agent_executables`    | `agentExecutables`    | literal executable matcher list             |
 
 The default executable list is `["codex", "omp", "claude", "agy"]`. Entries
 are literal, case-sensitive basenames or absolute paths, not regular
@@ -425,10 +427,10 @@ transport/auth requests remain errors. See the [Protected Idle-Suspend Status
 and Browser UI](./idle-suspend-status-ui.md) guide for decoder, UI, warning,
 countdown, and manual-force semantics.
 
-
 #### GET /api/system/idle-suspend/v1/status
 
 Returns the immutable authoritative `IdleSuspendStatusV1` snapshot.
+
 - **Auth**: Protected route (requires valid session cookie or Bearer token).
 - **Headers**: `Cache-Control: no-store`.
 - **Response**:
@@ -468,6 +470,7 @@ Returns the immutable authoritative `IdleSuspendStatusV1` snapshot.
 #### PATCH /api/system/idle-suspend/v1/timing
 
 Protected, atomic timing pair mutation endpoint. Accepts only the complete bounded quiet/wake pair from an authenticated, enabled operator account with database authentication.
+
 - **Auth**: Requires valid session cookie or Bearer token; rejected under `--no-auth` (`403 idleSuspendTimingDisabledNoAuth`) and without database authentication (`503 authenticationUnavailable`).
 - **Guards**: Requires `Content-Type: application/json` (`415 invalidContentType`); cookie-only requests enforce origin allowlist / same-origin check (`403 invalidOrigin`). Requests presenting `Authorization: Bearer` are exempt from cookie CSRF constraints even when ambient cookies are present. Request body limited to 16 KB.
 - **Body**:
@@ -494,12 +497,12 @@ resume.
   rejected under `--no-auth` (`403 idleSuspendDisabledNoAuth`) or when
   authentication is unavailable (`503 authenticationUnavailable`).
 - **Guards**: Requires `Content-Type: application/json` (`415
-  invalidContentType`) and a request body no larger than 16 KiB. Cookie-only
+invalidContentType`) and a request body no larger than 16 KiB. Cookie-only
   requests must contain exactly one parseable `Origin`, matching either an
   exact configured CORS origin (`DAM_HOPPER_CORS_ORIGINS`) or strict
   same-origin (`http(s)://Host`); missing, duplicate, malformed, foreign,
   path-bearing, query-bearing, or userinfo-bearing origins return `403
-  invalidOrigin`. Callers presenting a valid `Authorization: Bearer` token
+invalidOrigin`. Callers presenting a valid `Authorization: Bearer` token
   are exempt from cookie CSRF origin checks even when ambient cookies are
   attached.
 - **Body**: Strict camelCase JSON; both fields are required and unknown fields
@@ -559,9 +562,32 @@ resume.
 
 The route is registered only under the protected API router; there is no
 unauthenticated WebSocket or native bypass.
+
+#### Phase 07 qualification boundary
+
+The idle-suspend route contract is qualified at three consumer boundaries:
+
+- `server/tests/idle_suspend.rs` covers public-coordinator lifecycle, service-only
+  PTY output, accepted-input invalidation, manual/final-check ordering, disabled
+  observation, clean shutdown, and the explicit Linux PTY/TCP smoke.
+- `server/src/api/tests.rs` covers protected status authentication,
+  `Cache-Control: no-store`, policy/activity nullability, initializing and
+  disabled warnings, available `measurementWarning: null`, warning bounds, and
+  privacy omissions.
+- `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx` covers
+  rendered policy/counts, heuristic notice, warning duration and safe identity,
+  truncation, countdown, manual force, and old-server compatibility in Chromium.
+
+The Phase 07 QA record reports **323 backend/PTY/API/integration tests**,
+**14/14** boundary checks, **16/16** Chromium tests, and an ignored Linux
+observer smoke passing in **0.72s**. Automated tests use fake suspend outcomes
+and never invoke the helper, RTC programming, `systemctl suspend`, `sudo`, or
+root installation. A real suspend/resume canary remains an Operations gate.
+
 #### `host:idleSuspendChanged` transport event
 
 Out-of-band revision-only push hint broadcast over a dedicated event channel isolated from terminal output pressure.
+
 - **Payload**:
   ```json
   {

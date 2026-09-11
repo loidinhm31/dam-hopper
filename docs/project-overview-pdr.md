@@ -176,6 +176,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Diagnostics export from Settings > Maintenance with canonical frontend snapshot payload and capped terminal tails.
 
 **Acceptance Criteria:**
+
 - ✓ Native image/video streams require an opaque ticket bound to an authenticated actor/session
 - ✓ Ticket clients require `session-cookie-v1` and a credentialed successful `HEAD` before native source/download exposure
 - ✓ Profile change/logout revokes the bounded media session before credential removal, including stale dialog profiles
@@ -242,7 +243,6 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Sensitive metadata is redacted before sink delivery unless local diagnostics explicitly disable it
 - ✓ Shared logger is used by the high-value UI surfaces noted above
 
-
 ### PR-010: Browser Debug and Native Child WebView
 
 **Status:** Windows v1 runtime-supported behind `VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG`; Linux child/relay implementation exists but runtime and permission behavior are unverified; macOS is deferred; Android uses iframe fallback.
@@ -256,6 +256,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Windows release evidence must pass the documented WebView2 gate; Linux build/package evidence is not runtime proof.
 
 See [Native Browser Debug Support](./native-browser-debug-support.md) for the platform matrix and rollback path.
+
 ### PR-009: Host Resource Monitoring (Current Delivery)
 
 **Status:** Phase 07 completed on 2026-08-10 with release-owner approval after local packaging, soak, and browser validation. Phase 02 host-resource restoration alerts completed on 2026-08-11: additive thermal/disk current alerts, mixed history, validated compatible push events, and per-target recovery are now delivered. The still-unobserved Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are owner-authorized deferred follow-up work, not passed gates. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.
@@ -332,25 +333,25 @@ routes.
 **Acceptance Criteria:**
 
 - [x] Migration `010_workflow_tracking.sql` adds six workflow tables,
-  relationships, checks, unique constraints, and query indexes without
-  changing existing terminal-session tables.
+      relationships, checks, unique constraints, and query indexes without
+      changing existing terminal-session tables.
 - [x] `SessionStore::open()` enables foreign keys and applies migration 010
-  idempotently when the workflow schema is absent; `WorkflowStore` shares its
-  connection and does not open a second database.
+      idempotently when the workflow schema is absent; `WorkflowStore` shares its
+      connection and does not open a second database.
 - [x] Domain enums have stable lowercase snake_case storage values and
-  camelCase model serialization; invalid request values are reported through
-  `WorkflowModelError`.
+      camelCase model serialization; invalid request values are reported through
+      `WorkflowModelError`.
 - [x] Item, session, resource, note, and event mutations are transaction
-  helpers. Optional audit events commit atomically with their domain mutation.
+      helpers. Optional audit events commit atomically with their domain mutation.
 - [x] Event IDs are idempotent, event history is keyset paginated, notes are
-  soft-deleted before bounded purge, and observation updates do not mutate
-  session lifecycle fields.
+      soft-deleted before bounded purge, and observation updates do not mutate
+      session lifecycle fields.
 - [x] Overview limits are clamped and expose truncation rather than returning
-  unbounded projects, items, sessions, or event history.
+      unbounded projects, items, sessions, or event history.
 - [x] `server/src/workflow/tests.rs` covers model transitions, migration data
-  preservation, hierarchy/scope rules, idempotency, overlapping sessions,
-  observation isolation, note retention, overview progress, pagination, and
-  purge.
+      preservation, hierarchy/scope rules, idempotency, overlapping sessions,
+      observation isolation, note retention, overview progress, pagination, and
+      purge.
 
 **Technical Constraints:**
 
@@ -441,16 +442,16 @@ and [code review](../plans/reports/code-reviewer-260902-0312-phase-02-workflow-s
 **Acceptance Criteria:**
 
 - [x] Protected overview and history routes are mounted under the existing
-  Axum auth middleware.
+      Axum auth middleware.
 - [x] Item create/update/delete, session lifecycle, resource links, note
-  create/delete, and history purge routes return the documented shapes.
+      create/delete, and history purge routes return the documented shapes.
 - [x] Replay IDs are idempotent, stale item/note/link writes return conflict,
-  and invalid transitions/targets do not write partial state.
+      and invalid transitions/targets do not write partial state.
 - [x] Overview and event history are bounded; cursor and payload validation
-  reject malformed or oversized input.
+      reject malformed or oversized input.
 - [x] `server/tests/workflow_api.rs` covers auth, hierarchy, overview,
-  replay/CAS, session lifecycle, links, notes, validation, pagination, and
-  purge.
+      replay/CAS, session lifecycle, links, notes, validation, pagination, and
+      purge.
 
 **Changed backend files:**
 
@@ -522,16 +523,16 @@ passing. See the [Phase 03 code review](../plans/reports/code-reviewer-260902-04
 **Acceptance Criteria:**
 
 - [x] PTY input/output and restart handling remain non-blocking when the
-  observation queue is full or workflow storage fails.
+      observation queue is full or workflow storage fails.
 - [x] Lifecycle observations update only resource links/events and preserve
-  every manual session status and timestamp.
+      every manual session status and timestamp.
 - [x] Incarnation ordering and deterministic event IDs reject stale/replayed
-  observations.
+      observations.
 - [x] Startup restore marks live links attached and still-active missing links
-  detached without changing final link outcomes or abandoning manual sessions.
+      detached without changing final link outcomes or abandoning manual sessions.
 - [x] Target mismatch rejects terminal links without partial writes.
 - [x] Manual harness bounds, direct Plan linking, crash/exit/removal, queue
-  overflow, and real PTY lifecycle behavior are covered by tests.
+      overflow, and real PTY lifecycle behavior are covered by tests.
 
 **Changed backend files:**
 
@@ -593,13 +594,13 @@ and [code review](../plans/reports/code-reviewer-260902-1144-phase-04-client-typ
 
 - [x] DTOs and request payloads retain server enum/optional-field semantics.
 - [x] Plan-only, nested, standalone, and direct-Plan ownership states remain
-  representable without fabricated progress percentages.
+      representable without fabricated progress percentages.
 - [x] Profile/transport replacement cannot reuse the prior profile's query
-  hash or overview generation key.
+      hash or overview generation key.
 - [x] Failed mutations preserve cached authority and typed errors; successful
-  mutations invalidate the `['workflow']` root.
+      mutations invalidate the `['workflow']` root.
 - [x] Workflow hooks do not read/write URL search params, localStorage,
-  terminal registries, editor state, or a workflow Zustand store.
+      terminal registries, editor state, or a workflow Zustand store.
 
 **Changed client files:** `packages/ui/src/api/workflow-dto-types.ts`,
 `workflow-domain-helpers.ts`, `workflow-types.ts`, `workflow-queries.ts`,
@@ -609,12 +610,12 @@ and [code review](../plans/reports/code-reviewer-260902-1144-phase-04-client-typ
 notes, paths, external IDs, or request bodies. Server validation remains
 authoritative for workspace/target ownership, limits, errors, and replay.
 
-
 ### PR-015: Server-Authoritative Terminal Idle Suspend (Phases 01–05)
 
 **Status:** Complete / DONE on 2026-09-05. Cross-module integration, privileged helper enrollment, systemd sandboxing, REST/WebSocket contract, and UI browser tests verified. Full integration tests passed in `server/tests/idle_suspend.rs` and browser tests passed in `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx`.
 
 **Functional Requirements:**
+
 - Server-authoritative PTY fleet monitoring detects quiescent state (0 live, 0 creating, 0 restarting PTYs).
 - Configurable quiet period initiates an armed timer; active or spawning PTYs immediately cancel the timer.
 - Single-flight idle epoch: exactly one suspend execution per empty period; zero auto-retry loops while fleet remains empty.
@@ -636,6 +637,7 @@ isolation and the four-service `dam-hopper status` projection are covered. See
 [Linux Release Manager](./linux-release-manager.md#verification-and-end-to-end-coverage-production-cli-phase-04).
 
 **Acceptance Criteria:**
+
 - [x] Disabled by default at startup; requires explicit operator configuration.
 - [x] Timing updates rejected under `--no-auth` (`403`) and during active helper handoff (`409`).
 - [x] Zero sudo, shell pipelines, or arbitrary command execution in server binary.
@@ -671,21 +673,22 @@ isolation and the four-service `dam-hopper status` projection are covered. See
 - [x] Automatic config/timing validation continues to reject zero.
 - [x] Clear-only and timed RTC paths verify all required writes/readbacks.
 - [x] Busy-alarm, audit, capability, inhibitor, and RTC failures produce zero
-  suspend calls in fake/temp-file tests.
+      suspend calls in fake/temp-file tests.
 - [x] Scoped protocol, backend, preflight, helper, audit, and integration
-  regressions cover boundaries and compatibility without touching host power.
+      regressions cover boundaries and compatibility without touching host power.
 
+### PR-017: Configured-Agent Activity Idle-Suspend Policy, Evidence, and Status UI (Phases 01–07)
 
-### PR-017: Configured-Agent Activity Idle-Suspend Policy, Evidence, and Status UI (Phases 01–06)
-
-**Phase 06 status:** Protected status and browser UI complete 2026-09-11;
-integrated qualification and opt-in rollout remain pending.
+**Phase 07 status:** Integrated qualification complete 2026-09-11; Phase 08
+documentation, Operations rollout, rollback, and real-host canary gates remain
+pending.
 
 **Implementation status:** Phase 01 policy/configuration, Phase 02 PTY
 evidence, Phase 03 bounded process discovery, Phase 04 owned TCP byte
-observation, Phase 05 transactional sampling/automatic admission, and Phase 06
-protected status/browser UI are implemented (2026-09-11). Integrated
-qualification and opt-in rollout remain pending.
+observation, Phase 05 transactional sampling/automatic admission, Phase 06
+protected status/browser UI, and Phase 07 integrated qualification are complete
+(2026-09-11). Automatic execution remains disabled by default and target-host
+qualification is required before selecting `agent-activity` for execution.
 
 **Requirements:** Persist `automatic_policy` (`empty-fleet` by default or
 `agent-activity`) and a validated `agent_executables` list under
@@ -714,18 +717,18 @@ content-free snapshots plus a private coalescing invalidation watcher.
 **Acceptance criteria:**
 
 - [x] Root PID/start-ticks identity is captured after spawn; uncertain or
-  unavailable probes preserve terminal usability and fail closed downstream.
+      unavailable probes preserve terminal usability and fail closed downstream.
 - [x] Raw output increments once per successful nonempty reader chunk before
-  parser/buffer/event work; the per-incarnation atomic saturates at `u64::MAX`
-  and never wraps.
+      parser/buffer/event work; the per-incarnation atomic saturates at `u64::MAX`
+      and never wraps.
 - [x] Empty input is a no-op; accepted nonempty input advances revision/time
-  and invalidation, while handoff, closing/disposal, missing-session, and
-  saturated-revision gates reject without recording activity.
+      and invalidation, while handoff, closing/disposal, missing-session, and
+      saturated-revision gates reject without recording activity.
 - [x] Create, restore, respawn, stale-reader, hydration, resize, attach, and
-  real-PTY boundaries retain independent evidence and do not copy terminal
-  content.
+      real-PTY boundaries retain independent evidence and do not copy terminal
+      content.
 - [x] Snapshots bound live roots at 256 and report explicit incomplete
-  reasons; no procfs I/O occurs under the manager lock.
+      reasons; no procfs I/O occurs under the manager lock.
 
 #### Phase 03 — Bounded process discovery and agent attribution
 
@@ -744,22 +747,22 @@ samples.
 **Acceptance criteria:**
 
 - [x] `ProcessSource` isolates PID/stat/executable/cmdline/cwd/namespace/FD
-  reads; disappearance, permission, timeout, malformed socket, identity, and
-  namespace failures are explicit unavailable outcomes.
+      reads; disappearance, permission, timeout, malformed socket, identity, and
+      namespace failures are explicit unavailable outcomes.
 - [x] Attribution uses `(pid, start_ticks)`, stat-before/stat-after checks,
-  root/retained descendant closure, and unique-root qualification; PID-only
-  or process-group matching is not used.
+      root/retained descendant closure, and unique-root qualification; PID-only
+      or process-group matching is not used.
 - [x] Native executable matching is exact. Node, Bun, Python, and supported
-  shell forms use finite entrypoint grammars; eval/print/`-c`/stdin/unknown
-  forms and substring matches do not qualify.
+      shell forms use finite entrypoint grammars; eval/print/`-c`/stdin/unknown
+      forms and substring matches do not qualify.
 - [x] Hard bounds cap 256 roots, 8,192 scanned processes, 1,024 relevant
-  processes, 4,096 FDs per process, 8,192 owned socket inodes, and 16 KiB
-  command lines. Zero recognized agents skips FD/socket scanning.
+      processes, 4,096 FDs per process, 8,192 owned socket inodes, and 16 KiB
+      command lines. Zero recognized agents skips FD/socket scanning.
 - [x] Prepared samples expose only bounded counts, output handles, socket
-  identities, and safe executable evidence; terminal bytes, arguments,
-  environment, credentials, and raw socket diagnostics are not retained.
+      identities, and safe executable evidence; terminal bytes, arguments,
+      environment, credentials, and raw socket diagnostics are not retained.
 - [x] `commit_sample` advances discovery state only after a complete accepted
-  sample, while invalidation preserves retained identities for reparenting.
+      sample, while invalidation preserves retained identities for reparenting.
 
 #### Phase 04 — Owned TCP byte observation
 
@@ -776,25 +779,25 @@ send traffic, expose socket addresses, or authorize suspend.
 **Requirements and acceptance criteria:**
 
 - [x] `tcp_info` parsing requires at least 208 bytes, decodes
-  `tcpi_bytes_received` at `128..136` and `tcpi_bytes_sent` at `200..208`
-  with checked slices/native-endian decoding, accepts trailing extensions, and
-  never casts raw bytes to a local C struct.
+      `tcpi_bytes_received` at `128..136` and `tcpi_bytes_sent` at `200..208`
+      with checked slices/native-endian decoding, accepts trailing extensions, and
+      never casts raw bytes to a local C struct.
 - [x] Netlink transport is unprivileged, nonblocking, and deadline-aware.
-  Requests use `NETLINK_SOCK_DIAG`/`SOCK_DIAG_BY_FAMILY`; poll recalculates a
-  monotonic deadline, peeking uses `MSG_PEEK | MSG_TRUNC`, and all dumps share
-  a 16 MiB response budget.
+      Requests use `NETLINK_SOCK_DIAG`/`SOCK_DIAG_BY_FAMILY`; poll recalculates a
+      monotonic deadline, peeking uses `MSG_PEEK | MSG_TRUNC`, and all dumps share
+      a 16 MiB response budget.
 - [x] Multipart parsing validates sequence, sender PID, lengths, alignment,
 - [x] The observer verifies the thread network namespace before and after
-  collection, classifies owned inodes still unresolved after all applicable
-  dumps as retryable close races, and reports unsupported UDP ownership rather
-  than treating it as TCP.
+      collection, classifies owned inodes still unresolved after all applicable
+      dumps as retryable close races, and reports unsupported UDP ownership rather
+      than treating it as TCP.
 - [x] `SocketKey` uses namespace, family, and diagnostic cookie; inode is join
-  metadata only. Transactional baseline comparison returns
-  `BaselineEstablished`, `Unchanged`, or `Activity` for per-socket changes,
-  key membership changes, counter resets, or inode replacement.
+      metadata only. Transactional baseline comparison returns
+      `BaselineEstablished`, `Unchanged`, or `Activity` for per-socket changes,
+      key membership changes, counter resets, or inode replacement.
 - [x] Collection errors leave committed baseline state unchanged. Raw netlink
-  payloads, addresses, terminal bytes, command data, credentials, and
-  unbounded response data never cross the private evidence seam.
+      payloads, addresses, terminal bytes, command data, credentials, and
+      unbounded response data never cross the private evidence seam.
 
 See [Owned TCP Byte Observation](./tcp-activity-observation.md) for the
 implementation contract and failure taxonomy.
@@ -820,33 +823,34 @@ an opaque claim ticket.
 **Requirements and acceptance criteria:**
 
 - [x] `PtySessionManager::try_claim_agent_activity_handoff` checks startup
-  policy/enabled state, request/activity/epoch/timing revisions, quiet
-  deadline, five-second observation age, input revision, fleet generation,
-  exact live root incarnations, raw output fences, and lifecycle blockers under
-  one manager lock before setting `handoff_active`.
+      policy/enabled state, request/activity/epoch/timing revisions, quiet
+      deadline, five-second observation age, input revision, fleet generation,
+      exact live root incarnations, raw output fences, and lifecycle blockers under
+      one manager lock before setting `handoff_active`.
 - [x] The coordinator supports both automatic policies. `empty-fleet` retains
-  the active-to-empty epoch path; `agent-activity` requires a complete
-  baseline, qualifying context, lifecycle-clear fleet, and an unspent epoch
-  before arming and sending an asynchronous final sample.
+      the active-to-empty epoch path; `agent-activity` requires a complete
+      baseline, qualifying context, lifecycle-clear fleet, and an unspent epoch
+      before arming and sending an asynchronous final sample.
 - [x] Genuine input, output, network, process, or managed-lifecycle deltas
-  reset the quiet anchor. A successful claim spends the epoch revision;
-  recovery sampling after resume/release reconciles state without advancing
-  `current_epoch` or silently rearming the spent epoch.
+      reset the quiet anchor. A successful claim spends the epoch revision;
+      recovery sampling after resume/release reconciles state without advancing
+      `current_epoch` or silently rearming the spent epoch.
 - [x] Public v1 status always includes `automaticPolicy`; `activity` is nullable
-  under `empty-fleet` and populated under `agent-activity` with measurement
-  state, reason, bounded counts, timestamps, TCP coverage, and optional
-  `measurementWarning`. Warning processes are PID/safe-identity records capped
-  at 32, with no arguments, socket details, terminal bytes, or diagnostics.
+      under `empty-fleet` and populated under `agent-activity` with measurement
+      state, reason, bounded counts, timestamps, TCP coverage, and optional
+      `measurementWarning`. Warning processes are PID/safe-identity records capped
+      at 32, with no arguments, socket details, terminal bytes, or diagnostics.
 - [x] `is_meaningful_change` ignores status revision/timestamp heartbeat churn,
-  sampled-time churn, and elapsed warning-duration churn while preserving
-  semantic activity, warning, fleet, timing, epoch, and coordinator changes.
+      sampled-time churn, and elapsed warning-duration churn while preserving
+      semantic activity, warning, fleet, timing, epoch, and coordinator changes.
 - [x] Coordinator shutdown joins the sampler before PTY readers and manager
-  teardown; unavailable or stale evidence fails closed and cannot authorize
-  automatic suspend.
+      teardown; unavailable or stale evidence fails closed and cannot authorize
+      automatic suspend.
 
 See [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md)
 for the transaction sequence, ticket fields, status shape, state transitions,
 privacy contract, and verification map.
+
 #### Phase 06 — Protected status and browser UI
 
 Phase 06 consumes the frozen additive status DTO without changing the v1 route
@@ -864,23 +868,58 @@ valid old-server response with both additive properties absent.
 **Requirements and acceptance criteria:**
 
 - [x] New status data validates closed policy/measurement/reason values,
-  nullable unknown counts, epoch domains, warning PID ordering, identity
-  bounds, warning nullability, and policy/activity consistency.
+      nullable unknown counts, epoch domains, warning PID ordering, identity
+      bounds, warning nullability, and policy/activity consistency.
 - [x] Old-server compatibility is limited to both additive fields being absent;
-  partial/malformed data and rejected transport/auth requests remain errors.
+      partial/malformed data and rejected transport/auth requests remain errors.
 - [x] The status card separates coordinator state from measurement, renders
-  `Unknown` counts, TCP4/TCP6 coverage, persistent heuristic limitations, and
-  bounded warning reason/duration/PID-safe identity examples.
+      `Unknown` counts, TCP4/TCP6 coverage, persistent heuristic limitations, and
+      bounded warning reason/duration/PID-safe identity examples.
 - [x] `armDeadlineMs` is the only countdown. One local display clock serves the
-  countdown and warning elapsed duration without polling, invalidation, or
-  admission side effects.
+      countdown and warning elapsed duration without polling, invalidation, or
+      admission side effects.
 - [x] Manual force confirmation remains based on actual fleet counts and all
-  existing handoff, conflict, retry, and wake-choice gates.
+      existing handoff, conflict, retry, and wake-choice gates.
 - [x] Protected API tests pass 9/9, frontend unit tests pass 41/41, Chromium
-  tests pass 13/13, and review approves 9.7/10.
+      tests pass 13/13, and review approves 9.7/10.
 
 See [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md)
 for the exact browser contract and privacy boundary.
+
+#### Phase 07 — Integrated qualification
+
+Phase 07 qualifies the frozen implementation through public manager, API, and
+rendered-browser boundaries. It does not add a policy editor, matcher mutation,
+new endpoint, or privileged test path.
+
+**Changed verification files:**
+
+- `server/tests/idle_suspend.rs`
+- `server/src/api/tests.rs`
+- `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx`
+
+**Acceptance criteria:**
+
+- [x] Public-manager integration proves service-only PTY output does not block
+      agent-policy admission, accepted input invalidates quiet time, manual force
+      remains single-flight with final sampling, disabled observation has no
+      automatic deadline, and sampler shutdown joins before PTY teardown.
+- [x] Protected API tests prove authentication, `Cache-Control: no-store`,
+      exact policy/activity nullability, initializing/disabled/available warning
+      states, warning bounds, and omission of private command/socket/terminal data.
+- [x] Chromium tests prove rendered policy/counts, heuristic notice, warning
+      duration and safe identity/truncation, countdown, manual force, and
+      old-server compatibility.
+- [x] The explicitly ignored Linux `activity_live_linux_pty_tcp_smoke` uses a
+      managed PTY, test-owned loopback TCP, direct procfs/netlink observation, and a
+      panic executor; it never invokes host suspend or RTC mutation.
+- [x] Qualification evidence records **323 backend/PTY/API/integration tests**,
+      **14/14** boundary checks, **16/16** Chromium tests, a **0.72s** Linux
+      smoke, and **9.4/10** code-review approval.
+
+Real automatic suspend/resume remains an Operations-owned Phase 08 canary
+requiring target-host observer feasibility, explicit recovery ownership, a
+bounded maintenance window, and rollback approval.
 
 ## Non-Functional Requirements
 

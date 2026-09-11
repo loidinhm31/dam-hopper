@@ -146,10 +146,10 @@ execute bit.
 | `bin/dam-hopper-manager`                         | file      | `common`      | executable                                |
 | `bin/dam-hopper-server`                          | file      | `server`      | executable                                |
 | `bin/dam-hopper-web`                             | file      | `web`         | executable                                |
-| `systemd/dam-hopper-recovery.service`           | file      | `common`      | boot recovery unit template when packaged |
-| `systemd/dam-hopper-api.service`                | file      | `server`      | unit template                             |
-| `systemd/dam-hopper-idle-suspend-helper.service` | file     | `server`      | helper unit template when packaged        |
-| `systemd/dam-hopper-web.service`                | file      | `web`         | unit template                             |
+| `systemd/dam-hopper-recovery.service`            | file      | `common`      | boot recovery unit template when packaged |
+| `systemd/dam-hopper-api.service`                 | file      | `server`      | unit template                             |
+| `systemd/dam-hopper-idle-suspend-helper.service` | file      | `server`      | helper unit template when packaged        |
+| `systemd/dam-hopper-web.service`                 | file      | `web`         | unit template                             |
 | `sysusers.d/dam-hopper-web.conf`                 | file      | `web`         | sysusers input                            |
 | `web`                                            | directory | `web`         | web payload has `web` role                |
 | `LICENSE` or `NOTICES`                           | file      | `common`      | at least one is required                  |

@@ -7,13 +7,13 @@ make an automatic suspend decision, or authorize a handoff.
 
 ## Source map
 
-| Source | Contract |
-| --- | --- |
-| `server/src/idle_suspend/activity/tcp_info.rs` | Bounded `tcp_info` prefix parser for cumulative receive/send counters |
-| `server/src/idle_suspend/activity/netlink.rs` | Unprivileged `NETLINK_SOCK_DIAG` requests, bounded transport, and multipart parser |
-| `server/src/idle_suspend/activity/tcp.rs` | `SocketDiagnosticsSource`, Linux implementation, transactional observer, and baseline comparison |
-| `server/src/idle_suspend/activity/mod.rs` | Private activity exports, hard bounds, and `NetworkNamespaceIdentity::current_thread()` |
-| `server/src/idle_suspend/activity/*` tests | Parser, framing, deadline/budget, namespace, race, and baseline regressions |
+| Source                                         | Contract                                                                                         |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `server/src/idle_suspend/activity/tcp_info.rs` | Bounded `tcp_info` prefix parser for cumulative receive/send counters                            |
+| `server/src/idle_suspend/activity/netlink.rs`  | Unprivileged `NETLINK_SOCK_DIAG` requests, bounded transport, and multipart parser               |
+| `server/src/idle_suspend/activity/tcp.rs`      | `SocketDiagnosticsSource`, Linux implementation, transactional observer, and baseline comparison |
+| `server/src/idle_suspend/activity/mod.rs`      | Private activity exports, hard bounds, and `NetworkNamespaceIdentity::current_thread()`          |
+| `server/src/idle_suspend/activity/*` tests     | Parser, framing, deadline/budget, namespace, race, and baseline regressions                      |
 
 `activity::process` and `activity::tcp` are crate-private module exports;
 `activity::netlink` and `activity::tcp_info` remain private implementation
@@ -51,10 +51,10 @@ available or unavailable.
 `INET_DIAG_INFO` carries a native `tcp_info` byte payload. The parser reads a
 stable prefix without depending on the local libc structure layout:
 
-| Field | Byte range | Decode |
-| --- | ---: | --- |
+| Field                 | Byte range | Decode              |
+| --------------------- | ---------: | ------------------- |
 | `tcpi_bytes_received` | `128..136` | native-endian `u64` |
-| `tcpi_bytes_sent` | `200..208` | native-endian `u64` |
+| `tcpi_bytes_sent`     | `200..208` | native-endian `u64` |
 
 `TCP_INFO_REQUIRED_PREFIX_BYTES` is `208`. A shorter attribute returns
 `TcpInfoParseError::TooShort`; no counters are guessed. A payload longer than
@@ -175,11 +175,11 @@ the complete sample. `invalidate` marks the baseline invalid while retaining
 historical socket identity for diagnostics; the next successful sample reports
 `BaselineEstablished`.
 
-| Result | Meaning |
-| --- | --- |
-| `BaselineEstablished` | First successful sample or first sample after invalidation |
-| `Unchanged` | Same `SocketKey` set, same join inode for each key, and identical sent/received counters |
-| `Activity` | Any new/retired key, inode replacement, counter increase, or counter reset/decrease |
+| Result                | Meaning                                                                                  |
+| --------------------- | ---------------------------------------------------------------------------------------- |
+| `BaselineEstablished` | First successful sample or first sample after invalidation                               |
+| `Unchanged`           | Same `SocketKey` set, same join inode for each key, and identical sent/received counters |
+| `Activity`            | Any new/retired key, inode replacement, counter increase, or counter reset/decrease      |
 
 Comparison is per persistent socket. It does not sum counters across sockets,
 so a close/new-socket transition cannot cancel an active socket's byte delta.

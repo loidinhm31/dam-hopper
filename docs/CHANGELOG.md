@@ -1,5 +1,9 @@
 # 2026-09-11
 
+- **Configured-agent activity idle suspend — Phase 07 integrated qualification complete (2026-09-11).** Qualified managed PTY output/input, attributable TCP traffic, protected status/API warnings, Chromium rendering, fake suspend admission, recovery, and shutdown.
+- Validation passed: backend/PTY/API/integration **323 passed**, security boundary **14/14**, Chromium **16/16**, and the ignored live Linux PTY/TCP smoke **1/1 in 0.72s**; code review approved **9.4/10**. Automated evidence used fake suspend outcomes and did not invoke host suspend, RTC programming, helper execution, sudo, or root installation.
+- Plan progress: **7/8 phases complete; 98/111h (~88%)**. Phase 08 documentation, operations runbooks, controlled rollout, and rollback is now the active pending phase; real-host automatic suspend remains an Operations approval gate.
+
 - **Configured-agent activity idle suspend — Phase 06 complete.** Added a
   strict `unknown`-to-`IdleSuspendStatusV1` decoder with exact two-field
   old-server normalization and fail-closed malformed/partial response
@@ -178,7 +182,6 @@
 - Validation: focused Rust gates **134/134 passed**, focused UI Vitest **122/122 passed** across 13 files, and real-server Chromium browser **4/4 passed** against the actual no-auth backend, covering workflow state/actions, responsive keyboard/focus behavior, unavailable fallback, and terminal continuity. [Phase 07 plan](../plans/260901-0919-workflow-tracking-notes/phase-07-verification-rollout-observability-and-docs.md).
 - **Workflow note and summary multiline Textarea improvement.** Added the shared `Textarea` atom primitive (`packages/ui/src/components/ui/Textarea.tsx`) matching the `glass-input` design tokens and focus ring styling. Updated `WorkflowSelectedItemBar` to use `Textarea` for note drafting with multiline input, autoFocus, explicit `aria-label="Note content"`, Ctrl+Enter / Meta+Enter submission, and Escape cancellation. Updated `WorkflowQuickCapture` summary region to use `Textarea` for multiline item summary descriptions.
 
-
 # 2026-08-31
 
 - **Preserve Explorer Tree Expansion & Editor View Scroll Position (Phases 01–03).**
@@ -354,7 +357,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   through a bounded non-blocking telemetry sink. The default path is no-op and
   non-durable; `ChannelTelemetrySink` is reserved as the Phase 03 durable-worker
   boundary.
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+  and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 

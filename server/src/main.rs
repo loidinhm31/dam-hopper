@@ -365,27 +365,19 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Start idle-suspend coordinator after persistence restore completes.
-    // In Phase 03, resolve executor: if idle-suspend is enabled and helper socket exists,
-    // enroll SystemdIdleSuspendExecutor; otherwise fallback closed to UnavailableExecutor.
+    // In Phase 03, resolve executor: enroll SystemdIdleSuspendExecutor with privileged helper socket path.
+    // SystemdIdleSuspendExecutor dynamically checks socket presence and health per-request,
+    // avoiding permanent latching if the helper daemon starts after the API server.
     let idle_suspend_executor: Arc<dyn dam_hopper_server::idle_suspend::IdleSuspendExecutor> = {
         let socket_path = std::env::var("DAM_HOPPER_IDLE_SUSPEND_SOCKET")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/run/dam-hopper/idle-suspend.sock"));
-        if socket_path.exists() {
-            tracing::info!(
-                socket = %socket_path.display(),
-                "Enrolling SystemdIdleSuspendExecutor with privileged helper"
-            );
-            Arc::new(dam_hopper_server::idle_suspend::SystemdIdleSuspendExecutor::new(&socket_path))
-        } else {
-            tracing::info!(
-                socket = %socket_path.display(),
-                "Privileged helper socket not found; idle suspend executor will be unavailable"
-            );
-            Arc::new(dam_hopper_server::idle_suspend::UnavailableExecutor::new(
-                "Privileged helper socket not found at expected path",
-            ))
-        }
+        tracing::info!(
+            socket = %socket_path.display(),
+            socket_exists = socket_path.exists(),
+            "Enrolling SystemdIdleSuspendExecutor with privileged helper socket"
+        );
+        Arc::new(dam_hopper_server::idle_suspend::SystemdIdleSuspendExecutor::new(&socket_path))
     };
     state.start_idle_suspend_coordinator(idle_suspend_executor).await;
 

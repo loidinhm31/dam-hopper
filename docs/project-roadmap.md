@@ -4,9 +4,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Configured-agent activity idle suspend (2026-09-11)
 
-- **Phases 01–06 — DONE (2026-09-11).** Policy/configuration, PTY evidence,
+- **Phases 01–07 — DONE (2026-09-11).** Policy/configuration, PTY evidence,
   bounded process discovery, owned TCP observation, transactional sampler and
-  coordinator admission, and protected status/browser UI are implemented.
+  coordinator admission, protected status/browser UI, and integrated qualification
+  are complete.
 - Phase 03 adds private `ProcessDiscovery<S>` over `ProcessSource`, production
   `LinuxProcSource`, exact `(pid, start_ticks)` lineage with retained
   reparenting, finite native/interpreter matching, same-namespace owned-socket
@@ -25,14 +26,21 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   processes, 4,096 FDs per process, 8,192 owned socket inodes, 16 KiB command
   lines, and 32 warning process examples. Incomplete or stale observations
   remain unavailable.
+- Phase 07 adds integrated deterministic and live Linux qualification across
+  managed PTY output/input, attributable TCP traffic, protected status/API
+  warnings, Chromium rendering, fake suspend admission, recovery, and shutdown.
 - Validation: Phase 03 focused **18/18**, Phase 04 TCP/netlink **40/40** and
-  crate **142/142**, Phase 05 server **1031/1031**, and Phase 06 backend
-  **9/9**, frontend **41/41**, Chromium **13/13**. Phase 06 code review:
-  **9.7/10**, approved. See the [Phase 06 status/UI guide](./idle-suspend-status-ui.md)
+  crate **142/142**, Phase 05 server **1031/1031**, Phase 06 backend
+  **9/9**, frontend **41/41**, Chromium **13/13**, and Phase 07
+  **323 backend/PTY/API/integration tests**, **14/14 boundary checks**, and
+  **16/16 Chromium tests**. Phase 07 live Linux PTY/TCP smoke passed in
+  **0.72s**; code review approved **9.4/10**. See the [Phase 07
+  qualification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md)
   and [parent plan](../plans/260910-1604-agent-activity-idle-suspend/plan.md).
-- **Next steps:** Phase 07 integrated qualification; Phase 08 documentation and
-  opt-in rollout remain pending. Automatic real-host suspend remains an
-  explicit Operations gate.
+- **Plan progress: 7/8 phases done; 98/111h (~88%). Active phase: Phase 08 —
+  Documentation, operations runbooks, and controlled rollout (Pending; 0%).**
+- Automatic real-host suspend remains an explicit Operations gate; Phase 08 owns
+  documentation, controlled rollout, rollback, and canary prerequisites.
 
 ### Production CLI Deployment Setup for Idle Suspend Helper & Socket (2026-09-09)
 
@@ -68,7 +76,6 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - Scoped REST/API coverage is recorded for authentication, no-auth/database/actor gates, origin and media-type rejection, strict payload and wake bounds, DTO/conflict serialization, body limits, and no-store responses. Project-wide validation remains the parent integration gate.
 - **Phase 04 — [COMPLETED / DONE 2026-09-06 12:20:00 +07:00; 100%]**: Added the accessible Force Machine to Sleep action in HostIdleSuspendStatus and HostResourcePopover with seamless modal handoff to Radix ForceSleepDialog, indefinite default (`wakeAfterSeconds: 0`), optional bounded RTC wake duration, authoritative active-session confirmation, 409 conflict refresh, no-retry mutation, live-region state, and 44px touch targets. [Phase plan](../plans/260906-0348-manual-force-sleep-button/phase-04-host-popover-ui-and-confirmation-dialog.md).
 - **Phase 05 — [COMPLETED / DONE 2026-09-06 15:45:00 +07:00; 100%]**: Closed the integration, traceability, boundary-verification, and documentation gate for authenticated manual force sleep. Automated evidence passed: 81/81 Rust idle-suspend tests, 3/3 UI Vitest tests, 10/10 Chromium browser tests, 12/12 non-privileged boundary checks, and `cargo check`. Tests use fakes and temporary files only; the indefinite real-host canary is explicitly deferred pending Operations approval and verified physical/out-of-band wake and recovery. [Phase plan](../plans/260906-0348-manual-force-sleep-button/phase-05-integration-testing-and-docs.md) · [Parent plan](../plans/260906-0348-manual-force-sleep-button/plan.md).
-
 
 ### Workflow Tracking and Continuity (2026-09-02)
 
@@ -153,7 +160,6 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ### Terminal Touch Keyboard and Smooth Scroll (2026-08-28)
 
 - **Phases 01–02 — [COMPLETED 2026-08-29 16:48:06 +07:00]**: terminal scroll controls no longer focus xterm input or open the soft keyboard; xterm v6 coarse-pointer touch scrolling uses buffered custom `scrollLines` handling with bounded fling, plus explicit `touch-action: none` and contained overscroll/momentum CSS. Validation: UI TypeScript build PASS; full UI Vitest 1347/1347; focused terminal browser regressions 10/10; Chromium mobile-emulation swipe moved the xterm scrollbar from 280px to 158px. Physical Android hardware validation remains a release follow-up. [Plan](../plans/260828-1430-terminal-touch-keyboard-and-smooth-scroll/plan.md).
-
 
 ### Terminal Floating Controls UX (2026-08-29)
 
@@ -279,11 +285,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] Loopback-only authenticated binary receiver with bounded decoding and retry-safe dedupe
 - [x] Field-level forward compatibility with partial/unavailable token coverage
 - [x] Explicit managed local exporter setup with exact ownership/conflict protection, atomic
-  `0600` writes, no bearer disclosure; Codex restart remains a separate user action
+      `0600` writes, no bearer disclosure; Codex restart remains a separate user action
 
 **Phase 06: Usage UI and Compact Navigation — [COMPLETED 2026-07-26; APPROVED]**
 
-- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls *(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)*
+- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls _(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)_
 - [x] Explicit all/range deletion confirmation and no-cost/no-productivity interpretation copy
 
 **Phase 07: Security, Fault, Performance, Documentation — [VALIDATED; REVIEW APPROVED 2026-07-26; PLATFORM CHECKS PENDING]**

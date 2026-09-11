@@ -29,7 +29,7 @@ use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
     fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend, media_session,
     port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, usage,
-    usage_sessions, workspace, ws, workflow,
+    usage_sessions, workflow, workspace, ws,
 };
 
 /// Build the full Axum router without cross-origin browser access and without static web serving.
@@ -73,11 +73,23 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/workflow/overview", get(workflow::overview))
         .route("/api/workflow/events", get(workflow::events))
         .route("/api/workflow/items", post(workflow::item::create))
-        .route("/api/workflow/items/{id}", patch(workflow::item::patch).delete(workflow::item::delete))
+        .route(
+            "/api/workflow/items/{id}",
+            patch(workflow::item::patch).delete(workflow::item::delete),
+        )
         .route("/api/workflow/sessions", post(workflow::session::create))
-        .route("/api/workflow/sessions/{id}/end", post(workflow::session::end))
-        .route("/api/workflow/sessions/{id}/abandon", post(workflow::session::abandon))
-        .route("/api/workflow/sessions/{id}/links", post(workflow::session::link).delete(workflow::session::unlink))
+        .route(
+            "/api/workflow/sessions/{id}/end",
+            post(workflow::session::end),
+        )
+        .route(
+            "/api/workflow/sessions/{id}/abandon",
+            post(workflow::session::abandon),
+        )
+        .route(
+            "/api/workflow/sessions/{id}/links",
+            post(workflow::session::link).delete(workflow::session::unlink),
+        )
         .route("/api/workflow/notes", post(workflow::note::create))
         .route("/api/workflow/history", delete(workflow::purge::purge))
         .route("/api/workflow/notes/{id}", delete(workflow::note::delete))
@@ -284,19 +296,28 @@ pub fn build_router_with_web_dir_and_origins(
             "/api/system/actions/v1/intents",
             post(host_actions::create_intent)
                 .layer(RequestBodyLimitLayer::new(8 * 1024))
-                .route_layer(middleware::from_fn(host_actions::require_action_request)),
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    host_actions::require_action_request,
+                )),
         )
         .route(
             "/api/system/actions/v1/intents/{id}/approve",
             post(host_actions::approve_intent)
                 .layer(RequestBodyLimitLayer::new(8 * 1024))
-                .route_layer(middleware::from_fn(host_actions::require_action_request)),
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    host_actions::require_action_request,
+                )),
         )
         .route(
             "/api/system/actions/v1/executions",
             post(host_actions::create_execution)
                 .layer(RequestBodyLimitLayer::new(8 * 1024))
-                .route_layer(middleware::from_fn(host_actions::require_action_request)),
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    host_actions::require_action_request,
+                )),
         )
         .route(
             "/api/system/actions/v1/executions/{id}",
@@ -310,13 +331,11 @@ pub fn build_router_with_web_dir_and_origins(
         )
         .route(
             "/api/system/idle-suspend/v1/timing",
-            patch(idle_suspend::update_timing)
-                .layer(RequestBodyLimitLayer::new(16 * 1024)),
+            patch(idle_suspend::update_timing).layer(RequestBodyLimitLayer::new(16 * 1024)),
         )
         .route(
             "/api/system/idle-suspend/v1/force-suspend",
-            post(idle_suspend::force_suspend)
-                .layer(RequestBodyLimitLayer::new(16 * 1024)),
+            post(idle_suspend::force_suspend).layer(RequestBodyLimitLayer::new(16 * 1024)),
         )
         // Diagnostics
         .route(
@@ -493,7 +512,6 @@ pub(crate) async fn mark_allowed_media_origin(
 
 #[derive(Clone, Copy)]
 pub(crate) struct AllowedMediaOrigin;
-
 
 /// Parse a strict, canonical origin allowlist before the server starts.
 pub fn parse_cors_origins(raw_origins: Option<&str>) -> anyhow::Result<Vec<HeaderValue>> {

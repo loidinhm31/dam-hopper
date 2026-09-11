@@ -113,12 +113,12 @@ events in its bounded in-memory/JSONL store. These names describe the diagnostic
 metrics represented by those events; they are not a new workflow REST endpoint,
 remote export, or second telemetry database.
 
-| Metric | Recorded event and scope | Fixed-cardinality contract |
-| --- | --- | --- |
-| `workflow_operation_duration_seconds` | `workflow.operation` for workflow service/store operations | `operation` and `outcome` use fixed values; duration is capped at 60 seconds; `row_count`, `event_count`, and `count` are each capped at 1,000; `store_availability` is `available` or `unavailable`. |
-| `workflow_queue_dropped_total` | `workflow.observation_drop` when the PTY observation queue is full/disconnected | The handoff is non-blocking `try_send` to `sync_channel(256)`; `operation=observation`, `observation_kind=terminal_lifecycle`, `result=dropped`, and `outcome=queue_full` are fixed values. |
-| `workflow_reconciliation_total` | `workflow.reconciliation` after startup terminal-link reconciliation | `result` is `ok` or `error`; `attached_count`, `detached_count`, `row_count`, `event_count`, and `count` are capped at 1,000; duration is capped at 60 seconds; store availability is enum-only. |
-| `workflow_storage_errors_total` | Failed workflow store/observation/reconciliation operations | Failure and availability outcomes use fixed enums; bounded count fields are retained without raw database errors or dynamic resource labels. |
+| Metric                                | Recorded event and scope                                                        | Fixed-cardinality contract                                                                                                                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workflow_operation_duration_seconds` | `workflow.operation` for workflow service/store operations                      | `operation` and `outcome` use fixed values; duration is capped at 60 seconds; `row_count`, `event_count`, and `count` are each capped at 1,000; `store_availability` is `available` or `unavailable`. |
+| `workflow_queue_dropped_total`        | `workflow.observation_drop` when the PTY observation queue is full/disconnected | The handoff is non-blocking `try_send` to `sync_channel(256)`; `operation=observation`, `observation_kind=terminal_lifecycle`, `result=dropped`, and `outcome=queue_full` are fixed values.           |
+| `workflow_reconciliation_total`       | `workflow.reconciliation` after startup terminal-link reconciliation            | `result` is `ok` or `error`; `attached_count`, `detached_count`, `row_count`, `event_count`, and `count` are capped at 1,000; duration is capped at 60 seconds; store availability is enum-only.      |
+| `workflow_storage_errors_total`       | Failed workflow store/observation/reconciliation operations                     | Failure and availability outcomes use fixed enums; bounded count fields are retained without raw database errors or dynamic resource labels.                                                          |
 
 Workflow operation names are fixed (`scope`, `workspace`, `target_resolve`,
 `store_call`, and `retention_purge`), and workflow outcomes are fixed
@@ -175,34 +175,37 @@ DELETE returns a typed tombstone instead of a boolean:
 Workflow errors use a stable body with a sanitized message and code:
 
 ```json
-{ "error": "Workflow request conflicts with current state", "code": "workflow_conflict" }
+{
+  "error": "Workflow request conflicts with current state",
+  "code": "workflow_conflict"
+}
 ```
 
-| HTTP | Codes | Meaning |
-| ---: | --- | --- |
-| 400 | `workflow_invalid_request`, `workflow_limit_exceeded` | Malformed UUID/timestamp, unknown enum, invalid hierarchy, or domain field limits |
-| 404 | `workflow_not_found` | Entity or configured project is not in the current workspace |
-| 409 | `workflow_conflict`, `workflow_invalid_transition`, `workflow_target_unavailable` | CAS/replay conflict, illegal lifecycle transition, or unusable target |
-| 413 | *(router response; no workflow code guaranteed)* | Request exceeds the workflow route's 32 KiB body cap before the handler |
-| 503 | `workflow_store_unavailable` | Workflow SQLite/service is unavailable; unrelated APIs are not gated |
+| HTTP | Codes                                                                             | Meaning                                                                           |
+| ---: | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+|  400 | `workflow_invalid_request`, `workflow_limit_exceeded`                             | Malformed UUID/timestamp, unknown enum, invalid hierarchy, or domain field limits |
+|  404 | `workflow_not_found`                                                              | Entity or configured project is not in the current workspace                      |
+|  409 | `workflow_conflict`, `workflow_invalid_transition`, `workflow_target_unavailable` | CAS/replay conflict, illegal lifecycle transition, or unusable target             |
+|  413 | _(router response; no workflow code guaranteed)_                                  | Request exceeds the workflow route's 32 KiB body cap before the handler           |
+|  503 | `workflow_store_unavailable`                                                      | Workflow SQLite/service is unavailable; unrelated APIs are not gated              |
 
 ## Endpoint overview
 
-| Method | Route | Purpose |
-| --- | --- | --- |
-| GET | `/api/workflow/overview` | One bounded current-workspace context response |
-| GET | `/api/workflow/events` | Descending keyset-paged activity history |
-| POST | `/api/workflow/items` | Create a Plan, Phase, or Task |
-| PATCH | `/api/workflow/items/{id}` | CAS update an item |
-| DELETE | `/api/workflow/items/{id}` | CAS delete an item and descendants |
-| POST | `/api/workflow/sessions` | Start a manual running session |
-| POST | `/api/workflow/sessions/{id}/end` | End a running session with an explicit time |
-| POST | `/api/workflow/sessions/{id}/abandon` | Abandon a running session |
-| POST | `/api/workflow/sessions/{id}/links` | Link a terminal or agent resource |
-| DELETE | `/api/workflow/sessions/{id}/links` | CAS unlink a terminal or agent resource |
-| POST | `/api/workflow/notes` | Add a durable item/session note |
-| DELETE | `/api/workflow/notes/{id}` | CAS soft-delete a note |
-| DELETE | `/api/workflow/history` | Permanently purge old events and soft-deleted notes |
+| Method | Route                                 | Purpose                                             |
+| ------ | ------------------------------------- | --------------------------------------------------- |
+| GET    | `/api/workflow/overview`              | One bounded current-workspace context response      |
+| GET    | `/api/workflow/events`                | Descending keyset-paged activity history            |
+| POST   | `/api/workflow/items`                 | Create a Plan, Phase, or Task                       |
+| PATCH  | `/api/workflow/items/{id}`            | CAS update an item                                  |
+| DELETE | `/api/workflow/items/{id}`            | CAS delete an item and descendants                  |
+| POST   | `/api/workflow/sessions`              | Start a manual running session                      |
+| POST   | `/api/workflow/sessions/{id}/end`     | End a running session with an explicit time         |
+| POST   | `/api/workflow/sessions/{id}/abandon` | Abandon a running session                           |
+| POST   | `/api/workflow/sessions/{id}/links`   | Link a terminal or agent resource                   |
+| DELETE | `/api/workflow/sessions/{id}/links`   | CAS unlink a terminal or agent resource             |
+| POST   | `/api/workflow/notes`                 | Add a durable item/session note                     |
+| DELETE | `/api/workflow/notes/{id}`            | CAS soft-delete a note                              |
+| DELETE | `/api/workflow/history`               | Permanently purge old events and soft-deleted notes |
 
 There is no standalone item GET/list route in Phase 02. Item reads are
 returned by mutation responses and by the overview; the scoped repository also
@@ -282,11 +285,11 @@ expiry metadata. Empty or tampered cursors, and out-of-range limits, return
 
 Items use the Plan-first hierarchy:
 
-| Kind | Parent |
-| --- | --- |
-| `plan` | None; root only |
-| `phase` | A same-project/target `plan` (required) |
-| `task` | None, or a same-project/target `plan`/`phase` |
+| Kind    | Parent                                        |
+| ------- | --------------------------------------------- |
+| `plan`  | None; root only                               |
+| `phase` | A same-project/target `plan` (required)       |
+| `task`  | None, or a same-project/target `plan`/`phase` |
 
 Task cannot parent Task. Parent references must be in the current workspace,
 share the target project/worktree, contain no cycle, and stay within the
@@ -433,14 +436,14 @@ command inspection. New links start with `observedState: attached` and record
 
 Terminal link state is observation-driven:
 
-| `observedState` | Meaning |
-| --- | --- |
-| `attached` | PTY creation, successful restart, or startup reconciliation found the incarnation live. |
-| `stale` | The incarnation exited while an automatic restart is pending. |
-| `exited` | Final exit was observed with exit code `0`. |
-| `crashed` | Final exit was observed with a non-zero or unavailable exit code. |
-| `detached` | The PTY was explicitly removed or missing after startup restore. |
-| `unknown` | Reserved model value; not emitted by the Phase 03 terminal recorder. |
+| `observedState` | Meaning                                                                                 |
+| --------------- | --------------------------------------------------------------------------------------- |
+| `attached`      | PTY creation, successful restart, or startup reconciliation found the incarnation live. |
+| `stale`         | The incarnation exited while an automatic restart is pending.                           |
+| `exited`        | Final exit was observed with exit code `0`.                                             |
+| `crashed`       | Final exit was observed with a non-zero or unavailable exit code.                       |
+| `detached`      | The PTY was explicitly removed or missing after startup restore.                        |
+| `unknown`       | Reserved model value; not emitted by the Phase 03 terminal recorder.                    |
 
 Incarnations are ordered per public terminal ID. An older observation cannot
 overwrite a newer link incarnation; equal replay observations are suppressed
@@ -590,7 +593,7 @@ for the design and requirement records.
 ### Known implementation note
 
 The API event constructors currently assign the 90-day default expiry
- directly. `server.workflow_event_retention_days` is validated and exposed in
+directly. `server.workflow_event_retention_days` is validated and exposed in
 configuration, but custom event-retention values are not yet wired into those
 constructors. The deleted-note retention setting is consumed by the automatic
 purge. Keep this distinction in mind when changing retention configuration.

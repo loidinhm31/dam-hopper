@@ -1,7 +1,7 @@
 use axum::extract::Request;
 use axum::{
     extract::State,
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -68,15 +68,19 @@ pub enum CredentialVerificationError {
     ActorMismatch,
 }
 
+/// Extract bearer token slice from `Authorization: Bearer <token>` header if present.
+pub(crate) fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|val| val.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+}
+
 /// Extract token from `Authorization: Bearer <token>` header, falling back to cookie.
 fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String> {
     // Prefer Authorization Bearer header when supplied.
-    if let Some(val) = request.headers().get(header::AUTHORIZATION) {
-        if let Ok(s) = val.to_str() {
-            if let Some(token) = s.strip_prefix("Bearer ") {
-                return Some(token.to_string());
-            }
-        }
+    if let Some(token) = extract_bearer_token(request.headers()) {
+        return Some(token.to_string());
     }
     // Fall back to httpOnly cookie (same-origin)
     jar.get(AUTH_COOKIE).map(|c| c.value().to_string())

@@ -95,6 +95,7 @@ The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend automa
 │  └─ HelperAudit (/var/log/dam-hopper/idle-suspend-helper.jsonl)
 └─────────────────────────────────────────────────────────────┘
 ```
+
 ### Phase 01 policy/configuration contract
 
 `IdleSuspendConfig` accepts an `automatic_policy` selector and an
@@ -128,6 +129,7 @@ The matcher list is retained by startup authority and is not a status or
 WebSocket field.
 
 ### Key Invariants
+
 1. **Fleet Quiescence & Latching**:
    `empty-fleet` arms only after an active-to-empty transition; `agent-activity` arms only after a complete baseline, qualifying activity context, clear lifecycle, and an unspent epoch revision. Both policies are single-flight: one admitted execution per eligible period; resume/failure reconciles state, and agent recovery does not advance `current_epoch` or silently re-trigger a spent epoch.
 2. **Admission & Handoff Order**:
@@ -146,6 +148,7 @@ WebSocket field.
    manage the helper with the other units; Phase 04 staging/policy suites pass
    9/9 and 10/10, the boundary verifier passes 14/14, and `status --json`
    exposes the API, helper, web, and recovery service records.
+
 ### Manual force-suspend admission and reconciliation
 
 The protected endpoint accepts strict JSON `{ "wakeAfterSeconds": 0, "force": false }` (or a bounded nonzero wake value) under the 16 KiB request limit. Execution accepts exactly `0` or `60..=86400`; persisted automatic timing remains `60..=86400`. The fleet snapshot exposes only `generation`, `liveCount`, `creatingCount`, `restartPendingCount`, `disposing`, `closing`, and `handoffActive`.
@@ -252,6 +255,7 @@ only PID plus optional safe executable identity. Status meaningful-change
 filtering ignores heartbeat timestamp and elapsed-duration churn. Coordinator
 shutdown joins the sampler before `main.rs` stops PTY readers and tears down
 the manager.
+
 ### Phase 06 protected status and browser presentation
 
 The protected `GET /api/system/idle-suspend/v1/status` remains the single
@@ -280,6 +284,32 @@ state, status revisions, or WebSocket payloads. The existing
 Manual force confirmation continues to use actual fleet counts and existing
 handoff/closing/disposal/pending gates, never recognized-agent counts.
 
+### Phase 07 integrated qualification
+
+The integrated qualification ladder keeps each authority at its owning boundary:
+
+1. `server/tests/idle_suspend.rs` drives the public coordinator with a real
+   `PtySessionManager` and fake executor. It proves service-only PTY output,
+   accepted-input invalidation, manual/final-check ordering, disabled
+   observation, and sampler shutdown/join behavior.
+2. `server/src/api/tests.rs` exercises protected status at the Axum router
+   boundary. It checks authentication, `Cache-Control: no-store`, the exact
+   empty-fleet/agent-activity union, initializing/disabled/available warning
+   states, bounds, and privacy omissions.
+3. `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx` uses
+   Chromium to verify rendered counts, heuristic notice, warning duration and
+   safe identities, truncation, countdown, manual action, and old-server
+   compatibility.
+4. The ignored `activity_live_linux_pty_tcp_smoke` test uses a test-owned
+   managed PTY, loopback TCP, direct procfs/netlink observation, and a panic
+   executor. It qualifies observer seams only; it cannot authorize or invoke
+   host suspend.
+
+Phase 07 reports **323 backend/PTY/API/integration tests**, **14/14** boundary
+checks, **16/16** Chromium tests, a **0.72s** live Linux smoke, and **9.4/10**
+code review approval. Automated qualification uses fakes/temporary resources;
+the real automatic suspend/resume canary remains an Operations-owned,
+target-host gate. See [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
 
 ### Phase 01 helper execution contract
 
@@ -1096,14 +1126,14 @@ entities therefore share the configured `sessions.db` file and its Unix
 
 **Migration 010 tables:**
 
-| Table | Stored contract |
-| --- | --- |
-| `workflow_workspaces` | Text `id` (generated UUID), unique caller-resolved config `locator`, display `name`, and create/update millisecond timestamps. |
-| `workflow_items` | Workspace/project/optional worktree scope, optional parent, `kind` (`plan`, `phase`, `task`), title/summary, status, ordering, source, lifecycle timestamps, and optional completion/archive timestamps. Workspace deletion cascades. |
-| `workflow_sessions` | Workspace/project/optional worktree scope, optional item link, lifecycle status (`running`, `ended`, `abandoned`), start/end timestamps, source, and create/update timestamps. Workspace deletion cascades; deleting an item sets `item_id` to `NULL`. |
+| Table                     | Stored contract                                                                                                                                                                                                                                                                         |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workflow_workspaces`     | Text `id` (generated UUID), unique caller-resolved config `locator`, display `name`, and create/update millisecond timestamps.                                                                                                                                                          |
+| `workflow_items`          | Workspace/project/optional worktree scope, optional parent, `kind` (`plan`, `phase`, `task`), title/summary, status, ordering, source, lifecycle timestamps, and optional completion/archive timestamps. Workspace deletion cascades.                                                   |
+| `workflow_sessions`       | Workspace/project/optional worktree scope, optional item link, lifecycle status (`running`, `ended`, `abandoned`), start/end timestamps, source, and create/update timestamps. Workspace deletion cascades; deleting an item sets `item_id` to `NULL`.                                  |
 | `workflow_resource_links` | Session correlation for `terminal` or `agent` resources, external/incarnation identity, optional harness/run metadata, observed state, suggested end time, first/last seen, source, and timestamps. `(session_id, resource_type, external_id)` is unique and session deletion cascades. |
-| `workflow_notes` | Workspace-scoped text attached to an item, a session, or both. `deleted_at` implements soft deletion; a check constraint requires at least one target. Item/session/workspace deletion cascades. |
-| `workflow_events` | Append-only activity records with event type/source, optional project/worktree/item/session scope, occurred/recorded times, optional JSON payload, and optional expiry. Event item/session identifiers are metadata rather than foreign keys so history can outlive entity cleanup. |
+| `workflow_notes`          | Workspace-scoped text attached to an item, a session, or both. `deleted_at` implements soft deletion; a check constraint requires at least one target. Item/session/workspace deletion cascades.                                                                                        |
+| `workflow_events`         | Append-only activity records with event type/source, optional project/worktree/item/session scope, occurred/recorded times, optional JSON payload, and optional expiry. Event item/session identifiers are metadata rather than foreign keys so history can outlive entity cleanup.     |
 
 Indexes cover workspace/project/status queries, item parent traversal,
 session/item lookup, resource external identity, note targets/deletion, and
@@ -1158,15 +1188,15 @@ workflow routes, leaving PTY and IDE APIs operational.
 
 **Protected REST surface:**
 
-| Route | Responsibility |
-| --- | --- |
-| `GET /api/workflow/overview` | Bounded workspace, project, Plan/Phase/Task tree, notes, active sessions, progress, and recent events. |
-| `GET /api/workflow/events` | Descending `(recorded_at, id)` keyset history with opaque cursor. |
-| `POST /api/workflow/items`; `PATCH/DELETE /api/workflow/items/{id}` | Plan-first item mutations; PATCH/DELETE require `updatedAt` CAS. |
-| `POST /api/workflow/sessions`; `POST /api/workflow/sessions/{id}/end`; `POST /api/workflow/sessions/{id}/abandon` | Manual session lifecycle with explicit RFC3339 work times. |
-| `POST/DELETE /api/workflow/sessions/{id}/links` | Terminal/agent resource link and CAS unlink. |
-| `POST /api/workflow/notes`; `DELETE /api/workflow/notes/{id}` | Durable note creation and CAS soft deletion. |
-| `DELETE /api/workflow/history` | Explicit permanent purge of old events and soft-deleted notes. |
+| Route                                                                                                             | Responsibility                                                                                         |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET /api/workflow/overview`                                                                                      | Bounded workspace, project, Plan/Phase/Task tree, notes, active sessions, progress, and recent events. |
+| `GET /api/workflow/events`                                                                                        | Descending `(recorded_at, id)` keyset history with opaque cursor.                                      |
+| `POST /api/workflow/items`; `PATCH/DELETE /api/workflow/items/{id}`                                               | Plan-first item mutations; PATCH/DELETE require `updatedAt` CAS.                                       |
+| `POST /api/workflow/sessions`; `POST /api/workflow/sessions/{id}/end`; `POST /api/workflow/sessions/{id}/abandon` | Manual session lifecycle with explicit RFC3339 work times.                                             |
+| `POST/DELETE /api/workflow/sessions/{id}/links`                                                                   | Terminal/agent resource link and CAS unlink.                                                           |
+| `POST /api/workflow/notes`; `DELETE /api/workflow/notes/{id}`                                                     | Durable note creation and CAS soft deletion.                                                           |
+| `DELETE /api/workflow/history`                                                                                    | Explicit permanent purge of old events and soft-deleted notes.                                         |
 
 The route group inherits the existing auth middleware and applies a focused
 32 KiB request limit. Request DTOs deny unknown fields and use camelCase.
@@ -1219,12 +1249,12 @@ delivery; restart observations are incarnation-aware and replay-safe.
 
 Terminal link state is distinct from manual workflow-session lifecycle:
 
-| Link state | Transition source |
-| --- | --- |
-| `Attached` | Successful PTY create/restart or live startup reconciliation. |
-| `Stale` | Exit observed with an automatic restart pending. |
-| `Exited` | Final exit observed with code `0`. |
-| `Crashed` | Final exit observed with non-zero or unavailable code. |
+| Link state | Transition source                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------- |
+| `Attached` | Successful PTY create/restart or live startup reconciliation.                                           |
+| `Stale`    | Exit observed with an automatic restart pending.                                                        |
+| `Exited`   | Final exit observed with code `0`.                                                                      |
+| `Crashed`  | Final exit observed with non-zero or unavailable code.                                                  |
 | `Detached` | Explicit PTY removal or active (`attached`/`stale`) link missing or dead during startup reconciliation. |
 
 An incoming observation with an older incarnation is ignored. Equal replay
@@ -1350,15 +1380,15 @@ the UI does not infer missing child items.
 
 **Component responsibilities:**
 
-| Component | Architectural role |
-| --- | --- |
-| `WorkflowContextRibbon` | `h-9` ambient `region`; target label, active item, status, elapsed duration, latest note/progress, loading/error/retry, and polite live text. |
-| `WorkflowContextDeck` | Open-only non-modal desktop `region`; `320px` minimum, `360px` base, `440px` maximum; two columns at `md`, and `220px / flexible / 300px` panes at `lg`. |
-| `WorkflowContextSheet` | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `35dvh` collapsed and `90dvh` expanded. |
-| `WorkflowProjectList` | Exact target selection plus plan, task, and running-session counts. |
-| `WorkflowItemList` / `WorkflowItemRow` | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy. |
-| `WorkflowQuickCapture` | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request. |
-| `WorkflowExecutionList` / `WorkflowSessionCard` | Explicit start/end timestamps, Now actions, elapsed duration, abandon, observed links, and manual Agent Harness/Agent Run metadata. |
+| Component                                       | Architectural role                                                                                                                                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WorkflowContextRibbon`                         | `h-9` ambient `region`; target label, active item, status, elapsed duration, latest note/progress, loading/error/retry, and polite live text.                 |
+| `WorkflowContextDeck`                           | Open-only non-modal desktop `region`; `320px` minimum, `360px` base, `440px` maximum; two columns at `md`, and `220px / flexible / 300px` panes at `lg`.      |
+| `WorkflowContextSheet`                          | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `35dvh` collapsed and `90dvh` expanded. |
+| `WorkflowProjectList`                           | Exact target selection plus plan, task, and running-session counts.                                                                                           |
+| `WorkflowItemList` / `WorkflowItemRow`          | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy.                                  |
+| `WorkflowQuickCapture`                          | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request.                                                 |
+| `WorkflowExecutionList` / `WorkflowSessionCard` | Explicit start/end timestamps, Now actions, elapsed duration, abandon, observed links, and manual Agent Harness/Agent Run metadata.                           |
 
 The surface owns only presentation state: open state, selected target/item,
 quick-capture drafts, mobile segment, and a single one-second elapsed timer

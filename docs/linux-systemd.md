@@ -6,15 +6,15 @@ Authoritative deployment, role management, activation, rollback, recovery, and f
 
 The published DamHopper release provides immutable, attested binary releases for Fedora 44. Target hosts do not require a compiler, Git repository checkout, Node.js, pnpm, Cargo, or Rust toolchain.
 
-| Requirement | Specification | Verification / Fallback |
-|---|---|---|
-| **Operating System** | Fedora Linux 44 | Required; `/etc/os-release` `ID=fedora`, `VERSION_ID=44` |
-| **Architecture** | x86_64 (amd64) | Required; `uname -m` == `x86_64` |
-| **C Library** | GNU libc >= 2.43 | Dynamically linked against system glibc |
-| **Init & Service Manager** | systemd >= 259 | Unified cgroup v2; PID 1 system manager |
-| **Security Module** | SELinux Enforcing | Standard targeted policy; units use native sandboxing |
-| **Host Utilities** | `curl`, `tar`, `gzip`, `sha256sum`, `sudo`, `systemd` | Required on path for bootstrap/archive handling |
-| **Attestation Verifier** | GitHub CLI (`gh`) | Optional; required only when `--verify-attestation` is passed |
+| Requirement                | Specification                                         | Verification / Fallback                                       |
+| -------------------------- | ----------------------------------------------------- | ------------------------------------------------------------- |
+| **Operating System**       | Fedora Linux 44                                       | Required; `/etc/os-release` `ID=fedora`, `VERSION_ID=44`      |
+| **Architecture**           | x86_64 (amd64)                                        | Required; `uname -m` == `x86_64`                              |
+| **C Library**              | GNU libc >= 2.43                                      | Dynamically linked against system glibc                       |
+| **Init & Service Manager** | systemd >= 259                                        | Unified cgroup v2; PID 1 system manager                       |
+| **Security Module**        | SELinux Enforcing                                     | Standard targeted policy; units use native sandboxing         |
+| **Host Utilities**         | `curl`, `tar`, `gzip`, `sha256sum`, `sudo`, `systemd` | Required on path for bootstrap/archive handling               |
+| **Attestation Verifier**   | GitHub CLI (`gh`)                                     | Optional; required only when `--verify-attestation` is passed |
 
 ---
 
@@ -51,12 +51,12 @@ DamHopper releases are distributed as four immutable, reproducible release asset
 DamHopper provides three independently managed runtime services coordinated by
 a root-only recovery unit:
 
-| Unit | Process Binary | User / Group | Listener | Sandboxing & Capabilities |
-|---|---|---|---|---|
-| `dam-hopper-recovery.service` | `dam-hopper recover --boot` | `root:root` | None | Oneshot pre-boot gate before application units |
+| Unit                                     | Process Binary                   | User / Group                           | Listener                            | Sandboxing & Capabilities                                                                            |
+| ---------------------------------------- | -------------------------------- | -------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `dam-hopper-recovery.service`            | `dam-hopper recover --boot`      | `root:root`                            | None                                | Oneshot pre-boot gate before application units                                                       |
 | `dam-hopper-idle-suspend-helper.service` | `dam-hopper-idle-suspend-helper` | `root:dam-hopper` (rendered API group) | `/run/dam-hopper/idle-suspend.sock` | `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `CAP_WAKE_ALARM` |
-| `dam-hopper-api.service` | `dam-hopper-server` | `root:root` | `0.0.0.0:4801` | Dedicated PTY/auth/file operations; `NoNewPrivileges=false` |
-| `dam-hopper-web.service` | `dam-hopper-web` | `dam-hopper-web:dam-hopper-web` | `0.0.0.0:4802` | Read-only static host; `ProtectSystem=strict`, `NoNewPrivileges=true` |
+| `dam-hopper-api.service`                 | `dam-hopper-server`              | `root:root`                            | `0.0.0.0:4801`                      | Dedicated PTY/auth/file operations; `NoNewPrivileges=false`                                          |
+| `dam-hopper-web.service`                 | `dam-hopper-web`                 | `dam-hopper-web:dam-hopper-web`        | `0.0.0.0:4802`                      | Read-only static host; `ProtectSystem=strict`, `NoNewPrivileges=true`                                |
 
 > **Security Notice on API Identity:** Running `dam-hopper-api.service` as
 > `root:root` is an accepted v1 MVP operational decision for host PTY and
@@ -77,6 +77,7 @@ The recovery unit is staged for every role. Neither application unit depends on
 the other. The helper is a server-role companion and is started before the API
 by `dam-hopper start`; a helper start/enable failure is logged as a warning so
 non-suspend API operations remain available.
+
 ---
 
 ## 4. Filesystem Hierarchy and Permissions
@@ -122,15 +123,18 @@ the release manager's managed lifecycle list covers the helper service itself.
 ## 5. Operator Installation and Lifecycle Workflow
 
 ### 5.1 Fresh Installation (Bootstrap)
-   `dam-hopper-install.sh` stages candidate files, copies the manager CLI to `/usr/local/bin/dam-hopper`, and stops at `PENDING`.
+
+`dam-hopper-install.sh` stages candidate files, copies the manager CLI to `/usr/local/bin/dam-hopper`, and stops at `PENDING`.
 
 1. **Download bootstrap script:**
+
    ```bash
    curl -fsSLO https://github.com/loidinhm31/dam-hopper/releases/latest/download/dam-hopper-install.sh
    chmod +x dam-hopper-install.sh
    ```
 
 2. **Stage candidate release:**
+
    ```bash
    # Install API server role
    ./dam-hopper-install.sh --latest --role server
@@ -145,6 +149,7 @@ the release manager's managed lifecycle list covers the helper service itself.
    **Staging Behavior:** `install` runs preflight checks, extracts files to `/opt/dam-hopper/releases/<vX.Y.Z>/<role>`, renders unit templates to `/var/lib/dam-hopper-manager/pending-units-<tx_id>/` and public config to `/var/lib/dam-hopper-manager/pending-host-config-<tx_id>.json`, and updates `/var/lib/dam-hopper-manager/state.json` to state `PENDING`. It **never** alters running services, replaces units in `/etc/systemd/system/`, switches `/opt/dam-hopper/current`, or opens listeners.
 
 3. **Inspect pending state:**
+
    ```bash
    dam-hopper status
    # Or for machine-readable automation:
@@ -159,6 +164,7 @@ the release manager's managed lifecycle list covers the helper service itself.
 ### 5.2 Release Activation Gate
 
 The `dam-hopper start` command is the sole activation entrypoint. Under `/run/lock/dam-hopper/deploy.lock`:
+
 1. Quiesces existing services and verifies cgroups, listeners (4801/4802), and SQLite file holders are completely released.
 2. Backs up active systemd units and configuration to `/var/lib/dam-hopper-manager/backups/<tx_id>/`.
 3. Installs concrete units to `/etc/systemd/system/` and runs `systemctl daemon-reload`.
@@ -173,6 +179,7 @@ The `dam-hopper start` command is the sole activation entrypoint. Under `/run/lo
 ### 5.3 Upgrading to a New Release
 
 Upgrading follows the exact same two-step pattern:
+
 ```bash
 # Stage candidate version without interrupting current service
 ./dam-hopper-install.sh --version v0.2.0 --role both
@@ -183,11 +190,13 @@ dam-hopper status
 # Commit activation through health gate
 sudo dam-hopper start
 ```
+
 If health checks fail during activation, the manager automatically rolls back to the previous release.
 
 ### 5.4 Changing Roles
 
 To switch between `server`, `web`, and `both`, supply the release bundle (either retained from installation or fetched via `dam-hopper fetch`):
+
 ```bash
 # Fetch release bundle if not already retained
 dam-hopper fetch --latest --output /tmp/dam-hopper-bundle
@@ -204,7 +213,9 @@ sudo dam-hopper start
 ## 6. Health Probes and Runtime Configuration
 
 ### API Service Health (`0.0.0.0:4801`)
+
 `GET /api/health` returns HTTP 200 with:
+
 ```json
 {
   "schemaVersion": 1,
@@ -215,7 +226,9 @@ sudo dam-hopper start
 ```
 
 ### Web Host Health (`0.0.0.0:4802`)
+
 `GET /__dam-hopper/health` returns HTTP 200 with:
+
 ```json
 {
   "schemaVersion": 1,
@@ -226,7 +239,9 @@ sudo dam-hopper start
 ```
 
 ### Web Runtime Configuration
+
 `GET /__dam-hopper/runtime-config.json` returns:
+
 ```json
 {
   "schemaVersion": 1,
@@ -234,15 +249,18 @@ sudo dam-hopper start
   "profileId": "c7325e68-07e1-4e44-8d96-b333a4658cf9"
 }
 ```
-*Note:* On a fresh install, `apiUrl` is omitted. A new web UI starts in the standard server-profile setup flow, where user-saved profiles remain authoritative. `apiUrl` is present only when explicitly configured in retained host configuration (`/etc/dam-hopper/host-config.json`).
+
+_Note:_ On a fresh install, `apiUrl` is omitted. A new web UI starts in the standard server-profile setup flow, where user-saved profiles remain authoritative. `apiUrl` is present only when explicitly configured in retained host configuration (`/etc/dam-hopper/host-config.json`).
 
 ---
 
 ## 7. Rollback, Crash Recovery, and Boot Ordering
 
 ### Automatic Rollback
+
 If candidate API/web units fail to start within 20 seconds, crash during
 probing, or fail any of the 20 consecutive health checks:
+
 1. Candidate units, including the helper for a server role, are stopped and
    disabled.
 2. Previous concrete units and configuration are restored from
@@ -258,21 +276,25 @@ through the same activation path, so the helper stop/start ordering and
 non-fatal fallback also apply.
 
 ### Manual Rollback
+
 To revert an active release to the recorded `previous` version:
+
 ```bash
 sudo dam-hopper rollback
 ```
+
 The manager executes the rollback transaction using the recorded backup artifacts and verifies health before completing.
 
 ### Boot Recovery Service
+
 `dam-hopper-recovery.service` is a root-owned oneshot unit ordered after `local-fs.target` and before `dam-hopper-api.service` and `dam-hopper-web.service`.
 At boot:
+
 - Reconciles any interrupted transaction in `/var/lib/dam-hopper-manager/state.json`.
 - Disables helper/API/web units while a `PENDING` candidate is retained.
 - Restores backups, including the helper, if a crash occurred during `QUIESCED`, `SWITCHED`, or `PROBING`.
 - Repairs `current` and systemd enablement for `COMMITTED` releases; helper enablement is best-effort for server roles and disabled for non-server roles.
 - Fails closed, stops/disables all managed units, and blocks application startup if state is corrupted, marking status as `RECOVERY_REQUIRED`.
-
 
 ---
 
@@ -281,27 +303,32 @@ At boot:
 DamHopper provides a one-time automated migration path for existing checkout-runner (format-2) installations:
 
 ### Invariants for Format-2 Detection
+
 The legacy installation must strictly match:
+
 - Canonical root `/opt/dam-hopper` containing only `bin/dam-hopper-server` and `.systemd-fresh-install/`.
 - Marker `.systemd-fresh-install/manifest` with `format=2`, nonces, and matching SHA-256 digests.
 - Unit `/etc/systemd/system/dam-hopper.service` running as `loidinh`.
 - Active process on `0.0.0.0:4801` responding with `status: "ok"`.
 
 ### Atomic Directory Exchange
+
 Upon `sudo dam-hopper start` during a migration transaction:
+
 1. The new release is side-staged in `/opt/.dam-hopper-migration.<tx_id>`.
 2. Existing service is quiesced.
 3. Linux `renameat2(RENAME_EXCHANGE)` atomically swaps `/opt/dam-hopper` and `/opt/.dam-hopper-migration.<tx_id>`.
 4. Legacy unit `/etc/systemd/system/dam-hopper.service` is removed and new units are installed.
 5. Legacy release is recorded as `imported-format-2` in `previous` state for safe rollback.
 
-*Any format-1 layout (containing `web.sha256` or `/opt/dam-hopper/web`) or drifted configuration fails closed before any filesystem mutation.*
+_Any format-1 layout (containing `web.sha256` or `/opt/dam-hopper/web`) or drifted configuration fails closed before any filesystem mutation._
 
 ---
 
 ## 9. Troubleshooting and Diagnostics
 
 ### Inspecting Manager State
+
 ```bash
 # Human-readable state summary
 dam-hopper status
@@ -311,6 +338,7 @@ dam-hopper status --json
 ```
 
 ### Inspecting Service Logs
+
 ```bash
 # Idle-suspend helper journal
 journalctl -u dam-hopper-idle-suspend-helper.service -f --no-tail
@@ -326,6 +354,7 @@ journalctl -u dam-hopper-recovery.service --no-tail
 ```
 
 ### Common Failure Resolutions
+
 - **Port Conflict (4801 / 4802):** Check `ss -tulpn | grep -E '4801|4802'` for foreign processes.
 - **Lock Contention:** If `/run/lock/dam-hopper/deploy.lock` is held, wait for the concurrent manager process to finish. Do not delete the lock while a manager process is active.
 - **`RECOVERY_REQUIRED` State:** Run `sudo dam-hopper recover` to attempt automatic reconciliation. Check journal logs for root causes.
@@ -335,6 +364,7 @@ journalctl -u dam-hopper-recovery.service --no-tail
 ## 10. Retired Checkout-Runner Commands and Obsolete Paths
 
 The old checkout-runner production workflow is retired:
+
 - `deploy/run-linux-production.sh`
 - the fixed `deploy/systemd/dam-hopper.service` unit
 - `pnpm linux:production` / `pnpm linux:reset`
@@ -351,13 +381,17 @@ a general release manager.
 The server-authoritative terminal idle suspend subsystem provides opt-in, fail-closed host suspend with RTC wake after a bounded quiet period with zero active or starting PTY terminals. The enrolled helper also supports the Phase 01 execution-only indefinite-sleep sentinel; automatic persisted timing remains bounded.
 
 ### 11.1 Host Qualification Requirements
+
 Before enabling terminal idle suspend on a production host:
+
 1. **Kernel & RTC Hardware**: The host must expose a functional RTC wakealarm device at `/sys/class/rtc/rtc0/wakealarm`.
 2. **Systemd & Logind**: The fixed `systemctl suspend` path must reach systemd/logind and support suspend without desktop session inhibitors blocking non-interactive operation.
 3. **RTC ownership and inhibitors**: DamHopper must be the approved owner of `rtc0` wakealarm. A non-empty existing alarm is rejected as busy; active system inhibitors (for example system update locks or backup operations) are respected and cause suspend requests to fail closed without retry.
 
 ### 11.2 Privileged Helper Enrollment & Hardening
+
 The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed suspend request with RTC wakealarm programming over a local Unix domain socket. In the Phase 03 release-manager path, the helper service itself binds `/run/dam-hopper/idle-suspend.sock` from its ExecStart arguments:
+
 - **Manager-managed service**: `deploy/systemd/dam-hopper-idle-suspend-helper.service` runs the helper under strict systemd hardening:
   - `NoNewPrivileges=yes`
   - `ProtectSystem=strict`
@@ -427,7 +461,9 @@ recovery records when present). These checks do not invoke host suspend, logind,
 or real RTC hardware; qualify a real host separately.
 
 ### 11.4 Rollback and Emergency Reset
+
 To completely disenroll the privileged helper, revert configuration, and restore host integrity:
+
 ```bash
 # Dry-run simulation:
 ./deploy/reset-linux-production.sh --dry-run
@@ -435,7 +471,9 @@ To completely disenroll the privileged helper, revert configuration, and restore
 # Full production reset (requires root):
 sudo ./deploy/reset-linux-production.sh
 ```
+
 Rollback guarantees:
+
 1. The operator first verifies the authoritative server status has no active or in-flight handoff. The reset script checks socket presence only; it cannot inspect coordinator state.
 2. Atomically disables `enabled = false` under `[server.idle_suspend]`.
 3. Stops and disables the manager-managed helper service; it also stops, disables, and removes the optional helper socket unit when present.
