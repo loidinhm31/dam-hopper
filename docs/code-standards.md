@@ -316,6 +316,31 @@ Record command-level results and the target-host context in the Phase 07 QA
 report. A passing fake or live observer test is not evidence of a real suspend
 canary; that decision belongs to Operations.
 
+### Documentation, controlled rollout, and operational standards (Phase 08)
+
+Phase 08 establishes operational documentation, controlled rollout, and maintenance standards for the `agent-activity` idle-suspend feature:
+
+1. **Documentation Truthfulness and Honest Boundaries**:
+   - Documentation must never represent automated test passes as real-host suspend qualification. Automated tests use fake executors; real-host execution is an Operations gate.
+   - Explicitly document all heuristic limitations in operator-facing guides: polling intervals can miss short-lived processes, detached descendants may escape attribution, raw PTY bytes cannot identify individual writers, and service-only terminals do not prevent sleep.
+   - Never market `networkCoverage: "tcp4-tcp6"` as generic networking; explicitly state that UDP, QUIC, external proxies, and non-observer namespaces fail closed or remain unmeasured.
+
+2. **Bounded Parser and Socket Diagnostics Rules**:
+   - All procfs and socket diagnostics parsers must enforce hard bounds: 256 live roots, 8,192 listed processes, 1,024 relevant processes, 4,096 file descriptors, 8,192 owned socket inodes, 16 KiB command lines, and 16 MiB netlink buffer.
+   - `tcp_info` parsing requires a 208-byte prefix and native-endian slice decoding of byte counters; raw netlink bytes must never be cast directly to C structs.
+
+3. **Monotonic Revisions and WebSocket Meaningful-Change Filtering**:
+   - Coordinator state revisions, PTY input revisions, and epoch counters must advance monotonically.
+   - WebSocket notifications (`host:idleSuspendChanged`) must be filtered with `is_meaningful_change` to prevent notifying on periodic 2s heartbeats, display timestamps (`sampledAtMs`, `lastActivityAtMs`), or elapsed warning durations.
+
+4. **Lock Invariant: No Blocking Work Under Manager Lock**:
+   - Procfs traversal, netlink socket polling, sleep intervals, file I/O, and helper IPC must never be executed while holding `PtySessionManager` synchronous locks.
+   - Snapshots and admission claims must be completed in bounded, atomic transactions under lock.
+
+5. **Fake-Only Automated Suspend Testing**:
+   - All tests in `server/tests/` and unit test suites must use fake executors or panic executors.
+   - Automated tests are strictly prohibited from programming real host RTC wakealarms (`/sys/class/rtc/rtc0/wakealarm`), calling `systemctl suspend`, executing `sudo`, or modifying host systemd state.
+
 ### Linux release manager service lifecycle and verification (Production CLI Phases 03–04)
 
 Keep helper lifecycle ownership centralized in `server/src/linux_release/`:

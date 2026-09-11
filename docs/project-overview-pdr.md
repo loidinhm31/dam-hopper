@@ -677,11 +677,9 @@ isolation and the four-service `dam-hopper status` projection are covered. See
 - [x] Scoped protocol, backend, preflight, helper, audit, and integration
       regressions cover boundaries and compatibility without touching host power.
 
-### PR-017: Configured-Agent Activity Idle-Suspend Policy, Evidence, and Status UI (Phases 01–07)
+### PR-017: Configured-Agent Activity Idle-Suspend Policy, Evidence, and Status UI (Phases 01–08)
 
-**Phase 07 status:** Integrated qualification complete 2026-09-11; Phase 08
-documentation, Operations rollout, rollback, and real-host canary gates remain
-pending.
+**Phase 08 status:** Complete 2026-09-11 (documentation, runbooks, rollout stages, and rollback procedures integrated). Real-host automatic suspend canary remains an Operations gate.
 
 **Implementation status:** Phase 01 policy/configuration, Phase 02 PTY
 evidence, Phase 03 bounded process discovery, Phase 04 owned TCP byte
@@ -917,9 +915,42 @@ new endpoint, or privileged test path.
       **14/14** boundary checks, **16/16** Chromium tests, a **0.72s** Linux
       smoke, and **9.4/10** code-review approval.
 
-Real automatic suspend/resume remains an Operations-owned Phase 08 canary
-requiring target-host observer feasibility, explicit recovery ownership, a
-bounded maintenance window, and rollback approval.
+#### Phase 08 — Documentation, operations runbooks, and controlled rollout
+
+Phase 08 integrates operator documentation, operations runbooks, controlled rollout stages, and rollback procedures across all system guides.
+
+**Changed documentation and asset files:**
+
+- `docs/system-architecture.md`
+- `docs/api-reference.md`
+- `docs/configuration-guide.md`
+- `docs/terminal-idle-suspend-security.md`
+- `docs/linux-systemd.md`
+- `docs/linux-release-manager.md`
+- `docs/code-standards.md`
+- `docs/codebase-summary.md`
+- `docs/project-overview-pdr.md`
+- `docs/project-roadmap.md`
+- `docs/README.md`
+- `README.md`
+- `scripts/run-uat.sh`
+- `docs/CHANGELOG.md`
+
+**Acceptance criteria:**
+
+- [x] System architecture documents implemented dataflow, opaque ticket claim, epoch latches, and explicit heuristic limitations.
+- [x] API reference defines complete v1 status DTO, all enum values (`measurementState`, `reasonCode`, `measurementWarning.reasonCode`), nullable unknown counts, display timestamps, and strict privacy boundaries.
+- [x] Configuration guide documents three distinct registry paths, startup policy immutability, canonical TOML examples (default, observe-only, opt-in, interpreted agent), rollout stages, and two-level rollback.
+- [x] Security guide details unprivileged procfs and `NETLINK_SOCK_DIAG` boundaries, fail-closed policy, warning channel exclusions, final comparison race window, service-only terminal consequence, and automatic canary prerequisites.
+- [x] Systemd deployment guide provides target-host qualification commands (`activity_live_linux_pty_tcp_smoke`), complete operator reason interpretation table, observation-only soak runbook, bounded automatic canary runbook, stop criteria, and rollback runbooks.
+- [x] Release manager, code standards, and codebase summary align with delivered implementation and operational boundaries.
+- [x] Real automatic suspend/resume canary remains an Operations-owned gate with explicit host owner approval, exclusive RTC verification, and bounded wake.
+
+Phase 08 QA evidence records **14/14** boundary checks, **20/20** exercised
+idle-suspend scenarios (19 default tests plus the ignored live Linux smoke in
+0.74s), **16/16** Chromium tests, and **1606/1606** UI tests; automated paths
+used fake suspend outcomes. The real automatic suspend/resume canary remains an
+Operations-owned target-host gate. See the [Phase 08 QA report](../plans/reports/qa-260911-1207-phase08-idle-suspend-rollout.md).
 
 ## Non-Functional Requirements
 
