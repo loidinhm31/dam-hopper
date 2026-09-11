@@ -7,15 +7,14 @@ complete or authorize suspend.
 
 ## Source map
 
-| Source | Responsibility |
-| --- | --- |
+| Source                                        | Responsibility                                                                                                                                   |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `server/src/idle_suspend/activity/process.rs` | `ProcessDiscovery`, `ProcessSource`, `LinuxProcSource`, finite command matcher, retained attribution, socket-inode collection, and focused tests |
-| `server/src/idle_suspend/activity/mod.rs` | Crate-private result/error types, evidence records, and hard bounds |
-| `server/src/idle_suspend/mod.rs` | Keeps `activity` crate-private; no process identities or matcher state are re-exported |
-| `server/src/pty/activity.rs` | Shared `ProcessIdentity`, `TerminalIdentity`, `ProcessStat`, `PtyActivitySnapshot`, and the sole `/proc/<pid>/stat` parser |
+| `server/src/idle_suspend/activity/mod.rs`     | Crate-private result/error types, evidence records, and hard bounds                                                                              |
+| `server/src/idle_suspend/mod.rs`              | Keeps `activity` crate-private; no process identities or matcher state are re-exported                                                           |
+| `server/src/pty/activity.rs`                  | Shared `ProcessIdentity`, `TerminalIdentity`, `ProcessStat`, `PtyActivitySnapshot`, and the sole `/proc/<pid>/stat` parser                       |
 
-Phase 03 consumes the qualified PTY roots and atomic output handles from Phase
-02. Phase 04 consumes only the prepared `OwnedSocketSet` and performs owned
+Phase 03 consumes the qualified PTY roots and atomic output handles from Phase 02. Phase 04 consumes only the prepared `OwnedSocketSet` and performs owned
 TCP byte observation. Phase 05 combines both prepared samples in the dedicated
 [transactional sampler and admission layer](./agent-activity-automatic-admission.md),
 which owns retry, final admission, and authenticated warning projection.
@@ -50,17 +49,17 @@ while forcing the next successful pass to report `BaselineEstablished`.
 configured `/proc` root; tests provide deterministic fixtures without mutating
 the host `/proc` tree.
 
-| Method | Procfs evidence |
-| --- | --- |
-| `list_pids` | Complete numeric process-directory enumeration |
-| `read_stat` | Shared `ProcessStat` (`pid`, `ppid`, state, `start_ticks`) |
-| `read_exe` | `/proc/<pid>/exe` link target |
-| `read_exe_metadata` | Executable device/inode for image identity |
-| `read_cmdline` | NUL-tokenized, bounded command line |
-| `read_cwd` | CWD used only for relative interpreted entrypoints |
-| `read_netns` / `read_thread_netns` | `(device, inode)` network-namespace identity |
-| `list_fds` | Complete numeric FD enumeration for one relevant process |
-| `read_fd_socket` | Strict `socket:[decimal_inode]` parsing; non-sockets are ignored |
+| Method                             | Procfs evidence                                                  |
+| ---------------------------------- | ---------------------------------------------------------------- |
+| `list_pids`                        | Complete numeric process-directory enumeration                   |
+| `read_stat`                        | Shared `ProcessStat` (`pid`, `ppid`, state, `start_ticks`)       |
+| `read_exe`                         | `/proc/<pid>/exe` link target                                    |
+| `read_exe_metadata`                | Executable device/inode for image identity                       |
+| `read_cmdline`                     | NUL-tokenized, bounded command line                              |
+| `read_cwd`                         | CWD used only for relative interpreted entrypoints               |
+| `read_netns` / `read_thread_netns` | `(device, inode)` network-namespace identity                     |
+| `list_fds`                         | Complete numeric FD enumeration for one relevant process         |
+| `read_fd_socket`                   | Strict `socket:[decimal_inode]` parsing; non-sockets are ignored |
 
 Procfs disappearance caused by normal process/FD close is marked as a
 retryable close race. Permission errors, malformed data, incomplete
@@ -125,15 +124,15 @@ observation. Exact-at-limit input may qualify; one extra item, truncated input,
 iterator error, or a missed deadline returns `ActivityUnavailable` instead of
 a partial or top-N result.
 
-| Measurement | Limit | Failure when exceeded or incomplete |
-| --- | ---: | --- |
-| Managed PTY roots | 256 | `scanLimit` or root identity unavailable |
-| Numeric `/proc` entries per pass | 8,192 | `scanLimit` |
-| Relevant matched-agent/descendant identities | 1,024 | `scanLimit` |
-| Command-line bytes per candidate | 16 KiB (reads at most 16 KiB + 1) | `scanLimit`/unavailable; never prefix-match a truncation |
-| FDs per relevant process | 4,096 | `scanLimit` |
-| Unique owned socket inodes | 8,192 | `scanLimit` |
-| Safe warning identity | 256 UTF-8 bytes | omit identity (`None`), never fall back to argv |
+| Measurement                                  |                             Limit | Failure when exceeded or incomplete                      |
+| -------------------------------------------- | --------------------------------: | -------------------------------------------------------- |
+| Managed PTY roots                            |                               256 | `scanLimit` or root identity unavailable                 |
+| Numeric `/proc` entries per pass             |                             8,192 | `scanLimit`                                              |
+| Relevant matched-agent/descendant identities |                             1,024 | `scanLimit`                                              |
+| Command-line bytes per candidate             | 16 KiB (reads at most 16 KiB + 1) | `scanLimit`/unavailable; never prefix-match a truncation |
+| FDs per relevant process                     |                             4,096 | `scanLimit`                                              |
+| Unique owned socket inodes                   |                             8,192 | `scanLimit`                                              |
+| Safe warning identity                        |                   256 UTF-8 bytes | omit identity (`None`), never fall back to argv          |
 
 A complete zero-agent result is valid only after roots, process table,
 ancestry, candidate classification, identity checks, iterators, and deadline
@@ -192,6 +191,7 @@ Focused implementation commands from the phase plan are:
 cargo test --manifest-path server/Cargo.toml idle_suspend::activity::process::tests
 cargo test --manifest-path server/Cargo.toml process_discovery
 ```
+
 In this checkout, the focused module filter passes **18/18** process-discovery
 tests; the broader idle-suspend and PTY suites remain integration-gate evidence.
 

@@ -67,36 +67,83 @@ impl InhibitorProvider for SystemdInhibitCliProvider {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        // Each row format: WHO UID PID WHAT WHY MODE
-        // Example:
-        // root 0 1234 sleep in-flight backup block
-        for line in stdout.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            // Expected columns: WHO, UID, PID, WHAT, WHY..., MODE
-            if parts.len() >= 5 {
-                // Find if any column contains "sleep" in WHAT
-                // Often systemd-inhibit columns are: WHO, UID, PID, WHAT, WHY (may be multiple words), MODE
-                // Or: WHAT, WHO, WHY, MODE, UID, PID depending on systemd version
-                let line_lower = line.to_lowercase();
-                if line_lower.contains("sleep") {
-                    let who = parts[0].to_string();
-                    let mode = parts.last().unwrap_or(&"block").to_string();
-                    let why = if parts.len() > 4 {
-                        parts[3..parts.len() - 1].join(" ")
-                    } else {
-                        "system sleep inhibited".to_string()
-                    };
-                    return Ok(Some(ActiveInhibitor::new(who, why, mode)));
-                }
-            }
+        Ok(parse_systemd_inhibit_output(&stdout))
+    }
+}
+
+/// Known systemd inhibit operation types that may appear in the WHAT column.
+const SYSTEMD_INHIBIT_OPERATIONS: &[&str] = &[
+    "shutdown",
+    "sleep",
+    "idle",
+    "power-key",
+    "handle-power-key",
+    "suspend-key",
+    "handle-suspend-key",
+    "hibernate-key",
+    "handle-hibernate-key",
+    "lid-switch",
+    "handle-lid-switch",
+];
+
+/// Helper to test whether a candidate token consists solely of valid colon-separated
+/// systemd inhibit operations (e.g. "sleep", "shutdown:sleep", "idle").
+fn is_systemd_what_token(token: &str) -> bool {
+    let parts: Vec<&str> = token.split(':').collect();
+    !parts.is_empty()
+        && parts
+            .iter()
+            .all(|op| SYSTEMD_INHIBIT_OPERATIONS.contains(&op.to_ascii_lowercase().as_str()))
+}
+
+/// Parse the output of `systemd-inhibit --list --no-legend`.
+///
+/// Filters for inhibitors where `WHAT` includes `sleep` AND `MODE` is `block`.
+/// In systemd, `delay` inhibitors (e.g. ModemManager, NetworkManager) do not block sleep;
+/// they merely request a bounded notification window before suspend occurs.
+pub fn parse_systemd_inhibit_output(stdout: &str) -> Option<ActiveInhibitor> {
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        // systemd-inhibit output varies across versions:
+        // Format A: WHO UID PID WHAT WHY... MODE (6+ columns)
+        // Format B: WHO UID USER PID COMM WHAT WHY... MODE (8+ columns)
+        if parts.len() < 5 {
+            continue;
         }
 
-        Ok(None)
+        // The last column is always the inhibitor MODE ("block" or "delay")
+        let mode = parts.last().copied().unwrap_or("block");
+        if !mode.eq_ignore_ascii_case("block") {
+            // 'delay' inhibitors do not prevent suspend
+            continue;
+        }
+
+        // Find the WHAT column by identifying the first token matching valid systemd inhibit ops
+        if let Some(what_idx) = parts[..parts.len() - 1]
+            .iter()
+            .position(|&p| is_systemd_what_token(p))
+        {
+            let what_token = parts[what_idx];
+            let applies_to_sleep = what_token
+                .split(':')
+                .any(|op| op.eq_ignore_ascii_case("sleep"));
+
+            if applies_to_sleep {
+                let who = parts[0].to_string();
+                let why = if what_idx + 1 < parts.len() - 1 {
+                    parts[what_idx + 1..parts.len() - 1].join(" ")
+                } else {
+                    "system sleep inhibited".to_string()
+                };
+                return Some(ActiveInhibitor::new(who, why, mode));
+            }
+        }
     }
+    None
 }
 
 /// Fake inhibitor provider for deterministic testing.
@@ -224,11 +271,16 @@ impl PreflightChecker for SysfsPreflightChecker {
 
     fn check_sleep_inhibitors(&self) -> Result<(), PreflightError> {
         match self.inhibitor_provider.check_sleep_inhibitor() {
-            Ok(Some(inhibitor)) => Err(PreflightError::Inhibited(
-                inhibitor.format_description(),
-                Some(inhibitor.who),
-                Some(inhibitor.why),
-            )),
+            Ok(Some(inhibitor)) => {
+                if inhibitor.mode.eq_ignore_ascii_case("delay") {
+                    return Ok(());
+                }
+                Err(PreflightError::Inhibited(
+                    inhibitor.format_description(),
+                    Some(inhibitor.who),
+                    Some(inhibitor.why),
+                ))
+            }
             Ok(None) => Ok(()),
             Err(e) => Err(PreflightError::ProbeError(e)),
         }

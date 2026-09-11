@@ -14,13 +14,13 @@ generation-fenced final handoff claim.
 
 ## Source map
 
-| Source | Contract |
-| --- | --- |
-| `server/src/pty/activity.rs` | Identity types, `/proc/<pid>/stat` parsing, raw-output counter helper, private snapshot and watcher types |
-| `server/src/pty/session.rs` | Ephemeral root qualification and per-incarnation output-counter fields on `LiveSession` |
-| `server/src/pty/manager.rs` | Spawn/respawn initialization, reader boundary, input admission, bounded snapshot capture, and watcher publication |
-| `server/src/pty/mod.rs` | PTY-module exports for the shared private seam |
-| `server/src/pty/tests.rs` | Focused identity, counter, admission, incarnation, smoke, and incompleteness regressions |
+| Source                       | Contract                                                                                                          |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `server/src/pty/activity.rs` | Identity types, `/proc/<pid>/stat` parsing, raw-output counter helper, private snapshot and watcher types         |
+| `server/src/pty/session.rs`  | Ephemeral root qualification and per-incarnation output-counter fields on `LiveSession`                           |
+| `server/src/pty/manager.rs`  | Spawn/respawn initialization, reader boundary, input admission, bounded snapshot capture, and watcher publication |
+| `server/src/pty/mod.rs`      | PTY-module exports for the shared private seam                                                                    |
+| `server/src/pty/tests.rs`    | Focused identity, counter, admission, incarnation, smoke, and incompleteness regressions                          |
 
 The manager remains authoritative for public fleet counts. An ordinary live
 service terminal is still live even when a future `agent-activity` policy may
@@ -60,9 +60,9 @@ removed from visible output.
 
 `ProcessIdentity` is an immutable pair:
 
-| Field | Meaning |
-| --- | --- |
-| `pid: u32` | OS PID returned by the PTY child after spawn |
+| Field              | Meaning                                                                 |
+| ------------------ | ----------------------------------------------------------------------- |
+| `pid: u32`         | OS PID returned by the PTY child after spawn                            |
 | `start_ticks: u64` | Linux kernel boot-tick start time read from `/proc/<pid>/stat` field 22 |
 
 PID alone is not a stable identity because the kernel can reuse it. The
@@ -80,11 +80,11 @@ advance the replacement's counter.
 
 The PTY child root is represented explicitly:
 
-| Variant | Meaning | Policy consequence |
-| --- | --- | --- |
-| `Qualified { identity }` | Child PID and start ticks were read and verified | Root may be consumed by later process discovery |
-| `Uncertain { pid, reason }` | A child PID exists, but the start-time probe failed or was uncertain | Keep the terminal usable; observation is incomplete |
-| `Unavailable { reason }` | The PTY implementation did not provide a PID | Keep the terminal usable; no root identity is guessed |
+| Variant                     | Meaning                                                              | Policy consequence                                    |
+| --------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------- |
+| `Qualified { identity }`    | Child PID and start ticks were read and verified                     | Root may be consumed by later process discovery       |
+| `Uncertain { pid, reason }` | A child PID exists, but the start-time probe failed or was uncertain | Keep the terminal usable; observation is incomplete   |
+| `Unavailable { reason }`    | The PTY implementation did not provide a PID                         | Keep the terminal usable; no root identity is guessed |
 
 `is_qualified()` is true only for `Qualified`. `process_identity()` returns an
 identity only for that variant; `pid()` may return the captured PID for either
@@ -134,16 +134,16 @@ fence for later sampler/coordinator work.
 
 Admission order for `PtySessionManager::write(id, data)` is:
 
-| Condition | Result |
-| --- | --- |
-| `data` is empty | Return `Ok(())`; do not lock, increment, timestamp, invalidate, or write |
-| A suspend handoff is active | Return `AppError::IdleSuspendHandoffInProgress`; do not touch the writer or record activity |
-| Manager is closing or disposing | Return `AppError::Unavailable` |
-| `id` is not live | Return `AppError::SessionNotFound` |
-| `input_revision == u64::MAX` | Return `AppError::Unavailable`; do not reuse a saturated revision |
-| All gates pass | Save prior revision/time, increment revision, set `last_input_at`, publish invalidation, then write while holding the existing manager lock |
-| Writer fails | Restore the prior revision/time and return `AppError::PtyError`; failed bytes are not reported as accepted |
-| Writer succeeds | Keep the new revision/time; the input is admitted |
+| Condition                       | Result                                                                                                                                      |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data` is empty                 | Return `Ok(())`; do not lock, increment, timestamp, invalidate, or write                                                                    |
+| A suspend handoff is active     | Return `AppError::IdleSuspendHandoffInProgress`; do not touch the writer or record activity                                                 |
+| Manager is closing or disposing | Return `AppError::Unavailable`                                                                                                              |
+| `id` is not live                | Return `AppError::SessionNotFound`                                                                                                          |
+| `input_revision == u64::MAX`    | Return `AppError::Unavailable`; do not reuse a saturated revision                                                                           |
+| All gates pass                  | Save prior revision/time, increment revision, set `last_input_at`, publish invalidation, then write while holding the existing manager lock |
+| Writer fails                    | Restore the prior revision/time and return `AppError::PtyError`; failed bytes are not reported as accepted                                  |
+| Writer succeeds                 | Keep the new revision/time; the input is admitted                                                                                           |
 
 The same handoff gate applies to automatic and manual handoff state. Rejected
 input is never queued or replayed. Keeping the existing lock during the
@@ -155,14 +155,14 @@ decision; Phase 02 does not introduce an asynchronous writer queue.
 `capture_activity_snapshot()` returns a bounded, private
 `PtyActivitySnapshot`:
 
-| Field | Meaning |
-| --- | --- |
-| `fleet` | Content-free authoritative `PtyFleetSnapshot`, including generation, live/creating/restart-pending counts, disposal/shutdown, and handoff flags |
-| `input_revision` | Manager-wide revision captured at the same manager boundary |
-| `last_input_at` | Manager-wide monotonic timestamp for the last admitted nonempty input |
-| `roots` | One `RootActivityRecord` for each live session, containing `TerminalIdentity`, `RootQualification`, and an `Arc<AtomicU64>` counter handle |
-| `captured_at` | Monotonic capture timestamp |
-| `incomplete_reason` | First explicit reason the evidence cannot currently qualify for automatic handoff, or `None` |
+| Field               | Meaning                                                                                                                                         |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fleet`             | Content-free authoritative `PtyFleetSnapshot`, including generation, live/creating/restart-pending counts, disposal/shutdown, and handoff flags |
+| `input_revision`    | Manager-wide revision captured at the same manager boundary                                                                                     |
+| `last_input_at`     | Manager-wide monotonic timestamp for the last admitted nonempty input                                                                           |
+| `roots`             | One `RootActivityRecord` for each live session, containing `TerminalIdentity`, `RootQualification`, and an `Arc<AtomicU64>` counter handle      |
+| `captured_at`       | Monotonic capture timestamp                                                                                                                     |
+| `incomplete_reason` | First explicit reason the evidence cannot currently qualify for automatic handoff, or `None`                                                    |
 
 The snapshot copies no terminal content, command, argument, environment, or
 socket data. It takes the manager lock only long enough to copy scalar values,
@@ -188,12 +188,12 @@ Phase 03 qualifies process names, roots, and descendants using this seam.
 `watch::Receiver<u64>`. It is a coalescing wake-up seam, not an event log and
 not a public status channel.
 
-| Method | Behavior |
-| --- | --- |
-| `revision()` | Borrow the latest private invalidation revision without marking it seen |
-| `mark_seen()` | Mark the current revision as observed |
-| `borrow()` | Borrow the underlying latest revision |
-| `changed().await` | Wait for a newer revision; returns `RecvError` if the channel closes |
+| Method            | Behavior                                                                |
+| ----------------- | ----------------------------------------------------------------------- |
+| `revision()`      | Borrow the latest private invalidation revision without marking it seen |
+| `mark_seen()`     | Mark the current revision as observed                                   |
+| `borrow()`        | Borrow the underlying latest revision                                   |
+| `changed().await` | Wait for a newer revision; returns `RecvError` if the channel closes    |
 
 `PtySessionManager::activity_watcher()` clones the manager receiver and marks
 the clone seen before returning it. The manager advances this channel when

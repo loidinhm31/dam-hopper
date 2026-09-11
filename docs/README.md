@@ -46,7 +46,6 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 Historical implementation plans are not indexed here; verify that a plan path
 exists before linking it from a new document.
 
-
 ## Key Sections
 
 ### Understanding the System
@@ -115,6 +114,15 @@ configured-agent activity policy.
   aggregate status/measurement-warning presentation, a sole arm countdown, and
   Chromium/manual-force regressions. It does not add matcher controls, policy
   mutation, a new endpoint, or automatic authority in the browser.
+- Phase 07 completes integrated qualification across deterministic activity,
+  PTY, API, Chromium, security-boundary, and Linux live-observer surfaces.
+  Evidence: **323 backend/PTY/API/integration tests**, **14/14** boundary
+  checks, **16/16** Chromium tests, and the ignored Linux PTY/TCP smoke passed
+  in **0.72s**; code review approved **9.4/10**. See the
+  [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
+- Phase 08 owns the remaining documentation, Operations rollout, rollback, and
+  real automatic suspend canary gates. Automated qualification never invokes
+  host suspend, RTC programming, the helper, `sudo`, or root installation.
 - See [PTY Activity Observation](./pty-activity-observation.md),
   [Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
   [Owned TCP Byte Observation](./tcp-activity-observation.md), [Agent Activity
@@ -165,7 +173,6 @@ transport channels, profile-safe React Query state, and mutation wrappers.
   [Project Overview & PDR](./project-overview-pdr.md#pr-014-workflow-client-types-transport-and-query-state-phase-04),
   [Codebase Summary](./codebase-summary.md#workflow-client-types-transport-and-query-state-phase-04),
   and [Code Standards](./code-standards.md#workflow-client-contracts-phase-04).
-
 
 ## Common Tasks
 
@@ -341,22 +348,23 @@ See [System Architecture](./system-architecture.md) for detailed breakdown.
 
 server/
 ├── src/
-│   ├── persistence/              # SQLite session store and migrations
-│   └── workflow/                 # Domain, REST, observation, reconciliation
+│ ├── persistence/ # SQLite session store and migrations
+│ └── workflow/ # Domain, REST, observation, reconciliation
 apps/
-├── web/                          # Thin Vite browser host
+├── web/ # Thin Vite browser host
 packages/
-├── ui/                           # Shared React UI package
+├── ui/ # Shared React UI package
 docs/
-├── README.md                     # This file
-├── project-overview-pdr.md       # Product requirements & roadmap
-├── system-architecture.md        # Module breakdown & data flow
-├── api-reference.md              # REST/WebSocket endpoints
-├── workflow-api.md               # Phase 03 workflow REST/lifecycle contract
-├── configuration-guide.md        # dam-hopper.toml & setup
-├── code-standards.md             # Patterns, testing, security
-├── codebase-summary.md           # Quick module reference
-└── CHANGELOG.md                  # Dated implementation and release notes
+├── README.md # This file
+├── project-overview-pdr.md # Product requirements & roadmap
+├── system-architecture.md # Module breakdown & data flow
+├── api-reference.md # REST/WebSocket endpoints
+├── workflow-api.md # Phase 03 workflow REST/lifecycle contract
+├── configuration-guide.md # dam-hopper.toml & setup
+├── code-standards.md # Patterns, testing, security
+├── codebase-summary.md # Quick module reference
+└── CHANGELOG.md # Dated implementation and release notes
+
 ```
 
 Each file is self-contained but linked for cross-reference.
@@ -388,3 +396,4 @@ Always verify docs against actual code implementation before publishing.
 - Review code comments (// or /// in Rust/TypeScript)
 - Run tests: `cd server && cargo test`
 - Check logs: `RUST_LOG=dam_hopper=debug cargo run ...`
+```

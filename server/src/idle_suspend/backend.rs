@@ -41,6 +41,44 @@ impl SystemdLogindBackend {
         }
         PathBuf::from("/usr/bin/systemctl")
     }
+
+    /// Read current RTC hardware clock epoch.
+    ///
+    /// The Linux kernel sysfs RTC device exposes `since_epoch` (e.g. `/sys/class/rtc/rtc0/since_epoch`)
+    /// which reflects the RTC device's hardware timebase. When the host RTC is configured in local
+    /// timezone (`timedatectl` showing "RTC in local TZ: yes"), RTC epoch differs from system UTC
+    /// epoch by the timezone offset. Programming `wakealarm` requires timestamps in the RTC device's
+    /// timebase; otherwise the kernel rejects alarms that appear in the past relative to the RTC.
+    ///
+    /// If `since_epoch` is absent (e.g. in test fixtures), falls back to system wall clock.
+    pub fn read_rtc_now_epoch(&self) -> Result<u64, String> {
+        if let Some(parent) = self.rtc_wakealarm_path.parent() {
+            let since_epoch_path = parent.join("since_epoch");
+            if since_epoch_path.exists() {
+                let content = std::fs::read_to_string(&since_epoch_path).map_err(|e| {
+                    format!(
+                        "Failed reading RTC since_epoch from {}: {}",
+                        since_epoch_path.display(),
+                        e
+                    )
+                })?;
+                let trimmed = content.trim();
+                return trimmed.parse::<u64>().map_err(|e| {
+                    format!(
+                        "Failed parsing RTC since_epoch '{}' from {}: {}",
+                        trimmed,
+                        since_epoch_path.display(),
+                        e
+                    )
+                });
+            }
+        }
+
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .map_err(|e| format!("System clock error: {e}"))
+    }
 }
 
 impl Default for SystemdLogindBackend {
@@ -79,10 +117,7 @@ impl SuspendActionBackend for SystemdLogindBackend {
 
         // 3. For timed mode (Some), calculate target epoch, write, and verify readback
         if let Some(seconds) = wake_after_seconds {
-            let now_epoch = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|e| format!("System clock error: {e}"))?
-                .as_secs();
+            let now_epoch = self.read_rtc_now_epoch()?;
 
             let target_epoch = now_epoch
                 .checked_add(seconds)

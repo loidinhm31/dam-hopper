@@ -2,7 +2,7 @@
 
 ## Overview
 
-Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with RTC wake when all managed PTY sessions have remained quiet for a bounded duration. The manual force-sleep plan adds an execution-only indefinite mode while preserving the automatic scheduler's bounded timing domain. This document establishes the security invariants, threat model, approval requirements, and audit policies for Phase 01 through Phase 05.
+Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with RTC wake when all managed PTY sessions have remained quiet for a bounded duration. The manual force-sleep plan adds an execution-only indefinite mode while preserving the automatic scheduler's bounded timing domain. This document establishes the security invariants, threat model, approval requirements, and audit policies for Phase 01 through Phase 07.
 
 ## Security Invariants
 
@@ -14,16 +14,16 @@ Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with
 
 ## Threat Analysis and Mitigations
 
-| Threat | Impact | Mitigation |
-|---|---|---|
-| **Arbitrary Command Escalation** | Critical | No shell or command execution. Fixed request payload `SuspendWithRtcWakeRequest { request_id, wake_after_seconds }` only. |
-| **Tampering via Full Config (`PUT /api/config`)** | High | `preserve_and_reject_idle_suspend_mutation` preserves current settings and rejects any client-supplied delta. |
-| **Workspace Switch Hijack** | High | Canonical startup registry path is captured at boot; workspace switches preserve immutable startup policy. |
-| **Timing Bounds Abuse / DoS** | Medium | Automatic configuration and timing PATCH remain `60..=86400`; helper execution accepts exactly `0` or `60..=86400`, rejecting `1..=59`, overflow, and malformed JSON. |
-| **Audit Log Tampering / Leakage** | Medium | Server-private mode-0600 JSONL audit log with `libc::O_NOFOLLOW`. Excludes credentials, auth tokens, command strings, environment variables, and terminal contents. |
-| **Fleet Activity Race Condition** | High | Serialized coordinator command queue. `empty-fleet` claims require zero live/creating/restart-pending PTYs and an unadvanced generation; `agent-activity` claims require a fresh unchanged ticket with matching generation, exact roots, input revision, output fences, and no lifecycle blockers. Manual forced claims retain generation and handoff fencing while explicitly bypassing only the quiescence count. |
-| **CSRF / Cross-Origin Trigger** | Critical | Strict same-origin enforcement on cookie sessions: validates exact Host match and rejects foreign, duplicate, userinfo-bearing, and path-bearing origins. Bearer tokens require enabled database-authenticated actor. |
-| **Ambiguous or duplicate manual POST** | Critical | Accepted delivery may be interrupted by host suspend. The UI uses `retry: false`; request ID, audit records, status revision, and post-resume GET reconcile state. Clients never replay an ambiguous action. |
+| Threat                                            | Impact   | Mitigation                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Arbitrary Command Escalation**                  | Critical | No shell or command execution. Fixed request payload `SuspendWithRtcWakeRequest { request_id, wake_after_seconds }` only.                                                                                                                                                                                                                                                                                           |
+| **Tampering via Full Config (`PUT /api/config`)** | High     | `preserve_and_reject_idle_suspend_mutation` preserves current settings and rejects any client-supplied delta.                                                                                                                                                                                                                                                                                                       |
+| **Workspace Switch Hijack**                       | High     | Canonical startup registry path is captured at boot; workspace switches preserve immutable startup policy.                                                                                                                                                                                                                                                                                                          |
+| **Timing Bounds Abuse / DoS**                     | Medium   | Automatic configuration and timing PATCH remain `60..=86400`; helper execution accepts exactly `0` or `60..=86400`, rejecting `1..=59`, overflow, and malformed JSON.                                                                                                                                                                                                                                               |
+| **Audit Log Tampering / Leakage**                 | Medium   | Server-private mode-0600 JSONL audit log with `libc::O_NOFOLLOW`. Excludes credentials, auth tokens, command strings, environment variables, and terminal contents.                                                                                                                                                                                                                                                 |
+| **Fleet Activity Race Condition**                 | High     | Serialized coordinator command queue. `empty-fleet` claims require zero live/creating/restart-pending PTYs and an unadvanced generation; `agent-activity` claims require a fresh unchanged ticket with matching generation, exact roots, input revision, output fences, and no lifecycle blockers. Manual forced claims retain generation and handoff fencing while explicitly bypassing only the quiescence count. |
+| **CSRF / Cross-Origin Trigger**                   | Critical | Strict same-origin enforcement on cookie sessions: validates exact Host match and rejects foreign, duplicate, userinfo-bearing, and path-bearing origins. Bearer tokens require enabled database-authenticated actor.                                                                                                                                                                                               |
+| **Ambiguous or duplicate manual POST**            | Critical | Accepted delivery may be interrupted by host suspend. The UI uses `retry: false`; request ID, audit records, status revision, and post-resume GET reconcile state. Clients never replay an ambiguous action.                                                                                                                                                                                                        |
 
 ## Audit Retention and Path Policy
 
@@ -250,10 +250,10 @@ helper are grouped under `Server`; JSON status exposes all four managed records
 The boundary verifier now executes 14 checks. Checks 13 and 14 are the
 production-CLI additions:
 
-| Check | Boundary assertion |
-| --- | --- |
-| 13 | Both API unit files exist and declare `PIDFile=/run/dam-hopper/server.pid`, an `ExecStartPost` `$MAINPID` write, and an `ExecStopPost` `rm -f` cleanup hook. |
-| 14 | `HELPER_SERVICE_UNIT` is defined in `constants.rs`, staged by `stage_units.rs`, started by `activate.rs`, and included by `status.rs`. |
+| Check | Boundary assertion                                                                                                                                           |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 13    | Both API unit files exist and declare `PIDFile=/run/dam-hopper/server.pid`, an `ExecStartPost` `$MAINPID` write, and an `ExecStopPost` `rm -f` cleanup hook. |
+| 14    | `HELPER_SERVICE_UNIT` is defined in `constants.rs`, staged by `stage_units.rs`, started by `activate.rs`, and included by `status.rs`.                       |
 
 `./scripts/verify-idle-suspend-boundary.sh` passed all 14/14 checks with zero
 failures. Repository checks use temporary files, fakes, static assertions, and
@@ -264,6 +264,7 @@ RTC hardware. A timed real-host canary remains an operational gate.
 and [review](../plans/reports/reviewer-260910-0733-phase-04-verification-boundary.md).
 
 ### Sign-Off Record
+
 - **Security Owner**: Approved (2026-09-05)
 - **Infrastructure / Operator**: Approved (2026-09-05)
 
@@ -302,6 +303,7 @@ field null and does not start the sampler. Coordinator shutdown joins the
 worker before PTY readers and manager teardown. See [Agent Activity Automatic
 Admission](./agent-activity-automatic-admission.md) for the implementation
 contract.
+
 ### Protected status and browser UI Phase 06 (2026-09-11)
 
 The additive v1 status fields are protected by the existing authentication
@@ -332,10 +334,59 @@ heuristic, not an authorization boundary; the server's manager-locked claim and
 existing manual force gates remain authoritative. See [Protected Idle-Suspend
 Status and Browser UI](./idle-suspend-status-ui.md).
 
+### Integrated qualification and host gate — Phase 07 (2026-09-11)
+
+Phase 07 closes the deterministic integration and security qualification boundary
+without expanding the privileged execution surface:
+
+- `server/tests/idle_suspend.rs` proves service-only PTYs do not block the
+  configured-agent policy, accepted input invalidates quiet time, manual force
+  ordering remains single-flight, disabled observation has no automatic
+  deadline, and sampler shutdown joins before PTY teardown.
+- `server/src/api/tests.rs` proves authenticated `no-store` status, exact
+  `automaticPolicy`/`activity` serialization, initializing and disabled
+  measurement warnings, available `measurementWarning: null`, bounded sorted
+  warning examples, and omission of command, socket, terminal, and token data.
+- The Chromium suite exercises warning reason/duration/identity/truncation,
+  unknown and disabled states, countdown/manual action behavior, and old-server
+  compatibility at the rendered UI boundary.
+- `scripts/verify-idle-suspend-boundary.sh` passes **14/14** static checks,
+  including no `sudo` or shell execution in the server idle-suspend path and
+  helper/systemd hardening. The checks are read-only and do not run a helper,
+  `systemctl suspend`, RTC mutation, or root installation.
+- The ignored `activity_live_linux_pty_tcp_smoke` runs only when explicitly
+  selected on Linux. It uses a test-owned managed PTY, loopback TCP, production
+  procfs/fd ownership, direct `NETLINK_SOCK_DIAG`, and a panic executor that
+  fails if suspend is requested. The smoke passed in **0.72s**; it is observer
+  evidence, not a host-suspend authorization.
+
+The QA record reports **323 backend/PTY/API/integration tests**, **16/16
+Chromium tests**, **14/14** boundary checks, and code review approval at
+**9.4/10**. Automated evidence uses fake suspend outcomes and temporary
+resources. A real automatic suspend/resume canary remains an Operations gate:
+qualify the deployed service context and kernel first, assign physical or
+out-of-band recovery, bound the RTC window, and record rollback ownership.
+
+The qualification command surface is intentionally split:
+
+```sh
+cargo test --manifest-path server/Cargo.toml --test idle_suspend
+cargo test --manifest-path server/Cargo.toml --lib api::tests::idle_suspend
+pnpm --filter @dam-hopper/ui test:browser -- idle-suspend-settings-status.browser.tsx
+cargo test --manifest-path server/Cargo.toml --test idle_suspend \
+  activity_live_linux_pty_tcp_smoke -- --ignored --exact --nocapture --test-threads=1
+./scripts/verify-idle-suspend-boundary.sh
+```
+
+The live smoke must run under the target service's actual procfs and network
+namespace visibility before `agent-activity` is enabled. If required
+`TCP_INFO`, ownership, namespace, or one-second deadline behavior is unavailable,
+the status remains unavailable and automatic policy execution stays disabled.
 
 ### Cross-Origin Port & Transport Guard Policy (2026-09-07)
 
 Deployments using split web/API ports (e.g., UAT `:4804`/`:4803` or production `:4802`/`:4801`) interact with privileged mutations (`force-suspend`, `timing`, host actions) under a unified origin policy:
+
 1. **Bearer Token CSRF Exemption**: Requests presenting a valid `Authorization: Bearer <jwt>` header are exempt from cookie CSRF origin checks even when ambient cookies are attached by the browser client (`credentials: "include"`). Browsers cannot forge custom authorization headers across origins without explicit preflight authorization.
 2. **Exact CORS Origin Trust**: Cookie-only requests are permitted if the request `Origin` matches an exact configured allowlist entry in `DAM_HOPPER_CORS_ORIGINS` or satisfies strict same-origin (`http(s)://Host`).
 3. **Fail-Closed Rejection**: Foreign origins, duplicate `Origin` headers, malformed URIs, and origins bearing userinfo continue to fail closed with `403 invalidOrigin` before any coordinator handoff or side effect.
@@ -343,4 +394,6 @@ Deployments using split web/API ports (e.g., UAT `:4804`/`:4803` or production `
 ## Unresolved Questions
 
 - Can every target host guarantee DamHopper-exclusive `rtc0` ownership, or should any pre-existing alarm keep manual suspend unavailable?
-- Who owns physical/out-of-band wake and final go/no-go approval for indefinite-sleep qualification?
+- Can each target kernel/service sandbox expose unprivileged `SOCK_DIAG` TCP_INFO fields and complete `/proc/<pid>/fd` ownership within the one-second budget?
+- What normal sample and shutdown/join latency does each target service context exhibit?
+- Which production host, Operations owner, maintenance window, and physical/out-of-band wake path will own the first bounded automatic canary?

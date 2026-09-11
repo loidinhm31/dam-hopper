@@ -231,6 +231,7 @@ wake_after_seconds = 600
 capability_selection = "auto"
 automatic_policy = "empty-fleet"
 agent_executables = ["codex", "omp", "claude", "agy"]
+
 # enrollment_reference = "systemd:dam-hopper-idle-suspend.service"
 
 ### Policy and agent-executable fields (Phase 01)
@@ -244,11 +245,14 @@ baseline comparison. Phase 05 completes the dedicated transactional sampler,
 manager-locked final admission, bounded warning projection, and
 `agent-activity` coordinator path. Phase 06 adds protected status decoding and
 aggregate browser presentation without adding a policy/matcher editor or
-mutation route. See [PTY Activity Observation](./pty-activity-observation.md),
-[Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
-[Owned TCP Byte Observation](./tcp-activity-observation.md), [Agent Activity
-Automatic Admission](./agent-activity-automatic-admission.md), and
-[Protected Status and Browser UI](./idle-suspend-status-ui.md).
+mutation route. Phase 07 qualifies the integrated manager/API/Chromium path,
+the fake-executor safety boundary, and the explicitly selected Linux PTY/TCP
+observer smoke; it does not authorize a real suspend canary. See [PTY Activity
+Observation](./pty-activity-observation.md), [Configured-Agent Process
+Discovery](./agent-activity-process-discovery.md), [Owned TCP Byte
+Observation](./tcp-activity-observation.md), [Agent Activity Automatic
+Admission](./agent-activity-automatic-admission.md), and [Protected Status and
+Browser UI](./idle-suspend-status-ui.md).
 
 Under `agent-activity`, the server starts one joinable sampler worker after
 persistence restoration. It samples on a two-second cadence, performs a fresh
@@ -292,8 +296,7 @@ omission resolves to the defaults.
   - `wake_after_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 600 (10 min).
 - **Security Safeguards**: Both the timing mutation route and manual force-suspend route are strictly unavailable in development mode (`--no-auth`). All suspend requests fail closed if sleep inhibitors are active, helper enrollment is missing, host capabilities are unsupported, or RTC ownership is ambiguous.
 - **Manual Execution Independence**: Manual force sleep (`POST /api/system/idle-suspend/v1/force-suspend`) is independent of the automatic idle suspend `enabled` setting; it is accessible only to an authenticated enabled actor when helper enrollment and capability checks are satisfied.
-- **Rollback & Verification**: Non-privileged boundary verification is performed with `scripts/verify-idle-suspend-boundary.sh`. The release manager owns release rollback/recovery (`sudo dam-hopper rollback` and `sudo dam-hopper recover`); `deploy/reset-linux-production.sh` remains the separate helper disenrollment/reset runbook (supporting `--dry-run`) and preserves audit logs.
-
+- **Rollback & Verification**: Run the non-privileged boundary suite with `scripts/verify-idle-suspend-boundary.sh` (14/14 in Phase 07). The ignored `activity_live_linux_pty_tcp_smoke` is a Linux target-host observer check, not a suspend test. The release manager owns rollback/recovery (`sudo dam-hopper rollback` and `sudo dam-hopper recover`); `deploy/reset-linux-production.sh` remains the separate helper disenrollment/reset runbook (supporting `--dry-run`) and preserves audit logs.
 
 ### Release-manager helper service (Production CLI Phase 03)
 

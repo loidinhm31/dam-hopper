@@ -1,24 +1,24 @@
 # Configured-Agent Activity: Transactional Sampling and Automatic Admission
 
-**Status:** Phase 05 complete 2026-09-11. This page documents the private Linux
-`agent-activity` coordinator layer. It combines PTY, process, and owned-TCP
-evidence; it does not treat any single observation as proof that an agent is
-finished or expose process arguments, terminal bytes, socket addresses, or raw
-diagnostics.
+**Status:** Phases 05–07 complete (2026-09-11). This page documents the
+private Linux `agent-activity` coordinator layer. It combines PTY, process, and
+owned-TCP evidence; it does not treat any single observation as proof that an
+agent is finished or expose process arguments, terminal bytes, socket
+addresses, or raw diagnostics.
 
 ## Scope and source map
 
-| Source | Responsibility |
-| --- | --- |
-| `server/src/idle_suspend/activity/sampler.rs` | Dedicated worker, request mailbox, transactional process/TCP sample, raw-output checkpoints, revisions, and opaque final ticket |
-| `server/src/idle_suspend/activity/{mod,process,tcp}.rs` | Private evidence records, bounded process attribution, owned socket set, and independently prepared baselines |
-| `server/src/idle_suspend/coordinator.rs` | Tokio state machine, cadence/final/recovery requests, epoch latch, claim dispatch, status publication, and cooperative shutdown |
-| `server/src/idle_suspend/status.rs` | Version-1 public status DTO, activity warning projection, fallback state, and meaningful-change filtering |
-| `server/src/pty/manager.rs` | Manager-locked admission gate for policy, revisions, roots, output fences, and lifecycle |
-| `server/src/pty/fleet_state.rs` | Content-free fleet generation, lifecycle counts, quiescence, and handoff gate |
-| `server/src/idle_suspend/policy.rs` | Startup-owned policy and validated executable matcher set |
-| `server/src/api/idle_suspend.rs` | Protected status, timing, and manual force-suspend REST handlers |
-| `server/src/main.rs`, `server/src/state.rs` | Startup after persistence restoration and shutdown ordering |
+| Source                                                  | Responsibility                                                                                                                  |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `server/src/idle_suspend/activity/sampler.rs`           | Dedicated worker, request mailbox, transactional process/TCP sample, raw-output checkpoints, revisions, and opaque final ticket |
+| `server/src/idle_suspend/activity/{mod,process,tcp}.rs` | Private evidence records, bounded process attribution, owned socket set, and independently prepared baselines                   |
+| `server/src/idle_suspend/coordinator.rs`                | Tokio state machine, cadence/final/recovery requests, epoch latch, claim dispatch, status publication, and cooperative shutdown |
+| `server/src/idle_suspend/status.rs`                     | Version-1 public status DTO, activity warning projection, fallback state, and meaningful-change filtering                       |
+| `server/src/pty/manager.rs`                             | Manager-locked admission gate for policy, revisions, roots, output fences, and lifecycle                                        |
+| `server/src/pty/fleet_state.rs`                         | Content-free fleet generation, lifecycle counts, quiescence, and handoff gate                                                   |
+| `server/src/idle_suspend/policy.rs`                     | Startup-owned policy and validated executable matcher set                                                                       |
+| `server/src/api/idle_suspend.rs`                        | Protected status, timing, and manual force-suspend REST handlers                                                                |
+| `server/src/main.rs`, `server/src/state.rs`             | Startup after persistence restoration and shutdown ordering                                                                     |
 
 The lower-level evidence contracts remain in [PTY Activity Observation](./pty-activity-observation.md), [Configured-Agent Process Discovery](./agent-activity-process-discovery.md), and [Owned TCP Byte Observation](./tcp-activity-observation.md). This page is the integration contract for their Phase 05 consumer.
 
@@ -136,15 +136,15 @@ The retry never commits the failed preparation.
 
 Classification priority is deterministic:
 
-| Evidence | Observation reason | Effect |
-| --- | --- | --- |
-| Accepted nonempty PTY input or newer input revision/time | `RecentInput` | Genuine; increments activity and epoch revisions |
-| Raw output checkpoint advanced | `RecentOutput` | Genuine; increments both revisions |
-| Owned TCP counters/keys changed, reset, retired, or were replaced | `RecentNetwork` | Genuine; increments both revisions |
-| Recognized process attribution changed | `AgentChanged` | Genuine; increments both revisions |
-| PTY creation or restart is pending | `LifecycleBusy` | Genuine; increments both revisions |
-| First valid process/TCP baseline | No reason | `BaselineEstablished`; increments activity revision only |
-| Complete comparable sample with no change | No reason | `Unchanged`; no revision increment |
+| Evidence                                                          | Observation reason | Effect                                                   |
+| ----------------------------------------------------------------- | ------------------ | -------------------------------------------------------- |
+| Accepted nonempty PTY input or newer input revision/time          | `RecentInput`      | Genuine; increments activity and epoch revisions         |
+| Raw output checkpoint advanced                                    | `RecentOutput`     | Genuine; increments both revisions                       |
+| Owned TCP counters/keys changed, reset, retired, or were replaced | `RecentNetwork`    | Genuine; increments both revisions                       |
+| Recognized process attribution changed                            | `AgentChanged`     | Genuine; increments both revisions                       |
+| PTY creation or restart is pending                                | `LifecycleBusy`    | Genuine; increments both revisions                       |
+| First valid process/TCP baseline                                  | No reason          | `BaselineEstablished`; increments activity revision only |
+| Complete comparable sample with no change                         | No reason          | `Unchanged`; no revision increment                       |
 
 The coordinator treats any genuine delta as a new quiet anchor and cancels a
 pending final check. The epoch revision is the once-per-automatic-epoch
@@ -157,17 +157,17 @@ it only through `AgentActivityAdmission`. `PtySessionManager` takes its
 single `Inner` lock and verifies every condition before setting
 `handoff_active`:
 
-| Gate | Required condition | Rejection |
-| --- | --- | --- |
-| Policy | Startup policy is `AgentActivity` and enabled | `PolicyMismatch` |
-| Ticket revisions | Request ID, activity revision, epoch revision, and timing revision equal the accepted coordinator values | `PolicyMismatch` |
-| Quiet deadline | `now >= eligibility_deadline` | `DeadlineNotExpired` |
-| Observation freshness | Ticket age is at most five seconds | `ObservationStale` |
-| Input fence | Manager input revision equals ticket input revision | `InputRevisionMismatch` |
-| Fleet fence | Manager generation equals ticket generation | `GenerationMismatch` |
-| Root identity | Live count, session ID/incarnation, and exact qualified `(pid, start_ticks)` roots match | `RootIdentityMismatch` |
-| Output fence | Every counter is below the saturation sentinel and equals its accepted sequence | `RawOutputAdvanced` |
-| Lifecycle | Fleet is not closing, disposing, already handed off, creating, or restart-pending | Typed fleet claim error (`Closing`, `Disposing`, `HandoffAlreadyActive`, or `LifecycleBusy`; `NotQuiescent` applies to the separate `empty-fleet` claim) |
+| Gate                  | Required condition                                                                                       | Rejection                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Policy                | Startup policy is `AgentActivity` and enabled                                                            | `PolicyMismatch`                                                                                                                                         |
+| Ticket revisions      | Request ID, activity revision, epoch revision, and timing revision equal the accepted coordinator values | `PolicyMismatch`                                                                                                                                         |
+| Quiet deadline        | `now >= eligibility_deadline`                                                                            | `DeadlineNotExpired`                                                                                                                                     |
+| Observation freshness | Ticket age is at most five seconds                                                                       | `ObservationStale`                                                                                                                                       |
+| Input fence           | Manager input revision equals ticket input revision                                                      | `InputRevisionMismatch`                                                                                                                                  |
+| Fleet fence           | Manager generation equals ticket generation                                                              | `GenerationMismatch`                                                                                                                                     |
+| Root identity         | Live count, session ID/incarnation, and exact qualified `(pid, start_ticks)` roots match                 | `RootIdentityMismatch`                                                                                                                                   |
+| Output fence          | Every counter is below the saturation sentinel and equals its accepted sequence                          | `RawOutputAdvanced`                                                                                                                                      |
+| Lifecycle             | Fleet is not closing, disposing, already handed off, creating, or restart-pending                        | Typed fleet claim error (`Closing`, `Disposing`, `HandoffAlreadyActive`, or `LifecycleBusy`; `NotQuiescent` applies to the separate `empty-fleet` claim) |
 
 The final fleet claim and handoff flag are set while that same manager lock is
 held. On success the coordinator records the epoch revision as spent, enters
@@ -267,6 +267,42 @@ The implementation's focused verification map is:
 These tests use injected process/socket sources and test managers; this page
 claims the source coverage map, not a production host suspend or RTC run.
 
+## Phase 07 integrated qualification
+
+Phase 07 verifies the coordinator through the public manager and route
+boundaries rather than reaching into private observer state:
+
+| Surface                                                              | Integrated evidence                                                                                                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server/tests/idle_suspend.rs`                                       | Service-only output does not block an `agent-activity` handoff; accepted input invalidates an armed quiet window; manual force wins a final-check race with one executor request; disabled observation stays `Disabled` with no deadline; shutdown joins the sampler before teardown.                                     |
+| `server/src/api/tests.rs`                                            | Protected status requires auth and `no-store`; old/empty-fleet and `agent-activity` snapshots serialize the required policy/activity union; initializing and disabled observation preserve warnings; available measurement serializes `measurementWarning: null`; warning bounds and private-field omissions are checked. |
+| `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx` | Real Chromium renders available counts and heuristic notice, warning reason/duration/PID-safe identity/truncation, active countdown, initializing and disabled warnings, manual force action, and legacy old-server semantics.                                                                                            |
+
+The ignored `activity_live_linux_pty_tcp_smoke` test is a host-selected Linux
+qualification seam. It runs the current integration test binary as a managed
+PTY child, exchanges test-owned loopback bytes, and captures real procfs/fd
+ownership plus direct netlink diagnostics. `PanicExecutor` fails the smoke if
+automatic suspend is reached, so this test never invokes the helper, RTC, or
+host suspend. The QA record reports **323 backend/PTY/API/integration tests**,
+**14/14** static boundary checks, **16/16** Chromium tests, the live smoke in
+**0.72s**, and code review approval at **9.4/10**.
+
+Re-run the deterministic surfaces from the repository root before relying on a
+host result:
+
+```sh
+cargo test --manifest-path server/Cargo.toml --lib idle_suspend::activity
+cargo test --manifest-path server/Cargo.toml --lib pty::
+cargo test --manifest-path server/Cargo.toml --lib api::tests::idle_suspend
+cargo test --manifest-path server/Cargo.toml --test idle_suspend
+pnpm --filter @dam-hopper/ui test:browser -- idle-suspend-settings-status.browser.tsx
+./scripts/verify-idle-suspend-boundary.sh
+```
+
+The real automatic suspend/resume canary is not part of these commands or
+browser fixtures. It requires Operations approval, a qualified target host,
+physical or out-of-band recovery, and a bounded rollback-owned window.
+
 ## Related documentation
 
 - [PTY Activity Observation](./pty-activity-observation.md)
@@ -276,9 +312,11 @@ claims the source coverage map, not a production host suspend or RTC run.
 - [System Architecture](./system-architecture.md)
 - [API Reference](./api-reference.md#terminal-idle-suspend)
 - [Configuration Guide](./configuration-guide.md#terminal-idle-suspend-opt-in-linux-suspend)
+- [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md)
 
 ## Unresolved questions
 
-No new product or implementation questions were introduced by Phase 05. The
-existing operational questions about exclusive `rtc0` ownership and physical
-or out-of-band wake approval remain in [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md#unresolved-questions).
+No new product or implementation questions were introduced by Phase 07. The
+remaining operational questions about target-host observer feasibility, exclusive
+`rtc0` ownership, shutdown/join latency, and physical or out-of-band wake
+approval remain in [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md#unresolved-questions).

@@ -93,7 +93,7 @@ unread`. Opening acknowledges the presentation count only; this read-only UI
 does not change query, acknowledgement, bounds, fallback, active incidents, or
 dismissal behavior.
 
-## Terminal idle-suspend status (Phase 06)
+## Terminal idle-suspend status (Phases 06–07)
 
 **Locations:** `packages/ui/src/api/client.ts`,
 `packages/ui/src/api/queries.ts`, and
@@ -129,6 +129,10 @@ display-only; ticks never refetch, publish a status hint, or affect admission.
 Manual confirmation continues to use actual
 `liveCount + creatingCount + restartPendingCount`, independent of agent counts
 or measurement warnings. See [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md).
+Phase 07 Chromium qualification covers the rendered agent-activity policy,
+available/initializing/unavailable/disabled measurement, warning duration and
+safe identity/truncation, countdown, manual force flow, and old-server
+compatibility. See [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
 
 ## Error Boundary and stale lazy-chunk recovery
 
@@ -926,6 +930,7 @@ snapshot.
 **Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views. The Explorer header area also hosts `GitBranchControl` so users can switch or create branches without leaving the file browser.
 
 **Persistent Tree Expansion:** Directory open/closed states are managed by `useExplorerTreeStore` (`packages/ui/src/stores/explorer-tree.ts`) and persisted in `localStorage` under `dam-hopper:explorer-tree-state`. This ensures that expanded folders survive sidebar tool switching (e.g. Explorer ↔ Search), sidebar collapses, workspace mode transitions (IDE ↔ Terminal), and full browser page reloads.
+
 - **Target scoping:** Scoped per project target via `explorerTreeScopeKey(target)` (`${normalized.project}::${projectTargetCacheKey(normalized)}`), isolating regular project trees and worktree targets.
 - **Initial open state & toggle:** `FileTree` supplies `initialOpenState={openMap}` to `react-arborist` and synchronizes toggle events via `onToggle` and `setFolderOpen`. Toggling closed removes the key to keep persisted storage compact.
 - **Cascading child auto-hydration:** When mounting with persisted open folders, `FileTree` scans for open folders with unloaded children (`children === null`) and automatically triggers `loadChildren(id)`. If loading fails (e.g. directory deleted externally), `prunePath` cleans up the invalid path.
@@ -985,21 +990,21 @@ and mutation replay.
 
 **Locations:**
 
-| Module | Responsibility |
-| --- | --- |
-| `packages/ui/src/lib/workflow-focus.ts` | Shortcut matching, editable/native/Monaco/xterm/dialog suppression, and safe focus restoration. |
-| `packages/ui/src/api/workflow-selectors.ts` | Target filtering, active-item selection, attention aggregation, tree flattening, and factual progress labels. |
-| `packages/ui/src/components/molecules/WorkflowQuickCapture.tsx` | Compact Plan-first item form with optional parent, summary, status, and immediate session start. |
-| `packages/ui/src/components/molecules/WorkflowItemRow.tsx` | Hierarchical row with depth, status icon/color, selection, active-session marker, note/progress copy, and child count. |
-| `packages/ui/src/components/molecules/WorkflowItemList.tsx` | Plan and standalone-Task trees plus selection and New Plan entry point. |
-| `packages/ui/src/components/molecules/WorkflowSessionCard.tsx` | Running/past session details, duration, manual end/abandon controls, links, and suggested end-time review. |
-| `packages/ui/src/components/molecules/WorkflowExecutionList.tsx` | Start/end session controls and manual Agent Harness/Agent Run linking. |
-| `packages/ui/src/components/molecules/WorkflowProjectList.tsx` | Project/worktree target switcher with plan, task, and running-session counts. |
-| `packages/ui/src/components/organisms/WorkflowContextRibbon.tsx` | Compact ambient summary with loading, retry, status, duration, progress, and live-region output. |
-| `packages/ui/src/components/organisms/WorkflowContextDeck.tsx` | Non-modal desktop context region with project, item, quick-capture, and execution panes. |
-| `packages/ui/src/components/organisms/WorkflowContextSheet.tsx` | Mobile bottom Dialog with Projects, Plans & Work, and Execution segments. |
-| `packages/ui/src/components/organisms/WorkflowContextSurface.tsx` | Top-level overview query, selectors, timer, keyboard handling, and deck/sheet orchestration. |
-| `packages/ui/src/hooks/use-workflow-surface-actions.ts` | Request-ID-bearing workflow mutation callbacks used by the surface. |
+| Module                                                            | Responsibility                                                                                                         |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `packages/ui/src/lib/workflow-focus.ts`                           | Shortcut matching, editable/native/Monaco/xterm/dialog suppression, and safe focus restoration.                        |
+| `packages/ui/src/api/workflow-selectors.ts`                       | Target filtering, active-item selection, attention aggregation, tree flattening, and factual progress labels.          |
+| `packages/ui/src/components/molecules/WorkflowQuickCapture.tsx`   | Compact Plan-first item form with optional parent, summary, status, and immediate session start.                       |
+| `packages/ui/src/components/molecules/WorkflowItemRow.tsx`        | Hierarchical row with depth, status icon/color, selection, active-session marker, note/progress copy, and child count. |
+| `packages/ui/src/components/molecules/WorkflowItemList.tsx`       | Plan and standalone-Task trees plus selection and New Plan entry point.                                                |
+| `packages/ui/src/components/molecules/WorkflowSessionCard.tsx`    | Running/past session details, duration, manual end/abandon controls, links, and suggested end-time review.             |
+| `packages/ui/src/components/molecules/WorkflowExecutionList.tsx`  | Start/end session controls and manual Agent Harness/Agent Run linking.                                                 |
+| `packages/ui/src/components/molecules/WorkflowProjectList.tsx`    | Project/worktree target switcher with plan, task, and running-session counts.                                          |
+| `packages/ui/src/components/organisms/WorkflowContextRibbon.tsx`  | Compact ambient summary with loading, retry, status, duration, progress, and live-region output.                       |
+| `packages/ui/src/components/organisms/WorkflowContextDeck.tsx`    | Non-modal desktop context region with project, item, quick-capture, and execution panes.                               |
+| `packages/ui/src/components/organisms/WorkflowContextSheet.tsx`   | Mobile bottom Dialog with Projects, Plans & Work, and Execution segments.                                              |
+| `packages/ui/src/components/organisms/WorkflowContextSurface.tsx` | Top-level overview query, selectors, timer, keyboard handling, and deck/sheet orchestration.                           |
+| `packages/ui/src/hooks/use-workflow-surface-actions.ts`           | Request-ID-bearing workflow mutation callbacks used by the surface.                                                    |
 
 ### WorkspacePage and shell integration (Phase 06)
 
@@ -1007,11 +1012,11 @@ and mutation replay.
 `WorkflowContextSurface`. The same node passes through the existing
 `toolbarActions` prop in every workspace branch:
 
-| Shell | Placement |
-| --- | --- |
-| `IdeShell` | 40px companion row above editor/tool content. |
-| `TerminalWorkspaceShell` | 40px companion row above terminal/overlay content. |
-| `MobileWorkspaceShell` | Safe-area-aware inline action row; existing compact surface selector remains unchanged. |
+| Shell                    | Placement                                                                               |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `IdeShell`               | 40px companion row above editor/tool content.                                           |
+| `TerminalWorkspaceShell` | 40px companion row above terminal/overlay content.                                      |
+| `MobileWorkspaceShell`   | Safe-area-aware inline action row; existing compact surface selector remains unchanged. |
 
 The surface is not a route, activity-bar tool, mobile surface, TopNav item, or
 second PTY lifecycle. Shell mode changes therefore preserve the existing
