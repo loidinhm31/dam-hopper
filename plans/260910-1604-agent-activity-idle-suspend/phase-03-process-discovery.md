@@ -14,7 +14,7 @@
 - Description: discover configured agent processes and their socket-owning descendants from qualified managed PTY roots, with bounded identity-safe procfs traversal and retained attribution across reparenting.
 - Priority: P2. Estimated implementation effort: 14h.
 - Implementation status: DONE (2026-09-11). Review status: Complete (Score: 9.0/10; see plans/reports/code-review-260911-0237-phase-03-process-discovery.md).
-- Progress: 100% (13/13 todo items; 16/16 focused process-discovery tests passed).
+- Progress: 100% (13/13 todo items; 18/18 latest focused process-discovery tests passed).
 - Dependencies: Phase01 provides the immutable, already-compiled executable set; Phase02 provides qualified root identities, fleet snapshots, raw-output handles and the sole shared process-stat parser. Phase04 consumes this phase's typed owned-socket preparation and representative-owner evidence. Phase05 owns the all-or-nothing process-plus-TCP commit and the authenticated warning projection.
 
 ## Key Insights

@@ -676,12 +676,12 @@ isolation and the four-service `dam-hopper status` projection are covered. See
   regressions cover boundaries and compatibility without touching host power.
 
 
-### PR-017: Configured-Agent Activity Idle-Suspend Policy and PTY/Process Evidence (Phases 01–03)
+### PR-017: Configured-Agent Activity Idle-Suspend Policy and Evidence (Phases 01–04)
 
-**Status:** Phase 01 policy/configuration, Phase 02 PTY evidence, and Phase 03
-bounded process discovery are implemented (Phase 03 complete 2026-09-11).
-TCP observation, automatic eligibility, and the final automatic handoff claim
-remain pending in later phases.
+**Status:** Phase 01 policy/configuration, Phase 02 PTY evidence, Phase 03
+bounded process discovery, and Phase 04 owned TCP byte observation are
+implemented (Phase 04 complete 2026-09-11). Automatic eligibility and the final
+automatic handoff claim remain pending in Phase 05.
 
 **Requirements:** Persist `automatic_policy` (`empty-fleet` by default or
 `agent-activity`) and a validated `agent_executables` list under
@@ -757,14 +757,53 @@ samples.
 - [x] `commit_sample` advances discovery state only after a complete accepted
   sample, while invalidation preserves retained identities for reparenting.
 
+#### Phase 04 — Owned TCP byte observation
+
+Phase 04 adds a private `SocketDiagnosticsSource` seam and the production
+`LinuxSocketDiagnostics` collector. It consumes only Phase 03's prepared
+`OwnedSocketSet`; it does not open process descriptors, change namespaces,
+send traffic, expose socket addresses, or authorize suspend.
+
+**Changed implementation files:** `server/src/idle_suspend/activity/mod.rs`,
+`server/src/idle_suspend/activity/tcp_info.rs`,
+`server/src/idle_suspend/activity/netlink.rs`, and
+`server/src/idle_suspend/activity/tcp.rs`.
+
+**Requirements and acceptance criteria:**
+
+- [x] `tcp_info` parsing requires at least 208 bytes, decodes
+  `tcpi_bytes_received` at `128..136` and `tcpi_bytes_sent` at `200..208`
+  with checked slices/native-endian decoding, accepts trailing extensions, and
+  never casts raw bytes to a local C struct.
+- [x] Netlink transport is unprivileged, nonblocking, and deadline-aware.
+  Requests use `NETLINK_SOCK_DIAG`/`SOCK_DIAG_BY_FAMILY`; poll recalculates a
+  monotonic deadline, peeking uses `MSG_PEEK | MSG_TRUNC`, and all dumps share
+  a 16 MiB response budget.
+- [x] Multipart parsing validates sequence, sender PID, lengths, alignment,
+- [x] The observer verifies the thread network namespace before and after
+  collection, classifies owned inodes still unresolved after all applicable
+  dumps as retryable close races, and reports unsupported UDP ownership rather
+  than treating it as TCP.
+- [x] `SocketKey` uses namespace, family, and diagnostic cookie; inode is join
+  metadata only. Transactional baseline comparison returns
+  `BaselineEstablished`, `Unchanged`, or `Activity` for per-socket changes,
+  key membership changes, counter resets, or inode replacement.
+- [x] Collection errors leave committed baseline state unchanged. Raw netlink
+  payloads, addresses, terminal bytes, command data, credentials, and
+  unbounded response data never cross the private evidence seam.
+
+See [Owned TCP Byte Observation](./tcp-activity-observation.md) for the
+implementation contract and failure taxonomy.
+
 See [Configured-Agent Process Discovery](./agent-activity-process-discovery.md)
 for the implementation contract.
 
 No public endpoint or automatic `agent-activity` claim is introduced by
-Phases 02–03. See [PTY Activity Observation](./pty-activity-observation.md)
-and [Configured-Agent Process Discovery](./agent-activity-process-discovery.md)
-for the private evidence contracts. Phase 04 TCP observation and later
-coordinator/sampling work own the final automatic policy claim.
+Phases 02–04. See [PTY Activity Observation](./pty-activity-observation.md),
+[Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
+and [Owned TCP Byte Observation](./tcp-activity-observation.md) for the
+private evidence contracts. Phase 05 owns the coordinator/sampling work and
+the final automatic policy claim.
 
 ## Non-Functional Requirements
 

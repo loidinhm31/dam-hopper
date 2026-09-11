@@ -10,10 +10,12 @@
 
 ## Overview
 
-- Date: 2026-09-10.
+- Date: 2026-09-11.
 - Description: classify sockets owned by discovered agent lineages, read IPv4/IPv6 TCP cumulative byte counters through direct unprivileged `NETLINK_SOCK_DIAG`, and prepare identity-safe per-socket activity deltas without exposing process or network details.
 - Priority: P2. Estimated implementation effort: 14h.
-- Implementation status: Pending. Review status: user validation incorporated; implementation remains pending.
+- Implementation status: DONE (2026-09-11; 100%). Review status: Passed (Cycle 2: `WouldBlock` handling verified, staged dead-code warnings eliminated, privacy boundary verified, and 100% test pass rate).
+- Validation: Phase-specific TCP/netlink tests passed 40/40; latest activity suite passed 59/59; full idle-suspend library passed 128/128 and crate-wide tests passed 142/142, with no failures.
+- Evidence: [test report](../reports/tester-260911-0313-phase04-tcp-byte-observation.md) · [Cycle 2 code review](../reports/code-review-260911-0738-phase04-tcp-byte-observation-cycle2.md).
 - Dependencies: Phase03 supplies a complete `OwnedSocketSet`; Phase05 supplies the sole cooperative worker, common deadline, one full retry, pair commit/abort, invalidation, and epoch semantics. Phase04 performs no suspend or public status action.
 
 ## Key Insights
@@ -204,19 +206,19 @@ No status DTO, API route, client, UI, helper protocol, persistence, service unit
 
 ## Todo list
 
-- [ ] Consume Phase03 typed namespace/inode ownership without redoing discovery.
-- [ ] Encode direct unprivileged TCP4/TCP6 and UDP4/UDP6 socket-diag requests.
-- [ ] Add conditional AF_UNIX classification for remaining owned inodes.
-- [ ] Implement bounded nonblocking multipart netlink receive and deadline checks.
-- [ ] Parse netlink framing and required TCP_INFO prefix without raw casts.
-- [ ] Require cookie/family/namespace persistent socket identity.
-- [ ] Reject UDP, unknown family, missing metadata and namespace mismatch.
-- [ ] Compare sent/received counters per socket; ignore TCP listeners.
-- [ ] Prepare/commit transactionally with process discovery and abort on any failure.
-- [ ] Preserve spent epoch across invalidation/recovery; no phantom activity.
-- [ ] Prove bounded parsers, socket-set transitions and retry classification.
-- [ ] Qualify future real managed-PTY/loopback path through public status/FakeExecutor.
-- [ ] Return bounded attributable failure ownership without extra scans or private error formatting.
+- [x] Consume Phase03 typed namespace/inode ownership without redoing discovery.
+- [x] Encode direct unprivileged TCP4/TCP6 and UDP4/UDP6 socket-diag requests.
+- [x] Add conditional AF_UNIX classification for remaining owned inodes.
+- [x] Implement bounded nonblocking multipart netlink receive and deadline checks.
+- [x] Parse netlink framing and required TCP_INFO prefix without raw casts.
+- [x] Require cookie/family/namespace persistent socket identity.
+- [x] Reject UDP, unknown family, missing metadata and namespace mismatch.
+- [x] Compare sent/received counters per socket; ignore TCP listeners.
+- [x] Prepare/commit transactionally with process discovery and abort on any failure.
+- [x] Preserve spent epoch across invalidation/recovery; no phantom activity.
+- [x] Prove bounded parsers, socket-set transitions and retry classification.
+- [x] Qualify future real managed-PTY/loopback path through public status/FakeExecutor.
+- [x] Return bounded attributable failure ownership without extra scans or private error formatting.
 
 ## Success Criteria
 

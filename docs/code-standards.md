@@ -193,6 +193,41 @@ is accepted.
   passes all checks. Invalidation may clear the baseline while preserving
   retained attribution needed for reparenting.
 
+### Owned TCP byte observation and baseline comparison (Phase 04)
+
+Keep Linux socket diagnostics behind the synchronous, private
+`SocketDiagnosticsSource` trait. `LinuxSocketDiagnostics` is the production
+`NETLINK_SOCK_DIAG` implementation; tests should inject deterministic sources
+instead of depending on host sockets or network traffic.
+
+- Parse kernel wire data with explicit checked offsets, slice bounds, native
+  endian conversions, and 4-byte alignment. Never cast netlink payloads or
+  `INET_DIAG_INFO` bytes to local C structs. Require the 208-byte `tcp_info`
+  prefix before reading `tcpi_bytes_received` (`128..136`) and
+  `tcpi_bytes_sent` (`200..208`); accept trailing kernel extensions.
+- Open only an unprivileged nonblocking socket. Encode
+  `SOCK_DIAG_BY_FAMILY` requests with explicit sequence numbers and validate
+  sender PID, sequence, message type, lengths, attributes, `NLMSG_DONE`,
+  `NLMSG_ERROR`, and `NLM_F_DUMP_INTR`. Treat malformed, interrupted,
+  overrun, duplicate, or truncated streams as unavailable; never use a
+  partial dump as quiet evidence.
+- Carry one monotonic `Instant` deadline through poll, send, peek, receive,
+  and every dump. Use `MSG_PEEK | MSG_TRUNC` to size each datagram before
+  allocation and enforce the global 16 MiB response budget before allocating.
+- Verify `NetworkNamespaceIdentity::current_thread()` immediately before and
+  after collection. Do not change namespaces. Classify owned inodes still
+  unresolved after all applicable dumps as retryable close races; malformed or
+  corrupt records remain hard diagnostics failures.
+- Key persistent sockets by namespace, family, and diagnostic cookie. Keep
+  inode only as join/reuse metadata. Compare each socket independently:
+  `BaselineEstablished` initializes state, `Unchanged` requires identical
+  keys/inodes/counters, and `Activity` covers byte changes/resets, new or
+  retired sockets, and inode replacement.
+- Keep `prepare_sample` read-only and return an explicit prepared state.
+  Commit the next baseline only after the caller accepts the complete sample;
+  invalidation must force a new baseline. Do not expose raw netlink payloads,
+  addresses, command data, credentials, or terminal content.
+
 ### Linux release manager service lifecycle and verification (Production CLI Phases 03–04)
 
 Keep helper lifecycle ownership centralized in `server/src/linux_release/`:

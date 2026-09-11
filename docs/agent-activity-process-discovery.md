@@ -15,8 +15,9 @@ complete or authorize suspend.
 | `server/src/pty/activity.rs` | Shared `ProcessIdentity`, `TerminalIdentity`, `ProcessStat`, `PtyActivitySnapshot`, and the sole `/proc/<pid>/stat` parser |
 
 Phase 03 consumes the qualified PTY roots and atomic output handles from Phase
-02. Phase 04 consumes only the prepared `OwnedSocketSet`; Phase 05 owns the
-pair-commit, retry, final admission, and authenticated warning projection.
+02. Phase 04 consumes only the prepared `OwnedSocketSet` and performs owned
+TCP byte observation; Phase 05 owns the pair-commit, retry, final admission,
+and authenticated warning projection.
 
 ## Observation flow
 
@@ -160,8 +161,9 @@ Failures use the closed `ActivityUnavailableReason` set (`procAccess`,
 `namespaceMismatch`, `staleObservation`, `identityUncertain`,
 `counterOverflow`, or `reconciling`). `FailureContext` includes only processes
 directly implicated by the current failure; host-wide scan/timeout/ancestry
-failures leave it empty. Phase 03 leaves implicated socket evidence empty for
-Phase 04 to populate.
+failures leave it empty. Phase 03 returns owned socket identities for Phase 04;
+the TCP observer adds socket-diagnostics evidence, retryable close-race
+classification, and per-socket baseline results.
 
 ## Privacy, safety, and limitations
 
@@ -195,13 +197,15 @@ tests; the broader idle-suspend and PTY suites remain integration-gate evidence.
 The tests exercise the parser, finite interpreter grammar, fake-proc bounds,
 identity races, namespace and FD handling, retention/reparenting, safe warning
 identity, representative socket ownership, and transactional prepare/commit
-behavior. Integrated TCP observation, coordinator admission, public status,
-and host-suspend qualification belong to later phases.
+behavior. TCP observation is documented and tested separately; coordinator
+admission, public status, and host-suspend qualification belong to later phases.
 
 ## Related documentation
 
 - [PTY Activity Observation](./pty-activity-observation.md) — Phase 02 root and
   raw-output/input evidence consumed here.
+- [Owned TCP Byte Observation](./tcp-activity-observation.md) — Phase 04
+  bounded netlink transport, `tcp_info` parsing, and baseline comparison.
 - [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md) —
   privacy and fail-closed deployment policy.
 - [System Architecture](./system-architecture.md) — subsystem data flow.

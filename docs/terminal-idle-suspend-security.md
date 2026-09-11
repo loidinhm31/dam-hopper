@@ -145,8 +145,42 @@ diagnostics. Permission, timeout, disappearance, malformed-socket, identity,
 namespace, and limit failures become typed unavailable outcomes; retryable
 close races are not converted into quiet activity. Discovery cannot change
 namespaces, execute processes, signal processes, or request suspend, and it
-does not publish REST, WebSocket, audit, or log payloads. TCP observation and
-automatic eligibility remain later phases.
+does not publish REST, WebSocket, audit, or log payloads. Phase 04 consumes
+these identities through the private TCP observer; automatic eligibility
+remains a later phase.
+
+### Configured-agent owned TCP observation — Phase 04 (2026-09-11)
+
+Phase 04 extends the private, read-only evidence seam from owned socket
+identity to cumulative TCP byte counters. `tcp_info` parsing requires a
+208-byte prefix and reads only the stable native-endian
+`tcpi_bytes_received`/`tcpi_bytes_sent` offsets with checked slices; extended
+kernel payloads are accepted, and raw bytes are never cast to a local C
+structure.
+
+Production collection uses an unprivileged nonblocking
+`NETLINK_SOCK_DIAG` socket. `SOCK_DIAG_BY_FAMILY` requests carry explicit
+sequence numbers and request TCP `INET_DIAG_INFO`; unresolved UDP and AF_UNIX
+inodes are checked so unsupported transports or close races cannot be
+mistaken for a quiet TCP sample. Polling carries one monotonic deadline.
+Datagram length is obtained with `MSG_PEEK | MSG_TRUNC` before allocation, and
+all multipart responses share a 16 MiB budget.
+
+The parser validates sender PID, sequence, message/attribute lengths,
+alignment, `NLMSG_DONE`, `NLMSG_ERROR`, and `NLM_F_DUMP_INTR`. Malformed,
+interrupted, duplicate, overrun, or truncated streams fail closed. The
+observing thread's network namespace is verified immediately before and after
+collection. Owned inodes still unresolved after all applicable dumps are marked
+as retryable close races; corrupt data, namespace changes, unsupported
+transport, and budget/deadline failures remain unavailable outcomes.
+
+`TcpObserver` keys persistent state by network namespace, address family, and
+diagnostic cookie; inode is join/reuse metadata only. Preparation is
+transactional and read-only. `BaselineEstablished`, `Unchanged`, and
+`Activity` classify per-socket counter/key changes without aggregate
+cancellation. No netlink payload, address, terminal content, command data,
+credential, or raw diagnostic detail enters REST, WebSocket, audit, or logs.
+See [Owned TCP Byte Observation](./tcp-activity-observation.md).
 
 ## Approval Gates for Privileged Execution (Production CLI Phase 03) — Approved (2026-09-05)
 

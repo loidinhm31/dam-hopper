@@ -6,10 +6,10 @@ configured-agent idle-suspend phases.
 
 Phase 02 records evidence at the PTY boundary without adding a public REST
 route, a WebSocket acknowledgement, terminal-content inspection, or an
-automatic agent-policy claim. Phase 03 consumes the root/stat seam and now
-implements bounded configured-agent process discovery and retained attribution;
-Phase 04 adds owned TCP byte observation; Phase 05 owns sampling, eligibility,
-and the final handoff claim.
+automatic agent-policy claim. Phase 03 consumes the root/stat seam and
+implements bounded configured-agent process discovery and retained attribution.
+Phase 04 consumes the resulting owned-socket set for TCP byte observation;
+Phase 05 owns sampling, eligibility, and the final handoff claim.
 
 ## Source map
 
@@ -249,9 +249,10 @@ Phase 03 consumes `ProcessIdentity` and the shared proc-stat parser while
 retaining detached lineage. Its `ProcessSource` abstraction, finite matcher,
 exact identity checks, namespace/FD ownership reads, and hard scan bounds are
 documented in [Configured-Agent Process Discovery](./agent-activity-process-discovery.md).
-Phase 04 supplies typed owned-socket inputs. Phase 05 combines those inputs with
-raw output and accepted-input revisions under a final generation-fenced claim.
-No automatic `agent-activity` policy claim ships from these evidence seams alone.
+Phase 04 consumes its `OwnedSocketSet` and is documented in
+[Owned TCP Byte Observation](./tcp-activity-observation.md). Phase 05 combines
+all evidence under a final generation-fenced claim. No automatic
+`agent-activity` policy claim ships from these evidence seams alone.
 
 ## Unresolved questions
 
