@@ -21,9 +21,9 @@ modules. No activity type or diagnostic transport is public API. The shared
 `NetworkNamespaceIdentity::current_thread()` helper reads the observing
 thread's namespace identity for both Phase 03 ownership and Phase 04 fencing.
 
-Phase 03 produces the `OwnedSocketSet` consumed here. Phase 05 owns pair
-commit, retry policy, blocked-measurement warning projection, automatic
-eligibility, and the final handoff claim.
+Phase 03 produces the `OwnedSocketSet` consumed here. Phase 05 combines this
+prepared network result with PTY and process evidence in the transactional
+sampler, then performs warning projection and final handoff admission.
 
 ## Observation flow
 
@@ -211,8 +211,9 @@ baseline establishment, unchanged samples, activity deltas, key changes,
 inode reuse, invalidation, and transactional commit behavior.
 
 No production suspend, RTC mutation, socket mutation, or privileged operation
-is part of these tests. Phase 05 must still combine this result with PTY and
-process evidence under a generation-fenced final admission.
+is part of these tests. The [Phase 05 admission guide](./agent-activity-automatic-admission.md)
+documents how this result joins PTY/process evidence under a generation-fenced
+final claim.
 
 ## Related documentation
 
@@ -224,9 +225,12 @@ process evidence under a generation-fenced final admission.
 - [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md) —
   fail-closed privacy and deployment policy.
 - [System Architecture](./system-architecture.md) — subsystem data flow.
+- [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) —
+  Phase 05 pair transaction, final claim, coordinator, and status projection.
 
 ## Unresolved questions
 
 None requiring a product decision. Kernel support, procfs visibility, and
-observer latency remain deployment qualification prerequisites; automatic
-eligibility and final handoff remain Phase 05 work.
+observer latency remain deployment qualification prerequisites; the Phase 05
+sampler and final handoff contract are documented in
+[Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).

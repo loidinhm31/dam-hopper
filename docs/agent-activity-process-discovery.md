@@ -16,8 +16,9 @@ complete or authorize suspend.
 
 Phase 03 consumes the qualified PTY roots and atomic output handles from Phase
 02. Phase 04 consumes only the prepared `OwnedSocketSet` and performs owned
-TCP byte observation; Phase 05 owns the pair-commit, retry, final admission,
-and authenticated warning projection.
+TCP byte observation. Phase 05 combines both prepared samples in the dedicated
+[transactional sampler and admission layer](./agent-activity-automatic-admission.md),
+which owns retry, final admission, and authenticated warning projection.
 
 ## Observation flow
 
@@ -197,8 +198,9 @@ tests; the broader idle-suspend and PTY suites remain integration-gate evidence.
 The tests exercise the parser, finite interpreter grammar, fake-proc bounds,
 identity races, namespace and FD handling, retention/reparenting, safe warning
 identity, representative socket ownership, and transactional prepare/commit
-behavior. TCP observation is documented and tested separately; coordinator
-admission, public status, and host-suspend qualification belong to later phases.
+behavior. TCP observation is documented and tested separately; the Phase 05
+sampler, coordinator admission, and public status contract are documented in
+the [automatic admission guide](./agent-activity-automatic-admission.md).
 
 ## Related documentation
 
@@ -206,6 +208,8 @@ admission, public status, and host-suspend qualification belong to later phases.
   raw-output/input evidence consumed here.
 - [Owned TCP Byte Observation](./tcp-activity-observation.md) — Phase 04
   bounded netlink transport, `tcp_info` parsing, and baseline comparison.
+- [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) —
+  Phase 05 transactional sampling, final admission, coordinator, and status.
 - [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md) —
   privacy and fail-closed deployment policy.
 - [System Architecture](./system-architecture.md) — subsystem data flow.

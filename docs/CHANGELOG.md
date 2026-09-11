@@ -1,12 +1,25 @@
 # 2026-09-11
 
+- **Configured-agent activity idle suspend — Phase 05 complete.** Added the
+  dedicated joinable transactional sampler worker, sequential process/TCP
+  prepare with raw-output and manager invalidation fences, one-deep
+  retryable-close-race retry, back-to-back baseline commit, and opaque final
+  admission tickets.
+- Added manager-locked automatic admission for policy, request/activity/epoch/
+  timing revisions, quiet deadline, observation age, input/generation/root/
+  output fences, and PTY lifecycle blockers. Public status now requires
+  `automaticPolicy`, reports nullable `activity`, and projects bounded
+  `measurementWarning` process identities (maximum 32, no args or socket
+  details). Coordinator recovery latches spent epochs and joins the sampler
+  before PTY teardown.
+
 - **Configured-agent activity idle suspend — Phase 02 complete.** PTY sessions now capture qualified root `(pid, start_ticks)` identity per incarnation, count raw PTY reads with a saturating counter, fence accepted input before writer dispatch, reject writes during handoff, and expose bounded private observation snapshots without leaking terminal content.
-- Validation passed: focused PTY activity tests **8/8**; PTY module suite **159 passed, 1 ignored** (pre-existing performance gate). Code review scored **9.5/10** with no critical issues. Phase 03 and Phase 04 completion entries follow; Phases 05–08 remain pending.
+- Validation passed: focused PTY activity tests **8/8**; PTY module suite **159 passed, 1 ignored** (pre-existing performance gate). Code review scored **9.5/10** with no critical issues. At that point, Phase 03 and Phase 04 completion entries followed and Phases 05–08 were pending.
 - **Configured-agent activity idle suspend — Phase 03 complete.** Added private bounded `ProcessDiscovery<S>` over `ProcessSource`/`LinuxProcSource`, exact identity-safe root/retained descendant attribution, finite executable matching, same-namespace socket ownership, and transactional prepared samples.
 - Enforced caps for 256 roots, 8,192 scanned processes, 1,024 relevant processes, 4,096 FDs per process, 8,192 socket inodes, and 16 KiB command lines; incomplete, stale, and ambiguous observations fail closed.
-- Validation passed: latest focused process discovery validation **18/18**, idle-suspend **100/100**, and PTY **187/187** (one pre-existing performance test ignored). Code review approved **9.0/10** with no critical issues. Phase 04 is complete; Phases 05–08 remain pending.
+- Validation passed: latest focused process discovery validation **18/18**, idle-suspend **100/100**, and PTY **187/187** (one pre-existing performance test ignored). Code review approved **9.0/10** with no critical issues. At that point, Phase 04 and later phases were pending.
 - **Configured-agent activity idle suspend — Phase 04 complete.** Added direct unprivileged `NETLINK_SOCK_DIAG` TCP4/TCP6 byte observation, bounded multipart framing and `TCP_INFO` parsing, persistent cookie/family/namespace identity, per-socket differential activity, transactional prepare/commit, and fail-closed transport/privacy handling.
-- Validation passed: Phase 04 TCP/netlink focus **40/40**, latest activity suite **59/59**, full idle-suspend library **128/128**, and crate-wide idle-suspend **142/142**. Cycle-2 code review approved **9.8/10** with no critical issues. Phases 05–08 remain pending.
+- Validation passed: Phase 04 TCP/netlink focus **40/40**, latest activity suite **59/59**, full idle-suspend library **128/128**, and crate-wide **142/142**; all reported runs passed. Cycle-2 code review approved **9.8/10** with no critical issues. At that point, Phases 05–08 were pending.
 
 # 2026-09-10
 

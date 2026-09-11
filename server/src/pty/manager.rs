@@ -1135,6 +1135,90 @@ impl PtySessionManager {
             .fleet
             .try_claim_forced_handoff(expected_generation)
     }
+    /// Attempt to claim agent activity handoff admission.
+    ///
+    /// Under the single manager inner lock, verifies startup policy, ticket and revision
+    /// fences, deadline, observation age, input revision, fleet generation, exact live roots,
+    /// raw output checkpoints, and lifecycle state before setting handoff_active.
+    pub(crate) fn try_claim_agent_activity_handoff(
+        &self,
+        admission: crate::idle_suspend::activity::AgentActivityAdmission<'_>,
+    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError> {
+        let mut inner = self.inner.lock().unwrap();
+
+        // 1. Startup automatic policy must be AgentActivity and enabled
+        if admission.automatic_policy != crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentActivity
+            || !admission.automatic_enabled
+        {
+            return Err(crate::pty::fleet_state::HandoffClaimError::PolicyMismatch);
+        }
+
+        // 2. Request and revision values must match accepted admission
+        if admission.accepted_request_id != admission.ticket.request_id
+            || admission.accepted_activity_revision != admission.ticket.activity_revision
+            || admission.accepted_epoch_activity_revision != admission.ticket.epoch_activity_revision
+            || admission.accepted_timing_revision != admission.ticket.timing_revision
+        {
+            return Err(crate::pty::fleet_state::HandoffClaimError::PolicyMismatch);
+        }
+
+        // 3. Monotonic deadline must remain expired
+        if admission.now < admission.ticket.eligibility_deadline {
+            return Err(crate::pty::fleet_state::HandoffClaimError::DeadlineNotExpired);
+        }
+
+        // 4. Observation age must be <= 5 seconds
+        if admission
+            .now
+            .saturating_duration_since(admission.ticket.completed_at)
+            > crate::idle_suspend::activity::MAX_ACCEPTED_OBSERVATION_AGE
+        {
+            return Err(crate::pty::fleet_state::HandoffClaimError::ObservationStale);
+        }
+
+        // 5. Input revision must match ticket
+        if inner.input_revision != admission.ticket.input_revision {
+            return Err(crate::pty::fleet_state::HandoffClaimError::InputRevisionMismatch);
+        }
+
+        // 6. Fleet generation must match ticket
+        if inner.fleet.generation() != admission.ticket.fleet_generation {
+            return Err(crate::pty::fleet_state::HandoffClaimError::GenerationMismatch {
+                expected: admission.ticket.fleet_generation,
+                actual: inner.fleet.generation(),
+            });
+        }
+
+        // 7. Check live sessions match roots in ticket
+        if inner.live.len() != admission.ticket.roots.len() {
+            return Err(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch);
+        }
+        for (terminal, expected_root) in &admission.ticket.roots {
+            let session = inner
+                .live
+                .get(&terminal.session_id)
+                .ok_or(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch)?;
+            if session.incarnation != terminal.incarnation {
+                return Err(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch);
+            }
+            if session.root_qualification.process_identity() != Some(*expected_root) {
+                return Err(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch);
+            }
+        }
+
+        // 8. Check raw output fences
+        for fence in &admission.ticket.output_fences {
+            let current_seq = fence.output_sequence.load(std::sync::atomic::Ordering::Acquire);
+            if current_seq >= crate::pty::activity::SATURATED_COUNTER_SENTINEL
+                || current_seq != fence.accepted_sequence
+            {
+                return Err(crate::pty::fleet_state::HandoffClaimError::RawOutputAdvanced);
+            }
+        }
+
+        // 9. Atomic fleet handoff claim (checks closing, disposing, handoff_active, creating, restart_pending)
+        inner.fleet.try_claim_agent_handoff(admission.ticket.fleet_generation)
+    }
 
     pub fn release_handoff(&self) {
         self.inner.lock().unwrap().fleet.release_handoff();
@@ -4384,28 +4468,43 @@ fn apply_child_env(cmd: &mut CommandBuilder, env: &HashMap<String, String>) {
 }
 #[cfg(unix)]
 fn resolve_current_user_account() -> Option<(String, String, String)> {
-    let euid = unsafe { libc::geteuid() };
-    let pwd = unsafe { libc::getpwuid(euid) };
-    if pwd.is_null() {
-        return None;
-    }
-    let pwd_ref = unsafe { &*pwd };
-    let name = unsafe {
-        std::ffi::CStr::from_ptr(pwd_ref.pw_name)
-            .to_string_lossy()
-            .into_owned()
-    };
-    let home = unsafe {
-        std::ffi::CStr::from_ptr(pwd_ref.pw_dir)
-            .to_string_lossy()
-            .into_owned()
-    };
-    let shell = unsafe {
-        std::ffi::CStr::from_ptr(pwd_ref.pw_shell)
-            .to_string_lossy()
-            .into_owned()
-    };
-    Some((name, home, shell))
+    static CACHE: std::sync::LazyLock<Option<(String, String, String)>> = std::sync::LazyLock::new(|| {
+        let euid = unsafe { libc::geteuid() };
+        let mut pwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut result = std::ptr::null_mut();
+        let mut buf = vec![0u8; 4096];
+        let rc = unsafe {
+            libc::getpwuid_r(
+                euid,
+                pwd.as_mut_ptr(),
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+                &mut result,
+            )
+        };
+        if rc == 0 && !result.is_null() {
+            let pwd_ref = unsafe { &*result };
+            let name = unsafe {
+                std::ffi::CStr::from_ptr(pwd_ref.pw_name)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let home = unsafe {
+                std::ffi::CStr::from_ptr(pwd_ref.pw_dir)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let shell = unsafe {
+                std::ffi::CStr::from_ptr(pwd_ref.pw_shell)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            Some((name, home, shell))
+        } else {
+            None
+        }
+    });
+    CACHE.clone()
 }
 
 fn build_child_env(env: &HashMap<String, String>) -> Vec<(String, OsString)> {

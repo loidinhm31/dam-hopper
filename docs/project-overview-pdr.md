@@ -676,12 +676,12 @@ isolation and the four-service `dam-hopper status` projection are covered. See
   regressions cover boundaries and compatibility without touching host power.
 
 
-### PR-017: Configured-Agent Activity Idle-Suspend Policy and Evidence (Phases 01–04)
+### PR-017: Configured-Agent Activity Idle-Suspend Policy and Evidence (Phases 01–05)
 
 **Status:** Phase 01 policy/configuration, Phase 02 PTY evidence, Phase 03
-bounded process discovery, and Phase 04 owned TCP byte observation are
-implemented (Phase 04 complete 2026-09-11). Automatic eligibility and the final
-automatic handoff claim remain pending in Phase 05.
+bounded process discovery, Phase 04 owned TCP byte observation, and Phase 05
+transactional sampling, automatic eligibility, bounded warnings, and the final
+automatic handoff claim are implemented (Phase 05 complete 2026-09-11).
 
 **Requirements:** Persist `automatic_policy` (`empty-fleet` by default or
 `agent-activity`) and a validated `agent_executables` list under
@@ -798,12 +798,51 @@ implementation contract and failure taxonomy.
 See [Configured-Agent Process Discovery](./agent-activity-process-discovery.md)
 for the implementation contract.
 
-No public endpoint or automatic `agent-activity` claim is introduced by
-Phases 02–04. See [PTY Activity Observation](./pty-activity-observation.md),
-[Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
-and [Owned TCP Byte Observation](./tcp-activity-observation.md) for the
-private evidence contracts. Phase 05 owns the coordinator/sampling work and
-the final automatic policy claim.
+#### Phase 05 — Transactional sampler and automatic admission
+
+Phase 05 completes the configured-agent automatic path without widening the
+private evidence boundary. A dedicated joinable `idle-suspend-sampler` worker
+owns `ProcessDiscovery` and `TcpObserver`. It prepares process and TCP samples
+sequentially, verifies raw-output checkpoints and a second PTY snapshot, retries
+one retryable close race within the acceptance deadline, then commits both
+prepared baselines back-to-back. Only a complete unchanged final sample mints
+an opaque claim ticket.
+
+**Changed implementation files:** `server/src/idle_suspend/activity/sampler.rs`,
+`server/src/idle_suspend/coordinator.rs`, `server/src/idle_suspend/status.rs`,
+`server/src/pty/manager.rs`, `server/src/pty/fleet_state.rs`,
+`server/src/state.rs`, and `server/src/main.rs`.
+
+**Requirements and acceptance criteria:**
+
+- [x] `PtySessionManager::try_claim_agent_activity_handoff` checks startup
+  policy/enabled state, request/activity/epoch/timing revisions, quiet
+  deadline, five-second observation age, input revision, fleet generation,
+  exact live root incarnations, raw output fences, and lifecycle blockers under
+  one manager lock before setting `handoff_active`.
+- [x] The coordinator supports both automatic policies. `empty-fleet` retains
+  the active-to-empty epoch path; `agent-activity` requires a complete
+  baseline, qualifying context, lifecycle-clear fleet, and an unspent epoch
+  before arming and sending an asynchronous final sample.
+- [x] Genuine input, output, network, process, or managed-lifecycle deltas
+  reset the quiet anchor. A successful claim spends the epoch revision;
+  recovery sampling after resume/release reconciles state without advancing
+  `current_epoch` or silently rearming the spent epoch.
+- [x] Public v1 status always includes `automaticPolicy`; `activity` is nullable
+  under `empty-fleet` and populated under `agent-activity` with measurement
+  state, reason, bounded counts, timestamps, TCP coverage, and optional
+  `measurementWarning`. Warning processes are PID/safe-identity records capped
+  at 32, with no arguments, socket details, terminal bytes, or diagnostics.
+- [x] `is_meaningful_change` ignores status revision/timestamp heartbeat churn,
+  sampled-time churn, and elapsed warning-duration churn while preserving
+  semantic activity, warning, fleet, timing, epoch, and coordinator changes.
+- [x] Coordinator shutdown joins the sampler before PTY readers and manager
+  teardown; unavailable or stale evidence fails closed and cannot authorize
+  automatic suspend.
+
+See [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md)
+for the transaction sequence, ticket fields, status shape, state transitions,
+privacy contract, and verification map.
 
 ## Non-Functional Requirements
 
