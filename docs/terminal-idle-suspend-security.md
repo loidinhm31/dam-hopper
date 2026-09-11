@@ -302,6 +302,36 @@ field null and does not start the sampler. Coordinator shutdown joins the
 worker before PTY readers and manager teardown. See [Agent Activity Automatic
 Admission](./agent-activity-automatic-admission.md) for the implementation
 contract.
+### Protected status and browser UI Phase 06 (2026-09-11)
+
+The additive v1 status fields are protected by the existing authentication
+layer and remain `Cache-Control: no-store`. The UI client validates the
+transport response as `unknown`; only a valid base response with both
+`automaticPolicy` and `activity` omitted receives the narrow old-server
+`empty-fleet`/`null` normalization. Partial fields, undefined values,
+malformed enums/counts/timestamps, invalid warning entries, and policy/activity
+mismatches fail closed. Transport and authentication failures are never
+converted into legacy status.
+
+The browser exposes the measurement warning only through the authenticated
+status view. Its bounded projection is at most 32 strictly ordered positive
+PIDs plus optional non-empty safe executable identities (maximum 256 UTF-8
+bytes, no controls), reason, onset, and truncation. It excludes arguments,
+environment, matcher lists, terminal/session/root/start identities, socket
+addresses/inodes, terminal bytes, tokens, counters, and raw diagnostics.
+Rejected decoder errors do not stringify response data, and warning details do
+not enter logs, audits, WebSocket hints, local storage, analytics, or exported
+reports.
+
+Measurement state is informational and fail-closed: initializing/unavailable
+cannot become quiet or an automatic-ready claim, and nullable counts remain
+unknown rather than zero. `armDeadlineMs` is the only browser countdown; the
+shared local display tick also measures warning duration without making
+requests, changing admission, or creating persistence. Agent activity remains a
+heuristic, not an authorization boundary; the server's manager-locked claim and
+existing manual force gates remain authoritative. See [Protected Idle-Suspend
+Status and Browser UI](./idle-suspend-status-ui.md).
+
 
 ### Cross-Origin Port & Transport Guard Policy (2026-09-07)
 

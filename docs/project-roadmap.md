@@ -4,15 +4,35 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Configured-agent activity idle suspend (2026-09-11)
 
-- **Phase 05 — transactional sampler and automatic admission: DONE (2026-09-11).** Phases 01–05 of configured-agent activity idle suspend are implemented; later plan phases remain pending.
-- Phase 03 adds private `ProcessDiscovery<S>` over the `ProcessSource` seam, production `LinuxProcSource`, exact `(pid, start_ticks)` lineage with retained reparenting, finite native/interpreter matching, same-namespace owned-socket discovery, and transactional sample commit.
-- Hard bounds are 256 live roots, 8,192 scanned processes, 1,024 relevant processes, 4,096 FDs per process, 8,192 owned socket inodes, and 16 KiB command lines. Incomplete or stale observations remain unavailable.
-- Validation: latest focused process discovery validation **18/18**; the idle-suspend suite **100/100**; and PTY **187/187** (one pre-existing performance test ignored). [Parent plan](../plans/260910-1604-agent-activity-idle-suspend/plan.md) · [Phase 03 plan](../plans/260910-1604-agent-activity-idle-suspend/phase-03-process-discovery.md) · [Documentation/test validation](../plans/reports/docs-260911-0246-phase-03-process-discovery.md) · [Implementation test report](../plans/reports/tester-260911-0236-phase-03-process-discovery.md).
-- Code review approved Phase 03 at **9.0/10** with no critical issues. [Review](../plans/reports/code-review-260911-0237-phase-03-process-discovery.md).
-- Phase 04 adds direct unprivileged `NETLINK_SOCK_DIAG` TCP4/TCP6 byte observation, bounded multipart framing and `TCP_INFO` parsing, persistent cookie/family/namespace identity, per-socket differential activity, transactional prepare/commit, and fail-closed transport/privacy handling.
-- Validation: Phase 04 TCP/netlink focus **40/40**; latest activity suite **59/59**; full idle-suspend library **128/128** and crate-wide **142/142**; all reported runs passed. [Phase 04 plan](../plans/260910-1604-agent-activity-idle-suspend/phase-04-tcp-observation.md) · [Test report](../plans/reports/tester-260911-0313-phase04-tcp-byte-observation.md).
-- Code review approved Phase 04 at **9.8/10** with no critical issues. [Cycle 2 review](../plans/reports/code-review-260911-0738-phase04-tcp-byte-observation-cycle2.md).
-- **Next steps:** Complete the remaining plan phases after Phase 05; the implementation contract is [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).
+- **Phases 01–06 — DONE (2026-09-11).** Policy/configuration, PTY evidence,
+  bounded process discovery, owned TCP observation, transactional sampler and
+  coordinator admission, and protected status/browser UI are implemented.
+- Phase 03 adds private `ProcessDiscovery<S>` over `ProcessSource`, production
+  `LinuxProcSource`, exact `(pid, start_ticks)` lineage with retained
+  reparenting, finite native/interpreter matching, same-namespace owned-socket
+  discovery, and transactional sample commit.
+- Phase 04 adds direct unprivileged `NETLINK_SOCK_DIAG` TCP4/TCP6 byte
+  observation, bounded multipart framing and `TCP_INFO` parsing, persistent
+  cookie/family/namespace identity, per-socket differential activity, and
+  fail-closed transport/privacy handling.
+- Phase 05 adds the dedicated joinable sampler, manager-locked final claim,
+  bounded warning projection, epoch/recovery fencing, and public v1 activity
+  status. Phase 06 adds strict `unknown`-boundary decoding, exact old-server
+  normalization, aggregate policy/measurement UI, warning duration/PID-safe
+  identity display, sole arm countdown, and manual-force regressions. No
+  matcher or policy mutation surface is added.
+- Hard bounds remain 256 live roots, 8,192 scanned processes, 1,024 relevant
+  processes, 4,096 FDs per process, 8,192 owned socket inodes, 16 KiB command
+  lines, and 32 warning process examples. Incomplete or stale observations
+  remain unavailable.
+- Validation: Phase 03 focused **18/18**, Phase 04 TCP/netlink **40/40** and
+  crate **142/142**, Phase 05 server **1031/1031**, and Phase 06 backend
+  **9/9**, frontend **41/41**, Chromium **13/13**. Phase 06 code review:
+  **9.7/10**, approved. See the [Phase 06 status/UI guide](./idle-suspend-status-ui.md)
+  and [parent plan](../plans/260910-1604-agent-activity-idle-suspend/plan.md).
+- **Next steps:** Phase 07 integrated qualification; Phase 08 documentation and
+  opt-in rollout remain pending. Automatic real-host suspend remains an
+  explicit Operations gate.
 
 ### Production CLI Deployment Setup for Idle Suspend Helper & Socket (2026-09-09)
 

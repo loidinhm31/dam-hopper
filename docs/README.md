@@ -21,6 +21,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Configured-Agent Process Discovery](./agent-activity-process-discovery.md)** — Phase 03 bounded procfs discovery, attribution, and `ProcessSource` contract
 - **[Owned TCP Byte Observation](./tcp-activity-observation.md)** — Phase 04 bounded `NETLINK_SOCK_DIAG`, `tcp_info`, and per-socket baseline contract
 - **[Agent Activity Automatic Admission](./agent-activity-automatic-admission.md)** — Phase 05 transactional sampler, generation-fenced final claim, status warning, and coordinator lifecycle
+- **[Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md)** — Phase 06 decoder, aggregate activity presentation, warning/privacy boundary, and manual-force preservation
 
 ## Reference Documentation
 
@@ -97,7 +98,8 @@ exists before linking it from a new document.
 - See: [API Reference](./api-reference.md#terminals)
 
 **Terminal Idle Suspend** — Server-authoritative, opt-in Linux suspend with
-bounded automatic timing and a fixed enrolled helper.
+bounded automatic timing, a fixed enrolled helper, and an observation-only
+configured-agent activity policy.
 
 - Status: `GET /api/system/idle-suspend/v1/status`; timing: `PATCH .../timing`
 - Automatic persisted wake values remain `60..=86400` seconds.
@@ -106,12 +108,18 @@ bounded automatic timing and a fixed enrolled helper.
 - Phase 02 PTY evidence and input admission are implemented. Phase 03
   provides bounded configured-agent process discovery and retained attribution.
   Phase 04 provides owned TCP byte observation and per-socket baseline
-  comparison. Phase 05 adds the dedicated transactional sampler, manager-locked
-  final admission, bounded status warnings, and the `agent-activity` state path.
+  comparison. Phase 05 adds the dedicated transactional sampler,
+  manager-locked final admission, bounded status warnings, and the
+  `agent-activity` state path.
+- Phase 06 adds strict client decoding with narrow old-server normalization,
+  aggregate status/measurement-warning presentation, a sole arm countdown, and
+  Chromium/manual-force regressions. It does not add matcher controls, policy
+  mutation, a new endpoint, or automatic authority in the browser.
 - See [PTY Activity Observation](./pty-activity-observation.md),
   [Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
-  [Owned TCP Byte Observation](./tcp-activity-observation.md), and
-  [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).
+  [Owned TCP Byte Observation](./tcp-activity-observation.md), [Agent Activity
+  Automatic Admission](./agent-activity-automatic-admission.md), and
+  [Protected Status and Browser UI](./idle-suspend-status-ui.md).
 - Phase 01 helper execution accepts `wakeAfterSeconds: 0` for clear-only,
   indefinite sleep; it clears and verifies RTC state without target arithmetic.
 - Unexpected pre-existing RTC alarms, inhibitors, capability failures, and RTC

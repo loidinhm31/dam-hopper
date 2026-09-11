@@ -8,7 +8,7 @@ This document provides a high-level overview of the current repository. Historic
 
 **Repository Snapshot**:
 
-- Repomix snapshot (2026-09-11): 1,799 files, 3,836,103 tokens, and 15,699,864 characters.
+- Repomix snapshot (2026-09-11): 1,806 files, 3,882,732 tokens, and 15,921,030 characters.
 - Repomix security scanning excluded five suspicious files from the snapshot; review them separately before relying on a complete-file inventory.
 - The repository is predominantly Rust (`server/`) and TypeScript/React (`apps/`, `packages/`).
 
@@ -66,7 +66,7 @@ The snapshot is a compaction aid, not a release artifact; generated
   - Protocol: version 1, required camelCase fields, deny-unknown-fields JSON, 4 KiB length-prefixed helper frames, request-ID dedupe, and strict REST DTOs (`ForceSuspendRequest`, `ForceSuspendAcceptedResponse`, `IdleSuspendConflictResponse`).
   - Coordinator & Fleet: dual automatic policies, PTY generation/lifecycle fencing, automatic armed grace and epoch latching, Phase 05 final admission, forced handoff (`force: true` bypasses quiescence only), and status revision hints (`host:idleSuspendChanged`).
   - Agent-activity sampler: one joinable worker owns `ProcessDiscovery`/`TcpObserver`, commits both prepared baselines only after raw-output and manager invalidation checks, retries close races once, and emits bounded warning/status data.
-  - Helper order: peer/protocol validation → dedupe → suspend/RTC/inhibitor preflight → synced intent audit → clear/readback (and timed write/readback) → fixed suspend → completion audit; REST/UI force sleep remains protected and `Cache-Control: no-store`.
+  - Phase 06 client/UI: `decodeIdleSuspendStatusV1` validates unknown transport data and narrowly normalizes old servers; `HostIdleSuspendStatus` renders policy/measurement/unknown counts, TCP coverage, bounded warnings, the sole arm countdown, and preserves actual-fleet manual force confirmation. See [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md).
 - **Configured-agent PTY activity seam (Phase 02)**: `server/src/pty/activity.rs`
   defines `ProcessIdentity`, `TerminalIdentity`, `RootQualification`,
   `PtyActivitySnapshot`, `PtyActivityWatcher`, proc-stat parsing, and a
@@ -81,10 +81,7 @@ The snapshot is a compaction aid, not a release artifact; generated
 - **Owned TCP byte observation (Phase 04)**: private unprivileged
   `NETLINK_SOCK_DIAG`, bounded `tcp_info` parsing and framing, namespace
   fencing, retryable close-race classification, and transactional baselines.
-- **Configured-agent automatic admission (Phase 05)**: dedicated transactional
-  sampler, manager-locked revision/root/output/lifecycle gates, bounded status
-  warnings, opaque final tickets, epoch latching, recovery sampling, and
-  worker join; see [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).
+- **Configured-agent automatic admission and status UI (Phases 05–06)**: dedicated transactional sampler, manager-locked revision/root/output/lifecycle gates, bounded status warnings, opaque final tickets, epoch latching, recovery sampling, strict client decoding, aggregate warning presentation, and worker join; see [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) and [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md).
 - **Linux release manager**: `server/src/linux_release/` validates Manifest v1,
   role projections, transaction-scoped units, helper policy, and
   `systemd-analyze verify`.
@@ -736,7 +733,7 @@ dam-hopper/
 - **Configured-agent activity Phase 02**: focused coverage proves root identity,
   raw-read/input/handoff/incarnation/replay, local PTY observation, and incomplete reasons (8/8 focused; PTY module 159 passed, 1 ignored pre-existing performance test).
 - **Configured-agent process discovery Phase 03**: focused module tests **18/18** cover the source seam, identity/lineage, finite matching, namespace/socket bounds, typed unavailable outcomes, and transactional prepare/commit.
-- **Owned TCP byte observation Phase 04**: focused tests cover parser, netlink framing/deadlines/budget, ownership/namespace failures, close-race classification, and transactional baseline comparison; Phase 05 coordinator and manager admission gates are covered in `server/src/idle_suspend/tests.rs` and `server/src/pty/tests.rs`.
+- **Owned TCP byte observation, transactional admission, and status/UI (Phases 04–06)**: Phase 04 TCP/netlink and crate coverage completed; Phase 05 server **1031/1031**, idle-suspend **131/131**, sampler **7/7**, and manager-fence **7/7**; Phase 06 protected API **9/9**, frontend unit **41/41**, and Chromium **13/13**; no real host suspend is performed.
 - **Web**: Component tests with Vitest, 80% coverage target
 
 ### Known Limitations (Pre-existing)
@@ -785,7 +782,7 @@ dam-hopper/
 | [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
 | [pty-activity-observation.md](./pty-activity-observation.md) | Phase 02 private PTY identity, output, input, snapshot, and watcher contract |
 | [agent-activity-process-discovery.md](./agent-activity-process-discovery.md) | Phase 03 bounded process discovery, attribution, and `ProcessSource` contract |
-| [tcp-activity-observation.md](./tcp-activity-observation.md) | Phase 04 bounded TCP diagnostics and per-socket baseline; [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) covers Phase 05 transaction and claim |
+| [tcp-activity-observation.md](./tcp-activity-observation.md) | Phase 04 bounded TCP diagnostics and per-socket baseline; [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) covers Phase 05 transaction/claim; [idle-suspend-status-ui.md](./idle-suspend-status-ui.md) covers Phase 06 decoder/UI |
 | [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
 | [native-browser-debug-support.md](./native-browser-debug-support.md)   | Native Browser Debug platform gate and security boundaries |
 | [user-guide-multi-server-profiles.md](./user-guide-multi-server-profiles.md) | Profile storage, switching, and cross-origin policy |
@@ -794,4 +791,4 @@ dam-hopper/
 | [CHANGELOG.md](./CHANGELOG.md)                               | Dated implementation and release notes           |
 ---
 
-**Last Updated**: September 11, 2026. **Phase Status**: Helper deployment is complete and verified (2026-09-10); policy/configuration, PTY Phase 02, bounded process discovery Phase 03, owned TCP byte observation Phase 04, and configured-agent transactional sampling/final admission Phase 05 are implemented. **Generated by**: Repomix v1.18.0 (1,802 files / 3,862,877 tokens / 15,832,937 characters); five security-flagged files were excluded.
+**Last Updated**: September 11, 2026. **Phase Status**: Helper deployment is complete and verified (2026-09-10); configured-agent policy, PTY Phase 02, process discovery Phase 03, TCP observation Phase 04, transactional sampler/admission Phase 05, and protected status/browser UI Phase 06 are implemented. Phase 07 integrated qualification and Phase 08 rollout remain pending. **Generated by**: Repomix v1.18.0 (1,806 files / 3,882,732 tokens / 15,921,030 characters); five security-flagged files were excluded.
