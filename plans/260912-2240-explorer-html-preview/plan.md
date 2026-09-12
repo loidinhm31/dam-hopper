@@ -41,7 +41,7 @@ Add an in-editor sandboxed HTML live preview (`HtmlHost`) with Edit | Split | Pr
 | # | Phase | Status | Effort | Link |
 |---|---|---|---:|---|
 | 1 | HTML File Helper, Mode Persistence, and Sandboxed HtmlPreview | Completed (2026-09-12 22:45) | 2h | [phase-01](./phase-01-helpers-and-html-preview.md) |
-| 2 | HtmlHost Editor Component and EditorTabs Routing | Pending | 2h | [phase-02](./phase-02-html-host-and-editor-tabs.md) |
+| 2 | HtmlHost Editor Component and EditorTabs Routing | Completed (2026-09-12 22:54) | 2h | [phase-02](./phase-02-html-host-and-editor-tabs.md) |
 | 3 | Explorer Context Menu Integration and Test Coverage | Pending | 2h | [phase-03](./phase-03-explorer-menu-and-tests.md) |
 
 ## Side-Effect Review

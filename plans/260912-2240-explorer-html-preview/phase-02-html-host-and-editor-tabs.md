@@ -10,8 +10,8 @@
 - **Date**: 2026-09-12
 - **Description**: Build `HtmlHost.tsx` containing the Edit | Split | Preview mode toggle, lazy MonacoHost editor integration, and `HtmlPreview` pane. Route HTML files from `EditorTabs.tsx` to `HtmlHost`.
 - **Priority**: P2
-- **Implementation status**: Pending
-- **Review status**: Not reviewed
+- **Implementation status**: Completed (2026-09-12 22:54)
+- **Review status**: Completed
 
 ## Key Insights
 - `EditorTabs.tsx` currently routes `/\.mdx?$/i.test(activeTab.name)` to a lazy-loaded `MarkdownHost`.
@@ -68,10 +68,10 @@ flowchart TD
    - Verify Monaco and HtmlPreview render according to mode.
 
 ## Todo list
-- [ ] Implement `HtmlHost.tsx`
-- [ ] Add `HtmlHost.test.tsx` unit tests
-- [ ] Update `EditorTabs.tsx` to route HTML files to `HtmlHost`
-- [ ] Verify editor switching between different file types
+- [x] Implement `HtmlHost.tsx`
+- [x] Add `HtmlHost.test.tsx` unit tests
+- [x] Update `EditorTabs.tsx` to route HTML files to `HtmlHost`
+- [x] Verify editor switching between different file types
 
 ## Success Criteria
 - Opening `sample.html` loads `HtmlHost`.
@@ -86,6 +86,12 @@ flowchart TD
 ## Security Considerations
 - Read-only state is propagated to `HtmlHost` and `MonacoHost` when target is unavailable.
 - Sandboxed preview pane remains isolated in all modes.
+
+## Completion notes
+- Completed at: 2026-09-12 22:54
+- Implemented `HtmlHost.tsx` with Edit | Split | Preview mode bar, layout switching, and preference persistence.
+- Added lazy-loaded routing for HTML files in `EditorTabs.tsx`.
+- Added unit tests in `HtmlHost.test.tsx` (6 tests passing).
 
 ## Next steps
 - Proceed to Phase 03 for Explorer context menu integration and end-to-end test validation.
