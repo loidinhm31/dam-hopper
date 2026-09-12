@@ -85,7 +85,7 @@ export function MarkdownHost({
               "px-2.5 py-0.5 text-[11px] font-medium rounded-sm transition-colors",
               mode === id
                 ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
-                : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]",
+                : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface)]",
             )}
           >
             {label}

@@ -89,4 +89,47 @@ describe("getTreeContextMenuItems", () => {
     expect(h.onNewFile).toHaveBeenCalledOnce();
     expect(h.onNewFolder).toHaveBeenCalledOnce();
   });
+
+  it("shows Preview action for HTML files when onPreview is provided", () => {
+    const onPreview = vi.fn();
+    const items = getTreeContextMenuItems({
+      ...baseHandlers(),
+      isDir: false,
+      isHtml: true,
+      onPreview,
+    });
+    expect(labels(items)).toEqual([
+      ["Copy Absolute Path", false],
+      ["Copy Relative Path", false],
+      ["Preview", false],
+      ["Rename", false],
+      ["Download", false],
+      ["Delete", false],
+    ]);
+
+    items.find((item) => item.label === "Preview")?.onClick();
+    expect(onPreview).toHaveBeenCalledOnce();
+  });
+
+  it("does not show Preview action for non-HTML files or directories", () => {
+    const onPreview = vi.fn();
+
+    // Non-HTML file
+    const fileItems = getTreeContextMenuItems({
+      ...baseHandlers(),
+      isDir: false,
+      isHtml: false,
+      onPreview,
+    });
+    expect(fileItems.some((item) => item.label === "Preview")).toBe(false);
+
+    // Directory
+    const dirItems = getTreeContextMenuItems({
+      ...baseHandlers(),
+      isDir: true,
+      isHtml: true,
+      onPreview,
+    });
+    expect(dirItems.some((item) => item.label === "Preview")).toBe(false);
+  });
 });

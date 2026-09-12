@@ -231,6 +231,31 @@ preserve image tabs as preview-only. Legacy persisted image tabs are normalized
 before they can enter a text/binary read path, and status overlays report
 capability or stream failures without materializing image bytes.
 
+### Explorer HTML Preview
+
+**Locations:** `packages/ui/src/components/organisms/HtmlHost.tsx`,
+`packages/ui/src/components/organisms/HtmlPreview.tsx`,
+`packages/ui/src/components/organisms/EditorTabs.tsx`,
+`packages/ui/src/components/organisms/TreeContextMenu.tsx`,
+`packages/ui/src/components/organisms/FileTree.tsx`,
+`packages/ui/src/lib/html-file.ts`, and
+`packages/ui/src/lib/html-view-mode-persistence.ts`.
+
+Provides file detection, presentation persistence, editor host routing, context menu preview actions, and sandboxed preview rendering for HTML documents:
+
+- **Detection (`html-file.ts`):** Identifies `.html`, `.htm`, and `.xhtml` case-insensitively, maps to standard HTML/XHTML MIME types (`text/html`, `application/xhtml+xml`), and checks preview candidate suitability (excluding diff, large, and binary tabs). Dotfiles without a base name (e.g. `.html`) are excluded.
+- **View Mode Persistence (`html-view-mode-persistence.ts`):** Manages user view mode selection (`"edit" | "split" | "preview"`) via browser `localStorage` key `dam-hopper:html-view-mode:v1`, defaulting to `"edit"`. Storage access is safe and resilient to exceptions or unavailable storage environments. Dispatches the `dam-hopper:html-view-mode-changed` (`HTML_VIEW_MODE_CHANGED_EVENT`) window event on save, enabling live synchronization across mounted tabs without requiring a remount or page reload.
+- **Sandboxed Rendering (`HtmlPreview.tsx`):** Renders HTML content inside a sandboxed `<iframe>` with `sandbox="allow-scripts allow-modals"`. Omission of `allow-same-origin` ensures the document executes with an opaque origin (`"null"`), restricting script access to host parent storage, cookies, and network capabilities. Updates to editor content are debounced by 200ms to avoid DOM thrashing, and an explicit reload control enables forced remounting of the iframe.
+- **Editor Host (`HtmlHost.tsx`):** Split-view HTML editor component offering an **Edit | Split | Preview** top toggle bar. Lazily imports `MonacoHost` to keep initial bundle size lean. Listens to `HTML_VIEW_MODE_CHANGED_EVENT` to react dynamically to external mode changes, while supporting an optional `initialMode` prop override (e.g., when launched into preview mode from an Explorer context menu action) and defaulting to user preference loaded from `dam-hopper:html-view-mode:v1`.
+  - **Edit Mode:** 100% width Monaco code editor.
+  - **Split Mode:** 50% left Monaco editor with divider border, 50% right `HtmlPreview`.
+  - **Preview Mode:** 100% width sandboxed `HtmlPreview`.
+  - Seamlessly forwards editor lifecycle properties (`tabKey`, `path`, `content`, `tier`, `mime`, `viewState`, `readOnly`, `onChange`, `onSave`, `onViewStateChange`, `lineChanges`, `onGitIndicatorClick`).
+- **EditorTabs Routing (`EditorTabs.tsx`):** Detects HTML files via `isHtmlFile(activeTab.name)` before fallback MonacoHost, dynamically loading `HtmlHost` inside a `Suspense` boundary with a centered loading spinner fallback.
+- **Explorer Context Menu Integration (`TreeContextMenu.tsx` & `FileTree.tsx`):** Exposes a dedicated "Preview" action with an `Eye` icon in the right-click context menu for HTML files.
+  - **5 MB Size Threshold:** Restricted strictly to files smaller than 5 MB (`node.size < 5 * 1024 * 1024`). Files exceeding 5 MB, directories, and non-HTML files omit the preview item to avoid memory and performance degradation in the iframe.
+  - **Action Flow:** Clicking "Preview" calls `saveHtmlViewMode("preview")`, which emits `HTML_VIEW_MODE_CHANGED_EVENT` and invokes `onFileOpen(node)`, opening the document directly into Preview mode or live-switching an existing active tab.
+
 ## Terminal Agent Notifications
 
 **Locations:**
@@ -944,7 +969,9 @@ snapshot.
 `WorkspacePage`/shell integration complete (2026-09-02). The surface reads the
 bounded workflow overview and keeps presentation state local; the server
 remains authoritative for workflow validation, timestamps, target ownership,
-and mutation replay.
+and mutation replay. Selected-item note rendering, per-note deletion, and
+inline title/summary editing were restored on 2026-09-07; see [Workflow Context
+Surface](./workflow-context-surface.md) for that contract.
 
 **Locations:**
 
@@ -955,6 +982,9 @@ and mutation replay.
 | `packages/ui/src/components/molecules/WorkflowQuickCapture.tsx` | Compact Plan-first item form with optional parent, summary, status, and immediate session start. |
 | `packages/ui/src/components/molecules/WorkflowItemRow.tsx` | Hierarchical row with depth, status icon/color, selection, active-session marker, note/progress copy, and child count. |
 | `packages/ui/src/components/molecules/WorkflowItemList.tsx` | Plan and standalone-Task trees plus selection and New Plan entry point. |
+| `packages/ui/src/components/molecules/WorkflowSelectedItemBar.tsx` | Selected item status/session/child actions, note drafting, note rendering/deletion, and edit entry point. |
+| `packages/ui/src/components/molecules/WorkflowSelectedItemEditForm.tsx` | Inline title/summary editor with trim, blank-title guard, Save/Cancel, and keyboard shortcuts. |
+| `packages/ui/src/components/molecules/WorkflowSelectedItemNotesList.tsx` | Ordered, independently scrollable note list with timestamps and note-scoped deletion. |
 | `packages/ui/src/components/molecules/WorkflowSessionCard.tsx` | Running/past session details, duration, manual end/abandon controls, links, and suggested end-time review. |
 | `packages/ui/src/components/molecules/WorkflowExecutionList.tsx` | Start/end session controls and manual Agent Harness/Agent Run linking. |
 | `packages/ui/src/components/molecules/WorkflowProjectList.tsx` | Project/worktree target switcher with plan, task, and running-session counts. |
@@ -1082,6 +1112,12 @@ show status-specific icon/color, active-session state, the latest note in
 preference to progress text, and child count. `WorkflowQuickCapture` requires
 a trimmed title, defaults to Plan and Backlog, supports Phase/Task with an
 optional parent, accepts summary text, and can request an immediate session.
+Selecting a row also reveals `WorkflowSelectedItemBar`. The selected detail
+keeps status/session/child actions alongside Note and Delete item controls;
+when wired, Edit opens the inline title/summary form. Existing notes render in
+server order with timestamps and per-note Delete note actions. Item updates
+trim title/summary, encode an empty summary as `null`, and use the selected
+item's `updatedAt` for CAS; note deletion uses the note's `updatedAt`.
 
 Session cards calculate elapsed duration from explicit ISO timestamps and the
 shared `nowMs`. Running cards accept manual end timestamps, provide Now,
@@ -1116,15 +1152,15 @@ TypeScript compilation passed. The focused UI breakdown is 13 pure-helper,
 MobileWorkspaceShell assertions.
 
 Formal source coverage remains unavailable because `@vitest/coverage-v8` and
-Rust coverage tools are not installed. Full Chromium geometry, safe-area/touch,
-focus continuity, and real host-integration qualification remain Phase 07
-work rather than passed evidence.
+Rust coverage tools are not installed. Phase 07 completed focused Chromium
+geometry, safe-area/accessibility, focus-continuity, and host-integration
+checks; no blanket claim is made for untested browsers or devices.
 
-The current selector implementation reports `hasResourceAttention: false` and
-`resourceAttentionCount: 0`; resource-attention projection is not yet surfaced
-by the context UI. Item-list status/note/session/delete callbacks are accepted
-at the component boundary, but the current rendered list exposes selection and
-New Plan rather than controls for each callback.
+Resource-attention projection remains a separate selector/UI follow-up; the
+selected-item detail now renders item edit and note controls. `onEditItem` and
+`onDeleteNote` are forwarded through both responsive containers to the selected
+bar. See [Workflow Context Surface](./workflow-context-surface.md) for the
+selected-item notes/edit contract.
 
 ## Session Status Helpers
 

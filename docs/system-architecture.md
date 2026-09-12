@@ -1115,6 +1115,9 @@ the UI does not infer missing child items.
 | `WorkflowContextSheet` | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `35dvh` collapsed and `90dvh` expanded. |
 | `WorkflowProjectList` | Exact target selection plus plan, task, and running-session counts. |
 | `WorkflowItemList` / `WorkflowItemRow` | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy. |
+| `WorkflowSelectedItemBar` | Selected-item status/session/child actions, note drafting, ordered note display/deletion, item deletion, and edit entry point. |
+| `WorkflowSelectedItemEditForm` | Local title/summary drafts, normalization, keyboard shortcuts, and Save/Cancel presentation. |
+| `WorkflowSelectedItemNotesList` | Bounded independently scrollable note detail with semantic timestamps and note-scoped deletion. |
 | `WorkflowQuickCapture` | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request. |
 | `WorkflowExecutionList` / `WorkflowSessionCard` | Explicit start/end timestamps, Now actions, elapsed duration, abandon, observed links, and manual Agent Harness/Agent Run metadata. |
 
@@ -1132,18 +1135,19 @@ semantics. The focus helper restores a connected element defensively.
 
 `use-workflow-surface-actions.ts` maps UI actions to typed workflow mutations,
 generates a UUID `requestId` per request, preserves the selected target, and
-uses current ISO timestamps for status/session writes. Observed resource
-`suggestedEndTime` values only prefill a draft after an explicit user action;
-observation never changes manual workflow-session status or timestamps. Creating
-an item with immediate start creates the follow-up session with the current
-time.
+uses current ISO timestamps for status/session writes. Item edits pass the
+selected item's current `updatedAt`; note deletion passes the note's current
+`updatedAt`. Observed resource `suggestedEndTime` values only prefill a draft
+after an explicit user action; observation never changes manual workflow-session
+status or timestamps. Creating an item with immediate start creates the
+follow-up session with the current time.
 
 The focused Phase 05 report records 62/62 targeted UI/workflow tests, with
 1,493/1,493 full UI tests and 907/907 Rust tests (two ignored). Those tests do
 not qualify browser geometry, safe-area/touch behavior, focus continuity, or
-real host integration. Current implementation notes: resource-attention fields
-from `selectAttentionSummary` remain false/zero, and item-list action
-callbacks are broader than the controls currently rendered by the list.
+real host integration. Resource-attention fields from `selectAttentionSummary`
+remain false/zero; selected-item note and edit controls are now rendered by
+`WorkflowSelectedItemBar` and its focused molecules.
 
 ### WorkspacePage and shell integration (UI Phase 06)
 
@@ -3289,6 +3293,7 @@ API layer (handlers) catch AppError → HTTP status:
   as a single versioned localStorage value; files without a valid value use
   Split. Storage failures and invalid values are non-fatal; this preference
   never changes server, workspace, project-file, API, or database state.
+- **HTML split-view preview:** `HtmlHost` + `HtmlPreview` components in packages/ui/src/components/organisms/. EditorTabs routes .html/.htm/.xhtml files to `HtmlHost`. Toggle modes: Edit | Split | Preview-only with a sandboxed iframe (`sandbox="allow-scripts allow-modals"` omitting `allow-same-origin`). View mode preference persists to localStorage under `dam-hopper:html-view-mode:v1` (default `"edit"`).
 - **Drag-and-drop file move:** FileTree.tsx DnD via react-arborist's built-in `onMove`. Drop on dir → move into dir. Drop on file → move to file's parent. Calls existing `ops.move()` with server-side sandbox validation.
 - **Backend search API:** `GET /api/fs/search?project=X&q=QUERY[&case=bool&max=N]` in server/src/api/fs.rs. Uses `ignore` crate v0.4 for .gitignore-aware directory walking. Plain text search (regex-escaped server-side). Results capped at 1000, default 200.
 - **Persistent explorer tree expansion:** `packages/ui/src/stores/explorer-tree.ts` (`useExplorerTreeStore`) persists directory open/close states in `localStorage` under `dam-hopper:explorer-tree-state` keyed by target scope (`${project}::${targetKey}`). `FileTree` uses this state for `initialOpenState`, cascading child hydration on remount, error-safe directory pruning, and rename/move/delete tree synchronization.
