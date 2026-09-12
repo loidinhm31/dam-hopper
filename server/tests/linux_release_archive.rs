@@ -4,9 +4,11 @@ mod common;
 
 use common::release_fixtures::{build_archive, create_test_manifest_and_archive};
 use dam_hopper_server::linux_release::*;
+use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use tar::Builder;
+use std::io::Read;
+use tar::{Archive, Builder};
 use tempfile::tempdir;
 
 #[test]
@@ -14,6 +16,47 @@ fn test_archive_inspection_success() {
     let (manifest, archive_bytes) = create_test_manifest_and_archive();
     inspect_and_validate_archive(&archive_bytes[..], &manifest)
         .expect("valid archive matches manifest");
+}
+
+#[test]
+fn test_archive_api_gate_matches_packaged_manager() {
+    let (manifest, archive_bytes) = create_test_manifest_and_archive();
+    inspect_and_validate_archive(&archive_bytes[..], &manifest).unwrap();
+
+    let mut archive = Archive::new(GzDecoder::new(&archive_bytes[..]));
+    let mut manager_present = false;
+    let mut legacy_cli_present = false;
+    let mut api_unit = None;
+
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let path = entry.path().unwrap().to_string_lossy().into_owned();
+        match path.as_str() {
+            "bin/dam-hopper-manager" => {
+                manager_present = true;
+                assert_ne!(entry.header().mode().unwrap() & 0o111, 0);
+            }
+            "bin/dam-hopper" => legacy_cli_present = true,
+            "systemd/dam-hopper-api.service" => {
+                let mut content = String::new();
+                entry.read_to_string(&mut content).unwrap();
+                api_unit = Some(content);
+            }
+            _ => {}
+        }
+    }
+
+    assert!(manager_present, "archive must package the manager binary");
+    assert!(!legacy_cli_present, "archive must not rely on an unshipped CLI binary");
+    let api_unit = api_unit.expect("archive must package the API unit");
+    let pre_lines: Vec<_> = api_unit
+        .lines()
+        .filter(|line| line.starts_with("ExecStartPre="))
+        .collect();
+    assert_eq!(
+        pre_lines,
+        vec!["ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime"]
+    );
 }
 
 #[test]

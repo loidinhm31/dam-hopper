@@ -7,7 +7,6 @@ After=network-online.target
 Type=exec
 User=@API_USER@
 Group=@API_GROUP@
-StateDirectory=dam-hopper
 RuntimeDirectory=dam-hopper
 PIDFile=/run/dam-hopper/server.pid
 WorkingDirectory=@API_HOME@
@@ -21,6 +20,7 @@ Environment=GIT_CONFIG_VALUE_0=*
 Environment=DAM_HOPPER_CORS_ORIGINS=@API_ORIGINS@
 EnvironmentFile=-/etc/dam-hopper/server.env
 EnvironmentFile=-/etc/dam-hopper/server-safety.env
+ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime
 ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config /etc/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801
 ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'
 ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid

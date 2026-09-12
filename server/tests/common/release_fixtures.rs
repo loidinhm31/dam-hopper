@@ -40,18 +40,34 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
     let f7_data = include_bytes!("../../../deploy/sysusers.d/dam-hopper-web.conf");
     let f8_data = b"<!doctype html><html>web</html>";
     let f9_data = b"MIT License";
-    let f10_data = include_bytes!("../../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in");
+    let f10_data =
+        include_bytes!("../../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in");
     let f11_data = b"helper binary content";
 
     let entries = vec![
         ("bin/dam-hopper-manager", false, &f1_data[..], 0o755),
         ("bin/dam-hopper-server", false, &f2_data[..], 0o755),
         ("bin/dam-hopper-web", false, &f3_data[..], 0o755),
-        ("bin/dam-hopper-idle-suspend-helper", false, &f11_data[..], 0o755),
+        (
+            "bin/dam-hopper-idle-suspend-helper",
+            false,
+            &f11_data[..],
+            0o755,
+        ),
         ("systemd/dam-hopper-api.service", false, &f4_data[..], 0o644),
         ("systemd/dam-hopper-web.service", false, &f5_data[..], 0o644),
-        ("systemd/dam-hopper-idle-suspend-helper.service", false, &f10_data[..], 0o644),
-        ("systemd/dam-hopper-recovery.service", false, &f6_data[..], 0o644),
+        (
+            "systemd/dam-hopper-idle-suspend-helper.service",
+            false,
+            &f10_data[..],
+            0o644,
+        ),
+        (
+            "systemd/dam-hopper-recovery.service",
+            false,
+            &f6_data[..],
+            0o644,
+        ),
         ("sysusers.d/dam-hopper-web.conf", false, &f7_data[..], 0o644),
         ("web", true, &[][..], 0o755),
         ("web/index.html", false, &f8_data[..], 0o644),
@@ -161,7 +177,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
     ];
 
     let manifest = ReleaseManifest {
-        schema_version: SCHEMA_VERSION,
+        schema_version: RELEASE_MANIFEST_SCHEMA_VERSION,
         release: ReleaseMeta {
             tag: "v0.2.0".to_string(),
             version: "0.2.0".to_string(),
@@ -197,14 +213,13 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
         },
         inventory,
         services: ServicesMeta {
-            api: ServiceContract {
+            api: ApiServiceContract {
                 unit_name: API_SERVICE_UNIT.to_string(),
-                identity: API_SERVICE_IDENTITY.to_string(),
                 bind_host: API_SERVICE_BIND_HOST.to_string(),
                 port: API_SERVICE_PORT,
                 health_path: API_SERVICE_HEALTH_PATH.to_string(),
             },
-            web: ServiceContract {
+            web: WebServiceContract {
                 unit_name: WEB_SERVICE_UNIT.to_string(),
                 identity: WEB_SERVICE_IDENTITY.to_string(),
                 bind_host: WEB_SERVICE_BIND_HOST.to_string(),

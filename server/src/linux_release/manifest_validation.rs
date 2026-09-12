@@ -8,9 +8,9 @@ use super::version::*;
 
 /// Verify all cross-field contract invariants for a decoded release manifest.
 pub fn validate_manifest_invariants(m: &ReleaseManifest) -> Result<(), ReleaseError> {
-    if m.schema_version != SCHEMA_VERSION {
+    if m.schema_version != RELEASE_MANIFEST_SCHEMA_VERSION {
         return Err(ReleaseError::InvalidSchemaVersion {
-            expected: SCHEMA_VERSION,
+            expected: RELEASE_MANIFEST_SCHEMA_VERSION,
             got: m.schema_version,
         });
     }
@@ -126,14 +126,6 @@ fn validate_services(m: &ReleaseManifest) -> Result<(), ReleaseError> {
             field: "unitName",
             expected: API_SERVICE_UNIT.to_string(),
             got: api.unit_name.clone(),
-        });
-    }
-    if api.identity != API_SERVICE_IDENTITY {
-        return Err(ReleaseError::ServiceContractMismatch {
-            service: "api",
-            field: "identity",
-            expected: API_SERVICE_IDENTITY.to_string(),
-            got: api.identity.clone(),
         });
     }
     if api.bind_host != API_SERVICE_BIND_HOST {

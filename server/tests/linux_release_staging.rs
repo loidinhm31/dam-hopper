@@ -4,8 +4,15 @@ mod common;
 
 use common::release_fixtures::create_test_manifest_and_archive;
 use dam_hopper_server::linux_release::*;
+use sha2::{Digest, Sha256};
 use std::fs;
 use tempfile::tempdir;
+
+fn configure_test_service_user(layout: &Layout, role: TargetRole) {
+    let mut config = HostConfig::new(role, vec![]).expect("valid test host config");
+    config.service_user = Some("nobody".to_string());
+    save_host_config(&layout.host_config_path(), &config).expect("save test host config");
+}
 
 fn prepare_bundle(bundle_dir: &std::path::Path) -> (ReleaseManifest, Vec<u8>) {
     let (manifest, archive_bytes) = create_test_manifest_and_archive();
@@ -31,6 +38,7 @@ fn test_staging_fresh_install_requires_role() {
 fn test_staging_fresh_install_success() {
     let root = tempdir().unwrap();
     let layout = Layout::with_root(root.path());
+    configure_test_service_user(&layout, TargetRole::Server);
     let bundle_dir = tempdir().unwrap();
     let (manifest, _) = prepare_bundle(bundle_dir.path());
 
@@ -69,7 +77,21 @@ fn test_staging_fresh_install_success() {
     let pending_units = std::path::PathBuf::from(pending.pending_units_path.as_deref().unwrap());
     assert!(pending_units.join("dam-hopper-api.service").exists());
     assert!(!pending_units.join("dam-hopper-web.service").exists());
-    assert!(pending_units.join("dam-hopper-idle-suspend-helper.service").exists());
+    assert!(pending_units
+        .join("dam-hopper-idle-suspend-helper.service")
+        .exists());
+    let helper_hash = hex::encode(Sha256::digest(
+        fs::read(pending_units.join("dam-hopper-idle-suspend-helper.service")).unwrap(),
+    ));
+    let loaded_manager_state = load_or_init_manager_state(&layout.manager_state_path()).unwrap();
+    let loaded_candidate = loaded_manager_state
+        .pending
+        .as_ref()
+        .expect("loaded candidate");
+    assert_eq!(
+        loaded_candidate.helper_unit_sha256.as_deref(),
+        Some(helper_hash.as_str())
+    );
     // Verify host.toml was saved
     let host_config = load_host_config(&layout.host_config_path())
         .unwrap()
@@ -82,6 +104,7 @@ fn test_staging_fresh_install_success() {
 fn test_staging_upgrade_role_conflict() {
     let root = tempdir().unwrap();
     let layout = Layout::with_root(root.path());
+    configure_test_service_user(&layout, TargetRole::Server);
     let bundle_dir = tempdir().unwrap();
     prepare_bundle(bundle_dir.path());
 
@@ -171,6 +194,7 @@ fn test_staging_reinstall_overwrites_active_destination() {
     let root = tempdir().unwrap();
     let layout = Layout::with_root(root.path());
     let bundle_dir = tempdir().unwrap();
+    configure_test_service_user(&layout, TargetRole::Server);
     let (_manifest, _) = prepare_bundle(bundle_dir.path());
 
     let pending = stage_release_bundle(
@@ -197,6 +221,7 @@ fn test_staging_reinstall_overwrites_active_destination() {
         api_unit_sha256: None,
         web_unit_sha256: None,
         host_config_sha256: None,
+        helper_unit_sha256: None,
     });
     save_manager_state(&layout.manager_state_path(), &mut state).unwrap();
 
@@ -229,6 +254,7 @@ fn test_staging_reinstall_overwrites_active_destination() {
 fn test_staging_helper_unit_and_pidfile_content() {
     let root = tempdir().unwrap();
     let layout = Layout::with_root(root.path());
+    configure_test_service_user(&layout, TargetRole::Server);
     let bundle_dir = tempdir().unwrap();
     prepare_bundle(bundle_dir.path());
 
@@ -250,7 +276,7 @@ fn test_staging_helper_unit_and_pidfile_content() {
     assert!(helper_unit_path.exists());
     let helper_content = fs::read_to_string(&helper_unit_path).unwrap();
     assert!(helper_content.contains("User=root"));
-    assert!(helper_content.contains("Group=dam-hopper"));
+    assert!(helper_content.contains("Group=nobody"));
     assert!(helper_content.contains("RuntimeDirectory=dam-hopper"));
     assert!(helper_content.contains("RuntimeDirectoryMode=0775"));
     assert!(helper_content.contains("ExecStart="));
@@ -265,14 +291,18 @@ fn test_staging_helper_unit_and_pidfile_content() {
     assert!(helper_content.contains("CapabilityBoundingSet=CAP_WAKE_ALARM"));
     assert!(helper_content.contains("Restart=on-failure"));
     assert!(helper_content.contains("RestartSec=5s"));
-    assert!(!helper_content.contains('@'), "no unresolved template tokens");
+    assert!(
+        !helper_content.contains('@'),
+        "no unresolved template tokens"
+    );
 
     // 2. Verify API unit PIDFile and lifecycle hooks
     let api_unit_path = pending_units.join("dam-hopper-api.service");
     assert!(api_unit_path.exists());
     let api_content = fs::read_to_string(&api_unit_path).unwrap();
     assert!(api_content.contains("PIDFile=/run/dam-hopper/server.pid"));
-    assert!(api_content.contains("ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'"));
+    assert!(api_content
+        .contains("ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'"));
     assert!(api_content.contains("ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid"));
 }
 
@@ -295,7 +325,9 @@ fn test_staging_helper_unit_role_isolation() {
     )
     .expect("staging web success");
     let web_units = std::path::PathBuf::from(pending_web.pending_units_path.as_deref().unwrap());
-    assert!(!web_units.join("dam-hopper-idle-suspend-helper.service").exists());
+    assert!(!web_units
+        .join("dam-hopper-idle-suspend-helper.service")
+        .exists());
     assert!(!web_units.join("dam-hopper-api.service").exists());
     assert!(web_units.join("dam-hopper-web.service").exists());
     assert!(web_units.join("dam-hopper-recovery.service").exists());
@@ -303,6 +335,7 @@ fn test_staging_helper_unit_role_isolation() {
     // Both role MUST stage helper service, API service, and Web service
     let root_both = tempdir().unwrap();
     let layout_both = Layout::with_root(root_both.path());
+    configure_test_service_user(&layout_both, TargetRole::Both);
     let bundle_both = tempdir().unwrap();
     prepare_bundle(bundle_both.path());
     let pending_both = stage_release_bundle(
@@ -316,7 +349,9 @@ fn test_staging_helper_unit_role_isolation() {
     )
     .expect("staging both success");
     let both_units = std::path::PathBuf::from(pending_both.pending_units_path.as_deref().unwrap());
-    assert!(both_units.join("dam-hopper-idle-suspend-helper.service").exists());
+    assert!(both_units
+        .join("dam-hopper-idle-suspend-helper.service")
+        .exists());
     assert!(both_units.join("dam-hopper-api.service").exists());
     assert!(both_units.join("dam-hopper-web.service").exists());
     assert!(both_units.join("dam-hopper-recovery.service").exists());
@@ -324,7 +359,10 @@ fn test_staging_helper_unit_role_isolation() {
 
 #[test]
 fn test_helper_unit_lifecycle_constants_and_status() {
-    assert_eq!(HELPER_SERVICE_UNIT, "dam-hopper-idle-suspend-helper.service");
+    assert_eq!(
+        HELPER_SERVICE_UNIT,
+        "dam-hopper-idle-suspend-helper.service"
+    );
     assert!(ALL_SERVICE_UNITS.contains(&HELPER_SERVICE_UNIT));
 
     let statuses = collect_all_services_status();

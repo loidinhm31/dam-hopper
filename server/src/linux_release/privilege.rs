@@ -78,6 +78,15 @@ pub fn verify_privileges(command: &Commands, euid: u32) -> Result<(), ReleaseErr
             }
         }
         Commands::Status(_) | Commands::Version | Commands::Validate(_) => {}
+        Commands::ProvisionApiRuntime => {
+            if euid != 0 {
+                return Err(ReleaseError::PrivilegeRequired {
+                    operation: "provision-api-runtime",
+                    expected_euid: 0,
+                    actual_euid: euid,
+                });
+            }
+        }
     }
     Ok(())
 }

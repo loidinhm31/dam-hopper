@@ -1,6 +1,7 @@
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
+    fs::{File, OpenOptions},
+    io::{Read, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::PathBuf,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -232,36 +233,48 @@ impl IdleSuspendServerAudit {
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
+    fn open_verified(&self, write: bool) -> Result<File, AuditError> {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        if write {
+            options.write(true).append(true);
+        }
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
+        let file = options
+            .open(&*self.path)
+            .map_err(|e| AuditError::Io(format!("Cannot open pre-provisioned audit log: {e}")))?;
+        let metadata = file
+            .metadata()
+            .map_err(|e| AuditError::Io(format!("Cannot stat pre-provisioned audit log: {e}")))?;
+        let expected_uid = unsafe { libc::geteuid() };
+        let expected_gid = unsafe { libc::getegid() };
+        if !metadata.file_type().is_file()
+            || metadata.uid() != expected_uid
+            || metadata.gid() != expected_gid
+            || metadata.mode() & 0o7777 != 0o600
+        {
+            return Err(AuditError::Unavailable);
+        }
+        Ok(file)
+    }
 
     fn record_raw<T: Serialize>(&self, item: &T) -> Result<(), AuditError> {
         let _guard = self.lock.lock();
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| AuditError::Io(format!("Cannot create audit dir: {e}")))?;
-        }
-
-        let mut options = OpenOptions::new();
-        options.create(true).append(true).write(true);
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        }
-
-        let mut file = options
-            .open(&*self.path)
-            .map_err(|e| AuditError::Io(format!("Cannot open audit log: {e}")))?;
-
+        let mut file = self.open_verified(true)?;
         let line = serde_json::to_string(item)
             .map_err(|e| AuditError::Io(format!("Cannot serialize audit record: {e}")))?;
         writeln!(file, "{}", line)
             .map_err(|e| AuditError::Io(format!("Cannot write audit record: {e}")))?;
-
         file.sync_data()
             .map_err(|e| AuditError::Io(format!("Cannot sync audit record: {e}")))?;
-
         Ok(())
+    }
+    fn read_verified_content(&self) -> Result<String, AuditError> {
+        let mut file = self.open_verified(false)?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)
+            .map_err(|e| AuditError::Io(format!("Cannot read audit log: {e}")))?;
+        Ok(content)
     }
 
     pub fn record_timing_event(&self, record: &TimingAuditRecord) -> Result<(), AuditError> {
@@ -279,13 +292,7 @@ impl IdleSuspendServerAudit {
 
     pub fn read_recent_records(&self, limit: usize) -> Result<Vec<ServerAuditRecord>, AuditError> {
         let _guard = self.lock.lock();
-
-        if !self.path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let content = fs::read_to_string(&*self.path)
-            .map_err(|e| AuditError::Io(format!("Cannot read audit log: {e}")))?;
+        let content = self.read_verified_content()?;
 
         let mut records = Vec::new();
         for line in content.lines().rev() {
@@ -306,13 +313,8 @@ impl IdleSuspendServerAudit {
     pub fn read_recent_timing_records(&self, limit: usize) -> Result<Vec<TimingAuditRecord>, AuditError> {
         let _guard = self.lock.lock();
 
-        if !self.path.exists() {
-            return Ok(Vec::new());
-        }
 
-        let content = fs::read_to_string(&*self.path)
-            .map_err(|e| AuditError::Io(format!("Cannot read audit log: {e}")))?;
-
+        let content = self.read_verified_content()?;
         let mut records = Vec::new();
         for line in content.lines().rev() {
             if line.trim().is_empty() {
@@ -332,12 +334,7 @@ impl IdleSuspendServerAudit {
     pub fn read_recent_manual_records(&self, limit: usize) -> Result<Vec<ManualAuditRecord>, AuditError> {
         let _guard = self.lock.lock();
 
-        if !self.path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let content = fs::read_to_string(&*self.path)
-            .map_err(|e| AuditError::Io(format!("Cannot read audit log: {e}")))?;
+        let content = self.read_verified_content()?;
 
         let mut records = Vec::new();
         for line in content.lines().rev() {

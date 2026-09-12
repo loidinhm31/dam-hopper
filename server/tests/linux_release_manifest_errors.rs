@@ -30,13 +30,13 @@ fn test_reject_payload_too_large() {
 #[test]
 fn test_reject_invalid_schema_version() {
     let mut manifest = create_valid_manifest();
-    manifest.schema_version = 2;
+    manifest.schema_version = 1;
     let bytes = serde_json::to_vec(&manifest).unwrap();
     assert!(matches!(
         ReleaseManifest::parse_and_validate(&bytes),
         Err(ReleaseError::InvalidSchemaVersion {
-            expected: 1,
-            got: 2
+            expected: 2,
+            got: 1
         })
     ));
 }
@@ -90,17 +90,18 @@ fn test_reject_profile_drift() {
 }
 
 #[test]
-fn test_reject_service_identity_drift() {
-    let mut manifest = create_valid_manifest();
-    manifest.services.api.identity = "loidinh".to_string();
-    let bytes = serde_json::to_vec(&manifest).unwrap();
+fn test_reject_removed_api_identity() {
+    let manifest = create_valid_manifest();
+    let mut val = serde_json::to_value(&manifest).unwrap();
+    val.get_mut("services")
+        .and_then(|services| services.get_mut("api"))
+        .and_then(serde_json::Value::as_object_mut)
+        .unwrap()
+        .insert("identity".to_string(), serde_json::json!("root"));
+    let bytes = serde_json::to_vec(&val).unwrap();
     assert!(matches!(
         ReleaseManifest::parse_and_validate(&bytes),
-        Err(ReleaseError::ServiceContractMismatch {
-            service: "api",
-            field: "identity",
-            ..
-        })
+        Err(ReleaseError::JsonDeserialization(_))
     ));
 }
 
@@ -192,6 +193,22 @@ fn test_reject_missing_required_path() {
 }
 
 #[test]
+fn test_reject_missing_required_helper_asset() {
+    let mut manifest = create_valid_manifest();
+    manifest
+        .inventory
+        .retain(|entry| entry.path != "bin/dam-hopper-idle-suspend-helper");
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+
+    assert!(matches!(
+        ReleaseManifest::parse_and_validate(&bytes),
+        Err(ReleaseError::MissingRequiredPath {
+            path: "bin/dam-hopper-idle-suspend-helper"
+        })
+    ));
+}
+
+#[test]
 fn test_reject_directory_with_size_or_sha() {
     let mut manifest = create_valid_manifest();
     manifest.inventory.push(InventoryEntry {
@@ -263,7 +280,8 @@ fn test_reject_invalid_commit_sha_matrix() {
 fn test_reject_invalid_archive_sha256_matrix() {
     // Length 63
     let mut manifest = create_valid_manifest();
-    manifest.archive.sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85".to_string();
+    manifest.archive.sha256 =
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85".to_string();
     let bytes = serde_json::to_vec(&manifest).unwrap();
     assert!(matches!(
         ReleaseManifest::parse_and_validate(&bytes),
@@ -272,7 +290,8 @@ fn test_reject_invalid_archive_sha256_matrix() {
 
     // Length 65
     let mut manifest = create_valid_manifest();
-    manifest.archive.sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8555".to_string();
+    manifest.archive.sha256 =
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8555".to_string();
     let bytes = serde_json::to_vec(&manifest).unwrap();
     assert!(matches!(
         ReleaseManifest::parse_and_validate(&bytes),
@@ -281,7 +300,8 @@ fn test_reject_invalid_archive_sha256_matrix() {
 
     // Uppercase hex
     let mut manifest = create_valid_manifest();
-    manifest.archive.sha256 = "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855".to_string();
+    manifest.archive.sha256 =
+        "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855".to_string();
     let bytes = serde_json::to_vec(&manifest).unwrap();
     assert!(matches!(
         ReleaseManifest::parse_and_validate(&bytes),
@@ -325,13 +345,19 @@ fn test_reject_invalid_mode() {
 #[test]
 fn test_reject_non_executable_required_binaries() {
     let mut manifest = create_valid_manifest();
-    if let Some(entry) = manifest.inventory.iter_mut().find(|e| e.path == "bin/dam-hopper-manager") {
+    if let Some(entry) = manifest
+        .inventory
+        .iter_mut()
+        .find(|e| e.path == "bin/dam-hopper-manager")
+    {
         entry.mode = 0o644;
     }
     let bytes = serde_json::to_vec(&manifest).unwrap();
     assert!(matches!(
         ReleaseManifest::parse_and_validate(&bytes),
-        Err(ReleaseError::InvalidRequiredPath { path: "bin/dam-hopper-manager" })
+        Err(ReleaseError::InvalidRequiredPath {
+            path: "bin/dam-hopper-manager"
+        })
     ));
 }
 
@@ -363,7 +389,10 @@ fn test_reject_web_component_version_drift() {
     let bytes = serde_json::to_vec(&manifest).unwrap();
     assert!(matches!(
         ReleaseManifest::parse_and_validate(&bytes),
-        Err(ReleaseError::ComponentVersionMismatch { component: "webHost", .. })
+        Err(ReleaseError::ComponentVersionMismatch {
+            component: "webHost",
+            ..
+        })
     ));
 
     let mut manifest = create_valid_manifest();
@@ -371,6 +400,9 @@ fn test_reject_web_component_version_drift() {
     let bytes = serde_json::to_vec(&manifest).unwrap();
     assert!(matches!(
         ReleaseManifest::parse_and_validate(&bytes),
-        Err(ReleaseError::ComponentVersionMismatch { component: "webAssets", .. })
+        Err(ReleaseError::ComponentVersionMismatch {
+            component: "webAssets",
+            ..
+        })
     ));
 }
