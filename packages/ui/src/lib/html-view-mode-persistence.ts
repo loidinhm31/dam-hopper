@@ -31,6 +31,9 @@ export function loadHtmlViewMode(
   }
 }
 
+export const HTML_VIEW_MODE_CHANGED_EVENT =
+  "dam-hopper:html-view-mode-changed";
+
 export function saveHtmlViewMode(
   mode: HtmlMode,
   storage: HtmlViewModeStorage | undefined = defaultStorage(),
@@ -39,6 +42,11 @@ export function saveHtmlViewMode(
 
   try {
     storage?.setItem(HTML_VIEW_MODE_STORAGE_KEY, mode);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(HTML_VIEW_MODE_CHANGED_EVENT, { detail: mode }),
+      );
+    }
   } catch {
     // Browser storage is optional UI state.
   }

@@ -12,8 +12,8 @@
 - **Date**: 2026-09-12
 - **Description**: Add the "Preview" action to `TreeContextMenu` for HTML files in the Explorer panel, wire up the preview trigger in `FileTree.tsx` and `WorkspacePage.tsx`, and create comprehensive unit and browser test coverage.
 - **Priority**: P2
-- **Implementation status**: Pending
-- **Review status**: Not reviewed
+- **Implementation status**: Completed (2026-09-12 23:00)
+- **Review status**: Completed
 
 ## Key Insights
 - `getTreeContextMenuItems` in `TreeContextMenu.tsx` is a pure function covered by unit tests. Adding an `onPreview` callback and `isHtml` flag makes it easily testable without full DOM mounting.
@@ -89,11 +89,11 @@ sequenceDiagram
    - `pnpm check`
 
 ## Todo list
-- [ ] Add `onPreview` and `isHtml` to `TreeContextMenu`
-- [ ] Wire `handlePreviewFile` in `FileTree.tsx`
-- [ ] Add unit tests in `TreeContextMenu.test.ts`
-- [ ] Verify test suite and browser tests pass
-- [ ] Run full project validation (`pnpm check`)
+- [x] Add `onPreview` and `isHtml` to `TreeContextMenu`
+- [x] Wire `handlePreviewFile` in `FileTree.tsx`
+- [x] Add unit tests in `TreeContextMenu.test.ts`
+- [x] Verify test suite and browser tests pass
+- [x] Run full project validation (`pnpm check`)
 
 ## Success Criteria
 - Right-clicking an `.html` file in the Explorer file tree renders the "Preview" menu item.
@@ -108,5 +108,14 @@ sequenceDiagram
 ## Security Considerations
 - Context menu handler only passes verified `node.id` through standard workspace opening pipeline.
 
+## Completion notes
+- Completed at: 2026-09-12 23:00
+- Added `onPreview` and `isHtml` to `TreeContextMenu` with eye icon preview action for HTML files.
+- Wired `handlePreview` in `FileTree.tsx` to set preview mode and open file, guarded by a 5MB size limit (`node.size < 5 * 1024 * 1024`).
+- Introduced `HTML_VIEW_MODE_CHANGED_EVENT` (`dam-hopper:html-view-mode-changed`) dispatched by `saveHtmlViewMode` and observed by `HtmlHost.tsx` for live mode synchronization.
+- Added comprehensive unit tests in `TreeContextMenu.test.ts` and `ContextMenuConsumers.test.tsx`.
+- Added Chromium browser tests in `consumer-context-menu.browser.tsx`.
+- Validated test suite: 55 unit tests passing, 10 browser tests passing, UI TypeScript build passing cleanly.
+
 ## Next steps
-- Once user approves this implementation plan, execute using `/cmd_code_auto` or implementation steps across Phases 1-3.
+- Feature complete across all phases. Ready for integration.
