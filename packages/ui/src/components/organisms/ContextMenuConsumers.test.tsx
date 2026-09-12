@@ -271,6 +271,29 @@ describe("migrated context-menu consumers", () => {
     expect(handlers.onRename).toHaveBeenCalledOnce();
   });
 
+  it("renders preview action for HTML files and triggers onPreview callback", async () => {
+    const handlers = { ...treeHandlers(), onPreview: vi.fn() };
+
+    await mount(
+      <TreeContextMenu {...handlers} isDir={false} isHtml={true}>
+        <button data-trigger="html-tree" type="button">
+          index.html
+        </button>
+      </TreeContextMenu>,
+    );
+
+    await openMenu(
+      document.querySelector<HTMLElement>('[data-trigger="html-tree"]')!,
+    );
+    const preview = [
+      ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ].find((item) => item.textContent === "Preview");
+    expect(preview).not.toBeUndefined();
+    await act(async () => preview?.click());
+
+    expect(handlers.onPreview).toHaveBeenCalledOnce();
+  });
+
   it("keeps a virtual file row mounted while targeting its download action", async () => {
     await mount(<FileTree project="demo" />);
     const row = document.querySelector<HTMLElement>(

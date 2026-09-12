@@ -27,6 +27,8 @@ import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
 import { useFsSubscription } from "@/hooks/use-fs-subscription.js";
 import { useFsOps } from "@/hooks/use-fs-ops.js";
 import { useFsUpload } from "@/hooks/use-fs-upload.js";
+import { isHtmlFile } from "@/lib/html-file.js";
+import { saveHtmlViewMode } from "@/lib/html-view-mode-persistence.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import type { ProjectTargetRef } from "@/api/client.js";
 import { TreeContextMenu } from "./TreeContextMenu.js";
@@ -583,6 +585,18 @@ export function FileTree({
     void copy(relativePath);
   }
 
+  function handlePreview(node: FsArborNode) {
+    if (
+      !isRenderedLiveNode(node) ||
+      node.kind !== "file" ||
+      node.size >= 5 * 1024 * 1024
+    ) {
+      return;
+    }
+    saveHtmlViewMode("preview");
+    onFileOpen?.(node);
+  }
+
   // ── Context menu actions ────────────────────────────────────────────────
 
   function handleNewFile(node: FsArborNode) {
@@ -1125,6 +1139,12 @@ export function FileTree({
                 return (
                   <TreeContextMenu
                     isDir={props.node.data.kind === "dir"}
+                    isHtml={
+                      props.node.data.kind === "file" &&
+                      props.node.data.size < 5 * 1024 * 1024 &&
+                      isHtmlFile(props.node.data.name)
+                    }
+                    onPreview={() => handlePreview(props.node.data)}
                     onCopyAbsolutePath={() =>
                       handleCopyAbsolutePath(props.node.data)
                     }

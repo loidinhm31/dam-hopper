@@ -236,20 +236,25 @@ capability or stream failures without materializing image bytes.
 **Locations:** `packages/ui/src/components/organisms/HtmlHost.tsx`,
 `packages/ui/src/components/organisms/HtmlPreview.tsx`,
 `packages/ui/src/components/organisms/EditorTabs.tsx`,
+`packages/ui/src/components/organisms/TreeContextMenu.tsx`,
+`packages/ui/src/components/organisms/FileTree.tsx`,
 `packages/ui/src/lib/html-file.ts`, and
 `packages/ui/src/lib/html-view-mode-persistence.ts`.
 
-Provides file detection, presentation persistence, editor host routing, and sandboxed preview rendering for HTML documents:
+Provides file detection, presentation persistence, editor host routing, context menu preview actions, and sandboxed preview rendering for HTML documents:
 
 - **Detection (`html-file.ts`):** Identifies `.html`, `.htm`, and `.xhtml` case-insensitively, maps to standard HTML/XHTML MIME types (`text/html`, `application/xhtml+xml`), and checks preview candidate suitability (excluding diff, large, and binary tabs). Dotfiles without a base name (e.g. `.html`) are excluded.
-- **View Mode Persistence (`html-view-mode-persistence.ts`):** Manages user view mode selection (`"edit" | "split" | "preview"`) via browser `localStorage` key `dam-hopper:html-view-mode:v1`, defaulting to `"edit"`. Storage access is safe and resilient to exceptions or unavailable storage environments.
+- **View Mode Persistence (`html-view-mode-persistence.ts`):** Manages user view mode selection (`"edit" | "split" | "preview"`) via browser `localStorage` key `dam-hopper:html-view-mode:v1`, defaulting to `"edit"`. Storage access is safe and resilient to exceptions or unavailable storage environments. Dispatches the `dam-hopper:html-view-mode-changed` (`HTML_VIEW_MODE_CHANGED_EVENT`) window event on save, enabling live synchronization across mounted tabs without requiring a remount or page reload.
 - **Sandboxed Rendering (`HtmlPreview.tsx`):** Renders HTML content inside a sandboxed `<iframe>` with `sandbox="allow-scripts allow-modals"`. Omission of `allow-same-origin` ensures the document executes with an opaque origin (`"null"`), restricting script access to host parent storage, cookies, and network capabilities. Updates to editor content are debounced by 200ms to avoid DOM thrashing, and an explicit reload control enables forced remounting of the iframe.
-- **Editor Host (`HtmlHost.tsx`):** Split-view HTML editor component offering an **Edit | Split | Preview** top toggle bar. Lazily imports `MonacoHost` to keep initial bundle size lean. Supports an optional `initialMode` prop override (e.g., when launched into preview mode from an Explorer context menu action) while defaulting to user preference loaded from `dam-hopper:html-view-mode:v1`.
+- **Editor Host (`HtmlHost.tsx`):** Split-view HTML editor component offering an **Edit | Split | Preview** top toggle bar. Lazily imports `MonacoHost` to keep initial bundle size lean. Listens to `HTML_VIEW_MODE_CHANGED_EVENT` to react dynamically to external mode changes, while supporting an optional `initialMode` prop override (e.g., when launched into preview mode from an Explorer context menu action) and defaulting to user preference loaded from `dam-hopper:html-view-mode:v1`.
   - **Edit Mode:** 100% width Monaco code editor.
   - **Split Mode:** 50% left Monaco editor with divider border, 50% right `HtmlPreview`.
   - **Preview Mode:** 100% width sandboxed `HtmlPreview`.
   - Seamlessly forwards editor lifecycle properties (`tabKey`, `path`, `content`, `tier`, `mime`, `viewState`, `readOnly`, `onChange`, `onSave`, `onViewStateChange`, `lineChanges`, `onGitIndicatorClick`).
 - **EditorTabs Routing (`EditorTabs.tsx`):** Detects HTML files via `isHtmlFile(activeTab.name)` before fallback MonacoHost, dynamically loading `HtmlHost` inside a `Suspense` boundary with a centered loading spinner fallback.
+- **Explorer Context Menu Integration (`TreeContextMenu.tsx` & `FileTree.tsx`):** Exposes a dedicated "Preview" action with an `Eye` icon in the right-click context menu for HTML files.
+  - **5 MB Size Threshold:** Restricted strictly to files smaller than 5 MB (`node.size < 5 * 1024 * 1024`). Files exceeding 5 MB, directories, and non-HTML files omit the preview item to avoid memory and performance degradation in the iframe.
+  - **Action Flow:** Clicking "Preview" calls `saveHtmlViewMode("preview")`, which emits `HTML_VIEW_MODE_CHANGED_EVENT` and invokes `onFileOpen(node)`, opening the document directly into Preview mode or live-switching an existing active tab.
 
 ## Terminal Agent Notifications
 
