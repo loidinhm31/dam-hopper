@@ -1,3 +1,8 @@
+# 2026-09-12
+
+- **Phase 01: HTML File Helper, Mode Persistence, and Sandboxed HtmlPreview.** Added `html-file.ts` with case-insensitive `.html`/`.htm`/`.xhtml` detection and MIME resolution, `html-view-mode-persistence.ts` storing `"edit" | "split" | "preview"` mode under `dam-hopper:html-view-mode:v1` (defaulting to `"edit"`), and the sandboxed `HtmlPreview.tsx` iframe component with `sandbox="allow-scripts allow-modals"` (opaque origin isolation), 200ms debounce, and reload button. Also resolved timer typing in `use-clipboard.ts`.
+- Validation: Vitest unit and component tests **22/22 passed** across `html-file.test.ts`, `html-view-mode-persistence.test.ts`, and `HtmlPreview.test.tsx`. TypeScript build (`tsc -p tsconfig.json`) passed cleanly. [Phase 01 Plan](../plans/260912-2240-explorer-html-preview/phase-01-helpers-and-html-preview.md).
+
 # 2026-09-07
 
 - **Plan item notes and editing.** Restored selected Plan item note rendering with multiline bodies, semantic timestamps, and per-note deletion. Added inline title/summary editing across desktop Deck and compact Sheet, reusing existing workflow PATCH/delete-note mutations with fresh request IDs and exact CAS timestamps.
