@@ -1,5 +1,6 @@
 //! Template rendering and strict allowlisted token replacement for systemd units.
 
+use super::constants::API_SERVICE_HOME;
 use super::error::ReleaseError;
 use super::origin::validate_web_origins;
 use super::unit_parser::ParsedUnit;
@@ -55,9 +56,9 @@ impl UnitRenderContext {
             release_version,
             public_config,
             api_origins: validated_origins,
-            api_user: "dam-hopper".to_string(),
-            api_group: "dam-hopper".to_string(),
-            api_home: "/var/lib/dam-hopper".to_string(),
+            api_user: String::new(),
+            api_group: String::new(),
+            api_home: API_SERVICE_HOME.to_string(),
         })
     }
 
@@ -69,7 +70,20 @@ impl UnitRenderContext {
     ) -> Result<Self, ReleaseError> {
         validate_ident_param("api_user", &user)?;
         validate_ident_param("api_group", &group)?;
-        validate_path_param("api_home", Path::new(&home))?;
+        if home != API_SERVICE_HOME {
+            return Err(ReleaseError::Config(format!(
+                "API service home must be {API_SERVICE_HOME}"
+            )));
+        }
+        let user_info = super::account::verify_api_service_account(&user)?;
+        let group_gid = super::account::get_group_gid_by_name(&group).ok_or_else(|| {
+            ReleaseError::Config(format!("API service group '{group}' does not resolve"))
+        })?;
+        if group_gid != user_info.gid {
+            return Err(ReleaseError::Config(format!(
+                "API service group '{group}' is not user '{user}' primary group"
+            )));
+        }
         self.api_user = user;
         self.api_group = group;
         self.api_home = home;
@@ -112,7 +126,6 @@ fn validate_ident_param(name: &'static str, val: &str) -> Result<(), ReleaseErro
     Ok(())
 }
 
-
 /// Substitute allowlisted placeholders into unit template.
 pub fn render_unit(template: &str, ctx: &UnitRenderContext) -> Result<String, ReleaseError> {
     // Scan for potential injection or unknown @TOKEN@ tokens
@@ -122,12 +135,15 @@ pub fn render_unit(template: &str, ctx: &UnitRenderContext) -> Result<String, Re
             if let Some(end) = rest[start + 1..].find('@') {
                 let token = &rest[start..=start + 1 + end];
                 if token.len() > 2
-                    && token[1..token.len() - 1].chars().all(|c| c.is_ascii_uppercase() || c == '_')
+                    && token[1..token.len() - 1]
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c == '_')
                     && !ALLOWED_TOKENS.contains(&token)
                 {
                     return Err(ReleaseError::TemplateTokenInjection {
                         token: token.into(),
-                        details: "token is not in the allowlist of unit template placeholders".into(),
+                        details: "token is not in the allowlist of unit template placeholders"
+                            .into(),
                     });
                 }
                 rest = &rest[start + 2 + end..];
@@ -152,7 +168,9 @@ pub fn render_unit(template: &str, ctx: &UnitRenderContext) -> Result<String, Re
             if let Some(end) = rest[start + 1..].find('@') {
                 let token = &rest[start..=start + 1 + end];
                 if token.len() > 2
-                    && token[1..token.len() - 1].chars().all(|c| c.is_ascii_uppercase() || c == '_')
+                    && token[1..token.len() - 1]
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c == '_')
                 {
                     return Err(ReleaseError::UnresolvedTemplateToken {
                         token: token.into(),
@@ -185,10 +203,7 @@ pub fn render_web_unit(template: &str, ctx: &UnitRenderContext) -> Result<String
 }
 
 /// Render idle suspend helper unit and validate its strict systemd policy.
-pub fn render_helper_unit(
-    template: &str,
-    ctx: &UnitRenderContext,
-) -> Result<String, ReleaseError> {
+pub fn render_helper_unit(template: &str, ctx: &UnitRenderContext) -> Result<String, ReleaseError> {
     let rendered = render_unit(template, ctx)?;
     let parsed = ParsedUnit::parse(&rendered)?;
     validate_helper_unit_policy(&parsed, ctx)?;
@@ -207,18 +222,16 @@ pub fn render_recovery_unit(
         "{}/bin/dam-hopper-manager recover --boot",
         ctx.release_root.display()
     );
-    let actual_exec = parsed
-        .get_value("Service", "ExecStart")
-        .ok_or_else(|| ReleaseError::UnitPolicyViolation {
+    let actual_exec = parsed.get_value("Service", "ExecStart").ok_or_else(|| {
+        ReleaseError::UnitPolicyViolation {
             unit: name.into(),
             reason: "missing ExecStart in recovery unit".into(),
-        })?;
+        }
+    })?;
     if actual_exec != expected_exec {
         return Err(ReleaseError::UnitPolicyViolation {
             unit: name.into(),
-            reason: format!(
-                "ExecStart mismatch: expected '{expected_exec}', got '{actual_exec}'"
-            ),
+            reason: format!("ExecStart mismatch: expected '{expected_exec}', got '{actual_exec}'"),
         });
     }
     Ok(rendered)

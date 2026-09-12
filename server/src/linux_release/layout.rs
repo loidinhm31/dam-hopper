@@ -45,6 +45,38 @@ impl Layout {
             systemd_unit_dir: root.join("etc/systemd/system"),
         }
     }
+    /// Trusted filesystem root used for descriptor-relative runtime provisioning.
+    ///
+    /// `Layout` deliberately keeps the historical public path fields; deriving the
+    /// root from the fixed `/opt/dam-hopper` path keeps existing struct literals
+    /// source-compatible while still allowing `with_root` test layouts.
+    pub fn trusted_root(&self) -> PathBuf {
+        self.opt_dir
+            .parent()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("/"))
+    }
+
+    /// API-owned state directory (`/var/lib/dam-hopper`).
+    pub fn api_state_dir(&self) -> PathBuf {
+        self.trusted_root().join("var/lib/dam-hopper")
+    }
+
+    /// API-owned configuration directory (`/var/lib/dam-hopper/.config/dam-hopper`).
+    pub fn api_config_dir(&self) -> PathBuf {
+        self.api_state_dir().join(".config/dam-hopper")
+    }
+
+    /// Fixed root-owned configuration anchor (`/etc/dam-hopper`).
+    pub fn api_etc_dir(&self) -> PathBuf {
+        self.trusted_root().join("etc/dam-hopper")
+    }
+
+    /// Provisioned API audit file (`/etc/dam-hopper/idle-suspend-audit.jsonl`).
+    pub fn api_audit_path(&self) -> PathBuf {
+        self.api_etc_dir().join("idle-suspend-audit.jsonl")
+    }
 
     /// Root-only staging directory for in-flight transactions:
     /// `/opt/dam-hopper/.staging`
@@ -131,8 +163,7 @@ impl Layout {
 
     /// Transaction-scoped directory holding candidate rendered systemd units.
     pub fn transaction_pending_units_dir(&self, tx_id: &str) -> PathBuf {
-        self.var_lib_dir
-            .join(format!("pending-units-{tx_id}"))
+        self.var_lib_dir.join(format!("pending-units-{tx_id}"))
     }
 
     /// Transaction-scoped candidate public host configuration.

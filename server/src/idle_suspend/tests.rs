@@ -1,7 +1,18 @@
 use crate::pty::fleet_state::{HandoffClaimError, PtyFleetState};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use tempfile::tempdir;
+
+fn preprovisioned_server_audit(path: PathBuf) -> IdleSuspendServerAudit {
+    OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)
+        .unwrap();
+    IdleSuspendServerAudit::new(path)
+}
 
 use crate::config::{
     read_config, write_config, IdleSuspendCapabilitySelection, IdleSuspendConfig,
@@ -32,8 +43,7 @@ use crate::idle_suspend::protocol::{
     MAX_HELPER_FRAME_BYTES,
 };
 use crate::idle_suspend::server_audit::{
-    AuditError, IdleSuspendServerAudit, IdleSuspendTimingAudit, ManualAuditResult,
-    TimingAuditRecord, TimingAuditResult,
+    AuditError, IdleSuspendServerAudit, ManualAuditResult, TimingAuditRecord, TimingAuditResult,
 };
 use crate::idle_suspend::timing_store::{IdleSuspendTimingStore, TimingStoreError};
 
@@ -404,7 +414,7 @@ fn test_timing_audit_logging() {
     let dir = tempdir().unwrap();
     let audit_path = dir.path().join("idle-suspend-audit.jsonl");
 
-    let audit = IdleSuspendTimingAudit::new(audit_path.clone());
+    let audit = preprovisioned_server_audit(audit_path.clone());
 
     let record = TimingAuditRecord::new(
         "admin-user".to_string(),
@@ -453,6 +463,58 @@ fn test_timing_audit_logging() {
         ),
         Err(AuditError::InvalidActor)
     ));
+}
+
+#[test]
+fn test_server_audit_preprovisioned_contract() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let tmp = tempdir().unwrap();
+    let audit_path = tmp.path().join("idle-suspend-audit.jsonl");
+    let audit = IdleSuspendServerAudit::new(audit_path.clone());
+    let record = TimingAuditRecord::new(
+        "contract-test".to_string(),
+        900,
+        600,
+        1800,
+        1200,
+        "contract-001".to_string(),
+        TimingAuditResult::Committed,
+    )
+    .unwrap();
+
+    assert!(audit.record_event(&record).is_err());
+
+    fs::write(&audit_path, b"operator-bytes\n").unwrap();
+    fs::set_permissions(&audit_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let before_metadata = fs::symlink_metadata(&audit_path).unwrap();
+    audit.record_event(&record).unwrap();
+    let after_metadata = fs::symlink_metadata(&audit_path).unwrap();
+    assert_eq!(before_metadata.ino(), after_metadata.ino());
+    assert_eq!(fs::read(&audit_path).unwrap()[..15], b"operator-bytes\n"[..]);
+
+    fs::set_permissions(&audit_path, fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(audit.read_recent_records(10).is_err());
+    fs::set_permissions(&audit_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let target = tmp.path().join("real-audit.jsonl");
+    fs::write(&target, b"target\n").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::remove_file(&audit_path).unwrap();
+    std::os::unix::fs::symlink(&target, &audit_path).unwrap();
+    assert!(audit.record_event(&record).is_err());
+    assert_eq!(fs::read(&target).unwrap(), b"target\n");
+
+    let fifo_path = tmp.path().join("fifo-audit.jsonl");
+    let fifo_name = std::ffi::CString::new(fifo_path.to_str().unwrap()).unwrap();
+    assert_eq!(
+        unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) },
+        0,
+        "create FIFO"
+    );
+    let fifo_audit = IdleSuspendServerAudit::new(fifo_path);
+    assert!(fifo_audit.record_event(&record).is_err());
+    assert!(fifo_audit.read_recent_records(1).is_err());
 }
 
 #[test]
@@ -715,7 +777,7 @@ async fn test_coordinator_timing_update_ordered_transaction() {
 
     let store = IdleSuspendTimingStore::new(policy.canonical_registry_path.clone());
     let audit_file = tmp.path().join("audit.jsonl");
-    let audit = IdleSuspendTimingAudit::new(audit_file.clone());
+    let audit = preprovisioned_server_audit(audit_file.clone());
 
     let coordinator = IdleSuspendCoordinator::start(
         policy,
@@ -2014,7 +2076,7 @@ async fn test_manual_force_suspend_quiescent_ordinary_claim() {
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
     let audit_file = tmp.path().join("audit.jsonl");
-    let audit = IdleSuspendServerAudit::new(audit_file.clone());
+    let audit = preprovisioned_server_audit(audit_file.clone());
 
     let coordinator = IdleSuspendCoordinator::start(
         policy,
@@ -2083,7 +2145,7 @@ async fn test_manual_force_suspend_active_fleet_requires_confirmation() {
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
     let audit_file = tmp.path().join("audit.jsonl");
-    let audit = IdleSuspendServerAudit::new(audit_file.clone());
+    let audit = preprovisioned_server_audit(audit_file.clone());
 
     // Make fleet active
     pty_manager.with_fleet_for_test(|f| {
@@ -2165,7 +2227,7 @@ async fn test_manual_force_suspend_active_fleet_with_force_succeeds() {
     });
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
     let audit_file = tmp.path().join("audit.jsonl");
-    let audit = IdleSuspendServerAudit::new(audit_file.clone());
+    let audit = preprovisioned_server_audit(audit_file.clone());
 
     // Make fleet active
     pty_manager.with_fleet_for_test(|f| {
@@ -2234,7 +2296,7 @@ async fn test_manual_force_suspend_capability_failure() {
     let executor = Arc::new(UnavailableExecutor::new("Host not capable"));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
     let audit_file = tmp.path().join("audit.jsonl");
-    let audit = IdleSuspendServerAudit::new(audit_file.clone());
+    let audit = preprovisioned_server_audit(audit_file.clone());
 
     let coordinator = IdleSuspendCoordinator::start(
         policy,
@@ -2277,7 +2339,7 @@ async fn test_manual_force_suspend_wake_seconds_and_actor_validation() {
     let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
-    let audit = IdleSuspendServerAudit::new(tmp.path().join("audit.jsonl"));
+    let audit = preprovisioned_server_audit(tmp.path().join("audit.jsonl"));
 
     let coordinator = IdleSuspendCoordinator::start(
         policy,
@@ -2351,7 +2413,7 @@ async fn test_manual_force_suspend_with_policy_disabled() {
     let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
-    let audit = IdleSuspendServerAudit::new(tmp.path().join("audit.jsonl"));
+    let audit = preprovisioned_server_audit(tmp.path().join("audit.jsonl"));
 
     let coordinator = IdleSuspendCoordinator::start(
         policy,
@@ -2394,7 +2456,7 @@ async fn test_manual_force_suspend_cancels_automatic_armed_grace() {
         release_rx: parking_lot::Mutex::new(Some(release_rx)),
     });
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
-    let audit = IdleSuspendServerAudit::new(tmp.path().join("audit.jsonl"));
+    let audit = preprovisioned_server_audit(tmp.path().join("audit.jsonl"));
 
     let coordinator = IdleSuspendCoordinator::start(
         policy,
@@ -2459,7 +2521,7 @@ async fn test_manual_force_suspend_duplicate_click_and_timing_contention() {
         release_rx: parking_lot::Mutex::new(Some(release_rx)),
     });
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
-    let audit = IdleSuspendServerAudit::new(tmp.path().join("audit.jsonl"));
+    let audit = preprovisioned_server_audit(tmp.path().join("audit.jsonl"));
 
     let coordinator = IdleSuspendCoordinator::start(
         policy,

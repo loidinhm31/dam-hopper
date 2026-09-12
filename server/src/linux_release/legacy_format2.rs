@@ -24,7 +24,9 @@ pub fn is_legacy_format2_root(root_dir: &Path) -> bool {
     if root_meta.file_type().is_symlink() || !root_meta.is_dir() {
         return false;
     }
-    let Ok(marker_meta) = fs::symlink_metadata(root_dir.join(".systemd-fresh-install").join("manifest")) else {
+    let Ok(marker_meta) =
+        fs::symlink_metadata(root_dir.join(".systemd-fresh-install").join("manifest"))
+    else {
         return false;
     };
     marker_meta.file_type().is_file()
@@ -88,5 +90,6 @@ pub fn import_legacy_format2_release(
         api_unit_sha256: Some(evidence.unit_sha256.clone()),
         web_unit_sha256: None,
         host_config_sha256: None,
+        helper_unit_sha256: None,
     })
 }
