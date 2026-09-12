@@ -4,12 +4,14 @@
  * Lazily imports MonacoHost (same pattern as MarkdownHost) to keep the initial
  * bundle clean. HtmlPreview is rendered in split and preview modes.
  */
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { FileTier } from "@/lib/file-tier.js";
 import type { GitLineChange } from "@/api/client.js";
 import {
+  HTML_VIEW_MODE_CHANGED_EVENT,
+  isHtmlMode,
   loadHtmlViewMode,
   saveHtmlViewMode,
   type HtmlMode,
@@ -69,6 +71,19 @@ export function HtmlHost({
   const [mode, setMode] = useState<HtmlMode>(
     () => initialMode ?? loadHtmlViewMode(),
   );
+
+  useEffect(() => {
+    function handleModeEvent(e: Event) {
+      const custom = e as CustomEvent<HtmlMode>;
+      if (isHtmlMode(custom.detail)) {
+        setMode(custom.detail);
+      }
+    }
+    window.addEventListener(HTML_VIEW_MODE_CHANGED_EVENT, handleModeEvent);
+    return () => {
+      window.removeEventListener(HTML_VIEW_MODE_CHANGED_EVENT, handleModeEvent);
+    };
+  }, []);
 
   function handleModeChange(nextMode: HtmlMode) {
     setMode(nextMode);

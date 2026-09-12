@@ -17,6 +17,8 @@ vi.mock("@/components/organisms/MonacoHost.js", () => ({
 }));
 
 vi.mock("@/lib/html-view-mode-persistence.js", () => ({
+  HTML_VIEW_MODE_CHANGED_EVENT: "dam-hopper:html-view-mode-changed",
+  isHtmlMode: (v: unknown) => v === "edit" || v === "split" || v === "preview",
   loadHtmlViewMode: () => loadModeMock(),
   saveHtmlViewMode: (mode: string) => saveModeMock(mode),
 }));
@@ -143,5 +145,29 @@ describe("HtmlHost", () => {
 
     const monaco = document.querySelector('[data-testid="monaco-host"]');
     expect(monaco?.getAttribute("data-readonly")).toBe("true");
+  });
+
+  it("updates mode when HTML_VIEW_MODE_CHANGED_EVENT is dispatched", async () => {
+    await mount();
+
+    expect(
+      document.querySelector('button[aria-pressed="true"]')?.textContent,
+    ).toBe("Edit");
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("dam-hopper:html-view-mode-changed", {
+          detail: "preview",
+        }),
+      );
+    });
+
+    expect(
+      document.querySelector('button[aria-pressed="true"]')?.textContent,
+    ).toBe("Preview");
+    expect(document.querySelector('[data-testid="monaco-host"]')).toBeNull();
+    expect(
+      document.querySelector('[data-testid="html-preview-container"]'),
+    ).not.toBeNull();
   });
 });
