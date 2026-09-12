@@ -13,6 +13,9 @@ wire DTOs and domain helpers in focused modules, exposes the typed
 `api.workflow` facade, and uses `WsTransport` only as a channel-to-REST adapter.
 Profile-scoped query hashing and transport-generation keys are client cache
 boundaries; they do not change the server's workspace authorization scope.
+The responsive UI behavior for selected-item notes and title/summary editing is
+covered in [Workflow Context Surface](./workflow-context-surface.md); this API
+reference remains the authority for request fields and CAS semantics.
 
 ## Scope and authorization
 

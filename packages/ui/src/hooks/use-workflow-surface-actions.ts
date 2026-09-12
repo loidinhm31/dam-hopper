@@ -1,6 +1,6 @@
 import type { ProjectTargetRef } from "@/api/client.js";
 import { getIsoNow } from "@/api/workflow-domain-helpers.js";
-import type { ItemDto, ItemKind, ItemStatus, ResourceLinkType } from "@/api/workflow-dto-types.js";
+import type { ItemDto, ItemKind, ItemStatus, NoteDto, ResourceLinkType } from "@/api/workflow-dto-types.js";
 import {
   generateWorkflowRequestId,
   useAbandonWorkflowSession,
@@ -8,6 +8,7 @@ import {
   useCreateWorkflowNote,
   useCreateWorkflowSession,
   useDeleteWorkflowItem,
+  useDeleteWorkflowNote,
   useEndWorkflowSession,
   useLinkWorkflowResource,
   usePatchWorkflowItem,
@@ -44,6 +45,11 @@ export interface WorkflowSurfaceActions {
     externalId: string,
   ) => Promise<unknown>;
   handleDeleteItem: (item: ItemDto) => Promise<unknown>;
+  handleUpdateItem: (
+    item: ItemDto,
+    updates: { title?: string; summary?: string | null },
+  ) => Promise<unknown>;
+  handleDeleteNote: (note: NoteDto) => Promise<unknown>;
 }
 export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): WorkflowSurfaceActions {
   const createItem = useCreateWorkflowItem();
@@ -55,6 +61,7 @@ export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): Wo
   const linkResource = useLinkWorkflowResource();
   const unlinkResource = useUnlinkWorkflowResource();
   const deleteItem = useDeleteWorkflowItem();
+  const deleteNote = useDeleteWorkflowNote();
 
   const handleCreateItem = async (item: {
     target: ProjectTargetRef;
@@ -96,6 +103,24 @@ export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): Wo
       id: item.id,
       requestId: generateWorkflowRequestId(),
       updatedAt: item.updatedAt,
+    });
+
+  const handleUpdateItem = (
+    item: ItemDto,
+    updates: { title?: string; summary?: string | null },
+  ) =>
+    patchItem.mutateAsync({
+      id: item.id,
+      requestId: generateWorkflowRequestId(),
+      updatedAt: item.updatedAt,
+      ...updates,
+    });
+
+  const handleDeleteNote = (note: NoteDto) =>
+    deleteNote.mutateAsync({
+      id: note.id,
+      requestId: generateWorkflowRequestId(),
+      updatedAt: note.updatedAt,
     });
 
   const handleAddNote = (itemId: string, body: string) =>
@@ -160,6 +185,8 @@ export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): Wo
     handleAddNote,
     handleStartSession,
     handleDeleteItem,
+    handleUpdateItem,
+    handleDeleteNote,
     handleEndSession,
     handleAbandonSession,
     handleLinkResource,
