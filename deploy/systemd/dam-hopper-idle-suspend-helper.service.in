@@ -9,7 +9,6 @@ User=root
 Group=@API_GROUP@
 RuntimeDirectory=dam-hopper
 RuntimeDirectoryMode=0775
-StateDirectory=dam-hopper
 LogsDirectory=dam-hopper
 ExecStart=@RELEASE_ROOT@/bin/dam-hopper-idle-suspend-helper --socket /run/dam-hopper/idle-suspend.sock --audit-file /var/log/dam-hopper/idle-suspend-helper.jsonl --enrolled-pid-file /run/dam-hopper/server.pid
 Restart=on-failure

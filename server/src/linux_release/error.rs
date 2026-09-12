@@ -233,6 +233,36 @@ pub enum ReleaseError {
         action: &'static str,
         details: String,
     },
+    #[error(
+        "API runtime object '{path}' metadata mismatch: expected type={expected_type} uid={expected_uid} gid={expected_gid} mode={expected_mode:#o}, current type={current_type} uid={current_uid} gid={current_gid} mode={current_mode:#o}"
+    )]
+    ApiRuntimeMetadataMismatch {
+        path: &'static str,
+        expected_type: &'static str,
+        current_type: &'static str,
+        expected_uid: u32,
+        current_uid: u32,
+        expected_gid: u32,
+        current_gid: u32,
+        expected_mode: u32,
+        current_mode: u32,
+    },
+
+    #[error("API runtime operation '{operation}' failed at fixed path '{path}' (errno {errno})")]
+    ApiRuntimeIo {
+        path: &'static str,
+        operation: &'static str,
+        errno: i32,
+    },
+
+    #[error("API runtime cleanup failed at fixed path '{path}' (errno {errno})")]
+    ApiRuntimeCleanup { path: &'static str, errno: i32 },
+
+    #[error("API runtime provisioning failed: primary={primary}; cleanup={cleanup}")]
+    ApiRuntimeProvisionFailed {
+        primary: Box<ReleaseError>,
+        cleanup: Box<ReleaseError>,
+    },
     #[error("configuration error: {0}")]
     Config(String),
 }

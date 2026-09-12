@@ -9,6 +9,8 @@ const HELPER_TEMPLATE: &str =
     include_str!("../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in");
 
 fn create_valid_context() -> UnitRenderContext {
+    let user = get_user_by_name("nobody").expect("nobody account");
+    let group = get_group_by_gid(user.gid).expect("nobody primary group");
     UnitRenderContext::new(
         PathBuf::from("/opt/dam-hopper/releases/v0.2.0/both"),
         "0.2.0".to_string(),
@@ -16,18 +18,23 @@ fn create_valid_context() -> UnitRenderContext {
         vec!["http://localhost:4802".to_string()],
     )
     .expect("valid context")
+    .with_api_identity("nobody".to_string(), group, API_SERVICE_HOME.to_string())
+    .expect("valid API identity")
 }
-
 #[test]
 fn test_render_api_unit_success() {
     let ctx = create_valid_context();
     let rendered = render_api_unit(API_TEMPLATE, &ctx).expect("api unit render should succeed");
 
-    assert!(rendered.contains("User=dam-hopper"));
-    assert!(rendered.contains("Group=dam-hopper"));
-    assert!(rendered.contains("StateDirectory=dam-hopper"));
-    assert!(rendered.contains("RuntimeDirectory=dam-hopper"));
-    assert!(rendered.contains("WorkingDirectory=/var/lib/dam-hopper"));
+    assert!(rendered.contains(&format!("User={}", ctx.api_user)));
+    assert!(rendered.contains(&format!("Group={}", ctx.api_group)));
+    assert!(!rendered.lines().any(|line| line.starts_with("StateDirectory=")));
+    assert!(!rendered
+        .lines()
+        .any(|line| line.starts_with("StateDirectoryMode=")));
+    assert!(rendered.contains(
+        "ExecStartPre=+/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-manager provision-api-runtime"
+    ));
     assert!(rendered.contains("Environment=HOME=/var/lib/dam-hopper"));
     assert!(rendered.contains("Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config"));
     assert!(
@@ -36,21 +43,72 @@ fn test_render_api_unit_success() {
     assert!(rendered.contains("Environment=DAM_HOPPER_CORS_ORIGINS=http://localhost:4802"));
     assert!(rendered.contains("SyslogIdentifier=dam-hopper-api"));
     assert!(rendered.contains("PIDFile=/run/dam-hopper/server.pid"));
-    assert!(rendered.contains("ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'"));
+    assert!(rendered
+        .contains("ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'"));
     assert!(rendered.contains("ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid"));
     assert!(!rendered.contains('@'));
 }
 
 #[test]
-fn test_render_api_unit_rejects_root() {
-    let ctx = create_valid_context()
-        .with_api_identity("root".into(), "root".into(), "/root".into())
-        .expect("valid identity params");
-    let res = render_api_unit(API_TEMPLATE, &ctx);
+fn test_render_context_rejects_root_uid() {
+    let result = create_valid_context().with_api_identity(
+        "root".into(),
+        "root".into(),
+        API_SERVICE_HOME.into(),
+    );
+
     assert!(matches!(
-        res,
-        Err(ReleaseError::UnitPolicyViolation { ref reason, .. }) if reason.contains("API unit must not run as root")
+        result,
+        Err(ReleaseError::Config(reason)) if reason.contains("UID 0")
     ));
+}
+
+#[test]
+fn test_resolve_api_identity_accepts_non_root_primary_group() {
+    let user = get_user_by_name("nobody").expect("nobody account");
+    let group = get_group_by_gid(user.gid).expect("nobody primary group");
+    let unit = ParsedUnit::parse(&format!("[Service]\nUser=nobody\nGroup={group}\n"))
+        .expect("parse runtime identity");
+
+    let identity = resolve_api_runtime_identity(&unit).expect("resolve runtime identity");
+    assert_eq!(identity.user, "nobody");
+    assert_eq!(identity.group, group);
+    assert_eq!(identity.uid, user.uid);
+    assert_eq!(identity.gid, user.gid);
+}
+
+#[test]
+fn test_resolve_api_identity_rejects_root_uid_and_gid() {
+    let unit =
+        ParsedUnit::parse("[Service]\nUser=root\nGroup=root\n").expect("parse root identity");
+
+    assert!(matches!(
+        resolve_api_runtime_identity(&unit),
+        Err(ReleaseError::Config(reason)) if reason.contains("non-root")
+    ));
+}
+
+#[test]
+fn test_resolve_api_identity_rejects_missing_and_duplicate_directives() {
+    let missing_group = ParsedUnit::parse("[Service]\nUser=nobody\n").expect("parse missing group");
+    assert!(resolve_api_runtime_identity(&missing_group).is_err());
+
+    let duplicate_user = ParsedUnit::parse("[Service]\nUser=nobody\nUser=nobody\nGroup=nobody\n")
+        .expect("parse duplicate user");
+    assert!(matches!(
+        resolve_api_runtime_identity(&duplicate_user),
+        Err(ReleaseError::Config(reason)) if reason.contains("exactly one")
+    ));
+}
+
+#[test]
+fn test_resolve_api_identity_rejects_non_primary_group() {
+    let root = get_user_by_name("root").expect("root account");
+    let group = get_group_by_gid(root.gid).expect("root primary group");
+    let unit = ParsedUnit::parse(&format!("[Service]\nUser=nobody\nGroup={group}\n"))
+        .expect("parse mismatched identity");
+
+    assert!(resolve_api_runtime_identity(&unit).is_err());
 }
 
 #[test]
@@ -73,17 +131,16 @@ fn test_render_web_unit_success() {
     assert!(!rendered.contains('@'));
 }
 
-
 #[test]
 fn test_render_helper_unit_success() {
     let ctx = create_valid_context();
-    let rendered = render_helper_unit(HELPER_TEMPLATE, &ctx).expect("helper unit render should succeed");
+    let rendered =
+        render_helper_unit(HELPER_TEMPLATE, &ctx).expect("helper unit render should succeed");
 
-    assert!(rendered.contains("User=root"));
-    assert!(rendered.contains("Group=dam-hopper"));
+    assert!(!rendered.lines().any(|line| line.starts_with("StateDirectory=")));
+    assert!(rendered.contains(&format!("Group={}", ctx.api_group)));
     assert!(rendered.contains("RuntimeDirectory=dam-hopper"));
     assert!(rendered.contains("RuntimeDirectoryMode=0775"));
-    assert!(rendered.contains("StateDirectory=dam-hopper"));
     assert!(rendered.contains("LogsDirectory=dam-hopper"));
     assert!(rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-idle-suspend-helper --socket /run/dam-hopper/idle-suspend.sock --audit-file /var/log/dam-hopper/idle-suspend-helper.jsonl --enrolled-pid-file /run/dam-hopper/server.pid"));
     assert!(rendered.contains("Restart=on-failure"));
@@ -176,19 +233,22 @@ fn test_stage_candidate_units_roles() {
     let server_bin = target_dir.join("bin/dam-hopper-server");
     let web_bin = target_dir.join("bin/dam-hopper-web");
     let mgr_bin = target_dir.join("bin/dam-hopper-manager");
+    let cli_bin = target_dir.join("bin/dam-hopper");
     std::fs::write(&server_bin, "server").unwrap();
     std::fs::write(&web_bin, "web").unwrap();
     std::fs::write(&mgr_bin, "manager").unwrap();
+    std::fs::write(&cli_bin, "cli").unwrap();
     let helper_bin = target_dir.join("bin/dam-hopper-idle-suspend-helper");
     std::fs::write(&helper_bin, "helper").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&server_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&web_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&mgr_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&cli_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&helper_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Create dummy manifest
     let manifest = ReleaseManifest {
-        schema_version: 1,
+        schema_version: RELEASE_MANIFEST_SCHEMA_VERSION,
         release: ReleaseMeta {
             tag: "v0.2.0".to_string(),
             version: "0.2.0".to_string(),
@@ -224,14 +284,13 @@ fn test_stage_candidate_units_roles() {
         },
         inventory: vec![],
         services: ServicesMeta {
-            api: ServiceContract {
+            api: ApiServiceContract {
                 unit_name: API_SERVICE_UNIT.to_string(),
-                identity: API_SERVICE_IDENTITY.to_string(),
                 bind_host: API_SERVICE_BIND_HOST.to_string(),
                 port: API_SERVICE_PORT,
                 health_path: API_SERVICE_HEALTH_PATH.to_string(),
             },
-            web: ServiceContract {
+            web: WebServiceContract {
                 unit_name: WEB_SERVICE_UNIT.to_string(),
                 identity: WEB_SERVICE_IDENTITY.to_string(),
                 bind_host: WEB_SERVICE_BIND_HOST.to_string(),
@@ -247,6 +306,9 @@ fn test_stage_candidate_units_roles() {
 
     // Stage for Server role
     let origins = vec!["http://localhost:4802".to_string()];
+    let mut host_config = HostConfig::new(TargetRole::Server, origins.clone()).unwrap();
+    host_config.service_user = Some("nobody".to_string());
+    save_host_config(&layout.host_config_path(), &host_config).unwrap();
     stage_candidate_units(
         &layout,
         &target_dir,
@@ -259,7 +321,9 @@ fn test_stage_candidate_units_roles() {
     let pending_units = layout.pending_units_dir();
     assert!(pending_units.join("dam-hopper-api.service").exists());
     assert!(pending_units.join("dam-hopper-recovery.service").exists());
-    assert!(pending_units.join("dam-hopper-idle-suspend-helper.service").exists());
+    assert!(pending_units
+        .join("dam-hopper-idle-suspend-helper.service")
+        .exists());
     assert!(!pending_units.join("dam-hopper-web.service").exists());
 
     let pending_cfg = load_host_public_config(&layout.pending_host_config_json_path())
@@ -272,7 +336,9 @@ fn test_stage_candidate_units_roles() {
         .expect("stage candidate units for both");
     assert!(pending_units.join("dam-hopper-api.service").exists());
     assert!(pending_units.join("dam-hopper-web.service").exists());
-    assert!(pending_units.join("dam-hopper-idle-suspend-helper.service").exists());
+    assert!(pending_units
+        .join("dam-hopper-idle-suspend-helper.service")
+        .exists());
     assert!(pending_units.join("dam-hopper-web.conf").exists());
 
     let pending_cfg = load_host_public_config(&layout.pending_host_config_json_path())
@@ -284,7 +350,9 @@ fn test_stage_candidate_units_roles() {
     stage_candidate_units(&layout, &target_dir, &manifest, TargetRole::Web, &origins)
         .expect("stage candidate units for web");
     assert!(!pending_units.join("dam-hopper-api.service").exists());
-    assert!(!pending_units.join("dam-hopper-idle-suspend-helper.service").exists());
+    assert!(!pending_units
+        .join("dam-hopper-idle-suspend-helper.service")
+        .exists());
     assert!(pending_units.join("dam-hopper-web.service").exists());
     assert!(pending_units.join("dam-hopper-web.conf").exists());
     assert!(pending_units.join("dam-hopper-recovery.service").exists());

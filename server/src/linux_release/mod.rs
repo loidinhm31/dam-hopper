@@ -5,6 +5,7 @@
 //! release acquisition, and safe staging for Fedora 44.
 
 pub mod account;
+mod api_runtime;
 pub mod acquire;
 pub mod acquire_client;
 pub mod activate;
@@ -55,10 +56,12 @@ pub mod unit_parser;
 pub mod unit_policy;
 pub mod version;
 pub use account::{
-    UserInfo, get_group_by_gid, get_user_by_name, resolve_service_user, verify_api_service_account,
-    verify_web_sysuser_account,
+    get_group_by_gid, get_group_gid_by_name, get_user_by_name, resolve_api_runtime_identity,
+    resolve_service_user, verify_api_service_account, verify_web_sysuser_account,
+    ApiRuntimeIdentity, UserInfo,
 };
-pub use acquire::{AcquisitionRecord, acquire_release};
+pub use api_runtime::{provision_and_start_api_with, provision_api_runtime, provision_installed_api_runtime};
+pub use acquire::{acquire_release, AcquisitionRecord};
 pub use activate::{
     execute_activation, execute_activation_locked, execute_activation_locked_with_args,
     execute_activation_with_args,
@@ -76,55 +79,55 @@ pub use durable_fs::{
 };
 pub use error::ReleaseError;
 pub use health::{
+    probe_http_endpoint, wait_for_health_stability, HealthProbeTarget, HttpProbeOutcome,
     DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_STARTUP_DEADLINE,
-    HealthProbeTarget, HttpProbeOutcome, probe_http_endpoint, wait_for_health_stability,
 };
 pub use host_config::{
-    HostConfig, HostPublicConfig, load_host_config, load_host_public_config, save_host_config,
-    save_host_public_config,
+    load_host_config, load_host_public_config, save_host_config, save_host_public_config,
+    HostConfig, HostPublicConfig,
 };
 pub use inventory::{
-    EntryKind, InventoryEntry, ReleaseRole, TargetRole, check_disallowed_files,
-    normalize_inventory_path, validate_inventory,
+    check_disallowed_files, normalize_inventory_path, validate_inventory, EntryKind,
+    InventoryEntry, ReleaseRole, TargetRole,
 };
-pub use journal::{DeploymentState, RecoveryAction, classify_recovery, validate_transition};
+pub use journal::{classify_recovery, validate_transition, DeploymentState, RecoveryAction};
 pub use layout::Layout;
 pub use legacy_format2::{
+    import_legacy_format2_release, inspect_format2_installation, inspect_format2_root,
+    is_legacy_format2_root, validate_format2_unit, LegacyFormat2Evidence, LegacyFormat2Manifest,
     LEGACY_FORMAT2_PORT, LEGACY_FORMAT2_TAG, LEGACY_FORMAT2_UNIT, LEGACY_FORMAT2_USER,
-    LegacyFormat2Evidence, LegacyFormat2Manifest, import_legacy_format2_release,
-    inspect_format2_installation, inspect_format2_root, is_legacy_format2_root,
-    validate_format2_unit,
 };
 pub use lock::DeploymentLock;
 pub use manifest::{
-    ArchiveMeta, ComponentVersion, ComponentsMeta, ProfileMeta, ReleaseManifest, ReleaseMeta,
-    RollbackMeta, ServiceContract, ServicesMeta, validate_manifest_and_archive,
+    validate_manifest_and_archive, ApiServiceContract, ArchiveMeta, ComponentVersion,
+    ComponentsMeta, ProfileMeta, ReleaseManifest, ReleaseMeta, RollbackMeta, ServicesMeta,
+    WebServiceContract,
 };
 pub use origin::{validate_web_origin, validate_web_origins};
 pub use ownership::{
     verify_manager_state_permissions, verify_path_permissions, verify_release_ownership,
 };
 pub use platform::{
-    OsRelease, get_runtime_glibc_version, get_runtime_systemd_version, is_systemd_booted,
-    parse_os_release, parse_systemd_version, verify_arch, verify_glibc_version,
-    verify_host_platform, verify_os_release, verify_systemd_version,
+    get_runtime_glibc_version, get_runtime_systemd_version, is_systemd_booted, parse_os_release,
+    parse_systemd_version, verify_arch, verify_glibc_version, verify_host_platform,
+    verify_os_release, verify_systemd_version, OsRelease,
 };
 pub use privilege::{current_euid, verify_privileges};
 pub use process::{
-    ServiceProcessEvidence, check_ports_free, inspect_service_process, is_port_listening,
-    parse_proc_net_listening, terminate_stray_listeners, verify_no_foreign_sqlite_holders,
+    check_ports_free, inspect_service_process, is_port_listening, parse_proc_net_listening,
+    terminate_stray_listeners, verify_no_foreign_sqlite_holders, ServiceProcessEvidence,
 };
 pub use recovery::execute_recovery;
 pub use retention::apply_retention;
 pub use rollback::{execute_manual_rollback, rollback_activation_failure};
-pub use stage::{PendingState, load_pending_state, resolve_host_role};
+pub use stage::{load_pending_state, resolve_host_role, PendingState};
 pub use stage_transaction::stage_release_bundle;
 pub use stage_units::stage_candidate_units;
-pub use state::{ManagerState, backup_state_file, load_or_init_manager_state, save_manager_state};
+pub use state::{backup_state_file, load_or_init_manager_state, save_manager_state, ManagerState};
 pub use state_record::{
     FailureRecord, PendingCandidateRecord, ReleaseRecord, TransactionPhase, TransactionRecord,
 };
-pub use status::{ServiceStatus, collect_all_services_status, inspect_unit_status};
+pub use status::{collect_all_services_status, inspect_unit_status, ServiceStatus};
 pub use systemd::{
     disable_if_enabled, systemctl_daemon_reload, systemctl_disable, systemctl_enable,
     systemctl_is_active, systemctl_is_enabled, systemctl_restart, systemctl_show_property,
@@ -136,9 +139,9 @@ pub use systemd_backup::{
 pub use transaction::ActivationTransaction;
 pub use unit::render_recovery_unit;
 pub use unit::{
+    render_api_unit, render_helper_unit, render_unit, render_web_unit, UnitRenderContext,
     TOKEN_API_GROUP, TOKEN_API_HOME, TOKEN_API_ORIGINS, TOKEN_API_USER, TOKEN_PUBLIC_CONFIG,
-    TOKEN_RELEASE_ROOT, TOKEN_RELEASE_VERSION, UnitRenderContext, render_api_unit, render_unit,
-    render_helper_unit, render_web_unit,
+    TOKEN_RELEASE_ROOT, TOKEN_RELEASE_VERSION,
 };
 pub use unit_parser::ParsedUnit;
 pub use version::{

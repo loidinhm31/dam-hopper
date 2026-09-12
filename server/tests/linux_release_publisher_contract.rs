@@ -27,12 +27,11 @@ fn test_publisher_contract_manifest_and_archive_valid() {
         .expect("validation should succeed");
     assert_eq!(validated.release.tag, "v0.2.0");
     assert_eq!(validated.release.version, "0.2.0");
-    assert_eq!(validated.services.api.identity, "root");
     assert_eq!(validated.services.web.identity, "dam-hopper-web");
 
     // 2. Validate manifest alone without archive
-    let manifest_only = validate_manifest_and_archive(&manifest_path, None)
-        .expect("manifest alone should succeed");
+    let manifest_only =
+        validate_manifest_and_archive(&manifest_path, None).expect("manifest alone should succeed");
     assert_eq!(manifest_only, manifest);
 
     // 3. Validate CLI parsing for `dam-hopper validate`
@@ -63,24 +62,42 @@ fn test_publisher_contract_role_projections() {
     let both_entries = manifest.project_role(TargetRole::Both);
 
     // Server must include manager, server binary, api service unit, license
-    assert!(server_entries.iter().any(|e| e.path == "bin/dam-hopper-manager"));
-    assert!(server_entries.iter().any(|e| e.path == "bin/dam-hopper-server"));
-    assert!(server_entries.iter().any(|e| e.path == "systemd/dam-hopper-api.service"));
+    assert!(server_entries
+        .iter()
+        .any(|e| e.path == "bin/dam-hopper-manager"));
+    assert!(server_entries
+        .iter()
+        .any(|e| e.path == "bin/dam-hopper-server"));
+    assert!(server_entries
+        .iter()
+        .any(|e| e.path == "systemd/dam-hopper-api.service"));
     assert!(server_entries.iter().any(|e| e.path == "LICENSE"));
     // Server must NOT include web binary or web assets
-    assert!(!server_entries.iter().any(|e| e.path == "bin/dam-hopper-web"));
+    assert!(!server_entries
+        .iter()
+        .any(|e| e.path == "bin/dam-hopper-web"));
     assert!(!server_entries.iter().any(|e| e.path == "web/index.html"));
 
     // Web must include manager, web binary, web service unit, sysusers, web assets, license
-    assert!(web_entries.iter().any(|e| e.path == "bin/dam-hopper-manager"));
+    assert!(web_entries
+        .iter()
+        .any(|e| e.path == "bin/dam-hopper-manager"));
     assert!(web_entries.iter().any(|e| e.path == "bin/dam-hopper-web"));
-    assert!(web_entries.iter().any(|e| e.path == "systemd/dam-hopper-web.service"));
-    assert!(web_entries.iter().any(|e| e.path == "sysusers.d/dam-hopper-web.conf"));
+    assert!(web_entries
+        .iter()
+        .any(|e| e.path == "systemd/dam-hopper-web.service"));
+    assert!(web_entries
+        .iter()
+        .any(|e| e.path == "sysusers.d/dam-hopper-web.conf"));
     assert!(web_entries.iter().any(|e| e.path == "web/index.html"));
     assert!(web_entries.iter().any(|e| e.path == "LICENSE"));
     // Web must NOT include server binary or api service unit
-    assert!(!web_entries.iter().any(|e| e.path == "bin/dam-hopper-server"));
-    assert!(!web_entries.iter().any(|e| e.path == "systemd/dam-hopper-api.service"));
+    assert!(!web_entries
+        .iter()
+        .any(|e| e.path == "bin/dam-hopper-server"));
+    assert!(!web_entries
+        .iter()
+        .any(|e| e.path == "systemd/dam-hopper-api.service"));
 
     // Both must include all inventory entries
     assert_eq!(both_entries.len(), manifest.inventory.len());
@@ -105,7 +122,10 @@ fn test_publisher_contract_tampered_archive_rejected() {
 
     let err = validate_manifest_and_archive(&manifest_path, Some(&archive_path))
         .expect_err("corrupted archive should be rejected");
-    assert!(matches!(err, ReleaseError::Io { .. } | ReleaseError::ArchiveEntryInvalid { .. }));
+    assert!(matches!(
+        err,
+        ReleaseError::Io { .. } | ReleaseError::ArchiveEntryInvalid { .. }
+    ));
 }
 
 #[test]
@@ -123,8 +143,7 @@ fn test_publisher_contract_disallowed_files_rejected() {
     });
 
     let json = serde_json::to_vec(&manifest).unwrap();
-    let err = ReleaseManifest::parse_and_validate(&json)
-        .expect_err(".env file should be rejected");
+    let err = ReleaseManifest::parse_and_validate(&json).expect_err(".env file should be rejected");
     assert!(matches!(err, ReleaseError::DisallowedRuntimeFile { .. }));
 }
 
@@ -165,7 +184,12 @@ fn test_publisher_end_to_end_scripts_and_manager_validation() {
     fs::create_dir_all(&bin_dir).unwrap();
     fs::create_dir_all(&web_dir).unwrap();
 
-    for b in ["dam-hopper", "dam-hopper-server", "dam-hopper-web"] {
+    for b in [
+        "dam-hopper",
+        "dam-hopper-server",
+        "dam-hopper-idle-suspend-helper",
+        "dam-hopper-web",
+    ] {
         let p = bin_dir.join(b);
         fs::write(&p, b"#!/bin/sh\necho 0.1.0\n").unwrap();
         #[cfg(unix)]
@@ -175,15 +199,24 @@ fn test_publisher_end_to_end_scripts_and_manager_validation() {
         }
     }
 
-    fs::write(web_dir.join("index.html"), b"<!doctype html><html>DamHopper</html>").unwrap();
+    fs::write(
+        web_dir.join("index.html"),
+        b"<!doctype html><html>DamHopper</html>",
+    )
+    .unwrap();
 
     let status = std::process::Command::new("deploy/release/build-release-archive.sh")
         .args([
-            "--version", "v0.1.0",
-            "--target-dir", bin_dir.to_str().unwrap(),
-            "--web-dist", web_dir.to_str().unwrap(),
-            "--output-dir", out_dir.to_str().unwrap(),
-            "--source-date-epoch", "1700000000",
+            "--version",
+            "v0.1.0",
+            "--target-dir",
+            bin_dir.to_str().unwrap(),
+            "--web-dist",
+            web_dir.to_str().unwrap(),
+            "--output-dir",
+            out_dir.to_str().unwrap(),
+            "--source-date-epoch",
+            "1700000000",
         ])
         .current_dir("..")
         .status()
@@ -196,10 +229,14 @@ fn test_publisher_end_to_end_scripts_and_manager_validation() {
     let status = std::process::Command::new("node")
         .args([
             "deploy/release/generate-release-manifest.mjs",
-            "--archive", archive_path.to_str().unwrap(),
-            "--tag", "v0.1.0",
-            "--commit", "0123456789abcdef0123456789abcdef01234567",
-            "--output-dir", out_dir.to_str().unwrap(),
+            "--archive",
+            archive_path.to_str().unwrap(),
+            "--tag",
+            "v0.1.0",
+            "--commit",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--output-dir",
+            out_dir.to_str().unwrap(),
         ])
         .current_dir("..")
         .status()
@@ -214,6 +251,5 @@ fn test_publisher_end_to_end_scripts_and_manager_validation() {
         .expect("manager validation of generated archive must succeed");
     assert_eq!(manifest.release.tag, "v0.1.0");
     assert_eq!(manifest.release.version, "0.1.0");
-    assert_eq!(manifest.services.api.identity, "root");
     assert_eq!(manifest.services.web.identity, "dam-hopper-web");
 }

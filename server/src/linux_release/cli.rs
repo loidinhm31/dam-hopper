@@ -48,9 +48,12 @@ pub enum Commands {
 
     /// Validate a release manifest and optional archive bundle against contract invariants.
     Validate(ValidateArgs),
-
     /// Print detailed version information.
     Version,
+
+    /// Provision fixed API runtime paths for the installed API unit (internal).
+    #[command(name = "provision-api-runtime", hide = true)]
+    ProvisionApiRuntime,
 }
 
 /// Arguments for `fetch` subcommand.

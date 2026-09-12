@@ -9,7 +9,7 @@ pub fn create_valid_manifest() -> ReleaseManifest {
     let sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string();
 
     ReleaseManifest {
-        schema_version: 1,
+        schema_version: RELEASE_MANIFEST_SCHEMA_VERSION,
         release: ReleaseMeta {
             tag: tag.clone(),
             version: version.clone(),
@@ -61,6 +61,14 @@ pub fn create_valid_manifest() -> ReleaseManifest {
                 sha256: Some(sha.clone()),
             },
             InventoryEntry {
+                path: "bin/dam-hopper-idle-suspend-helper".to_string(),
+                kind: EntryKind::File,
+                roles: vec![ReleaseRole::Server],
+                mode: 0o755,
+                size: Some(5_000_000),
+                sha256: Some(sha.clone()),
+            },
+            InventoryEntry {
                 path: "bin/dam-hopper-web".to_string(),
                 kind: EntryKind::File,
                 roles: vec![ReleaseRole::Web],
@@ -70,6 +78,14 @@ pub fn create_valid_manifest() -> ReleaseManifest {
             },
             InventoryEntry {
                 path: "systemd/dam-hopper-api.service".to_string(),
+                kind: EntryKind::File,
+                roles: vec![ReleaseRole::Server],
+                mode: 0o644,
+                size: Some(512),
+                sha256: Some(sha.clone()),
+            },
+            InventoryEntry {
+                path: "systemd/dam-hopper-idle-suspend-helper.service".to_string(),
                 kind: EntryKind::File,
                 roles: vec![ReleaseRole::Server],
                 mode: 0o644,
@@ -126,14 +142,13 @@ pub fn create_valid_manifest() -> ReleaseManifest {
             },
         ],
         services: ServicesMeta {
-            api: ServiceContract {
+            api: ApiServiceContract {
                 unit_name: API_SERVICE_UNIT.to_string(),
-                identity: API_SERVICE_IDENTITY.to_string(),
                 bind_host: API_SERVICE_BIND_HOST.to_string(),
                 port: API_SERVICE_PORT,
                 health_path: API_SERVICE_HEALTH_PATH.to_string(),
             },
-            web: ServiceContract {
+            web: WebServiceContract {
                 unit_name: WEB_SERVICE_UNIT.to_string(),
                 identity: WEB_SERVICE_IDENTITY.to_string(),
                 bind_host: WEB_SERVICE_BIND_HOST.to_string(),
@@ -202,4 +217,13 @@ fn test_role_projections() {
 
     let both_entries = manifest.project_role(TargetRole::Both);
     assert_eq!(both_entries.len(), manifest.inventory.len());
+}
+
+#[test]
+fn test_release_and_manager_state_versions_are_independent() {
+    assert_eq!(RELEASE_MANIFEST_SCHEMA_VERSION, 2);
+    assert_eq!(
+        ManagerState::new().schema_version,
+        MANAGER_STATE_SCHEMA_VERSION
+    );
 }

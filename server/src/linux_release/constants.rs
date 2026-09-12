@@ -1,7 +1,10 @@
 //! Constants defining the release contract and profile invariants for Fedora 44.
 
-/// Supported schema version for release manifests.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Schema version for release manifests.
+pub const RELEASE_MANIFEST_SCHEMA_VERSION: u32 = 2;
+
+/// Schema version for persisted manager state.
+pub const MANAGER_STATE_SCHEMA_VERSION: u32 = 1;
 
 /// Target profile identifier.
 pub const PROFILE_ID: &str = "linux-x86_64-systemd";
@@ -22,8 +25,6 @@ pub const PROFILE_SYSTEMD_MIN: u32 = 245;
 
 /// Systemd unit name for the API server.
 pub const API_SERVICE_UNIT: &str = "dam-hopper-api.service";
-/// Systemd execution user for the API server (manifest identity contract).
-pub const API_SERVICE_IDENTITY: &str = "root";
 /// Default fallback system user for the API server.
 pub const DEFAULT_API_SERVICE_USER: &str = "dam-hopper";
 /// Dedicated home and state directory for the API server.
