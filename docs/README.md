@@ -108,7 +108,7 @@ generic network coverage.
   900 seconds (15 minutes).
 - Phase 01 configuration stores `automaticPolicy` and `agentExecutables`
   under `server.idleSuspend`; the selector defaults to `empty-fleet`.
-- Production diagnostics Phase 06 is complete: `dam-hopper diagnose --json`
+- Production diagnostics Phases 01–07 are complete: `dam-hopper diagnose --json`
   invokes fixed role-aware systemd/journal/local-API/host-probe adapters,
   writes a bounded `bundleSchemaVersion: 1` JSON bundle, and returns exit
   `0` for complete, `2` for valid partial, or `1` for fatal
@@ -119,7 +119,10 @@ generic network coverage.
   `permissionDenied`, so server/both runs may be partial. See the
   [Linux Release Manager](./linux-release-manager.md#production-diagnostics-phase-06)
   guide and [diagnostics plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md).
-- Phase 07 rollout remains planned.
+- Phase 07 cross-layer verification, architecture reconciliation, documentation,
+  and staged read-only rollout are complete (2026-09-14). See the
+  [Phase 07 test report](../plans/reports/tester-260914-0106-phase07-cycle2-verification.md)
+  and [code review](../plans/reports/code-review-260914-0109-phase-07-production-idle-suspend-diagnostics-cycle2.md).
 - Configured-agent activity Phase 02 provides private PTY evidence and input
   admission; its Phase 03 provides bounded process discovery and retained
   attribution. Phase 04 provides owned TCP byte observation and per-socket

@@ -954,17 +954,34 @@ Operations-owned target-host gate. See the [Phase 08 QA report](../plans/reports
 
 ### PR-018: Production Idle-Suspend Diagnostics (Phases 01–07)
 
-**Status:** Phase 01 architecture/schema/security contract, Phase 02
-canonical event foundation, Phase 03 server coordinator integration, Phase
-04 helper audit milestone enrichment, Phase 05 pure bundle/correlation
-engine, and Phase 06 host/API/command/output integration are complete.
-Phase 07 rollout remains planned.
+**Status:** COMPLETE / DONE (2026-09-14). Phases 01–06 delivered the
+architecture/schema/security contract, event and audit evidence, pure bundle
+correlation engine, and fixed host/API/command/output integration. Phase 07
+cross-layer verification, architecture reconciliation, read-only Linux smoke,
+documentation, and rollout qualification are complete.
 
 **Product intent:** Preserve bounded, privacy-safe evidence for diagnosing an
 idle-suspend incident without adding an observer daemon, terminal-content
 logging, telemetry egress, root-cause classifier, automatic upload, policy
 change, or alternate suspend authority. `dam-hopper diagnose --json` reads
 fixed local sources and writes one atomic local bundle.
+
+**Phase 07 delivery:** `server/tests/idle_suspend_phase07.rs` passes 2/2
+deterministic automatic/manual cross-layer tests, including quiet admission and
+cancellation, terminal rejection, canonical UUID propagation, and server-audit
+correlation. `server/tests/idle_suspend_diagnostics.rs` passes 8/8 deterministic
+fault, redaction, bounds, role/EUID, local-API, and atomic-output tests through
+six focused modules. The explicitly ignored
+`server/tests/idle_suspend_diagnostics_linux_smoke.rs` passes 1/1 with
+production read adapters and temporary output; before/after snapshots show no
+mutation of host/configuration/audit files, RTC wakealarm content, or API/helper
+unit state.
+
+The five-command focused gate recorded 223/223 aggregate executed tests with
+zero failures. This is an invocation aggregate, not unique-test coverage, and
+no coverage percentage is claimed. Cycle-2 code review approved the delivered
+scope at 10.0/10. Complete/partial/fatal CLI semantics, staged rollout, and
+rollback boundaries are documented; no real suspend/resume canary is claimed.
 
 **Phase 02 delivery:** `server/src/idle_suspend/event.rs` defines the closed
 `IdleSuspendEventEnvelopeV1` model, 14 event types, 26 reason codes, typed
@@ -1054,7 +1071,7 @@ serialization/output failure with no path.
 - [x] Phase 06 implements role-aware host/API/command/probe adapters, the
       exact `diagnose --json` grammar, atomic `0700`/`0600` output, and
       complete/partial/fatal exit semantics.
-- [ ] Phase 07 performs mixed-version qualification and controlled rollout.
+- [x] Phase 07 performs cross-layer verification, architecture checks, zero-mutation Linux smoke, and controlled rollout.
 
 **Operational boundary:** Event writes are diagnostic best effort after
 coordinator integration; they never rewrite a suspend outcome. Existing

@@ -421,7 +421,7 @@ heuristic, not an authorization boundary; the server's manager-locked claim and
 existing manual force gates remain authoritative. See [Protected Idle-Suspend
 Status and Browser UI](./idle-suspend-status-ui.md).
 
-### Integrated qualification and host gate — Phase 07 (2026-09-11)
+### Configured-agent activity integrated qualification and host gate — Phase 07 (2026-09-11)
 
 Phase 07 closes the deterministic integration and security qualification boundary
 without expanding the privileged execution surface:
@@ -447,12 +447,12 @@ without expanding the privileged execution surface:
   fails if suspend is requested. The smoke passed in **0.72s**; it is observer
   evidence, not a host-suspend authorization.
 
-The QA record reports **323 backend/PTY/API/integration tests**, **16/16
-Chromium tests**, **14/14** boundary checks, and code review approval at
-**9.4/10**. Automated evidence uses fake suspend outcomes and temporary
-resources. A real automatic suspend/resume canary remains an Operations gate:
-qualify the deployed service context and kernel first, assign physical or
-out-of-band recovery, bound the RTC window, and record rollback ownership.
+The configured-agent activity QA record reports **323 backend/PTY/API/integration
+tests**, **16/16 Chromium tests**, **14/14** boundary checks, and code review
+approval at **9.4/10**. Automated evidence uses fake suspend outcomes and
+temporary resources. A real automatic suspend/resume canary remains an
+Operations gate: it requires a qualified host, maintenance window, physical or
+out-of-band recovery, bounded RTC wake, and rollback ownership.
 
 The qualification command surface is intentionally split:
 
@@ -528,7 +528,51 @@ Deployments using split web/API ports (e.g., UAT `:4804`/`:4803` or production `
 2. **Exact CORS Origin Trust**: Cookie-only requests are permitted if the request `Origin` matches an exact configured allowlist entry in `DAM_HOPPER_CORS_ORIGINS` or satisfies strict same-origin (`http(s)://Host`).
 3. **Fail-Closed Rejection**: Foreign origins, duplicate `Origin` headers, malformed URIs, and origins bearing userinfo continue to fail closed with `403 invalidOrigin` before any coordinator handoff or side effect.
 
-## Unresolved Questions
+### Production idle-suspend diagnostics security, privacy, and AI-attachment boundaries — Phase 07 (2026-09-14)
+
+Phase 07 verifies the diagnostics path as a local evidence collector, not a new
+suspend authority:
+
+1. **One-shot and no egress**: `dam-hopper diagnose --json` runs once, uses
+   fixed local files/units and the loopback status API, and never starts a
+   daemon, opens a listener, invokes a shell, uploads a bundle, or contacts an
+   external AI service. `--json` is the complete grammar; source, command,
+   path, URL, and window overrides are not accepted.
+2. **Privacy projection**: Projectors run before bundle sizing/serialization.
+   The tested redaction corpus excludes JWTs, bearer tokens, `damhopper-auth`
+   cookies, passwords/passphrases, raw ANSI escapes, terminal/PTY bytes,
+   argv/environment, socket/IP addresses, inhibitor identity, journal message
+   text, raw helper frames, and unbounded stderr. Actors become presence
+   booleans; helper/free text becomes closed codes; current executable identity
+   is retained only after strict safe-identity validation.
+3. **Bounded evidence**: The v1 bundle uses a 60-minute window, 10,000
+   records per source, 16 KiB JSONL lines, 16 MiB file scans, 2 MiB fixed
+   command output, 256 KiB local API bodies, 512-byte retained strings,
+   bounded errors/examples/arrays, depth eight, and five-second command/API
+   deadlines. Malformed, unknown, gapped, rotated, dropped, or truncated
+   evidence remains explicitly partial.
+4. **Privilege and output boundary**: Root attempts the applicable helper audit;
+   non-root never escalates and records that source as `permissionDenied`.
+   Output directories are EUID-owned `0700`; bundles are atomic owner-only
+   `0600` files. Symlinked destination directories and non-regular source files
+   are rejected, and source logs are never repaired or rewritten.
+5. **Qualification evidence**: `server/tests/idle_suspend_phase07.rs` proves
+   automatic/manual cross-layer chains and exact UUID/audit correlation.
+   `server/tests/idle_suspend_diagnostics.rs` delegates fault, redaction,
+   bounds, role, and output checks to six focused modules. The ignored
+   `server/tests/idle_suspend_diagnostics_linux_smoke.rs` uses production read
+   adapters plus temporary output and verifies unchanged host/configuration/
+   audit hashes, RTC wakealarm content, and API/helper unit state.
+6. **AI handoff**: Exit `0` means complete applicable historical evidence,
+   `2` means a valid partial bundle, and `1` means no safely written bundle.
+   Exit `0`/`2` print only the absolute path. The file still contains sensitive
+   boot, kernel/OS, UID, service, and timing metadata; an operator reviews it
+   before attaching it anywhere. The product never uploads or analyzes it.
+
+## Unresolved questions (configured-agent automatic-suspend canary)
+Phase 07 diagnostics has no unresolved implementation questions; the items below
+remain operational gates for the separate configured-agent automatic-suspend
+canary.
 
 - Can every target host guarantee DamHopper-exclusive `rtc0` ownership, or should any pre-existing alarm keep manual suspend unavailable?
 - Can each target kernel/service sandbox expose unprivileged `SOCK_DIAG` TCP_INFO fields and complete `/proc/<pid>/fd` ownership within the one-second budget?

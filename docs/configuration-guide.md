@@ -767,23 +767,45 @@ optional writer into `AppState` and coordinator startup; initialization can
 degrade semantic evidence without disabling suspend/status behavior.
 
 Production collection is a separate read-only CLI path:
-`dam-hopper diagnose --json`. The required `--json` flag is the complete
-grammar; path, window, source, unit, URL, command, and verbosity overrides are
-not accepted. The collector uses fixed role-aware host adapters and emits one
-bounded `bundleSchemaVersion: 1` JSON file. It returns `0` for complete
-historical evidence, `2` for a valid partial bundle, and `1` for serialization
-or secure-output failure.
+`dam-hopper diagnose --json` (Phases 06–07). The required `--json` flag is the
+complete grammar; path, window, source, unit, URL, command, and verbosity
+overrides are not accepted.
 
-- Root output: `/var/lib/dam-hopper-manager/diagnostics`
-- Non-root output: `$XDG_STATE_HOME/dam-hopper/diagnostics`, else
-  `$HOME/.local/state/dam-hopper/diagnostics`; no `/tmp` fallback
-- Output directory: owner-only `0700`; final bundle: owner-only `0600`
-- Non-root execution never escalates; root-only helper audit is
-  `permissionDenied` and applicable server/both collection is partial
-- The command prints only the absolute final bundle path on stdout
+Bundle-v1 bounds are fixed in the implementation:
+
+- 60-minute historical window
+- 10,000 accepted records per source and 10,000 record-array items
+- 16 KiB per JSONL line and 16 MiB maximum file scan
+- 2 MiB maximum host-command stdout and 256 KiB maximum local-API body
+- 8 MiB maximum serialized bundle
+- 512-byte redacted/serialized strings, 256 source errors, 32 warning examples,
+  and nested DTO depth 8
+- 5-second command/API deadlines
+
+These are not `dam-hopper.toml` keys and have no public tuning knobs. The
+default idle-suspend policy (`empty-fleet`) and timeout configuration remain
+unchanged.
+
+The collector uses fixed role-aware host adapters and emits one bounded
+camelCase `bundleSchemaVersion: 1` JSON file. Applicable server/both sources
+are collected for those roles; web-role sources are `notApplicable`; an
+unknown role remains partial. Current host probes are marked latest and
+`nonHistorical`, so they do not establish historical completeness.
+
+Root output is `/var/lib/dam-hopper-manager/diagnostics`. Non-root output is
+`$XDG_STATE_HOME/dam-hopper/diagnostics`, or
+`$HOME/.local/state/dam-hopper/diagnostics` when unset; there is no `/tmp`
+fallback. The output directory is owner-only `0700`, the final bundle is
+owner-only `0600`, and non-root execution never escalates. A root-only helper
+audit is reported as `permissionDenied` for non-root collection and can make a
+valid bundle partial. The command prints only the absolute final bundle path
+after an atomic same-directory write.
+
+The command returns `0` for complete applicable historical evidence, `2` for a
+valid partial bundle, and `1` for serialization or secure-output failure.
 
 See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
-for fixed source paths, adapter bounds, and the atomic write sequence.
+for fixed source paths, adapter behavior, and the atomic write sequence.
 
 - Backend diagnostics are stored locally at `~/.config/dam-hopper/diagnostics/backend-log.jsonl`
 - The backend log keeps a 60-minute retention window and uses restricted `0o600` file permissions on Unix

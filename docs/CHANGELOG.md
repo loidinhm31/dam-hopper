@@ -1,3 +1,25 @@
+# 2026-09-14
+
+- **Production idle-suspend diagnostics — Phase 07 complete.** Cross-layer
+  verification, architecture reconciliation, read-only Linux smoke, security
+  review, documentation, and rollout qualification are complete.
+- Added `server/tests/idle_suspend_phase07.rs` with 2/2 deterministic automatic
+  and manual lifecycle checks. Added the six-module
+  `server/tests/idle_suspend_diagnostics.rs` suite with 8/8 deterministic
+  fault, redaction-corpus, bounds, role/EUID, local-API, and atomic-output
+  checks.
+- Added the explicitly ignored
+  `server/tests/idle_suspend_diagnostics_linux_smoke.rs` production-adapter
+  smoke with temporary output and unchanged host/configuration/audit, RTC, and
+  API/helper unit snapshots.
+- The five-command focused gate recorded **223/223 aggregate executions** with
+  zero failures; the separate cross-layer target passed **2/2** and the latest
+  cycle-2 review approved the scope at **10.0/10**. No coverage percentage or
+  real suspend/resume canary is claimed.
+- Reconciled architecture, API, configuration, security, Linux/systemd,
+  codebase-summary, PDR, and rollout/rollback documentation with the delivered
+  fixed-source, bounded, privacy-safe collector.
+
 # 2026-09-13
 - **Production idle-suspend diagnostics — Phase 06 Linux CLI integration complete (2026-09-13).** Added the exact `dam-hopper diagnose --json` grammar, role-aware fixed host/API/command/probe adapters, non-root permission boundaries, atomic root/user output (`0700`/`0600`), path-only stdout, and complete/partial/fatal exit mapping (`0`/`2`/`1`). Phase 07 rollout remains planned.
 - **Production idle-suspend diagnostics — Phase 05 bundle/correlation engine complete (2026-09-13).** Delivered the pure bundle-v1 model, bounded no-follow JSONL readers, strict privacy projection, source completeness/status, exact UUID correlation, gap/restart/orphan analysis, and deterministic 8-MiB whole-record reduction.
