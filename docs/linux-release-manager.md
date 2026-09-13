@@ -70,6 +70,12 @@ replacement, truncation, or content mutation. Failure cleanup removes only
 empty objects created by the same call whose recorded identity still matches.
 The API audit consumer never lazily creates or follows this file.
 
+The Phase 02 canonical event writer is deliberately outside this provisioning
+set. It requires an already-existing diagnostics parent and refuses a missing,
+unsafe, or mismatched parent; the API pre-start gate does not create, repair,
+or lazily initialize `idle-suspend-events-v1.jsonl`. Coordinator emission is
+deferred to Phase 03.
+
 ## Bootstrap handoff (Phase 06)
 
 The published `dam-hopper-install.sh` is a non-root wrapper around this

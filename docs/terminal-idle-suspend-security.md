@@ -42,6 +42,29 @@ Manual records contain actor subject, request ID, wake mode, requested/effective
 fleet generation and aggregate counts, and typed result only. They exclude tokens,
 cookies, command strings, environment variables, terminal IDs/content, and raw IPC.
 
+### Phase 02 canonical semantic event writer
+
+Phase 02 adds a separate tagged server event stream at
+`/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`;
+it does not extend or reinterpret the untagged `idle-suspend-audit.jsonl`
+records above. The event envelope is closed, camelCase, deny-unknown-fields,
+and limited to the reviewed event/data/reason contract.
+
+`ProducerIdentity` uses the canonical boot UUID plus one UUID v4 process
+instance. `ActionCorrelationId` accepts only canonical lowercase UUID v4
+strings compatible with helper protocol-v1 request IDs. The writer reserves
+checked non-wrapping sequences under one mutex; serialization or append/sync
+failures consume the sequence so later gaps remain visible, and overflow
+disables future emission.
+
+The writer requires an existing effective-owner mode-`0700` parent and a
+regular effective-owner mode-`0600` target, opens with no-follow flags, bounds
+each JSONL line to 16 KiB, and calls `sync_data()` before success. It never
+creates, repairs, chmods, rotates, or truncates the parent or target. The
+coordinator does not emit these events until Phase 03 integration; event
+initialization cannot change suspend policy or outcome.
+
+
 ### Phase 01 execution-domain safeguards
 
 - `wakeAfterSeconds: 0` is a numeric sentinel only for helper execution. It is

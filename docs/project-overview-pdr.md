@@ -952,6 +952,45 @@ idle-suspend scenarios (19 default tests plus the ignored live Linux smoke in
 used fake suspend outcomes. The real automatic suspend/resume canary remains an
 Operations-owned target-host gate. See the [Phase 08 QA report](../plans/reports/qa-260911-1207-phase08-idle-suspend-rollout.md).
 
+### PR-018: Production Idle-Suspend Diagnostics (Phases 01–07)
+
+**Status:** Phase 01 architecture/schema/security contract approved. Phase 02
+canonical event foundation completed on 2026-09-13. Coordinator/helper
+instrumentation, one-shot collection, bundle projection, and rollout remain
+planned Phases 03–07.
+
+**Product intent:** Preserve bounded, privacy-safe evidence for diagnosing an
+idle-suspend incident without adding an observer daemon, terminal-content
+logging, telemetry egress, root-cause classifier, automatic upload, policy
+change, or alternate suspend authority. A future `dam-hopper diagnose --json`
+command will read fixed local sources and write one atomic local bundle.
+
+**Phase 02 delivery:** `server/src/idle_suspend/event.rs` defines the closed
+`IdleSuspendEventEnvelopeV1` model, 14 event types, 26 reason codes, typed
+payload validation, strict boot/process identity, UUID v4 action correlation,
+and checked producer sequencing. `IdleSuspendEventWriter` appends bounded
+mode-`0600` no-follow synchronized JSONL to the fixed diagnostics path and
+fails closed on unsafe paths or sequence overflow. `idle_suspend/mod.rs`
+re-exports the public event types and writer. The coordinator is not wired to
+emit these events yet, and the legacy untagged server audit is unchanged.
+
+**Acceptance criteria:**
+
+- [x] Phase 01 freezes the event, helper, bundle, path, privacy, durability,
+      role, completeness, compatibility, and rollback contracts.
+- [x] Phase 02 provides deterministic producer identity/sequence/correlation
+      primitives and a bounded synchronized writer without policy coupling.
+- [ ] Phase 03 integrates lifecycle emission without changing the frozen
+      event contract.
+- [ ] Phases 04–07 evolve helper evidence, implement the bounded collector and
+      bundle, verify mixed versions/security, and complete rollout gates.
+
+**Operational boundary:** Event writes are diagnostic best effort once the
+foundation is integrated; they never rewrite a suspend outcome. Existing
+manual acceptance audit and helper accepted intent remain the pre-action
+durability gates. The collector may claim historical completeness only after
+all applicable required sources and gap/coverage gates pass.
+
 ## Non-Functional Requirements
 
 ### Performance

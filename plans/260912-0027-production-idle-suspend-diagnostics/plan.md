@@ -31,7 +31,7 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 | Phase | Status | Progress | Estimate | Dependency |
 | --- | --- | ---: | ---: | --- |
 | [01 — Frozen architecture, schemas, source/privacy/durability matrix](phase-01-freeze-architecture-contracts.md) | approved/completed (2026-09-12) | 100% | 12h | None |
-| [02 — Canonical event writer, identity, sequence, correlation foundation](phase-02-canonical-event-foundation.md) | pending | 0% | 16h | 01 approved |
+| [02 — Canonical event writer, identity, sequence, correlation foundation](phase-02-canonical-event-foundation.md) | completed (2026-09-13) | 100% | 16h | 01 approved |
 | [03 — Coordinator/manual/automatic instrumentation and restart-safe IDs](phase-03-server-coordinator-instrumentation.md) | pending | 0% | 18h | 02 |
 | [04 — Helper audit milestones and protocol-safe propagation](phase-04-helper-milestone-enrichment.md) | pending | 0% | 18h | 02–03 correlation contract |
 | [05 — Bundle model, bounded readers, redaction, correlation/gap engine](phase-05-bundle-correlation-engine.md) | pending | 0% | 20h | 01–04 schemas stable |
@@ -40,13 +40,20 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 
 **Total: 110h.** Phase estimates sum to frontmatter effort.
 
-**Current plan status:** In progress — Phase 01 architecture/contract approval completed 2026-09-12 (documentation only). Phases 02–07 remain pending and cover future runtime implementation, verification, and rollout.
-
+**Current plan status:** In progress — Phase 01 completed 2026-09-12; Phase 02 DONE (100%, completed 2026-09-13; reviewed 9.5/10). Phases 03–07 remain pending for coordinator instrumentation, helper audit enrichment, bundle engine, and CLI rollout.
 ## Phase 01 completion record
 
 - **Completed:** 2026-09-12.
 - **Approval:** The architecture contract passed the three-cycle approval workflow; the terminal advisor lifecycle is complete, and the third reviewer scored **10/10 with no findings**.
 - **Boundary:** Phase 01 includes no runtime Rust, test, or deployment changes. Phase 02 may now implement the frozen contract; later phases remain pending.
+
+## Phase 02 completion record
+
+- **Completed:** 2026-09-13.
+- **Approval:** Canonical event schema, identity, sequence, and writer foundation implemented and reviewed (9.5/10). 143/143 tests pass.
+- **Progress:** 100% (6/6 todo items).
+- **Evidence:** Focused canonical event tests 11/11, server-audit compatibility 1/1, and the full `idle_suspend::` module 143/143 passed; [test report](../reports/tester-260913-1637-phase02-canonical-event-foundation.md) · [code review](../reports/code-review-260913-1639-phase02-event-writer.md).
+- **Boundary:** Phase 02 creates `event.rs`, adds exports in `idle_suspend/mod.rs`, and tests in `idle_suspend/tests.rs`. Coordinator and helper runtime remain untouched for Phases 03 and 04.
 
 ## Ownership and sequencing
 
