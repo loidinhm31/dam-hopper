@@ -11,9 +11,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Production idle-suspend diagnostics (2026-09-12–13)
 
-- **Plan status: IN PROGRESS (Phase 02 complete; 2/7 phases; 28/110h).** Phase 02 establishes the producer-owned canonical event schema, boot/producer identity, checked sequence and UUID correlation foundation for later coordinator and helper instrumentation.
+- **Plan status: IN PROGRESS (Phase 03 complete; 3/7 phases; 46/110h).** Phases 01–03 deliver the frozen diagnostics contract, canonical writer, coordinator instrumentation, and restart-safe action correlation; Phases 04–07 remain planned.
 - **Phase 02 — DONE (2026-09-13; 100%)**: Delivered closed event/data types, a bounded mode-0600 no-follow synced JSONL writer, restart-safe producer identity, sequence-gap semantics, and protocol-compatible action correlation validation.
-- Validation: canonical event tests **11/11**, server-audit compatibility **1/1**, full `idle_suspend::` module **143/143**; code review approved **9.5/10** with no critical findings. [Plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md) · [Phase 02](../plans/260912-0027-production-idle-suspend-diagnostics/phase-02-canonical-event-foundation.md) · [Test report](../plans/reports/tester-260913-1637-phase02-canonical-event-foundation.md) · [Code review](../plans/reports/code-review-260913-1639-phase02-event-writer.md).
+- **Phase 03 — DONE (2026-09-13; 100%)**: Wired the optional writer through `AppState` and coordinator startup; emitted authoritative automatic/manual lifecycle events; reused one UUID v4 through semantic events, helper requests, manual responses/audits, outcomes, and reconciliation; suppressed per-sample event volume.
+- Validation: Phase 03 focused coordinator events **7/7**, full `idle_suspend::tests::` unit filter **84/84**, and `server/tests/idle_suspend` integration tests **19/19**; code review approved **9.3/10** with no critical findings. [Plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md) · [Phase 03](../plans/260912-0027-production-idle-suspend-diagnostics/phase-03-server-coordinator-instrumentation.md) · [Test report](../plans/reports/tester-260913-1806-phase03-server-coordinator-instrumentation.md) · [Code review](../plans/reports/code-review-260913-1807-phase03-coordinator-instrumentation.md).
 
 ### Configured-agent activity idle suspend (2026-09-11)
 

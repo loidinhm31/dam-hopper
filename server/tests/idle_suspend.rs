@@ -37,6 +37,7 @@ use dam_hopper_server::{
         },
         status::{CoordinatorState, IdleSuspendStatusV1},
         UnavailableExecutor,
+        validate_canonical_uuid_v4,
     },
     pty::{BroadcastEventSink, PtyCreateOpts, PtySessionManager},
     state::AppState,
@@ -113,6 +114,16 @@ wake_after_seconds = {}
         wake
     );
     std::fs::write(&config_path, initial_toml).expect("write initial toml");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .mode(0o600)
+            .open(workspace_dir.join("idle-suspend-audit.jsonl"))
+            .expect("preprovision audit log");
+    }
 
     let (event_sink, _rx) = BroadcastEventSink::new(512);
     let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
@@ -213,6 +224,16 @@ agent_executables = [{}]
     );
     std::fs::write(&config_path, initial_toml).expect("write initial toml");
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .mode(0o600)
+            .open(workspace_dir.join("idle-suspend-audit.jsonl"))
+            .expect("preprovision audit log");
+    }
     let (event_sink, _rx) = BroadcastEventSink::new(512);
     let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
 
@@ -371,7 +392,7 @@ async fn test_idle_suspend_cross_module_lifecycle_empty_to_armed_to_resumed() {
             request_id,
             elapsed_seconds,
         } => {
-            assert!(request_id.starts_with("epoch-"));
+            assert!(validate_canonical_uuid_v4(&request_id).is_ok());
             assert_eq!(elapsed_seconds, 600);
         }
         other => panic!("Expected ResumedSuccessfully, got: {other:?}"),
@@ -391,6 +412,13 @@ async fn test_idle_suspend_cross_module_lifecycle_empty_to_armed_to_resumed() {
         "Must not auto-retry suspend while fleet remains empty"
     );
 
+    // 6. Verify canonical semantic event file written beside diagnostics
+    assert!(fixture.state.idle_suspend_event_writer.is_some());
+    let event_path = fixture._tmp.path().join("idle-suspend-events-v1.jsonl");
+    assert!(event_path.exists(), "Event log must exist at fixed diagnostics sibling path");
+    let raw_events = std::fs::read_to_string(&event_path).expect("read events");
+    let event_lines: Vec<&str> = raw_events.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(event_lines.len(), 9, "Must emit exactly 9 events in complete lifecycle");
     coordinator.shutdown().await;
 }
 
@@ -781,7 +809,7 @@ async fn test_idle_suspend_post_resume_reconciliation_and_new_pty_epoch() {
     assert_eq!(coordinator.status().state, CoordinatorState::Resumed);
     let requests = fake_executor.recorded_requests();
     assert_eq!(requests.len(), 2, "Second epoch executed");
-    assert_eq!(requests[1].request_id, "epoch-2");
+    assert!(validate_canonical_uuid_v4(&requests[1].request_id).is_ok());
 
     coordinator.shutdown().await;
 }

@@ -440,8 +440,10 @@ The isolated writer targets
 `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`
 with mode `0600`, no-follow append/sync semantics, and does not add a systemd
 unit or `StateDirectory=` directive. Its parent is expected to be provisioned
-by the API runtime path owner; coordinator emission is a Phase 03 integration
-step, not an API/helper startup gate.
+by the API runtime path owner. Phase 03 passes the optional writer from
+`AppState` into the coordinator; construction failure records a sanitized
+backend diagnostic and disables only semantic emission, not API startup or
+suspend/status behavior.
 
 Do not qualify indefinite sleep from an automated test: repository tests use
 temporary files and fake backends and never invoke `systemctl`, logind, or a
