@@ -227,9 +227,9 @@ diagnostics contract. The canonical server event writer and Phase 03
 coordinator emission are internal producer paths; they add no REST/WebSocket
 route and are not included in this export.
 
-### Production diagnostics CLI (Phase 06)
+### Production diagnostics CLI (Phases 06–07)
 
-The Linux release binary exposes one exact invocation:
+Historical idle-suspend incident reconstruction is not exposed via REST or WebSocket endpoints; `/api/system/idle-suspend/v1/status` reports only the latest, ephemeral coordinator state and current host probes. Comprehensive historical diagnosis across coordinator events, audits, systemd lifecycle, journald, and host probes is exclusively provided via the local one-shot CLI:
 
 ```bash
 dam-hopper diagnose --json
@@ -260,6 +260,25 @@ Non-root collection never escalates; an applicable helper audit is
 See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
 for source paths, role applicability, fixed adapter limits, and output details.
 
+#### Phase 07 qualification (production diagnostics, 2026-09-14)
+
+The dedicated verification artifacts are:
+
+- `server/tests/idle_suspend_phase07.rs`: 2/2 deterministic cross-layer tests
+  covering automatic quiet admission/cancellation plus manual admission,
+  rejection, UUID propagation, and server-audit correlation.
+- `server/tests/idle_suspend_diagnostics.rs`: 8/8 deterministic diagnostics
+  tests through six focused modules for malformed/unknown/gapped records,
+  redaction, fixed bounds, role/EUID and local API faults, and atomic output.
+- `server/tests/idle_suspend_diagnostics_linux_smoke.rs`: 1/1 explicitly
+  ignored Linux read-only smoke using production read adapters and temporary
+  output; host/configuration/audit files, RTC wakealarm content, and API/helper
+  unit snapshots remain unchanged.
+
+The five-command focused gate recorded 223/223 aggregate executed tests with
+zero failures; this count is not unique-test coverage and no percentage is
+claimed. Cycle-2 code review approved the delivered scope at 10.0/10. These
+checks do not constitute a real suspend/resume canary.
 Request and response payloads use camelCase on the wire. The request accepts `frontend` and also the legacy `frontendSnapshot` alias.
 
 **POST /api/diagnostics/export**
@@ -592,7 +611,7 @@ invalidOrigin`. Callers presenting a valid `Authorization: Bearer` token
   ```json
   {
     "version": 1,
-    "requestId": "req-abc-123",
+    "requestId": "123e4567-e89b-42d3-a456-426614174000",
     "statusRevision": 10,
     "state": "handedOff",
     "wakeAfterSeconds": 0,
@@ -633,7 +652,7 @@ invalidOrigin`. Callers presenting a valid `Authorization: Bearer` token
 The route is registered only under the protected API router; there is no
 unauthenticated WebSocket or native bypass.
 
-#### Phase 07 qualification boundary
+#### Configured-agent activity qualification boundary (Phase 07, 2026-09-11)
 
 The idle-suspend route contract is qualified at three consumer boundaries:
 
@@ -648,11 +667,12 @@ The idle-suspend route contract is qualified at three consumer boundaries:
   rendered policy/counts, heuristic notice, warning duration and safe identity,
   truncation, countdown, manual force, and old-server compatibility in Chromium.
 
-The Phase 07 QA record reports **323 backend/PTY/API/integration tests**,
-**14/14** boundary checks, **16/16** Chromium tests, and an ignored Linux
-observer smoke passing in **0.72s**. Automated tests use fake suspend outcomes
-and never invoke the helper, RTC programming, `systemctl suspend`, `sudo`, or
-root installation. A real suspend/resume canary remains an Operations gate.
+The configured-agent activity Phase 07 QA record reports **323 backend/PTY/API
+integration tests**, **14/14** boundary checks, **16/16** Chromium tests, and
+an ignored Linux observer smoke passing in **0.72s**. Automated tests use fake
+suspend outcomes and never invoke the helper, RTC programming, `systemctl
+suspend`, `sudo`, or root installation. A real suspend/resume canary remains an
+Operations gate.
 
 #### `host:idleSuspendChanged` transport event
 

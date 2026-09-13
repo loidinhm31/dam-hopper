@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-13 from `repomix-output.xml` (Repomix v1.18.0; 1,863
-files, 4,116,535 tokens, 16,999,207 characters; five security-flagged files
+**Generated:** 2026-09-14 from `repomix-output.xml` (Repomix v1.18.0; 1,877
+files, 4,136,543 tokens, 17,081,986 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -129,8 +129,9 @@ Phase 05 owns the pure read-only bundle-v1 model, four bounded JSONL
 compatibility readers, allowlist/redaction projectors, exact-UUID correlation
 and gap analysis, and whole-record final-cap reduction. Phase 06 composes it
 with fixed role, EUID, host-command, local-API, current-probe, and output
-adapters; Phase 07 still owns rollout. These adapters do not widen the pure
-engine.
+adapters. Phase 07 completes cross-layer qualification, architecture
+reconciliation, the read-only Linux smoke, and rollout documentation.
+These adapters do not widen the pure engine.
 
 ### Phase 05 pure diagnostics engine
 
@@ -178,6 +179,26 @@ exclusive no-follow temp-file write, sync, rename, and directory sync.
 `dam-hopper.rs` prints only the absolute final path after output and maps
 complete/partial/fatal results to exits `0`/`2`/`1`; non-root never escalates.
 
+### Phase 07 diagnostics verification, architecture reconciliation, and rollout
+
+`server/tests/idle_suspend_phase07.rs` contains two deterministic cross-layer
+tests for automatic quiet admission/cancellation and manual admission,
+rejection, UUID propagation, and server-audit correlation. The
+`server/tests/idle_suspend_diagnostics.rs` entrypoint delegates to six focused
+modules (`fakes.rs`, `fault_matrix.rs`, `redaction.rs`, `bounds.rs`, `roles.rs`,
+and `output.rs`) covering malformed/unknown/gapped records, the redaction
+corpus, fixed record caps, role and EUID behavior, local API faults, and
+atomic output. `server/tests/idle_suspend_diagnostics_linux_smoke.rs` is an
+ignored Linux-only smoke using production read adapters and temporary output;
+before/after snapshots prove no mutation of host/configuration/audit files,
+RTC wakealarm content, or API/helper unit state.
+
+The five-command focused gate recorded 223/223 aggregate executed tests with
+zero failures (counts are invocation executions, not unique coverage), and the
+separate Phase 07 cross-layer target passed 2/2. The latest cycle-2 review
+approved the change at 10.0/10. No coverage percentage or real suspend canary
+is claimed.
+
 ## Linux release and deployment
 
 `server/src/linux_release/` owns manifest validation, role projection, unit
@@ -204,7 +225,7 @@ Authentication, CSRF/same-origin checks, project sandbox containment, fixed
 allowlisted commands, no-follow filesystem operations, bounded request/output
 sizes, and sanitized error types are enforced at backend boundaries. Durable
 logs omit credentials, tokens, terminal content, commands, environment, and
-raw IPC. The Phase 05/06 diagnostics engine keeps evidence local, applies
+raw IPC. The Phase 05–07 diagnostics path keeps evidence local, applies
 explicit privacy projection before sizing, and never infers authority from
 latest probes or terminal text.
 
@@ -217,16 +238,17 @@ latest probes or terminal text.
   `packages/ui/browser-tests/` and exercise actual rendered behavior.
 - Linux release and target-host smoke scripts are under `server/tests/deploy/`
   and `deploy/`; real RTC/suspend canaries remain explicit host-owner gates.
-- Phase 02–06 diagnostics behavior is covered by schema/serde, validation,
+  Phase 02–07 diagnostics behavior is covered by schema/serde, validation,
   identity, path safety, bounded readers/adapters, malformed-line recovery,
   privacy projection, exact UUID correlation, sequence gaps/duplicates,
   restart boundaries, whole-record cap reduction, source immutability, role
-  applicability, and atomic output semantics.
+  applicability, atomic output semantics, cross-layer chains, and the ignored
+  read-only Linux smoke.
 
 ## Documentation map
 
 - [System Architecture](./system-architecture.md) — live data flow and
-  security boundaries, including the completed Phase 05/06 diagnostics engine.
+  security boundaries, including the completed Phase 07 diagnostics path.
 - [Code Standards](./code-standards.md) — Rust/TypeScript patterns,
   canonical writer, diagnostics adapters, and coordinator lifecycle rules.
 - [Project Overview PDR](./project-overview-pdr.md) — product requirements and

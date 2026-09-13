@@ -291,7 +291,7 @@ state, status revisions, or WebSocket payloads. The existing
 Manual force confirmation continues to use actual fleet counts and existing
 handoff/closing/disposal/pending gates, never recognized-agent counts.
 
-### Phase 07 integrated qualification
+### Configured-agent activity integrated qualification (Phase 07, 2026-09-11)
 
 The integrated qualification ladder keeps each authority at its owning boundary:
 
@@ -312,11 +312,12 @@ The integrated qualification ladder keeps each authority at its owning boundary:
    executor. It qualifies observer seams only; it cannot authorize or invoke
    host suspend.
 
-Phase 07 reports **323 backend/PTY/API/integration tests**, **14/14** boundary
-checks, **16/16** Chromium tests, a **0.72s** live Linux smoke, and **9.4/10**
-code review approval. Automated qualification uses fakes/temporary resources;
-the real automatic suspend/resume canary remains an Operations-owned,
-target-host gate. See [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
+Configured-agent activity Phase 07 reports **323 backend/PTY/API/integration
+tests**, **14/14** boundary checks, **16/16** Chromium tests, a **0.72s** live
+Linux smoke, and **9.4/10** code review approval. Automated qualification uses
+fakes/temporary resources; the real automatic suspend/resume canary remains an
+Operations-owned target-host gate. See [configured-agent Phase 07 verification
+report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
 
 ### Phase 08 documentation, controlled rollout, and operational boundaries
 
@@ -346,15 +347,16 @@ The `agent-activity` policy is an activity heuristic, not semantic proof that an
 - **Kernel handoff race**: An activity change occurring in the kernel immediately after final comparison can race handoff. The implementation fences server-admitted input, creation, and restarts, but does not freeze processes or guarantee atomic absence of work.
 - **Host qualification requirement**: Process/socket permissions, kernel features, namespace topology, or latency exceeding the 1-second budget make a host permanently unavailable for this mode. There is no fallback to unverified interface metrics.
 
-### Production idle-suspend diagnostics (Phases 01–06 implemented; Phase 07 planned)
+### Production idle-suspend diagnostics (Phases 01–07 completed)
 
 Status: Phase 01 architecture/schema/security contract approved (third
 reviewer: 10/10 with no findings). Phase 02 canonical event foundation, Phase
 03 coordinator integration, Phase 04 helper audit milestone enrichment, and the
 Phase 05 pure bundle/correlation engine were implemented on 2026-09-13.
-Phase 06 now implements the role-aware host/API/command/probe adapters, secure
-atomic output, and `dam-hopper diagnose --json` dispatch. Phase 07 rollout
-remains planned.
+Phase 06 role-aware host/API/command/probe adapters, secure atomic output, and
+`dam-hopper diagnose --json` dispatch were completed on 2026-09-14.
+Phase 07 cross-layer verification, architecture check, zero-mutation read-only
+Linux smoke, and rollout docs are completed.
 
 The canonical producer foundation is shipped in
 `server/src/idle_suspend/event.rs` and re-exported by `idle_suspend::mod`.
@@ -822,13 +824,13 @@ bounded, marked untrusted, and excludes terminal sources/tails. Typed source
 errors contain no raw I/O error, command stderr, arbitrary path, or source line
 text.
 
-#### Collector boundary, compatibility, and rollback
+#### Collector boundary, compatibility, and rollback (Phases 06–07 implemented)
 
 The completed Phase 05 core under `linux_release/diagnostics/` accepts typed
 source envelopes and fixed file paths for its four read-only JSONL adapters.
-Phase 06 now composes those adapters with role, EUID, fixed-command, local-API,
-current-probe, trusted-output, and host descriptor boundaries. It has no
-resident process, UI, telemetry, alerting, upload, AI credential, external
+Phases 06 and 07 now compose those adapters with role, EUID, fixed-command,
+local-API, current-probe, trusted-output, and host descriptor boundaries. It has
+no resident process, UI, telemetry, alerting, upload, AI credential, external
 egress, shell, operator-selected path/source/command, or public tuning flag.
 Source failure does not stop independent collection or pure assembly; an
 unsafe output operation is fatal.
@@ -852,10 +854,19 @@ response returns the same UUID used as `correlationId` and helper protocol-v1
 `requestId`; it never creates a `manual-<uuid>` alias. Older readers may ignore
 additive helper-v2 milestones while retaining existing action names and fields.
 Rollback stops new emission and collector use but never deletes evidence.
-Phase 03 coordinator emission, Phase 04 helper milestones, the Phase 05 pure
-collector, and Phase 06 host integration are complete. Phase 07 rollout
-remains pending. Architecture, security, and release-owner approval is
-complete for the frozen interfaces.
+Phase 03 coordinator emission, Phase 04 helper milestones, Phase 05 pure
+collector, Phase 06 host integration, and Phase 07 cross-layer verification,
+architecture reconciliation, read-only Linux smoke, and rollout documentation
+are complete as of 2026-09-14.
+Phase 07 evidence is split by boundary: `server/tests/idle_suspend_phase07.rs`
+passes 2/2 deterministic automatic/manual cross-layer tests; the diagnostics
+entrypoint delegates to six focused modules covering fault, redaction, bounds,
+role, and atomic-output behavior; and
+`server/tests/idle_suspend_diagnostics_linux_smoke.rs` passes as an ignored
+Linux-only read-only smoke with unchanged source, RTC, and API/helper unit
+snapshots. The five-command focused gate recorded 223/223 aggregate executed
+tests with zero failures; this is not a coverage percentage and does not claim
+a real suspend canary.
 
 #### Phase 01 review disposition
 

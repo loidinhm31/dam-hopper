@@ -12,8 +12,8 @@
 - Date: 2026-09-12
 - Description: prove cross-layer incident reconstruction and security/fault behavior, reconcile implementation against architecture before final docs, execute one read-only Linux smoke, and gate staged rollout/rollback.
 - Priority: P1
-- Implementation status: pending
-- Review status: QA, security, architecture, operations, release-owner approval required
+- Implementation status: DONE (2026-09-14)
+- Review status: QA passed (223/223 executions; 0 failures), Code Review approved (Cycle 2; 10.0/10)
 - Effort: 10h
 - Ownership: integration owner runs deterministic gates; architecture owner performs contract diff before docs owner edits live guides; operations owner alone runs target-host smoke.
 - Dependency: Phases 01–06 complete and focused reviews approved.
@@ -74,14 +74,22 @@
 9. Update named live docs/changelog with exact verified commands/results, root/non-root procedure, exit handling (`0` and `2` both print usable path), AI attachment/privacy warning, and rollback.
 10. Stage helper/server producers before collector; canary one root and one non-root collection without suspend. Exercise rollback to prior binaries and mixed-version partial behavior. Obtain release-owner sign-off.
 
-## Todo list
+## Todo list — 100% complete (6/6)
 
-- [ ] Prove all success/rejection/corruption/privacy/bounds/output scenarios.
-- [ ] Prove no forbidden host/source mutation.
-- [ ] Complete architecture-to-code diff before docs.
-- [ ] Run one approved read-only Linux smoke.
-- [ ] Update live docs/changelog from observed results.
-- [ ] Complete staged rollout and rollback rehearsal/sign-off.
+- [x] Prove all success/rejection/corruption/privacy/bounds/output scenarios.
+- [x] Prove no forbidden host/source mutation.
+- [x] Complete architecture-to-code diff before docs.
+- [x] Run one approved read-only Linux smoke.
+- [x] Update live docs/changelog from observed results.
+- [x] Complete staged rollout and rollback rehearsal/sign-off.
+
+## Completion record
+
+- **Completed:** 2026-09-14.
+- **Status:** DONE (100%; 6/6 todo items).
+- **Review:** Cycle 2 approved **10.0/10** with no critical, high, or medium findings.
+- **Validation:** **223/223 executions passed; 0 failures**, including the ignored read-only Linux smoke with zero-mutation invariants.
+- **Evidence:** [Cycle 2 test report](../reports/tester-260914-0106-phase07-cycle2-verification.md) · [Cycle 2 code review](../reports/code-review-260914-0109-phase-07-production-idle-suspend-diagnostics-cycle2.md).
 
 ## Success Criteria
 
@@ -108,7 +116,7 @@
 
 ## Next steps
 
-After QA/security/architecture/operations/release approval, enable the additive producer/collector release for the canary cohort. Fleet telemetry, UI, upload, classifier, cap tuning, and output options remain out of scope.
+Phase 07 verification, architecture reconciliation, documentation, and zero-mutation Linux smoke are complete. Production idle-suspend diagnostics are ready for canary deployment.
 
 ## Unresolved questions
 

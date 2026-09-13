@@ -1,7 +1,7 @@
 ---
 title: "Production idle-suspend diagnostics"
 description: "Add producer-owned semantic evidence and a bounded one-shot local incident bundle for production idle-suspend failures."
-status: in-progress
+status: completed
 priority: P2
 effort: 110h
 branch: feat/terminal-idle-suspend
@@ -36,11 +36,11 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 | [04 — Helper audit milestones and protocol-safe propagation](phase-04-helper-milestone-enrichment.md) | DONE (2026-09-13) | 100% | 18h | 02–03 correlation contract |
 | [05 — Bundle model, bounded readers, redaction, correlation/gap engine](phase-05-bundle-correlation-engine.md) | DONE (2026-09-13) | 100% | 20h | 01–04 schemas stable |
 | [06 — Linux CLI, role-aware adapters, atomic output and exits](phase-06-linux-cli-integration.md) | DONE (2026-09-14) | 100% | 16h | 05 |
-| [07 — Cross-layer security/fault gates, architecture verification, docs/rollout](phase-07-security-verification-rollout.md) | pending | 0% | 10h | 01–06 |
+| [07 — Cross-layer security/fault gates, architecture verification, docs/rollout](phase-07-security-verification-rollout.md) | DONE (2026-09-14) | 100% | 10h | 01–06 |
 
 **Total: 110h.** Phase estimates sum to frontmatter effort.
 
-**Current plan status:** IN PROGRESS — Phase 01 completed 2026-09-12; Phase 02 completed 2026-09-13 (reviewed 9.5/10); Phase 03 **DONE (2026-09-13; 100%; reviewed 9.3/10; 170/170 tests passed)**; Phase 04 **DONE (2026-09-13; 100%; reviewed 9.8/10; 172/172 tests passed)**; Phase 05 **DONE (2026-09-13; 100%; reviewed 9.5/10; 202/202 tests passed)**; Phase 06 **DONE (2026-09-14; 100%; reviewed 9.6/10; 282 test executions passed across focused suites)**. Overall progress: **6/7 phases; 100/110h (91%)**. Phase 07 remains pending for cross-layer rollout.
+**Current plan status:** COMPLETED — Phase 01 completed 2026-09-12; Phase 02 completed 2026-09-13 (reviewed 9.5/10); Phase 03 **DONE (2026-09-13; 100%; reviewed 9.3/10; 170/170 tests passed)**; Phase 04 **DONE (2026-09-13; 100%; reviewed 9.8/10; 172/172 tests passed)**; Phase 05 **DONE (2026-09-13; 100%; reviewed 9.5/10; 202/202 tests passed)**; Phase 06 **DONE (2026-09-14; 100%; reviewed 9.6/10; 282 test executions passed across focused suites)**; Phase 07 **DONE (2026-09-14; 100%; Cycle 2 reviewed 10.0/10; 223/223 test executions passed; zero-mutation Linux smoke verified)**. Overall progress: **7/7 phases; 110/110h (100%)**.
 ## Phase 01 completion record
 
 - **Completed:** 2026-09-12.
@@ -92,6 +92,15 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 - **Evidence:** [Test report](../reports/tester-260913-2357-phase06-linux-cli-role-aware-host-adapters.md) · [Code review](../reports/code-review-260913-2359-phase-06-linux-cli-role-aware-host-adapters.md).
 - **Boundary:** Phase 06 exposes `dam-hopper diagnose --json`, safely projects role-aware host/systemd/journal/probe/API sources, writes atomic `0600` bundle to secure `0700` directory, and exits `0/2/1`. Phase 07 owns cross-layer failure validation, architecture verification, and documentation.
 
+
+## Phase 07 completion record
+
+- **Completed:** 2026-09-14.
+- **Status:** DONE (100%; 6/6 todo items).
+- **Review:** Cycle 2 approved **10.0/10**; cross-layer observable chains, manual/automatic UUID correlation, fault matrix (malformed lines, sequence gaps, unknown versions), 100% redaction corpus exclusion, bounds enforcement, role awareness, read-only Linux smoke with zero-mutation before/after invariants, and doc reconciliation approved.
+- **Tests passed:** **223/223 executions (100% pass rate; 0 failures)** across the requested focused suites.
+- **Evidence:** [Cycle 2 test report](../reports/tester-260914-0106-phase07-cycle2-verification.md) · [Cycle 2 code review](../reports/code-review-260914-0109-phase-07-production-idle-suspend-diagnostics-cycle2.md).
+- **Boundary:** Production idle-suspend diagnostics fully qualified across server, helper, host probes, and CLI. Read-only Linux smoke proves unchanged host state. Docs reconciled across 8 operational and architectural files.
 ## Ownership and sequencing
 
 - Phase 01 owns architecture/source-contract review; no production code starts before approval.
