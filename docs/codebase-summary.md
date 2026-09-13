@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-13 from `repomix-output.xml` (Repomix v1.18.0; 1,843
-files, 4,039,716 tokens, 16,667,647 characters; five security-flagged files
+**Generated:** 2026-09-13 from `repomix-output.xml` (Repomix v1.18.0; 1,847
+files, 4,055,261 tokens, 16,735,503 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -58,7 +58,7 @@ capabilities rather than project-path access.
 | `coordinator.rs` | Single-flight automatic/manual state machine, semantic event emission, and reconciliation. |
 | `status.rs` | Private measurement/status DTOs and warning projection. |
 | `server_audit.rs` | Legacy untagged timing/manual audit JSONL. |
-| `audit.rs` | Helper audit records and compatibility readers. |
+| `audit.rs` | In-place helper audit v2 records, typed milestones/codes, producer identity/sequence, and legacy-compatible reader. |
 | `backend.rs`, `executor.rs` | RTC and fixed suspend execution seams. |
 | `preflight.rs`, `peer_auth.rs` | Inhibitor, capability, RTC, and peer checks. |
 | `helper_client.rs`, `helper_server.rs` | Unix-socket client and root helper service. |
@@ -120,12 +120,16 @@ failure remains fail-closed.
 
 Phase 03 coordinator tests cover seven deterministic event scenarios, while
 the public `server/tests/idle_suspend.rs` suite covers 19 integration tests.
-The full focused `idle_suspend::` unit filter passed 150 tests; all fixtures
-use temporary trusted paths, fake clocks, and fake executors.
+Phase 04 adds helper audit compatibility, sequence-gap, secure-pruning, and
+milestone ordering coverage; the full focused `idle_suspend::` unit filter
+passed 172 tests, including 23 focused helper tests. Fixtures use temporary
+trusted paths, fake clocks, and fake executors; no host suspend or RTC mutation
+is exercised.
 
-The parent diagnostics contract still describes future helper-v2 evidence,
-fixed source collection, redaction, correlation, atomic bundle output, and
-rollout. Those components are not implied by the Phase 02–03 server producer.
+Phases 05–07 still own the read-only helper-v2 collector, fixed-source
+projection/redaction, atomic bundle output, mixed-version completeness, and
+rollout. These future components are not implied by the Phase 02–04 server
+producers.
 
 ## Linux release and deployment
 

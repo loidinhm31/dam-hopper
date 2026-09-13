@@ -12,12 +12,13 @@
 - Date: 2026-09-12
 - Description: evolve the existing root helper audit in place with versioned producer identity/sequence and typed request, capability, preflight, intent, RTC, invocation, and outcome milestones while preserving protocol v1 and existing audit compatibility.
 - Priority: P1
-- Implementation status: pending
-- Review status: privileged-helper security and mixed-version review required
-- Effort: 18h
-- Ownership: helper owner exclusively edits `audit.rs`, `helper_server.rs`, helper binary wiring, and helper-focused tests. Protocol owner confirms no wire change.
-- Dependency: Phase 02 identity rules and Phase 03 exact UUID request propagation.
-
+- **Implementation status:** DONE (2026-09-13)
+- **Review status:** APPROVED (Cycle 2; 9.8/10); see [code review report](../reports/code-review-260913-1937-phase-04-helper-milestone-enrichment-cycle2.md)
+- **Progress:** 100% (6/6 todo items).
+- **Tests passed:** 172/172 `idle_suspend` module tests; 23/23 focused helper tests.
+- **Effort:** 18h
+- **Ownership:** helper owner exclusively edits `audit.rs`, `helper_server.rs`, helper binary wiring, and helper-focused tests. Protocol owner confirms no wire change.
+- **Dependency:** Phase 02 identity rules and Phase 03 exact UUID request propagation.
 ## Key Insights
 
 - `HelperServer::handle_connection` already owns auth → frame → validation → dedupe → preflight → durable intent → RTC → suspend → completion ordering.
@@ -77,12 +78,20 @@
 
 ## Todo list
 
-- [ ] Add helper audit v2 metadata and typed milestone variants.
-- [ ] Initialize helper producer identity once.
-- [ ] Instrument auth/capability/preflight/intent/RTC/invocation/outcome boundaries.
-- [ ] Preserve intent fail-closed and post-action outcome truth.
-- [ ] Add mixed-version/fault tests and unchanged protocol fixtures.
-- [ ] Complete privileged/mixed-version review.
+- [x] Add helper audit v2 metadata and typed milestone variants.
+- [x] Initialize helper producer identity once.
+- [x] Instrument auth/capability/preflight/intent/RTC/invocation/outcome boundaries.
+- [x] Preserve intent fail-closed and post-action outcome truth.
+- [x] Add mixed-version/fault tests and unchanged protocol fixtures.
+- [x] Complete privileged/mixed-version review.
+
+## Completion record
+
+- **Completed:** 2026-09-13.
+- **Status:** DONE (100%; 6/6 todo items).
+- **Review score:** 9.8/10 (Cycle 2; approved with no critical or high findings).
+- **Tests passed:** 172/172 `idle_suspend` module tests; 23/23 focused helper tests; helper binary build passed.
+- **Evidence:** [test report](../reports/tester-260913-1935-phase04-helper-audit-milestone-enrichment-cycle2.md) · [code review](../reports/code-review-260913-1937-phase-04-helper-milestone-enrichment-cycle2.md).
 
 ## Success Criteria
 
@@ -110,7 +119,7 @@
 
 ## Next steps
 
-After helper fixtures and mixed-version review freeze, Phase 05 implements read-only compatibility readers, bundle projection, and deterministic correlation/gap analysis.
+With helper fixtures and mixed-version review frozen, Phase 05 can implement read-only compatibility readers, bundle projection, and deterministic correlation/gap analysis.
 
 ## Unresolved questions
 

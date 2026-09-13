@@ -11,10 +11,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Production idle-suspend diagnostics (2026-09-12–13)
 
-- **Plan status: IN PROGRESS (Phase 03 complete; 3/7 phases; 46/110h).** Phases 01–03 deliver the frozen diagnostics contract, canonical writer, coordinator instrumentation, and restart-safe action correlation; Phases 04–07 remain planned.
+- **Plan status: IN PROGRESS (Phase 04 complete; 4/7 phases; 64/110h).** Phases 01–04 deliver the frozen diagnostics contract, canonical writer, coordinator instrumentation, restart-safe action correlation, and hardened helper audit milestones; Phases 05–07 remain planned.
 - **Phase 02 — DONE (2026-09-13; 100%)**: Delivered closed event/data types, a bounded mode-0600 no-follow synced JSONL writer, restart-safe producer identity, sequence-gap semantics, and protocol-compatible action correlation validation.
 - **Phase 03 — DONE (2026-09-13; 100%)**: Wired the optional writer through `AppState` and coordinator startup; emitted authoritative automatic/manual lifecycle events; reused one UUID v4 through semantic events, helper requests, manual responses/audits, outcomes, and reconciliation; suppressed per-sample event volume.
+- **Phase 04 — DONE (2026-09-13; 100%)**: Evolved the existing root helper audit in place to schema v2 with producer identity/sequence and typed rejection, capability, preflight, RTC, invocation, and outcome milestones; preserved protocol-v1/action compatibility, intent fail-closed ordering, safe redaction, and post-action outcome truth.
 - Validation: Phase 03 focused coordinator events **7/7**, full `idle_suspend::tests::` unit filter **84/84**, and `server/tests/idle_suspend` integration tests **19/19**; code review approved **9.3/10** with no critical findings. [Plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md) · [Phase 03](../plans/260912-0027-production-idle-suspend-diagnostics/phase-03-server-coordinator-instrumentation.md) · [Test report](../plans/reports/tester-260913-1806-phase03-server-coordinator-instrumentation.md) · [Code review](../plans/reports/code-review-260913-1807-phase03-coordinator-instrumentation.md).
+- Validation: Phase 04 focused helper tests **23/23**, full `idle_suspend` module **172/172**, and helper binary build passed; Cycle 2 code review approved **9.8/10** with no critical or high findings. [Phase 04](../plans/260912-0027-production-idle-suspend-diagnostics/phase-04-helper-milestone-enrichment.md) · [Test report](../plans/reports/tester-260913-1935-phase04-helper-audit-milestone-enrichment-cycle2.md) · [Code review](../plans/reports/code-review-260913-1937-phase-04-helper-milestone-enrichment-cycle2.md).
 
 ### Configured-agent activity idle suspend (2026-09-11)
 

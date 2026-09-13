@@ -410,7 +410,10 @@ The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed
 - **Socket permissions**: The service uses `RuntimeDirectory=dam-hopper` with mode `0775`; the helper binds the socket and sets mode `0660`.
 - **Optional socket unit**: `deploy/systemd/dam-hopper-idle-suspend-helper.socket` is a packaged manual/socket-activation asset. The Phase 03 release manager stages and manages the helper **service**, not this `.socket` unit. Do not enable both direct-binding service mode and the socket unit for the same path.
 - **Peer Credential Verification**: The helper validates peer UID and PID on connection via `SO_PEERCRED`, rejecting unauthorized callers.
-- **Audit Trail**: Every request, intent, and completion is recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`).
+- **Audit Trail**: The single `/var/log/dam-hopper/idle-suspend-helper.jsonl`
+  file (mode `0600`) records request/authentication evidence plus v2
+  capability, preflight, accepted-intent, RTC, suspend-invocation, and
+  completion milestones. No parallel helper log is used.
 
 The server always configures the systemd helper executor and checks the
 configured socket's presence and health per request
@@ -434,6 +437,35 @@ or unsupported capability suppresses suspend. Intent and completion records
 retain `wakeAfterSeconds: 0`; the helper audit remains mode `0600` and bounded.
 The server audit's recent-read APIs are capped; its append retention and
 rotation are operator-managed.
+#### Phase 04 helper audit v2
+
+The helper audit evolves in place with independent schema version `2`; the
+protocol remains version `1`, with the same required `requestId`/
+`wakeAfterSeconds` fields and 4-KiB frame cap. Established
+`acceptedIntent`, `executionCompleted`, and `executionRejected` records remain
+readable, including legacy lines whose schema version is implicit v1.
+
+New lines carry timestamp, canonical boot/producer identity, checked producer
+sequence, safely available UUID correlation, numeric peer PID/UID, and closed
+reason/outcome codes. Additive `recordType` values are `requestRejected`,
+`capabilityResult`, `preflightResult`, `rtcProgrammingResult`, and
+`suspendInvoked`. Capability probes and auth/frame failures use null
+correlation when no validated action request ID exists. Restricted detail is
+source-only and is not suitable for bundle projection.
+
+The authoritative order is authenticate/decode/validate/deduplicate, emit
+capability or preflight evidence, synchronously persist `acceptedIntent`,
+program and verify RTC, emit the RTC result and `suspendInvoked`, invoke the
+fixed suspend backend, then record the actual completion. Only intent sync
+failure blocks RTC/suspend; later milestone write failures cannot rewrite the
+backend outcome.
+
+The file is capped at 10,000 records. Overflow pruning retains the newest
+half through an exclusive mode-`0600` no-follow temporary file, syncs the
+retained file and parent directory before atomic replacement, and removes the
+temporary file on failure. A helper restart creates a new producer instance
+and restarts its sequence at one.
+
 
 The Phase 02 canonical server event stream is separate from both audit files.
 The isolated writer targets
@@ -516,7 +548,10 @@ hardware, or host suspend.
 2. **Timed Canary Qualification (Required First)**:
    - Perform during an approved maintenance window with physical or out-of-band recovery.
    - Using the active authenticated profile, make exactly one manual POST with a bounded timer (for example `{ "wakeAfterSeconds": 120, "force": false }` when the fleet is quiescent). Do not retry an ambiguous response.
-   - Monitor `/var/log/dam-hopper/idle-suspend-helper.jsonl` for helper intent then completion and the server `idle-suspend-audit.jsonl` for the actor/request outcome.
+   - Monitor `/var/log/dam-hopper/idle-suspend-helper.jsonl` for the ordered
+     preflight, intent, RTC, invocation, and completion milestones (exactly
+     one `acceptedIntent` and `executionCompleted`) and the server
+     `idle-suspend-audit.jsonl` for the actor/request outcome.
    - Confirm the machine suspends and automatically resumes within the approved tolerance.
    - Upon resume, refetch status and verify the status revision/`host:idleSuspendChanged` reconciliation, handoff release, and no duplicate suspend request.
 
@@ -647,7 +682,9 @@ Executing a real automatic host suspend canary is an explicit Operations procedu
    - Upon wake, refetch status and verify:
      - `state` reconciled to `watching` or `armed`.
      - `currentEpoch` advanced, latching the spent epoch.
-     - Helper audit `/var/log/dam-hopper/idle-suspend-helper.jsonl` contains exactly one intent and completion record.
+     - Helper audit `/var/log/dam-hopper/idle-suspend-helper.jsonl` contains
+       exactly one `acceptedIntent` and one `executionCompleted`, plus the
+       expected preflight, RTC-programming, and suspend-invocation milestones.
      - Server audit `idle-suspend-audit.jsonl` contains the matching handoff record.
      - No duplicate suspend request is issued while conditions remain unchanged.
 

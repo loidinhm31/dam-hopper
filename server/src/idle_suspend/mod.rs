@@ -52,7 +52,10 @@ pub use status::{
     IdleSuspendActivityStatusV1, IdleSuspendMeasurementWarningV1, IdleSuspendStatusV1,
     IdleSuspendWarningProcessV1, MeasurementWarningReasonCode,
 };
-pub use audit::{HelperAudit, HelperAuditError, HelperAuditRecord, HelperAuditRecordType};
+pub use audit::{
+    HelperAudit, HelperAuditError, HelperAuditRecord, HelperAuditRecordType, HelperOutcomeCode,
+    HelperReasonCode, HELPER_AUDIT_SCHEMA_VERSION,
+};
 pub use backend::{FakeActionBackend, SuspendActionBackend, SystemdLogindBackend};
 pub use helper_client::HelperClient;
 pub use helper_server::HelperServer;

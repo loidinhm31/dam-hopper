@@ -74,7 +74,12 @@ async fn main() -> anyhow::Result<()> {
 
     let preflight = Arc::new(SysfsPreflightChecker::new());
     let backend = Arc::new(SystemdLogindBackend::new());
-    let audit = Arc::new(HelperAudit::new(&cli.audit_file, 10_000));
+    let audit = Arc::new(HelperAudit::new(&cli.audit_file, 10_000)?);
+    info!(
+        boot_id = %audit.identity().boot_id,
+        instance_id = %audit.identity().producer_instance_id,
+        "Helper audit initialized with v2 producer identity"
+    );
     let server = Arc::new(HelperServer::new(policy, preflight, backend, audit, 1024));
 
     // Ensure parent directory for socket exists

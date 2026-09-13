@@ -320,8 +320,13 @@ The opt-in `agent-activity` idle suspend enhancement interacts cleanly with the 
 1. **Canonical Production Configuration**:
    In systemd deployments, `dam-hopper-api.service` reads its canonical registry from `/etc/dam-hopper/dam-hopper.toml`. Operators configure `[server.idle_suspend]` options (`automatic_policy`, `agent_executables`, `quiet_period_seconds`, `wake_after_seconds`) directly in this file.
 
-2. **Helper Lifecycle Unchanged**:
-   The helper service (`dam-hopper-idle-suspend-helper.service`) and its socket (`/run/dam-hopper/idle-suspend.sock`) remain entirely unchanged. The helper continues to execute privileged host suspend actions; the activity observer operates entirely within the unprivileged API server process.
+2. **Helper Lifecycle and Audit**:
+   The helper service (`dam-hopper-idle-suspend-helper.service`) and socket
+   (`/run/dam-hopper/idle-suspend.sock`) lifecycle remain unchanged. The helper
+   continues to execute privileged host suspend actions, while its single
+   `/var/log/dam-hopper/idle-suspend-helper.jsonl` audit evolves in place to
+   schema v2 with typed milestones and bounded secure pruning. The activity
+   observer operates entirely within the unprivileged API server process.
 
 3. **Per-Host Qualification Requirement**:
    Do not assume fleet-wide compatibility from release deployment. Each target host must qualify procfs visibility and `NETLINK_SOCK_DIAG` socket diagnostics under the deployed API service user context before enabling the policy.

@@ -955,10 +955,10 @@ Operations-owned target-host gate. See the [Phase 08 QA report](../plans/reports
 ### PR-018: Production Idle-Suspend Diagnostics (Phases 01–07)
 
 **Status:** Phase 01 architecture/schema/security contract, Phase 02
-canonical event foundation, and Phase 03 server coordinator integration were
-completed on 2026-09-13. Helper milestones, one-shot collection, bundle
-projection, mixed-version verification, and rollout remain planned Phases
-04–07.
+canonical event foundation, Phase 03 server coordinator integration, and Phase
+04 helper audit milestone enrichment were completed on 2026-09-13. The bounded
+collector, bundle projection, mixed-version verification, and rollout remain
+planned Phases 05–07.
 
 **Product intent:** Preserve bounded, privacy-safe evidence for diagnosing an
 idle-suspend incident without adding an observer daemon, terminal-content
@@ -986,6 +986,25 @@ same UUID is used for semantic `correlationId`, helper protocol-v1
 Epochs and revisions remain evidence only. Repeated sampler/status activity is
 not logged; semantic write failure is diagnostic best effort and cannot alter
 coordinator outcomes or handoff release.
+**Phase 04 delivery:** `server/src/idle_suspend/audit.rs` evolves the existing
+root audit in place to `HELPER_AUDIT_SCHEMA_VERSION = 2`, adding boot and
+producer identity, checked sequence metadata, safely available UUID
+correlation, and closed reason/outcome codes. `helper_server.rs` emits typed
+`requestRejected`, `capabilityResult`, `preflightResult`,
+`rtcProgrammingResult`, and `suspendInvoked` milestones around the existing
+`acceptedIntent`/`executionCompleted` action records. The helper binary
+initializes one producer identity before binding its socket. Protocol v1 and
+the established action record shape remain compatible.
+
+The accepted-intent record is still the only helper pre-action durability gate:
+its synchronized write failure prevents RTC/suspend mutation. Other milestone
+writes are best effort and cannot rewrite a real backend result. The audit
+remains mode `0600`, bounded at 10,000 records, and uses exclusive no-follow
+temporary-file pruning with file/directory sync and failure cleanup.
+
+Phase 04 test fixtures cover mixed v1/v2 deserialization, exact milestone
+ordering, closed code mapping, sequence-gap/restart behavior, intent and RTC
+fail-closed paths, and prune safety without host mutation.
 
 **Acceptance criteria:**
 
@@ -995,8 +1014,11 @@ coordinator outcomes or handoff release.
       primitives and a bounded synchronized writer without policy coupling.
 - [x] Phase 03 integrates lifecycle emission without changing the frozen
       event contract and prevents action-ID collisions across API restarts.
-- [ ] Phases 04–07 evolve helper evidence, implement the bounded collector and
-      bundle, verify mixed versions/security, and complete rollout gates.
+- [x] Phase 04 evolves helper evidence in place with typed milestones,
+      producer identity/sequence, protocol/action compatibility, intent
+      fail-closed ordering, safe closed codes, and secure pruning.
+- [ ] Phases 05–07 implement the bounded collector and bundle, verify mixed
+      versions/security, and complete rollout gates.
 
 **Operational boundary:** Event writes are diagnostic best effort after
 coordinator integration; they never rewrite a suspend outcome. Existing

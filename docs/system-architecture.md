@@ -346,13 +346,13 @@ The `agent-activity` policy is an activity heuristic, not semantic proof that an
 - **Kernel handoff race**: An activity change occurring in the kernel immediately after final comparison can race handoff. The implementation fences server-admitted input, creation, and restarts, but does not freeze processes or guarantee atomic absence of work.
 - **Host qualification requirement**: Process/socket permissions, kernel features, namespace topology, or latency exceeding the 1-second budget make a host permanently unavailable for this mode. There is no fallback to unverified interface metrics.
 
-### Production idle-suspend diagnostics (Phases 01–03 implemented; Phases 04–07 planned)
+### Production idle-suspend diagnostics (Phases 01–04 implemented; Phases 05–07 planned)
 
 Status: Phase 01 architecture/schema/security contract approved (third
-reviewer: 10/10 with no findings). Phase 02 canonical event foundation and
-Phase 03 coordinator integration were implemented on 2026-09-13. Helper
-milestones, the collector, bundle output, and rollout remain planned Phases
-04–07.
+reviewer: 10/10 with no findings). Phase 02 canonical event foundation, Phase
+03 coordinator integration, and Phase 04 helper audit milestone enrichment
+were implemented on 2026-09-13. The bounded collector, bundle output, and
+rollout remain planned Phases 05–07.
 
 The canonical producer foundation is shipped in
 `server/src/idle_suspend/event.rs` and re-exported by `idle_suspend::mod`.
@@ -534,21 +534,27 @@ The root helper retains one in-place audit at
 compatibility fields. Every newly emitted line carries audit schema version,
 timestamp, boot ID, producer instance/sequence, a nullable safely parsed
 request ID, protocol version, numeric peer PID/UID, applicable wake seconds,
-and closed reason/outcome codes. `requestId: null` is required for
-authentication or frame failures with no validated ID and for capability
-records without an action correlation; no ID is invented. Additive types are
-`requestRejected`, `capabilityResult`, `preflightResult`,
-`rtcProgrammingResult`, and `suspendInvoked`. Restricted legacy `detail`
-remains source-only and never enters a bundle.
+and optional closed reason/outcome codes where applicable. `requestId: null`
+is required for authentication or frame failures with no validated ID and for
+capability records without an action correlation; no ID is invented. Additive
+Rust variants are `RequestRejected`, `CapabilityResult`, `PreflightResult`,
+`RtcProgrammingResult`, and `SuspendInvoked` (serialized as lower camel-case
+`recordType` values). Restricted legacy `detail` remains source-only and never
+enters a bundle.
+The helper audit is bounded at 10,000 records. When the limit is exceeded,
+pruning retains the newest half through an exclusive `create_new` mode-`0600`
+no-follow temporary file, syncs the retained file and parent directory before
+atomic replacement, and removes the temporary file on failure; no parallel
+helper log is created.
 
 The helper authenticates, decodes one bounded protocol-v1 frame, validates and
 deduplicates it, then emits safe rejection/capability/preflight evidence when
 possible. It must `sync_all` `acceptedIntent` before RTC mutation; failure
 returns an execution failure and invokes no backend. Afterward it records RTC
-result, emits `suspendInvoked` immediately before the fixed backend call,
-captures the actual outcome, and attempts completion. A post-action failure
-cannot alter the outcome; it is an evidence gap. No parallel helper log is
-permitted.
+result and, only on RTC success, emits `suspendInvoked` immediately before the
+fixed backend call, captures the actual outcome, and attempts completion. A
+post-action failure cannot alter the outcome; it is an evidence gap. No
+parallel helper log is permitted.
 
 #### Fixed source, output, and completeness model
 
@@ -781,9 +787,9 @@ response returns the same UUID used as `correlationId` and helper protocol-v1
 `requestId`; it never creates a `manual-<uuid>` alias. Older readers may ignore
 additive helper-v2 milestones while retaining existing action names and fields.
 Rollback stops new emission and collector use but never deletes evidence.
-Phase 03 coordinator emission is implemented; helper milestones, collector
-implementation, and rollout remain pending. Architecture, security, and
-release-owner approval is complete.
+Phase 03 coordinator emission and Phase 04 helper milestones are implemented;
+collector implementation and rollout remain pending. Architecture, security,
+and release-owner approval is complete.
 
 #### Phase 01 review disposition
 
