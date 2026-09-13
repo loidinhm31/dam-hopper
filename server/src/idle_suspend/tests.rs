@@ -753,7 +753,7 @@ async fn test_coordinator_deadline_final_check_and_resumed() {
     // Verify exactly one suspend request occurred
     let reqs = executor.recorded_requests();
     assert_eq!(reqs.len(), 1);
-    assert_eq!(reqs[0].request_id, "epoch-1");
+    assert!(validate_canonical_uuid_v4(&reqs[0].request_id).is_ok());
     assert_eq!(reqs[0].wake_after_seconds, 600);
 
     // Advance further by 100 seconds with empty fleet — must NOT loop or re-arm!
@@ -2100,7 +2100,7 @@ async fn test_manual_force_suspend_quiescent_ordinary_claim() {
             status_revision,
             fleet_snapshot,
         } => {
-            assert!(request_id.starts_with("manual-"));
+            assert!(validate_canonical_uuid_v4(&request_id).is_ok());
             assert_eq!(status_revision, 2);
             assert!(fleet_snapshot.handoff_active);
             request_id
@@ -2256,7 +2256,7 @@ async fn test_manual_force_suspend_active_fleet_with_force_succeeds() {
             status_revision,
             fleet_snapshot,
         } => {
-            assert!(request_id.starts_with("manual-"));
+            assert!(validate_canonical_uuid_v4(&request_id).is_ok());
             assert_eq!(status_revision, 2);
             assert!(fleet_snapshot.handoff_active);
         }
@@ -2620,6 +2620,7 @@ async fn test_coordinator_agent_activity_disabled_mode_observer_only() {
         None,
         sampler,
         rx,
+        None,
     );
 
     let status = coordinator.status();
@@ -2672,6 +2673,7 @@ async fn test_coordinator_agent_activity_clean_boot_no_auto_arm() {
         None,
         sampler,
         rx,
+        None,
     );
 
     // Let the first background sample establish baseline
@@ -2761,6 +2763,7 @@ async fn test_coordinator_agent_activity_countdown_and_final_claim() {
         None,
         sampler,
         rx,
+        None,
     );
 
     // Wait for countdown and final claim (cadence is 2s, quiet is 1s, so ~3-4s total)
@@ -2853,6 +2856,7 @@ async fn test_coordinator_agent_activity_invalidation_resets_countdown() {
         None,
         sampler,
         rx,
+        None,
     );
 
     // Wait until Armed
@@ -2949,6 +2953,7 @@ async fn test_coordinator_agent_activity_spent_epoch_latch() {
         None,
         sampler,
         rx,
+        None,
     );
 
     // Wait for HandedOff and executor completion
@@ -3007,6 +3012,7 @@ async fn test_coordinator_agent_activity_shutdown() {
         None,
         sampler,
         rx,
+        None,
     );
 
     // Shutdown must complete cleanly
@@ -3805,4 +3811,623 @@ fn event_writer_restart_creates_new_identity_and_resets_sequence() {
     ).unwrap();
     assert_eq!(e2.producer_sequence, 1);
     assert_eq!(e2.producer_instance_id, id2.producer_instance_id);
+}
+fn read_emitted_events(path: &std::path::Path) -> Vec<IdleSuspendEventEnvelopeV1> {
+    if !path.exists() {
+        return Vec::new();
+    }
+    let content = std::fs::read_to_string(path).unwrap();
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn test_coordinator_events_quiet_automatic_empty_fleet_success() {
+    tokio::time::pause();
+
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+    let identity = make_test_identity();
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let coordinator = IdleSuspendCoordinator::start_with_writer(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager.clone(),
+        Some(writer),
+    );
+    let mut status_rx = coordinator.subscribe_status();
+
+    // Initial event: CoordinatorStarted
+    tokio::task::yield_now().await;
+    let events = read_emitted_events(&event_path);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
+    assert_eq!(events[0].producer_sequence, 1);
+
+    // Trigger fleet non-quiescence, then quiescence
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.begin_create("t1", 1).unwrap();
+        fleet.publish_live("t1", 1);
+    });
+    while status_rx.borrow().fleet_snapshot.live_count != 1 {
+        status_rx.changed().await.unwrap();
+    }
+
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.remove_live("t1", 1);
+    });
+    while status_rx.borrow().state != CoordinatorState::Armed {
+        status_rx.changed().await.unwrap();
+    }
+
+    // Armed: AttemptStarted, ArmStarted
+    let events = read_emitted_events(&event_path);
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::AttemptStarted);
+    assert_eq!(events[2].event_type, ServerIdleSuspendEventTypeV1::ArmStarted);
+    let attempt_id = events[1].correlation_id.as_ref().unwrap();
+    assert_eq!(events[2].correlation_id.as_ref().unwrap(), attempt_id);
+    assert_eq!(events[1].producer_sequence, 2);
+    assert_eq!(events[2].producer_sequence, 3);
+
+    // Advance to deadline -> FinalCheckStarted, FinalCheckCompleted, HandoffClaimAccepted, HelperRequestDispatched
+    // and then outcome: HelperOutcomeReceived, ReconciliationCompleted
+    tokio::time::advance(std::time::Duration::from_secs(65)).await;
+    while status_rx.borrow().state != CoordinatorState::Resumed {
+        status_rx.changed().await.unwrap();
+    }
+
+    let events = read_emitted_events(&event_path);
+    assert_eq!(events.len(), 9);
+    assert_eq!(events[3].event_type, ServerIdleSuspendEventTypeV1::FinalCheckStarted);
+    assert_eq!(events[4].event_type, ServerIdleSuspendEventTypeV1::FinalCheckCompleted);
+    assert_eq!(events[5].event_type, ServerIdleSuspendEventTypeV1::HandoffClaimAccepted);
+    assert_eq!(events[6].event_type, ServerIdleSuspendEventTypeV1::HelperRequestDispatched);
+    assert_eq!(events[7].event_type, ServerIdleSuspendEventTypeV1::HelperOutcomeReceived);
+    assert_eq!(events[8].event_type, ServerIdleSuspendEventTypeV1::ReconciliationCompleted);
+
+    // Verify all attempt events share identical UUID correlation_id
+    for ev in &events[1..9] {
+        assert_eq!(ev.correlation_id.as_ref().unwrap(), attempt_id);
+    }
+    // Verify strictly monotonic sequences
+    for (i, ev) in events.iter().enumerate() {
+        assert_eq!(ev.producer_sequence, (i + 1) as u64);
+    }
+
+    // Advance further — no extra events!
+    tokio::time::advance(std::time::Duration::from_secs(100)).await;
+    tokio::task::yield_now().await;
+    let events_after = read_emitted_events(&event_path);
+    assert_eq!(events_after.len(), 9);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_events_empty_fleet_arm_cancelled_by_active_fleet() {
+    tokio::time::pause();
+
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+    let identity = make_test_identity();
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let coordinator = IdleSuspendCoordinator::start_with_writer(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager.clone(),
+        Some(writer),
+    );
+    let mut status_rx = coordinator.subscribe_status();
+
+    tokio::task::yield_now().await;
+
+    // Non-quiescent then quiescent to arm
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.begin_create("t1", 1).unwrap();
+        fleet.publish_live("t1", 1);
+    });
+    while status_rx.borrow().fleet_snapshot.live_count != 1 {
+        status_rx.changed().await.unwrap();
+    }
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.remove_live("t1", 1);
+    });
+    while status_rx.borrow().state != CoordinatorState::Armed {
+        status_rx.changed().await.unwrap();
+    }
+
+    // Spawn new PTY during armed countdown -> active fleet cancellation
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.begin_create("t2", 2).unwrap();
+        fleet.publish_live("t2", 2);
+    });
+    while status_rx.borrow().state != CoordinatorState::Watching {
+        status_rx.changed().await.unwrap();
+    }
+
+    let events = read_emitted_events(&event_path);
+    assert_eq!(events.len(), 5);
+    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
+    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::AttemptStarted);
+    assert_eq!(events[2].event_type, ServerIdleSuspendEventTypeV1::ArmStarted);
+    assert_eq!(events[3].event_type, ServerIdleSuspendEventTypeV1::ArmCancelled);
+    assert_eq!(events[4].event_type, ServerIdleSuspendEventTypeV1::TerminalRejected);
+
+    let corr = events[1].correlation_id.as_ref().unwrap();
+    assert_eq!(events[3].correlation_id.as_ref().unwrap(), corr);
+    assert_eq!(events[4].correlation_id.as_ref().unwrap(), corr);
+
+    if let IdleSuspendEventDataV1::ArmCancelled(data) = &events[3].data {
+        assert_eq!(data.reason_code, ServerIdleSuspendReasonCodeV1::ActiveFleet);
+    } else {
+        panic!("Expected ArmCancelled");
+    }
+
+    if let IdleSuspendEventDataV1::TerminalRejected(data) = &events[4].data {
+        assert_eq!(data.reason_code, ServerIdleSuspendReasonCodeV1::ActiveFleet);
+    } else {
+        panic!("Expected TerminalRejected");
+    }
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_events_manual_force_suspend_accepted_flow() {
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+    let identity = make_test_identity();
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let audit_file = tmp.path().join("idle-suspend-audit.jsonl");
+    let server_audit = preprovisioned_server_audit(audit_file.clone());
+
+    let coordinator = IdleSuspendCoordinator::start_with_writer(
+        policy,
+        timing,
+        None,
+        Some(server_audit.clone()),
+        executor.clone(),
+        pty_manager,
+        Some(writer),
+    );
+
+    tokio::task::yield_now().await;
+
+    let cmd = ForceSuspendCommand {
+        actor: "admin".to_string(),
+        wake_after_seconds: 600,
+        force: false,
+    };
+
+    let res = coordinator.force_suspend(cmd).await;
+    let req_id = match res {
+        CoordinatorForceSuspendResult::Accepted { request_id, .. } => {
+            assert!(validate_canonical_uuid_v4(&request_id).is_ok());
+            request_id
+        }
+        other => panic!("Expected Accepted, got: {other:?}"),
+    };
+
+    // Wait for in-flight executor to finish
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let events = read_emitted_events(&event_path);
+    assert_eq!(events.len(), 6);
+    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
+    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::AttemptStarted);
+    assert_eq!(events[2].event_type, ServerIdleSuspendEventTypeV1::HandoffClaimAccepted);
+    assert_eq!(events[3].event_type, ServerIdleSuspendEventTypeV1::HelperRequestDispatched);
+    assert_eq!(events[4].event_type, ServerIdleSuspendEventTypeV1::HelperOutcomeReceived);
+    assert_eq!(events[5].event_type, ServerIdleSuspendEventTypeV1::ReconciliationCompleted);
+
+    // Exact UUID matches across events, audit, and executor request
+    for ev in &events[1..6] {
+        assert_eq!(ev.correlation_id.as_ref().unwrap(), &req_id);
+        assert_eq!(ev.mode, Some(IdleSuspendModeV1::Manual));
+    }
+
+    let recorded = executor.recorded_requests();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].request_id, req_id);
+
+    let audits = server_audit.read_recent_manual_records(10).unwrap();
+    assert!(!audits.is_empty());
+    assert_eq!(audits.last().unwrap().request_id, req_id);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_events_manual_force_suspend_rejections() {
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+    let identity = make_test_identity();
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(false)); // Capability fails!
+
+    let coordinator = IdleSuspendCoordinator::start_with_writer(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager,
+        Some(writer),
+    );
+
+    tokio::task::yield_now().await;
+
+    // 1. Capability failure
+    let cmd1 = ForceSuspendCommand {
+        actor: "admin".to_string(),
+        wake_after_seconds: 600,
+        force: false,
+    };
+    let res1 = coordinator.force_suspend(cmd1).await;
+    assert!(matches!(res1, CoordinatorForceSuspendResult::CapabilityUnavailable(_)));
+
+    let events = read_emitted_events(&event_path);
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
+    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::AttemptStarted);
+    assert_eq!(events[2].event_type, ServerIdleSuspendEventTypeV1::TerminalRejected);
+    if let IdleSuspendEventDataV1::TerminalRejected(data) = &events[2].data {
+        assert_eq!(data.reason_code, ServerIdleSuspendReasonCodeV1::CapabilityUnsupported);
+    } else {
+        panic!("Expected TerminalRejected");
+    }
+
+    // 2. Validation failure: wake_after_seconds out of bounds (e.g. 10)
+    // Basic input validation fails before attempt admission; no new attempt events emitted.
+    let cmd2 = ForceSuspendCommand {
+        actor: "admin".to_string(),
+        wake_after_seconds: 10,
+        force: false,
+    };
+    let res2 = coordinator.force_suspend(cmd2).await;
+    assert!(matches!(res2, CoordinatorForceSuspendResult::ValidationFailed(_)));
+
+    let events2 = read_emitted_events(&event_path);
+    assert_eq!(events2.len(), 3); // Still 3 events
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_events_shutdown_while_armed() {
+    tokio::time::pause();
+
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+    let identity = make_test_identity();
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let coordinator = IdleSuspendCoordinator::start_with_writer(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager.clone(),
+        Some(writer),
+    );
+    let mut status_rx = coordinator.subscribe_status();
+
+    tokio::task::yield_now().await;
+
+    // Arm
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.begin_create("t1", 1).unwrap();
+        fleet.publish_live("t1", 1);
+    });
+    while status_rx.borrow().fleet_snapshot.live_count != 1 {
+        status_rx.changed().await.unwrap();
+    }
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.remove_live("t1", 1);
+    });
+    while status_rx.borrow().state != CoordinatorState::Armed {
+        status_rx.changed().await.unwrap();
+    }
+
+    // Shutdown while Armed
+    coordinator.shutdown().await;
+
+    let events = read_emitted_events(&event_path);
+    assert_eq!(events.len(), 5);
+    assert_eq!(events[3].event_type, ServerIdleSuspendEventTypeV1::ArmCancelled);
+    assert_eq!(events[4].event_type, ServerIdleSuspendEventTypeV1::TerminalRejected);
+    if let IdleSuspendEventDataV1::ArmCancelled(data) = &events[3].data {
+        assert_eq!(data.reason_code, ServerIdleSuspendReasonCodeV1::Shutdown);
+    }
+    if let IdleSuspendEventDataV1::TerminalRejected(data) = &events[4].data {
+        assert_eq!(data.reason_code, ServerIdleSuspendReasonCodeV1::Shutdown);
+    }
+}
+#[tokio::test]
+async fn test_coordinator_events_manual_force_suspend_active_fleet_rejection() {
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+    let identity = make_test_identity();
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+
+    let policy = create_test_policy(tmp.path(), true);
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let audit_file = tmp.path().join("idle-suspend-audit.jsonl");
+    let server_audit = preprovisioned_server_audit(audit_file.clone());
+
+    // Create an active session
+    pty_manager.with_fleet_for_test(|fleet| {
+        fleet.begin_create("active-term", 1).unwrap();
+        fleet.publish_live("active-term", 1);
+    });
+
+    let coordinator = IdleSuspendCoordinator::start_with_writer(
+        policy,
+        timing,
+        None,
+        Some(server_audit),
+        executor,
+        pty_manager,
+        Some(writer),
+    );
+
+    tokio::task::yield_now().await;
+
+    // Command without force -> active fleet requires confirmation!
+    let cmd = ForceSuspendCommand {
+        actor: "admin".to_string(),
+        wake_after_seconds: 600,
+        force: false,
+    };
+
+    let res = coordinator.force_suspend(cmd).await;
+    assert!(matches!(res, CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation { .. }));
+
+    let events = read_emitted_events(&event_path);
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
+    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::AttemptStarted);
+    assert_eq!(events[2].event_type, ServerIdleSuspendEventTypeV1::TerminalRejected);
+    if let IdleSuspendEventDataV1::TerminalRejected(data) = &events[2].data {
+        assert_eq!(data.reason_code, ServerIdleSuspendReasonCodeV1::ActiveFleet);
+    } else {
+        panic!("Expected TerminalRejected with ActiveFleet");
+    }
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_coordinator_events_agent_activity_measurement_availability_transitions() {
+    use crate::idle_suspend::activity::process::tests::MockProcessSource;
+    use crate::idle_suspend::activity::tcp::tests::FakeDiagnosticsSource;
+    use crate::idle_suspend::activity::ActivitySampler;
+    use tokio::sync::mpsc;
+
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+    let identity = make_test_identity();
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+
+    let mut policy = create_test_policy(tmp.path(), true);
+    policy.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentActivity;
+    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+
+    let proc_source = MockProcessSource::new();
+    let diag_source = FakeDiagnosticsSource {
+        result: Some(Err(crate::idle_suspend::activity::ActivityUnavailable::new(
+            crate::idle_suspend::activity::ActivityUnavailableReason::SocketDiagnostics,
+        ))),
+    };
+
+    let (tx, rx) = mpsc::channel(16);
+    let sampler = ActivitySampler::with_sources(
+        Arc::new(pty_manager.clone()),
+        Arc::clone(&policy.agent_executables),
+        tx,
+        proc_source,
+        diag_source,
+    );
+
+    let coordinator = IdleSuspendCoordinator::start_with_sampler(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager,
+        None,
+        sampler,
+        rx,
+        Some(writer),
+    );
+
+    // Initial background tick -> unavailable sample
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let events = read_emitted_events(&event_path);
+    // Should have CoordinatorStarted and exactly ONE MeasurementUnavailable
+    assert!(events.len() >= 2);
+    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
+    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::MeasurementUnavailable);
+
+    let count_before = events.len();
+
+    // Trigger another unavailable tick -> must NOT emit duplicate MeasurementUnavailable!
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let events_after = read_emitted_events(&event_path);
+    assert_eq!(events_after.len(), count_before, "Repeated unavailable sample must not emit duplicate event");
+
+    coordinator.shutdown().await;
+}
+#[tokio::test]
+async fn test_coordinator_events_process_restart_safe_ids() {
+    tokio::time::pause();
+
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+
+    // Instance 1: initial process boot
+    let identity1 = ProducerIdentity::with_ids(
+        "8f03c004-bb50-4822-9218-d75b34091a92".to_string(),
+        "11111111-1111-4111-8111-111111111111".to_string(),
+    )
+    .unwrap();
+    let writer1 = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity1));
+
+    let policy1 = create_test_policy(tmp.path(), true);
+    let timing1 = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
+    let pty_manager1 = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor1 = Arc::new(FakeExecutor::new(true));
+
+    let coordinator1 = IdleSuspendCoordinator::start_with_writer(
+        policy1,
+        timing1,
+        None,
+        None,
+        executor1.clone(),
+        pty_manager1.clone(),
+        Some(writer1),
+    );
+    let mut status_rx1 = coordinator1.subscribe_status();
+
+    // Trigger an attempt in instance 1: fleet active then quiescent
+    pty_manager1.with_fleet_for_test(|fleet| {
+        fleet.begin_create("t1", 1).unwrap();
+        fleet.publish_live("t1", 1);
+    });
+    while status_rx1.borrow().fleet_snapshot.live_count != 1 {
+        status_rx1.changed().await.unwrap();
+    }
+    pty_manager1.with_fleet_for_test(|fleet| {
+        fleet.remove_live("t1", 1);
+    });
+    while status_rx1.borrow().state != CoordinatorState::Armed {
+        status_rx1.changed().await.unwrap();
+    }
+
+    // Advance to suspend and resume
+    tokio::time::advance(std::time::Duration::from_secs(65)).await;
+    while status_rx1.borrow().state != CoordinatorState::Resumed {
+        status_rx1.changed().await.unwrap();
+    }
+
+    coordinator1.shutdown().await;
+
+    let events_inst1 = read_emitted_events(&event_path);
+    assert_eq!(events_inst1.len(), 9);
+    let corr1 = events_inst1[1].correlation_id.clone().unwrap();
+    assert!(validate_canonical_uuid_v4(&corr1).is_ok());
+
+    // Instance 2: simulated API process restart writing to SAME event log
+    let identity2 = ProducerIdentity::with_ids(
+        "8f03c004-bb50-4822-9218-d75b34091a92".to_string(), // Same boot ID
+        "22222222-2222-4222-8222-222222222222".to_string(), // NEW process instance ID
+    )
+    .unwrap();
+    let writer2 = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity2));
+
+    let policy2 = create_test_policy(tmp.path(), true);
+    let timing2 = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
+    let pty_manager2 = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor2 = Arc::new(FakeExecutor::new(true));
+
+    let coordinator2 = IdleSuspendCoordinator::start_with_writer(
+        policy2,
+        timing2,
+        None,
+        None,
+        executor2.clone(),
+        pty_manager2.clone(),
+        Some(writer2),
+    );
+    let mut status_rx2 = coordinator2.subscribe_status();
+
+    // Trigger an attempt in instance 2
+    pty_manager2.with_fleet_for_test(|fleet| {
+        fleet.begin_create("t2", 1).unwrap();
+        fleet.publish_live("t2", 1);
+    });
+    while status_rx2.borrow().fleet_snapshot.live_count != 1 {
+        status_rx2.changed().await.unwrap();
+    }
+    pty_manager2.with_fleet_for_test(|fleet| {
+        fleet.remove_live("t2", 1);
+    });
+    while status_rx2.borrow().state != CoordinatorState::Armed {
+        status_rx2.changed().await.unwrap();
+    }
+
+    tokio::time::advance(std::time::Duration::from_secs(65)).await;
+    while status_rx2.borrow().state != CoordinatorState::Resumed {
+        status_rx2.changed().await.unwrap();
+    }
+
+    coordinator2.shutdown().await;
+
+    // All events across both process lifetimes in same file:
+    let all_events = read_emitted_events(&event_path);
+    assert_eq!(all_events.len(), 18, "Must contain 9 events from instance 1 + 9 events from instance 2");
+
+    // 1. First event of Instance 2 is CoordinatorStarted with sequence 1 and new producer instance ID
+    let inst2_start = &all_events[9];
+    assert_eq!(inst2_start.event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
+    assert_eq!(inst2_start.producer_sequence, 1, "Producer sequence must reset on process restart");
+    assert_eq!(inst2_start.producer_instance_id, "22222222-2222-4222-8222-222222222222");
+
+    // 2. Correlation ID for instance 2 attempt
+    let corr2 = all_events[10].correlation_id.clone().unwrap();
+    assert!(validate_canonical_uuid_v4(&corr2).is_ok());
+
+    // 3. Invariant: Action Correlation IDs MUST NOT collide across process restarts (unlike legacy epoch-1)
+    assert_ne!(corr1, corr2, "Action UUIDs must be strictly distinct across restarts");
+
+    // 4. Executor requests in instance 1 and instance 2 receive exact distinct UUIDs
+    let reqs1 = executor1.recorded_requests();
+    let reqs2 = executor2.recorded_requests();
+    assert_eq!(reqs1[0].request_id, corr1);
+    assert_eq!(reqs2[0].request_id, corr2);
+    assert_ne!(reqs1[0].request_id, reqs2[0].request_id, "No ID collision across restarts");
 }

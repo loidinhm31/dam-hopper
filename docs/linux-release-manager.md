@@ -73,8 +73,11 @@ The API audit consumer never lazily creates or follows this file.
 The Phase 02 canonical event writer is deliberately outside this provisioning
 set. It requires an already-existing diagnostics parent and refuses a missing,
 unsafe, or mismatched parent; the API pre-start gate does not create, repair,
-or lazily initialize `idle-suspend-events-v1.jsonl`. Coordinator emission is
-deferred to Phase 03.
+or lazily initialize `idle-suspend-events-v1.jsonl`. Phase 03 passes the
+optional writer from `AppState` into coordinator startup. If construction
+fails, the API records a sanitized diagnostic and continues without semantic
+event emission; the missing producer evidence is therefore partial rather than
+silently redirected.
 
 ## Bootstrap handoff (Phase 06)
 

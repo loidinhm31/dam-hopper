@@ -122,6 +122,9 @@ pub struct AppState {
     /// Active idle suspend coordinator, initialized after persistence restoration.
     pub idle_suspend_coordinator:
         Arc<RwLock<Option<Arc<crate::idle_suspend::IdleSuspendCoordinator>>>>,
+    /// Authoritative event writer for canonical server semantic events.
+    pub idle_suspend_event_writer:
+        Option<Arc<crate::idle_suspend::IdleSuspendEventWriter>>,
     /// Monotonic timestamp for idle suspend fallback warning onset.
     pub fallback_warning_onset_ms: u64,
 }
@@ -206,6 +209,7 @@ impl AppState {
                 executor,
                 self.pty_manager.clone(),
                 Some(Arc::new(self.event_sink.clone())),
+                self.idle_suspend_event_writer.clone(),
             ),
         );
         *guard = Some(Arc::clone(&coordinator));
@@ -321,6 +325,25 @@ impl AppState {
         let idle_suspend_audit = Arc::new(crate::idle_suspend::IdleSuspendServerAudit::new(
             idle_suspend_audit_dir.join("idle-suspend-audit.jsonl"),
         ));
+        let idle_suspend_event_writer = diagnostics
+            .log_path()
+            .parent()
+            .map(|p| p.join("idle-suspend-events-v1.jsonl"))
+            .and_then(|path| match crate::idle_suspend::IdleSuspendEventWriter::new(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(err) => {
+                    let mut fields = std::collections::BTreeMap::new();
+                    fields.insert("error".to_string(), err.to_string());
+                    diagnostics.record_event(crate::diagnostics::DiagnosticEvent {
+                        timestamp_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(),
+                        level: "WARN".to_string(),
+                        source: "idle_suspend::event_writer".to_string(),
+                        message: "Failed to initialize idle suspend canonical event writer".to_string(),
+                        fields,
+                    });
+                    None
+                }
+            });
         Ok(Self {
             workspace_dir,
             config: Arc::new(RwLock::new(config)),
@@ -359,6 +382,7 @@ impl AppState {
             idle_suspend_store,
             idle_suspend_audit,
             idle_suspend_coordinator: Arc::new(RwLock::new(None)),
+            idle_suspend_event_writer,
             fallback_warning_onset_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(),
         })
     }
