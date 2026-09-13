@@ -339,21 +339,52 @@ dam-hopper status
 dam-hopper status --json
 ```
 
-### Capturing a production diagnostics bundle (Phase 06)
+### Capturing a production diagnostics bundle (Phase 07 complete)
 
-For a bounded local idle-suspend snapshot, run:
+Run the fixed, one-shot collector after an idle-suspend incident:
 
 ```bash
 dam-hopper diagnose --json
 ```
 
-The command prints only the absolute bundle path after an atomic write. Exit
-`0` means complete historical evidence, `2` means a valid partial bundle, and
-`1` means fatal serialization/output failure. It is allowed for non-root users;
-root-only helper evidence is marked `permissionDenied` without escalation.
-See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
-for role applicability, fixed source paths, and output permissions.
+`--json` is required; no path, window, source, unit, URL, command, or
+verbosity override is accepted. The collector reads fixed local sources,
+redacts before serialization, writes one atomic `bundleSchemaVersion: 1` JSON
+file, and prints exactly its absolute path plus newline on stdout.
 
+- **Root**: writes under `/var/lib/dam-hopper-manager/diagnostics` (directory
+  `0700`, bundle `0600`) and attempts the root-only helper audit.
+- **Non-root**: writes under `$XDG_STATE_HOME/dam-hopper/diagnostics`, or
+  `$HOME/.local/state/dam-hopper/diagnostics` when `XDG_STATE_HOME` is unset.
+  It never escalates; an applicable helper audit is `permissionDenied`, so the
+  result is normally partial (exit `2`). There is no `/tmp` fallback.
+- **Exit `0`**: safely written bundle with complete applicable historical
+  evidence. **Exit `2`**: safely written valid partial bundle. **Exit `1`**:
+  serialization or secure-output failure; no path is printed.
+- **Sources and privacy**: server events/audit, helper audit, backend
+  diagnostics, fixed API/helper systemd and journald metadata, the loopback
+  idle-status API, and current host probes. Tokens, credentials, terminal/PTY
+  bytes, argv/environment, journal message text, raw helper frames, and
+  socket/IP addresses are excluded. Current status/probes are latest or
+  non-historical, not incident history.
+- **Safety and rollback**: source files are read-only; output uses a same-
+  directory exclusive `0600` temporary file, sync, atomic rename, and
+  directory sync. Rollback restores prior binaries/assets and retains evidence.
+
+For deterministic gates, run the diagnostics target and cross-layer target from
+the source checkout. On an approved Linux host, the explicit read-only smoke is:
+
+```bash
+cargo test --manifest-path server/Cargo.toml \
+  --test idle_suspend_diagnostics_linux_smoke -- --ignored
+```
+
+It uses production read adapters plus temporary output and compares before/after
+host/configuration/audit hashes, RTC wakealarm content, and API/helper
+`ActiveState`, `SubState`, and `MainPID`; it must not trigger suspend.
+
+See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
+for fixed source paths and adapter details.
 ### Inspecting Service Logs
 
 ```bash
@@ -578,7 +609,7 @@ hardware, or host suspend.
      - Submit exactly one POST and never replay it after a network interruption.
    - Confirm post-resume status, audit, handoff, and PTY reconciliation once manually awakened.
 
-### 11.6 Target-Host Observer Qualification (Phase 07 Gate)
+### 11.6 Target-Host Observer Qualification (Configured-Agent Activity)
 
 Before enabling the `agent-activity` automatic policy on any host, qualify that host's kernel, permissions, and service context:
 

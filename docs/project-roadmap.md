@@ -11,10 +11,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Production idle-suspend diagnostics (2026-09-12–14)
 
-- **Plan status: IN PROGRESS (Phase 06 complete; 6/7 phases).** Phases 01–06
-  deliver the frozen diagnostics contract, canonical writer, coordinator
-  instrumentation, restart-safe correlation, helper audit milestones, pure
-  bundle/correlation engine, role-aware host adapters, atomic output, and `dam-hopper diagnose --json`; Phase 07 rollout remains planned.
+- **Plan status: COMPLETE (100%; 7/7 phases; 110/110h).** Phases 01–07
+  delivered the frozen contract, canonical event writer, coordinator
+  instrumentation, restart-safe UUID correlation, helper audit milestones,
+  bounded bundle/correlation engine, role-aware Linux adapters, secure atomic
+  output, and `dam-hopper diagnose --json`.
+  Phase 07 cross-layer verification, architecture reconciliation, docs, and
+  controlled rollout are complete as of 2026-09-14.
 - **Phase 02 — DONE (2026-09-13; 100%)**: Delivered closed event/data types, a bounded mode-0600 no-follow synced JSONL writer, restart-safe producer identity, sequence-gap semantics, and protocol-compatible action correlation validation.
 - **Phase 03 — DONE (2026-09-13; 100%)**: Wired the optional writer through `AppState` and coordinator startup; emitted authoritative automatic/manual lifecycle events; reused one UUID v4 through semantic events, helper requests, manual responses/audits, outcomes, and reconciliation; suppressed per-sample event volume.
 - **Phase 04 — DONE (2026-09-13; 100%)**: Evolved the existing root helper audit in place to schema v2 with producer identity/sequence and typed rejection, capability, preflight, RTC, invocation, and outcome milestones; preserved protocol-v1/action compatibility, intent fail-closed ordering, safe redaction, and post-action outcome truth.
@@ -25,8 +28,20 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 06 — DONE:** Exact required-`--json` grammar, any-EUID privilege
   allowance without escalation, role-aware fixed host adapters, and secure
   root/non-root output. Exit `0` is complete evidence, `2` a valid partial
-  bundle, and `1` fatal serialization/output; Phase 07 owns qualification and
-  controlled rollout.
+  bundle, and `1` fatal serialization/output; Phase 07 qualification and
+  controlled rollout are complete (2026-09-14).
+- **Phase 07 — DONE (2026-09-14; 100%; 6/6 todo items):** Cross-layer
+  automatic/manual chains and exact UUID propagation passed; malformed,
+  unknown-version, sequence-gap, restart/orphan, role/EUID, API, redaction,
+  bounds, and atomic-output faults remain explicit/partial without false
+  completeness. Read-only Linux production-adapter smoke passed with
+  unchanged host/config/audit/RTC/systemd invariants; no new process or unit
+  was introduced. Cycle 2 review approved **10.0/10** and focused validation
+  passed **223/223 executions, 0 failures**.
+  [Phase 07 plan](../plans/260912-0027-production-idle-suspend-diagnostics/phase-07-security-verification-rollout.md) ·
+  [Test report](../plans/reports/tester-260914-0106-phase07-cycle2-verification.md) ·
+  [Code review](../plans/reports/code-review-260914-0109-phase-07-production-idle-suspend-diagnostics-cycle2.md).
+
 ### Configured-agent activity idle suspend (2026-09-11)
 
 - **Phases 01–08 — DONE (2026-09-11).** Policy/configuration, PTY evidence,

@@ -1326,6 +1326,7 @@ async fn test_integrated_agent_activity_shutdown_cleanly_joins() {
     let _ = fixture.state.pty_manager.kill(&session.id);
 }
 
+
 struct PanicExecutor;
 
 impl IdleSuspendExecutor for PanicExecutor {
