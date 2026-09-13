@@ -107,6 +107,41 @@ busy alarms, audit-intent failures, RTC clear/readback/write failures,
 unsupported capabilities, and inhibitors produce no suspend call. Tests use
 `tempfile` RTC/audit paths and fake preflight/backends; never use real power
 management or host RTC state.
+### Helper audit v2 patterns (Phase 04)
+
+Keep helper audit evolution in the existing
+`/var/log/dam-hopper/idle-suspend-helper.jsonl`; do not add a second helper
+event file or change `HELPER_PROTOCOL_VERSION`.
+
+- `HELPER_AUDIT_SCHEMA_VERSION` is independently `2`. Existing
+  `acceptedIntent`, `executionCompleted`, and `executionRejected` records keep
+  their established fields; legacy lines without a version deserialize as v1.
+- New lines add `timestampMs`, boot/producer identity, checked
+  `producerSequence`, a safely parsed UUID `correlationId`, and optional
+  closed `HelperReasonCode`/`HelperOutcomeCode` values where applicable. Rust
+  milestone variants are `RequestRejected`, `CapabilityResult`,
+  `PreflightResult`, `RtcProgrammingResult`, and `SuspendInvoked`; serialized
+  `recordType` values use lower camel case.
+- Capability, authentication, and frame records use null correlation when no
+  validated action request ID exists. Never invent IDs; protocol request IDs
+  are correlation evidence, while enrolled peer UID/PID remains authorization.
+- `HelperAudit::record` reserves a checked, non-wrapping sequence under its
+  mutex and consumes it on serialization/open/write/sync failure. It enriches
+  a cloned logical record, bounds each JSONL line to 16 KiB, writes mode
+  `0600` with `O_NOFOLLOW`, and calls `sync_all`.
+- Preserve side-effect ordering: emit preflight before intent, sync
+  `acceptedIntent` before RTC mutation, record RTC result, emit
+  `suspendInvoked` immediately before the fixed suspend call, then record the
+  actual completion. Only intent failure blocks execution; later milestone
+  failures are diagnostic gaps and cannot replace a backend outcome.
+- Keep at most 10,000 records. Overflow pruning writes the newest half through
+  an exclusive mode-`0600` no-follow temporary file, syncs file and parent
+  directory before rename, and removes the temporary file on failure.
+
+Tests inject identity/clock, temporary audit and RTC paths, credentials,
+preflight, and backends. They must prove v1 compatibility, sequence gaps,
+milestone order, and prune cleanup without invoking real systemd, RTC, or
+suspend.
 
 ### Canonical idle-suspend event writer (Phases 02–03)
 

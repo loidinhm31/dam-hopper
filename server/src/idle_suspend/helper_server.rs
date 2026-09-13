@@ -1,8 +1,9 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::idle_suspend::audit::{HelperAudit, HelperAuditRecord};
+use crate::idle_suspend::audit::{HelperAudit, HelperAuditRecord, HelperReasonCode};
 use crate::idle_suspend::backend::SuspendActionBackend;
 use crate::idle_suspend::peer_auth::{EnrolledPeerPolicy, PeerCredentials};
 use crate::idle_suspend::preflight::{PreflightChecker, PreflightError};
@@ -49,11 +50,12 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
     ) -> Result<(), ProtocolError> {
         // 1. Peer authentication
         if let Err(e) = self.policy.verify_credentials(&cred) {
-            let _ = self.audit.record(&HelperAuditRecord::new_rejected(
-                "unauthenticated",
+            let _ = self.audit.record(&HelperAuditRecord::new_request_rejected(
                 cred.pid,
                 cred.uid,
-                format!("Peer authentication failed: {e}"),
+                HelperReasonCode::PeerAuthenticationFailed,
+                None,
+                Some(format!("Peer authentication failed: {e}")),
             ));
             let err_resp = HelperResponseFrame::new(HelperResponsePayload::Error {
                 code: "permissionDenied".to_string(),
@@ -67,11 +69,12 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
         let req_frame: HelperRequestFrame = match read_frame_async(stream).await {
             Ok(f) => f,
             Err(e) => {
-                let _ = self.audit.record(&HelperAuditRecord::new_rejected(
-                    "invalid-frame",
+                let _ = self.audit.record(&HelperAuditRecord::new_request_rejected(
                     cred.pid,
                     cred.uid,
-                    format!("Frame decode failed: {e}"),
+                    HelperReasonCode::InvalidFrame,
+                    None,
+                    Some(format!("Frame decode failed: {e}")),
                 ));
                 return Err(e);
             }
@@ -79,11 +82,12 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
 
         // 3. Validate frame contents
         if let Err(e) = req_frame.validate() {
-            let _ = self.audit.record(&HelperAuditRecord::new_rejected(
-                "invalid-frame",
+            let _ = self.audit.record(&HelperAuditRecord::new_request_rejected(
                 cred.pid,
                 cred.uid,
-                format!("Frame validation failed: {e}"),
+                HelperReasonCode::InvalidFrame,
+                None,
+                Some(format!("Frame validation failed: {e}")),
             ));
             let err_resp = HelperResponseFrame::new(HelperResponsePayload::Error {
                 code: "invalidFrame".to_string(),
@@ -96,10 +100,30 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
         // 4. Dispatch request
         match req_frame.payload {
             HelperRequestPayload::ProbeCapability => {
-                let (supported, detail) = match self.preflight.run_all() {
-                    Ok(()) => (true, "Host supports RTC wake and suspend".to_string()),
-                    Err(e) => (false, format!("Preflight check failed: {e}")),
+                let (supported, detail, reason_code) = match self.preflight.run_all() {
+                    Ok(()) => (true, "Host supports RTC wake and suspend".to_string(), None),
+                    Err(e) => {
+                        let reason = match &e {
+                            PreflightError::Inhibited(..) => HelperReasonCode::InhibitorPresent,
+                            PreflightError::UnsupportedSuspend(..)
+                            | PreflightError::UnsupportedRtc(..) => {
+                                HelperReasonCode::CapabilityUnsupported
+                            }
+                            PreflightError::RtcAlarmBusy(..) => HelperReasonCode::RtcBusy,
+                            PreflightError::ProbeError(..) => HelperReasonCode::PreflightFailed,
+                        };
+                        (false, format!("Preflight check failed: {e}"), Some(reason))
+                    }
                 };
+
+                let _ = self.audit.record(&HelperAuditRecord::new_capability_result(
+                    supported,
+                    cred.pid,
+                    cred.uid,
+                    reason_code,
+                    Some(detail.clone()),
+                ));
+
                 let resp = HelperResponseFrame::new(HelperResponsePayload::Capability {
                     supported,
                     detail,
@@ -109,15 +133,16 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
             HelperRequestPayload::SuspendWithRtcWake(req) => {
                 // Deduplicate request ID in synchronous scope to drop MutexGuard before any await
                 let dedupe_result = {
-                    let mut guard = self.deduplicator.lock().unwrap();
+                    let mut guard = self.deduplicator.lock();
                     guard.check_and_record(&req.request_id)
                 };
                 if let Err(e) = dedupe_result {
-                    let _ = self.audit.record(&HelperAuditRecord::new_rejected(
-                        &req.request_id,
+                    let _ = self.audit.record(&HelperAuditRecord::new_request_rejected(
                         cred.pid,
                         cred.uid,
-                        format!("Deduplication rejected: {e}"),
+                        HelperReasonCode::DuplicateRequest,
+                        Some(req.request_id.clone()),
+                        Some(format!("Deduplication rejected: {e}")),
                     ));
                     let err_resp = HelperResponseFrame::new(HelperResponsePayload::Error {
                         code: "duplicateRequestId".to_string(),
@@ -128,7 +153,34 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
                 }
 
                 // Preflight check
-                if let Err(err) = self.preflight.run_all() {
+                let preflight_result = self.preflight.run_all();
+                let (passed, preflight_reason) = match &preflight_result {
+                    Ok(()) => (true, None),
+                    Err(e) => {
+                        let reason = match e {
+                            PreflightError::Inhibited(..) => HelperReasonCode::InhibitorPresent,
+                            PreflightError::UnsupportedSuspend(..)
+                            | PreflightError::UnsupportedRtc(..) => {
+                                HelperReasonCode::CapabilityUnsupported
+                            }
+                            PreflightError::RtcAlarmBusy(..) => HelperReasonCode::RtcBusy,
+                            PreflightError::ProbeError(..) => HelperReasonCode::PreflightFailed,
+                        };
+                        (false, Some(reason))
+                    }
+                };
+
+                // Emit preflight milestone (diagnostic best-effort)
+                let _ = self.audit.record(&HelperAuditRecord::new_preflight_result(
+                    passed,
+                    &req.request_id,
+                    cred.pid,
+                    cred.uid,
+                    preflight_reason,
+                    preflight_result.as_ref().err().map(|e| e.to_string()),
+                ));
+
+                if let Err(err) = preflight_result {
                     let outcome = match err {
                         PreflightError::Inhibited(desc, who, why) => {
                             SuspendOutcome::BlockedByInhibitor {
@@ -195,7 +247,23 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
                 };
 
                 // Program hardware RTC wakealarm
-                if let Err(e) = self.backend.program_rtc_wake(wake_opt) {
+                let rtc_res = self.backend.program_rtc_wake(wake_opt);
+                let rtc_ok = rtc_res.is_ok();
+                let _ = self.audit.record(&HelperAuditRecord::new_rtc_result(
+                    rtc_ok,
+                    &req.request_id,
+                    Some(req.wake_after_seconds),
+                    cred.pid,
+                    cred.uid,
+                    if rtc_ok {
+                        None
+                    } else {
+                        Some(HelperReasonCode::RtcProgrammingFailed)
+                    },
+                    rtc_res.as_ref().err().map(|e| e.to_string()),
+                ));
+
+                if let Err(e) = rtc_res {
                     let outcome = SuspendOutcome::ExecutionFailed {
                         request_id: req.request_id.clone(),
                         error: format!("RTC programming failed: {e}"),
@@ -214,6 +282,13 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
                 }
 
                 // Trigger host suspend and block until resume
+                let _ = self.audit.record(&HelperAuditRecord::new_suspend_invoked(
+                    &req.request_id,
+                    Some(req.wake_after_seconds),
+                    cred.pid,
+                    cred.uid,
+                ));
+
                 let outcome = match self.backend.trigger_suspend() {
                     Ok(elapsed) => SuspendOutcome::ResumedSuccessfully {
                         request_id: req.request_id.clone(),
@@ -225,7 +300,7 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
                     },
                 };
 
-                // Record completion audit
+                // Record completion audit (diagnostic best-effort: write failure cannot change outcome)
                 let _ = self.audit.record(&HelperAuditRecord::new_completed(
                     &req.request_id,
                     req.wake_after_seconds,

@@ -108,10 +108,11 @@ generic network coverage.
   900 seconds (15 minutes).
 - Phase 01 configuration stores `automaticPolicy` and `agentExecutables`
   under `server.idleSuspend`; the selector defaults to `empty-fleet`.
-- Production diagnostics Phases 02–03 are complete: the server has the closed
+- Production diagnostics Phases 02–04 are complete: the server has the closed
   canonical event model, producer identity, checked sequence/correlation
-  primitives, hardened synchronized JSONL writer, and coordinator lifecycle
-  emission. `diagnose --json` collection remains planned; see the
+  primitives, hardened synchronized JSONL writer, coordinator lifecycle
+  emission, and the in-place helper audit v2 milestones. `diagnose --json`
+  collection remains planned; see the
   [diagnostics plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md).
 - Configured-agent activity Phase 02 provides private PTY evidence and input
   admission; its Phase 03 provides bounded process discovery and retained
