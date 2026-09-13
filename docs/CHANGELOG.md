@@ -1,3 +1,11 @@
+# 2026-09-13
+
+- **Interactive Script and Sandbox Enhancements in HTML Preview.** Added `html-preview-transform.ts` and updated `HtmlPreview.tsx` to enable full interaction with embedded `<script>` tags, forms, and browser APIs inside sandboxed HTML previews while strictly maintaining `null`-origin parent isolation (omitting `allow-same-origin`).
+  - Added `allow-forms`, `allow-popups`, and `allow-pointer-lock` to iframe sandbox attributes (`sandbox="allow-scripts allow-modals allow-forms allow-popups allow-pointer-lock"`), enabling form submissions, button interactions, popups, and pointer-lock APIs.
+  - Injected an in-memory `localStorage` and `sessionStorage` fallback shim to prevent fatal `SecurityError: The document is sandboxed and lacks the 'allow-same-origin' flag` exceptions when user scripts access storage.
+  - Injected an in-frame visual modal alert fallback for `window.alert()` to overcome modern browser suppression of native dialogs in cross-origin/sandboxed iframes.
+- Validation: Vitest unit tests **59/59 passed** across all HTML preview suites (including 4 new tests in `html-preview-transform.test.ts`). Chromium browser tests **14/14 passed** across `consumer-context-menu.browser.tsx` and `script-interaction.browser.tsx` verifying DOM manipulation, interactive counter script, form submission, in-memory localStorage, and in-frame alert modal. TypeScript build (`tsc -p tsconfig.json`) passed cleanly.
+
 # 2026-09-12
 
 - **Phase 03: Explorer Context Menu Integration and Test Coverage.** Added "Preview" action with `Eye` icon to `TreeContextMenu.tsx` for HTML files. Integrated preview handler in `FileTree.tsx` guarded by a 5MB size safety threshold (`node.size < 5 * 1024 * 1024`), setting view mode to `"preview"` before triggering `onFileOpen`. Introduced `HTML_VIEW_MODE_CHANGED_EVENT` (`dam-hopper:html-view-mode-changed`) dispatched by `saveHtmlViewMode` and observed by `HtmlHost.tsx` to ensure mounted tabs immediately switch to preview mode when launched from Explorer.
