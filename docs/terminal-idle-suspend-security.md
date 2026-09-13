@@ -71,6 +71,62 @@ boundaries, emits measurement unavailable/recovered only on availability
 transitions, and does not log scheduled samples or status heartbeats.
 Semantic write failure is warning-only: it cannot alter suspend state/outcome,
 prevent reconciliation, or bypass the existing fail-closed manual audit gate.
+### Phase 04 helper audit v2 and milestone ordering (2026-09-13)
+
+The privileged helper evolves its existing
+`/var/log/dam-hopper/idle-suspend-helper.jsonl` in place. The independent
+`HELPER_AUDIT_SCHEMA_VERSION` is `2`; protocol frames remain version `1` with
+the existing 4-KiB cap and no new wire correlation field. Legacy lines without
+an explicit schema version deserialize as v1, and established
+`acceptedIntent`, `executionCompleted`, and `executionRejected` records retain
+their compatibility fields.
+
+Every newly emitted line is enriched with `auditSchemaVersion`, `timestampMs`,
+canonical boot/producer identity, checked `producerSequence`, safely available
+UUID `correlationId`, numeric peer PID/UID, applicable wake seconds, and
+optional closed `reasonCode`/`outcomeCode` values where applicable. Additive
+record types are `requestRejected`, `capabilityResult`, `preflightResult`,
+`rtcProgrammingResult`, and `suspendInvoked`. Capability probes and
+authentication/frame failures use a null correlation when no validated action
+request ID exists; no ID is invented. Legacy `detail` remains restricted
+source evidence and is not exported to a diagnostic bundle.
+The Rust milestone variants are `RequestRejected`, `CapabilityResult`,
+`PreflightResult`, `RtcProgrammingResult`, and `SuspendInvoked`; their
+`recordType` values use lower camel case. The closed helper reason-code set is
+`peerAuthenticationFailed`, `invalidFrame`, `protocolInvalid`,
+`duplicateRequest`, `inhibitorPresent`, `capabilityUnsupported`, `rtcBusy`,
+`preflightFailed`, `auditWriteFailed`, `rtcProgrammingFailed`,
+`suspendFailed`, `suspendReturned`, and `rejectedFleetActive`. The closed
+outcome-code set is `resumedSuccessfully`, `rejectedFleetActive`,
+`blockedByInhibitor`, `unsupportedCapability`, `executionFailed`, `success`,
+and `failed`.
+
+
+The helper emits milestones at the existing authoritative boundaries:
+authenticate and decode one frame, validate and deduplicate, record capability
+or preflight result, synchronously persist `acceptedIntent`, program and
+verify RTC, record `rtcProgrammingResult`, and, only when RTC succeeds, emit
+`suspendInvoked` immediately before the fixed suspend backend. It then records
+the actual completion outcome.
+Only the accepted-intent write is a pre-action durability gate. Other milestone
+writes are best effort and consume producer sequence values; post-action
+write failure cannot replace the backend result or response. Preflight,
+inhibitor, capability, RTC, peer, protocol, and dedupe failures remain
+fail-closed for forbidden execution steps.
+
+The helper retains at most 10,000 records. On overflow it keeps the newest
+half by writing through an exclusive `create_new` mode-`0600` no-follow
+temporary file, syncing the retained file and parent directory before atomic
+replacement, and removing the temporary file on failure. Pruning is in-place;
+there is no parallel helper log. A helper restart loads a new producer
+instance identity and restarts its sequence at one, so sequence gaps and
+restart boundaries remain diagnosable.
+
+The audit source remains private: no credentials, raw frames, inhibitor
+identity, command arguments, environment, terminal content, socket addresses,
+or unbounded backend/journal text enters typed v2 fields or downstream
+projection. Protocol request IDs remain correlation evidence, not authorization;
+`SO_PEERCRED` and enrolled UID/PID policy remain the authority.
 
 
 ### Phase 01 execution-domain safeguards

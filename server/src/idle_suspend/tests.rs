@@ -20,7 +20,10 @@ use crate::config::{
     MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
     MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
 };
-use crate::idle_suspend::audit::{HelperAudit, HelperAuditRecord, HelperAuditRecordType};
+use crate::idle_suspend::audit::{
+    HelperAudit, HelperAuditRecord, HelperAuditRecordType, HelperOutcomeCode, HelperReasonCode,
+    HELPER_AUDIT_SCHEMA_VERSION,
+};
 use crate::idle_suspend::backend::{FakeActionBackend, SuspendActionBackend, SystemdLogindBackend};
 use crate::idle_suspend::executor::{
     BoxFuture, FakeExecutor, IdleSuspendExecutor, SystemdIdleSuspendExecutor, UnavailableExecutor,
@@ -1245,7 +1248,7 @@ fn test_helper_audit_record_and_fail_closed() {
     let tmp = tempdir().unwrap();
     let audit_file = tmp.path().join("audit.jsonl");
 
-    let audit = HelperAudit::new(&audit_file, 10);
+    let audit = HelperAudit::new(&audit_file, 10).unwrap();
 
     let intent = HelperAuditRecord::new_intent("tx-100", 600, 1234, 1000);
     assert!(audit.record(&intent).is_ok());
@@ -1268,7 +1271,7 @@ fn test_helper_audit_record_and_fail_closed() {
         records[0].record_type,
         HelperAuditRecordType::AcceptedIntent
     );
-    assert_eq!(records[0].request_id, "tx-100");
+    assert_eq!(records[0].request_id.as_deref(), Some("tx-100"));
     assert_eq!(records[0].wake_after_seconds, Some(600));
     assert_eq!(records[0].peer_pid, 1234);
     assert_eq!(
@@ -1285,7 +1288,7 @@ fn test_helper_audit_record_and_fail_closed() {
     }
 
     // Fail-closed test on invalid directory path
-    let bad_audit = HelperAudit::new("/nonexistent_forbidden_dir/audit.log", 10);
+    let bad_audit = HelperAudit::new("/nonexistent_forbidden_dir/audit.log", 10).unwrap();
     let rec = HelperAuditRecord::new_intent("tx-fail", 600, 1, 0);
     assert!(bad_audit.record(&rec).is_err());
 }
@@ -1295,7 +1298,7 @@ fn test_helper_audit_bounded_pruning() {
     let tmp = tempdir().unwrap();
     let audit_file = tmp.path().join("prune_audit.jsonl");
 
-    let audit = HelperAudit::new(&audit_file, 10);
+    let audit = HelperAudit::new(&audit_file, 10).unwrap();
     for i in 0..15 {
         let rec = HelperAuditRecord::new_intent(format!("tx-{i}"), 600, 1000 + i, 1000);
         audit.record(&rec).unwrap();
@@ -1305,7 +1308,7 @@ fn test_helper_audit_bounded_pruning() {
     // Max was 10, when exceeded it pruned to keep half (5) plus subsequent entries
     assert!(records.len() <= 10);
     // Ensure newest record is present
-    assert_eq!(records.last().unwrap().request_id, "tx-14");
+    assert_eq!(records.last().unwrap().request_id.as_deref(), Some("tx-14"));
 }
 
 #[test]
@@ -1356,7 +1359,7 @@ async fn test_helper_server_client_ipc_success_and_audit() {
     let policy = EnrolledPeerPolicy::new_test_permissive();
     let preflight = Arc::new(FakePreflightChecker::new_passing());
     let backend = Arc::new(FakeActionBackend::with_elapsed(590));
-    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100).unwrap());
     let server = Arc::new(HelperServer::new(
         policy,
         preflight,
@@ -1403,19 +1406,19 @@ async fn test_helper_server_client_ipc_success_and_audit() {
 
     // 3. Verify audit log
     let records = audit.read_all_records().unwrap();
-    assert_eq!(records.len(), 2);
-    assert_eq!(
-        records[0].record_type,
-        HelperAuditRecordType::AcceptedIntent
-    );
-    assert_eq!(records[0].request_id, "test-epoch-1");
-    assert_eq!(records[0].wake_after_seconds, Some(600));
-    assert_eq!(
-        records[1].record_type,
-        HelperAuditRecordType::ExecutionCompleted
-    );
-    assert_eq!(records[1].request_id, "test-epoch-1");
-
+    assert_eq!(records.len(), 6);
+    assert_eq!(records[0].record_type, HelperAuditRecordType::CapabilityResult);
+    assert_eq!(records[1].record_type, HelperAuditRecordType::PreflightResult);
+    assert_eq!(records[1].request_id.as_deref(), Some("test-epoch-1"));
+    assert_eq!(records[2].record_type, HelperAuditRecordType::AcceptedIntent);
+    assert_eq!(records[2].request_id.as_deref(), Some("test-epoch-1"));
+    assert_eq!(records[2].wake_after_seconds, Some(600));
+    assert_eq!(records[3].record_type, HelperAuditRecordType::RtcProgrammingResult);
+    assert_eq!(records[3].request_id.as_deref(), Some("test-epoch-1"));
+    assert_eq!(records[4].record_type, HelperAuditRecordType::SuspendInvoked);
+    assert_eq!(records[4].request_id.as_deref(), Some("test-epoch-1"));
+    assert_eq!(records[5].record_type, HelperAuditRecordType::ExecutionCompleted);
+    assert_eq!(records[5].request_id.as_deref(), Some("test-epoch-1"));
     server_handle.abort();
 }
 
@@ -1434,7 +1437,7 @@ async fn test_helper_server_client_inhibitor_and_deduplication() {
     ));
     let preflight = Arc::new(preflight_inner);
     let backend = Arc::new(FakeActionBackend::with_elapsed(300));
-    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100).unwrap());
     let server = Arc::new(HelperServer::new(policy, preflight, backend, audit, 100));
 
     let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
@@ -1500,7 +1503,7 @@ async fn test_helper_server_peer_auth_rejection() {
     let policy = EnrolledPeerPolicy::new_exact(2000, 9999);
     let preflight = Arc::new(FakePreflightChecker::new_passing());
     let backend = Arc::new(FakeActionBackend::new());
-    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100).unwrap());
     let server = Arc::new(HelperServer::new(
         policy,
         preflight,
@@ -1533,8 +1536,9 @@ async fn test_helper_server_peer_auth_rejection() {
     assert_eq!(records.len(), 1);
     assert_eq!(
         records[0].record_type,
-        HelperAuditRecordType::ExecutionRejected
+        HelperAuditRecordType::RequestRejected
     );
+    assert_eq!(records[0].reason_code, Some(crate::idle_suspend::audit::HelperReasonCode::PeerAuthenticationFailed));
 
     server_handle.abort();
 }
@@ -1645,7 +1649,7 @@ async fn test_helper_server_malformed_and_oversized_frame_rejection() {
     let policy = EnrolledPeerPolicy::new_test_permissive();
     let preflight = Arc::new(FakePreflightChecker::new_passing());
     let backend = Arc::new(FakeActionBackend::new());
-    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100).unwrap());
     let server = Arc::new(HelperServer::new(policy, preflight, backend, audit, 100));
 
     let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
@@ -1684,7 +1688,7 @@ async fn test_helper_server_audit_failure_fails_closed() {
     let policy = EnrolledPeerPolicy::new_test_permissive();
     let preflight = Arc::new(FakePreflightChecker::new_passing());
     let backend = Arc::new(FakeActionBackend::new());
-    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100).unwrap());
     let server = Arc::new(HelperServer::new(
         policy,
         preflight,
@@ -1924,7 +1928,7 @@ async fn test_helper_server_indefinite_sleep_execution_and_audit() {
     let policy = EnrolledPeerPolicy::new_test_permissive();
     let preflight = Arc::new(FakePreflightChecker::new_passing());
     let backend = Arc::new(FakeActionBackend::with_elapsed(120));
-    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100).unwrap());
 
     let server = HelperServer::new(
         policy,
@@ -1965,14 +1969,16 @@ async fn test_helper_server_indefinite_sleep_execution_and_audit() {
 
     // Verify audit log explicitly records wake_after_seconds: Some(0) and is_indefinite_sleep() == true
     let records = audit.read_all_records().unwrap();
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[0].record_type, HelperAuditRecordType::AcceptedIntent);
-    assert_eq!(records[0].wake_after_seconds, Some(0));
-    assert!(records[0].is_indefinite_sleep());
-
-    assert_eq!(records[1].record_type, HelperAuditRecordType::ExecutionCompleted);
+    assert_eq!(records.len(), 5);
+    assert_eq!(records[0].record_type, HelperAuditRecordType::PreflightResult);
+    assert_eq!(records[1].record_type, HelperAuditRecordType::AcceptedIntent);
     assert_eq!(records[1].wake_after_seconds, Some(0));
     assert!(records[1].is_indefinite_sleep());
+    assert_eq!(records[2].record_type, HelperAuditRecordType::RtcProgrammingResult);
+    assert_eq!(records[3].record_type, HelperAuditRecordType::SuspendInvoked);
+    assert_eq!(records[4].record_type, HelperAuditRecordType::ExecutionCompleted);
+    assert_eq!(records[4].wake_after_seconds, Some(0));
+    assert!(records[4].is_indefinite_sleep());
 }
 
 #[tokio::test]
@@ -1986,7 +1992,7 @@ async fn test_helper_server_busy_alarm_and_rtc_failure_suppresses_suspend() {
     let mut preflight = FakePreflightChecker::new_passing();
     preflight.rtc_busy = Some("foreign cron wakealarm active".to_string());
     let backend = Arc::new(FakeActionBackend::new());
-    let audit = Arc::new(HelperAudit::new(&audit_path, 100));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100).unwrap());
 
     let server = HelperServer::new(
         policy,
@@ -2030,7 +2036,7 @@ async fn test_helper_server_busy_alarm_and_rtc_failure_suppresses_suspend() {
     let preflight2 = Arc::new(FakePreflightChecker::new_passing());
     let backend2 = Arc::new(FakeActionBackend::new());
     backend2.set_fail_rtc(Some("sysfs write permission denied".to_string()));
-    let audit2 = Arc::new(HelperAudit::new(tmp.path().join("audit2.jsonl"), 100));
+    let audit2 = Arc::new(HelperAudit::new(tmp.path().join("audit2.jsonl"), 100).unwrap());
 
     let server2 = HelperServer::new(
         policy2,
@@ -2066,6 +2072,356 @@ async fn test_helper_server_busy_alarm_and_rtc_failure_suppresses_suspend() {
     assert!(!*backend2.suspend_called.lock().unwrap());
 
     server_handle2.await.unwrap();
+}
+#[test]
+fn test_helper_audit_v2_schema_serialization_and_legacy_v1_compatibility() {
+    // 1. Legacy v1 record deserialization
+    let legacy_json = r#"{"recordType":"acceptedIntent","requestId":"legacy-tx-1","protocolVersion":1,"wakeAfterSeconds":300,"peerPid":100,"peerUid":1000,"timestampEpochMs":1726000000000}"#;
+    let legacy_rec: HelperAuditRecord = serde_json::from_str(legacy_json).unwrap();
+    assert_eq!(legacy_rec.audit_schema_version, 1);
+    assert_eq!(legacy_rec.record_type, HelperAuditRecordType::AcceptedIntent);
+    assert_eq!(legacy_rec.request_id.as_deref(), Some("legacy-tx-1"));
+    assert_eq!(legacy_rec.protocol_version, 1);
+    assert_eq!(legacy_rec.wake_after_seconds, Some(300));
+    assert_eq!(legacy_rec.peer_pid, 100);
+    assert_eq!(legacy_rec.peer_uid, 1000);
+    assert_eq!(legacy_rec.timestamp_epoch_ms, 1726000000000);
+    assert_eq!(legacy_rec.timestamp_ms, None);
+    assert_eq!(legacy_rec.boot_id, None);
+    assert_eq!(legacy_rec.producer_instance_id, None);
+    assert_eq!(legacy_rec.producer_sequence, None);
+    assert_eq!(legacy_rec.correlation_id, None);
+    assert_eq!(legacy_rec.outcome, None);
+    assert_eq!(legacy_rec.outcome_code, None);
+    assert_eq!(legacy_rec.reason_code, None);
+    assert_eq!(legacy_rec.detail, None);
+
+    // 2. Newly emitted v2 record serialization and enriched metadata
+    let tmp = tempdir().unwrap();
+    let audit_file = tmp.path().join("v2_audit.jsonl");
+    let identity = ProducerIdentity::with_ids(
+        "11111111-1111-4111-8111-111111111111".to_string(),
+        "22222222-2222-4222-8222-222222222222".to_string(),
+    )
+    .unwrap();
+    let audit = HelperAudit::with_identity(&audit_file, 100, identity).unwrap();
+
+    // Valid UUID v4 request ID
+    let uuid_req_id = "33333333-3333-4333-8333-333333333333";
+    let intent = HelperAuditRecord::new_intent(uuid_req_id, 600, 10, 1000);
+    audit.record(&intent).unwrap();
+
+    let capability = HelperAuditRecord::new_capability_result(
+        false,
+        10,
+        1000,
+        Some(HelperReasonCode::CapabilityUnsupported),
+        Some("no rtc".to_string()),
+    );
+    audit.record(&capability).unwrap();
+
+    let preflight = HelperAuditRecord::new_preflight_result(
+        true,
+        uuid_req_id,
+        10,
+        1000,
+        None,
+        None,
+    );
+    audit.record(&preflight).unwrap();
+
+    let rtc = HelperAuditRecord::new_rtc_result(
+        true,
+        uuid_req_id,
+        Some(600),
+        10,
+        1000,
+        None,
+        None,
+    );
+    audit.record(&rtc).unwrap();
+
+    let suspend = HelperAuditRecord::new_suspend_invoked(uuid_req_id, Some(600), 10, 1000);
+    audit.record(&suspend).unwrap();
+
+    let completed = HelperAuditRecord::new_completed(
+        uuid_req_id,
+        600,
+        10,
+        1000,
+        SuspendOutcome::ResumedSuccessfully {
+            request_id: uuid_req_id.to_string(),
+            elapsed_seconds: 595,
+        },
+    );
+    audit.record(&completed).unwrap();
+
+    let rejected = HelperAuditRecord::new_request_rejected(
+        10,
+        1000,
+        HelperReasonCode::PeerAuthenticationFailed,
+        None,
+        Some("untrusted peer".to_string()),
+    );
+    audit.record(&rejected).unwrap();
+
+    let records = audit.read_all_records().unwrap();
+    assert_eq!(records.len(), 7);
+
+    for (i, rec) in records.iter().enumerate() {
+        assert_eq!(rec.audit_schema_version, HELPER_AUDIT_SCHEMA_VERSION);
+        assert_eq!(rec.boot_id.as_deref(), Some("11111111-1111-4111-8111-111111111111"));
+        assert_eq!(
+            rec.producer_instance_id.as_deref(),
+            Some("22222222-2222-4222-8222-222222222222")
+        );
+        assert_eq!(rec.producer_sequence, Some((i + 1) as u64));
+        assert!(rec.timestamp_ms.is_some());
+    }
+
+    // Intent record correlation ID matches UUID v4 request ID
+    assert_eq!(records[0].correlation_id.as_deref(), Some(uuid_req_id));
+    // Capability result has null request ID and null correlation ID
+    assert_eq!(records[1].request_id, None);
+    assert_eq!(records[1].correlation_id, None);
+    assert_eq!(records[1].outcome_code, Some(HelperOutcomeCode::Failed));
+    assert_eq!(records[1].reason_code, Some(HelperReasonCode::CapabilityUnsupported));
+
+    // Completed record has ResumedSuccessfully outcome code
+    assert_eq!(records[5].outcome_code, Some(HelperOutcomeCode::ResumedSuccessfully));
+    assert_eq!(records[5].reason_code, None);
+
+    // Request rejected has peerAuthenticationFailed reason code
+    assert_eq!(records[6].reason_code, Some(HelperReasonCode::PeerAuthenticationFailed));
+    assert_eq!(records[6].outcome_code, Some(HelperOutcomeCode::Failed));
+    assert_eq!(records[6].request_id, None);
+}
+
+#[test]
+fn test_helper_audit_sequence_gap_preservation_on_write_failure() {
+    let tmp = tempdir().unwrap();
+    let audit_file = tmp.path().join("gap_audit.jsonl");
+    let identity = ProducerIdentity::with_ids(
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_string(),
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_string(),
+    )
+    .unwrap();
+    let audit = HelperAudit::with_identity(&audit_file, 100, identity).unwrap();
+
+    // First write succeeds: seq = 1
+    let rec1 = HelperAuditRecord::new_intent("tx-1", 300, 1, 1000);
+    audit.record(&rec1).unwrap();
+
+    // Introduce an oversized record failure (> 16 KiB)
+    let oversized_detail = "x".repeat(20 * 1024);
+    let rec_large = HelperAuditRecord::new_rejected("tx-2", 1, 1000, oversized_detail);
+    let err = audit.record(&rec_large);
+    assert!(err.is_err());
+
+    // Next write succeeds: seq = 3 (seq = 2 was consumed and generated an observable gap!)
+    let rec3 = HelperAuditRecord::new_intent("tx-3", 300, 1, 1000);
+    audit.record(&rec3).unwrap();
+
+    let records = audit.read_all_records().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].producer_sequence, Some(1));
+    assert_eq!(records[1].producer_sequence, Some(3));
+}
+#[test]
+fn test_helper_audit_prune_exclusive_creation_and_symlink_safety() {
+    let tmp = tempdir().unwrap();
+    let audit_file = tmp.path().join("secure_prune_audit.jsonl");
+
+    let audit = HelperAudit::new(&audit_file, 10).unwrap();
+    for i in 0..15 {
+        let rec = HelperAuditRecord::new_intent(format!("tx-{i}"), 600, 1000 + i, 1000);
+        audit.record(&rec).unwrap();
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::symlink_metadata(&audit_file).unwrap();
+        assert_eq!(meta.mode() & 0o777, 0o600);
+        assert!(meta.file_type().is_file());
+    }
+
+    let records = audit.read_all_records().unwrap();
+    assert!(records.len() <= 10);
+    assert_eq!(records.last().unwrap().request_id.as_deref(), Some("tx-14"));
+
+    let entries: Vec<_> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with(".audit-prune-"))
+        .collect();
+    assert!(entries.is_empty(), "No prune temporary files must leak");
+}
+
+#[tokio::test]
+async fn test_helper_server_preflight_inhibitor_milestone_and_suppression() {
+    let tmp = tempdir().unwrap();
+    let socket_path = tmp.path().join("helper_inhibitor.sock");
+    let audit_path = tmp.path().join("audit_inhibitor.jsonl");
+
+    let policy = EnrolledPeerPolicy::new_test_permissive();
+    let mut preflight_checker = FakePreflightChecker::new_passing();
+    preflight_checker.active_inhibitor = Some(ActiveInhibitor::new(
+        "system-updater",
+        "upgrade in progress",
+        "block",
+    ));
+    let preflight = Arc::new(preflight_checker);
+    let backend = Arc::new(FakeActionBackend::new());
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100).unwrap());
+    let server = Arc::new(HelperServer::new(
+        policy,
+        preflight,
+        Arc::clone(&backend),
+        Arc::clone(&audit),
+        100,
+    ));
+
+    let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+    let server_handle = {
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let srv = Arc::clone(&server);
+                tokio::spawn(async move {
+                    let cred = PeerCredentials::new(std::process::id(), 1000, 1000);
+                    let _ = srv.handle_connection(&mut stream, cred).await;
+                });
+            }
+        })
+    };
+
+    let executor = SystemdIdleSuspendExecutor::new(&socket_path);
+    let req_id = "44444444-4444-4444-8444-444444444444";
+    let outcome = executor
+        .execute_suspend(SuspendWithRtcWakeRequest {
+            request_id: req_id.to_string(),
+            wake_after_seconds: 300,
+        })
+        .await;
+
+    match outcome {
+        SuspendOutcome::BlockedByInhibitor { request_id, who, why, .. } => {
+            assert_eq!(request_id, req_id);
+            assert_eq!(who.as_deref(), Some("system-updater"));
+            assert_eq!(why.as_deref(), Some("upgrade in progress"));
+        }
+        other => panic!("Expected BlockedByInhibitor, got: {other:?}"),
+    }
+
+    // Crucial invariants:
+    // 1. Neither RTC nor suspend was invoked
+    assert!(backend.is_not_called());
+    assert!(!*backend.suspend_called.lock().unwrap());
+
+    // 2. Audit records: exactly PreflightResult and ExecutionCompleted; AcceptedIntent was NEVER written!
+    let records = audit.read_all_records().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].record_type, HelperAuditRecordType::PreflightResult);
+    assert_eq!(records[0].reason_code, Some(HelperReasonCode::InhibitorPresent));
+    assert_eq!(records[0].outcome_code, Some(HelperOutcomeCode::Failed));
+    assert_eq!(records[0].request_id.as_deref(), Some(req_id));
+
+    assert_eq!(records[1].record_type, HelperAuditRecordType::ExecutionCompleted);
+    assert_eq!(records[1].reason_code, Some(HelperReasonCode::InhibitorPresent));
+    assert_eq!(records[1].outcome_code, Some(HelperOutcomeCode::BlockedByInhibitor));
+    assert_eq!(records[1].request_id.as_deref(), Some(req_id));
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_helper_server_dedupe_and_auth_milestones() {
+    let tmp = tempdir().unwrap();
+    let socket_path = tmp.path().join("helper_dedupe.sock");
+    let audit_path = tmp.path().join("audit_dedupe.jsonl");
+
+    let policy = EnrolledPeerPolicy::new_exact(1000, 5555);
+    let preflight = Arc::new(FakePreflightChecker::new_passing());
+    let backend = Arc::new(FakeActionBackend::with_elapsed(100));
+    let audit = Arc::new(HelperAudit::new(&audit_path, 100).unwrap());
+    let server = Arc::new(HelperServer::new(
+        policy,
+        preflight,
+        Arc::clone(&backend),
+        Arc::clone(&audit),
+        10,
+    ));
+
+    let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+    let server_handle = {
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let srv = Arc::clone(&server);
+                tokio::spawn(async move {
+                    // Matching credentials: PID 5555, UID 1000
+                    let cred = PeerCredentials::new(5555, 1000, 1000);
+                    let _ = srv.handle_connection(&mut stream, cred).await;
+                });
+            }
+        })
+    };
+
+    let executor = SystemdIdleSuspendExecutor::new(&socket_path);
+    let req_id = "55555555-5555-4555-8555-555555555555";
+
+    // First call succeeds
+    let outcome = executor
+        .execute_suspend(SuspendWithRtcWakeRequest {
+            request_id: req_id.to_string(),
+            wake_after_seconds: 300,
+        })
+        .await;
+    assert!(matches!(outcome, SuspendOutcome::ResumedSuccessfully { .. }));
+
+    // Second call with same request_id fails with duplicate
+    let outcome2 = executor
+        .execute_suspend(SuspendWithRtcWakeRequest {
+            request_id: req_id.to_string(),
+            wake_after_seconds: 300,
+        })
+        .await;
+    assert!(matches!(outcome2, SuspendOutcome::ExecutionFailed { .. }));
+
+    let records = audit.read_all_records().unwrap();
+    // Records from first execution: PreflightResult, AcceptedIntent, RtcProgrammingResult, SuspendInvoked, ExecutionCompleted (5)
+    // Plus deduplication rejection: RequestRejected (1)
+    assert_eq!(records.len(), 6);
+    let dedupe_rec = &records[5];
+    assert_eq!(dedupe_rec.record_type, HelperAuditRecordType::RequestRejected);
+    assert_eq!(dedupe_rec.reason_code, Some(HelperReasonCode::DuplicateRequest));
+    assert_eq!(dedupe_rec.request_id.as_deref(), Some(req_id));
+
+    server_handle.abort();
+}
+
+#[test]
+fn test_helper_protocol_v1_frame_compatibility() {
+    assert_eq!(HELPER_PROTOCOL_VERSION, 1);
+    assert_eq!(crate::idle_suspend::protocol::MAX_HELPER_FRAME_BYTES, 4096);
+
+    let req = SuspendWithRtcWakeRequest {
+        request_id: "66666666-6666-4666-8666-666666666666".to_string(),
+        wake_after_seconds: 300,
+    };
+    let frame = crate::idle_suspend::protocol::HelperRequestFrame::new_suspend(req).unwrap();
+    let encoded = encode_frame(&frame).unwrap();
+    assert!(encoded.len() <= 4096);
+    let decoded: crate::idle_suspend::protocol::HelperRequestFrame = decode_frame(&encoded).unwrap();
+    assert_eq!(decoded.version, 1);
+    match decoded.payload {
+        crate::idle_suspend::protocol::HelperRequestPayload::SuspendWithRtcWake(r) => {
+            assert_eq!(r.request_id, "66666666-6666-4666-8666-666666666666");
+            assert_eq!(r.wake_after_seconds, 300);
+        }
+        _ => panic!("Payload variant mismatch"),
+    }
 }
 
 #[tokio::test]

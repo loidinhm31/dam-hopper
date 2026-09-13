@@ -657,6 +657,36 @@ audit-intent failures return a typed failure and do not invoke suspend.
 The helper records `wakeAfterSeconds: 0` in both intent and completion audit
 records. These details are internal to the enrolled helper and are not exposed
 as a browser-selectable path, device, command, suspend mode, or absolute time.
+#### Phase 04 helper audit v2 (internal diagnostics)
+
+The helper keeps one audit file at
+`/var/log/dam-hopper/idle-suspend-helper.jsonl`; this is not a REST, WebSocket,
+or browser payload. `HELPER_AUDIT_SCHEMA_VERSION` is independently `2`.
+Existing `acceptedIntent`, `executionCompleted`, and `executionRejected`
+records retain their established fields, while legacy lines without an
+explicit version remain readable as v1.
+
+Newly emitted lines carry `auditSchemaVersion`, `timestampMs`, boot and
+producer identity, checked `producerSequence`, safely available UUID
+`correlationId`, numeric peer PID/UID, applicable wake seconds, and closed
+`reasonCode`/`outcomeCode` values. Additive record types are
+`requestRejected`, `capabilityResult`, `preflightResult`,
+`rtcProgrammingResult`, and `suspendInvoked`. Capability probes and
+authentication/frame failures have null correlation when no validated action
+request ID exists; no request ID is fabricated. Restricted legacy `detail` is
+source-only and is not copied into diagnostic bundles.
+
+For an accepted request whose RTC programming succeeds, the ordered evidence is
+preflight, synchronized `acceptedIntent`, RTC programming result,
+`suspendInvoked`, and actual `executionCompleted` outcome. A failed RTC
+programming path has the RTC result and completion but no suspend invocation.
+Only `acceptedIntent` sync failure blocks RTC or suspend; later milestone write
+failures are evidence gaps and cannot replace the backend result. The helper
+audit is capped at 10,000 records. Overflow
+pruning retains the newest half via an exclusive mode-`0600` no-follow
+temporary file, syncs file and parent directory before atomic replacement, and
+removes the temporary file on failure.
+
 
 ### Deferred remediation backlog
 
