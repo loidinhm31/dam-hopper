@@ -435,6 +435,14 @@ retain `wakeAfterSeconds: 0`; the helper audit remains mode `0600` and bounded.
 The server audit's recent-read APIs are capped; its append retention and
 rotation are operator-managed.
 
+The Phase 02 canonical server event stream is separate from both audit files.
+The isolated writer targets
+`/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`
+with mode `0600`, no-follow append/sync semantics, and does not add a systemd
+unit or `StateDirectory=` directive. Its parent is expected to be provisioned
+by the API runtime path owner; coordinator emission is a Phase 03 integration
+step, not an API/helper startup gate.
+
 Do not qualify indefinite sleep from an automated test: repository tests use
 temporary files and fake backends and never invoke `systemctl`, logind, or a
 real RTC. A production indefinite canary requires explicit operations approval
