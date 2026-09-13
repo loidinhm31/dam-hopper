@@ -11,6 +11,7 @@ pub mod audit;
 pub mod backend;
 pub mod helper_client;
 pub mod helper_server;
+pub mod event;
 
 pub(crate) mod activity;
 
@@ -55,3 +56,14 @@ pub use audit::{HelperAudit, HelperAuditError, HelperAuditRecord, HelperAuditRec
 pub use backend::{FakeActionBackend, SuspendActionBackend, SystemdLogindBackend};
 pub use helper_client::HelperClient;
 pub use helper_server::HelperServer;
+pub use event::{
+    validate_canonical_uuid, validate_canonical_uuid_v4, ActionCorrelationId, ArmCancelledDataV1,
+    ArmStartedDataV1, AttemptStartedDataV1, AutomaticPolicyV1, CoordinatorStartedDataV1,
+    EventValidationError, EventWriteError, FinalCheckCompletedDataV1, FinalCheckStartedDataV1,
+    HandoffClaimAcceptedDataV1, HandoffClaimRejectedDataV1, HelperOutcomeReceivedDataV1,
+    HelperRequestDispatchedDataV1, IdleSuspendEventDataV1, IdleSuspendEventEnvelopeV1,
+    IdleSuspendEventWriter, IdleSuspendModeV1, MeasurementRecoveredDataV1,
+    MeasurementUnavailableDataV1, ProducerIdentity, ReconciliationCompletedDataV1,
+    ServerIdleSuspendEventTypeV1, ServerIdleSuspendReasonCodeV1, TerminalRejectedDataV1,
+    DEFAULT_IDLE_SUSPEND_EVENTS_PATH, IDLE_SUSPEND_EVENT_SCHEMA_VERSION, MAX_EVENT_LINE_BYTES,
+};

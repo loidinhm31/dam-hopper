@@ -108,6 +108,33 @@ unsupported capabilities, and inhibitors produce no suspend call. Tests use
 `tempfile` RTC/audit paths and fake preflight/backends; never use real power
 management or host RTC state.
 
+### Canonical idle-suspend event writer (Phase 02)
+
+Keep semantic events separate from the legacy untagged `ServerAuditRecord`.
+Use the closed `IdleSuspendEventEnvelopeV1`/payload model with camelCase,
+`deny_unknown_fields`, explicit event/data pairing, and event-specific reason
+and timing validation. Do not add free-form maps, operational text, or a third
+legacy-audit variant.
+
+`ProducerIdentity` is the only producer identity source: read the canonical
+boot UUID, generate one UUID v4 process instance, and never substitute a PID,
+hostname, epoch, revision, or timestamp. `ActionCorrelationId` accepts only a
+canonical lowercase UUID v4 and must remain valid for helper protocol-v1
+request IDs.
+
+Reserve `producerSequence` under the writer's one `parking_lot::Mutex` only
+after validation. Start at one, use checked nonwrapping increments, and never
+reuse a sequence after serialization/open/write/sync failure; overflow
+permanently disables emission. Keep formatting and file I/O inside the same
+critical section so records and gaps retain producer order.
+
+The writer must refuse an unsafe parent or target, append one bounded JSONL
+line to a regular mode-`0600` file with `O_NOFOLLOW`, and call `sync_data()`
+before success. It never creates, repairs, chmods, rotates, or truncates the
+parent or existing target. Tests inject identity/path and use temporary files;
+they do not mutate process-wide environment or production audit paths. Phase
+03 owns coordinator lifecycle integration.
+
 Keep the Phase 01 policy/configuration contract separate from runtime
 observation:
 

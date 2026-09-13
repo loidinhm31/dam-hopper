@@ -9,6 +9,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - This is bounded qualification only; no stable production publication or external trust verification claimed. External trust-root/inventory integration, workflow migration/deep-validator wiring, Fedora parity, numeric JSON lexical canonicalization, and parent diagnostics Phase 02 status were explicitly outside this disposition and remain unresolved. Shallow/deep, trust-root, and workflow caveats remain documented.
 - [Reconciliation plan](../plans/260912-1221-idle-suspend-runtime-identity-reconciliation/plan.md) · [Phase 03 plan](../plans/260912-1221-idle-suspend-runtime-identity-reconciliation/phase-03-qualify-and-review-reconciliation.md).
 
+### Production idle-suspend diagnostics (2026-09-12–13)
+
+- **Plan status: IN PROGRESS (Phase 02 complete; 2/7 phases; 28/110h).** Phase 02 establishes the producer-owned canonical event schema, boot/producer identity, checked sequence and UUID correlation foundation for later coordinator and helper instrumentation.
+- **Phase 02 — DONE (2026-09-13; 100%)**: Delivered closed event/data types, a bounded mode-0600 no-follow synced JSONL writer, restart-safe producer identity, sequence-gap semantics, and protocol-compatible action correlation validation.
+- Validation: canonical event tests **11/11**, server-audit compatibility **1/1**, full `idle_suspend::` module **143/143**; code review approved **9.5/10** with no critical findings. [Plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md) · [Phase 02](../plans/260912-0027-production-idle-suspend-diagnostics/phase-02-canonical-event-foundation.md) · [Test report](../plans/reports/tester-260913-1637-phase02-canonical-event-foundation.md) · [Code review](../plans/reports/code-review-260913-1639-phase02-event-writer.md).
+
 ### Configured-agent activity idle suspend (2026-09-11)
 
 - **Phases 01–08 — DONE (2026-09-11).** Policy/configuration, PTY evidence,

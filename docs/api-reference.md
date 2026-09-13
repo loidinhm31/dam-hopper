@@ -222,6 +222,12 @@ semantic selection and offer manual image input instead.
 
 Protected local export for backend diagnostics. The endpoint reads from the local JSONL store and does not upload data anywhere. The UI entry point is Settings > Maintenance > Export Diagnostics.
 
+This browser-facing export is separate from the production idle-suspend
+diagnostics contract. Phase 02's canonical server event writer is an internal
+producer foundation; it adds no REST/WebSocket route and is not included in
+this export. Coordinator emission and the one-shot `diagnose --json` collector
+remain planned in the [diagnostics plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md).
+
 Request and response payloads use camelCase on the wire. The request accepts `frontend` and also the legacy `frontendSnapshot` alias.
 
 **POST /api/diagnostics/export**
