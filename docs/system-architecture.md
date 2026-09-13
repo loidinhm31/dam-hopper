@@ -346,15 +346,15 @@ The `agent-activity` policy is an activity heuristic, not semantic proof that an
 - **Kernel handoff race**: An activity change occurring in the kernel immediately after final comparison can race handoff. The implementation fences server-admitted input, creation, and restarts, but does not freeze processes or guarantee atomic absence of work.
 - **Host qualification requirement**: Process/socket permissions, kernel features, namespace topology, or latency exceeding the 1-second budget make a host permanently unavailable for this mode. There is no fallback to unverified interface metrics.
 
-### Production idle-suspend diagnostics (Phases 01–05 implemented; Phases 06–07 planned)
+### Production idle-suspend diagnostics (Phases 01–06 implemented; Phase 07 planned)
 
 Status: Phase 01 architecture/schema/security contract approved (third
 reviewer: 10/10 with no findings). Phase 02 canonical event foundation, Phase
 03 coordinator integration, Phase 04 helper audit milestone enrichment, and the
 Phase 05 pure bundle/correlation engine were implemented on 2026-09-13.
-Phase 05 verification passed 16/16 diagnostics unit/adversarial tests and
-186/186 focused idle-suspend tests (202 total); code review approved 9.5/10.
-Phase 06 host/API/command/output adapters and Phase 07 rollout remain planned.
+Phase 06 now implements the role-aware host/API/command/probe adapters, secure
+atomic output, and `dam-hopper diagnose --json` dispatch. Phase 07 rollout
+remains planned.
 
 The canonical producer foundation is shipped in
 `server/src/idle_suspend/event.rs` and re-exported by `idle_suspend::mod`.
@@ -626,7 +626,7 @@ fixed backend call, captures the actual outcome, and attempts completion. A
 post-action failure cannot alter the outcome; it is an evidence gap. No
 parallel helper log is permitted.
 
-#### Fixed source, output, and completeness model (Phase 06 host integration contract)
+#### Fixed source, output, and completeness model (Phase 06 implemented)
 
 All adapters use fixed allowlisted authorities; custom or alternate layouts are
 `unsupported`, not guessed. The API service has `HOME=/var/lib/dam-hopper` and
@@ -643,7 +643,7 @@ owns the root log through `LogsDirectory=dam-hopper`.
 | Helper audit                                               | `/var/log/dam-hopper/idle-suspend-helper.jsonl`                                               | historical; required attempt for root `Server`/`Both`; non-root is `permissionDenied`          |
 | API/helper journal and lifecycle                           | fixed `dam-hopper-api.service` and `dam-hopper-idle-suspend-helper.service`                   | historical; required attempt for `Server`/`Both`; unreadable evidence makes the bundle partial |
 | Protected local idle status                                | fixed loopback API and token lookup                                                           | latest; best effort only                                                                       |
-| Proc/netlink, RTC, inhibitor, socket/PID/enrollment probes | fixed read-only host adapters                                                                 | nonHistorical; best effort only                                                                |
+| RTC, power-state, inhibitor, and enrolled PID/executable probes            | fixed read-only host adapters                                                                 | nonHistorical; best effort only                                                                |
 | Role                                                       | `/etc/dam-hopper/host.toml` via `Layout::host_config_path()`                                  | `Server`/`Both` apply idle sources; `Web` is `notApplicable`                                   |
 | Root bundle                                                | `/var/lib/dam-hopper-manager/diagnostics/dam-hopper-diagnose-<generatedAtMs>-<bundleId>.json` | trusted root output                                                                            |
 | Non-root bundle                                            | `$XDG_STATE_HOME/dam-hopper/diagnostics`, else `$HOME/.local/state/dam-hopper/diagnostics`    | valid partial output; no `/tmp` fallback                                                       |
@@ -704,7 +704,7 @@ objects created by that call, in reverse order.
 Installed ownership and creation are part of the implemented runtime contract
 only for the fixed API paths below. Phase 05 readers/projectors only inspect
 producer files and never provision, repair, or lazily create them; Phase 06
-owns host/API/command/output adapters around this pure core.
+implements the host/API/command/output adapters around this pure core.
 
 | Path class                                    | Required owner/group and creation rule                                                                                                                                                                 |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -826,12 +826,12 @@ text.
 
 The completed Phase 05 core under `linux_release/diagnostics/` accepts typed
 source envelopes and fixed file paths for its four read-only JSONL adapters.
-It has no resident process, UI, telemetry, alerting, upload, AI credential,
-external egress, shell, operator-selected path/source/command, or public
-tuning flag. Phase 06 supplies the role, EUID, fixed command, local API,
-current-probe, trusted-output, and host descriptor adapters around this core.
-Source failure does not stop independent pure assembly; only a future unsafe
-output operation is fatal.
+Phase 06 now composes those adapters with role, EUID, fixed-command, local-API,
+current-probe, trusted-output, and host descriptor boundaries. It has no
+resident process, UI, telemetry, alerting, upload, AI credential, external
+egress, shell, operator-selected path/source/command, or public tuning flag.
+Source failure does not stop independent collection or pure assembly; an
+unsafe output operation is fatal.
 
 Roll-forward is additive: protocol v1 and existing audit files remain readable,
 no systemd unit or observer is added, and a new collector is the only component
@@ -852,10 +852,10 @@ response returns the same UUID used as `correlationId` and helper protocol-v1
 `requestId`; it never creates a `manual-<uuid>` alias. Older readers may ignore
 additive helper-v2 milestones while retaining existing action names and fields.
 Rollback stops new emission and collector use but never deletes evidence.
-Phase 03 coordinator emission, Phase 04 helper milestones, and the Phase 05
-pure collector implementation are complete. Phase 06 host integration and
-Phase 07 rollout remain pending. Architecture, security, and release-owner
-approval is complete for the frozen Phase 05 interfaces.
+Phase 03 coordinator emission, Phase 04 helper milestones, the Phase 05 pure
+collector, and Phase 06 host integration are complete. Phase 07 rollout
+remains pending. Architecture, security, and release-owner approval is
+complete for the frozen interfaces.
 
 #### Phase 01 review disposition
 

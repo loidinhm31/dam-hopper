@@ -12,8 +12,8 @@
 - Date: 2026-09-12
 - Description: expose `dam-hopper diagnose --json`; add fixed role-aware systemd/journal/local-API/current-probe adapters; safely write the bundle and map complete/partial/fatal exits.
 - Priority: P1
-- Implementation status: pending
-- Review status: Linux security/CLI/output review required
+- Implementation status: completed (2026-09-14)
+- Review status: reviewed (Phase 06 review approved)
 - Effort: 16h
 - Ownership: Linux diagnostics owner edits CLI/privilege/layout and creates host adapters/output. One binary-dispatch owner handles stdout/exit behavior.
 - Dependency: Phase 05 collector interfaces and bundle schema approved.
@@ -81,12 +81,12 @@
 
 ## Todo list
 
-- [ ] Add exact CLI grammar and privilege exception.
-- [ ] Add fixed layout/role/EUID resolution.
-- [ ] Add closed systemd/journal, API, and host-probe adapters.
-- [ ] Add atomic root/non-root output writer.
-- [ ] Wire path-only stdout and exit `0/2/1`.
-- [ ] Complete fake-backed fault/security review.
+- [x] Add exact CLI grammar and privilege exception.
+- [x] Add fixed layout/role/EUID resolution.
+- [x] Add closed systemd/journal, API, and host-probe adapters.
+- [x] Add atomic root/non-root output writer.
+- [x] Wire path-only stdout and exit `0/2/1`.
+- [x] Complete fake-backed fault/security review.
 
 ## Success Criteria
 

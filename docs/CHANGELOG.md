@@ -1,4 +1,5 @@
 # 2026-09-13
+- **Production idle-suspend diagnostics — Phase 06 Linux CLI integration complete (2026-09-13).** Added the exact `dam-hopper diagnose --json` grammar, role-aware fixed host/API/command/probe adapters, non-root permission boundaries, atomic root/user output (`0700`/`0600`), path-only stdout, and complete/partial/fatal exit mapping (`0`/`2`/`1`). Phase 07 rollout remains planned.
 - **Production idle-suspend diagnostics — Phase 05 bundle/correlation engine complete (2026-09-13).** Delivered the pure bundle-v1 model, bounded no-follow JSONL readers, strict privacy projection, source completeness/status, exact UUID correlation, gap/restart/orphan analysis, and deterministic 8-MiB whole-record reduction.
 - Validation passed: **202/202 tests** (**16 diagnostics + 186 `idle_suspend`**); Cycle 2 code review approved **9.5/10**; canonical advisor lifecycle completed. [Phase 05 plan](../plans/260912-0027-production-idle-suspend-diagnostics/phase-05-bundle-correlation-engine.md) · [Code review](../plans/reports/code-review-260913-2327-phase-05-bundle-correlation-engine-cycle2.md).
 

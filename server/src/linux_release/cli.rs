@@ -51,6 +51,9 @@ pub enum Commands {
     /// Print detailed version information.
     Version,
 
+    /// Collect local idle-suspend evidence into a redacted diagnostic bundle.
+    Diagnose(DiagnoseArgs),
+
     /// Provision fixed API runtime paths for the installed API unit (internal).
     #[command(name = "provision-api-runtime", hide = true)]
     ProvisionApiRuntime,
@@ -186,4 +189,12 @@ pub struct ValidateArgs {
     /// Optional path to release archive tar.gz to validate against manifest inventory.
     #[arg(long)]
     pub archive: Option<PathBuf>,
+}
+
+/// Arguments for `diagnose` subcommand.
+#[derive(Debug, Args, Clone, PartialEq, Eq)]
+pub struct DiagnoseArgs {
+    /// Emit the diagnostic bundle as JSON. Required.
+    #[arg(long, required = true, action = clap::ArgAction::SetTrue)]
+    pub json: bool,
 }
