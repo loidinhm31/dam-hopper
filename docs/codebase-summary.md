@@ -85,15 +85,28 @@ The snapshot is a compaction aid, not a release artifact; generated
   fencing, retryable close-race classification, and transactional baselines.
 - **Configured-agent automatic admission, status UI, and controlled rollout (Phases 05–08)**: dedicated transactional sampler, manager-locked revision/root/output/lifecycle gates, bounded status warnings, opaque final tickets, epoch latching, recovery sampling, strict client decoding, aggregate warning presentation, worker join, integrated qualification, controlled rollout stages, and operator rollback runbooks; see [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) and [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md).
 
-- **Linux release manager**: `server/src/linux_release/` validates Manifest v1,
-  role projections, transaction-scoped units, helper policy, and
-  `systemd-analyze verify`.
+- **Linux release manager**: `server/src/linux_release/` validates Manifest v2,
+  keeps persisted manager state at v1, enforces role projections and
+  transaction-scoped units, and owns helper/API lifecycle, health, rollback,
+  recovery, and `systemd-analyze verify`.
+  - The finalized API unit's exact non-root `User=`/`Group=` pair is the sole
+    runtime identity authority. `provision-api-runtime` creates or validates
+    only the fixed API state/audit paths with no-follow, exact metadata, and
+    refusal-based no-repair semantics before every API start/restart.
   - Server-role `dam-hopper start` starts helper before API; helper failures warn
     and fall back to API availability.
   - Managed stop/rollback/recovery include helper; `status` reports API, helper,
     web, and recovery evidence.
-  - Production CLI Phase 04 proof: staging 9/9, unit policy 10/10, boundary
-    14/14, and JSON status includes helper as `role: "server"`.
+  - The release publisher gate requires fresh, complete manager-first v2
+    capability evidence, production environment, release-bound forward and
+    rollback manifest/archive bytes, a semantically older regenerated rollback,
+    and prohibits manager downgrade while v2 assets are active. Target
+    inventory evidence remains an explicit release-owner input; the checker
+    does not embed a GitHub DSSE/certificate trust root and stable publication
+    is held when evidence is absent.
+  - Focused release proof is recorded by the commands in
+    [Linux Release Manifest](./linux-release-manifest.md); historical phase
+    totals are intentionally not duplicated here.
 - **systemd PID enrollment**: API units publish/remove `$MAINPID` at
   `/run/dam-hopper/server.pid`; helper uses 0775 runtime/socket directories and
   0660 group-owned socket access.
