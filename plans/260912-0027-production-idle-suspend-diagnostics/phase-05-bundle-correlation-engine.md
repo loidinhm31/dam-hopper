@@ -11,11 +11,21 @@
 - Date: 2026-09-12
 - Description: build the pure bundle-v1 model, read-only bounded JSONL adapters, strict privacy projection, per-source completeness, deterministic correlation/gap analysis, and final-size reduction.
 - Priority: P1
-- Implementation status: pending
-- Review status: schema/privacy/correlation review required
+- **Implementation status:** DONE (2026-09-13; 100%; Cycle 2 verified)
+- **Review status:** reviewed **9.5/10** in Cycle 2; approved with one minor unused `push_error` warning noted.
 - Effort: 20h
 - Ownership: diagnostics-domain owner creates `linux_release/diagnostics` pure modules. Phase 06 owns OS/API/command/output adapters after these interfaces freeze.
 - Dependency: Phases 01–04 schemas and record fixtures approved.
+
+## Completion record
+
+- **Completed:** 2026-09-13.
+- **Status:** DONE (100%; 6/6 todo items).
+- **Progress:** 100% (6/6 todo items).
+- **Review:** Reviewed **9.5/10** in Cycle 2.
+- **Tests passed:** **202/202** (**16 diagnostics + 186 `idle_suspend`**).
+- **Advisor lifecycle:** Canonical advisor lifecycle completed.
+- **Evidence:** [Cycle 2 code review](../reports/code-review-260913-2327-phase-05-bundle-correlation-engine-cycle2.md).
 
 ## Key Insights
 
@@ -76,14 +86,14 @@
 10. Add fixtures for empty vs missing, malformed middle/tail, unknown versions/enums, permission error injection, >10,000 records, 60-minute edge, 16-KiB line, rotated/coverage-unknown, drops, gaps, restarts, orphan intent, legacy IDs, secrets, and 8-MiB boundary.
 11. Run focused module tests: `cargo test -p dam-hopper-server linux_release::diagnostics`; review emitted fixture manually for schema/privacy and deterministic ordering.
 
-## Todo list
+## Todo list — 100% complete (6/6)
 
-- [ ] Add bundle/source/status/bounds models.
-- [ ] Add four fixed bounded read-only JSONL adapters.
-- [ ] Add explicit redaction/projectors.
-- [ ] Add exact correlation/gap/restart engine.
-- [ ] Add deterministic final-cap reduction.
-- [ ] Complete fixture-driven schema/privacy review.
+- [x] Add bundle/source/status/bounds models.
+- [x] Add four fixed bounded read-only JSONL adapters.
+- [x] Add explicit redaction/projectors.
+- [x] Add exact correlation/gap/restart engine.
+- [x] Add deterministic final-cap reduction.
+- [x] Complete fixture-driven schema/privacy review.
 
 ## Success Criteria
 
@@ -111,8 +121,14 @@
 
 ## Next steps
 
-Phase 06 supplies role, EUID, fixed command, local API, current probe, and atomic output adapters around this pure core; it cannot weaken source statuses or redaction.
-
+1. Cycle 2 remediation completed and verified:
+   - Replaced naive re-serialization in `reduce_to_cap` with batch/counting excess reduction and single final recomputation.
+   - Wrapped reader in `.take(MAX_FILE_SCAN_BYTES)` and bounded line discard using zero-allocation buffer.
+   - Fixed orphan classification in `correlation.rs` to treat all groups lacking `attemptStarted` as orphans.
+   - Implemented duplicate sequence detection (`gap_size: 0`) and restart boundary `boot_id` lookup.
+   - Removed `is_web` short-circuit in `evaluate_historical_completeness` so infrastructure sources are evaluated.
+   - Added 16 unit & adversarial tests in `tests.rs` (16/16 passing).
+2. Phase 06 supplies role, EUID, fixed command, local API, current probe, and atomic output adapters around this pure core.
 ## Unresolved questions
 
 None. New source types or fields require Phase 01 contract review.

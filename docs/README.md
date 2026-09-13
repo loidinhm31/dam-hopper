@@ -108,11 +108,13 @@ generic network coverage.
   900 seconds (15 minutes).
 - Phase 01 configuration stores `automaticPolicy` and `agentExecutables`
   under `server.idleSuspend`; the selector defaults to `empty-fleet`.
-- Production diagnostics Phases 02–04 are complete: the server has the closed
-  canonical event model, producer identity, checked sequence/correlation
-  primitives, hardened synchronized JSONL writer, coordinator lifecycle
-  emission, and the in-place helper audit v2 milestones. `diagnose --json`
-  collection remains planned; see the
+- Production diagnostics Phase 05 is complete: the pure bundle-v1 model,
+  source envelopes, four bounded compatibility readers, privacy projection,
+  exact UUID correlation/gap engine, and whole-record 8-MiB cap reducer are
+  implemented under `server/src/linux_release/diagnostics/`. Focused
+  diagnostics tests pass 16/16; readers verify source bytes, length, and
+  permissions remain unchanged. Phase 06 host/API/command/output integration
+  and Phase 07 rollout remain planned; see the
   [diagnostics plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md).
 - Configured-agent activity Phase 02 provides private PTY evidence and input
   admission; its Phase 03 provides bounded process discovery and retained
