@@ -1,3 +1,8 @@
+# 2026-09-13
+
+- **Production idle-suspend diagnostics — Phase 02 canonical event foundation complete (2026-09-13).** Added the closed canonical event model, boot/producer identity, checked sequence and UUID correlation primitives, plus a bounded mode-0600 no-follow synced JSONL writer. Existing untagged server-audit behavior remains unchanged.
+- Validation passed: canonical event tests **11/11**, server-audit compatibility **1/1**, and full `idle_suspend::` module **143/143**; code review approved **9.5/10** with no critical findings. The parent diagnostics plan remains in progress with Phases 03–07 pending. [Phase 02 test report](../plans/reports/tester-260913-1637-phase02-canonical-event-foundation.md) · [Code review](../plans/reports/code-review-260913-1639-phase02-event-writer.md).
+
 # 2026-09-11
 
 - **Configured-agent activity idle suspend — Phase 08 documentation, runbooks, and controlled rollout complete (2026-09-11).** Integrated operator documentation, operations runbooks, controlled rollout stages, and rollback procedures across all system guides.

@@ -3012,3 +3012,797 @@ async fn test_coordinator_agent_activity_shutdown() {
     // Shutdown must complete cleanly
     coordinator.shutdown().await;
 }
+
+use crate::idle_suspend::event::{
+    validate_canonical_uuid, validate_canonical_uuid_v4, ActionCorrelationId, ArmCancelledDataV1,
+    ArmStartedDataV1, AttemptStartedDataV1, AutomaticPolicyV1, CoordinatorStartedDataV1,
+    EventValidationError, EventWriteError, FinalCheckCompletedDataV1, FinalCheckStartedDataV1,
+    HandoffClaimAcceptedDataV1, HandoffClaimRejectedDataV1, HelperOutcomeReceivedDataV1,
+    HelperRequestDispatchedDataV1, IdleSuspendEventDataV1, IdleSuspendEventEnvelopeV1,
+    IdleSuspendEventWriter, IdleSuspendModeV1, MeasurementRecoveredDataV1,
+    MeasurementUnavailableDataV1, ProducerIdentity, ReconciliationCompletedDataV1,
+    ServerIdleSuspendEventTypeV1, ServerIdleSuspendReasonCodeV1, TerminalRejectedDataV1,
+    DEFAULT_IDLE_SUSPEND_EVENTS_PATH, IDLE_SUSPEND_EVENT_SCHEMA_VERSION, MAX_EVENT_LINE_BYTES,
+};
+
+fn make_test_identity() -> ProducerIdentity {
+    ProducerIdentity::with_ids(
+        "8f03c004-bb50-4822-9218-d75b34091a92".to_string(),
+        "73d4a675-9c8f-4cb1-807e-97629fa2a5e4".to_string(),
+    )
+    .unwrap()
+}
+
+fn make_test_correlation() -> ActionCorrelationId {
+    ActionCorrelationId::parse("e1f1816e-5cf6-4448-9c16-cf4c9354013a").unwrap()
+}
+
+#[test]
+fn event_serde_roundtrip_all_14_events() {
+    let identity = make_test_identity();
+    let corr = make_test_correlation();
+    assert_eq!(MAX_EVENT_LINE_BYTES, 16384);
+    assert_eq!(
+        DEFAULT_IDLE_SUSPEND_EVENTS_PATH,
+        "/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl"
+    );
+
+
+    let test_cases: Vec<(
+        ServerIdleSuspendEventTypeV1,
+        Option<String>,
+        Option<IdleSuspendModeV1>,
+        IdleSuspendEventDataV1,
+    )> = vec![
+        (
+            ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+            None,
+            None,
+            IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+                automatic_policy: AutomaticPolicyV1::AgentActivity,
+                quiet_period_seconds: 900,
+                wake_after_seconds: 600,
+                timing_revision: 1,
+                status_revision: 2,
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::AttemptStarted,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::AttemptStarted(AttemptStartedDataV1 {
+                fleet_generation: 10,
+                activity_revision: Some(5),
+                timing_revision: 1,
+                status_revision: 3,
+                wake_after_seconds: 600,
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::ArmStarted,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::ArmStarted(ArmStartedDataV1 {
+                fleet_generation: 10,
+                activity_revision: Some(5),
+                quiet_period_seconds: 900,
+                deadline_after_seconds: 300,
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::ArmCancelled,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+                reason_code: ServerIdleSuspendReasonCodeV1::RecentInput,
+                fleet_generation: 10,
+                activity_revision: Some(5),
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::MeasurementUnavailable,
+            None,
+            None,
+            IdleSuspendEventDataV1::MeasurementUnavailable(MeasurementUnavailableDataV1 {
+                reason_code: ServerIdleSuspendReasonCodeV1::MeasurementUnavailable,
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::MeasurementRecovered,
+            None,
+            None,
+            IdleSuspendEventDataV1::MeasurementRecovered(MeasurementRecoveredDataV1 {
+                activity_revision: 6,
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::FinalCheckStarted,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::FinalCheckStarted(FinalCheckStartedDataV1 {
+                fleet_generation: 10,
+                activity_revision: Some(6),
+                timing_revision: 1,
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::FinalCheckCompleted,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::FinalCheckCompleted(FinalCheckCompletedDataV1 {
+                accepted: true,
+                reason_code: None,
+                fleet_generation: 10,
+                activity_revision: Some(6),
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::HandoffClaimAccepted,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::HandoffClaimAccepted(HandoffClaimAcceptedDataV1 {
+                fleet_generation: 10,
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::HandoffClaimRejected(HandoffClaimRejectedDataV1 {
+                reason_code: ServerIdleSuspendReasonCodeV1::StaleFleetGeneration,
+                expected_fleet_generation: Some(10),
+                actual_fleet_generation: Some(11),
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::HelperRequestDispatched,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::HelperRequestDispatched(HelperRequestDispatchedDataV1 {
+                wake_after_seconds: 600,
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::HelperOutcomeReceived,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::HelperOutcomeReceived(HelperOutcomeReceivedDataV1 {
+                reason_code: ServerIdleSuspendReasonCodeV1::ResumedSuccessfully,
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::ReconciliationCompleted,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::ReconciliationCompleted(ReconciliationCompletedDataV1 {
+                reason_code: ServerIdleSuspendReasonCodeV1::ResumedSuccessfully,
+            }),
+        ),
+        (
+            ServerIdleSuspendEventTypeV1::TerminalRejected,
+            Some(corr.as_str().to_string()),
+            Some(IdleSuspendModeV1::Manual),
+            IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                reason_code: ServerIdleSuspendReasonCodeV1::ActiveFleet,
+                fleet_generation: Some(10),
+                activity_revision: None,
+            }),
+        ),
+    ];
+
+    assert_eq!(test_cases.len(), 14);
+
+    for (seq, (ev_type, correlation_id, mode, data)) in test_cases.into_iter().enumerate() {
+        let envelope = IdleSuspendEventEnvelopeV1 {
+            event_schema_version: IDLE_SUSPEND_EVENT_SCHEMA_VERSION,
+            timestamp_ms: 1726215600000 + (seq as u64),
+            boot_id: identity.boot_id.clone(),
+            producer_instance_id: identity.producer_instance_id.clone(),
+            producer_sequence: (seq as u64) + 1,
+            event_type: ev_type,
+            correlation_id,
+            mode,
+            data,
+        };
+        envelope.validate().unwrap();
+
+        let json = serde_json::to_string(&envelope).unwrap();
+        assert!(!json.contains("event_schema_version"));
+        assert!(json.contains("eventSchemaVersion"));
+        assert!(json.contains("producerInstanceId"));
+
+        let decoded: IdleSuspendEventEnvelopeV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, envelope);
+    }
+}
+
+#[test]
+fn event_serde_rejects_unknown_fields() {
+    let valid_json = serde_json::json!({
+        "eventSchemaVersion": 1,
+        "timestampMs": 1726215600000u64,
+        "bootId": "8f03c004-bb50-4822-9218-d75b34091a92",
+        "producerInstanceId": "73d4a675-9c8f-4cb1-807e-97629fa2a5e4",
+        "producerSequence": 1,
+        "eventType": "measurementUnavailable",
+        "correlationId": null,
+        "mode": null,
+        "data": {
+            "reasonCode": "measurementUnavailable"
+        }
+    });
+
+    // Verify valid base deserializes
+    let _: IdleSuspendEventEnvelopeV1 = serde_json::from_value(valid_json.clone()).unwrap();
+
+    // Extra field in envelope must fail
+    let mut extra_envelope = valid_json.clone();
+    extra_envelope.as_object_mut().unwrap().insert("extraField".to_string(), serde_json::json!("forbidden"));
+    assert!(serde_json::from_value::<IdleSuspendEventEnvelopeV1>(extra_envelope).is_err());
+
+    // Extra field in data must fail
+    let mut extra_data = valid_json.clone();
+    extra_data["data"].as_object_mut().unwrap().insert("extraDataField".to_string(), serde_json::json!("forbidden"));
+    assert!(serde_json::from_value::<IdleSuspendEventEnvelopeV1>(extra_data).is_err());
+}
+
+#[test]
+fn event_validation_uuid_and_schema_version() {
+    // Canonical lowercase RFC 4122
+    assert!(validate_canonical_uuid("8f03c004-bb50-4822-9218-d75b34091a92").is_ok());
+    // Uppercase hex rejected
+    assert!(validate_canonical_uuid("8F03C004-BB50-4822-9218-D75B34091A92").is_err());
+    // Missing hyphens rejected
+    assert!(validate_canonical_uuid("8f03c004bb5048229218d75b34091a92").is_err());
+    // Invalid chars rejected
+    assert!(validate_canonical_uuid("8f03c004-bb50-4822-9218-d75b34091a9g").is_err());
+
+    // UUID v4 check
+    assert!(validate_canonical_uuid_v4("73d4a675-9c8f-4cb1-807e-97629fa2a5e4").is_ok());
+    // Version 1 rejected
+    assert!(validate_canonical_uuid_v4("8f03c004-bb50-1822-9218-d75b34091a92").is_err());
+
+    // ActionCorrelationId strict parsing
+    assert!(ActionCorrelationId::parse("73d4a675-9c8f-4cb1-807e-97629fa2a5e4").is_ok());
+    assert!(ActionCorrelationId::parse("not-a-uuid").is_err());
+
+    // Helper protocol request ID compatibility holds
+    let corr = ActionCorrelationId::new_v4();
+    assert!(crate::idle_suspend::protocol::validate_request_id(corr.as_str()).is_ok());
+}
+
+#[test]
+fn event_validation_scope_and_mode_legality() {
+    let identity = make_test_identity();
+    let corr = make_test_correlation();
+
+    // Process-wide event with correlationId must fail
+    let env_with_corr = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::MeasurementUnavailable,
+        correlation_id: Some(corr.as_str().to_string()),
+        mode: None,
+        data: IdleSuspendEventDataV1::MeasurementUnavailable(MeasurementUnavailableDataV1 {
+            reason_code: ServerIdleSuspendReasonCodeV1::MeasurementUnavailable,
+        }),
+    };
+    assert!(matches!(env_with_corr.validate(), Err(EventValidationError::ForbiddenCorrelationId { .. })));
+
+    // Process-wide event with mode must fail
+    let env_with_mode = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        correlation_id: None,
+        mode: Some(IdleSuspendModeV1::Automatic),
+        data: IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: AutomaticPolicyV1::EmptyFleet,
+            quiet_period_seconds: 900,
+            wake_after_seconds: 600,
+            timing_revision: 1,
+            status_revision: 1,
+        }),
+    };
+    assert!(matches!(env_with_mode.validate(), Err(EventValidationError::ForbiddenMode { .. })));
+
+    // Attempt-scoped event without correlation must fail
+    let env_missing_corr = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::AttemptStarted,
+        correlation_id: None,
+        mode: Some(IdleSuspendModeV1::Automatic),
+        data: IdleSuspendEventDataV1::AttemptStarted(AttemptStartedDataV1 {
+            fleet_generation: 1,
+            activity_revision: None,
+            timing_revision: 1,
+            status_revision: 1,
+            wake_after_seconds: 600,
+        }),
+    };
+    assert!(matches!(env_missing_corr.validate(), Err(EventValidationError::MissingCorrelationId { .. })));
+
+    // ArmStarted with mode Manual must fail
+    let env_arm_manual = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::ArmStarted,
+        correlation_id: Some(corr.as_str().to_string()),
+        mode: Some(IdleSuspendModeV1::Manual),
+        data: IdleSuspendEventDataV1::ArmStarted(ArmStartedDataV1 {
+            fleet_generation: 1,
+            activity_revision: None,
+            quiet_period_seconds: 900,
+            deadline_after_seconds: 900,
+        }),
+    };
+    assert!(matches!(env_arm_manual.validate(), Err(EventValidationError::InvalidModeForEvent { .. })));
+
+    // Manual attempt with activityRevision must fail
+    let env_manual_activity = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::AttemptStarted,
+        correlation_id: Some(corr.as_str().to_string()),
+        mode: Some(IdleSuspendModeV1::Manual),
+        data: IdleSuspendEventDataV1::AttemptStarted(AttemptStartedDataV1 {
+            fleet_generation: 1,
+            activity_revision: Some(42),
+            timing_revision: 1,
+            status_revision: 1,
+            wake_after_seconds: 600,
+        }),
+    };
+    assert!(matches!(env_manual_activity.validate(), Err(EventValidationError::ManualAttemptWithActivityRevision)));
+}
+
+#[test]
+fn event_validation_reason_subsets_and_bounds() {
+    let identity = make_test_identity();
+    let corr = make_test_correlation();
+
+    // 1. ArmCancelled with non-R_ARM reason (e.g. suspendFailed) must fail
+    let env_bad_arm_reason = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::ArmCancelled,
+        correlation_id: Some(corr.as_str().to_string()),
+        mode: Some(IdleSuspendModeV1::Automatic),
+        data: IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+            reason_code: ServerIdleSuspendReasonCodeV1::SuspendFailed,
+            fleet_generation: 1,
+            activity_revision: None,
+        }),
+    };
+    assert!(matches!(env_bad_arm_reason.validate(), Err(EventValidationError::ForbiddenReasonCode { .. })));
+
+    // 2. FinalCheckCompleted accepted=true with reason must fail
+    let env_final_accepted_with_reason = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::FinalCheckCompleted,
+        correlation_id: Some(corr.as_str().to_string()),
+        mode: Some(IdleSuspendModeV1::Automatic),
+        data: IdleSuspendEventDataV1::FinalCheckCompleted(FinalCheckCompletedDataV1 {
+            accepted: true,
+            reason_code: Some(ServerIdleSuspendReasonCodeV1::RecentInput),
+            fleet_generation: 1,
+            activity_revision: None,
+        }),
+    };
+    assert!(matches!(env_final_accepted_with_reason.validate(), Err(EventValidationError::FinalCheckAcceptedWithReason)));
+
+    // 3. FinalCheckCompleted accepted=false with null reason must fail
+    let env_final_rejected_null_reason = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::FinalCheckCompleted,
+        correlation_id: Some(corr.as_str().to_string()),
+        mode: Some(IdleSuspendModeV1::Automatic),
+        data: IdleSuspendEventDataV1::FinalCheckCompleted(FinalCheckCompletedDataV1 {
+            accepted: false,
+            reason_code: None,
+            fleet_generation: 1,
+            activity_revision: None,
+        }),
+    };
+    assert!(matches!(env_final_rejected_null_reason.validate(), Err(EventValidationError::FinalCheckRejectedWithoutReason)));
+
+    // 4. HandoffClaimRejected with staleFleetGeneration missing actual generation must fail
+    let env_handoff_missing_gen = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
+        correlation_id: Some(corr.as_str().to_string()),
+        mode: Some(IdleSuspendModeV1::Automatic),
+        data: IdleSuspendEventDataV1::HandoffClaimRejected(HandoffClaimRejectedDataV1 {
+            reason_code: ServerIdleSuspendReasonCodeV1::StaleFleetGeneration,
+            expected_fleet_generation: Some(1),
+            actual_fleet_generation: None,
+        }),
+    };
+    assert!(matches!(env_handoff_missing_gen.validate(), Err(EventValidationError::HandoffStaleGenerationMissingGenerations)));
+
+    // 5. HandoffClaimRejected with handoffBusy carrying generation must fail
+    let env_handoff_busy_with_gen = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
+        correlation_id: Some(corr.as_str().to_string()),
+        mode: Some(IdleSuspendModeV1::Automatic),
+        data: IdleSuspendEventDataV1::HandoffClaimRejected(HandoffClaimRejectedDataV1 {
+            reason_code: ServerIdleSuspendReasonCodeV1::HandoffBusy,
+            expected_fleet_generation: Some(1),
+            actual_fleet_generation: None,
+        }),
+    };
+    assert!(matches!(env_handoff_busy_with_gen.validate(), Err(EventValidationError::HandoffRejectionForbiddenGenerations(_))));
+
+    // 6. Numeric bounds: quietPeriodSeconds < 60 fails
+    let env_bad_quiet = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        correlation_id: None,
+        mode: None,
+        data: IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: AutomaticPolicyV1::EmptyFleet,
+            quiet_period_seconds: 59,
+            wake_after_seconds: 600,
+            timing_revision: 1,
+            status_revision: 1,
+        }),
+    };
+    assert!(matches!(env_bad_quiet.validate(), Err(EventValidationError::NumericOutOfBounds { field: "quietPeriodSeconds", .. })));
+
+    // 7. Numeric bounds: wakeAfterSeconds non-zero and < 60 fails
+    let env_bad_wake = IdleSuspendEventEnvelopeV1 {
+        event_schema_version: 1,
+        timestamp_ms: 1000,
+        boot_id: identity.boot_id.clone(),
+        producer_instance_id: identity.producer_instance_id.clone(),
+        producer_sequence: 1,
+        event_type: ServerIdleSuspendEventTypeV1::HelperRequestDispatched,
+        correlation_id: Some(corr.as_str().to_string()),
+        mode: Some(IdleSuspendModeV1::Automatic),
+        data: IdleSuspendEventDataV1::HelperRequestDispatched(HelperRequestDispatchedDataV1 {
+            wake_after_seconds: 30,
+        }),
+    };
+    assert!(matches!(env_bad_wake.validate(), Err(EventValidationError::NumericOutOfBounds { field: "wakeAfterSeconds", .. })));
+}
+
+fn setup_trusted_diagnostics_dir(tmp: &tempfile::TempDir) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let diag_dir = tmp.path().join("diagnostics");
+    fs::create_dir(&diag_dir).unwrap();
+    fs::set_permissions(&diag_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    diag_dir.join("idle-suspend-events-v1.jsonl")
+}
+
+#[test]
+fn event_writer_file_mode_and_sync() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+    let identity = make_test_identity();
+    let writer = IdleSuspendEventWriter::with_identity(event_path.clone(), identity);
+
+    // Emit two sequential events
+    let e1 = writer.emit(
+        1726215600000,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        None,
+        None,
+        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: AutomaticPolicyV1::AgentActivity,
+            quiet_period_seconds: 900,
+            wake_after_seconds: 600,
+            timing_revision: 1,
+            status_revision: 1,
+        }),
+    ).unwrap();
+    assert_eq!(e1.producer_sequence, 1);
+
+    let corr = make_test_correlation();
+    let e2 = writer.emit(
+        1726215601000,
+        ServerIdleSuspendEventTypeV1::AttemptStarted,
+        Some(&corr),
+        Some(IdleSuspendModeV1::Automatic),
+        IdleSuspendEventDataV1::AttemptStarted(AttemptStartedDataV1 {
+            fleet_generation: 1,
+            activity_revision: Some(1),
+            timing_revision: 1,
+            status_revision: 2,
+            wake_after_seconds: 600,
+        }),
+    ).unwrap();
+    assert_eq!(e2.producer_sequence, 2);
+
+    // Verify file mode 0600 on disk
+    let meta = fs::metadata(&event_path).unwrap();
+    assert_eq!(meta.permissions().mode() & 0o7777, 0o600);
+
+    // Read lines back and verify deserialization
+    let content = fs::read_to_string(&event_path).unwrap();
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 2);
+
+    let parsed1: IdleSuspendEventEnvelopeV1 = serde_json::from_str(lines[0]).unwrap();
+    let parsed2: IdleSuspendEventEnvelopeV1 = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(parsed1, e1);
+    assert_eq!(parsed2, e2);
+}
+
+#[test]
+fn event_writer_sequence_gap_on_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+    let identity = make_test_identity();
+    let writer = IdleSuspendEventWriter::with_identity(event_path.clone(), identity);
+
+    // 1. First event succeeds with sequence 1
+    let e1 = writer.emit(
+        1000,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        None,
+        None,
+        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: AutomaticPolicyV1::EmptyFleet,
+            quiet_period_seconds: 900,
+            wake_after_seconds: 600,
+            timing_revision: 1,
+            status_revision: 1,
+        }),
+    ).unwrap();
+    assert_eq!(e1.producer_sequence, 1);
+
+    // 2. Invalidate file permissions to trigger I/O failure (consume sequence 2)
+    fs::set_permissions(&event_path, fs::Permissions::from_mode(0o400)).unwrap();
+
+    let err = writer.emit(
+        2000,
+        ServerIdleSuspendEventTypeV1::MeasurementUnavailable,
+        None,
+        None,
+        IdleSuspendEventDataV1::MeasurementUnavailable(MeasurementUnavailableDataV1 {
+            reason_code: ServerIdleSuspendReasonCodeV1::MeasurementUnavailable,
+        }),
+    );
+    assert!(err.is_err(), "Write must fail against non-0600 file");
+
+    // 3. Restore valid file permissions 0600 and write next event
+    fs::set_permissions(&event_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let e3 = writer.emit(
+        3000,
+        ServerIdleSuspendEventTypeV1::MeasurementRecovered,
+        None,
+        None,
+        IdleSuspendEventDataV1::MeasurementRecovered(MeasurementRecoveredDataV1 {
+            activity_revision: 10,
+        }),
+    ).unwrap();
+
+    // Observable sequence gap: sequence advanced from 1 to 3!
+    assert_eq!(e3.producer_sequence, 3);
+
+    // File contains only sequence 1 and sequence 3
+    let content = fs::read_to_string(&event_path).unwrap();
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 2);
+    let p1: IdleSuspendEventEnvelopeV1 = serde_json::from_str(lines[0]).unwrap();
+    let p3: IdleSuspendEventEnvelopeV1 = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(p1.producer_sequence, 1);
+    assert_eq!(p3.producer_sequence, 3);
+}
+
+#[test]
+fn event_writer_overflow_and_permanent_disable() {
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+    let identity = make_test_identity();
+    let writer = IdleSuspendEventWriter::with_identity(event_path.clone(), identity);
+
+    writer.set_sequence_for_test(u64::MAX);
+
+    let err = writer.emit(
+        1000,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        None,
+        None,
+        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: AutomaticPolicyV1::EmptyFleet,
+            quiet_period_seconds: 900,
+            wake_after_seconds: 600,
+            timing_revision: 1,
+            status_revision: 1,
+        }),
+    );
+    assert!(matches!(err, Err(EventWriteError::SequenceOverflow)));
+
+    // Subsequent writes must fail with Disabled
+    let err2 = writer.emit(
+        2000,
+        ServerIdleSuspendEventTypeV1::MeasurementUnavailable,
+        None,
+        None,
+        IdleSuspendEventDataV1::MeasurementUnavailable(MeasurementUnavailableDataV1 {
+            reason_code: ServerIdleSuspendReasonCodeV1::MeasurementUnavailable,
+        }),
+    );
+    assert!(matches!(err2, Err(EventWriteError::Disabled)));
+}
+
+#[test]
+fn event_writer_security_checks() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir().unwrap();
+    let identity = make_test_identity();
+
+    // 1. Missing parent directory rejected
+    let missing_parent = tmp.path().join("nonexistent-dir").join("events.jsonl");
+    let writer1 = IdleSuspendEventWriter::with_identity(missing_parent, identity.clone());
+    let err1 = writer1.emit(
+        1000,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        None,
+        None,
+        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: AutomaticPolicyV1::EmptyFleet,
+            quiet_period_seconds: 900,
+            wake_after_seconds: 600,
+            timing_revision: 1,
+            status_revision: 1,
+        }),
+    );
+    assert!(matches!(err1, Err(EventWriteError::ParentPathRejected)));
+
+    // 2. Parent directory with mode 0755 rejected
+    let unsafe_parent_dir = tmp.path().join("unsafe-diag");
+    fs::create_dir(&unsafe_parent_dir).unwrap();
+    fs::set_permissions(&unsafe_parent_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    let writer2 = IdleSuspendEventWriter::with_identity(unsafe_parent_dir.join("events.jsonl"), identity.clone());
+    let err2 = writer2.emit(
+        1000,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        None,
+        None,
+        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: AutomaticPolicyV1::EmptyFleet,
+            quiet_period_seconds: 900,
+            wake_after_seconds: 600,
+            timing_revision: 1,
+            status_revision: 1,
+        }),
+    );
+    assert!(matches!(err2, Err(EventWriteError::ParentPathRejected)));
+
+    // 3. Symlink target rejected
+    let safe_diag_dir = setup_trusted_diagnostics_dir(&tmp);
+    let real_target = tmp.path().join("real-events.jsonl");
+    fs::write(&real_target, b"").unwrap();
+    fs::set_permissions(&real_target, fs::Permissions::from_mode(0o600)).unwrap();
+    std::os::unix::fs::symlink(&real_target, &safe_diag_dir).unwrap();
+
+    let writer3 = IdleSuspendEventWriter::with_identity(safe_diag_dir.clone(), identity.clone());
+    let err3 = writer3.emit(
+        1000,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        None,
+        None,
+        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: AutomaticPolicyV1::EmptyFleet,
+            quiet_period_seconds: 900,
+            wake_after_seconds: 600,
+            timing_revision: 1,
+            status_revision: 1,
+        }),
+    );
+    assert!(matches!(err3, Err(EventWriteError::FileSecurityRejected)));
+}
+
+#[test]
+fn event_producer_identity_boot_id_reader() {
+    let tmp = tempdir().unwrap();
+    let fake_boot_id_path = tmp.path().join("boot_id");
+
+    // Valid canonical UUID with trailing newline
+    fs::write(&fake_boot_id_path, b"8f03c004-bb50-4822-9218-d75b34091a92\n").unwrap();
+    let id = ProducerIdentity::load_from_path(&fake_boot_id_path).unwrap();
+    assert_eq!(id.boot_id, "8f03c004-bb50-4822-9218-d75b34091a92");
+    assert!(validate_canonical_uuid_v4(&id.producer_instance_id).is_ok());
+
+    // Invalid boot ID
+    fs::write(&fake_boot_id_path, b"invalid-boot-id\n").unwrap();
+    assert!(matches!(ProducerIdentity::load_from_path(&fake_boot_id_path), Err(EventWriteError::BootIdInvalid(_))));
+}
+
+#[test]
+fn event_writer_restart_creates_new_identity_and_resets_sequence() {
+    let tmp = tempdir().unwrap();
+    let event_path = setup_trusted_diagnostics_dir(&tmp);
+
+    let id1 = ProducerIdentity::with_ids(
+        "8f03c004-bb50-4822-9218-d75b34091a92".to_string(),
+        uuid::Uuid::new_v4().to_string(),
+    ).unwrap();
+    let writer1 = IdleSuspendEventWriter::with_identity(event_path.clone(), id1.clone());
+    let e1 = writer1.emit(
+        1000,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        None,
+        None,
+        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: AutomaticPolicyV1::EmptyFleet,
+            quiet_period_seconds: 900,
+            wake_after_seconds: 600,
+            timing_revision: 1,
+            status_revision: 1,
+        }),
+    ).unwrap();
+    assert_eq!(e1.producer_sequence, 1);
+
+    // Process restart: new instance ID, sequence resets to 1
+    let id2 = ProducerIdentity::with_ids(
+        id1.boot_id.clone(),
+        uuid::Uuid::new_v4().to_string(),
+    ).unwrap();
+    assert_ne!(id1.producer_instance_id, id2.producer_instance_id);
+
+    let writer2 = IdleSuspendEventWriter::with_identity(event_path.clone(), id2.clone());
+    let e2 = writer2.emit(
+        2000,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        None,
+        None,
+        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: AutomaticPolicyV1::EmptyFleet,
+            quiet_period_seconds: 900,
+            wake_after_seconds: 600,
+            timing_revision: 2,
+            status_revision: 1,
+        }),
+    ).unwrap();
+    assert_eq!(e2.producer_sequence, 1);
+    assert_eq!(e2.producer_instance_id, id2.producer_instance_id);
+}

@@ -17,7 +17,9 @@
 - Review status: Approved — the three-cycle architecture contract workflow passed; the third reviewer scored 10/10 with no findings.
 - Effort: 12h
 - Ownership: architecture owner edits `docs/system-architecture.md`; release owner validates layout/unit facts. No production Rust/test/deployment mutation in this phase.
-- Dependency: none. Phase 02 is unblocked; Phases 02–07 remain future runtime implementation, verification, and rollout work.
+- Dependency: none. Phase 02 canonical event foundation is complete
+  (2026-09-13); Phases 03–07 remain future runtime instrumentation,
+  collection, verification, and rollout work.
 
 ## Key Insights
 
@@ -76,6 +78,7 @@
 - [x] Add planned architecture section before production code.
 - [x] Review mixed-version forward/rollback behavior.
 - [x] Record architecture/security/release approval.
+- [x] (2026-09-13 Amendment) Freeze normative 14-event to payload matrix, exact 26-reason subsets, bounds, and writer safety contract in design-contract.md and docs/system-architecture.md.
 
 ## Success Criteria
 
@@ -88,7 +91,9 @@
 
 - Path ownership differs from assumptions: amend deployment contract now; never add fallback scanning.
 - Overlarge taxonomy: reject events not needed to reconstruct current coordinator/helper branches.
-- Architecture claims code exists: label section planned/approved until Phase 07 verifies implementation.
+- Architecture claims code exists: identify the implemented Phase 02 producer
+  foundation separately; keep coordinator instrumentation and collector
+  sections planned until their phases verify implementation.
 - Legacy reader break: require mixed-version fixtures in Phases 04–07 before rollout.
 
 ## Security Considerations
@@ -99,7 +104,11 @@
 
 ## Next steps
 
-Following the completed three-cycle approval, Phase 02 may implement the isolated server event model/writer. Phase 02 must not reinterpret paths, enums, limits, or durability.
+Following the completed three-cycle approval, Phase 02 implemented the isolated
+server event model/writer without changing paths, enums, limits, or durability.
+Phase 03 may now integrate one writer into coordinator lifecycle boundaries;
+later phases remain responsible for helper evolution, collection, verification,
+and rollout.
 
 ## Unresolved questions
 

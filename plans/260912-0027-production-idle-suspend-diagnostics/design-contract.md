@@ -1,8 +1,27 @@
 # Production idle-suspend diagnostics design contract
 
-Status: User-approved Phase 01 contract; planned only; runtime code not yet changed.
+Status: User-approved Phase 01 contract. Phase 02 canonical event foundation
+was implemented on 2026-09-13; coordinator/helper instrumentation, the
+collector, bundle output, and rollout remain planned Phases 03–07.
 Review status: Third reviewer scored 10/10 with no findings.
-Phase 01 must copy the reviewed contract into `docs/system-architecture.md` before any production-code mutation.
+Phase 01 copied this reviewed contract into `docs/system-architecture.md`
+before the Phase 02 production-code mutation.
+
+## Phase 02 implementation disposition
+
+Phase 02 implements the producer foundation described by this contract in
+`server/src/idle_suspend/event.rs` and re-exports it from
+`server/src/idle_suspend/mod.rs`. The closed 14-event model, 26 reason codes,
+typed payload validation, boot/process identity, UUID v4 correlation, checked
+producer sequence, and hardened JSONL writer are now available to later
+coordinator instrumentation.
+
+The implementation is intentionally isolated: the coordinator does not yet
+construct or emit semantic events, the helper audit remains unchanged, and no
+collector or bundle writer is shipped. The existing untagged timing/manual
+server audit remains byte-compatible. Phase 03 owns lifecycle emission and
+must consume these types without changing the frozen schema, path, identity,
+sequence, correlation, or durability rules.
 
 ## Decision and boundaries
 
@@ -26,11 +45,13 @@ The bundle reconstructs evidence; it does not classify a root cause, prove work 
 
 ## Fixed installed paths and authority
 
-Phase 01 validates ownership/modes against staged and installed units; any mismatch blocks Phases 02–06 until this table or deployment assets are corrected and reviewed.
+Phase 01 validated ownership/modes against staged and installed units. Phase 02
+uses this fixed path contract; any mismatch reopens the contract and blocks
+Phase 03–06 until the table or deployment assets are corrected and reviewed.
 
 | Source/output | Installed path or authority | Rule |
 | --- | --- | --- |
-| Server semantic events | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl` | Planned API-service writer, mode `0600`, no-follow, append/sync; the final rendered API `User=`/`Group=` pair is the runtime owner authority. The API pre-start gate does not provision this future file. |
+| Server semantic events | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl` | Phase 02 provides the isolated writer, mode `0600`, no-follow, append/sync; Phase 03 will integrate it with the API coordinator. The final rendered API `User=`/`Group=` pair is the runtime owner authority. The API pre-start gate does not provision this file. |
 | Server timing/manual audit | `/etc/dam-hopper/idle-suspend-audit.jsonl` for the fixed `/etc/dam-hopper/dam-hopper.toml` deployment | The completed API runtime gate pre-provisions this final-API-UID/GID regular file `0600` beneath the root `0:0` `0755` anchor; existing bytes/inode are preserved. Collector reports alternate/custom layouts unsupported rather than guessing. |
 | Helper audit/events | `/var/log/dam-hopper/idle-suspend-helper.jsonl` | Existing helper audit written `0600` by the `root:API_GROUP` helper beneath systemd `LogsDirectory=dam-hopper`; no second helper log. |
 | Backend diagnostics | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/backend-log.jsonl` | Existing API-owned compatibility source, created `0600`; the collector reads it through its bounded no-follow adapter and excludes terminal tails entirely. |
@@ -40,7 +61,7 @@ Phase 01 validates ownership/modes against staged and installed units; any misma
 | Root bundle output | `/var/lib/dam-hopper-manager/diagnostics/dam-hopper-diagnose-<generatedAtMs>-<bundleId>.json` | Trusted root-owned `0700` directory; exclusive temp in the same directory, sync, atomic rename, directory sync. |
 | Non-root bundle output | resolved user state directory with same filename | Trusted invoking-user-owned `0700` directory without symlink traversal; valid partial output; unsafe/missing home resolution is exit `1`, not `/tmp` fallback. |
 
-The completed descriptor-relative, refusal-based API runtime provisioner is the sole provisioning authority for fixed API state and audit paths. It walks from the trusted layout root with directory descriptors and no-follow operations, creates missing objects with final metadata, validates each pre-existing object as exact type/owner/group/mode, and refuses mismatches without repair, replacement, truncation, or content mutation; a failed call cleans only empty objects created by that call in reverse order. This implemented prerequisite provisions only the fixed API state and audit paths above: it does not provision, repair, or lazily create any planned diagnostics source.
+The completed descriptor-relative, refusal-based API runtime provisioner is the sole provisioning authority for fixed API state and audit paths. It walks from the trusted layout root with directory descriptors and no-follow operations, creates missing objects with final metadata, validates each pre-existing object as exact type/owner/group/mode, and refuses mismatches without repair, replacement, truncation, or content mutation; a failed call cleans only empty objects created by that call in reverse order. This implemented prerequisite provisions only the fixed API state and audit paths above: it does not provision, repair, or lazily create the diagnostics source. The Phase 02 writer requires its already-provisioned parent and does not create it.
 
 The API unit has no `StateDirectory=` or `StateDirectoryMode=`. Its one fixed root-privileged pre-start gate is `ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime`, with no operands beyond `provision-api-runtime`; it runs before every API start/restart, and `ExecStart` is unreachable when it refuses. Activation and rollback provision immediately before starting the API. Boot recovery reparses the installed API unit and provisions an active server's fixed paths without starting services. A provisioning, owner, parent-mode, or symlink mismatch is an explicit source error that blocks `complete`; alternate-path scanning is forbidden.
 
@@ -79,34 +100,62 @@ Unknown version, unknown enum, invalid UUID, duplicate producer sequence, partia
 
 `IdleSuspendEventEnvelopeV1` is camelCase, deny-unknown-fields, and explicitly tagged:
 
-- `eventSchemaVersion: 1`
-- `timestampMs: u64` (wall-clock evidence, not ordering identity)
-- `bootId: UUID` read from `/proc/sys/kernel/random/boot_id`
-- `producerInstanceId: UUID v4` created once per API process
-- `producerSequence: u64` allocated under the writer lock, starts at 1 per instance, checked increment with no wrap
-- `eventType: ServerIdleSuspendEventTypeV1`
-- `correlationId: UUID | null`
-- `mode: automatic | manual | null`
-- `data: ServerIdleSuspendEventDataV1`, closed bounded payload
+- `eventSchemaVersion`: strictly `1` (`u32`)
+- `timestampMs`: `u64` milliseconds since UNIX epoch (wall-clock evidence, not ordering identity)
+- `bootId`: canonical lowercase RFC 4122 UUID string read from `/proc/sys/kernel/random/boot_id` (capped at 128 bytes, trimmed)
+- `producerInstanceId`: canonical lowercase UUID v4 string created once per API process at startup
+- `producerSequence`: `u64`, `1 ..= (u64::MAX - 1)`, allocated under writer lock, checked increment with no wrap; overflow permanently disables emission
+- `eventType`: closed enum matching the 14 event types below
+- `correlationId`: canonical lowercase UUID v4 string or `null`
+- `mode`: `"automatic" | "manual" | null`
+- `data`: closed bounded payload matching `eventType`
 
-Writer initialization failure disables only semantic emission and exposes an explicit producer gap to backend diagnostics/current status; it does not fabricate identity or stop the server. Every attempted append consumes a sequence. A failed append therefore becomes a detectable gap when later writes succeed.
+### Exhaustive 14-Event Matrix
 
-Closed server event taxonomy:
+| Event Type | Scope | `correlationId` | `mode` | Exact Payload Fields | Allowed Payload Rules & Bounds |
+|---|---|---|---|---|---|
+| `coordinatorStarted` | Process-wide | `null` | `null` | `automaticPolicy`<br>`quietPeriodSeconds`<br>`wakeAfterSeconds`<br>`timingRevision`<br>`statusRevision` | `automaticPolicy`: `"emptyFleet" \| "agentActivity"`<br>`quietPeriodSeconds`: `60 ..= 86400`<br>`wakeAfterSeconds`: `0 \| 60 ..= 86400`<br>`timingRevision`: `u64`<br>`statusRevision`: `u64` |
+| `attemptStarted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration`<br>`activityRevision`<br>`timingRevision`<br>`statusRevision`<br>`wakeAfterSeconds` | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null` (must be `null` if `mode == "manual"` or `policy == "emptyFleet"`)<br>`timingRevision`: `u64`<br>`statusRevision`: `u64`<br>`wakeAfterSeconds`: `0 \| 60 ..= 86400` |
+| `armStarted` | Attempt | Required UUID v4 | `"automatic"` | `fleetGeneration`<br>`activityRevision`<br>`quietPeriodSeconds`<br>`deadlineAfterSeconds` | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null`<br>`quietPeriodSeconds`: `60 ..= 86400`<br>`deadlineAfterSeconds`: `1 ..= 86400` |
+| `armCancelled` | Attempt | Required UUID v4 | `"automatic"` | `reasonCode`<br>`fleetGeneration`<br>`activityRevision` | `reasonCode`: Subset **R_ARM**<br>`fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null` |
+| `measurementUnavailable` | Process-wide | `null` | `null` | `reasonCode` | `reasonCode`: strictly `"measurementUnavailable"` |
+| `measurementRecovered` | Process-wide | `null` | `null` | `activityRevision` | `activityRevision`: `u64` |
+| `finalCheckStarted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration`<br>`activityRevision`<br>`timingRevision` | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null`<br>`timingRevision`: `u64` |
+| `finalCheckCompleted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `accepted`<br>`reasonCode`<br>`fleetGeneration`<br>`activityRevision` | `accepted`: `boolean`<br>If `accepted == true`: `reasonCode` must be `null`<br>If `accepted == false`: `reasonCode` must be Subset **R_FINAL**<br>`fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null` |
+| `handoffClaimAccepted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration` | `fleetGeneration`: `u64` |
+| `handoffClaimRejected` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode`<br>`expectedFleetGeneration`<br>`actualFleetGeneration` | `reasonCode`: Subset **R_HANDOFF**<br>If `reasonCode == "staleFleetGeneration"`: `expectedFleetGeneration` and `actualFleetGeneration` must both be `u64`<br>For all other reasons: both must be `null` |
+| `helperRequestDispatched` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `wakeAfterSeconds` | `wakeAfterSeconds`: `0 \| 60 ..= 86400` |
+| `helperOutcomeReceived` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode` | `reasonCode`: Subset **R_OUTCOME** |
+| `reconciliationCompleted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode` | `reasonCode`: Subset **R_OUTCOME** |
+| `terminalRejected` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode`<br>`fleetGeneration`<br>`activityRevision` | `reasonCode`: Subset **R_TERMINAL**<br>`fleetGeneration`: `u64 \| null`<br>`activityRevision`: `u64 \| null` |
 
-1. `coordinatorStarted` — producer/policy/timing revisions; no action ID.
-2. `attemptStarted` — one per automatic candidate or manual command; allocates/uses correlation.
-3. `armStarted`; 4. `armCancelled`.
-5. `measurementUnavailable`; 6. `measurementRecovered` — availability transitions only, never samples.
-7. `finalCheckStarted`; 8. `finalCheckCompleted`.
-9. `handoffClaimAccepted`; 10. `handoffClaimRejected`.
-11. `helperRequestDispatched`; 12. `helperOutcomeReceived`.
-13. `reconciliationCompleted` — exactly one after an observed outcome/release.
-14. `terminalRejected` — terminal admission/cancellation with a closed reason.
+### Closed Reason Code Subsets (`ServerIdleSuspendReasonCodeV1`)
 
-`ServerIdleSuspendReasonCodeV1`: `policyDisabled`, `startupGuard`, `emptyFleet`, `activeFleet`, `recentInput`, `recentOutput`, `recentNetwork`, `measurementUnavailable`, `staleActivityRevision`, `staleFleetGeneration`, `graceCancelled`, `finalCheckFailed`, `handoffBusy`, `handoffLost`, `helperUnavailable`, `capabilityUnsupported`, `inhibitorPresent`, `shutdown`, `auditWriteFailed`, `protocolInvalid`, `duplicateRequest`, `rtcBusy`, `rtcProgrammingFailed`, `suspendFailed`, `suspendReturned`, `resumedSuccessfully`. Event-specific payload enums prevent meaningless fields.
+All reason codes belong to the closed set of 26 variants:
+`policyDisabled`, `startupGuard`, `emptyFleet`, `activeFleet`, `recentInput`, `recentOutput`, `recentNetwork`, `measurementUnavailable`, `staleActivityRevision`, `staleFleetGeneration`, `graceCancelled`, `finalCheckFailed`, `handoffBusy`, `handoffLost`, `helperUnavailable`, `capabilityUnsupported`, `inhibitorPresent`, `shutdown`, `auditWriteFailed`, `protocolInvalid`, `duplicateRequest`, `rtcBusy`, `rtcProgrammingFailed`, `suspendFailed`, `suspendReturned`, `resumedSuccessfully`.
 
-Allowed payload values: booleans; bounded counts/durations/wake seconds; fleet/activity/timing/status revisions; fleet generation; policy/mode; typed reason/outcome. Forbidden: actor names, argv, environment, terminal bytes, prompts, credentials/tokens, raw socket/netlink/IPC data, addresses, inhibitor identity, and free-form errors.
+- **R_ARM** (`armCancelled`): `recentInput`, `recentOutput`, `recentNetwork`, `staleActivityRevision`, `staleFleetGeneration`, `activeFleet`, `graceCancelled`, `shutdown`.
+- **R_FINAL** (`finalCheckCompleted` when `accepted == false`): `finalCheckFailed`, `recentInput`, `recentOutput`, `recentNetwork`, `measurementUnavailable`, `staleActivityRevision`, `staleFleetGeneration`, `activeFleet`, `shutdown`.
+- **R_HANDOFF** (`handoffClaimRejected`): `handoffBusy`, `handoffLost`, `staleFleetGeneration`, `activeFleet`, `shutdown`.
+- **R_OUTCOME** (`helperOutcomeReceived`, `reconciliationCompleted`): `resumedSuccessfully`, `activeFleet`, `inhibitorPresent`, `capabilityUnsupported`, `rtcBusy`, `rtcProgrammingFailed`, `suspendFailed`, `suspendReturned`, `helperUnavailable`, `protocolInvalid`, `duplicateRequest`.
+- **R_TERMINAL** (`terminalRejected`): `policyDisabled`, `startupGuard`, `emptyFleet`, `activeFleet`, `recentInput`, `recentOutput`, `recentNetwork`, `measurementUnavailable`, `staleActivityRevision`, `staleFleetGeneration`, `finalCheckFailed`, `handoffBusy`, `handoffLost`, `helperUnavailable`, `capabilityUnsupported`, `shutdown`, `auditWriteFailed`, `protocolInvalid`.
 
+### Writer Concurrency & Safety Contract
+
+- **Single Process Authority**: Exactly one `IdleSuspendEventWriter` instance in the API process, held in `AppState`. No cross-process file coordination or file locking.
+- **Mutex Scope**: A single `parking_lot::Mutex` serializes sequence allocation, formatting, and file I/O across local Tokio threads.
+- **Sequence Allocation Point**:
+  1. Validate event schema, fields, bounds, and payload rules. Validation failure does **not** consume a sequence.
+  2. Under lock, allocate the next checked sequence: `next_seq = current_seq.checked_add(1)`.
+  3. Format and serialize the envelope into a bounded buffer (< 16 KiB).
+  4. If serialization or subsequent file operations (`open`, `write_all`, `\n`, `sync_data`) fail, the sequence is NOT reused. It remains consumed, generating an observable gap on future writes.
+  5. On overflow (`seq == u64::MAX`), the writer permanently fails closed.
+- **File Safety & Permissions**:
+  - Target path: `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`.
+  - **Parent Directory Enforcement**: Verified before opening. If parent is missing, a symlink, not a directory, or not exact mode `0700` owned by effective UID/GID, writer refuses with `EventWriteError::ParentPathRejected`. Writer **never** creates, repairs, or chmods parent.
+  - **File Open Flags**: `O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW` with mode `0600`.
+  - **Pre-existing Target**: If the file exists, `fstat` verifies it is a regular file owned by effective UID/GID with exact mode `0600`. Non-`0600`, non-regular, or symlink targets are rejected with a typed error; writer never chmods or repairs the file.
+  - **Sync**: `file.sync_data()` is called synchronously under the writer lock before returning success.
 ## Correlation lifecycle
 
 - Generate an unprefixed UUID v4 before each `attemptStarted`. Automatic attempt begins when a candidate enters arm/final-admission flow; manual attempt begins when the coordinator receives the command. Internal numeric sampler request IDs stay internal.
@@ -200,8 +249,8 @@ Roll forward is additive: protocol v1 and existing audit files remain readable; 
 | new | new | old | Partial: old reader keeps established records and ignores additive streams; it cannot claim the v1 bundle contract complete. |
 | new | new | new | Complete only when every applicable required source, coverage interval, and gap gate passes. |
 
-Mixed-version, restart, rotation, malformed, and dropped evidence always remain partial. Legacy automatic `epoch-N` IDs never join across producer restarts; legacy manual IDs join only on an exact validated ID. A manual API response returns the same UUID used as `correlationId` and helper protocol-v1 `requestId`; it never creates a `manual-<uuid>` alias. Older readers may ignore additive helper-v2 milestones while retaining existing action names and fields. Rollback stops new emission and collector use but never deletes evidence; withdrawing this approval reverts only this planned subsection. Phase 02 remains subject to Phase 01 implementation and validation gates; architecture, security, and release-owner approval is complete.
+Mixed-version, restart, rotation, malformed, and dropped evidence always remain partial. Legacy automatic `epoch-N` IDs never join across producer restarts; legacy manual IDs join only on an exact validated ID. A manual API response returns the same UUID used as `correlationId` and helper protocol-v1 `requestId`; it never creates a `manual-<uuid>` alias. Older readers may ignore additive helper-v2 milestones while retaining existing action names and fields. Rollback stops new emission and collector use but never deletes evidence; withdrawing this approval reverts only the planned collector subsection. Phase 02 canonical event foundation is implemented; coordinator/helper instrumentation, collector implementation, and rollout remain pending. Architecture, security, and release-owner approval is complete.
 
 ## Unresolved questions
 
-None at planning level. Phase 01 must validate fixed installed ownership/modes, smaller per-field/command/API limits, reason/outcome mapping coverage, and mixed-version rollback fixtures; failure is a review gate, not permission to improvise downstream.
+None for the frozen contract or Phase 02 foundation. Phase 03 must validate coordinator emission and later phases must validate helper evolution, collection, correlation, redaction, bounded output, and mixed-version rollback before any collector can claim historical completeness.
