@@ -355,6 +355,41 @@ create a parallel observer.
   churn while preserving semantic state, activity, warning, fleet, timing, and
   epoch changes. Join the sampler before PTY teardown during shutdown.
 
+### Production diagnostics bundle engine (Phase 05)
+
+Keep `server/src/linux_release/diagnostics/` pure and narrow. `model.rs` owns
+the closed bundle/source DTOs and fixed bounds; `file_sources.rs` owns the
+shared no-follow bounded scanner plus exactly four source adapters;
+`redaction.rs` owns source-specific allowlist projectors; `correlation.rs`
+owns exact-UUID chains/gaps/restarts; and `collector.rs` owns completeness,
+assembly, and final-size reduction. Do not add a generic source-plugin
+registry, JSON passthrough, host command, network client, output writer, or
+filesystem mutation to this core.
+
+- Open producer files read-only with no-follow semantics. Reject symlinks and
+  non-regular files. Enforce 16 MiB/source, 16 KiB/line, and 10,000
+  accepted-record bounds before allocation. Preserve valid records around
+  malformed lines while marking source status and typed errors.
+- Treat missing, readable-empty, malformed, retention-limited, truncated, and
+  coverage-unknown sources as distinct evidence states. Never claim historical
+  completeness from newest-record presence alone; required-source status,
+  requested window, producer start/sequence, and gap indicators must agree.
+- Project before sizing. Validate closed schema/enums and canonical UUIDs,
+  allowlist fields, map free text to closed codes, bound strings/maps, and
+  exclude terminal/PTY data, credentials, argv/environment, addresses, raw
+  frames, journal message text, and unrestricted stderr.
+- Correlate only exact validated UUIDs. Time, PID, epoch, revision, and
+  producer proximity are not identity. After any record eviction, recompute
+  correlations and completeness from the retained set.
+- Enforce the 8,388,608-byte final JSON limit by evicting whole records in a
+  deterministic source priority. Never byte-slice serialized JSON; mark every
+  affected source truncated and retain bundle metadata/privacy metadata.
+- Keep fixture tests for malformed middle/tail input, bounds, redaction,
+  unknown schema/UUID, exact joins, sequence gaps/duplicates, restarts,
+  orphan chains, cap reduction, and source byte/metadata immutability. Tests
+  use temporary files and deterministic identities; they must not mutate a
+  producer path or invoke suspend.
+
 ### Protected status decoding and presentation (Phase 06)
 
 Keep external status data at an explicit `unknown` boundary. The

@@ -15,6 +15,7 @@ pub mod archive_extract;
 pub mod attestation;
 pub mod cli;
 pub mod constants;
+pub mod diagnostics;
 pub mod durable_fs;
 pub mod error;
 pub mod health;

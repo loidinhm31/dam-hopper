@@ -346,13 +346,15 @@ The `agent-activity` policy is an activity heuristic, not semantic proof that an
 - **Kernel handoff race**: An activity change occurring in the kernel immediately after final comparison can race handoff. The implementation fences server-admitted input, creation, and restarts, but does not freeze processes or guarantee atomic absence of work.
 - **Host qualification requirement**: Process/socket permissions, kernel features, namespace topology, or latency exceeding the 1-second budget make a host permanently unavailable for this mode. There is no fallback to unverified interface metrics.
 
-### Production idle-suspend diagnostics (Phases 01–04 implemented; Phases 05–07 planned)
+### Production idle-suspend diagnostics (Phases 01–05 implemented; Phases 06–07 planned)
 
 Status: Phase 01 architecture/schema/security contract approved (third
 reviewer: 10/10 with no findings). Phase 02 canonical event foundation, Phase
-03 coordinator integration, and Phase 04 helper audit milestone enrichment
-were implemented on 2026-09-13. The bounded collector, bundle output, and
-rollout remain planned Phases 05–07.
+03 coordinator integration, Phase 04 helper audit milestone enrichment, and the
+Phase 05 pure bundle/correlation engine were implemented on 2026-09-13.
+Phase 05 verification passed 16/16 diagnostics unit/adversarial tests and
+186/186 focused idle-suspend tests (202 total); code review approved 9.5/10.
+Phase 06 host/API/command/output adapters and Phase 07 rollout remain planned.
 
 The canonical producer foundation is shipped in
 `server/src/idle_suspend/event.rs` and re-exported by `idle_suspend::mod`.
@@ -442,6 +444,74 @@ The collector has no resident process, UI, telemetry, alerting, upload, AI
 credential, external egress, shell, operator-selected path/source/command, or
 public tuning flag. It never reads terminal/PTY content or mutates RTC,
 suspend, systemd, audit, configuration, or source files.
+
+#### Phase 05 pure bundle, bounded readers, privacy, and correlation engine (implemented)
+
+Phase 05 is complete in `server/src/linux_release/diagnostics/`. The
+`linux_release::diagnostics` module exports a pure model, four compatibility
+readers, explicit projectors, exact-UUID correlation analysis, and bundle
+assembly; `server/src/linux_release/mod.rs` declares the module without
+widening release-manager exports. The core accepts typed source results and a
+captured generation timestamp. It performs no command execution, network
+access, output write, producer-file repair, or disk mutation.
+
+`DiagnosticBundleV1` is a camelCase, `deny_unknown_fields` bundle with
+`bundleSchemaVersion: 1`, request/window and host metadata, completeness,
+bounds, latest status, historical source envelopes, correlations, privacy
+manifest, and typed errors. Every source envelope carries collection status,
+historicity, applicability/requiredness, record and byte counts, malformed
+count, coverage, retention/rotation/drop/truncation indicators, and bounded
+typed errors. A readable empty file is `available` with zero records; missing,
+denied, malformed, unsupported, partial-tail, retention-limited, and unknown
+coverage remain explicit partial evidence.
+
+The shared bounded JSONL scanner verifies regular non-symlink files, opens
+read-only with no-follow semantics, scans at most 16 MiB per source, caps each
+line at 16 KiB, accepts at most 10,000 records, and discards oversized lines
+without an unbounded buffer. Oversize files are tail-scanned and marked
+retention-limited; malformed records do not hide valid records on either side.
+The four fixed adapters are:
+
+- `read_server_events` — canonical semantic event schema v1;
+- `read_server_audit` — legacy timing/manual audit records;
+- `read_helper_audit` — helper audit compatibility records across v1/v2;
+- `read_backend_diagnostics` — backend diagnostic JSONL with terminal sources
+  excluded by projection.
+
+Projectors validate schema, closed enums, and canonical UUIDs before retaining
+fields. Server actors are reduced to `actorPresent`; helper detail and free
+text become closed detail/outcome codes; backend text is re-redacted and
+bounded. Terminal/PTY bytes and tails, argv/environment, credentials/tokens,
+socket/IP addresses, inhibitor identity, raw helper frames, journal messages,
+and unbounded stderr never enter the bundle. All retained strings and field
+maps are bounded before final-size calculation.
+
+Correlation is authoritative only on exact validated UUIDs. The engine
+deterministically orders server events, compatibility audits, and helper
+records, then reports chains, open chains, orphan records, duplicate or
+missing producer sequences, and producer restart boundaries. Time proximity,
+epochs, revisions, PIDs, and legacy `epoch-N` values never synthesize a join.
+Legacy manual records join only when their UUID validates; helper records
+without an `attemptStarted` event remain orphans.
+
+`collector::assemble_bundle` calculates the trailing 60-minute request,
+correlations, and historical completeness, then applies a whole-record
+reduction when serialized JSON exceeds 8,388,608 bytes. It marks
+`bounds.truncated` and affected source envelopes, evicts records in the
+frozen source priority (journald, backend diagnostics, compatibility audit,
+non-endpoint semantic events, non-endpoint helper records, then remaining
+endpoints), and never byte-slices JSON. It reserializes in bounded batches and
+recomputes correlations and completeness from the retained records, so
+reported chains and gaps cannot refer to evicted evidence. Bundle metadata,
+privacy manifest, and the single systemd status projection are retained.
+
+Fixture-driven tests cover empty versus missing files, symlink/non-regular
+sources, malformed middle and tail lines, unknown schema/enums, invalid UUIDs,
+line/file/record bounds, redaction corpus, exact joins, gaps, duplicates,
+restarts, orphan helpers, cap reduction, and source immutability. The
+immutability test compares source bytes, length, and permissions before and
+after a reader call; no compaction, truncation, rotation, lock, or repair is
+performed.
 
 #### Independent version and identity contracts
 
@@ -556,7 +626,7 @@ fixed backend call, captures the actual outcome, and attempts completion. A
 post-action failure cannot alter the outcome; it is an evidence gap. No
 parallel helper log is permitted.
 
-#### Fixed source, output, and completeness model
+#### Fixed source, output, and completeness model (Phase 06 host integration contract)
 
 All adapters use fixed allowlisted authorities; custom or alternate layouts are
 `unsupported`, not guessed. The API service has `HOME=/var/lib/dam-hopper` and
@@ -632,16 +702,16 @@ replacement, truncation, or content mutation. A failed call cleans only empty
 objects created by that call, in reverse order.
 
 Installed ownership and creation are part of the implemented runtime contract
-only for the fixed API paths below. Future diagnostics sources listed in this
-planned section are not provisioned, repaired, or lazily created by the API
-gate; they remain a separate diagnostics producer/collector contract.
+only for the fixed API paths below. Phase 05 readers/projectors only inspect
+producer files and never provision, repair, or lazily create them; Phase 06
+owns host/API/command/output adapters around this pure core.
 
 | Path class                                    | Required owner/group and creation rule                                                                                                                                                                 |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | API state                                     | Final rendered API `User:Group` (default `dam-hopper:dam-hopper`); `/var/lib/dam-hopper`, `.config`, and `.config/dam-hopper` are directories `0700` |
 | `/etc/dam-hopper`                             | Installer root `0:0`; fixed anchor directory `0755`; created when absent and exact-validated when present; mismatches are refused, never repaired |
 | `/etc/dam-hopper/idle-suspend-audit.jsonl`    | Final rendered API UID/GID; regular file `0600`; provisioned before API start beneath the root-owned `0755` anchor; existing bytes and inode are preserved; absent/unwritable path makes the audit gate fail closed |
-| Planned diagnostics files                    | Not managed by `provision-api-runtime`; their producer/collector rules remain specified above and are not an API startup prerequisite |
+| Phase 05 pure diagnostics files                  | Not managed by `provision-api-runtime`; readers consume existing producer files and never provision or repair them |
 | Helper audit                                  | systemd `LogsDirectory=dam-hopper`; helper is `root:API_GROUP` and retains its existing runtime/log/protocol contract |
 
 The API unit has no `StateDirectory=` or `StateDirectoryMode=` directives. Its
@@ -715,24 +785,17 @@ records, and command output are rejected or truncated at these limits before
 allocation. Public cap or path flags do not exist.
 
 Projection occurs before sizing and serialization. The immutable top-level
-bundle metadata and privacy manifest, plus required systemd unit identity and
-lifecycle metadata referenced by retained endpoint records, are never evicted.
-Ancillary `systemd` records and `journald` records are evictable. If the final
-JSON is too large, repeatedly evict one whole non-endpoint source record using
-this global total order: ancillary `journald`, ancillary `systemd`, backend
-diagnostics, compatibility server audit, semantic server events, then helper
-audit. Within that priority, candidates are ordered by
-`(timestampMs, producerInstanceId, producerSequence, sourceName,
-sourceOffset)`; source priority is evaluated before the tuple, so no
-cross-source tie exists. All attempt endpoints
-(`attemptStarted`, `terminalRejected`, `reconciliationCompleted`,
-`helperRequestDispatched`, `helperOutcomeReceived`, `acceptedIntent`,
-`executionCompleted`, and `executionRejected`) are protected globally while
-any non-endpoint record remains eligible in any source. Once only endpoints
-remain, the same global order evicts them if necessary. Repeat until
-serialized bytes are at most 8,388,608, mark every affected source
-`truncated`, and recompute correlations after each reduction. Never byte-slice
-JSON.
+bundle metadata and privacy manifest, plus the single systemd status
+projection, are never evicted. If the final JSON is too large,
+`reduce_to_cap` marks `bounds.truncated` and removes whole records in a frozen
+source priority: `journald`, backend diagnostics, compatibility server audit,
+non-endpoint semantic server events, non-endpoint helper audit records, then
+remaining semantic/helper endpoint records. Records retain their source order
+within each priority; no JSON byte slicing or partial record is allowed.
+The reducer evicts in bounded batches, reserializes until the output is at
+most 8,388,608 bytes, marks each affected source `truncated`, and recomputes
+correlations and historical completeness from retained records. A source can
+therefore be partial after reduction even when its input was readable.
 
 Correlation joins exact UUIDs only and orders records by
 `(timestampMs, producerInstanceId, producerSequence, sourceName, sourceOffset)`.
@@ -761,12 +824,14 @@ text.
 
 #### Collector boundary, compatibility, and rollback
 
-Future focused modules under `linux_release/diagnostics/` use narrow fixed
-clock, EUID, read-only filesystem, closed host-command, local-status-client,
-and current-host-probe seams. Commands have fixed executable/argv, null stdin,
-locale `C`, deadline, and stdout cap; API access is fixed loopback with bounded
-body, no redirect, fixed token lookup, and no external request. Source failure
-does not stop independent collection; only safe output failure is fatal.
+The completed Phase 05 core under `linux_release/diagnostics/` accepts typed
+source envelopes and fixed file paths for its four read-only JSONL adapters.
+It has no resident process, UI, telemetry, alerting, upload, AI credential,
+external egress, shell, operator-selected path/source/command, or public
+tuning flag. Phase 06 supplies the role, EUID, fixed command, local API,
+current-probe, trusted-output, and host descriptor adapters around this core.
+Source failure does not stop independent pure assembly; only a future unsafe
+output operation is fatal.
 
 Roll-forward is additive: protocol v1 and existing audit files remain readable,
 no systemd unit or observer is added, and a new collector is the only component
@@ -787,20 +852,21 @@ response returns the same UUID used as `correlationId` and helper protocol-v1
 `requestId`; it never creates a `manual-<uuid>` alias. Older readers may ignore
 additive helper-v2 milestones while retaining existing action names and fields.
 Rollback stops new emission and collector use but never deletes evidence.
-Phase 03 coordinator emission and Phase 04 helper milestones are implemented;
-collector implementation and rollout remain pending. Architecture, security,
-and release-owner approval is complete.
+Phase 03 coordinator emission, Phase 04 helper milestones, and the Phase 05
+pure collector implementation are complete. Phase 06 host integration and
+Phase 07 rollout remain pending. Architecture, security, and release-owner
+approval is complete for the frozen Phase 05 interfaces.
 
 #### Phase 01 review disposition
 
 Cycle 1 warnings are dispositioned as follows: source-open security and
 owner/group assumptions are frozen above; field/array/nested and command
-bounds are explicit above; eviction tie-breaking and endpoint retention are
-global, total, and repeatable above; applicability and coverage metadata
-including `coverageUnknown` and `malformedCount` are explicit above; helper
-IDs are nullable above; the old/new compatibility matrix, legacy restart rule,
-and manual UUID reuse are explicit above; safe executable identity is
-allowlisted above.
+bounds are explicit above; source-priority reduction and endpoint retention
+are fixed, deterministic, and repeatable above; applicability and coverage
+metadata including `coverageUnknown` and `malformedCount` are explicit above;
+helper IDs are nullable above; the old/new compatibility matrix, legacy
+restart rule, and manual UUID reuse are explicit above; safe executable
+identity is allowlisted above.
 
 Cycle 2's deployability contradiction is resolved in the implementation. The
 finalized API unit's exact `User=`/`Group=` pair is the sole numeric identity
@@ -813,9 +879,9 @@ or repair. Neither API nor helper uses `StateDirectory=` or
 `+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime`; active,
 candidate, rollback, and automatic-restart API starts pass through it, while
 boot recovery provisions without starting services. API identity is not read
-from a release manifest and cannot override the final unit. The diagnostics
-producer/collector described above remains planned and separate from this
-implemented runtime reconciliation.
+from a release manifest and cannot override the final unit. Phase 05's pure
+diagnostics producer/collector remains separate from this implemented runtime
+reconciliation; Phase 06 owns host integration.
 
 ### Phase 01 helper execution contract
 

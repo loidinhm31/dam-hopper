@@ -955,10 +955,10 @@ Operations-owned target-host gate. See the [Phase 08 QA report](../plans/reports
 ### PR-018: Production Idle-Suspend Diagnostics (Phases 01–07)
 
 **Status:** Phase 01 architecture/schema/security contract, Phase 02
-canonical event foundation, Phase 03 server coordinator integration, and Phase
-04 helper audit milestone enrichment were completed on 2026-09-13. The bounded
-collector, bundle projection, mixed-version verification, and rollout remain
-planned Phases 05–07.
+canonical event foundation, Phase 03 server coordinator integration, Phase
+04 helper audit milestone enrichment, and Phase 05 pure bundle/correlation
+engine were completed on 2026-09-13. Phase 06 host/API/command/output
+integration and Phase 07 rollout remain planned.
 
 **Product intent:** Preserve bounded, privacy-safe evidence for diagnosing an
 idle-suspend incident without adding an observer daemon, terminal-content
@@ -1008,6 +1008,17 @@ Phase 04 test fixtures cover mixed v1/v2 deserialization, exact milestone
 ordering, closed code mapping, sequence-gap/restart behavior, intent and RTC
 fail-closed paths, and prune safety without host mutation.
 
+**Phase 05 delivery:** `server/src/linux_release/diagnostics/` now provides the
+pure bundle-v1 model, four bounded no-follow JSONL compatibility readers,
+source completeness metadata, explicit privacy projection, exact UUID
+correlation/gap/restart analysis, and deterministic whole-record reduction to
+the 8-MiB serialized bundle cap. Readers preserve valid records around
+malformed input, distinguish missing from readable-empty files, and never
+compact, repair, truncate, rotate, lock, or write producer files. The
+collector recomputes correlations and completeness after reduction. Focused
+diagnostics tests pass 16/16; source immutability is verified with fixture
+bytes, length, and permission comparisons.
+
 **Acceptance criteria:**
 
 - [x] Phase 01 freezes the event, helper, bundle, path, privacy, durability,
@@ -1019,8 +1030,11 @@ fail-closed paths, and prune safety without host mutation.
 - [x] Phase 04 evolves helper evidence in place with typed milestones,
       producer identity/sequence, protocol/action compatibility, intent
       fail-closed ordering, safe closed codes, and secure pruning.
-- [ ] Phases 05–07 implement the bounded collector and bundle, verify mixed
-      versions/security, and complete rollout gates.
+- [x] Phase 05 implements the pure bounded readers, bundle projection,
+      privacy redaction, exact UUID correlation/gap engine, and whole-record
+      final-size reduction with source immutability verification.
+- [ ] Phases 06–07 add host/API/command/output adapters, mixed-version
+      qualification, and rollout gates.
 
 **Operational boundary:** Event writes are diagnostic best effort after
 coordinator integration; they never rewrite a suspend outcome. Existing
