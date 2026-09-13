@@ -347,6 +347,7 @@ The `agent-activity` policy is an activity heuristic, not semantic proof that an
 - **Host qualification requirement**: Process/socket permissions, kernel features, namespace topology, or latency exceeding the 1-second budget make a host permanently unavailable for this mode. There is no fallback to unverified interface metrics.
 
 ### Production idle-suspend diagnostics (planned and approved; Phase 01)
+Status: User-approved Phase 01 contract; third reviewer scored 10/10 with no findings; runtime implementation remains planned only.
 
 The diagnostics collector remains an approved planned contract, not a shipped
 runtime feature. The implemented release-manager identity/provisioning gate
@@ -482,18 +483,40 @@ owns the root log through `LogsDirectory=dam-hopper`.
 | Root bundle                                                | `/var/lib/dam-hopper-manager/diagnostics/dam-hopper-diagnose-<generatedAtMs>-<bundleId>.json` | trusted root output                                                                            |
 | Non-root bundle                                            | `$XDG_STATE_HOME/dam-hopper/diagnostics`, else `$HOME/.local/state/dam-hopper/diagnostics`    | valid partial output; no `/tmp` fallback                                                       |
 
-Every file source is read through a regular-file, read-only, no-follow
-directory-handle traversal. Linux implementations use `openat2` with
-`RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV` (or an equivalent
-dirfd walk that rejects symlinks and mount crossings for every ancestor and the
-final component); unsupported handle-safe traversal is a source error, never a
-path-based fallback. The adapter validates each opened directory and final
-descriptor with `fstat` for the expected owner/group/mode, checks the handle
-again before projection, and enforces source and line caps before allocation.
-A replacement, symlink, non-regular source, mount crossing, ownership/mode
-mismatch, or detected race discards that source and reports a typed partial
-error; it never follows an alternate path. The collector never locks,
-compacts, repairs, rotates, truncates, rewrites, or follows a producer path.
+Every file source begins from the trusted layout-root descriptor and opens only
+its fixed components with `openat2`
+`RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV`, or an equivalent
+descriptor walk. A symlink, replacement, mount transition, missing handle-safe
+primitive, or failed descriptor-continuity check discards the affected source as
+typed partial evidence; it never follows or scans an alternate path. The
+`NO_XDEV` rule intentionally makes a separate `/var` or `/var/log` filesystem
+an `unsupported` partial source rather than a supported alternate layout.
+
+The collector uses the following exact metadata comparators for
+product-controlled **ancestor directories**. The final-file comparators remain
+in the source table above; no row repairs or normalizes an existing object.
+
+| Path | Type | UID | GID | Mode | Sole authority and mismatch result |
+| --- | --- | ---: | ---: | ---: | --- |
+| `/var` | directory | `0` | `0` | `0755` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/lib` | directory | `0` | `0` | `0755` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/lib/dam-hopper` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/lib/dam-hopper/.config` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/lib/dam-hopper/.config/dam-hopper` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/lib/dam-hopper/.config/dam-hopper/diagnostics` | directory | final API UID | final API GID | `0700` | API `DiagnosticStore` creates a missing parent while the final API unit has `UMask=0077`; collector only verifies an existing entry. Mismatch makes `serverEvents` and `diagnosticEvents` `unsupported` partial sources. |
+| `/etc` | directory | `0` | `0` | `0755` | API runtime provisioner; existing and newly created entries must match. |
+| `/etc/dam-hopper` | directory | `0` | `0` | `0755` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/log/dam-hopper` | directory | `0` | final API GID | `0755` | Fixed helper unit: `User=root`, `Group=API_GROUP`, `LogsDirectory=dam-hopper`, and default `LogsDirectoryMode=0755`. Collector requires the effective fixed helper unit to retain these values; deviation makes only helper audit, journal, and lifecycle sources `unsupported` partial evidence. |
+
+`/` and `/var/log` are host traversal anchors, not product metadata
+authorities. For them the collector requires only a directory descriptor,
+no symlink or mount transition, and descriptor continuity before projection; it
+does not invent an exact UID, GID, or mode. For every product-controlled row
+and final file, it validates type/owner/group/mode with `fstat` before and
+after projection, enforces source and line caps before allocation, and reports a
+replacement, special file, metadata mismatch, or race as typed partial
+evidence. The collector never locks, compacts, repairs, rotates, truncates,
+rewrites, or follows a producer path.
 
 The finalized API systemd unit's exact `User=`/`Group=` pair is the sole
 numeric runtime identity authority for API-owned state. The manager parses
@@ -513,19 +536,18 @@ object as exact type/owner/group/mode, and refuses mismatches without repair,
 replacement, truncation, or content mutation. A failed call cleans only empty
 objects created by that call, in reverse order.
 
-Installed ownership and creation are part of the implemented runtime contract.
-For API-owned objects, the descriptor-relative provisioner is the sole
-creator/validator and establishes these properties before the API executable
-starts:
+Installed ownership and creation are part of the implemented runtime contract
+only for the fixed API paths below. Future diagnostics sources listed in this
+planned section are not provisioned, repaired, or lazily created by the API
+gate; they remain a separate diagnostics producer/collector contract.
 
-| Path class                                    | Required owner/group and creation rule                                                                                                                                                                                                                                              |
-| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| API state, server events, backend diagnostics | Rendered API `User:Group` (default `dam-hopper:dam-hopper`); the provisioner creates/validates `/var/lib/dam-hopper`, `.config`, and `.config/dam-hopper` as `0700`; files are API-owned `0600`; `UMask=0077` is defense in depth, not the parent-mode guarantee |
-| `/etc/dam-hopper`                              | Installer root `0:0`; fixed anchor directory `0755`; created when absent and exact-validated when present; mismatches are refused, never repaired                                                                                                                                    |
-| `/etc/dam-hopper/idle-suspend-audit.jsonl`    | Final rendered API UID/GID; regular file `0600`; provisioned before API start beneath the root-owned `0755` anchor; existing bytes and inode are preserved; absent/unwritable path makes the audit gate fail closed                                      |
-| Helper audit                                  | systemd `LogsDirectory=dam-hopper`; helper is `root:API_GROUP`, where `API_GROUP` is the same verified rendered API primary group (default `dam-hopper`) in both units; helper-created audit file is root-owned `0600`                                                              |
-| Root bundle output                            | Root invocation creates `/var/lib/dam-hopper-manager/diagnostics` as `root:root`, `0700`; final files are `0600`                                                                                                                                                                    |
-| Non-root bundle output                        | Invoking UID and primary GID create the resolved state directory as `0700`; final files are `0600`                                                                                                                                                                                  |
+| Path class                                    | Required owner/group and creation rule                                                                                                                                                                 |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| API state                                     | Final rendered API `User:Group` (default `dam-hopper:dam-hopper`); `/var/lib/dam-hopper`, `.config`, and `.config/dam-hopper` are directories `0700` |
+| `/etc/dam-hopper`                             | Installer root `0:0`; fixed anchor directory `0755`; created when absent and exact-validated when present; mismatches are refused, never repaired |
+| `/etc/dam-hopper/idle-suspend-audit.jsonl`    | Final rendered API UID/GID; regular file `0600`; provisioned before API start beneath the root-owned `0755` anchor; existing bytes and inode are preserved; absent/unwritable path makes the audit gate fail closed |
+| Planned diagnostics files                    | Not managed by `provision-api-runtime`; their producer/collector rules remain specified above and are not an API startup prerequisite |
+| Helper audit                                  | systemd `LogsDirectory=dam-hopper`; helper is `root:API_GROUP` and retains its existing runtime/log/protocol contract |
 
 The API unit has no `StateDirectory=` or `StateDirectoryMode=` directives. Its
 single exact pre-start gate is
@@ -668,10 +690,7 @@ restarts; legacy manual IDs join only on an exact validated ID. A manual API
 response returns the same UUID used as `correlationId` and helper protocol-v1
 `requestId`; it never creates a `manual-<uuid>` alias. Older readers may ignore
 additive helper-v2 milestones while retaining existing action names and fields.
-Rollback stops new emission and collector use but never deletes evidence;
-withdrawing this approval reverts only this planned subsection. Phase 02 is
-blocked until architecture, security, and release-owner review approve this
-contract.
+Rollback stops new emission and collector use but never deletes evidence; withdrawing this approval reverts only this planned subsection. Phase 02 remains subject to Phase 01 implementation and validation gates; architecture, security, and release-owner approval is complete.
 
 #### Phase 01 review disposition
 
