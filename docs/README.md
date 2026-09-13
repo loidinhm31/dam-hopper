@@ -39,7 +39,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 - **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
 - **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
-- **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, helper service lifecycle, activation, rollback, and recovery
+- **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, Phase 06 diagnostics, helper service lifecycle, activation, rollback, and recovery
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
 - Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
 
@@ -108,14 +108,18 @@ generic network coverage.
   900 seconds (15 minutes).
 - Phase 01 configuration stores `automaticPolicy` and `agentExecutables`
   under `server.idleSuspend`; the selector defaults to `empty-fleet`.
-- Production diagnostics Phase 05 is complete: the pure bundle-v1 model,
-  source envelopes, four bounded compatibility readers, privacy projection,
-  exact UUID correlation/gap engine, and whole-record 8-MiB cap reducer are
-  implemented under `server/src/linux_release/diagnostics/`. Focused
-  diagnostics tests pass 16/16; readers verify source bytes, length, and
-  permissions remain unchanged. Phase 06 host/API/command/output integration
-  and Phase 07 rollout remain planned; see the
-  [diagnostics plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md).
+- Production diagnostics Phase 06 is complete: `dam-hopper diagnose --json`
+  invokes fixed role-aware systemd/journal/local-API/host-probe adapters,
+  writes a bounded `bundleSchemaVersion: 1` JSON bundle, and returns exit
+  `0` for complete, `2` for valid partial, or `1` for fatal
+  serialization/output failure. Root output uses
+  `/var/lib/dam-hopper-manager/diagnostics`; non-root output uses
+  `$XDG_STATE_HOME/dam-hopper/diagnostics` or `$HOME/.local/state/dam-hopper/diagnostics`.
+  Non-root collection never escalates; root-only helper evidence is
+  `permissionDenied`, so server/both runs may be partial. See the
+  [Linux Release Manager](./linux-release-manager.md#production-diagnostics-phase-06)
+  guide and [diagnostics plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md).
+- Phase 07 rollout remains planned.
 - Configured-agent activity Phase 02 provides private PTY evidence and input
   admission; its Phase 03 provides bounded process discovery and retained
   attribution. Phase 04 provides owned TCP byte observation and per-socket

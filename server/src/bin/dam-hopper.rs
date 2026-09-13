@@ -4,8 +4,9 @@ use clap::Parser;
 use dam_hopper_server::linux_release::{
     acquire_release, current_euid, execute_activation_with_args, execute_manual_rollback,
     execute_recovery, load_host_config, load_or_init_manager_state, save_host_config,
-    stage_release_bundle, verify_api_service_account, verify_privileges, Cli, Commands, HostConfig,
-    Layout, ReleaseError, RoleCommands, TargetRole, ALL_SERVICE_UNITS,
+    stage_release_bundle, verify_api_service_account, verify_privileges, Cli, CollectorAdapters,
+    Commands, HostConfig, Layout, ReleaseError, RoleCommands, TargetRole, ALL_SERVICE_UNITS,
+    run_diagnose,
 };
 use std::process::ExitCode;
 
@@ -367,6 +368,10 @@ async fn main() -> ExitCode {
                 dam_hopper_server::linux_release::RELEASE_MANIFEST_SCHEMA_VERSION
             );
             ExitCode::SUCCESS
+        }
+        Commands::Diagnose(_args) => {
+            let adapters = CollectorAdapters::default();
+            run_diagnose(&layout, &adapters).await
         }
         Commands::ProvisionApiRuntime => {
             match dam_hopper_server::linux_release::provision_installed_api_runtime(&layout) {

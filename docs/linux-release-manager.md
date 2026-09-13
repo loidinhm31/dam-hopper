@@ -122,6 +122,7 @@ sudo dam-hopper rollback
 sudo dam-hopper recover
 dam-hopper version
 dam-hopper validate --manifest PATH [--archive PATH]
+dam-hopper diagnose --json
 ```
 
 `--version` and `--latest` conflict. The runtime requires one of them; omitting
@@ -141,6 +142,7 @@ both causes `fetch` to fail before a release is written. `--output` and
 | `recover`  | 0        | Reconcile crash/boot state (`--boot` for systemd)        |
 | `version`  | any      | Print manager version, profile, and schema               |
 | `validate` | any      | Validate manifest and optional archive without mutation  |
+| `diagnose` | any      | Collect fixed local evidence; may return a partial bundle |
 
 The parser has no `--api-url` or separate `activate` command. Web and both-role
 installs leave server URL setup to the existing client-side server-profile
@@ -474,6 +476,62 @@ the authoritative `state` envelope; it must not expose environment files,
 tokens, archive contents, or command output. `version` reports the Cargo package
 version, the `linux-x86_64-systemd` profile, and release manifest schema `2`;
 persisted manager state remains schema `1`.
+
+### Production diagnostics (Phase 06)
+
+Run the one-shot local collector:
+
+```bash
+dam-hopper diagnose --json
+```
+
+`--json` is required. No path, window, source, unit, URL, command, or
+verbosity option is accepted. The command writes one bounded
+`bundleSchemaVersion: 1` JSON bundle and prints exactly its absolute final path
+plus newline on stdout; progress and warnings never share stdout.
+
+Output location depends on EUID:
+
+- Root: `/var/lib/dam-hopper-manager/diagnostics`.
+- Non-root: `$XDG_STATE_HOME/dam-hopper/diagnostics`, else
+  `$HOME/.local/state/dam-hopper/diagnostics`. There is no `/tmp` fallback.
+
+The output directory must be an owned, non-symlink directory with mode `0700`.
+The final file is named
+`dam-hopper-diagnose-<generatedAtMs>-<bundleId>.json` and is mode `0600`.
+The writer creates a same-directory exclusive no-follow temporary file, writes
+and syncs the JSON, atomically renames it, and syncs the directory before
+publishing the path.
+
+Role-aware collection reads the role from `/etc/dam-hopper/host.toml`:
+
+- `server` and `both` collect server events/audit, helper audit, backend
+  diagnostics, fixed systemd/journal evidence, local idle status, and current
+  host probes.
+- `web` marks server-only sources `notApplicable` and does not invoke their
+  host commands.
+- Missing or unknown role remains unknown and prevents a complete historical
+  result; it is not converted to `notApplicable`.
+
+The host command adapter invokes only fixed `systemctl`, `journalctl`, and
+`systemd-inhibit` forms. It uses locale `C`, null stdin, discarded stderr,
+five-second deadlines, and bounded stdout. The local API adapter uses only
+`http://127.0.0.1:4801/api/system/idle-suspend/v1/status` with token
+`/var/lib/dam-hopper/.config/dam-hopper/server-token`, no redirects, a
+five-second deadline, and a 256 KiB body cap. Probes are read-only and redact
+journal message text, credentials, terminal data, arguments, and addresses.
+Non-root collection never calls `sudo`, setuid helpers, or other escalation;
+helper audit is `permissionDenied`, so an applicable non-root run is partial.
+
+| Exit | Meaning |
+| ---: | --- |
+| `0` | Bundle written; all applicable required historical sources are complete. |
+| `2` | Valid bundle written, but historical evidence is partial. |
+| `1` | Serialization or secure output failure; no path is printed or bundle published. |
+
+The collector never mutates RTC, suspend, systemd, configuration, enrollment,
+source logs, sockets, or PID files. It is separate from the browser
+`POST /api/diagnostics/export` flow.
 
 ## Filesystem layout
 

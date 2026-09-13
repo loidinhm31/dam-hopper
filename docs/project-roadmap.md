@@ -9,9 +9,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - This is bounded qualification only; no stable production publication or external trust verification claimed. External trust-root/inventory integration, workflow migration/deep-validator wiring, Fedora parity, numeric JSON lexical canonicalization, and parent diagnostics Phase 02 status were explicitly outside this disposition and remain unresolved. Shallow/deep, trust-root, and workflow caveats remain documented.
 - [Reconciliation plan](../plans/260912-1221-idle-suspend-runtime-identity-reconciliation/plan.md) · [Phase 03 plan](../plans/260912-1221-idle-suspend-runtime-identity-reconciliation/phase-03-qualify-and-review-reconciliation.md).
 
-### Production idle-suspend diagnostics (2026-09-12–13)
+### Production idle-suspend diagnostics (2026-09-12–14)
 
-- **Plan status: IN PROGRESS (Phase 05 complete; 5/7 phases; 84/110h, 76%).** Phases 01–05 deliver the frozen diagnostics contract, canonical writer, coordinator instrumentation, restart-safe action correlation, hardened helper audit milestones, and the pure bundle/correlation engine; Phases 06–07 remain planned.
+- **Plan status: IN PROGRESS (Phase 06 complete; 6/7 phases).** Phases 01–06
+  deliver the frozen diagnostics contract, canonical writer, coordinator
+  instrumentation, restart-safe correlation, helper audit milestones, pure
+  bundle/correlation engine, role-aware host adapters, atomic output, and `dam-hopper diagnose --json`; Phase 07 rollout remains planned.
 - **Phase 02 — DONE (2026-09-13; 100%)**: Delivered closed event/data types, a bounded mode-0600 no-follow synced JSONL writer, restart-safe producer identity, sequence-gap semantics, and protocol-compatible action correlation validation.
 - **Phase 03 — DONE (2026-09-13; 100%)**: Wired the optional writer through `AppState` and coordinator startup; emitted authoritative automatic/manual lifecycle events; reused one UUID v4 through semantic events, helper requests, manual responses/audits, outcomes, and reconciliation; suppressed per-sample event volume.
 - **Phase 04 — DONE (2026-09-13; 100%)**: Evolved the existing root helper audit in place to schema v2 with producer identity/sequence and typed rejection, capability, preflight, RTC, invocation, and outcome milestones; preserved protocol-v1/action compatibility, intent fail-closed ordering, safe redaction, and post-action outcome truth.
@@ -19,7 +22,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - Validation: Phase 04 focused helper tests **23/23**, full `idle_suspend` module **172/172**, and helper binary build passed; Cycle 2 code review approved **9.8/10** with no critical or high findings. [Phase 04](../plans/260912-0027-production-idle-suspend-diagnostics/phase-04-helper-milestone-enrichment.md) · [Test report](../plans/reports/tester-260913-1935-phase04-helper-audit-milestone-enrichment-cycle2.md) · [Code review](../plans/reports/code-review-260913-1937-phase-04-helper-milestone-enrichment-cycle2.md).
 - **Phase 05 — DONE (2026-09-13; 100%; 6/6 todo items):** Delivered the pure bundle-v1 model, bounded no-follow JSONL readers, strict privacy projection, source completeness/status, exact UUID correlation, gap/restart/orphan analysis, and deterministic 8-MiB whole-record reduction.
 - Validation: **202/202 tests passed** (**16 diagnostics + 186 `idle_suspend`**); Cycle 2 review **9.5/10**; canonical advisor lifecycle completed. [Phase 05 plan](../plans/260912-0027-production-idle-suspend-diagnostics/phase-05-bundle-correlation-engine.md) · [Code review](../plans/reports/code-review-260913-2327-phase-05-bundle-correlation-engine-cycle2.md).
-
+- **Phase 06 — DONE:** Exact required-`--json` grammar, any-EUID privilege
+  allowance without escalation, role-aware fixed host adapters, and secure
+  root/non-root output. Exit `0` is complete evidence, `2` a valid partial
+  bundle, and `1` fatal serialization/output; Phase 07 owns qualification and
+  controlled rollout.
 ### Configured-agent activity idle suspend (2026-09-11)
 
 - **Phases 01–08 — DONE (2026-09-11).** Policy/configuration, PTY evidence,

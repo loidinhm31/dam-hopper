@@ -195,4 +195,98 @@ impl Layout {
     pub fn sysusers_conf_path(&self) -> PathBuf {
         self.sysusers_dir().join("dam-hopper-web.conf")
     }
+
+    /// Root bundle output directory:
+    /// `/var/lib/dam-hopper-manager/diagnostics`
+    pub fn diagnostics_dir(&self) -> PathBuf {
+        self.var_lib_dir.join("diagnostics")
+    }
+
+    /// Server semantic events file:
+    /// `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`
+    pub fn server_events_path(&self) -> PathBuf {
+        self.api_config_dir().join("diagnostics/idle-suspend-events-v1.jsonl")
+    }
+
+    /// Backend diagnostics log:
+    /// `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/backend-log.jsonl`
+    pub fn backend_diagnostics_path(&self) -> PathBuf {
+        self.api_config_dir().join("diagnostics/backend-log.jsonl")
+    }
+
+    /// Helper audit log:
+    /// `/var/log/dam-hopper/idle-suspend-helper.jsonl`
+    pub fn helper_audit_path(&self) -> PathBuf {
+        self.trusted_root().join("var/log/dam-hopper/idle-suspend-helper.jsonl")
+    }
+
+    /// API authentication token:
+    /// `/var/lib/dam-hopper/.config/dam-hopper/server-token`
+    pub fn api_token_path(&self) -> PathBuf {
+        self.api_config_dir().join("server-token")
+    }
+
+    /// Server enrolled PID file:
+    /// `/run/dam-hopper/server.pid`
+    pub fn server_pid_path(&self) -> PathBuf {
+        self.trusted_root().join("run/dam-hopper/server.pid")
+    }
+
+    /// Helper UNIX domain socket:
+    /// `/run/dam-hopper/idle-suspend.sock`
+    pub fn helper_socket_path(&self) -> PathBuf {
+        self.trusted_root().join("run/dam-hopper/idle-suspend.sock")
+    }
+
+    /// RTC wakealarm sysfs path:
+    /// `/sys/class/rtc/rtc0/wakealarm`
+    pub fn rtc_wakealarm_path(&self) -> PathBuf {
+        self.trusted_root().join("sys/class/rtc/rtc0/wakealarm")
+    }
+
+    /// RTC device directory:
+    /// `/sys/class/rtc/rtc0`
+    pub fn rtc_device_dir(&self) -> PathBuf {
+        self.trusted_root().join("sys/class/rtc/rtc0")
+    }
+
+    /// Linux power state sysfs path:
+    /// `/sys/power/state`
+    pub fn power_state_path(&self) -> PathBuf {
+        self.trusted_root().join("sys/power/state")
+    }
+
+    /// Kernel boot id path:
+    /// `/proc/sys/kernel/random/boot_id`
+    pub fn boot_id_path(&self) -> PathBuf {
+        self.trusted_root().join("proc/sys/kernel/random/boot_id")
+    }
+}
+
+/// Resolve safe user-scoped diagnostics directory for non-root executions.
+///
+/// Priority:
+/// 1. `$XDG_STATE_HOME/dam-hopper/diagnostics` if `$XDG_STATE_HOME` is set and non-empty.
+/// 2. `$HOME/.local/state/dam-hopper/diagnostics` if `$HOME` is set and non-empty.
+/// 3. None (no `/tmp` fallback).
+pub fn resolve_user_diagnostics_dir() -> Option<PathBuf> {
+    resolve_user_diagnostics_dir_with(|k| std::env::var_os(k).map(PathBuf::from))
+}
+
+/// Seamed variant of `resolve_user_diagnostics_dir` for deterministic testing.
+pub fn resolve_user_diagnostics_dir_with<F>(get_env: F) -> Option<PathBuf>
+where
+    F: Fn(&str) -> Option<PathBuf>,
+{
+    if let Some(state_home) = get_env("XDG_STATE_HOME") {
+        if state_home.is_absolute() && !state_home.as_os_str().is_empty() {
+            return Some(state_home.join("dam-hopper").join("diagnostics"));
+        }
+    }
+    if let Some(home) = get_env("HOME") {
+        if home.is_absolute() && !home.as_os_str().is_empty() {
+            return Some(home.join(".local/state/dam-hopper/diagnostics"));
+        }
+    }
+    None
 }
