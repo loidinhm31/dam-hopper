@@ -138,8 +138,8 @@ event file or change `HELPER_PROTOCOL_VERSION`.
   an exclusive mode-`0600` no-follow temporary file, syncs file and parent
   directory before rename, and removes the temporary file on failure.
 
-Tests inject identity/clock, temporary audit and RTC paths, credentials,
-preflight, and backends. They must prove v1 compatibility, sequence gaps,
+Tests inject identity, temporary audit and RTC paths, credentials, preflight,
+and backends. They must prove v1 compatibility, sequence gaps,
 milestone order, and prune cleanup without invoking real systemd, RTC, or
 suspend.
 

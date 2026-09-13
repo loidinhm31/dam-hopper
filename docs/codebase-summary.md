@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
 **Generated:** 2026-09-13 from `repomix-output.xml` (Repomix v1.18.0; 1,847
-files, 4,055,261 tokens, 16,735,503 characters; five security-flagged files
+files, 4,058,705 tokens, 16,750,620 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -123,8 +123,7 @@ the public `server/tests/idle_suspend.rs` suite covers 19 integration tests.
 Phase 04 adds helper audit compatibility, sequence-gap, secure-pruning, and
 milestone ordering coverage; the full focused `idle_suspend::` unit filter
 passed 172 tests, including 23 focused helper tests. Fixtures use temporary
-trusted paths, fake clocks, and fake executors; no host suspend or RTC mutation
-is exercised.
+trusted paths and fake executors; no host suspend or RTC mutation is exercised.
 
 Phases 05–07 still own the read-only helper-v2 collector, fixed-source
 projection/redaction, atomic bundle output, mixed-version completeness, and
