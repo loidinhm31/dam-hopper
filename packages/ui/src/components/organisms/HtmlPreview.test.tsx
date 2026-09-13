@@ -40,7 +40,9 @@ describe("HtmlPreview", () => {
 
     const iframe = document.querySelector("iframe");
     expect(iframe).not.toBeNull();
-    expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts allow-modals");
+    expect(iframe?.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-modals allow-forms allow-popups allow-pointer-lock",
+    );
     expect(iframe?.getAttribute("sandbox")).not.toContain("allow-same-origin");
     expect(iframe?.getAttribute("title")).toBe("HTML Preview");
   });
@@ -49,7 +51,8 @@ describe("HtmlPreview", () => {
     await mount("<p>Initial</p>", 200);
 
     let iframe = document.querySelector("iframe");
-    expect(iframe?.getAttribute("srcdoc")).toBe("<p>Initial</p>");
+    expect(iframe?.getAttribute("srcdoc")).toContain("<p>Initial</p>");
+    expect(iframe?.getAttribute("srcdoc")).toContain("data-dam-hopper-preview-shim");
 
     // Re-render with new content
     await act(async () => {
@@ -58,7 +61,7 @@ describe("HtmlPreview", () => {
 
     iframe = document.querySelector("iframe");
     // Before timer advances, still initial
-    expect(iframe?.getAttribute("srcdoc")).toBe("<p>Initial</p>");
+    expect(iframe?.getAttribute("srcdoc")).toContain("<p>Initial</p>");
 
     // Advance timer past debounceMs
     await act(async () => {
@@ -66,7 +69,7 @@ describe("HtmlPreview", () => {
     });
 
     iframe = document.querySelector("iframe");
-    expect(iframe?.getAttribute("srcdoc")).toBe("<p>Updated</p>");
+    expect(iframe?.getAttribute("srcdoc")).toContain("<p>Updated</p>");
   });
 
   it("remounts iframe on reload button click", async () => {
