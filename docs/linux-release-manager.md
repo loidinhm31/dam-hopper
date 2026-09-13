@@ -1,29 +1,24 @@
-# Linux Release Manager (Phases 02–07)
+# Linux Release Manager (Manifest v2; manager state v1)
 
-Status: Core release-manager Phases 02–07 are complete and reviewed
-(2026-09-04). The production CLI idle-suspend helper/socket integration
-(Phases 01–04) is complete and verified (2026-09-10). The manager provides
-unprivileged acquisition, root-only staging, durable activation, exact health
-gating, rollback, crash recovery, and the one-time format-2 migration from the
-retired checkout runner for the Fedora 44 x86_64 systemd release profile.
-Phase 03 adds the separate `dam-hopper-web` binary; Phase 04 defines role-aware
-units and ownership; Phase 06 adds the central GitHub publisher and non-root
-bootstrap; Phase 07 retires the old runner.
+Status: The Manifest v2 hard cutover and manager-state v1 contract are current.
+The manager provides unprivileged acquisition, root-only staging, durable
+activation, exact health gating, rollback, crash recovery, and the one-time
+format-2 migration from the retired checkout runner.
 
 This guide documents the executable from downloaded bundle through committed
-release. The manifest field contract remains in [Linux Release Manifest v1](./linux-release-manifest.md).
+release. The manifest field contract remains in [Linux Release Manifest v2](./linux-release-manifest.md).
 
 ## Prerequisites and trust boundary
 
-The v1 target profile is fixed:
+The v2 target profile is fixed:
 
 | Requirement      | Value                                               |
 | ---------------- | --------------------------------------------------- |
-| Operating system | Fedora 44 (`ID=fedora`, `VERSION_ID=44`)            |
+| Operating system | Linux                                               |
 | CPU              | x86_64                                              |
 | GNU target       | `x86_64-unknown-linux-gnu`                          |
-| glibc            | 2.43 or newer                                       |
-| systemd          | 259 or newer, running as the system manager (PID 1) |
+| glibc            | 2.39 or newer                                       |
+| systemd          | 245 or newer, running as the system manager (PID 1) |
 | Network          | HTTPS access to the public DamHopper GitHub release |
 | Optional tool    | `gh` for GitHub attestation verification only       |
 
@@ -40,14 +35,40 @@ Acquisition and installation have intentionally different privilege boundaries:
   following symlinks, hashes the copied archive, validates the manifest and
   archive, and extracts only the requested role projection.
 - `status` and `version` are read-only and may run under either EUID.
-- The API unit defaults to the validated non-root `dam-hopper:dam-hopper`
-  identity; `validate_api_unit_policy` rejects `root`. A deployment may select
-  another validated non-root service account, so operators must verify the
-  effective `User=`/`Group=` before observer qualification.
+- The API unit's exact final `User=`/`Group=` pair is the only runtime identity
+  authority. The manager rejects root and requires `Group=` to be the user's
+  primary group; it does not infer identity from the manifest, host selection,
+  `SUDO_USER`, or a username-as-group fallback.
 
 The one-time format-2 migration is part of this manager. It accepts only the
 verified legacy layout described in [Linux systemd](./linux-systemd.md), stages
 the new root beside `/opt/dam-hopper`, and retires the old runner after commit.
+
+### API runtime reconciliation
+
+The finalized `dam-hopper-api.service` unit has no `StateDirectory=` or
+`StateDirectoryMode=` directives. Its one fixed privileged pre-start command is:
+
+```text
+ExecStartPre=+<release-root>/bin/dam-hopper-manager provision-api-runtime
+```
+
+The command has no operands and runs before every API start or restart. It
+reparses the final unit, resolves its non-root numeric UID/GID, and creates or
+validates only these fixed paths:
+
+| Path | Required metadata |
+| --- | --- |
+| `/var/lib/dam-hopper` | API UID/GID, directory `0700` |
+| `/var/lib/dam-hopper/.config` | API UID/GID, directory `0700` |
+| `/var/lib/dam-hopper/.config/dam-hopper` | API UID/GID, directory `0700` |
+| `/etc/dam-hopper` | `root:root`, directory `0755` |
+| `/etc/dam-hopper/idle-suspend-audit.jsonl` | API UID/GID, regular file `0600` |
+
+Pre-existing type, owner, group, or mode mismatches refuse without repair,
+replacement, truncation, or content mutation. Failure cleanup removes only
+empty objects created by the same call whose recorded identity still matches.
+The API audit consumer never lazily creates or follows this file.
 
 ## Bootstrap handoff (Phase 06)
 
@@ -130,7 +151,7 @@ dam-hopper fetch --latest --output "$HOME/.cache/dam-hopper/latest" \
 `release-manifest.json` and the exact archive named by the manifest contract:
 
 ```text
-dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz
+dam-hopper-vX.Y.Z-linux-x86_64-systemd.tar.gz
 ```
 
 The manifest is bounded to 1 MiB and the archive response to 500 MiB. Requests
@@ -300,32 +321,53 @@ The opt-in `agent-activity` idle suspend enhancement interacts cleanly with the 
    - **Policy Change**: Setting `automatic_policy = "agent-activity"` or `"empty-fleet"` in `/etc/dam-hopper/dam-hopper.toml` takes effect upon running `sudo systemctl restart dam-hopper-api.service`. It does not require a release-manager transaction or candidate redeployment.
    - **Policy Rollback**: Reverting from `agent-activity` to `empty-fleet` is an immediate configuration edit and API service restart. `sudo dam-hopper rollback` is reserved for binary release rollbacks, while `./deploy/reset-linux-production.sh` is reserved for complete helper disenrollment.
 
-## Verification and end-to-end coverage (Production CLI Phase 04)
+## Verification and end-to-end coverage
 
-The production CLI gate covers rendered-unit policy, transaction-scoped
-staging, role isolation, idle-suspend integration, static boundary assertions,
-and read-only status inspection. Run the focused checks from the repository
-root:
+The release-manager qualification gate covers rendered-unit policy,
+descriptor-relative runtime provisioning, transaction-scoped staging, role
+isolation, idle-suspend audit consumption, start/rollback/recovery ordering,
+and read-only status inspection. Run focused checks from the repository root:
 
 ```bash
-cargo test --manifest-path server/Cargo.toml --test linux_release_staging
-cargo test --manifest-path server/Cargo.toml --test linux_release_unit_policy
-cargo test --manifest-path server/Cargo.toml --lib idle_suspend
-cargo test --manifest-path server/Cargo.toml --test idle_suspend
-./scripts/verify-idle-suspend-boundary.sh
-cargo run --manifest-path server/Cargo.toml --bin dam-hopper -- status --json
+cd server
+cargo test -p dam-hopper-server \
+  --test linux_release_manifest \
+  --test linux_release_manifest_errors \
+  --test linux_release_unit_policy \
+  --test linux_release_staging \
+  --test linux_release_ownership \
+  --test linux_release_state_machine \
+  --test linux_release_publisher_contract
+cargo test -p dam-hopper-server linux_release::api_runtime::tests
+cargo test -p dam-hopper-server \
+  idle_suspend::tests::test_server_audit_preprovisioned_contract
+cargo test -p dam-hopper-server \
+  idle_suspend::tests::test_helper_protocol_suspend_roundtrip
+cd ..
+pnpm release:verify
 ```
 
-Evidence recorded for this phase:
+The publisher contract's migration fixture exercises manager-first ordering,
+complete homogeneous v2 manager capability with v1 state, production
+environment, release-bound forward/rollback manifest and archive bytes,
+bounded timestamps, semantically older rollback ordering, and refusal of
+mixed, stale, unsigned, schema-v1, path-unsafe, detached, and reused rollback
+evidence. Runtime tests use isolated temp roots and injected syscall/starter
+seams; they do not touch host systemd, RTC, suspend, or production paths.
 
-| Scope                                           |       Result |
-| ----------------------------------------------- | -----------: |
-| `linux_release_staging` integration tests       |          9/9 |
-| `linux_release_unit_policy` rendered-unit tests |        10/10 |
-| `idle_suspend` library tests                    |        69/69 |
-| `idle_suspend` integration tests                |        14/14 |
-| Combined focused Rust tests                     |      102/102 |
-| Boundary verifier                               | 14/14 checks |
+The migration checker validates owner-supplied evidence structure and digest
+binding. It does not embed a GitHub DSSE/certificate trust root or synthesize
+target inventory. External attestation verification remains a prerequisite;
+the protected stable publish job is held when migration evidence is absent.
+The final bounded Phase 03 qualification (2026-09-13) recorded 84 passed, 0
+failed, and 0 ignored across the seven focused Rust integration suites listed
+above. `pnpm release:verify` passed, and `pnpm test:deploy` passed all six
+deployment journeys. This approval is limited to the bounded checker and
+runtime qualification; stable publication, external trust-root verification,
+authoritative target-inventory integration, and workflow deep validation remain
+separate gates.
+Run the focused commands above for current counts rather than relying on
+historical phase totals.
 
 `server/tests/linux_release_staging.rs` checks helper/API staging for a server
 role, helper hardening and fixed socket/audit/enrolled-PID arguments, API
@@ -416,7 +458,8 @@ Human-readable status reports the recorded role/origins and active, previous,
 pending, transaction, and failure state. `status --json` emits `hostConfig` and
 the authoritative `state` envelope; it must not expose environment files,
 tokens, archive contents, or command output. `version` reports the Cargo package
-version, `fedora44-x86_64-systemd` profile, and manifest schema version.
+version, the `linux-x86_64-systemd` profile, and release manifest schema `2`;
+persisted manager state remains schema `1`.
 
 ## Filesystem layout
 
@@ -578,10 +621,13 @@ unless `pending` records the staged release.
 
 ## Verification evidence
 
-The Phase 02 focused release suites passed 45/45 tests across seven suites,
-including CLI grammar/privilege checks, Fedora/profile and origin checks,
-acquisition boundaries, archive traversal and role projection, staging,
-deployment-lock contention, and pending-state persistence. The scoped manager
-compile/check and reviewer gate were also approved. Run the focused suites from
-`server/` when changing this contract; the full release validation gate belongs
-to the release owner.
+The historical Phase 02 record covered focused release suites for CLI
+grammar/privilege checks, profile and origin checks, acquisition boundaries,
+archive traversal and role projection, staging, deployment-lock contention, and
+pending-state persistence. Its legacy Fedora/profile cases are historical and
+are not release evidence for the current Linux-only Manifest v2 cutover.
+
+Run the focused suites from `server/` when changing this contract. Current
+publication approval additionally requires the bounded migration evidence,
+external attestation verification, authoritative manager inventory, and the
+stable-job hold to be cleared by the release owner.

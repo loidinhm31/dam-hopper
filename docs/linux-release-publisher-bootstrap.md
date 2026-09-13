@@ -1,9 +1,10 @@
 # Linux Release Publisher and Bootstrap
 
-Status: Phase 06 complete (2026-09-04). This guide describes the central GitHub
-publisher and the non-root bootstrap for the Fedora 44 x86_64 systemd release.
+Status: Phase 06 is complete; bounded Phase 03 migration-gate
+qualification was approved on 2026-09-13. This guide describes the central
+GitHub publisher and the non-root bootstrap for the Linux x86_64 systemd release.
 The runtime manifest and manager rules remain authoritative in [Linux Release
-Manifest v1](./linux-release-manifest.md) and [Linux Release Manager](./linux-release-manager.md).
+Manifest v2](./linux-release-manifest.md) and [Linux Release Manager](./linux-release-manager.md).
 
 ## Release boundary
 
@@ -15,9 +16,9 @@ by the generated manifest is:
 
 | Field           | Value                                                        |
 | --------------- | ------------------------------------------------------------ |
-| Archive         | `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz`           |
+| Archive         | `dam-hopper-vX.Y.Z-linux-x86_64-systemd.tar.gz`              |
 | Target          | `x86_64-unknown-linux-gnu`                                   |
-| OS/ABI contract | Fedora 44, glibc >= 2.43, systemd >= 259                     |
+| OS/ABI contract | Linux, glibc >= 2.39, systemd >= 245                        |
 | Roles           | `server`, `web`, `both` projections                          |
 | Authority       | protected `vX.Y.Z` tag; no `latest` asset or mutable pointer |
 
@@ -41,11 +42,11 @@ validate-metadata
       v                           v
 build-rust                    build-web
 three vendored Rust bins      frozen pnpm9/Node20 web dist
-      \                         /
-       v                       v
+      \                       /
+       v                     v
 package-release
   download inputs -> archive twice -> compare SHA-256
-  -> generate manifest + SPDX SBOM -> stage installer
+  -> generate Manifest v2 + SPDX SBOM -> stage installer
   -> local exact-four-asset gate -> upload one artifact
           |
           v
@@ -71,9 +72,9 @@ name by `check-release-assets.mjs`:
 | Name                                                  | Contents                      | Provenance       |
 | ----------------------------------------------------- | ----------------------------- | ---------------- |
 | `dam-hopper-install.sh`                               | caller-side bootstrap script  | attested subject |
-| `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.tar.gz`    | one immutable runtime archive | attested subject |
-| `release-manifest.json`                               | external Manifest v1 metadata | attested subject |
-| `dam-hopper-vX.Y.Z-fedora44-x86_64-systemd.spdx.json` | SPDX 2.3 SBOM                 | attested subject |
+| `dam-hopper-vX.Y.Z-linux-x86_64-systemd.tar.gz`       | one immutable runtime archive | attested subject |
+| `release-manifest.json`                               | external Manifest v2 metadata | attested subject |
+| `dam-hopper-vX.Y.Z-linux-x86_64-systemd.spdx.json`    | SPDX 2.3 SBOM                 | attested subject |
 
 The manifest is intentionally outside the archive. It contains the archive
 filename, size, and digest, so embedding it would create a digest cycle. GitHub
@@ -154,7 +155,7 @@ After the final archive bytes exist,
 The manifest fixes profile, component, service, and rollback values and writes
 `release-manifest.json` plus the tag-specific SBOM into the output directory.
 The Rust manager remains the second validator: `validate_manifest_and_archive`
-parses a bounded Manifest v1 payload, applies cross-field invariants, then
+parses a bounded Manifest v2 payload, applies cross-field invariants, then
 inspects every gzip/tar entry for exact path set, kind, mode, size, and digest.
 
 The generated inventory maps manager and recovery assets to `common`, API
@@ -165,27 +166,63 @@ credential, mutable URL, or application database may enter the archive.
 
 ## Asset gates and attestations
 
-`deploy/release/check-release-assets.mjs` supports a local directory gate and a
-remote GitHub release gate:
+`deploy/release/check-release-assets.mjs` supports a local directory gate, a
+remote GitHub release gate, and the explicit Manifest v2 migration gate:
 
-- local mode requires exactly the four expected filenames, rejects extra visible
-  files and empty files, computes each local size/SHA-256, checks manifest tag,
-  archive name/size/digest, checks bootstrap `bash -n`, and requires SBOM
-  `spdxVersion` `SPDX-2.3`;
+- local mode requires exactly the four expected Linux filenames, rejects every
+  extra visible entry and every non-regular hidden entry, computes each local
+  size/SHA-256, validates the complete shallow Linux Manifest v2 structure,
+  bounds release inputs, checks manifest tag and whole archive bytes, checks
+  bootstrap `bash -n`, and requires SBOM `spdxVersion` `SPDX-2.3`;
 - remote mode reads GitHub asset metadata (via `gh api` or `--assets-json`),
-  requires exactly those names, `state: uploaded`, nonzero size, and sizes that
-  match local outputs.
+  requires exactly four unique names, `state: uploaded`, positive sizes, and
+  SHA-256 `digest` values matching local outputs when local outputs are
+  supplied. GitHub API mode requires a positive numeric release ID plus
+  `owner/repository`; fixture mode rejects ignored release selectors.
+- migration mode requires `--migration-evidence PATH --require-migration-gate`
+  and `--dir` so evidence binds to real publication bytes. The evidence
+  environment is fixed to `production`, expires within 24 hours, and contains
+  1..1,024 unique manager targets (Manifest v2 plus manager-state v1), with
+  manager IDs bounded to 128 UTF-8 bytes. Its forward manifest and archive
+  must resolve to the exact local release files. Its rollback manifest and
+  archive must be separate files in one publication directory, describe a
+  semantically older release, match their declared archive bytes, and differ
+  from the source manifest bytes. Manager attestation digests must match the
+  published manager inventory entry. Active v2 assets cannot be paired with a
+  manager downgrade.
 
-The workflow runs the local gate before uploading the final artifact and reruns
-both local and remote checks after creating the private draft. The attestation
-job uses `actions/attest-build-provenance` for the installer, archive, manifest,
-and SBOM. Attestation verification is an additional authenticity check; the
-manifest/archive SHA-256 comparison remains mandatory for the manager.
+The checker is a bounded shallow publication gate: it validates evidence
+structure, release identity, manifest structure, whole-file digests, and path
+binding, but does not inspect archive entries against manifest inventory. The
+Rust manager's `validate_manifest_and_archive` deep archive validator must run
+before release approval. The `verified` and `signed` fields are not a
+cryptographic trust root: an operator or external verifier must produce them.
+The repository does not yet embed a GitHub DSSE/certificate trust root or an
+authoritative target-inventory feed, so the checker does not claim to
+authenticate those records independently. Missing external evidence therefore
+remains a release-blocking condition.
 
-The current remote gate compares the API-reported asset names, upload state, and
-sizes; it does not fetch every remote byte to recompute a remote digest. The
-local digest checks and GitHub provenance attestations are the corresponding
-content and provenance checks.
+The release owner must obtain the evidence from the authoritative target
+inventory and complete external attestation verification before invoking the
+required gate:
+
+```bash
+node deploy/release/check-release-assets.mjs \
+  --tag vX.Y.Z \
+  --dir artifacts/final \
+  --migration-evidence path/to/migration-evidence.json \
+  --require-migration-gate
+```
+
+In the protected `publish-release` job, the checker fails closed when a stable
+tag has no migration evidence, so the current workflow cannot undraft a stable
+release until that input is wired. This is an intentional manual hold, not a
+claim that the workflow already generates or verifies migration evidence.
+
+The attestation job still uses `actions/attest-build-provenance` for the
+installer, archive, manifest, and SBOM. Target-manager capability evidence and
+the forward/rollback migration records remain separate owner inputs until an
+external verifier and authoritative inventory source are integrated.
 
 ## Bootstrap installer
 
@@ -258,19 +295,29 @@ pnpm release:check-version [vX.Y.Z]
 pnpm release:archive -- --version vX.Y.Z --target-dir ... --web-dist ...
 pnpm release:manifest -- --archive ... --tag vX.Y.Z --commit <40-char-sha>
 pnpm release:check-assets -- --dir ... --tag vX.Y.Z
+pnpm release:check-assets -- --dir ... --tag vX.Y.Z \
+  --migration-evidence path/to/migration-evidence.json \
+  --require-migration-gate
 pnpm release:verify
 ```
 
 The publisher contract integration test exercises real archive creation, Node
 manifest generation, role projections, tamper rejection, prohibited-file
-rejection, and Rust manager validation. Phase 06 review recorded 24/24 focused
-Rust tests and `pnpm release:verify` passing with no compiler or syntax errors.
+rejection, Rust manager validation, and the migration gate's fresh
+manager-first evidence. The Phase 03 fixture rejects mixed manager capability,
+stale or unsigned evidence, schema-v1 manifests, and reused rollback bytes.
+The final bounded Phase 03 qualification (2026-09-13) recorded 84 passed, 0
+failed, and 0 ignored across the seven focused Rust integration suites.
+`pnpm release:verify` passed, and `pnpm test:deploy` passed all six deployment
+journeys. This evidence qualifies the bounded checker and runtime path only; it
+does not establish stable publication, external trust-root verification,
+authoritative target-inventory integration, or workflow deep validation.
 
 ## Known release boundaries
 
-- The manifest profile is Fedora 44/glibc 2.43/systemd 259, but the current
-  `build-rust` job runs on `ubuntu-latest`; protected Fedora-host and dynamic
-  glibc evidence remains a later release gate.
+- The manifest profile is Linux/glibc 2.39/systemd 245, while the current
+  `build-rust` job runs on `ubuntu-latest`; target-host and dynamic glibc
+  evidence remains a later release gate.
 - The workflow pins checkout, setup, artifact, and attestation Actions to full
   commit SHAs. `dtolnay/rust-toolchain@stable` and `Swatinem/rust-cache@v2`
   remain mutable review follow-ups.
