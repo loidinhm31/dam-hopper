@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { prepareHtmlPreviewContent } from "@/lib/html-preview-transform.js";
 
 export interface HtmlPreviewProps {
   content: string;
@@ -22,6 +23,11 @@ export function HtmlPreview({
     }, debounceMs);
     return () => clearTimeout(timer);
   }, [content, debounceMs]);
+
+  const preparedContent = useMemo(
+    () => prepareHtmlPreviewContent(debouncedContent),
+    [debouncedContent],
+  );
 
   return (
     <div
@@ -50,8 +56,8 @@ export function HtmlPreview({
         <iframe
           key={reloadKey}
           title="HTML Preview"
-          srcDoc={debouncedContent}
-          sandbox="allow-scripts allow-modals"
+          srcDoc={preparedContent}
+          sandbox="allow-scripts allow-modals allow-forms allow-popups allow-pointer-lock"
           className="w-full h-full border-0 block"
         />
       </div>
