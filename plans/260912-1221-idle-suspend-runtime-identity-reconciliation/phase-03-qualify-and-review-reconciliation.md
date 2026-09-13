@@ -13,8 +13,9 @@
 - Date: 2026-09-12
 - Description: prove v2 identity authority and refusal-based pre-start provisioning, qualify migration/rollback, preserve helper v1, then re-review architecture.
 - Priority: P2
-- Implementation status: pending
-- Review status: architecture, security, and release-owner approval required
+- Implementation status: completed 2026-09-13 (bounded qualification)
+- Review status: approved 2026-09-13 (post-tester review; bounded scope)
+- Progress: 100% (7/7 qualification tasks; owner disposition complete)
 
 ## Key Insights
 
@@ -87,13 +88,20 @@
 
 ## Todo list
 
-- [ ] Prove v2-only manifests and manager-state v1 independence.
-- [ ] Complete final-unit identity matrix.
-- [ ] Complete create/refuse/no-mutation/manual-repair/cleanup matrix.
-- [ ] Prove every explicit and automatic start is gated.
-- [ ] Qualify manager-first publication and v2 rollback release.
-- [ ] Prove helper v1 and unrelated unit behavior unchanged.
-- [ ] Record three-owner approval.
+- [x] Prove v2-only manifests and manager-state v1 independence.
+- [x] Complete final-unit identity matrix.
+- [x] Complete create/refuse/no-mutation/manual-repair/cleanup matrix.
+- [x] Prove every explicit and automatic start is gated.
+- [x] Qualify manager-first publication and v2 rollback release.
+- [x] Prove helper v1 and unrelated unit behavior unchanged.
+- [x] Record three-owner approval.
+
+## Completion record
+
+- Bounded qualification completed 2026-09-13 after owner approval, requested tester PASS, and post-tester code-review **APPROVE**.
+- Tester route `openai-codex/gpt-5.6-luna:xhigh` ran seven focused Rust integration suites: **84 passed / 0 failed / 0 ignored**. `pnpm release:verify` passed, and `pnpm test:deploy` passed all six deployment journeys.
+- Post-tester review found no in-scope MUST-FIX/HIGH findings and confirmed current checker `TAG_REGEX`, bounded/fatal-`gh` output, `O_NOFOLLOW|O_NONBLOCK` descriptor reads with metadata/size checks, same-buffer digest/parse, installer stdin, fake-`gh` regressions, and 500 MiB/512 MiB documentation.
+- Scope disposition is explicit: no stable production publication or external trust verification is claimed. External trust-root/inventory integration, workflow migration/deep-validator wiring, Fedora parity, numeric JSON lexical canonicalization, and parent diagnostics Phase 02 status were intentionally ignored for this phase disposition and remain unresolved. Shallow/deep, trust-root, and workflow caveats remain in documentation.
 
 ## Success Criteria
 
@@ -135,8 +143,7 @@
 
 ## Next steps
 
-After focused evidence, architecture/security/release owners issue one no-contradiction disposition. Only then may the parent diagnostics plan treat runtime identity and API path ownership as implemented prerequisites.
+Phase 03 qualification and bounded review completed 2026-09-13. Parent diagnostics Phase 02 status remains unchanged/pending; this disposition does not establish external trust verification or resolve excluded integration/deep-validator, Fedora-parity, numeric-JSON, or inventory gates.
 
 ## Unresolved questions
-
-None.
+None within the bounded Phase 03 disposition.

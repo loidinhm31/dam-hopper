@@ -1,7 +1,7 @@
 ---
 title: "Idle-suspend runtime identity reconciliation"
 description: "Cut release manifests to v2, make rendered API identity authoritative, and fail closed on unsafe runtime paths before every API start."
-status: in_progress
+status: complete
 priority: P2
 effort: 40h
 branch: feat/terminal-idle-suspend
@@ -51,7 +51,16 @@ Managed objects:
 | --- | --- | ---: | ---: | --- |
 | [01 — Reconcile runtime identity authority](phase-01-reconcile-runtime-identity-authority.md) | completed | 100% | 14h | Manifest v2 hard cutover; exact final-unit non-root identity is sole runtime authority; focused release suites and review passed |
 | [02 — Provision API runtime paths](phase-02-provision-api-runtime-paths.md) | completed | 100% | 18h | Completed 2026-09-12: refusal-based no-follow provisioning uses final-unit identity, gates explicit/rollback starts and automatic restarts, and provisions active server recovery before success without starting services |
-| [03 — Qualify and review reconciliation](phase-03-qualify-and-review-reconciliation.md) | pending | 0% | 8h | Observable matrices, migration gate, architecture/security/release approval |
+| [03 — Qualify and review reconciliation](phase-03-qualify-and-review-reconciliation.md) | completed | 100% | 8h | Bounded qualification passed 2026-09-13: seven focused Rust suites 84/0/0, release/deploy gates passed, owner and post-tester review approved; broader blockers explicitly outside disposition |
+
+**Plan progress: COMPLETE (100%; 3/3 phases; 40/40h).**
+
+## Completion record
+
+- Phase 03 bounded qualification completed 2026-09-13 after owner approval.
+- Tester route `openai-codex/gpt-5.6-luna:xhigh`: seven focused Rust integration suites, **84 passed / 0 failed / 0 ignored**; `pnpm release:verify` passed; `pnpm test:deploy` passed all six deployment journeys.
+- Post-tester code review: **APPROVE**; no in-scope MUST-FIX/HIGH findings. Review confirmed current checker `TAG_REGEX`, bounded/fatal-`gh` output, `O_NOFOLLOW|O_NONBLOCK` descriptor reads and metadata/size checks, same-buffer digest/parse, installer stdin, fake-`gh` regressions, and 500 MiB/512 MiB documentation.
+- Disposition is intentionally bounded: no stable production publication or external trust verification claimed. External trust-root/inventory integration, workflow migration/deep-validator wiring, Fedora parity, numeric JSON lexical canonicalization, and parent diagnostics Phase 02 status were explicitly ignored for this phase disposition and remain unresolved; shallow/deep, trust-root, and workflow caveats remain.
 
 ## Cross-phase acceptance gate
 
@@ -60,7 +69,7 @@ Managed objects:
 - Missing managed paths are created with exact identity/type/mode. Any pre-existing mismatch, symlink, or special file is rejected with no mutation and zero starts; after explicit operator repair, rerun succeeds.
 - Existing audit bytes/inode are preserved. Failure cleanup removes only call-created empty objects whose recorded identity/type still match; cleanup races fail closed. Explicit activation and rollback provision first; boot recovery provisions an active server before success but does not start services; restored units are revalidated before rollback start; the fixed `ExecStartPre` closes automatic `Restart=on-failure` bypass, and the audit consumer is pre-provisioned/no-follow.
 - Neither API nor helper unit uses `StateDirectory=dam-hopper`; helper runtime/log ownership, hardening, protocol v1 bytes, and behavior are unchanged.
-- Parent diagnostics Phase 02 remains blocked until focused evidence and architecture/security/release-owner review approve the implemented contract.
+- Parent diagnostics Phase 02 remains separately pending/blocked; this completed disposition does not resolve its external trust-root/inventory, workflow migration/deep-validator, or other broader gates.
 
 ## Rollback and release gate
 

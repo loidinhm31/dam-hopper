@@ -363,6 +363,40 @@ Keep helper lifecycle ownership centralized in `server/src/linux_release/`:
   exception. Check 13 separately protects API `PIDFile`, `ExecStartPost`, and
   `ExecStopPost` enrollment hooks.
 
+### Linux release manifest and runtime identity invariants
+
+The release boundary is Manifest v2; persisted manager state remains schema v1
+and is independent. API identity is never serialized in a release manifest.
+The finalized API unit's single exact non-root `User=`/`Group=` pair is the sole
+runtime identity input for health and ownership; do not infer it from manifests,
+host selection, `SUDO_USER`, username-as-group, or root fallbacks.
+
+The API unit has no `StateDirectory=` or `StateDirectoryMode=`. Its only
+privileged pre-start gate is the fixed zero-operand
+`+<release-root>/bin/dam-hopper-manager provision-api-runtime` command. The
+descriptor-relative provisioner creates or validates only the documented fixed
+state, anchor, and audit paths, rejects symlinks/special files and metadata
+mismatches without repair, and cleans only matching empty objects created by
+the same failed call. The audit consumer opens an existing regular `0600` file
+without lazy creation or path-following. Preserve the helper's runtime, log,
+hardening, and protocol-v1 behavior; it must not claim the API state directory.
+
+The release publication migration gate requires a fresh complete manager-first
+inventory with Manifest v2/manager-state v1 capability, production environment,
+release-bound forward and rollback manifest/archive bytes, a semantically older
+rollback, bounded timestamps, and externally verified attestation records. The
+checker performs bounded exact structural, schema, path, and whole-file digest
+validation, including unique remote asset names and API-reported SHA-256
+digests. It does not inspect archive entries against manifest inventory; the
+Rust manager's `validate_manifest_and_archive` deep validator remains required
+before release approval. It rejects mixed or schema-v1 evidence,
+stale/future/long-lived timestamps, unsigned/path-unsafe/detached records,
+reused rollback source/manifest bytes, and manager downgrade while v2 assets
+are active. Evidence must come from the authoritative target inventory; it is
+not fabricated from local release asset names. The checker does not itself
+provide a GitHub DSSE/certificate trust root, so external verification remains
+explicit and missing evidence holds stable publication.
+
 ### Async Patterns
 
 **Never hold locks across `.await`:**

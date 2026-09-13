@@ -2,6 +2,13 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Idle-suspend runtime identity reconciliation (2026-09-12–13)
+
+- **Plan status: COMPLETE (100%; 3/3 phases; 40/40h).** Phase 03 bounded qualification completed and received owner disposition plus post-tester review approval on 2026-09-13. Phase 01/02 implementation and Phase 03 qualification establish v2-only release manifests, final API-unit identity authority, refusal-based no-follow runtime provisioning, and provision-before-start coverage.
+- **Qualification evidence:** requested `openai-codex/gpt-5.6-luna:xhigh` tester ran seven focused Rust integration suites: **84 passed / 0 failed / 0 ignored**; `pnpm release:verify` passed; `pnpm test:deploy` passed all six deployment journeys. Post-tester code review **APPROVE**, with no in-scope MUST-FIX/HIGH findings; review confirmed current checker `TAG_REGEX`, bounded/fatal-`gh` output, `O_NOFOLLOW|O_NONBLOCK` descriptor reads with metadata/size checks, same-buffer digest/parse, installer stdin, fake-`gh` regressions, and 500 MiB/512 MiB documentation.
+- This is bounded qualification only; no stable production publication or external trust verification claimed. External trust-root/inventory integration, workflow migration/deep-validator wiring, Fedora parity, numeric JSON lexical canonicalization, and parent diagnostics Phase 02 status were explicitly outside this disposition and remain unresolved. Shallow/deep, trust-root, and workflow caveats remain documented.
+- [Reconciliation plan](../plans/260912-1221-idle-suspend-runtime-identity-reconciliation/plan.md) · [Phase 03 plan](../plans/260912-1221-idle-suspend-runtime-identity-reconciliation/phase-03-qualify-and-review-reconciliation.md).
+
 ### Configured-agent activity idle suspend (2026-09-11)
 
 - **Phases 01–08 — DONE (2026-09-11).** Policy/configuration, PTY evidence,

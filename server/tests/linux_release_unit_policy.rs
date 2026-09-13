@@ -50,6 +50,71 @@ fn test_render_api_unit_success() {
 }
 
 #[test]
+fn test_api_unit_identity_and_start_gate_are_single_and_final() {
+    let ctx = create_valid_context();
+    let rendered = render_api_unit(API_TEMPLATE, &ctx).expect("render API unit");
+    let parsed = ParsedUnit::parse(&rendered).expect("parse rendered API unit");
+    let identity = resolve_api_runtime_identity(&parsed).expect("resolve rendered identity");
+
+    assert_eq!(parsed.get_all_values("Service", "User").len(), 1);
+    assert_eq!(parsed.get_all_values("Service", "Group").len(), 1);
+    assert_eq!(
+        parsed.get_all_values("Service", "ExecStartPre"),
+        vec![format!(
+            "+{}/bin/dam-hopper-manager provision-api-runtime",
+            ctx.release_root.display()
+        )]
+    );
+    assert_eq!(identity.user, ctx.api_user);
+    assert_eq!(identity.group, ctx.api_group);
+
+    let mismatched_process = ServiceProcessEvidence {
+        unit_name: API_SERVICE_UNIT.to_string(),
+        pid: 4242,
+        uid: identity.uid.saturating_add(1),
+        gid: identity.gid.saturating_add(1),
+        exe_path: Some(ctx.release_root.join("bin/dam-hopper-server")),
+        cgroup: None,
+    };
+    let process_error = process::verify_service_identity_and_exe(
+        &mismatched_process,
+        identity.uid,
+        &ctx.release_root,
+    )
+    .expect_err("mismatched process UID must be refused");
+    assert!(matches!(
+        process_error,
+        ReleaseError::ProcessInspectionFailed { reason }
+            if reason.contains("effective UID mismatch")
+    ));
+    assert_ne!(mismatched_process.gid, identity.gid);
+}
+
+#[test]
+fn test_api_unit_policy_rejects_state_directory_and_duplicate_prestart() {
+    let ctx = create_valid_context();
+    let state_directory_template = API_TEMPLATE.replace(
+        "\nRuntimeDirectory=dam-hopper",
+        "\nStateDirectory=dam-hopper\nRuntimeDirectory=dam-hopper",
+    );
+    assert!(matches!(
+        render_api_unit(&state_directory_template, &ctx),
+        Err(ReleaseError::UnitPolicyViolation { reason, .. })
+            if reason.contains("StateDirectory")
+    ));
+
+    let duplicate_prestart_template = API_TEMPLATE.replace(
+        "\nExecStart=",
+        "\nExecStartPre=+/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-manager provision-api-runtime\nExecStart=",
+    );
+    assert!(matches!(
+        render_api_unit(&duplicate_prestart_template, &ctx),
+        Err(ReleaseError::UnitPolicyViolation { reason, .. })
+            if reason.contains("exactly one")
+    ));
+}
+
+#[test]
 fn test_render_context_rejects_root_uid() {
     let result = create_valid_context().with_api_identity(
         "root".into(),
@@ -103,9 +168,7 @@ fn test_resolve_api_identity_rejects_missing_and_duplicate_directives() {
 
 #[test]
 fn test_resolve_api_identity_rejects_non_primary_group() {
-    let root = get_user_by_name("root").expect("root account");
-    let group = get_group_by_gid(root.gid).expect("root primary group");
-    let unit = ParsedUnit::parse(&format!("[Service]\nUser=nobody\nGroup={group}\n"))
+    let unit = ParsedUnit::parse("[Service]\nUser=nobody\nGroup=root\n")
         .expect("parse mismatched identity");
 
     assert!(resolve_api_runtime_identity(&unit).is_err());
@@ -138,6 +201,9 @@ fn test_render_helper_unit_success() {
         render_helper_unit(HELPER_TEMPLATE, &ctx).expect("helper unit render should succeed");
 
     assert!(!rendered.lines().any(|line| line.starts_with("StateDirectory=")));
+    assert!(!rendered
+        .lines()
+        .any(|line| line.starts_with("StateDirectoryMode=")));
     assert!(rendered.contains(&format!("Group={}", ctx.api_group)));
     assert!(rendered.contains("RuntimeDirectory=dam-hopper"));
     assert!(rendered.contains("RuntimeDirectoryMode=0775"));
