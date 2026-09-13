@@ -995,6 +995,8 @@ correlation, and closed reason/outcome codes. `helper_server.rs` emits typed
 `acceptedIntent`/`executionCompleted` action records. The helper binary
 initializes one producer identity before binding its socket. Protocol v1 and
 the established action record shape remain compatible.
+`idle_suspend/mod.rs` re-exports the helper audit record/types, closed code
+enums, and schema constant for the server/helper integration surface.
 
 The accepted-intent record is still the only helper pre-action durability gate:
 its synchronized write failure prevents RTC/suspend mutation. Other milestone
