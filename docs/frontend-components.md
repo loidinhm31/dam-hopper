@@ -238,14 +238,17 @@ capability or stream failures without materializing image bytes.
 `packages/ui/src/components/organisms/EditorTabs.tsx`,
 `packages/ui/src/components/organisms/TreeContextMenu.tsx`,
 `packages/ui/src/components/organisms/FileTree.tsx`,
-`packages/ui/src/lib/html-file.ts`, and
+`packages/ui/src/lib/html-file.ts`,
+`packages/ui/src/lib/html-preview-transform.ts`, and
 `packages/ui/src/lib/html-view-mode-persistence.ts`.
 
 Provides file detection, presentation persistence, editor host routing, context menu preview actions, and sandboxed preview rendering for HTML documents:
 
 - **Detection (`html-file.ts`):** Identifies `.html`, `.htm`, and `.xhtml` case-insensitively, maps to standard HTML/XHTML MIME types (`text/html`, `application/xhtml+xml`), and checks preview candidate suitability (excluding diff, large, and binary tabs). Dotfiles without a base name (e.g. `.html`) are excluded.
 - **View Mode Persistence (`html-view-mode-persistence.ts`):** Manages user view mode selection (`"edit" | "split" | "preview"`) via browser `localStorage` key `dam-hopper:html-view-mode:v1`, defaulting to `"edit"`. Storage access is safe and resilient to exceptions or unavailable storage environments. Dispatches the `dam-hopper:html-view-mode-changed` (`HTML_VIEW_MODE_CHANGED_EVENT`) window event on save, enabling live synchronization across mounted tabs without requiring a remount or page reload.
-- **Sandboxed Rendering (`HtmlPreview.tsx`):** Renders HTML content inside a sandboxed `<iframe>` with `sandbox="allow-scripts allow-modals"`. Omission of `allow-same-origin` ensures the document executes with an opaque origin (`"null"`), restricting script access to host parent storage, cookies, and network capabilities. Updates to editor content are debounced by 200ms to avoid DOM thrashing, and an explicit reload control enables forced remounting of the iframe.
+- **Sandboxed Rendering (`HtmlPreview.tsx` & `html-preview-transform.ts`):** Renders HTML content inside a sandboxed `<iframe>` with `sandbox="allow-scripts allow-modals allow-forms allow-popups allow-pointer-lock"`. Omission of `allow-same-origin` ensures the document executes with an opaque origin (`"null"`), restricting script access to host parent storage, cookies, and network capabilities. Updates to editor content are debounced by 200ms to avoid DOM thrashing, and an explicit reload control enables forced remounting of the iframe. To ensure embedded `<script>` tags and standard interactions work reliably in the sandboxed preview without throwing fatal security exceptions, `prepareHtmlPreviewContent` injects non-invasive shims:
+  - **In-Memory Storage Shim:** Provides an in-memory `localStorage` and `sessionStorage` fallback when native access throws `SecurityError` under the `null` origin, allowing scripts with storage calls to execute smoothly.
+  - **In-Frame Visual Alert Modal:** Intercepts `window.alert()` to render an in-frame visual dismissible modal dialog, overcoming modern browser suppression of native dialogs in cross-origin sandboxed frames.
 - **Editor Host (`HtmlHost.tsx`):** Split-view HTML editor component offering an **Edit | Split | Preview** top toggle bar. Lazily imports `MonacoHost` to keep initial bundle size lean. Listens to `HTML_VIEW_MODE_CHANGED_EVENT` to react dynamically to external mode changes, while supporting an optional `initialMode` prop override (e.g., when launched into preview mode from an Explorer context menu action) and defaulting to user preference loaded from `dam-hopper:html-view-mode:v1`.
   - **Edit Mode:** 100% width Monaco code editor.
   - **Split Mode:** 50% left Monaco editor with divider border, 50% right `HtmlPreview`.
