@@ -346,25 +346,20 @@ The `agent-activity` policy is an activity heuristic, not semantic proof that an
 - **Kernel handoff race**: An activity change occurring in the kernel immediately after final comparison can race handoff. The implementation fences server-admitted input, creation, and restarts, but does not freeze processes or guarantee atomic absence of work.
 - **Host qualification requirement**: Process/socket permissions, kernel features, namespace topology, or latency exceeding the 1-second budget make a host permanently unavailable for this mode. There is no fallback to unverified interface metrics.
 
-### Production idle-suspend diagnostics (Phase 01 contract; Phase 02 foundation implemented)
+### Production idle-suspend diagnostics (Phases 01–03 implemented; Phases 04–07 planned)
 
-Status: Phase 01 architecture contract approved (third reviewer: 10/10 with
-no findings). Phase 02 canonical event foundation was implemented on
-2026-09-13. Coordinator/helper instrumentation, the collector, bundle output,
-and rollout remain planned Phases 03–07.
+Status: Phase 01 architecture/schema/security contract approved (third
+reviewer: 10/10 with no findings). Phase 02 canonical event foundation and
+Phase 03 coordinator integration were implemented on 2026-09-13. Helper
+milestones, the collector, bundle output, and rollout remain planned Phases
+04–07.
 
 The canonical producer foundation is shipped in
-`server/src/idle_suspend/event.rs` and re-exported by `idle_suspend::mod`. It
-defines the closed server event model, strict identity/correlation validators,
-and hardened writer, but the coordinator does not construct or emit it yet.
-The diagnostics collector remains an approved planned contract, not a shipped
-runtime feature. The implemented release-manager identity/provisioning gate
-below is a prerequisite for its API-owned sources; it does not add a
-diagnostics producer, observer, policy change, or suspend authority. When
-delivered, one local `dam-hopper diagnose --json` invocation will reconstruct
-bounded producer evidence after an incident; it will not operate an observer,
-classify a root cause, prove work completion, or claim that a final sample
-removes a handoff race.
+`server/src/idle_suspend/event.rs` and re-exported by `idle_suspend::mod`.
+It defines the closed server event model, strict identity/correlation
+validators, and hardened writer. Phase 03 now constructs one optional writer
+through `AppState` and passes it to the coordinator; the existing untagged
+server audit remains a separate compatibility stream.
 
 #### Phase 02 canonical event foundation (implemented)
 
@@ -386,9 +381,51 @@ overflow.
 event path. It refuses an unsafe parent or target, appends one bounded JSONL
 record to a regular mode-`0600` file with no-follow flags, and calls
 `sync_data()` before reporting success. `with_identity` provides deterministic
-test construction; production `new` loads host identity. Phase 03 will inject
-one writer into coordinator lifecycle boundaries. Until then, the existing
-untagged timing/manual server audit remains the only active server audit path.
+test construction; production `new` loads host identity.
+
+#### Phase 03 coordinator and correlation integration (implemented)
+
+`AppState::new` derives the canonical event path from the
+`DiagnosticStore` log parent and initializes an optional
+`IdleSuspendEventWriter`. If that initialization fails, it records a
+sanitized backend diagnostic and leaves the writer absent; the coordinator
+and suspend service remain available, but later diagnostics must expose the
+missing producer evidence as partial. `start_idle_suspend_coordinator` passes
+the shared writer through `start_with_sink` into `run_coordinator`.
+
+`run_coordinator` emits one process-wide `coordinatorStarted` event at
+startup. It keeps one in-memory `AttemptContext` for each automatic or manual
+attempt. The context allocates one UUID v4 before `attemptStarted` and carries
+the mode, fleet/activity/timing/status revisions, generation, and wake value
+through the attempt. The exact UUID is reused as the helper protocol-v1
+`requestId`, accepted manual response ID, existing manual audit ID, and every
+attempt-scoped semantic event. Epochs, revisions, timestamps, PIDs, and fleet
+generations remain evidence only.
+
+Automatic `empty-fleet` attempts emit `attemptStarted` and `armStarted`, then
+`finalCheckStarted`/`finalCheckCompleted`, `handoffClaimAccepted` or
+`handoffClaimRejected`, and `helperRequestDispatched`. Active-fleet,
+generation, recent-activity, timing, and shutdown invalidations emit typed
+`armCancelled`/`terminalRejected` boundaries. `agent-activity` follows the
+same correlation lifecycle after an unchanged final observation; process-wide
+`measurementUnavailable` and `measurementRecovered` events are emitted only
+when availability changes, never once per scheduled sample.
+
+Manual force-suspend allocates the same context type before admission checks.
+Accepted requests emit the handoff and dispatch boundaries before the executor
+call; an actual executor result emits exactly one `helperOutcomeReceived` and,
+after handoff release, one `reconciliationCompleted`. Capability, active-fleet
+confirmation, conflict, audit, and shutdown rejections emit typed terminal
+evidence without dispatch. Semantic writer failures are warning-only and
+cannot replace coordinator state, helper outcomes, audit fail-closed behavior,
+or handoff release.
+
+The integration is covered by deterministic writer/coordinator tests and the
+public idle-suspend integration suite; fixtures inject trusted temporary event
+paths, fake clocks, and fake executors. No event is emitted for scheduled
+samples, status heartbeats, unchanged fleet snapshots, or repeated
+unavailable measurements. See the
+[Phase 03 review report](../plans/reports/code-review-260913-1807-phase03-coordinator-instrumentation.md).
 
 ```
 IdleSuspendCoordinator ── semantic server events ──┐
@@ -743,7 +780,10 @@ restarts; legacy manual IDs join only on an exact validated ID. A manual API
 response returns the same UUID used as `correlationId` and helper protocol-v1
 `requestId`; it never creates a `manual-<uuid>` alias. Older readers may ignore
 additive helper-v2 milestones while retaining existing action names and fields.
-Rollback stops new emission and collector use but never deletes evidence; withdrawing this approval reverts only the planned collector subsection. Phase 02 canonical event foundation is implemented and available to later phases; coordinator/helper instrumentation, collector implementation, and rollout remain pending. Architecture, security, and release-owner approval is complete.
+Rollback stops new emission and collector use but never deletes evidence.
+Phase 03 coordinator emission is implemented; helper milestones, collector
+implementation, and rollout remain pending. Architecture, security, and
+release-owner approval is complete.
 
 #### Phase 01 review disposition
 

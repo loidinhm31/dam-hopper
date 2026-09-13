@@ -16,6 +16,15 @@ use crate::idle_suspend::activity::{
     AgentActivityAdmission, SampleKind, SampleRequest,
     MAX_ACCEPTED_OBSERVATION_AGE, SAMPLE_CADENCE,
 };
+use crate::idle_suspend::event::{
+    ActionCorrelationId, ArmCancelledDataV1, ArmStartedDataV1, AttemptStartedDataV1,
+    AutomaticPolicyV1, CoordinatorStartedDataV1, FinalCheckCompletedDataV1,
+    FinalCheckStartedDataV1, HandoffClaimAcceptedDataV1, HandoffClaimRejectedDataV1,
+    HelperOutcomeReceivedDataV1, HelperRequestDispatchedDataV1, IdleSuspendEventDataV1,
+    IdleSuspendEventWriter, IdleSuspendModeV1, MeasurementRecoveredDataV1,
+    MeasurementUnavailableDataV1, ReconciliationCompletedDataV1,
+    ServerIdleSuspendEventTypeV1, ServerIdleSuspendReasonCodeV1, TerminalRejectedDataV1,
+};
 use crate::idle_suspend::executor::{BoxFuture, IdleSuspendExecutor};
 use crate::idle_suspend::policy::{
     validate_timing_pair, IdleSuspendAutomaticPolicy, RuntimeIdleSuspendTiming,
@@ -124,6 +133,107 @@ enum CommandMessage {
         reply: oneshot::Sender<CoordinatorForceSuspendResult>,
     },
 }
+#[derive(Debug, Clone)]
+pub(crate) struct AttemptContext {
+    pub correlation_id: ActionCorrelationId,
+    pub mode: IdleSuspendModeV1,
+    pub fleet_generation: u64,
+    pub activity_revision: Option<u64>,
+    pub timing_revision: u64,
+    pub status_revision: u64,
+    pub wake_after_seconds: u64,
+}
+
+impl AttemptContext {
+    pub fn new_automatic(
+        fleet_generation: u64,
+        activity_revision: Option<u64>,
+        timing_revision: u64,
+        status_revision: u64,
+        wake_after_seconds: u64,
+    ) -> Self {
+        Self {
+            correlation_id: ActionCorrelationId::new_v4(),
+            mode: IdleSuspendModeV1::Automatic,
+            fleet_generation,
+            activity_revision,
+            timing_revision,
+            status_revision,
+            wake_after_seconds,
+        }
+    }
+
+    pub fn new_manual(
+        fleet_generation: u64,
+        timing_revision: u64,
+        status_revision: u64,
+        wake_after_seconds: u64,
+    ) -> Self {
+        Self {
+            correlation_id: ActionCorrelationId::new_v4(),
+            mode: IdleSuspendModeV1::Manual,
+            fleet_generation,
+            activity_revision: None,
+            timing_revision,
+            status_revision,
+            wake_after_seconds,
+        }
+    }
+}
+
+fn emit_event(
+    writer: Option<&IdleSuspendEventWriter>,
+    event_type: ServerIdleSuspendEventTypeV1,
+    correlation_id: Option<&ActionCorrelationId>,
+    mode: Option<IdleSuspendModeV1>,
+    data: IdleSuspendEventDataV1,
+) {
+    if let Some(w) = writer {
+        let now_ms = IdleSuspendStatusV1::now_ms();
+        if let Err(e) = w.emit(now_ms, event_type, correlation_id, mode, data) {
+            tracing::warn!("Failed to emit idle suspend event {}: {:?}", event_type.as_str(), e);
+        }
+    }
+}
+
+fn map_outcome_to_reason_code(outcome: &SuspendOutcome) -> ServerIdleSuspendReasonCodeV1 {
+    match outcome {
+        SuspendOutcome::ResumedSuccessfully { .. } => {
+            ServerIdleSuspendReasonCodeV1::ResumedSuccessfully
+        }
+        SuspendOutcome::RejectedFleetActive { .. } => {
+            ServerIdleSuspendReasonCodeV1::ActiveFleet
+        }
+        SuspendOutcome::BlockedByInhibitor { .. } => {
+            ServerIdleSuspendReasonCodeV1::InhibitorPresent
+        }
+        SuspendOutcome::UnsupportedCapability { .. } => {
+            ServerIdleSuspendReasonCodeV1::CapabilityUnsupported
+        }
+        SuspendOutcome::ExecutionFailed { error, .. } => {
+            let lower = error.to_lowercase();
+            if lower.contains("busy") || lower.contains("already programmed") {
+                ServerIdleSuspendReasonCodeV1::RtcBusy
+            } else if lower.contains("programming") || lower.contains("rtc") {
+                ServerIdleSuspendReasonCodeV1::RtcProgrammingFailed
+            } else if lower.contains("duplicate") {
+                ServerIdleSuspendReasonCodeV1::DuplicateRequest
+            } else if lower.contains("communication")
+                || lower.contains("unavailable")
+                || lower.contains("helper ipc")
+            {
+                ServerIdleSuspendReasonCodeV1::HelperUnavailable
+            } else if lower.contains("protocol") || lower.contains("unexpected response") {
+                ServerIdleSuspendReasonCodeV1::ProtocolInvalid
+            } else if lower.contains("returned") {
+                ServerIdleSuspendReasonCodeV1::SuspendReturned
+            } else {
+                ServerIdleSuspendReasonCodeV1::SuspendFailed
+            }
+        }
+    }
+}
+
 
 /// Authoritative coordinator for terminal idle suspend.
 pub struct IdleSuspendCoordinator {
@@ -151,6 +261,28 @@ impl IdleSuspendCoordinator {
             executor,
             pty_manager,
             None,
+            None,
+        )
+    }
+
+    pub fn start_with_writer(
+        startup_policy: StartupIdleSuspendPolicy,
+        runtime_timing: Arc<RwLock<RuntimeIdleSuspendTiming>>,
+        timing_store: Option<IdleSuspendTimingStore>,
+        server_audit: Option<IdleSuspendServerAudit>,
+        executor: Arc<dyn IdleSuspendExecutor>,
+        pty_manager: PtySessionManager,
+        event_writer: Option<Arc<IdleSuspendEventWriter>>,
+    ) -> Self {
+        Self::start_with_sink(
+            startup_policy,
+            runtime_timing,
+            timing_store,
+            server_audit,
+            executor,
+            pty_manager,
+            None,
+            event_writer,
         )
     }
 
@@ -162,6 +294,7 @@ impl IdleSuspendCoordinator {
         executor: Arc<dyn IdleSuspendExecutor>,
         pty_manager: PtySessionManager,
         event_sink: Option<Arc<dyn crate::pty::EventSink>>,
+        event_writer: Option<Arc<IdleSuspendEventWriter>>,
     ) -> Self {
         Self::start_internal(
             startup_policy,
@@ -172,6 +305,7 @@ impl IdleSuspendCoordinator {
             pty_manager,
             event_sink,
             None,
+            event_writer,
         )
     }
 
@@ -186,6 +320,7 @@ impl IdleSuspendCoordinator {
         event_sink: Option<Arc<dyn crate::pty::EventSink>>,
         sampler: ActivitySampler,
         sampler_rx: mpsc::Receiver<ActivitySamplerResult>,
+        event_writer: Option<Arc<IdleSuspendEventWriter>>,
     ) -> Self {
         Self::start_internal(
             startup_policy,
@@ -196,9 +331,9 @@ impl IdleSuspendCoordinator {
             pty_manager,
             event_sink,
             Some((sampler, sampler_rx)),
+            event_writer,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn start_internal(
         startup_policy: StartupIdleSuspendPolicy,
@@ -209,6 +344,7 @@ impl IdleSuspendCoordinator {
         pty_manager: PtySessionManager,
         event_sink: Option<Arc<dyn crate::pty::EventSink>>,
         injected_sampler: Option<(ActivitySampler, mpsc::Receiver<ActivitySamplerResult>)>,
+        event_writer: Option<Arc<IdleSuspendEventWriter>>,
     ) -> Self {
         let event_sink = event_sink.unwrap_or_else(|| pty_manager.sink());
         let (command_tx, command_rx) = mpsc::channel(32);
@@ -296,6 +432,7 @@ impl IdleSuspendCoordinator {
                 wake,
                 initial_state,
                 injected_sampler,
+                event_writer,
             )
             .await;
         });
@@ -375,7 +512,10 @@ async fn run_coordinator(
     mut wake_after_seconds: u64,
     mut state: CoordinatorState,
     injected_sampler: Option<(ActivitySampler, mpsc::Receiver<ActivitySamplerResult>)>,
+    event_writer: Option<Arc<IdleSuspendEventWriter>>,
 ) {
+    let mut active_attempt: Option<AttemptContext> = None;
+    let mut prior_measurement_available: Option<bool> = None;
     let initial_snapshot = fleet_watcher.snapshot();
     let mut status_revision = 1u64;
     let mut current_epoch = 0u64;
@@ -426,6 +566,39 @@ async fn run_coordinator(
     } else {
         None
     };
+    let automatic_policy_v1 = match startup_policy.automatic_policy {
+        IdleSuspendAutomaticPolicy::EmptyFleet => AutomaticPolicyV1::EmptyFleet,
+        IdleSuspendAutomaticPolicy::AgentActivity => AutomaticPolicyV1::AgentActivity,
+    };
+    let initial_timing_revision = runtime_timing
+        .try_read()
+        .map(|r| r.status_revision)
+        .unwrap_or(1);
+    let quiet_bounded = quiet_period_seconds.clamp(
+        MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+        MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+    );
+    let wake_bounded = if wake_after_seconds == 0 {
+        0
+    } else {
+        wake_after_seconds.clamp(
+            MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+            MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+        )
+    };
+    emit_event(
+        event_writer.as_deref(),
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+        None,
+        None,
+        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+            automatic_policy: automatic_policy_v1,
+            quiet_period_seconds: quiet_bounded,
+            wake_after_seconds: wake_bounded,
+            timing_revision: initial_timing_revision,
+            status_revision,
+        }),
+    );
 
     let mut cadence_interval = tokio::time::interval(SAMPLE_CADENCE);
     cadence_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -452,6 +625,33 @@ async fn run_coordinator(
 
         tokio::select! {
             _ = shutdown_token.cancelled() => {
+                if let Some(ctx) = active_attempt.take() {
+                    let snap = pty_manager.fleet_snapshot();
+                    if state == CoordinatorState::Armed {
+                        emit_event(
+                            event_writer.as_deref(),
+                            ServerIdleSuspendEventTypeV1::ArmCancelled,
+                            Some(&ctx.correlation_id),
+                            Some(ctx.mode),
+                            IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+                                reason_code: ServerIdleSuspendReasonCodeV1::Shutdown,
+                                fleet_generation: snap.generation,
+                                activity_revision: ctx.activity_revision,
+                            }),
+                        );
+                    }
+                    emit_event(
+                        event_writer.as_deref(),
+                        ServerIdleSuspendEventTypeV1::TerminalRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::Shutdown,
+                            fleet_generation: Some(snap.generation),
+                            activity_revision: ctx.activity_revision,
+                        }),
+                    );
+                }
                 if state == CoordinatorState::Armed || state == CoordinatorState::FinalCheck {
                     state = CoordinatorState::Watching;
                     publish_status_checked(
@@ -484,6 +684,18 @@ async fn run_coordinator(
 
             outcome = suspend_fut => {
                 in_flight_suspend = None;
+                let outcome_reason = map_outcome_to_reason_code(&outcome);
+                if let Some(ctx) = active_attempt.as_ref() {
+                    emit_event(
+                        event_writer.as_deref(),
+                        ServerIdleSuspendEventTypeV1::HelperOutcomeReceived,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::HelperOutcomeReceived(HelperOutcomeReceivedDataV1 {
+                            reason_code: outcome_reason,
+                        }),
+                    );
+                }
                 if let Some(mut manual_audit_rec) = in_flight_manual_audit.take() {
                     if let Some(audit) = server_audit.as_ref() {
                         let now_ms = IdleSuspendStatusV1::now_ms();
@@ -517,6 +729,17 @@ async fn run_coordinator(
                     last_qualifying_activity_at,
                     Some(epoch_activity_revision) == last_attempted_epoch_activity_revision,
                 );
+                if let Some(ctx) = active_attempt.take() {
+                    emit_event(
+                        event_writer.as_deref(),
+                        ServerIdleSuspendEventTypeV1::ReconciliationCompleted,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::ReconciliationCompleted(ReconciliationCompletedDataV1 {
+                            reason_code: outcome_reason,
+                        }),
+                    );
+                }
             }
 
             msg = command_rx.recv() => {
@@ -534,7 +757,22 @@ async fn run_coordinator(
                                 }
                             }
                         }
-
+                        if state == CoordinatorState::Armed {
+                            if let Some(ctx) = active_attempt.take() {
+                                let snap = pty_manager.fleet_snapshot();
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::ArmCancelled,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+                                        reason_code: ServerIdleSuspendReasonCodeV1::GraceCancelled,
+                                        fleet_generation: snap.generation,
+                                        activity_revision: ctx.activity_revision,
+                                    }),
+                                );
+                            }
+                        }
                         let result = handle_timing(
                             cmd,
                             &mut state,
@@ -576,6 +814,44 @@ async fn run_coordinator(
                             arm_deadline.is_some(),
                             Some(epoch_activity_revision) == last_attempted_epoch_activity_revision,
                         );
+                        if state == CoordinatorState::Armed && active_attempt.is_none() {
+                            let snap = pty_manager.fleet_snapshot();
+                            let timing_rev = runtime_timing.try_read().map(|r| r.status_revision).unwrap_or(1);
+                            let act_rev = if is_agent_policy { Some(epoch_activity_revision) } else { None };
+                            let new_ctx = AttemptContext::new_automatic(
+                                snap.generation,
+                                act_rev,
+                                timing_rev,
+                                status_revision,
+                                wake_after_seconds,
+                            );
+                            emit_event(
+                                event_writer.as_deref(),
+                                ServerIdleSuspendEventTypeV1::AttemptStarted,
+                                Some(&new_ctx.correlation_id),
+                                Some(new_ctx.mode),
+                                IdleSuspendEventDataV1::AttemptStarted(AttemptStartedDataV1 {
+                                    fleet_generation: new_ctx.fleet_generation,
+                                    activity_revision: new_ctx.activity_revision,
+                                    timing_revision: new_ctx.timing_revision,
+                                    status_revision: new_ctx.status_revision,
+                                    wake_after_seconds: new_ctx.wake_after_seconds,
+                                }),
+                            );
+                            emit_event(
+                                event_writer.as_deref(),
+                                ServerIdleSuspendEventTypeV1::ArmStarted,
+                                Some(&new_ctx.correlation_id),
+                                Some(new_ctx.mode),
+                                IdleSuspendEventDataV1::ArmStarted(ArmStartedDataV1 {
+                                    fleet_generation: new_ctx.fleet_generation,
+                                    activity_revision: new_ctx.activity_revision,
+                                    quiet_period_seconds,
+                                    deadline_after_seconds: quiet_period_seconds,
+                                }),
+                            );
+                            active_attempt = Some(new_ctx);
+                        }
                         let _ = reply.send(result);
                     }
                     CommandMessage::ForceSuspend { cmd, reply } => {
@@ -589,7 +865,25 @@ async fn run_coordinator(
                             }
                         }
 
-                        let (result, maybe_fut, maybe_audit) = handle_force_suspend(
+                        if state == CoordinatorState::Armed {
+                            if let Some(ctx) = active_attempt.take() {
+                                let snap = pty_manager.fleet_snapshot();
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::ArmCancelled,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+                                        reason_code: ServerIdleSuspendReasonCodeV1::GraceCancelled,
+                                        fleet_generation: snap.generation,
+                                        activity_revision: ctx.activity_revision,
+                                    }),
+                                );
+                            }
+                        }
+
+                        let timing_rev = runtime_timing.try_read().map(|r| r.status_revision).unwrap_or(1);
+                        let (result, maybe_fut, maybe_audit, maybe_attempt) = handle_force_suspend(
                             cmd,
                             &mut state,
                             &mut status_revision,
@@ -599,10 +893,13 @@ async fn run_coordinator(
                             &pty_manager,
                             server_audit.as_ref(),
                             in_flight_suspend.is_some(),
+                            timing_rev,
+                            event_writer.as_deref(),
                         ).await;
                         if maybe_fut.is_some() {
                             in_flight_suspend = maybe_fut;
                             in_flight_manual_audit = maybe_audit;
+                            active_attempt = maybe_attempt;
                         }
                         publish_status_checked(
                             &status_tx,
@@ -641,6 +938,31 @@ async fn run_coordinator(
                 quiet_anchor = Some(Instant::now());
                 if state == CoordinatorState::Armed || state == CoordinatorState::FinalCheck {
                     state = CoordinatorState::Watching;
+                    if let Some(ctx) = active_attempt.take() {
+                        let snap = pty_manager.fleet_snapshot();
+                        emit_event(
+                            event_writer.as_deref(),
+                            ServerIdleSuspendEventTypeV1::ArmCancelled,
+                            Some(&ctx.correlation_id),
+                            Some(ctx.mode),
+                            IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+                                reason_code: ServerIdleSuspendReasonCodeV1::RecentInput,
+                                fleet_generation: snap.generation,
+                                activity_revision: Some(epoch_activity_revision),
+                            }),
+                        );
+                        emit_event(
+                            event_writer.as_deref(),
+                            ServerIdleSuspendEventTypeV1::TerminalRejected,
+                            Some(&ctx.correlation_id),
+                            Some(ctx.mode),
+                            IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                                reason_code: ServerIdleSuspendReasonCodeV1::RecentInput,
+                                fleet_generation: Some(snap.generation),
+                                activity_revision: Some(epoch_activity_revision),
+                            }),
+                        );
+                    }
                 }
                 arm_deadline = None;
                 publish_status_checked(
@@ -698,6 +1020,35 @@ async fn run_coordinator(
                 let observation = res.observation;
                 activity_revision = observation.activity_revision;
                 epoch_activity_revision = observation.epoch_activity_revision;
+                // Availability transition check
+                let is_avail = observation.is_available();
+                if prior_measurement_available != Some(is_avail) {
+                    if is_avail {
+                        if prior_measurement_available.is_some() {
+                            emit_event(
+                                event_writer.as_deref(),
+                                ServerIdleSuspendEventTypeV1::MeasurementRecovered,
+                                None,
+                                None,
+                                IdleSuspendEventDataV1::MeasurementRecovered(MeasurementRecoveredDataV1 {
+                                    activity_revision,
+                                }),
+                            );
+                        }
+                        prior_measurement_available = Some(true);
+                    } else {
+                        emit_event(
+                            event_writer.as_deref(),
+                            ServerIdleSuspendEventTypeV1::MeasurementUnavailable,
+                            None,
+                            None,
+                            IdleSuspendEventDataV1::MeasurementUnavailable(MeasurementUnavailableDataV1 {
+                                reason_code: ServerIdleSuspendReasonCodeV1::MeasurementUnavailable,
+                            }),
+                        );
+                        prior_measurement_available = Some(false);
+                    }
+                }
 
                 // Update continuous warning onset tracking
                 if observation.is_available() {
@@ -706,7 +1057,6 @@ async fn run_coordinator(
                 } else if warning_onset_ms.is_none() {
                     warning_onset_ms = Some(IdleSuspendStatusV1::now_ms());
                 }
-
                 // Handle genuine activity vs baseline
                 match observation.delta {
                     ActivityDelta::Genuine(_) => {
@@ -720,8 +1070,32 @@ async fn run_coordinator(
                         }
                         if state == CoordinatorState::Armed || state == CoordinatorState::FinalCheck {
                             state = CoordinatorState::Watching;
+                            if let Some(ctx) = active_attempt.take() {
+                                let snap = pty_manager.fleet_snapshot();
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::ArmCancelled,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+                                        reason_code: ServerIdleSuspendReasonCodeV1::RecentOutput,
+                                        fleet_generation: snap.generation,
+                                        activity_revision: Some(epoch_activity_revision),
+                                    }),
+                                );
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::TerminalRejected,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                                        reason_code: ServerIdleSuspendReasonCodeV1::RecentOutput,
+                                        fleet_generation: Some(snap.generation),
+                                        activity_revision: Some(epoch_activity_revision),
+                                    }),
+                                );
+                            }
                         }
-                        arm_deadline = None;
                     }
                     ActivityDelta::BaselineEstablished => {
                         baseline_established = true;
@@ -746,6 +1120,22 @@ async fn run_coordinator(
                         let ticket_valid = res.ticket.as_ref().map(|t| now >= t.eligibility_deadline).unwrap_or(false);
 
                         if is_current && ticket_valid {
+                            let snap = pty_manager.fleet_snapshot();
+                            if let Some(ctx) = active_attempt.as_ref() {
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::FinalCheckCompleted,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::FinalCheckCompleted(FinalCheckCompletedDataV1 {
+                                        accepted: true,
+                                        reason_code: None,
+                                        fleet_generation: snap.generation,
+                                        activity_revision: Some(epoch_activity_revision),
+                                    }),
+                                );
+                            }
+
                             let ticket = res.ticket.as_ref().unwrap();
                             let admission = AgentActivityAdmission {
                                 ticket,
@@ -759,12 +1149,35 @@ async fn run_coordinator(
                             };
 
                             match pty_manager.try_claim_agent_activity_handoff(admission) {
-                                Ok(_claim) => {
+                                Ok(claim) => {
                                     last_attempted_epoch_activity_revision = Some(epoch_activity_revision);
                                     state = CoordinatorState::HandedOff;
                                     arm_deadline = None;
+                                    if let Some(ctx) = active_attempt.as_ref() {
+                                        emit_event(
+                                            event_writer.as_deref(),
+                                            ServerIdleSuspendEventTypeV1::HandoffClaimAccepted,
+                                            Some(&ctx.correlation_id),
+                                            Some(ctx.mode),
+                                            IdleSuspendEventDataV1::HandoffClaimAccepted(HandoffClaimAcceptedDataV1 {
+                                                fleet_generation: claim.generation,
+                                            }),
+                                        );
+                                        emit_event(
+                                            event_writer.as_deref(),
+                                            ServerIdleSuspendEventTypeV1::HelperRequestDispatched,
+                                            Some(&ctx.correlation_id),
+                                            Some(ctx.mode),
+                                            IdleSuspendEventDataV1::HelperRequestDispatched(HelperRequestDispatchedDataV1 {
+                                                wake_after_seconds,
+                                            }),
+                                        );
+                                    }
+                                    let req_id = active_attempt.as_ref()
+                                        .map(|c| c.correlation_id.as_str().to_string())
+                                        .unwrap_or_else(|| ActionCorrelationId::new_v4().as_str().to_string());
                                     let req = SuspendWithRtcWakeRequest {
-                                        request_id: format!("epoch-{}", current_epoch),
+                                        request_id: req_id,
                                         wake_after_seconds,
                                     };
                                     let exec = Arc::clone(&executor);
@@ -776,12 +1189,83 @@ async fn run_coordinator(
                                     tracing::warn!("Agent activity handoff admission denied: {:?}", err);
                                     state = CoordinatorState::Watching;
                                     arm_deadline = None;
-                                }
+                                    if let Some(ctx) = active_attempt.take() {
+                                        let reason = match err {
+                                            crate::pty::fleet_state::HandoffClaimError::GenerationMismatch { .. } => {
+                                                 ServerIdleSuspendReasonCodeV1::StaleFleetGeneration
+                                             }
+                                             crate::pty::fleet_state::HandoffClaimError::NotQuiescent => {
+                                                 ServerIdleSuspendReasonCodeV1::ActiveFleet
+                                             }
+                                             crate::pty::fleet_state::HandoffClaimError::HandoffAlreadyActive => {
+                                                 ServerIdleSuspendReasonCodeV1::HandoffBusy
+                                             }
+                                             _ => ServerIdleSuspendReasonCodeV1::HandoffLost,
+                                         };
+                                         emit_event(
+                                             event_writer.as_deref(),
+                                             ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
+                                             Some(&ctx.correlation_id),
+                                             Some(ctx.mode),
+                                             IdleSuspendEventDataV1::HandoffClaimRejected(HandoffClaimRejectedDataV1 {
+                                                 reason_code: reason,
+                                                 expected_fleet_generation: None,
+                                                 actual_fleet_generation: None,
+                                             }),
+                                         );
+                                         emit_event(
+                                             event_writer.as_deref(),
+                                             ServerIdleSuspendEventTypeV1::TerminalRejected,
+                                             Some(&ctx.correlation_id),
+                                             Some(ctx.mode),
+                                             IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                                                 reason_code: reason,
+                                                 fleet_generation: Some(snap.generation),
+                                                 activity_revision: Some(epoch_activity_revision),
+                                             }),
+                                         );
+                                     }
+                                 }
                             }
                         } else {
                             // Final sample was late, stale, or unavailable: abort claim without spending epoch
                             state = CoordinatorState::Watching;
                             arm_deadline = None;
+                            if let Some(ctx) = active_attempt.take() {
+                                let snap = pty_manager.fleet_snapshot();
+                                let reason = if !observation.is_available() {
+                                    ServerIdleSuspendReasonCodeV1::MeasurementUnavailable
+                                } else if observation.delta != ActivityDelta::Unchanged {
+                                    ServerIdleSuspendReasonCodeV1::RecentOutput
+                                } else if Some(epoch_activity_revision) == last_attempted_epoch_activity_revision {
+                                    ServerIdleSuspendReasonCodeV1::StaleActivityRevision
+                                } else {
+                                    ServerIdleSuspendReasonCodeV1::FinalCheckFailed
+                                };
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::FinalCheckCompleted,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::FinalCheckCompleted(FinalCheckCompletedDataV1 {
+                                        accepted: false,
+                                        reason_code: Some(reason),
+                                        fleet_generation: snap.generation,
+                                        activity_revision: Some(epoch_activity_revision),
+                                    }),
+                                );
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::TerminalRejected,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                                        reason_code: reason,
+                                        fleet_generation: Some(snap.generation),
+                                        activity_revision: Some(epoch_activity_revision),
+                                    }),
+                                );
+                            }
                         }
                     }
                 }
@@ -805,10 +1289,77 @@ async fn run_coordinator(
                         if state == CoordinatorState::Watching {
                             state = CoordinatorState::Armed;
                         }
+                        if active_attempt.is_none() {
+                            let timing_rev = runtime_timing.try_read().map(|r| r.status_revision).unwrap_or(1);
+                            let ctx = AttemptContext::new_automatic(
+                                snap.generation,
+                                Some(epoch_activity_revision),
+                                timing_rev,
+                                status_revision,
+                                wake_after_seconds,
+                            );
+                            emit_event(
+                                event_writer.as_deref(),
+                                ServerIdleSuspendEventTypeV1::AttemptStarted,
+                                Some(&ctx.correlation_id),
+                                Some(ctx.mode),
+                                IdleSuspendEventDataV1::AttemptStarted(AttemptStartedDataV1 {
+                                    fleet_generation: ctx.fleet_generation,
+                                    activity_revision: ctx.activity_revision,
+                                    timing_revision: ctx.timing_revision,
+                                    status_revision: ctx.status_revision,
+                                    wake_after_seconds: ctx.wake_after_seconds,
+                                }),
+                            );
+                            emit_event(
+                                event_writer.as_deref(),
+                                ServerIdleSuspendEventTypeV1::ArmStarted,
+                                Some(&ctx.correlation_id),
+                                Some(ctx.mode),
+                                IdleSuspendEventDataV1::ArmStarted(ArmStartedDataV1 {
+                                    fleet_generation: ctx.fleet_generation,
+                                    activity_revision: ctx.activity_revision,
+                                    quiet_period_seconds,
+                                    deadline_after_seconds: quiet_period_seconds,
+                                }),
+                            );
+                            active_attempt = Some(ctx);
+                        }
                     } else {
                         arm_deadline = None;
                         if state == CoordinatorState::Armed {
                             state = CoordinatorState::Watching;
+                            if let Some(ctx) = active_attempt.take() {
+                                let reason = if !observation.is_available() {
+                                    ServerIdleSuspendReasonCodeV1::RecentInput
+                                } else if !lifecycle_clear {
+                                    ServerIdleSuspendReasonCodeV1::ActiveFleet
+                                } else {
+                                    ServerIdleSuspendReasonCodeV1::RecentInput
+                                };
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::ArmCancelled,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+                                        reason_code: reason,
+                                        fleet_generation: snap.generation,
+                                        activity_revision: Some(epoch_activity_revision),
+                                    }),
+                                );
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::TerminalRejected,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                                        reason_code: reason,
+                                        fleet_generation: Some(snap.generation),
+                                        activity_revision: Some(epoch_activity_revision),
+                                    }),
+                                );
+                            }
                         }
                     }
                 }
@@ -852,10 +1403,35 @@ async fn run_coordinator(
                         }
                         if state == CoordinatorState::Armed || state == CoordinatorState::FinalCheck {
                             state = CoordinatorState::Watching;
+                            if let Some(ctx) = active_attempt.take() {
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::ArmCancelled,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+                                        reason_code: ServerIdleSuspendReasonCodeV1::ActiveFleet,
+                                        fleet_generation: snapshot.generation,
+                                        activity_revision: Some(epoch_activity_revision),
+                                    }),
+                                );
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::TerminalRejected,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                                        reason_code: ServerIdleSuspendReasonCodeV1::ActiveFleet,
+                                        fleet_generation: Some(snapshot.generation),
+                                        activity_revision: Some(epoch_activity_revision),
+                                    }),
+                                );
+                            }
                         }
                         arm_deadline = None;
                     }
                 } else {
+                    let timing_rev = runtime_timing.try_read().map(|r| r.status_revision).unwrap_or(1);
                     handle_fleet(
                         snapshot,
                         &mut state,
@@ -867,6 +1443,10 @@ async fn run_coordinator(
                         &mut status_revision,
                         &startup_policy,
                         quiet_period_seconds,
+                        wake_after_seconds,
+                        timing_rev,
+                        event_writer.as_deref(),
+                        &mut active_attempt,
                     );
                 }
 
@@ -912,6 +1492,21 @@ async fn run_coordinator(
                     if let Some(s) = &sampler {
                         s.send_final(req);
                     }
+                    if let Some(ctx) = active_attempt.as_ref() {
+                        let snap = pty_manager.fleet_snapshot();
+                        let timing_rev = runtime_timing.try_read().map(|r| r.status_revision).unwrap_or(1);
+                        emit_event(
+                            event_writer.as_deref(),
+                            ServerIdleSuspendEventTypeV1::FinalCheckStarted,
+                            Some(&ctx.correlation_id),
+                            Some(ctx.mode),
+                            IdleSuspendEventDataV1::FinalCheckStarted(FinalCheckStartedDataV1 {
+                                fleet_generation: snap.generation,
+                                activity_revision: Some(epoch_activity_revision),
+                                timing_revision: timing_rev,
+                            }),
+                        );
+                    }
                     publish_status_checked(
                         &status_tx,
                         Some(&*event_sink),
@@ -933,11 +1528,38 @@ async fn run_coordinator(
                         Some(epoch_activity_revision) == last_attempted_epoch_activity_revision,
                     );
                 } else {
-                    let claimed = handle_deadline(
+                    let expected_gen = armed_generation.unwrap_or(0);
+                    let timing_rev = runtime_timing.try_read().map(|r| r.status_revision).unwrap_or(1);
+                    if let Some(ctx) = active_attempt.as_ref() {
+                        emit_event(
+                            event_writer.as_deref(),
+                            ServerIdleSuspendEventTypeV1::FinalCheckStarted,
+                            Some(&ctx.correlation_id),
+                            Some(ctx.mode),
+                            IdleSuspendEventDataV1::FinalCheckStarted(FinalCheckStartedDataV1 {
+                                fleet_generation: expected_gen,
+                                activity_revision: None,
+                                timing_revision: timing_rev,
+                            }),
+                        );
+                        emit_event(
+                            event_writer.as_deref(),
+                            ServerIdleSuspendEventTypeV1::FinalCheckCompleted,
+                            Some(&ctx.correlation_id),
+                            Some(ctx.mode),
+                            IdleSuspendEventDataV1::FinalCheckCompleted(FinalCheckCompletedDataV1 {
+                                accepted: true,
+                                reason_code: None,
+                                fleet_generation: expected_gen,
+                                activity_revision: None,
+                            }),
+                        );
+                    }
+                    let claim_res = handle_deadline(
                         &mut state,
                         &mut epoch_ready,
                         current_epoch,
-                        armed_generation.unwrap_or(0),
+                        expected_gen,
                         &mut arm_deadline,
                         &mut armed_generation,
                         &mut status_revision,
@@ -950,15 +1572,78 @@ async fn run_coordinator(
                         &startup_policy,
                         &event_sink,
                     );
-                    if claimed {
-                        let req = SuspendWithRtcWakeRequest {
-                            request_id: format!("epoch-{}", current_epoch),
-                            wake_after_seconds,
-                        };
-                        let exec = Arc::clone(&executor);
-                        in_flight_suspend = Some(Box::pin(async move {
-                            exec.execute_suspend(req).await
-                        }));
+                    match claim_res {
+                        Ok(claim) => {
+                            if let Some(ctx) = active_attempt.as_ref() {
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::HandoffClaimAccepted,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::HandoffClaimAccepted(HandoffClaimAcceptedDataV1 {
+                                        fleet_generation: claim.generation,
+                                    }),
+                                );
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::HelperRequestDispatched,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::HelperRequestDispatched(HelperRequestDispatchedDataV1 {
+                                        wake_after_seconds,
+                                    }),
+                                );
+                            }
+                            let req_id = active_attempt.as_ref()
+                                 .map(|c| c.correlation_id.as_str().to_string())
+                                 .unwrap_or_else(|| ActionCorrelationId::new_v4().as_str().to_string());
+                            let req = SuspendWithRtcWakeRequest {
+                                request_id: req_id,
+                                wake_after_seconds,
+                            };
+                            let exec = Arc::clone(&executor);
+                            in_flight_suspend = Some(Box::pin(async move {
+                                exec.execute_suspend(req).await
+                            }));
+                        }
+                        Err(err) => {
+                            if let Some(ctx) = active_attempt.take() {
+                                let (reason, exp, act) = match err {
+                                    crate::pty::fleet_state::HandoffClaimError::GenerationMismatch { expected, actual } => {
+                                        (ServerIdleSuspendReasonCodeV1::StaleFleetGeneration, Some(expected), Some(actual))
+                                    }
+                                    crate::pty::fleet_state::HandoffClaimError::NotQuiescent => {
+                                        (ServerIdleSuspendReasonCodeV1::ActiveFleet, None, None)
+                                    }
+                                    crate::pty::fleet_state::HandoffClaimError::HandoffAlreadyActive => {
+                                        (ServerIdleSuspendReasonCodeV1::HandoffBusy, None, None)
+                                    }
+                                    _ => (ServerIdleSuspendReasonCodeV1::HandoffLost, None, None),
+                                };
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::HandoffClaimRejected(HandoffClaimRejectedDataV1 {
+                                        reason_code: reason,
+                                        expected_fleet_generation: exp,
+                                        actual_fleet_generation: act,
+                                    }),
+                                );
+                                emit_event(
+                                    event_writer.as_deref(),
+                                    ServerIdleSuspendEventTypeV1::TerminalRejected,
+                                    Some(&ctx.correlation_id),
+                                    Some(ctx.mode),
+                                    IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                                        reason_code: reason,
+                                        fleet_generation: Some(expected_gen),
+                                        activity_revision: None,
+                                    }),
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -1306,6 +1991,10 @@ fn handle_fleet(
     status_revision: &mut u64,
     startup_policy: &StartupIdleSuspendPolicy,
     quiet_period_seconds: u64,
+    wake_after_seconds: u64,
+    timing_revision: u64,
+    event_writer: Option<&IdleSuspendEventWriter>,
+    active_attempt: &mut Option<AttemptContext>,
 ) {
     if !startup_policy.enabled {
         *state = CoordinatorState::Disabled;
@@ -1323,11 +2012,59 @@ fn handle_fleet(
             *state = CoordinatorState::Watching;
             *seen_non_quiescent = true;
             *status_revision = status_revision.wrapping_add(1);
+            if let Some(ctx) = active_attempt.take() {
+                emit_event(
+                    event_writer,
+                    ServerIdleSuspendEventTypeV1::ArmCancelled,
+                    Some(&ctx.correlation_id),
+                    Some(ctx.mode),
+                    IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+                        reason_code: ServerIdleSuspendReasonCodeV1::ActiveFleet,
+                        fleet_generation: snapshot.generation,
+                        activity_revision: None,
+                    }),
+                );
+                emit_event(
+                    event_writer,
+                    ServerIdleSuspendEventTypeV1::TerminalRejected,
+                    Some(&ctx.correlation_id),
+                    Some(ctx.mode),
+                    IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                        reason_code: ServerIdleSuspendReasonCodeV1::ActiveFleet,
+                        fleet_generation: Some(snapshot.generation),
+                        activity_revision: None,
+                    }),
+                );
+            }
         } else if Some(snapshot.generation) != *armed_generation {
             *arm_deadline = None;
             *armed_generation = None;
             *state = CoordinatorState::Watching;
             *status_revision = status_revision.wrapping_add(1);
+            if let Some(ctx) = active_attempt.take() {
+                emit_event(
+                    event_writer,
+                    ServerIdleSuspendEventTypeV1::ArmCancelled,
+                    Some(&ctx.correlation_id),
+                    Some(ctx.mode),
+                    IdleSuspendEventDataV1::ArmCancelled(ArmCancelledDataV1 {
+                        reason_code: ServerIdleSuspendReasonCodeV1::StaleFleetGeneration,
+                        fleet_generation: snapshot.generation,
+                        activity_revision: None,
+                    }),
+                );
+                emit_event(
+                    event_writer,
+                    ServerIdleSuspendEventTypeV1::TerminalRejected,
+                    Some(&ctx.correlation_id),
+                    Some(ctx.mode),
+                    IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                        reason_code: ServerIdleSuspendReasonCodeV1::StaleFleetGeneration,
+                        fleet_generation: Some(snapshot.generation),
+                        activity_revision: None,
+                    }),
+                );
+            }
         }
     } else if !snapshot.is_quiescent() {
         *seen_non_quiescent = true;
@@ -1344,6 +2081,40 @@ fn handle_fleet(
             Some(tokio::time::Instant::now() + Duration::from_secs(quiet_period_seconds));
         *armed_generation = Some(snapshot.generation);
         *status_revision = status_revision.wrapping_add(1);
+
+        let ctx = AttemptContext::new_automatic(
+            snapshot.generation,
+            None,
+            timing_revision,
+            *status_revision,
+            wake_after_seconds,
+        );
+        emit_event(
+            event_writer,
+            ServerIdleSuspendEventTypeV1::AttemptStarted,
+            Some(&ctx.correlation_id),
+            Some(ctx.mode),
+            IdleSuspendEventDataV1::AttemptStarted(AttemptStartedDataV1 {
+                fleet_generation: ctx.fleet_generation,
+                activity_revision: None,
+                timing_revision: ctx.timing_revision,
+                status_revision: ctx.status_revision,
+                wake_after_seconds: ctx.wake_after_seconds,
+            }),
+        );
+        emit_event(
+            event_writer,
+            ServerIdleSuspendEventTypeV1::ArmStarted,
+            Some(&ctx.correlation_id),
+            Some(ctx.mode),
+            IdleSuspendEventDataV1::ArmStarted(ArmStartedDataV1 {
+                fleet_generation: ctx.fleet_generation,
+                activity_revision: None,
+                quiet_period_seconds,
+                deadline_after_seconds: quiet_period_seconds,
+            }),
+        );
+        *active_attempt = Some(ctx);
     }
 }
 
@@ -1363,24 +2134,24 @@ fn handle_deadline(
     _status_tx: &watch::Sender<IdleSuspendStatusV1>,
     _startup_policy: &StartupIdleSuspendPolicy,
     _event_sink: &Arc<dyn crate::pty::EventSink>,
-) -> bool {
+) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError> {
     *arm_deadline = None;
     *armed_generation = None;
     *state = CoordinatorState::FinalCheck;
     *status_revision = status_revision.wrapping_add(1);
 
     match pty_manager.try_claim_handoff(expected_gen) {
-        Ok(_claim) => {
+        Ok(claim) => {
             *state = CoordinatorState::HandedOff;
             *status_revision = status_revision.wrapping_add(1);
-            true
+            Ok(claim)
         }
         Err(err) => {
             tracing::warn!("Handoff claim rejected at deadline: {:?}", err);
             *state = CoordinatorState::Watching;
             *epoch_ready = false;
             *status_revision = status_revision.wrapping_add(1);
-            false
+            Err(err)
         }
     }
 }
@@ -1488,10 +2259,13 @@ async fn handle_force_suspend(
     pty_manager: &PtySessionManager,
     server_audit: Option<&IdleSuspendServerAudit>,
     in_flight_suspend_active: bool,
+    timing_revision: u64,
+    event_writer: Option<&IdleSuspendEventWriter>,
 ) -> (
     CoordinatorForceSuspendResult,
     Option<BoxFuture<'static, SuspendOutcome>>,
     Option<ManualAuditRecord>,
+    Option<AttemptContext>,
 ) {
     let actor = match validate_actor(&cmd.actor) {
         Ok(a) => a,
@@ -1502,13 +2276,14 @@ async fn handle_force_suspend(
                 ),
                 None,
                 None,
+                None,
             );
         }
     };
 
     if let Err(e) = validate_suspend_wake_seconds(cmd.wake_after_seconds) {
         let snapshot = pty_manager.fleet_snapshot();
-        let request_id = format!("manual-{}", uuid::Uuid::new_v4());
+        let request_id = ActionCorrelationId::new_v4().as_str().to_string();
         if let Some(audit) = server_audit {
             if let Ok(rec) = ManualAuditRecord::new(
                 actor.clone(),
@@ -1529,10 +2304,32 @@ async fn handle_force_suspend(
             CoordinatorForceSuspendResult::ValidationFailed(e.to_string()),
             None,
             None,
+            None,
         );
     }
 
-    let request_id = format!("manual-{}", uuid::Uuid::new_v4());
+    let snapshot_init = pty_manager.fleet_snapshot();
+    let ctx = AttemptContext::new_manual(
+        snapshot_init.generation,
+        timing_revision,
+        *status_revision,
+        cmd.wake_after_seconds,
+    );
+    let request_id = ctx.correlation_id.as_str().to_string();
+
+    emit_event(
+        event_writer,
+        ServerIdleSuspendEventTypeV1::AttemptStarted,
+        Some(&ctx.correlation_id),
+        Some(ctx.mode),
+        IdleSuspendEventDataV1::AttemptStarted(AttemptStartedDataV1 {
+            fleet_generation: snapshot_init.generation,
+            activity_revision: None,
+            timing_revision,
+            status_revision: *status_revision,
+            wake_after_seconds: cmd.wake_after_seconds,
+        }),
+    );
 
     if *state == CoordinatorState::HandedOff
         || pty_manager.fleet_snapshot().handoff_active
@@ -1542,7 +2339,7 @@ async fn handle_force_suspend(
         if let Some(audit) = server_audit {
             if let Ok(rec) = ManualAuditRecord::new(
                 actor.clone(),
-                request_id,
+                request_id.clone(),
                 cmd.wake_after_seconds,
                 cmd.force,
                 false,
@@ -1555,8 +2352,20 @@ async fn handle_force_suspend(
                 let _ = audit.record_manual_event(&rec);
             }
         }
+        emit_event(
+            event_writer,
+            ServerIdleSuspendEventTypeV1::TerminalRejected,
+            Some(&ctx.correlation_id),
+            Some(ctx.mode),
+            IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                reason_code: ServerIdleSuspendReasonCodeV1::HandoffBusy,
+                fleet_generation: Some(snapshot.generation),
+                activity_revision: None,
+            }),
+        );
         return (
             CoordinatorForceSuspendResult::HandoffInProgress,
+            None,
             None,
             None,
         );
@@ -1572,7 +2381,7 @@ async fn handle_force_suspend(
         if let Some(audit) = server_audit {
             if let Ok(rec) = ManualAuditRecord::new(
                 actor.clone(),
-                request_id,
+                request_id.clone(),
                 cmd.wake_after_seconds,
                 cmd.force,
                 false,
@@ -1585,10 +2394,22 @@ async fn handle_force_suspend(
                 let _ = audit.record_manual_event(&rec);
             }
         }
+        emit_event(
+            event_writer,
+            ServerIdleSuspendEventTypeV1::TerminalRejected,
+            Some(&ctx.correlation_id),
+            Some(ctx.mode),
+            IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                reason_code: ServerIdleSuspendReasonCodeV1::CapabilityUnsupported,
+                fleet_generation: Some(snapshot.generation),
+                activity_revision: None,
+            }),
+        );
         return (
             CoordinatorForceSuspendResult::CapabilityUnavailable(
                 "Host lacks required suspend capability or capability probe failed".into(),
             ),
+            None,
             None,
             None,
         );
@@ -1601,7 +2422,7 @@ async fn handle_force_suspend(
         if let Some(audit) = server_audit {
             if let Ok(rec) = ManualAuditRecord::new(
                 actor,
-                request_id,
+                request_id.clone(),
                 cmd.wake_after_seconds,
                 cmd.force,
                 false,
@@ -1614,10 +2435,22 @@ async fn handle_force_suspend(
                 let _ = audit.record_manual_event(&rec);
             }
         }
+        emit_event(
+            event_writer,
+            ServerIdleSuspendEventTypeV1::TerminalRejected,
+            Some(&ctx.correlation_id),
+            Some(ctx.mode),
+            IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                reason_code: ServerIdleSuspendReasonCodeV1::ActiveFleet,
+                fleet_generation: Some(snapshot_before.generation),
+                activity_revision: None,
+            }),
+        );
         return (
             CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation {
                 fleet_snapshot: snapshot_before,
             },
+            None,
             None,
             None,
         );
@@ -1639,10 +2472,34 @@ async fn handle_force_suspend(
             ManualAuditResult::Attempted,
         ) {
             Ok(r) => r,
-            Err(e) => return (CoordinatorForceSuspendResult::AuditFailed(e.to_string()), None, None),
+            Err(e) => {
+                emit_event(
+                    event_writer,
+                    ServerIdleSuspendEventTypeV1::TerminalRejected,
+                    Some(&ctx.correlation_id),
+                    Some(ctx.mode),
+                    IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                        reason_code: ServerIdleSuspendReasonCodeV1::AuditWriteFailed,
+                        fleet_generation: Some(snapshot_before.generation),
+                        activity_revision: None,
+                    }),
+                );
+                return (CoordinatorForceSuspendResult::AuditFailed(e.to_string()), None, None, None);
+            }
         };
         if let Err(e) = audit.record_manual_event(&attempt_rec) {
-            return (CoordinatorForceSuspendResult::AuditFailed(e.to_string()), None, None);
+            emit_event(
+                event_writer,
+                ServerIdleSuspendEventTypeV1::TerminalRejected,
+                Some(&ctx.correlation_id),
+                Some(ctx.mode),
+                IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                    reason_code: ServerIdleSuspendReasonCodeV1::AuditWriteFailed,
+                    fleet_generation: Some(snapshot_before.generation),
+                    activity_revision: None,
+                }),
+            );
+            return (CoordinatorForceSuspendResult::AuditFailed(e.to_string()), None, None, None);
         }
     }
 
@@ -1652,158 +2509,294 @@ async fn handle_force_suspend(
         pty_manager.try_claim_handoff(snapshot_before.generation)
     };
 
-    match claim_res {
-        Ok(claim) => {
-            *state = CoordinatorState::HandedOff;
-            *arm_deadline = None;
-            *armed_generation = None;
-            *status_revision = status_revision.wrapping_add(1);
+     match claim_res {
+         Ok(claim) => {
+             *state = CoordinatorState::HandedOff;
+             *arm_deadline = None;
+             *armed_generation = None;
+             *status_revision = status_revision.wrapping_add(1);
 
-            let snapshot_after = pty_manager.fleet_snapshot();
+             let snapshot_after = pty_manager.fleet_snapshot();
 
-            let manual_audit_rec = if let Some(audit) = server_audit {
-                if let Ok(rec) = ManualAuditRecord::new(
-                    actor,
-                    request_id.clone(),
-                    cmd.wake_after_seconds,
-                    cmd.force,
-                    effective_force,
-                    claim.generation,
-                    snapshot_after.live_count,
-                    snapshot_after.creating_count,
-                    snapshot_after.restart_pending_count,
-                    ManualAuditResult::Accepted,
-                ) {
-                    let _ = audit.record_manual_event(&rec);
-                    Some(rec)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+             let manual_audit_rec = if let Some(audit) = server_audit {
+                 if let Ok(rec) = ManualAuditRecord::new(
+                     actor,
+                     request_id.clone(),
+                     cmd.wake_after_seconds,
+                     cmd.force,
+                     effective_force,
+                     claim.generation,
+                     snapshot_after.live_count,
+                     snapshot_after.creating_count,
+                     snapshot_after.restart_pending_count,
+                     ManualAuditResult::Accepted,
+                 ) {
+                     let _ = audit.record_manual_event(&rec);
+                     Some(rec)
+                 } else {
+                     None
+                 }
+             } else {
+                 None
+             };
 
-            let req = SuspendWithRtcWakeRequest {
-                request_id: request_id.clone(),
-                wake_after_seconds: cmd.wake_after_seconds,
-            };
-            let exec = Arc::clone(executor);
-            let fut: BoxFuture<'static, SuspendOutcome> =
-                Box::pin(async move { exec.execute_suspend(req).await });
+            emit_event(
+                event_writer,
+                ServerIdleSuspendEventTypeV1::HandoffClaimAccepted,
+                Some(&ctx.correlation_id),
+                Some(ctx.mode),
+                IdleSuspendEventDataV1::HandoffClaimAccepted(HandoffClaimAcceptedDataV1 {
+                    fleet_generation: claim.generation,
+                }),
+            );
+            emit_event(
+                event_writer,
+                ServerIdleSuspendEventTypeV1::HelperRequestDispatched,
+                Some(&ctx.correlation_id),
+                Some(ctx.mode),
+                IdleSuspendEventDataV1::HelperRequestDispatched(HelperRequestDispatchedDataV1 {
+                    wake_after_seconds: cmd.wake_after_seconds,
+                }),
+            );
 
-            (
-                CoordinatorForceSuspendResult::Accepted {
-                    request_id,
-                    status_revision: *status_revision,
-                    fleet_snapshot: snapshot_after,
-                },
-                Some(fut),
-                manual_audit_rec,
-            )
-        }
-        Err(err) => {
-            let snapshot_err = pty_manager.fleet_snapshot();
-            match err {
-                crate::pty::fleet_state::HandoffClaimError::GenerationMismatch { expected, actual } => {
-                    if let Some(audit) = server_audit {
-                        if let Ok(rec) = ManualAuditRecord::new(
-                            actor.clone(),
-                            request_id,
-                            cmd.wake_after_seconds,
-                            cmd.force,
-                            effective_force,
-                            actual,
-                            snapshot_err.live_count,
-                            snapshot_err.creating_count,
-                            snapshot_err.restart_pending_count,
-                            ManualAuditResult::RejectedConflict,
-                        ) {
-                            let _ = audit.record_manual_event(&rec);
-                        }
-                    }
+             let req = SuspendWithRtcWakeRequest {
+                 request_id: request_id.clone(),
+                 wake_after_seconds: cmd.wake_after_seconds,
+             };
+             let exec = Arc::clone(executor);
+             let fut: BoxFuture<'static, SuspendOutcome> =
+                 Box::pin(async move { exec.execute_suspend(req).await });
+
+             (
+                 CoordinatorForceSuspendResult::Accepted {
+                     request_id,
+                     status_revision: *status_revision,
+                     fleet_snapshot: snapshot_after,
+                 },
+                 Some(fut),
+                 manual_audit_rec,
+                Some(ctx),
+             )
+         }
+         Err(err) => {
+             let snapshot_err = pty_manager.fleet_snapshot();
+             match err {
+                 crate::pty::fleet_state::HandoffClaimError::GenerationMismatch { expected, actual } => {
+                     if let Some(audit) = server_audit {
+                         if let Ok(rec) = ManualAuditRecord::new(
+                             actor.clone(),
+                            request_id.clone(),
+                             cmd.wake_after_seconds,
+                             cmd.force,
+                             effective_force,
+                             actual,
+                             snapshot_err.live_count,
+                             snapshot_err.creating_count,
+                             snapshot_err.restart_pending_count,
+                             ManualAuditResult::RejectedConflict,
+                         ) {
+                             let _ = audit.record_manual_event(&rec);
+                         }
+                     }
+                    emit_event(
+                        event_writer,
+                        ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::HandoffClaimRejected(HandoffClaimRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::StaleFleetGeneration,
+                            expected_fleet_generation: Some(expected),
+                            actual_fleet_generation: Some(actual),
+                        }),
+                    );
+                    emit_event(
+                        event_writer,
+                        ServerIdleSuspendEventTypeV1::TerminalRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::StaleFleetGeneration,
+                            fleet_generation: Some(snapshot_err.generation),
+                            activity_revision: None,
+                        }),
+                    );
+                     (
+                         CoordinatorForceSuspendResult::GenerationConflict {
+                             expected,
+                             actual,
+                             fleet_snapshot: snapshot_err,
+                         },
+                         None,
+                         None,
+                        None,
+                     )
+                 }
+                 crate::pty::fleet_state::HandoffClaimError::NotQuiescent => {
+                     if let Some(audit) = server_audit {
+                         if let Ok(rec) = ManualAuditRecord::new(
+                             actor.clone(),
+                            request_id.clone(),
+                             cmd.wake_after_seconds,
+                             cmd.force,
+                             effective_force,
+                             snapshot_err.generation,
+                             snapshot_err.live_count,
+                             snapshot_err.creating_count,
+                             snapshot_err.restart_pending_count,
+                             ManualAuditResult::RejectedConfirmationRequired,
+                         ) {
+                             let _ = audit.record_manual_event(&rec);
+                         }
+                     }
+                    emit_event(
+                        event_writer,
+                        ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::HandoffClaimRejected(HandoffClaimRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::ActiveFleet,
+                            expected_fleet_generation: None,
+                            actual_fleet_generation: None,
+                        }),
+                    );
+                    emit_event(
+                        event_writer,
+                        ServerIdleSuspendEventTypeV1::TerminalRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::ActiveFleet,
+                            fleet_generation: Some(snapshot_err.generation),
+                            activity_revision: None,
+                        }),
+                    );
+                     (
+                         CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation {
+                             fleet_snapshot: snapshot_err,
+                         },
+                         None,
+                         None,
+                        None,
+                     )
+                 }
+                 crate::pty::fleet_state::HandoffClaimError::HandoffAlreadyActive => {
+                     if let Some(audit) = server_audit {
+                         if let Ok(rec) = ManualAuditRecord::new(
+                             actor.clone(),
+                            request_id.clone(),
+                             cmd.wake_after_seconds,
+                             cmd.force,
+                             effective_force,
+                             snapshot_err.generation,
+                             snapshot_err.live_count,
+                             snapshot_err.creating_count,
+                             snapshot_err.restart_pending_count,
+                             ManualAuditResult::RejectedHandoffInProgress,
+                         ) {
+                             let _ = audit.record_manual_event(&rec);
+                         }
+                     }
+                    emit_event(
+                        event_writer,
+                        ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::HandoffClaimRejected(HandoffClaimRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::HandoffBusy,
+                            expected_fleet_generation: None,
+                            actual_fleet_generation: None,
+                        }),
+                    );
+                    emit_event(
+                        event_writer,
+                        ServerIdleSuspendEventTypeV1::TerminalRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::HandoffBusy,
+                            fleet_generation: Some(snapshot_err.generation),
+                            activity_revision: None,
+                        }),
+                    );
+                     (
+                         CoordinatorForceSuspendResult::HandoffInProgress,
+                         None,
+                         None,
+                        None,
+                     )
+                 }
+                 crate::pty::fleet_state::HandoffClaimError::Closing | crate::pty::fleet_state::HandoffClaimError::Disposing => {
+                     if let Some(audit) = server_audit {
+                         if let Ok(rec) = ManualAuditRecord::new(
+                             actor.clone(),
+                            request_id.clone(),
+                             cmd.wake_after_seconds,
+                             cmd.force,
+                             effective_force,
+                             snapshot_err.generation,
+                             snapshot_err.live_count,
+                             snapshot_err.creating_count,
+                             snapshot_err.restart_pending_count,
+                             ManualAuditResult::RejectedShuttingDown,
+                         ) {
+                             let _ = audit.record_manual_event(&rec);
+                         }
+                     }
+                    emit_event(
+                        event_writer,
+                        ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::HandoffClaimRejected(HandoffClaimRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::Shutdown,
+                            expected_fleet_generation: None,
+                            actual_fleet_generation: None,
+                        }),
+                    );
+                    emit_event(
+                        event_writer,
+                        ServerIdleSuspendEventTypeV1::TerminalRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::Shutdown,
+                            fleet_generation: Some(snapshot_err.generation),
+                            activity_revision: None,
+                        }),
+                    );
+                    (CoordinatorForceSuspendResult::ShuttingDown, None, None, None)
+                 }
+                _ => {
+                    emit_event(
+                        event_writer,
+                        ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::HandoffClaimRejected(HandoffClaimRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::HandoffLost,
+                            expected_fleet_generation: None,
+                            actual_fleet_generation: None,
+                        }),
+                    );
+                    emit_event(
+                        event_writer,
+                        ServerIdleSuspendEventTypeV1::TerminalRejected,
+                        Some(&ctx.correlation_id),
+                        Some(ctx.mode),
+                        IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
+                            reason_code: ServerIdleSuspendReasonCodeV1::HandoffLost,
+                            fleet_generation: Some(snapshot_err.generation),
+                            activity_revision: None,
+                        }),
+                    );
                     (
-                        CoordinatorForceSuspendResult::GenerationConflict {
-                            expected,
-                            actual,
-                            fleet_snapshot: snapshot_err,
-                        },
+                        CoordinatorForceSuspendResult::ValidationFailed(format!("{err:?}")),
+                        None,
                         None,
                         None,
                     )
                 }
-                crate::pty::fleet_state::HandoffClaimError::NotQuiescent => {
-                    if let Some(audit) = server_audit {
-                        if let Ok(rec) = ManualAuditRecord::new(
-                            actor.clone(),
-                            request_id,
-                            cmd.wake_after_seconds,
-                            cmd.force,
-                            effective_force,
-                            snapshot_err.generation,
-                            snapshot_err.live_count,
-                            snapshot_err.creating_count,
-                            snapshot_err.restart_pending_count,
-                            ManualAuditResult::RejectedConfirmationRequired,
-                        ) {
-                            let _ = audit.record_manual_event(&rec);
-                        }
-                    }
-                    (
-                        CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation {
-                            fleet_snapshot: snapshot_err,
-                        },
-                        None,
-                        None,
-                    )
-                }
-                crate::pty::fleet_state::HandoffClaimError::HandoffAlreadyActive => {
-                    if let Some(audit) = server_audit {
-                        if let Ok(rec) = ManualAuditRecord::new(
-                            actor.clone(),
-                            request_id,
-                            cmd.wake_after_seconds,
-                            cmd.force,
-                            effective_force,
-                            snapshot_err.generation,
-                            snapshot_err.live_count,
-                            snapshot_err.creating_count,
-                            snapshot_err.restart_pending_count,
-                            ManualAuditResult::RejectedHandoffInProgress,
-                        ) {
-                            let _ = audit.record_manual_event(&rec);
-                        }
-                    }
-                    (
-                        CoordinatorForceSuspendResult::HandoffInProgress,
-                        None,
-                        None,
-                    )
-                }
-                crate::pty::fleet_state::HandoffClaimError::Closing | crate::pty::fleet_state::HandoffClaimError::Disposing => {
-                    if let Some(audit) = server_audit {
-                        if let Ok(rec) = ManualAuditRecord::new(
-                            actor.clone(),
-                            request_id,
-                            cmd.wake_after_seconds,
-                            cmd.force,
-                            effective_force,
-                            snapshot_err.generation,
-                            snapshot_err.live_count,
-                            snapshot_err.creating_count,
-                            snapshot_err.restart_pending_count,
-                            ManualAuditResult::RejectedShuttingDown,
-                        ) {
-                            let _ = audit.record_manual_event(&rec);
-                        }
-                    }
-                    (CoordinatorForceSuspendResult::ShuttingDown, None, None)
-                }
-                _ => (
-                    CoordinatorForceSuspendResult::ValidationFailed(format!("{err:?}")),
-                    None,
-                    None,
-                ),
-            }
-        }
-    }
-}
+             }
+         }
+     }
+ }

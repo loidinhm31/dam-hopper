@@ -954,10 +954,11 @@ Operations-owned target-host gate. See the [Phase 08 QA report](../plans/reports
 
 ### PR-018: Production Idle-Suspend Diagnostics (Phases 01–07)
 
-**Status:** Phase 01 architecture/schema/security contract approved. Phase 02
-canonical event foundation completed on 2026-09-13. Coordinator/helper
-instrumentation, one-shot collection, bundle projection, and rollout remain
-planned Phases 03–07.
+**Status:** Phase 01 architecture/schema/security contract, Phase 02
+canonical event foundation, and Phase 03 server coordinator integration were
+completed on 2026-09-13. Helper milestones, one-shot collection, bundle
+projection, mixed-version verification, and rollout remain planned Phases
+04–07.
 
 **Product intent:** Preserve bounded, privacy-safe evidence for diagnosing an
 idle-suspend incident without adding an observer daemon, terminal-content
@@ -971,8 +972,20 @@ payload validation, strict boot/process identity, UUID v4 action correlation,
 and checked producer sequencing. `IdleSuspendEventWriter` appends bounded
 mode-`0600` no-follow synchronized JSONL to the fixed diagnostics path and
 fails closed on unsafe paths or sequence overflow. `idle_suspend/mod.rs`
-re-exports the public event types and writer. The coordinator is not wired to
-emit these events yet, and the legacy untagged server audit is unchanged.
+re-exports the public event types and writer. The legacy untagged server audit
+remains unchanged.
+
+**Phase 03 delivery:** `AppState` constructs one optional writer beside the
+diagnostics store and passes it through coordinator startup. The coordinator
+emits process startup, automatic/manual attempt, arm, final-check, handoff,
+dispatch, outcome, reconciliation, availability-transition, and terminal
+rejection events at authoritative state-machine boundaries. One
+`AttemptContext` allocates a canonical UUID v4 before `attemptStarted`; the
+same UUID is used for semantic `correlationId`, helper protocol-v1
+`requestId`, accepted manual responses, and existing manual audit records.
+Epochs and revisions remain evidence only. Repeated sampler/status activity is
+not logged; semantic write failure is diagnostic best effort and cannot alter
+coordinator outcomes or handoff release.
 
 **Acceptance criteria:**
 
@@ -980,13 +993,13 @@ emit these events yet, and the legacy untagged server audit is unchanged.
       role, completeness, compatibility, and rollback contracts.
 - [x] Phase 02 provides deterministic producer identity/sequence/correlation
       primitives and a bounded synchronized writer without policy coupling.
-- [ ] Phase 03 integrates lifecycle emission without changing the frozen
-      event contract.
+- [x] Phase 03 integrates lifecycle emission without changing the frozen
+      event contract and prevents action-ID collisions across API restarts.
 - [ ] Phases 04–07 evolve helper evidence, implement the bounded collector and
       bundle, verify mixed versions/security, and complete rollout gates.
 
-**Operational boundary:** Event writes are diagnostic best effort once the
-foundation is integrated; they never rewrite a suspend outcome. Existing
+**Operational boundary:** Event writes are diagnostic best effort after
+coordinator integration; they never rewrite a suspend outcome. Existing
 manual acceptance audit and helper accepted intent remain the pre-action
 durability gates. The collector may claim historical completeness only after
 all applicable required sources and gap/coverage gates pass.

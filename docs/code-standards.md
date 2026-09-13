@@ -108,7 +108,7 @@ unsupported capabilities, and inhibitors produce no suspend call. Tests use
 `tempfile` RTC/audit paths and fake preflight/backends; never use real power
 management or host RTC state.
 
-### Canonical idle-suspend event writer (Phase 02)
+### Canonical idle-suspend event writer (Phases 02–03)
 
 Keep semantic events separate from the legacy untagged `ServerAuditRecord`.
 Use the closed `IdleSuspendEventEnvelopeV1`/payload model with camelCase,
@@ -132,8 +132,40 @@ The writer must refuse an unsafe parent or target, append one bounded JSONL
 line to a regular mode-`0600` file with `O_NOFOLLOW`, and call `sync_data()`
 before success. It never creates, repairs, chmods, rotates, or truncates the
 parent or existing target. Tests inject identity/path and use temporary files;
-they do not mutate process-wide environment or production audit paths. Phase
-03 owns coordinator lifecycle integration.
+they do not mutate process-wide environment or production audit paths.
+
+### Coordinator event and correlation rules (Phase 03)
+
+`AppState::new` derives the event path from `DiagnosticStore::log_path()`
+parent and stores one optional `Arc<IdleSuspendEventWriter>`. Initialization
+failure records a sanitized diagnostic and leaves semantic emission disabled;
+the coordinator must keep serving normal suspend/status behavior. Startup
+passes this writer through `start_with_sink` to `run_coordinator`.
+
+Allocate one `AttemptContext` UUID v4 before `attemptStarted` for every
+automatic candidate and manual command that reaches attempt validation.
+Carry that immutable context through arm/final-check, handoff, dispatch,
+outcome, and reconciliation. Reuse its exact canonical lowercase UUID for
+event `correlationId`, `SuspendWithRtcWakeRequest.request_id`, the accepted
+manual response, and the existing manual audit record. Epochs, revisions,
+timestamps, PIDs, and fleet generations are evidence, never correlation IDs;
+never recreate `epoch-N` or `manual-<uuid>` aliases.
+
+Emit only authoritative semantic boundaries: one `coordinatorStarted` per
+producer, attempt/arm start and cancellation, final-check start/result,
+handoff claim result, helper dispatch, actual helper outcome, reconciliation,
+and terminal rejection. For `agent-activity`, emit process-wide
+`measurementUnavailable`/`measurementRecovered` only on availability-class
+transitions; scheduled samples, status heartbeats, unchanged snapshots, and
+repeated unavailable results are silent.
+
+Keep event writes outside PTY/session locks and treat them as diagnostic
+best-effort. A writer failure logs a warning but cannot rewrite coordinator
+state, a real executor outcome, or handoff release. Existing manual audit
+failure remains fail-closed before dispatch. Treat `ArmCancelled` as the
+terminal boundary for the cancelled attempt; shutdown, activity, and other
+admission invalidations additionally emit their typed `terminalRejected`
+event, while a grace cancellation can end without that companion event.
 
 Keep the Phase 01 policy/configuration contract separate from runtime
 observation:

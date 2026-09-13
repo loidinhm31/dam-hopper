@@ -32,7 +32,7 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 | --- | --- | ---: | ---: | --- |
 | [01 — Frozen architecture, schemas, source/privacy/durability matrix](phase-01-freeze-architecture-contracts.md) | approved/completed (2026-09-12) | 100% | 12h | None |
 | [02 — Canonical event writer, identity, sequence, correlation foundation](phase-02-canonical-event-foundation.md) | completed (2026-09-13) | 100% | 16h | 01 approved |
-| [03 — Coordinator/manual/automatic instrumentation and restart-safe IDs](phase-03-server-coordinator-instrumentation.md) | pending | 0% | 18h | 02 |
+| [03 — Coordinator/manual/automatic instrumentation and restart-safe IDs](phase-03-server-coordinator-instrumentation.md) | DONE (2026-09-13) | 100% | 18h | 02 |
 | [04 — Helper audit milestones and protocol-safe propagation](phase-04-helper-milestone-enrichment.md) | pending | 0% | 18h | 02–03 correlation contract |
 | [05 — Bundle model, bounded readers, redaction, correlation/gap engine](phase-05-bundle-correlation-engine.md) | pending | 0% | 20h | 01–04 schemas stable |
 | [06 — Linux CLI, role-aware adapters, atomic output and exits](phase-06-linux-cli-integration.md) | pending | 0% | 16h | 05 |
@@ -40,7 +40,7 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 
 **Total: 110h.** Phase estimates sum to frontmatter effort.
 
-**Current plan status:** In progress — Phase 01 completed 2026-09-12; Phase 02 DONE (100%, completed 2026-09-13; reviewed 9.5/10). Phases 03–07 remain pending for coordinator instrumentation, helper audit enrichment, bundle engine, and CLI rollout.
+**Current plan status:** IN PROGRESS — Phase 01 completed 2026-09-12; Phase 02 completed 2026-09-13 (reviewed 9.5/10); Phase 03 **DONE (2026-09-13; 100%; reviewed 9.3/10; 170/170 tests passed)**. Phases 04–07 remain pending for helper audit enrichment, bundle engine, and CLI rollout.
 ## Phase 01 completion record
 
 - **Completed:** 2026-09-12.
@@ -54,6 +54,15 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 - **Progress:** 100% (6/6 todo items).
 - **Evidence:** Focused canonical event tests 11/11, server-audit compatibility 1/1, and the full `idle_suspend::` module 143/143 passed; [test report](../reports/tester-260913-1637-phase02-canonical-event-foundation.md) · [code review](../reports/code-review-260913-1639-phase02-event-writer.md).
 - **Boundary:** Phase 02 creates `event.rs`, adds exports in `idle_suspend/mod.rs`, and tests in `idle_suspend/tests.rs`. Coordinator and helper runtime remain untouched for Phases 03 and 04.
+
+## Phase 03 completion record
+
+- **Completed:** 2026-09-13.
+- **Status:** DONE (100%; 6/6 todo items).
+- **Review score:** 9.3/10.
+- **Tests passed:** 170/170.
+- **Evidence:** Deterministic coordinator, unit, and integration validation passed; [code review](../reports/code-review-260913-1807-phase03-coordinator-instrumentation.md).
+- **Boundary:** Phase 03 wires canonical writer through AppState and coordinator, adds AttemptContext, replaces epoch-N with UUID correlation, and instruments authoritative transitions without per-sample overhead. Helper audit remains untouched for Phase 04.
 
 ## Ownership and sequencing
 

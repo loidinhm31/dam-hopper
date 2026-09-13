@@ -12,10 +12,11 @@
 - Date: 2026-09-12
 - Description: wire one event producer into server startup; instrument authoritative coordinator transitions, decisions, dispatch/outcome/reconciliation; replace action request IDs with one restart-safe UUID correlation lifecycle.
 - Priority: P1
-- Implementation status: pending
-- Review status: coordinator state-machine and compatibility review required
+- Implementation status: DONE (2026-09-13)
+- Review status: APPROVED (9.3/10); see [code review report](../reports/code-review-260913-1807-phase03-coordinator-instrumentation.md)
+- Progress: 100% (6/6 todo items).
+- Tests passed: 170/170.
 - Effort: 18h
-- Ownership: one coordinator owner exclusively edits `coordinator.rs` and `state.rs`; API/test owners update their callsites after signatures freeze.
 - Dependency: Phase 02 writer/types approved. Phase 04 consumes the frozen request-ID behavior.
 
 ## Key Insights
@@ -78,12 +79,19 @@
 
 ## Todo list
 
-- [ ] Wire one optional writer through `AppState` and coordinator startup.
-- [ ] Add one UUID `AttemptContext` for both modes.
-- [ ] Instrument every authoritative transition/rejection without sample logging.
-- [ ] Preserve manual/timing audit and status behavior.
-- [ ] Add deterministic chain/restart/fault tests.
-- [ ] Complete coordinator compatibility review.
+- [x] Wire one optional writer through `AppState` and coordinator startup.
+- [x] Add one UUID `AttemptContext` for both modes.
+- [x] Instrument every authoritative transition/rejection without sample logging.
+- [x] Preserve manual/timing audit and status behavior.
+- [x] Add deterministic chain/restart/fault tests.
+- [x] Complete coordinator compatibility review.
+
+## Completion record
+
+- **Completed:** 2026-09-13.
+- **Status:** DONE (100%; 6/6 todo items).
+- **Review score:** 9.3/10.
+- **Tests passed:** 170/170.
 
 ## Success Criteria
 

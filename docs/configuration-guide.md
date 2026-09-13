@@ -759,11 +759,13 @@ Diagnostics export does not currently add user-configurable knobs to `dam-hopper
 
 The export API is local-only, uses camelCase on the wire, and accepts `frontend` plus the legacy `frontendSnapshot` alias.
 
-The Phase 02 canonical idle-suspend event writer is a separate internal
-producer. Its path is fixed at
+The Phases 02–03 canonical idle-suspend event producer is internal. Its path
+is fixed at
 `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`;
-there is no configuration key or public path override, and coordinator emission
-plus the `diagnose --json` collector remain planned for later phases.
+there is no configuration key or public path override. Phase 03 wires the
+optional writer into `AppState` and coordinator startup; initialization can
+degrade semantic evidence without disabling suspend/status behavior. The
+`diagnose --json` collector remains planned for later phases.
 
 - Backend diagnostics are stored locally at `~/.config/dam-hopper/diagnostics/backend-log.jsonl`
 - The backend log keeps a 60-minute retention window and uses restricted `0o600` file permissions on Unix

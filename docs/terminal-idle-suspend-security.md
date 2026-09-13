@@ -42,11 +42,11 @@ Manual records contain actor subject, request ID, wake mode, requested/effective
 fleet generation and aggregate counts, and typed result only. They exclude tokens,
 cookies, command strings, environment variables, terminal IDs/content, and raw IPC.
 
-### Phase 02 canonical semantic event writer
+### Phases 02–03 canonical semantic event writer and coordinator emission
 
-Phase 02 adds a separate tagged server event stream at
+Phases 02–03 add a separate tagged server event stream at
 `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`;
-it does not extend or reinterpret the untagged `idle-suspend-audit.jsonl`
+they do not extend or reinterpret the untagged `idle-suspend-audit.jsonl`
 records above. The event envelope is closed, camelCase, deny-unknown-fields,
 and limited to the reviewed event/data/reason contract.
 
@@ -60,9 +60,17 @@ disables future emission.
 The writer requires an existing effective-owner mode-`0700` parent and a
 regular effective-owner mode-`0600` target, opens with no-follow flags, bounds
 each JSONL line to 16 KiB, and calls `sync_data()` before success. It never
-creates, repairs, chmods, rotates, or truncates the parent or target. The
-coordinator does not emit these events until Phase 03 integration; event
-initialization cannot change suspend policy or outcome.
+creates, repairs, chmods, rotates, or truncates the parent or target.
+
+Phase 03 stores one optional writer in `AppState` and passes it into the
+coordinator. Each automatic or manual attempt allocates one UUID v4 before
+`attemptStarted`; that exact value is reused for semantic event
+`correlationId`, the helper request ID, accepted manual response, and existing
+manual audit record. The coordinator emits only authoritative lifecycle
+boundaries, emits measurement unavailable/recovered only on availability
+transitions, and does not log scheduled samples or status heartbeats.
+Semantic write failure is warning-only: it cannot alter suspend state/outcome,
+prevent reconciliation, or bypass the existing fail-closed manual audit gate.
 
 
 ### Phase 01 execution-domain safeguards

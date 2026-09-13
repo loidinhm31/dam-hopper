@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-13 from `repomix-output.xml` (Repomix v1.18.0; 1,841
-files, 4,022,265 tokens, 16,575,377 characters; five security-flagged files
+**Generated:** 2026-09-13 from `repomix-output.xml` (Repomix v1.18.0; 1,843
+files, 4,039,716 tokens, 16,667,647 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -55,15 +55,15 @@ capabilities rather than project-path access.
 | --- | --- |
 | `policy.rs` | Startup-owned automatic policy and bounded timing configuration. |
 | `protocol.rs` | Version-1 helper frames, request IDs, wake validation, and REST DTOs. |
-| `coordinator.rs` | Single-flight automatic/manual state machine and reconciliation. |
+| `coordinator.rs` | Single-flight automatic/manual state machine, semantic event emission, and reconciliation. |
 | `status.rs` | Private measurement/status DTOs and warning projection. |
 | `server_audit.rs` | Legacy untagged timing/manual audit JSONL. |
 | `audit.rs` | Helper audit records and compatibility readers. |
 | `backend.rs`, `executor.rs` | RTC and fixed suspend execution seams. |
 | `preflight.rs`, `peer_auth.rs` | Inhibitor, capability, RTC, and peer checks. |
 | `helper_client.rs`, `helper_server.rs` | Unix-socket client and root helper service. |
-| `event.rs` | Phase 02 canonical semantic event model and writer. |
-| `tests.rs` | Focused policy, protocol, audit, helper, and event behavior tests. |
+| `event.rs` | Canonical semantic event model, identity/correlation validation, and synchronized writer. |
+| `tests.rs` | Focused policy, protocol, audit, helper, event, and coordinator behavior tests. |
 
 The configured-agent policy consumes private PTY, bounded process-discovery,
 and owned TCP observation seams. Later sampler/admission and status/UI layers
@@ -72,7 +72,7 @@ remain distinct from the suspend helper and cannot grant host power authority.
 ### Phase 02 canonical event foundation
 
 `event.rs` implements the producer foundation for the production diagnostics
-contract without wiring it into coordinator lifecycle yet:
+contract:
 
 - `IdleSuspendEventEnvelopeV1` is a camelCase, deny-unknown-fields envelope
   with `eventSchemaVersion = 1`, 14 closed event types, typed payload variants,
@@ -91,13 +91,41 @@ contract without wiring it into coordinator lifecycle yet:
   The writer refuses unsafe parent/target metadata, writes bounded JSONL to a
   regular mode-`0600` file with no-follow flags, and calls `sync_data()` before
   success. It does not provision or repair the parent.
-- `idle_suspend/mod.rs` re-exports the event types, constants, identity, and
-  writer. Phase 03 owns coordinator emission; the existing untagged server
-  audit remains unchanged.
 
-The parent diagnostics contract describes future helper-v2 evidence, fixed
-source collection, redaction, correlation, atomic bundle output, and rollout.
-Those components are not implied by the Phase 02 producer module.
+### Phase 03 coordinator instrumentation and restart-safe IDs
+
+`AppState::new` derives the event path from the diagnostics log parent and
+stores one optional `Arc<IdleSuspendEventWriter>`. Initialization failure is
+recorded as a sanitized backend diagnostic and does not stop the server;
+missing writer evidence makes later collection partial. Coordinator startup
+passes that shared writer through `start_with_sink` into `run_coordinator`.
+
+`run_coordinator` emits `coordinatorStarted` once per producer process and
+keeps one `AttemptContext` for each automatic or manual attempt. The context
+allocates a UUID v4 before `attemptStarted` and carries mode, fleet/activity/
+timing/status revisions, generation, and wake value through the lifecycle.
+That exact UUID is reused for attempt event `correlationId`, the helper
+protocol-v1 `requestId`, accepted manual responses, and legacy manual audit
+records. Epochs and revisions are evidence only; a new process receives a
+new producer identity and cannot reuse an earlier action correlation.
+
+Automatic empty-fleet and agent-activity paths emit typed arm, final-check,
+handoff, dispatch, terminal-rejection, outcome, and reconciliation events.
+Agent measurement emits process-wide unavailable/recovered events only when
+availability changes, not for each scheduled sample. Manual admission records
+accepted and rejected/conflict/capability/shutdown paths with the same UUID
+rules. Semantic write failures are warning-only and never replace a real
+suspend outcome or prevent handoff release; existing pre-action server audit
+failure remains fail-closed.
+
+Phase 03 coordinator tests cover seven deterministic event scenarios, while
+the public `server/tests/idle_suspend.rs` suite covers 19 integration tests.
+The full focused `idle_suspend::` unit filter passed 150 tests; all fixtures
+use temporary trusted paths, fake clocks, and fake executors.
+
+The parent diagnostics contract still describes future helper-v2 evidence,
+fixed source collection, redaction, correlation, atomic bundle output, and
+rollout. Those components are not implied by the Phase 02–03 server producer.
 
 ## Linux release and deployment
 
@@ -137,17 +165,18 @@ future collection must not infer authority from latest probes or terminal text.
   `packages/ui/browser-tests/` and exercise actual rendered behavior.
 - Linux release and target-host smoke scripts are under `server/tests/deploy/`
   and `deploy/`; real RTC/suspend canaries remain explicit host-owner gates.
-- Phase 02 event behavior is covered by event-focused tests for schema/serde,
-  validation, identity, path safety, size bounds, sequence gaps/overflow,
-  protocol-compatible correlation, synchronization, and legacy-audit
-  compatibility.
+- Phase 02–03 event behavior is covered by schema/serde, validation, identity,
+  path safety, size bounds, sequence gaps/overflow, protocol-compatible
+  correlation, synchronization, legacy-audit compatibility, coordinator
+  lifecycle ordering, measurement transition suppression, and restart-safe
+  producer/action IDs.
 
 ## Documentation map
 
 - [System Architecture](./system-architecture.md) — live data flow and
-  security boundaries, including the Phase 02 diagnostics foundation.
-- [Code Standards](./code-standards.md) — Rust/TypeScript patterns and
-  canonical writer rules.
+  security boundaries, including Phase 02–03 diagnostics integration.
+- [Code Standards](./code-standards.md) — Rust/TypeScript patterns,
+  canonical writer, and coordinator lifecycle rules.
 - [Project Overview PDR](./project-overview-pdr.md) — product requirements and
   phase acceptance criteria.
 - [Configuration Guide](./configuration-guide.md) — configuration and runtime
