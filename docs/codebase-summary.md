@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-13 from `repomix-output.xml` (Repomix v1.18.0; 1,847
-files, 4,058,705 tokens, 16,750,620 characters; five security-flagged files
+**Generated:** 2026-09-13 from `repomix-output.xml` (Repomix v1.18.0; 1,856
+files, 4,093,089 tokens, 16,899,368 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -125,10 +125,40 @@ milestone ordering coverage; the full focused `idle_suspend::` unit filter
 passed 172 tests, including 23 focused helper tests. Fixtures use temporary
 trusted paths and fake executors; no host suspend or RTC mutation is exercised.
 
-Phases 05–07 still own the read-only helper-v2 collector, fixed-source
-projection/redaction, atomic bundle output, mixed-version completeness, and
-rollout. These future components are not implied by the Phase 02–04 server
-producers.
+Phase 05 now owns the pure read-only bundle-v1 model, four bounded JSONL
+compatibility readers, allowlist/redaction projectors, exact-UUID correlation
+and gap analysis, and whole-record final-cap reduction. Phase 06–07 still own
+host/API/command/output integration and rollout; these adapters are not implied
+by the pure Phase 05 engine.
+
+### Phase 05 pure diagnostics engine
+
+`server/src/linux_release/diagnostics/` is a pure assembly boundary:
+
+- `model.rs` defines `DiagnosticBundleV1`, source envelopes, completeness,
+  bounds, privacy, correlation, projected-record DTOs, typed errors, and fixed
+  limits. Bundle serde is camelCase and rejects unknown top-level fields.
+- `file_sources.rs` shares one no-follow, read-only bounded JSONL scanner across
+  `read_server_events`, `read_server_audit`, `read_helper_audit`, and
+  `read_backend_diagnostics`. Each source has independent status, coverage,
+  malformed/retention/truncation/drop indicators, and bounded errors.
+- `redaction.rs` validates closed schemas/UUIDs and projects explicit
+  allowlists. Actors, terminal/PTY data, argv/environment, credentials,
+  addresses, journal text, raw helper details, and unbounded stderr are
+  excluded or mapped to bounded codes.
+- `correlation.rs` joins exact validated UUIDs only; it reports deterministic
+  chains, open/orphan records, sequence gaps/duplicates, and restart
+  boundaries. Time, epochs, revisions, and PIDs never infer identity.
+- `collector.rs` assembles the trailing 60-minute bundle, evaluates required
+  historical-source completeness, and reduces whole records until serialized
+  output is at most 8,388,608 bytes, then recomputes correlations.
+
+Readers cap each source at 16 MiB, each JSONL line at 16 KiB, and 10,000
+accepted records. Missing and readable-empty files remain distinct. Malformed
+middle/tail evidence preserves valid neighboring records while marking the
+source partial. Source reads never compact, repair, truncate, rotate, lock, or
+write producer files. Fixture tests compare bytes, length, and permissions
+before/after reads to verify zero disk mutation.
 
 ## Linux release and deployment
 
@@ -156,8 +186,9 @@ Authentication, CSRF/same-origin checks, project sandbox containment, fixed
 allowlisted commands, no-follow filesystem operations, bounded request/output
 sizes, and sanitized error types are enforced at backend boundaries. Durable
 logs omit credentials, tokens, terminal content, commands, environment, and
-raw IPC. Diagnostic evidence is intended to remain local and privacy-projected;
-future collection must not infer authority from latest probes or terminal text.
+raw IPC. The Phase 05 diagnostic engine keeps evidence local, applies explicit
+privacy projection before sizing, and never infers authority from latest probes
+or terminal text.
 
 ## Verification map
 
@@ -168,16 +199,15 @@ future collection must not infer authority from latest probes or terminal text.
   `packages/ui/browser-tests/` and exercise actual rendered behavior.
 - Linux release and target-host smoke scripts are under `server/tests/deploy/`
   and `deploy/`; real RTC/suspend canaries remain explicit host-owner gates.
-- Phase 02–03 event behavior is covered by schema/serde, validation, identity,
-  path safety, size bounds, sequence gaps/overflow, protocol-compatible
-  correlation, synchronization, legacy-audit compatibility, coordinator
-  lifecycle ordering, measurement transition suppression, and restart-safe
-  producer/action IDs.
+- Phase 02–05 diagnostics behavior is covered by schema/serde, validation,
+  identity, path safety, bounded readers, malformed-line recovery, privacy
+  projection, exact UUID correlation, sequence gaps/duplicates, restart
+  boundaries, whole-record cap reduction, and source immutability.
 
 ## Documentation map
 
 - [System Architecture](./system-architecture.md) — live data flow and
-  security boundaries, including Phase 02–03 diagnostics integration.
+  security boundaries, including the completed Phase 05 diagnostics engine.
 - [Code Standards](./code-standards.md) — Rust/TypeScript patterns,
   canonical writer, and coordinator lifecycle rules.
 - [Project Overview PDR](./project-overview-pdr.md) — product requirements and

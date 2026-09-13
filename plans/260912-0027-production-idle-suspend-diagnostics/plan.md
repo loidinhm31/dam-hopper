@@ -34,13 +34,13 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 | [02 — Canonical event writer, identity, sequence, correlation foundation](phase-02-canonical-event-foundation.md) | completed (2026-09-13) | 100% | 16h | 01 approved |
 | [03 — Coordinator/manual/automatic instrumentation and restart-safe IDs](phase-03-server-coordinator-instrumentation.md) | DONE (2026-09-13) | 100% | 18h | 02 |
 | [04 — Helper audit milestones and protocol-safe propagation](phase-04-helper-milestone-enrichment.md) | DONE (2026-09-13) | 100% | 18h | 02–03 correlation contract |
-| [05 — Bundle model, bounded readers, redaction, correlation/gap engine](phase-05-bundle-correlation-engine.md) | pending | 0% | 20h | 01–04 schemas stable |
+| [05 — Bundle model, bounded readers, redaction, correlation/gap engine](phase-05-bundle-correlation-engine.md) | DONE (2026-09-13) | 100% | 20h | 01–04 schemas stable |
 | [06 — Linux CLI, role-aware adapters, atomic output and exits](phase-06-linux-cli-integration.md) | pending | 0% | 16h | 05 |
 | [07 — Cross-layer security/fault gates, architecture verification, docs/rollout](phase-07-security-verification-rollout.md) | pending | 0% | 10h | 01–06 |
 
 **Total: 110h.** Phase estimates sum to frontmatter effort.
 
-**Current plan status:** IN PROGRESS — Phase 01 completed 2026-09-12; Phase 02 completed 2026-09-13 (reviewed 9.5/10); Phase 03 **DONE (2026-09-13; 100%; reviewed 9.3/10; 170/170 tests passed)**; Phase 04 **DONE (2026-09-13; 100%; reviewed 9.8/10; 172/172 tests passed)**. Phases 05–07 remain pending for bundle engine and CLI rollout.
+**Current plan status:** IN PROGRESS — Phase 01 completed 2026-09-12; Phase 02 completed 2026-09-13 (reviewed 9.5/10); Phase 03 **DONE (2026-09-13; 100%; reviewed 9.3/10; 170/170 tests passed)**; Phase 04 **DONE (2026-09-13; 100%; reviewed 9.8/10; 172/172 tests passed)**; Phase 05 **DONE (2026-09-13; 100%; reviewed 9.5/10; 202/202 tests passed)**. Overall progress: **5/7 phases; 84/110h (76%)**. Phases 06–07 remain pending for Linux CLI integration and cross-layer rollout.
 ## Phase 01 completion record
 
 - **Completed:** 2026-09-12.
@@ -72,6 +72,16 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 - **Tests passed:** 172/172 `idle_suspend` module tests; 23/23 focused helper tests.
 - **Evidence:** [test report](../reports/tester-260913-1935-phase04-helper-audit-milestone-enrichment-cycle2.md) · [code review](../reports/code-review-260913-1937-phase-04-helper-milestone-enrichment-cycle2.md).
 - **Boundary:** Phase 04 enriches the existing helper audit in place with typed, privacy-safe milestones and producer identity/sequence while preserving protocol v1, established action records, intent fail-closed ordering, and post-action outcome truth. Phase 05 owns bundle readers, projection, and correlation/gap analysis.
+
+## Phase 05 completion record
+
+- **Completed:** 2026-09-13.
+- **Status:** DONE (100%; 6/6 todo items).
+- **Review:** Reviewed **9.5/10** in Cycle 2; approved with one minor unused `push_error` warning noted.
+- **Tests passed:** **202/202** (**16 diagnostics + 186 `idle_suspend`**).
+- **Advisor lifecycle:** Canonical advisor lifecycle completed.
+- **Evidence:** [Cycle 2 code review](../reports/code-review-260913-2327-phase-05-bundle-correlation-engine-cycle2.md).
+- **Boundary:** Phase 05 delivers pure bundle/read/redaction/correlation/cap reduction logic; Phase 06 owns Linux CLI, role-aware host adapters, and atomic output integration.
 
 ## Ownership and sequencing
 
