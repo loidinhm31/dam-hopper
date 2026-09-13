@@ -390,6 +390,41 @@ filesystem mutation to this core.
   use temporary files and deterministic identities; they must not mutate a
   producer path or invoke suspend.
 
+### Production diagnostics host integration (Phase 06)
+
+Keep the CLI integration narrow and fixed:
+
+- `collector.rs` composes the Phase 05 pure readers with role, EUID, host
+  command, local API, current-probe, and output seams. A source failure marks
+  that source and does not abort independent collection.
+- `host_commands.rs` exposes only the closed `systemctl`, `journalctl`, and
+  `systemd-inhibit` command variants. Compile fixed argv, locale `C`, null
+  stdin, discarded stderr, a five-second deadline, and bounded stdout; never
+  shell out or accept operator command text.
+- `local_api.rs` uses only the fixed loopback idle-status URL and token path,
+  disables redirects, bounds the response to 256 KiB, and never logs or
+  serializes the token.
+- `host_probes.rs` reads fixed RTC/power/PID/enrollment inputs and aggregates
+  inhibitors without mutation. Keep probe data non-historical; omit raw
+  process/inhibitor identities, message text, terminal bytes, arguments,
+  credentials, and addresses, retaining only approved executable identity.
+- `output.rs` validates an owned non-symlink `0700` directory, creates an
+  exclusive no-follow temporary file with mode `0600`, syncs and renames it,
+  then syncs the directory. Resolve root output through `Layout`; resolve
+  non-root output through absolute `XDG_STATE_HOME` or `HOME` only, never
+  `/tmp`.
+- `cli.rs` accepts exactly `diagnose --json`; `dam-hopper.rs` prints no
+  progress and maps complete/partial/fatal to exit `0`/`2`/`1`. Print the
+  absolute final path only after durable output; fatal output/serialization
+  errors print no path.
+
+`verify_privileges` must allow `diagnose` for every EUID while preserving
+root-only mutating commands and non-root-only acquisition. Role applicability
+comes only from `Layout::host_config_path()`: `server`/`both` require server
+sources, `web` marks them `notApplicable`, and unknown role remains partial.
+Non-root collection never calls `sudo`, setuid helpers, or another escalation;
+root-only helper evidence is an explicit `permissionDenied` source state.
+
 ### Protected status decoding and presentation (Phase 06)
 
 Keep external status data at an explicit `unknown` boundary. The

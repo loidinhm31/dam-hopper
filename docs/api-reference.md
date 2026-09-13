@@ -225,9 +225,40 @@ Protected local export for backend diagnostics. The endpoint reads from the loca
 This browser-facing export is separate from the production idle-suspend
 diagnostics contract. The canonical server event writer and Phase 03
 coordinator emission are internal producer paths; they add no REST/WebSocket
-route and are not included in this export. The one-shot `diagnose --json`
-collector remains planned in the
-[diagnostics plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md).
+route and are not included in this export.
+
+### Production diagnostics CLI (Phase 06)
+
+The Linux release binary exposes one exact invocation:
+
+```bash
+dam-hopper diagnose --json
+```
+
+`--json` is required; no output path, window, source, unit, URL, command, or
+verbosity flag is accepted. The collector writes a bounded camelCase
+`DiagnosticBundleV1` (`bundleSchemaVersion: 1`) from fixed role-aware sources:
+server event/audit files, helper audit, backend diagnostics, systemd/journal
+metadata, the loopback idle-status API, and current host probes. Journal
+message text, credentials/tokens, terminal/PTY data, arguments, raw helper
+frames, and socket/IP addresses are excluded.
+
+The command prints only the absolute final bundle path after an atomic
+same-directory write. Root output is
+`/var/lib/dam-hopper-manager/diagnostics`; non-root output is
+`$XDG_STATE_HOME/dam-hopper/diagnostics`, or `$HOME/.local/state/dam-hopper/diagnostics`
+when the former is unset. Directories are `0700` and final files `0600`.
+Non-root collection never escalates; an applicable helper audit is
+`permissionDenied` and can make the historical result partial.
+
+| Exit | Meaning |
+| ---: | --- |
+| `0` | Complete applicable historical evidence; bundle written. |
+| `2` | Partial historical evidence; valid bundle written. |
+| `1` | Serialization or secure-output failure; no path is printed. |
+
+See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
+for source paths, role applicability, fixed adapter limits, and output details.
 
 Request and response payloads use camelCase on the wire. The request accepts `frontend` and also the legacy `frontendSnapshot` alias.
 

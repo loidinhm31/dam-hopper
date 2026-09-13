@@ -764,13 +764,31 @@ is fixed at
 `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`;
 there is no configuration key or public path override. Phase 03 wires the
 optional writer into `AppState` and coordinator startup; initialization can
-degrade semantic evidence without disabling suspend/status behavior. The
-`diagnose --json` collector remains planned for later phases.
+degrade semantic evidence without disabling suspend/status behavior.
+
+Production collection is a separate read-only CLI path:
+`dam-hopper diagnose --json`. The required `--json` flag is the complete
+grammar; path, window, source, unit, URL, command, and verbosity overrides are
+not accepted. The collector uses fixed role-aware host adapters and emits one
+bounded `bundleSchemaVersion: 1` JSON file. It returns `0` for complete
+historical evidence, `2` for a valid partial bundle, and `1` for serialization
+or secure-output failure.
+
+- Root output: `/var/lib/dam-hopper-manager/diagnostics`
+- Non-root output: `$XDG_STATE_HOME/dam-hopper/diagnostics`, else
+  `$HOME/.local/state/dam-hopper/diagnostics`; no `/tmp` fallback
+- Output directory: owner-only `0700`; final bundle: owner-only `0600`
+- Non-root execution never escalates; root-only helper audit is
+  `permissionDenied` and applicable server/both collection is partial
+- The command prints only the absolute final bundle path on stdout
+
+See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
+for fixed source paths, adapter bounds, and the atomic write sequence.
 
 - Backend diagnostics are stored locally at `~/.config/dam-hopper/diagnostics/backend-log.jsonl`
 - The backend log keeps a 60-minute retention window and uses restricted `0o600` file permissions on Unix
 - Frontend diagnostics stay in browser `localStorage` under `damhopper_diagnostics_frontend_v1`
-- Exported JSON bundles are created only when the user triggers Settings > Maintenance > Export Diagnostics
+- Exported browser JSON bundles are created only when the user triggers Settings > Maintenance > Export Diagnostics
 - Terminal tails are included by default and may still contain sensitive local/dev output even after best-effort redaction
 
 ## Global Configuration (~/.config/dam-hopper/config.toml)

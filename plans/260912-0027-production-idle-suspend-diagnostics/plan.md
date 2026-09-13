@@ -35,12 +35,12 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 | [03 — Coordinator/manual/automatic instrumentation and restart-safe IDs](phase-03-server-coordinator-instrumentation.md) | DONE (2026-09-13) | 100% | 18h | 02 |
 | [04 — Helper audit milestones and protocol-safe propagation](phase-04-helper-milestone-enrichment.md) | DONE (2026-09-13) | 100% | 18h | 02–03 correlation contract |
 | [05 — Bundle model, bounded readers, redaction, correlation/gap engine](phase-05-bundle-correlation-engine.md) | DONE (2026-09-13) | 100% | 20h | 01–04 schemas stable |
-| [06 — Linux CLI, role-aware adapters, atomic output and exits](phase-06-linux-cli-integration.md) | pending | 0% | 16h | 05 |
+| [06 — Linux CLI, role-aware adapters, atomic output and exits](phase-06-linux-cli-integration.md) | DONE (2026-09-14) | 100% | 16h | 05 |
 | [07 — Cross-layer security/fault gates, architecture verification, docs/rollout](phase-07-security-verification-rollout.md) | pending | 0% | 10h | 01–06 |
 
 **Total: 110h.** Phase estimates sum to frontmatter effort.
 
-**Current plan status:** IN PROGRESS — Phase 01 completed 2026-09-12; Phase 02 completed 2026-09-13 (reviewed 9.5/10); Phase 03 **DONE (2026-09-13; 100%; reviewed 9.3/10; 170/170 tests passed)**; Phase 04 **DONE (2026-09-13; 100%; reviewed 9.8/10; 172/172 tests passed)**; Phase 05 **DONE (2026-09-13; 100%; reviewed 9.5/10; 202/202 tests passed)**. Overall progress: **5/7 phases; 84/110h (76%)**. Phases 06–07 remain pending for Linux CLI integration and cross-layer rollout.
+**Current plan status:** IN PROGRESS — Phase 01 completed 2026-09-12; Phase 02 completed 2026-09-13 (reviewed 9.5/10); Phase 03 **DONE (2026-09-13; 100%; reviewed 9.3/10; 170/170 tests passed)**; Phase 04 **DONE (2026-09-13; 100%; reviewed 9.8/10; 172/172 tests passed)**; Phase 05 **DONE (2026-09-13; 100%; reviewed 9.5/10; 202/202 tests passed)**; Phase 06 **DONE (2026-09-14; 100%; reviewed 9.6/10; 282 test executions passed across focused suites)**. Overall progress: **6/7 phases; 100/110h (91%)**. Phase 07 remains pending for cross-layer rollout.
 ## Phase 01 completion record
 
 - **Completed:** 2026-09-12.
@@ -82,6 +82,15 @@ No observer service, continuous telemetry, UI, alerting, automatic upload, exter
 - **Advisor lifecycle:** Canonical advisor lifecycle completed.
 - **Evidence:** [Cycle 2 code review](../reports/code-review-260913-2327-phase-05-bundle-correlation-engine-cycle2.md).
 - **Boundary:** Phase 05 delivers pure bundle/read/redaction/correlation/cap reduction logic; Phase 06 owns Linux CLI, role-aware host adapters, and atomic output integration.
+
+## Phase 06 completion record
+
+- **Completed:** 2026-09-14.
+- **Status:** DONE (100%; 6/6 todo items).
+- **Review:** Reviewed **9.6/10**; CLI grammar, EUID privilege boundaries, closed command runner, loopback API client, read-only probes, atomic mode 0600 output, and exit code semantics approved.
+- **Tests passed:** **282/282** (**36 focused diagnostics + 60 `linux_release` + 186 `idle_suspend` executions; 100% pass rate**).
+- **Evidence:** [Test report](../reports/tester-260913-2357-phase06-linux-cli-role-aware-host-adapters.md) · [Code review](../reports/code-review-260913-2359-phase-06-linux-cli-role-aware-host-adapters.md).
+- **Boundary:** Phase 06 exposes `dam-hopper diagnose --json`, safely projects role-aware host/systemd/journal/probe/API sources, writes atomic `0600` bundle to secure `0700` directory, and exits `0/2/1`. Phase 07 owns cross-layer failure validation, architecture verification, and documentation.
 
 ## Ownership and sequencing
 

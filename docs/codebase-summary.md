@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-13 from `repomix-output.xml` (Repomix v1.18.0; 1,856
-files, 4,093,089 tokens, 16,899,368 characters; five security-flagged files
+**Generated:** 2026-09-13 from `repomix-output.xml` (Repomix v1.18.0; 1,863
+files, 4,116,535 tokens, 16,999,207 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -125,11 +125,12 @@ milestone ordering coverage; the full focused `idle_suspend::` unit filter
 passed 172 tests, including 23 focused helper tests. Fixtures use temporary
 trusted paths and fake executors; no host suspend or RTC mutation is exercised.
 
-Phase 05 now owns the pure read-only bundle-v1 model, four bounded JSONL
+Phase 05 owns the pure read-only bundle-v1 model, four bounded JSONL
 compatibility readers, allowlist/redaction projectors, exact-UUID correlation
-and gap analysis, and whole-record final-cap reduction. Phase 06–07 still own
-host/API/command/output integration and rollout; these adapters are not implied
-by the pure Phase 05 engine.
+and gap analysis, and whole-record final-cap reduction. Phase 06 composes it
+with fixed role, EUID, host-command, local-API, current-probe, and output
+adapters; Phase 07 still owns rollout. These adapters do not widen the pure
+engine.
 
 ### Phase 05 pure diagnostics engine
 
@@ -160,6 +161,23 @@ source partial. Source reads never compact, repair, truncate, rotate, lock, or
 write producer files. Fixture tests compare bytes, length, and permissions
 before/after reads to verify zero disk mutation.
 
+### Phase 06 Linux diagnostic CLI and adapters
+
+`cli.rs` accepts only the required `diagnose --json` form. `collector.rs`
+loads role from the fixed host configuration, applies server/both versus web
+applicability, preserves independent source statuses, and records host EUID.
+`host_commands.rs` runs only fixed systemd/journal/inhibitor commands with
+locale `C`, null stdin, discarded stderr, five-second deadlines, and bounded
+stdout. `local_api.rs` reads the fixed token and queries only the loopback
+idle-status endpoint with no redirects and a 256 KiB body cap.
+
+`host_probes.rs` projects fixed RTC, power-state, enrollment/PID, and inhibitor
+evidence as non-historical data. `output.rs` resolves root or safe user-state
+destinations, enforces directory `0700` and bundle `0600`, and performs
+exclusive no-follow temp-file write, sync, rename, and directory sync.
+`dam-hopper.rs` prints only the absolute final path after output and maps
+complete/partial/fatal results to exits `0`/`2`/`1`; non-root never escalates.
+
 ## Linux release and deployment
 
 `server/src/linux_release/` owns manifest validation, role projection, unit
@@ -186,9 +204,9 @@ Authentication, CSRF/same-origin checks, project sandbox containment, fixed
 allowlisted commands, no-follow filesystem operations, bounded request/output
 sizes, and sanitized error types are enforced at backend boundaries. Durable
 logs omit credentials, tokens, terminal content, commands, environment, and
-raw IPC. The Phase 05 diagnostic engine keeps evidence local, applies explicit
-privacy projection before sizing, and never infers authority from latest probes
-or terminal text.
+raw IPC. The Phase 05/06 diagnostics engine keeps evidence local, applies
+explicit privacy projection before sizing, and never infers authority from
+latest probes or terminal text.
 
 ## Verification map
 
@@ -199,17 +217,18 @@ or terminal text.
   `packages/ui/browser-tests/` and exercise actual rendered behavior.
 - Linux release and target-host smoke scripts are under `server/tests/deploy/`
   and `deploy/`; real RTC/suspend canaries remain explicit host-owner gates.
-- Phase 02–05 diagnostics behavior is covered by schema/serde, validation,
-  identity, path safety, bounded readers, malformed-line recovery, privacy
-  projection, exact UUID correlation, sequence gaps/duplicates, restart
-  boundaries, whole-record cap reduction, and source immutability.
+- Phase 02–06 diagnostics behavior is covered by schema/serde, validation,
+  identity, path safety, bounded readers/adapters, malformed-line recovery,
+  privacy projection, exact UUID correlation, sequence gaps/duplicates,
+  restart boundaries, whole-record cap reduction, source immutability, role
+  applicability, and atomic output semantics.
 
 ## Documentation map
 
 - [System Architecture](./system-architecture.md) — live data flow and
-  security boundaries, including the completed Phase 05 diagnostics engine.
+  security boundaries, including the completed Phase 05/06 diagnostics engine.
 - [Code Standards](./code-standards.md) — Rust/TypeScript patterns,
-  canonical writer, and coordinator lifecycle rules.
+  canonical writer, diagnostics adapters, and coordinator lifecycle rules.
 - [Project Overview PDR](./project-overview-pdr.md) — product requirements and
   phase acceptance criteria.
 - [Configuration Guide](./configuration-guide.md) — configuration and runtime

@@ -956,15 +956,15 @@ Operations-owned target-host gate. See the [Phase 08 QA report](../plans/reports
 
 **Status:** Phase 01 architecture/schema/security contract, Phase 02
 canonical event foundation, Phase 03 server coordinator integration, Phase
-04 helper audit milestone enrichment, and Phase 05 pure bundle/correlation
-engine were completed on 2026-09-13. Phase 06 host/API/command/output
-integration and Phase 07 rollout remain planned.
+04 helper audit milestone enrichment, Phase 05 pure bundle/correlation
+engine, and Phase 06 host/API/command/output integration are complete.
+Phase 07 rollout remains planned.
 
 **Product intent:** Preserve bounded, privacy-safe evidence for diagnosing an
 idle-suspend incident without adding an observer daemon, terminal-content
 logging, telemetry egress, root-cause classifier, automatic upload, policy
-change, or alternate suspend authority. A future `dam-hopper diagnose --json`
-command will read fixed local sources and write one atomic local bundle.
+change, or alternate suspend authority. `dam-hopper diagnose --json` reads
+fixed local sources and writes one atomic local bundle.
 
 **Phase 02 delivery:** `server/src/idle_suspend/event.rs` defines the closed
 `IdleSuspendEventEnvelopeV1` model, 14 event types, 26 reason codes, typed
@@ -1019,6 +1019,24 @@ collector recomputes correlations and completeness after reduction. Focused
 diagnostics tests pass 16/16; source immutability is verified with fixture
 bytes, length, and permission comparisons.
 
+**Phase 06 delivery:** `cli.rs` exposes exactly `dam-hopper diagnose --json`
+with required `--json` and no output/window/source/unit/URL/command flags.
+`privilege.rs` permits the command for any EUID while preserving existing
+mutation boundaries. `collector.rs` composes role-aware fixed systemd,
+journal, loopback API, and current-host adapters around the Phase 05 core.
+`server`/`both` roles apply server sources; `web` marks them `notApplicable`;
+an unknown role remains partial. Non-root collection never escalates and marks
+root-only helper audit `permissionDenied`.
+
+`output.rs` writes root bundles under
+`/var/lib/dam-hopper-manager/diagnostics`; non-root bundles use absolute
+`XDG_STATE_HOME` or `HOME/.local/state`, with no `/tmp` fallback. It requires
+an owned non-symlink `0700` directory, creates a same-directory exclusive
+no-follow `0600` temporary file, syncs and atomically renames it, then syncs
+the directory. The binary prints only the absolute final path after output:
+exit `0` means complete, `2` means valid partial, and `1` means fatal
+serialization/output failure with no path.
+
 **Acceptance criteria:**
 
 - [x] Phase 01 freezes the event, helper, bundle, path, privacy, durability,
@@ -1033,14 +1051,20 @@ bytes, length, and permission comparisons.
 - [x] Phase 05 implements the pure bounded readers, bundle projection,
       privacy redaction, exact UUID correlation/gap engine, and whole-record
       final-size reduction with source immutability verification.
-- [ ] Phases 06–07 add host/API/command/output adapters, mixed-version
-      qualification, and rollout gates.
+- [x] Phase 06 implements role-aware host/API/command/probe adapters, the
+      exact `diagnose --json` grammar, atomic `0700`/`0600` output, and
+      complete/partial/fatal exit semantics.
+- [ ] Phase 07 performs mixed-version qualification and controlled rollout.
 
 **Operational boundary:** Event writes are diagnostic best effort after
 coordinator integration; they never rewrite a suspend outcome. Existing
 manual acceptance audit and helper accepted intent remain the pre-action
 durability gates. The collector may claim historical completeness only after
 all applicable required sources and gap/coverage gates pass.
+
+The CLI output contract is intentionally separate from the browser
+`POST /api/diagnostics/export` flow. No public tuning, alternate source, or
+operator-selected output path is part of bundle v1.
 
 ## Non-Functional Requirements
 

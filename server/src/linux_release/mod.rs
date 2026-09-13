@@ -71,8 +71,14 @@ pub use archive::inspect_and_validate_archive;
 pub use archive_extract::extract_role_projection;
 pub use attestation::verify_file_attestation;
 pub use cli::{
-    Cli, Commands, FetchArgs, InstallArgs, RoleCommands, RoleSetArgs, StartArgs, StatusArgs,
-    StopArgs, ValidateArgs,
+    Cli, Commands, DiagnoseArgs, FetchArgs, InstallArgs, RoleCommands, RoleSetArgs, StartArgs,
+    StatusArgs, StopArgs, ValidateArgs,
+};
+pub use diagnostics::{
+    collect_diagnostic_bundle, run_diagnose, Clock, CollectorAdapters, CurrentHostProbeReader,
+    EuidProvider, HostCommand, HostCommandRunner, LocalIdleStatusClient,
+    ProductionCurrentHostProbeReader, ProductionHostCommandRunner, ProductionLocalIdleStatusClient,
+    SystemClock, SystemEuidProvider,
 };
 pub use constants::*;
 pub use durable_fs::{
@@ -92,7 +98,9 @@ pub use inventory::{
     InventoryEntry, ReleaseRole, TargetRole,
 };
 pub use journal::{classify_recovery, validate_transition, DeploymentState, RecoveryAction};
-pub use layout::Layout;
+pub use layout::{
+    resolve_user_diagnostics_dir, resolve_user_diagnostics_dir_with, Layout,
+};
 pub use legacy_format2::{
     import_legacy_format2_release, inspect_format2_installation, inspect_format2_root,
     is_legacy_format2_root, validate_format2_unit, LegacyFormat2Evidence, LegacyFormat2Manifest,

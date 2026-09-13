@@ -339,6 +339,21 @@ dam-hopper status
 dam-hopper status --json
 ```
 
+### Capturing a production diagnostics bundle (Phase 06)
+
+For a bounded local idle-suspend snapshot, run:
+
+```bash
+dam-hopper diagnose --json
+```
+
+The command prints only the absolute bundle path after an atomic write. Exit
+`0` means complete historical evidence, `2` means a valid partial bundle, and
+`1` means fatal serialization/output failure. It is allowed for non-root users;
+root-only helper evidence is marked `permissionDenied` without escalation.
+See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
+for role applicability, fixed source paths, and output permissions.
+
 ### Inspecting Service Logs
 
 ```bash
