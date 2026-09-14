@@ -12,8 +12,8 @@ use dam_hopper_server::linux_release::migration::{
 use dam_hopper_server::linux_release::state_record::MigrationRecord;
 use dam_hopper_server::linux_release::ReleaseError;
 use std::fs;
-use std::path::Path;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 #[test]
 fn test_import_and_atomic_exchange_lifecycle() {
@@ -32,8 +32,13 @@ fn test_import_and_atomic_exchange_lifecycle() {
         binary_sha256: f.binary_hash.clone(),
         unit_path: f.layout.systemd_unit_dir.join(LEGACY_FORMAT2_UNIT),
         unit_sha256: f.unit_hash.clone(),
-        unit_content: fs::read_to_string(f.layout.systemd_unit_dir.join(LEGACY_FORMAT2_UNIT)).unwrap(),
-        wants_link_path: f.layout.systemd_unit_dir.join("multi-user.target.wants").join(LEGACY_FORMAT2_UNIT),
+        unit_content: fs::read_to_string(f.layout.systemd_unit_dir.join(LEGACY_FORMAT2_UNIT))
+            .unwrap(),
+        wants_link_path: f
+            .layout
+            .systemd_unit_dir
+            .join("multi-user.target.wants")
+            .join(LEGACY_FORMAT2_UNIT),
         manifest: LegacyFormat2Manifest {
             format: 2,
             nonce: f.nonce.clone(),
@@ -68,17 +73,38 @@ fn test_import_and_atomic_exchange_lifecycle() {
         legacy_unit_sha256: f.unit_hash.clone(),
         legacy_api_version: None,
         exchanged: false,
-        old_unit_backup_path: f.layout.systemd_unit_dir.join(LEGACY_FORMAT2_UNIT).display().to_string(),
-        old_wants_link_path: f.layout.systemd_unit_dir.join("multi-user.target.wants").join(LEGACY_FORMAT2_UNIT).display().to_string(),
+        old_unit_backup_path: f
+            .layout
+            .systemd_unit_dir
+            .join(LEGACY_FORMAT2_UNIT)
+            .display()
+            .to_string(),
+        old_wants_link_path: f
+            .layout
+            .systemd_unit_dir
+            .join("multi-user.target.wants")
+            .join(LEGACY_FORMAT2_UNIT)
+            .display()
+            .to_string(),
     };
 
     execute_migration_exchange(&f.layout, &mut mig_record).unwrap();
     assert!(mig_record.exchanged);
 
     // Canonical opt_dir now has candidate releases directory!
-    assert!(f.layout.opt_dir.join("releases").join("v1.0.0").join("server").join("marker.txt").exists());
+    assert!(f
+        .layout
+        .opt_dir
+        .join("releases")
+        .join("v1.0.0")
+        .join("server")
+        .join("marker.txt")
+        .exists());
     // And mig_root now has the old format-2 binary!
-    assert!(Path::new(&mig_record.migration_root).join("bin").join("dam-hopper-server").exists());
+    assert!(Path::new(&mig_record.migration_root)
+        .join("bin")
+        .join("dam-hopper-server")
+        .exists());
 
     // 4. Commit cleanup removes old exchanged root
     commit_migration_cleanup(&f.layout, &mig_record).unwrap();
@@ -102,8 +128,19 @@ fn test_atomic_exchange_rollback_restores_original_root() {
         legacy_unit_sha256: f.unit_hash.clone(),
         legacy_api_version: None,
         exchanged: false,
-        old_unit_backup_path: f.layout.systemd_unit_dir.join(LEGACY_FORMAT2_UNIT).display().to_string(),
-        old_wants_link_path: f.layout.systemd_unit_dir.join("multi-user.target.wants").join(LEGACY_FORMAT2_UNIT).display().to_string(),
+        old_unit_backup_path: f
+            .layout
+            .systemd_unit_dir
+            .join(LEGACY_FORMAT2_UNIT)
+            .display()
+            .to_string(),
+        old_wants_link_path: f
+            .layout
+            .systemd_unit_dir
+            .join("multi-user.target.wants")
+            .join(LEGACY_FORMAT2_UNIT)
+            .display()
+            .to_string(),
     };
 
     execute_migration_exchange(&f.layout, &mut mig_record).unwrap();
@@ -120,14 +157,27 @@ fn test_atomic_exchange_rollback_restores_original_root() {
 
     // Canonical opt_dir is back to the exact format-2 root!
     assert!(!f.layout.opt_dir.join("releases").exists());
-    assert!(f.layout.opt_dir.join(".systemd-fresh-install").join("manifest").exists());
-    assert!(f.layout.opt_dir.join("bin").join("dam-hopper-server").exists());
+    assert!(f
+        .layout
+        .opt_dir
+        .join(".systemd-fresh-install")
+        .join("manifest")
+        .exists());
+    assert!(f
+        .layout
+        .opt_dir
+        .join("bin")
+        .join("dam-hopper-server")
+        .exists());
 }
 
 #[test]
 fn test_retention_allows_imported_format2_and_prunes_when_unreferenced() {
     let f = create_format2_fixture();
-    let mut state = dam_hopper_server::linux_release::load_or_init_manager_state(&f.layout.manager_state_path()).unwrap();
+    let mut state = dam_hopper_server::linux_release::load_or_init_manager_state(
+        &f.layout.manager_state_path(),
+    )
+    .unwrap();
 
     // Create imported-format-2 release tree
     let imported_dir = f.layout.releases_dir().join(LEGACY_FORMAT2_TAG);
@@ -136,7 +186,11 @@ fn test_retention_allows_imported_format2_and_prunes_when_unreferenced() {
     fs::create_dir_all(&srv_bin).unwrap();
     fs::create_dir_all(&srv_unit).unwrap();
     fs::set_permissions(&imported_dir, fs::Permissions::from_mode(0o755)).unwrap();
-    fs::set_permissions(imported_dir.join("server"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(
+        imported_dir.join("server"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
     fs::set_permissions(&srv_bin, fs::Permissions::from_mode(0o755)).unwrap();
     fs::set_permissions(&srv_unit, fs::Permissions::from_mode(0o755)).unwrap();
     let bin_path = srv_bin.join("dam-hopper-server");
@@ -159,8 +213,13 @@ fn test_retention_allows_imported_format2_and_prunes_when_unreferenced() {
         api_unit_sha256: None,
         web_unit_sha256: None,
         host_config_sha256: None,
+        helper_unit_sha256: None,
     });
-    dam_hopper_server::linux_release::save_manager_state(&f.layout.manager_state_path(), &mut state).unwrap();
+    dam_hopper_server::linux_release::save_manager_state(
+        &f.layout.manager_state_path(),
+        &mut state,
+    )
+    .unwrap();
 
     let pruned = dam_hopper_server::linux_release::apply_retention(&f.layout, &state).unwrap();
     assert_eq!(pruned, 0);
@@ -168,9 +227,14 @@ fn test_retention_allows_imported_format2_and_prunes_when_unreferenced() {
 
     // 2. When unreferenced, apply_retention safely prunes it without aborting on tag validation
     state.previous = None;
-    dam_hopper_server::linux_release::save_manager_state(&f.layout.manager_state_path(), &mut state).unwrap();
+    dam_hopper_server::linux_release::save_manager_state(
+        &f.layout.manager_state_path(),
+        &mut state,
+    )
+    .unwrap();
 
-    let pruned_unref = dam_hopper_server::linux_release::apply_retention(&f.layout, &state).unwrap();
+    let pruned_unref =
+        dam_hopper_server::linux_release::apply_retention(&f.layout, &state).unwrap();
     assert_eq!(pruned_unref, 1);
     assert!(!imported_dir.exists());
 }

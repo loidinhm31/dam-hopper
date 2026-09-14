@@ -1,12 +1,11 @@
 //! Systemd command adapter executing direct binaries without shell interpretation.
 
 use super::error::ReleaseError;
-use std::path::Path;
-use std::process::Command;
 pub use super::systemd_backup::{
     backup_unit_files, install_unit_file, remove_unit_file, restore_unit_files,
 };
-
+use std::path::Path;
+use std::process::Command;
 
 /// Run `systemd-analyze verify` against the given unit file paths.
 pub fn systemd_analyze_verify<P: AsRef<Path>>(
@@ -62,7 +61,10 @@ pub fn systemctl_disable(unit_name: &str) -> Result<(), ReleaseError> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         // Idempotent: if unit file does not exist, consider it already disabled
-        if stderr.contains("does not exist") || stderr.contains("not loaded") || stderr.contains("No such file") {
+        if stderr.contains("does not exist")
+            || stderr.contains("not loaded")
+            || stderr.contains("No such file")
+        {
             return Ok(());
         }
         if (stderr.contains("Access denied") || stderr.contains("interactive authentication"))
@@ -138,7 +140,12 @@ pub fn systemctl_is_enabled(unit_name: &str) -> Result<bool, ReleaseError> {
 /// Query a single property of a unit (`systemctl show <unit> --property=<prop> --value`).
 pub fn systemctl_show_property(unit_name: &str, property: &str) -> Result<String, ReleaseError> {
     let mut cmd = Command::new("systemctl");
-    cmd.args(["show", unit_name, &format!("--property={property}"), "--value"]);
+    cmd.args([
+        "show",
+        unit_name,
+        &format!("--property={property}"),
+        "--value",
+    ]);
     let output = cmd.output().map_err(|e| ReleaseError::Io {
         action: "execute systemctl show",
         details: e.to_string(),

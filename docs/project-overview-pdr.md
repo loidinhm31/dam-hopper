@@ -610,6 +610,16 @@ and [code review](../plans/reports/code-reviewer-260902-1144-phase-04-client-typ
 notes, paths, external IDs, or request bodies. Server validation remains
 authoritative for workspace/target ownership, limits, errors, and replay.
 
+### Workflow selected-item surface extension (2026-09-07)
+
+The responsive workflow context surface renders authoritative item notes and
+supports inline title/summary editing in both Deck and Sheet layouts.
+
+- Note deletion passes the complete `NoteDto` and its `updatedAt` through
+  `useWorkflowSurfaceActions`; item updates use the same CAS contract.
+- Notes remain append-only in the UI; blank summaries serialize as `null`, and
+  successful mutations refresh the workflow overview without optimistic writes.
+
 ### PR-015: Server-Authoritative Terminal Idle Suspend (Phases 01–05)
 
 **Status:** Complete / DONE on 2026-09-05. Cross-module integration, privileged helper enrollment, systemd sandboxing, REST/WebSocket contract, and UI browser tests verified. Full integration tests passed in `server/tests/idle_suspend.rs` and browser tests passed in `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx`.
@@ -1082,6 +1092,57 @@ all applicable required sources and gap/coverage gates pass.
 The CLI output contract is intentionally separate from the browser
 `POST /api/diagnostics/export` flow. No public tuning, alternate source, or
 operator-selected output path is part of bundle v1.
+
+### Explorer HTML File Preview (Phases 01–03)
+
+**Status:** Complete 2026-09-12; interactive script and sandbox enhancements
+completed 2026-09-13.
+
+**Product intent:** Provide an in-editor HTML preview without a backend static
+file server or a second authenticated origin. Keep unsaved editor content live,
+retain the existing Monaco/editor lifecycle, and isolate workspace HTML in an
+opaque-origin sandbox.
+
+**Functional requirements:**
+
+- Detect final `.html`, `.htm`, and `.xhtml` extensions case-insensitively via
+  `isHtmlFile`; exclude dotfiles without a base name and non-preview tiers
+  (`diff`, `large`, and `binary`) via `isHtmlPreviewCandidate`.
+- Define `HtmlMode` as `"edit" | "split" | "preview"`; persist the mode in
+  browser storage under `dam-hopper:html-view-mode:v1`, defaulting to `"edit"`
+  when storage is absent, invalid, or unavailable.
+- Render `HtmlPreview` from debounced `srcDoc` content (200 ms) in an iframe
+  with `sandbox="allow-scripts allow-modals allow-forms allow-popups
+  allow-pointer-lock"`; omit `allow-same-origin` so content executes with a
+  `null` opaque origin and cannot access parent cookies or storage.
+- Inject only in-frame runtime shims for the opaque-origin `localStorage` /
+  `sessionStorage` errors and suppressed `window.alert()` behavior; do not
+  grant parent-page privileges. Provide an explicit reload control.
+- Render `HtmlHost` with Edit (100% Monaco), Split (50% Monaco / 50% preview),
+  and Preview (100% preview) modes. Lazy-load Monaco, persist mode changes,
+  accept `initialMode`, and forward the existing editor callbacks and view
+  state.
+- Lazy-route HTML tabs in `EditorTabs` before the generic Monaco fallback. Add
+  an Explorer `Preview`/`Eye` action only for live HTML files below 5 MiB;
+  saving `"preview"` then opens the existing file tab.
+
+**Acceptance criteria:**
+
+- [x] HTML detection, MIME hints, mode persistence, safe storage fallback, and
+      event-based live mode synchronization are implemented.
+- [x] Preview updates are debounced and reloadable; all iframe sandbox tokens
+      are explicit and `allow-same-origin` remains absent.
+- [x] Edit/Split/Preview layouts preserve Monaco save, change, view-state, and
+      Git indicator callbacks.
+- [x] Explorer context-menu preview enforces the 5 MiB live-file boundary and
+      does not add backend routes, static serving, or path-resolution behavior.
+- [x] Vitest/component/Chromium coverage and TypeScript checks cover helpers,
+      host routing, mode changes, sandbox interactions, and non-HTML filtering.
+
+**Changed frontend files:** `packages/ui/src/lib/html-file.ts`,
+`html-preview-transform.ts`, `html-view-mode-persistence.ts`,
+`components/organisms/HtmlPreview.tsx`, `HtmlHost.tsx`, `EditorTabs.tsx`,
+`TreeContextMenu.tsx`, `FileTree.tsx`, and their focused tests.
 
 ## Non-Functional Requirements
 

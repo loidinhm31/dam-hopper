@@ -54,9 +54,17 @@ mod tests {
     fn test_collect_all_services_status_structure() {
         let statuses = collect_all_services_status();
         assert_eq!(statuses.len(), 4);
-        assert!(statuses.iter().any(|s| s.unit_name == API_SERVICE_UNIT && s.role == "server"));
-        assert!(statuses.iter().any(|s| s.unit_name == HELPER_SERVICE_UNIT && s.role == "server"));
-        assert!(statuses.iter().any(|s| s.unit_name == WEB_SERVICE_UNIT && s.role == "web"));
-        assert!(statuses.iter().any(|s| s.unit_name == RECOVERY_SERVICE_UNIT && s.role == "recovery"));
+        assert!(statuses
+            .iter()
+            .any(|s| s.unit_name == API_SERVICE_UNIT && s.role == "server"));
+        assert!(statuses
+            .iter()
+            .any(|s| s.unit_name == HELPER_SERVICE_UNIT && s.role == "server"));
+        assert!(statuses
+            .iter()
+            .any(|s| s.unit_name == WEB_SERVICE_UNIT && s.role == "web"));
+        assert!(statuses
+            .iter()
+            .any(|s| s.unit_name == RECOVERY_SERVICE_UNIT && s.role == "recovery"));
     }
 }

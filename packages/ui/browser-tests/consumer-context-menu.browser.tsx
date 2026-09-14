@@ -35,6 +35,15 @@ const harness = vi.hoisted(() => ({
       isSymlink: false,
       children: [],
     },
+    {
+      id: "index.html",
+      name: "index.html",
+      kind: "file",
+      size: 15,
+      mtime: 0,
+      isSymlink: false,
+      children: null,
+    },
   ] as FsArborNode[],
   download: vi.fn(),
   upload: vi.fn(),
@@ -870,5 +879,62 @@ describe("consumer context menus in Chromium", () => {
     expect(document.querySelector("[role=combobox]")).toBe(
       document.activeElement,
     );
+  });
+
+  it("renders Preview action on right-click for HTML files and invokes onFileOpen", async () => {
+    const onFileOpen = vi.fn();
+    await mount(
+      <div style={{ height: 320, width: 360 }}>
+        <FileTree project="demo" onFileOpen={onFileOpen} />
+      </div>,
+    );
+    await waitForTreeMeasurement();
+    const htmlFile = row("index.html");
+    expect(htmlFile).not.toBeNull();
+
+    await act(async () =>
+      htmlFile?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          button: 2,
+          clientX: 120,
+          clientY: 120,
+        }),
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="menu"]')).not.toBeNull(),
+    );
+
+    const preview = menuItem("Preview");
+    expect(preview).not.toBeNull();
+    await act(async () => preview?.click());
+
+    expect(onFileOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "index.html", name: "index.html" }),
+    );
+    expect(localStorage.getItem("dam-hopper:html-view-mode:v1")).toBe("preview");
+
+    // Verify non-HTML file does not render Preview in context menu
+    const tsFile = row("main.ts");
+    expect(tsFile).not.toBeNull();
+    await act(async () =>
+      tsFile?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          button: 2,
+          clientX: 120,
+          clientY: 120,
+        }),
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="menu"]')).not.toBeNull(),
+    );
+    expect(
+      Array.from(document.querySelectorAll('[role="menuitem"]')).some(
+        (el) => el.textContent === "Preview",
+      ),
+    ).toBe(false);
   });
 });

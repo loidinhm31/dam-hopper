@@ -38,7 +38,7 @@ fn test_render_api_unit_success() {
     assert!(rendered.contains("Environment=HOME=/var/lib/dam-hopper"));
     assert!(rendered.contains("Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config"));
     assert!(
-        rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server")
+        rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801")
     );
     assert!(rendered.contains("Environment=DAM_HOPPER_CORS_ORIGINS=http://localhost:4802"));
     assert!(rendered.contains("SyslogIdentifier=dam-hopper-api"));
@@ -172,6 +172,21 @@ fn test_resolve_api_identity_rejects_non_primary_group() {
         .expect("parse mismatched identity");
 
     assert!(resolve_api_runtime_identity(&unit).is_err());
+}
+
+#[test]
+fn test_render_api_unit_custom_identity() {
+    let ctx = create_valid_context()
+        .with_api_identity("loidinh".into(), "loidinh".into(), "/var/lib/dam-hopper".into())
+        .expect("valid identity params");
+    let rendered = render_api_unit(API_TEMPLATE, &ctx).expect("api unit render should succeed");
+
+    assert!(rendered.contains("User=loidinh"));
+    assert!(rendered.contains("Group=loidinh"));
+    assert!(rendered.contains("WorkingDirectory=/var/lib/dam-hopper"));
+    assert!(rendered.contains("Environment=HOME=/var/lib/dam-hopper"));
+    assert!(rendered.contains("Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config"));
+    assert!(rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801"));
 }
 
 #[test]

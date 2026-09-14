@@ -29,6 +29,7 @@ import { mimeToLanguage } from "@/lib/mime-to-language.js";
 import { isPreviewOnlyFile } from "@/lib/file-tier.js";
 import { imageMimeType, isImagePreviewCandidate } from "@/lib/image-file.js";
 import { isVideoPreviewCandidate, videoMimeType } from "@/lib/video-file.js";
+import { isHtmlFile } from "@/lib/html-file.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useEncryptedWrite } from "@/hooks/use-encrypted-write.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
@@ -58,6 +59,12 @@ const MonacoHost = lazy(() =>
 const MarkdownHost = lazy(() =>
   import("@/components/organisms/MarkdownHost.js").then((m) => ({
     default: m.MarkdownHost,
+  })),
+);
+
+const HtmlHost = lazy(() =>
+  import("@/components/organisms/HtmlHost.js").then((m) => ({
+    default: m.HtmlHost,
   })),
 );
 
@@ -460,6 +467,33 @@ export function EditorTabs({
                 onGitIndicatorClick={openActiveDiff}
               />
             </Suspense>
+          ) : isHtmlFile(activeTab.name) ? (
+            <Suspense
+              fallback={
+                <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading editor…
+                </div>
+              }
+            >
+              <HtmlHost
+                key={activeTab.key}
+                tabKey={activeTab.key}
+                path={activeTab.path}
+                content={activeTab.content}
+                tier={activeTab.tier}
+                mime={activeTab.mime}
+                viewState={activeTab.viewState}
+                readOnly={!activeTab.targetAvailable}
+                onChange={(val) => setContent(activeTab.key, val)}
+                onSave={() => void handleSave(activeTab.key)}
+                onViewStateChange={(vs, key) =>
+                  saveViewState(key ?? activeTab.key, vs)
+                }
+                lineChanges={activeLineChanges}
+                onGitIndicatorClick={openActiveDiff}
+              />
+            </Suspense>
           ) : (
             <Suspense
               fallback={
@@ -527,7 +561,8 @@ export function EditorTabs({
           activeTab.tier !== "binary" &&
           activeTab.tier !== "large" &&
           !activeIsPreviewOnly &&
-          !/\.mdx?$/i.test(activeTab.name) && (
+          !/\.mdx?$/i.test(activeTab.name) &&
+          !isHtmlFile(activeTab.name) && (
             <EditorStatusBar
               editor={activeEditor}
               language={mimeToLanguage(activeTab.mime, activeTab.path)}

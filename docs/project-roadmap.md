@@ -2,6 +2,29 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### System daemon state configuration migration (2026-09-14)
+
+- **Plan status: IN PROGRESS (1/4 phases; 6/44h).** Phase 00 merge
+  reconciliation is complete and ready to commit; Phases 01–03 remain pending.
+- **Phase 00 — DONE (2026-09-14; 100%; 6/6h):** Reconciled `origin/main` into
+  `feat/terminal-idle-suspend` while preserving refusal-based descriptor
+  provisioning (no recursive `chown`), aligning API systemd template/unit policy,
+  accepting upstream clipboard/`WATCHDOG.yml` changes, and synthesizing all
+  conflicting docs plus the workflow context page. Cycle-2 review approved
+  **10/10** and confirmed 85 staged files, 0 unmerged files, and 0 conflict
+  markers. The merge commit remains pending.
+- **Phase 01 — PENDING:** Implement canonical `/var/lib/dam-hopper` API
+  config/audit runtime provisioning and copy-once migration with descriptor-
+  relative refusal and cleanup tests.
+- **Phase 02 — PENDING:** Align systemd templates, checked-in units, rendered
+  policy, and staging on one canonical API `ExecStart`.
+- **Phase 03 — PENDING:** Complete preflight, installer/reset behavior, and
+  deployment smoke coverage for canonical/legacy state and SQLite holders.
+- **Scope:** Phase 00 changes merge state and documentation only; it does not
+  complete the daemon-state cutover.
+- [Phase 00 plan](../plans/260914-0854-system-daemon-state-config/phase-00-merge-origin-main-and-reconcile-conflicts.md) ·
+  [Cycle-2 review](../plans/reports/code-review-260914-1158-phase-00-merge-origin-main-cycle2.md).
+
 ### Idle-suspend runtime identity reconciliation (2026-09-12–13)
 
 - **Plan status: COMPLETE (100%; 3/3 phases; 40/40h).** Phase 03 bounded qualification completed and received owner disposition plus post-tester review approval on 2026-09-13. Phase 01/02 implementation and Phase 03 qualification establish v2-only release manifests, final API-unit identity authority, refusal-based no-follow runtime provisioning, and provision-before-start coverage.
@@ -41,6 +64,33 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   [Phase 07 plan](../plans/260912-0027-production-idle-suspend-diagnostics/phase-07-security-verification-rollout.md) ·
   [Test report](../plans/reports/tester-260914-0106-phase07-cycle2-verification.md) ·
   [Code review](../plans/reports/code-review-260914-0109-phase-07-production-idle-suspend-diagnostics-cycle2.md).
+
+### Explorer HTML File Preview (2026-09-12–13)
+
+- **Plan status: COMPLETE (100%; 3/3 phases; 6/6h).** The feature adds
+  sandboxed in-editor HTML preview, Edit | Split | Preview modes, lazy editor
+  routing, and an Explorer context-menu action for small HTML files.
+- **Phase 01 — DONE (2026-09-12):** Added case-insensitive `.html`, `.htm`, and
+  `.xhtml` detection/MIME helpers, `HtmlMode` persistence under
+  `dam-hopper:html-view-mode:v1`, and the debounced `HtmlPreview` iframe with
+  explicit reload. The sandbox omits `allow-same-origin` and runs at an opaque
+  `null` origin.
+- **Phase 02 — DONE (2026-09-12):** Added lazy `HtmlHost` routing with Edit
+  (100% Monaco), Split (50/50), and Preview (100% iframe) modes, persisted mode
+  changes, `initialMode`, and live synchronization via
+  `dam-hopper:html-view-mode-changed`.
+- **Phase 03 — DONE (2026-09-12):** Added the `Eye`/`Preview` Explorer action
+  for live HTML files below 5 MiB; it selects preview mode before opening the
+  existing tab and excludes directories, non-HTML files, language scans, and
+  oversized files.
+- **Interactive enhancement — DONE (2026-09-13):** `html-preview-transform.ts`
+  adds in-memory storage fallbacks and an in-frame alert modal while retaining
+  `sandbox="allow-scripts allow-modals allow-forms allow-popups
+  allow-pointer-lock"` and no `allow-same-origin`.
+- Validation: focused HTML Vitest suites passed through 59/59 assertions and
+  Chromium preview/context-menu suites passed through 14/14 assertions;
+  TypeScript checks passed. See [HTML preview plan](../plans/260912-2240-explorer-html-preview/plan.md)
+  and its Phase 01–03 plans.
 
 ### Configured-agent activity idle suspend (2026-09-11)
 
@@ -116,6 +166,23 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - Scoped REST/API coverage is recorded for authentication, no-auth/database/actor gates, origin and media-type rejection, strict payload and wake bounds, DTO/conflict serialization, body limits, and no-store responses. Project-wide validation remains the parent integration gate.
 - **Phase 04 — [COMPLETED / DONE 2026-09-06 12:20:00 +07:00; 100%]**: Added the accessible Force Machine to Sleep action in HostIdleSuspendStatus and HostResourcePopover with seamless modal handoff to Radix ForceSleepDialog, indefinite default (`wakeAfterSeconds: 0`), optional bounded RTC wake duration, authoritative active-session confirmation, 409 conflict refresh, no-retry mutation, live-region state, and 44px touch targets. [Phase plan](../plans/260906-0348-manual-force-sleep-button/phase-04-host-popover-ui-and-confirmation-dialog.md).
 - **Phase 05 — [COMPLETED / DONE 2026-09-06 15:45:00 +07:00; 100%]**: Closed the integration, traceability, boundary-verification, and documentation gate for authenticated manual force sleep. Automated evidence passed: 81/81 Rust idle-suspend tests, 3/3 UI Vitest tests, 10/10 Chromium browser tests, 12/12 non-privileged boundary checks, and `cargo check`. Tests use fakes and temporary files only; the indefinite real-host canary is explicitly deferred pending Operations approval and verified physical/out-of-band wake and recovery. [Phase plan](../plans/260906-0348-manual-force-sleep-button/phase-05-integration-testing-and-docs.md) · [Parent plan](../plans/260906-0348-manual-force-sleep-button/plan.md).
+
+### Plan Item Notes and Editing (2026-09-07)
+
+- **Plan status: COMPLETE.** Restored selected Plan item note rendering with
+  multiline bodies, semantic timestamps, per-note deletion, and inline
+  title/summary editing across desktop Deck and compact Sheet layouts.
+- Reused existing workflow PATCH/delete-note mutations with fresh request IDs
+  and exact `updatedAt` CAS timestamps. Blank summaries serialize as `null`;
+  successful mutations refresh authoritative workflow overview data without
+  optimistic writes.
+- Validation recorded focused workflow Vitest suites **27/27 passed** and
+  changed-file TypeScript checks; coverage provider unavailability and an
+  unrelated `use-clipboard.ts` type error remain documented. Asynchronous edit
+  rejection retention remains a non-blocking follow-up.
+- [Plan](../plans/260907-0013-plan-item-notes-and-edit/plan.md) ·
+  [QA report](../plans/reports/qa-260907-0029-plan-item-notes-and-edit.md) ·
+  [Review report](../plans/reports/code-review-260907-0031-restore-plan-item-notes-and-edit.md).
 
 ### Workflow Tracking and Continuity (2026-09-02)
 
