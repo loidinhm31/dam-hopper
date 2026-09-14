@@ -29,6 +29,15 @@ if "$INSTALLER" --version v0.1.0 --role invalid_role 2>/dev/null; then
     fail "Installer must fail when given an invalid role"
 fi
 
+# 2. Verify installer source has zero daemon-TOML provisioning or repair
+log "Verifying installer does not provision or repair daemon-TOML in /etc or /var/lib"
+if grep -E "dam-hopper\.toml" "$INSTALLER"; then
+    fail "Installer must not reference or provision dam-hopper.toml"
+fi
+if grep -E "(mkdir|tee|cat|install|chmod|chown).*dam-hopper\.toml" "$INSTALLER"; then
+    fail "Installer must not contain TOML creation, modification, or repair commands"
+fi
+
 # 2. Verify release bundle matches strict release asset gate
 log "Validating release bundle assets against check-release-assets"
 node "$REPO_ROOT/deploy/release/check-release-assets.mjs" --tag "v0.1.0" --dir "$BUNDLE_DIR"

@@ -43,6 +43,26 @@
 - [Phase 02 plan](../plans/260914-0854-system-daemon-state-config/phase-02-systemd-unit-template-checked-in-unit-and-policy.md) ·
   [Cycle-2 review](../plans/reports/code-review-260914-1805-phase02-systemd-unit-template-and-policy-cycle2.md).
 
+- **System daemon state configuration — Phase 03 complete (2026-09-14).**
+  Preflight now performs server-role-only, read-only canonical/legacy SQLite
+  discovery with bounded no-follow TOML inspection, API HOME/working-directory
+  path semantics, stable deduplication, and database/WAL/SHM holder protection.
+  The release installer stages pending bytes without daemon-TOML provisioning;
+  first Server/Both start remains the runtime provisioner's boundary, while
+  Web-only installs remain API-state-free.
+- Reset now defaults to `/var/lib/dam-hopper/dam-hopper.toml` and performs
+  refusal-based, API-identity same-directory atomic disablement while
+  preserving audits and foreign RTC state. Clean-install, security, reset,
+  migration, rootless, and release-artifact checks passed; the focused Rust
+  preflight suite passed **11/11** and Cycle-2 review approved **10/10**.
+- Architecture, configuration, release-manager, systemd, roadmap, and
+  codebase-summary docs now describe these authorities and repair workflow;
+  final documentation validation passed **327 internal links across 29 files**.
+  Protected Fedora runtime qualification requires dedicated runner hooks and
+  is not claimed as local execution.
+- [Phase 03 plan](../plans/260914-0854-system-daemon-state-config/phase-03-preflight-installer-reset-and-smoke-tests.md) ·
+  [Cycle-2 review](../plans/reports/code-review-260914-2028-phase03-preflight-installer-reset-and-smoke.md).
+
 - **System daemon state configuration — Phase 00 merge reconciliation complete
   (2026-09-14).** Reconciled `origin/main` into
   `feat/terminal-idle-suspend` without importing recursive `chown`; preserved
