@@ -102,9 +102,15 @@ DamHopper enforces strict separation between immutable release assets, durable m
 ├── pending-host-config-<tx_id>.json # 0644 root:root (Candidate public runtime config)
 └── backups/<tx_id>/               # 0700 root:root (Concrete unit & config rollback backups)
 
-/etc/dam-hopper/             # 0755 root:root
+/var/lib/dam-hopper/              # 0700 final API UID:GID (API runtime state)
+├── dam-hopper.toml                # 0600 final API UID:GID (Canonical API registry)
+├── idle-suspend-audit.jsonl       # 0600 final API UID:GID (Server timing/manual audit)
+└── .config/dam-hopper/            # 0700 final API UID:GID (Diagnostics and token parent)
+
+/etc/dam-hopper/             # 0755 root:root (Installer/host config; API gate reads legacy only)
 ├── host.toml                # 0644 root:root (Recorded deployment role and allowed web origins)
-└── host-config.json         # 0644 root:root (Committed public runtime config)
+├── host-config.json         # 0644 root:root (Committed public runtime config)
+└── dam-hopper.toml          # 0644 root:root (Optional read-only legacy migration source)
 
 /etc/systemd/system/
 ├── dam-hopper-recovery.service
@@ -666,7 +672,7 @@ The protected status endpoint (`GET /api/system/idle-suspend/v1/status`) reports
 
 To validate activity observation on a candidate host without risking unexpected automatic sleep:
 
-1. In `/etc/dam-hopper/dam-hopper.toml`, set:
+1. In `/var/lib/dam-hopper/dam-hopper.toml`, set:
    ```toml
    [server.idle_suspend]
    enabled = false
@@ -711,7 +717,7 @@ Executing a real automatic host suspend canary is an explicit Operations procedu
      a clean status with no active or in-flight handoff.
 
 2. **Enablement**:
-   In `/etc/dam-hopper/dam-hopper.toml`, set:
+   In `/var/lib/dam-hopper/dam-hopper.toml`, set:
    ```toml
    [server.idle_suspend]
    enabled = true
@@ -757,7 +763,7 @@ Restores legacy zero-active-fleet behavior without disturbing helper enrollment 
 1. Refetch protected status and ensure there is no `finalCheck`, `handedOff`, or
    active handoff. Reconcile an accepted handoff before restarting; a config edit
    is not cancellation.
-2. Back up `/etc/dam-hopper/dam-hopper.toml` while preserving owner and mode.
+2. Back up `/var/lib/dam-hopper/dam-hopper.toml` while preserving owner and mode.
 3. Edit the active registry:
    ```toml
    [server.idle_suspend]
@@ -779,8 +785,7 @@ Restores legacy zero-active-fleet behavior without disturbing helper enrollment 
 Immediately disables all automatic idle-suspend scheduling:
 
 1. Refetch protected status and resolve any accepted handoff before restarting.
-2. In `/etc/dam-hopper/dam-hopper.toml`, set `enabled = false` and
-   `automatic_policy = "empty-fleet"`.
+2. In `/var/lib/dam-hopper/dam-hopper.toml`, set `enabled = false` and `automatic_policy = "empty-fleet"`.
 3. Restart the API: `sudo systemctl restart dam-hopper-api.service`.
 4. Verify `state: "disabled"` and `activity: null`.
 

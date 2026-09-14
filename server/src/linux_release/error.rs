@@ -263,6 +263,11 @@ pub enum ReleaseError {
         primary: Box<ReleaseError>,
         cleanup: Box<ReleaseError>,
     },
+    #[error("API configuration at fixed path '{path}' is invalid: {reason}")]
+    ApiRuntimeConfigInvalid {
+        path: &'static str,
+        reason: &'static str,
+    },
     #[error("configuration error: {0}")]
     Config(String),
 }

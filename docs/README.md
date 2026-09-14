@@ -41,6 +41,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
 - **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
 - **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, Phase 06 diagnostics, helper service lifecycle, activation, rollback, and recovery
+- **[Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md)** — Canonical API config/audit state, copy-once legacy migration, and descriptor-relative refusal boundaries
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
 - Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
 
