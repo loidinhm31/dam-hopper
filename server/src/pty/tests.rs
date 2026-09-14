@@ -2305,3 +2305,937 @@ mod pty_tests {
         );
     }
 }
+#[cfg(test)]
+mod fleet_state_tests {
+    use std::sync::Arc;
+    use crate::error::AppError;
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::fleet_state::{HandoffClaimError, PtyFleetState};
+    use crate::pty::manager::{PtyCreateOpts, PtySessionManager};
+
+    #[test]
+    fn test_pty_fleet_snapshot_content_free_and_quiescence() {
+        let (state, watcher) = PtyFleetState::new();
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 1);
+        assert_eq!(snap.live_count, 0);
+        assert_eq!(snap.creating_count, 0);
+        assert_eq!(snap.restart_pending_count, 0);
+        assert!(!snap.disposing);
+        assert!(!snap.closing);
+        assert!(!snap.handoff_active);
+        assert!(snap.is_quiescent());
+        assert_eq!(snap.running_count(), 0);
+        assert_eq!(state.generation(), 1);
+    }
+
+    #[test]
+    fn test_pty_fleet_state_transitions_monotonic_generation() {
+        let (mut state, watcher) = PtyFleetState::new();
+
+        // 1. Begin create -> creating count 1, non-quiescent
+        state.begin_create("t1", 100).expect("begin_create");
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 2);
+        assert_eq!(snap.creating_count, 1);
+        assert_eq!(snap.live_count, 0);
+        assert!(!snap.is_quiescent());
+
+        // 2. Publish live -> creating 0, live 1, non-quiescent
+        state.publish_live("t1", 100);
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 3);
+        assert_eq!(snap.creating_count, 0);
+        assert_eq!(snap.live_count, 1);
+        assert!(!snap.is_quiescent());
+
+        // 3. Exit with restart -> atomically transitions live -> restart_pending
+        // INVARIANT: never emits a quiescent observation between exit and restart!
+        state.transition_live_to_restart_pending("t1", 100);
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 4);
+        assert_eq!(snap.live_count, 0);
+        assert_eq!(snap.restart_pending_count, 1);
+        assert!(!snap.is_quiescent());
+
+        // 4. Respawn begins -> atomically transitions restart_pending -> creating
+        state
+            .transition_restart_pending_to_creating("t1", 100, 101)
+            .expect("restart to creating");
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 5);
+        assert_eq!(snap.restart_pending_count, 0);
+        assert_eq!(snap.creating_count, 1);
+        assert!(!snap.is_quiescent());
+
+        // 5. Publish replacement live
+        state.publish_live("t1", 101);
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 6);
+        assert_eq!(snap.creating_count, 0);
+        assert_eq!(snap.live_count, 1);
+        assert!(!snap.is_quiescent());
+
+        // 6. Exit without restart -> remove live -> quiescent
+        state.remove_live("t1", 101);
+        let snap = watcher.snapshot();
+        assert_eq!(snap.generation, 7);
+        assert_eq!(snap.live_count, 0);
+        assert!(snap.is_quiescent());
+    }
+
+    #[test]
+    fn test_stale_incarnations_are_no_ops() {
+        let (mut state, _) = PtyFleetState::new();
+        state.begin_create("t1", 200).unwrap();
+        let gen_after_create = state.generation();
+
+        // Stale publish with different incarnation
+        state.publish_live("t1", 199);
+        assert_eq!(state.generation(), gen_after_create);
+        assert_eq!(state.snapshot().creating_count, 1);
+        assert_eq!(state.snapshot().live_count, 0);
+
+        // Stale cancel with different incarnation
+        state.cancel_create("t1", 199);
+        assert_eq!(state.generation(), gen_after_create);
+        assert_eq!(state.snapshot().creating_count, 1);
+
+        // Correct cancel
+        state.cancel_create("t1", 200);
+        assert_eq!(state.snapshot().creating_count, 0);
+        assert!(state.is_quiescent());
+    }
+
+    #[test]
+    fn test_handoff_gate_admission_and_conflict() {
+        let (mut state, _) = PtyFleetState::new();
+        let expected_gen = state.generation();
+
+        // Claim succeeds when quiescent and generation matches
+        let claim = state.try_claim_handoff(expected_gen).expect("claim handoff");
+        assert!(claim.generation > expected_gen);
+        assert!(state.is_handoff_active());
+        assert!(!state.is_quiescent());
+
+        // Second claim fails
+        let second_claim = state.try_claim_handoff(state.generation());
+        assert_eq!(second_claim, Err(HandoffClaimError::HandoffAlreadyActive));
+
+        // Create is rejected while handoff in flight
+        let create_res = state.begin_create("t2", 300);
+        assert!(matches!(create_res, Err(AppError::IdleSuspendHandoffInProgress(_))));
+
+        // Respawn transition is rejected while handoff in flight
+        let respawn_res = state.transition_restart_pending_to_creating("t2", 300, 301);
+        assert!(matches!(respawn_res, Err(AppError::IdleSuspendHandoffInProgress(_))));
+
+        // Release handoff
+        state.release_handoff();
+        assert!(!state.is_handoff_active());
+        assert!(state.is_quiescent());
+
+        // Now create succeeds
+        state.begin_create("t2", 300).expect("create after release");
+        assert_eq!(state.snapshot().creating_count, 1);
+    }
+
+    #[test]
+    fn test_disposal_and_shutdown_invariants() {
+        let (mut state, _) = PtyFleetState::new();
+
+        // Disposing makes is_quiescent false
+        state.mark_disposing(true);
+        assert!(!state.is_quiescent());
+        state.mark_disposing(false);
+        assert!(state.is_quiescent());
+
+        // Closing makes is_quiescent false and rejects create
+        state.mark_closing(true);
+        assert!(!state.is_quiescent());
+        let res = state.begin_create("t3", 400);
+        assert!(matches!(res, Err(AppError::Unavailable(_))));
+    }
+
+    #[tokio::test]
+    async fn test_pty_session_manager_fleet_handoff_gate_rejection() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let watcher = manager.fleet_watcher();
+        assert!(watcher.snapshot().is_quiescent());
+
+        // Claim handoff on manager
+        let gen = manager.fleet_snapshot().generation;
+        let claim = manager.try_claim_handoff(gen).expect("claim handoff on manager");
+        assert!(claim.generation > gen);
+
+        // Session creation is rejected with typed error without spawning process
+        let create_opts = PtyCreateOpts {
+            id: "blocked-pty".to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: std::collections::HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: crate::config::schema::RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+
+        let err = manager.create(create_opts).expect_err("create should fail during handoff");
+        assert!(matches!(err, AppError::IdleSuspendHandoffInProgress(_)));
+        assert_eq!(err.api_code(), Some("idleSuspendHandoffInProgress"));
+        assert_eq!(err.status_code(), 409);
+
+        // Release handoff
+        manager.release_handoff();
+        assert!(manager.fleet_snapshot().is_quiescent());
+    }
+
+    #[tokio::test]
+    async fn test_watcher_channel_changed() {
+        let (mut state, watcher) = PtyFleetState::new();
+        state.begin_create("t1", 1).unwrap();
+        state.publish_live("t1", 1);
+
+        let mut cloned_watcher = watcher.clone();
+        cloned_watcher.mark_seen();
+
+        state.remove_live("t1", 1);
+        assert!(cloned_watcher.changed().await.is_ok());
+        assert!(cloned_watcher.snapshot().is_quiescent());
+    }
+
+    #[test]
+    fn test_forced_handoff_gate_admission_and_conflict() {
+        let (mut state, _) = PtyFleetState::new();
+
+        // 1. Begin create to make fleet active
+        state.begin_create("t_forced", 10).unwrap();
+        assert!(!state.is_quiescent());
+        let active_gen = state.generation();
+
+        // Normal handoff claim fails when fleet is active
+        let normal_res = state.try_claim_handoff(active_gen);
+        assert_eq!(normal_res, Err(HandoffClaimError::NotQuiescent));
+
+        // Forced claim with stale generation fails
+        let stale_res = state.try_claim_forced_handoff(active_gen - 1);
+        assert!(matches!(stale_res, Err(HandoffClaimError::GenerationMismatch { .. })));
+
+        // Forced claim succeeds with active fleet and matching generation
+        let claim = state.try_claim_forced_handoff(active_gen).expect("claim forced handoff");
+        assert!(claim.generation > active_gen);
+        assert!(state.is_handoff_active());
+
+        // Second forced claim fails with HandoffAlreadyActive
+        let second_claim = state.try_claim_forced_handoff(state.generation());
+        assert_eq!(second_claim, Err(HandoffClaimError::HandoffAlreadyActive));
+
+        // New terminal creation is rejected
+        let create_res = state.begin_create("t_another", 20);
+        assert!(matches!(create_res, Err(AppError::IdleSuspendHandoffInProgress(_))));
+
+        // Release handoff
+        state.release_handoff();
+        assert!(!state.is_handoff_active());
+
+        // Disposing and closing reject forced claim
+        state.mark_disposing(true);
+        assert_eq!(
+            state.try_claim_forced_handoff(state.generation()),
+            Err(HandoffClaimError::Disposing)
+        );
+        state.mark_disposing(false);
+
+        state.mark_closing(true);
+        assert_eq!(
+            state.try_claim_forced_handoff(state.generation()),
+            Err(HandoffClaimError::Closing)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pty_session_manager_forced_handoff_wrapper() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let gen = manager.fleet_snapshot().generation;
+
+        let claim = manager.try_claim_forced_handoff(gen).expect("claim forced handoff on manager");
+        assert!(claim.generation > gen);
+        assert!(manager.fleet_snapshot().handoff_active);
+
+        // Session creation is rejected
+        let create_opts = PtyCreateOpts {
+            id: "blocked-forced-pty".to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: std::collections::HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: crate::config::schema::RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        let err = manager.create(create_opts).expect_err("create should fail during handoff");
+        assert!(matches!(err, AppError::IdleSuspendHandoffInProgress(_)));
+
+        manager.release_handoff();
+        assert!(!manager.fleet_snapshot().handoff_active);
+    }
+}
+
+mod agent_activity_claim_tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use crate::config::schema::RestartPolicy;
+    use crate::error::AppError;
+    use crate::idle_suspend::activity::{
+        ActivityClaimTicket, AgentActivityAdmission, MonitoredOutputFence,
+    };
+    use crate::idle_suspend::policy::IdleSuspendAutomaticPolicy;
+    use crate::pty::activity::{ProcessIdentity, RootQualification, TerminalIdentity, SATURATED_COUNTER_SENTINEL};
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::fleet_state::HandoffClaimError;
+    use crate::pty::manager::{PtyCreateOpts, PtySessionManager};
+
+    fn create_test_session(
+        manager: &PtySessionManager,
+        id: &str,
+    ) -> (TerminalIdentity, ProcessIdentity, Arc<std::sync::atomic::AtomicU64>) {
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sleep 60".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        let meta = manager.create(opts).expect("create test session");
+        let snap = manager.capture_activity_snapshot();
+        let root = snap.roots.iter().find(|r| r.terminal.session_id == id).unwrap();
+        let terminal = TerminalIdentity {
+            session_id: id.to_string(),
+            incarnation: meta.incarnation,
+        };
+        let pid = root.qualification.pid().unwrap_or(54321);
+        let identity = root.qualification.process_identity().unwrap_or(ProcessIdentity {
+            pid,
+            start_ticks: 200,
+        });
+        // Ensure qualification has the exact process_identity
+        manager.test_set_root_qualification(id, RootQualification::Qualified { identity });
+        (terminal, identity, Arc::clone(&root.raw_output_sequence))
+    }
+
+    fn make_valid_ticket(
+        manager: &PtySessionManager,
+        terminal: TerminalIdentity,
+        identity: ProcessIdentity,
+        output_seq: Arc<std::sync::atomic::AtomicU64>,
+        now: Instant,
+    ) -> ActivityClaimTicket {
+        let snap = manager.capture_activity_snapshot();
+        ActivityClaimTicket {
+            request_id: 10,
+            observation_sequence: 1,
+            completed_at: now - Duration::from_millis(100),
+            activity_revision: 2,
+            epoch_activity_revision: 1,
+            timing_revision: 1,
+            fleet_generation: snap.fleet.generation,
+            input_revision: snap.input_revision,
+            roots: vec![(terminal.clone(), identity)],
+            output_fences: vec![MonitoredOutputFence {
+                terminal,
+                output_sequence: output_seq,
+                accepted_sequence: 0,
+            }],
+            eligibility_deadline: now - Duration::from_millis(50),
+        }
+    }
+
+    fn make_valid_admission<'a>(
+        ticket: &'a ActivityClaimTicket,
+        now: Instant,
+    ) -> AgentActivityAdmission<'a> {
+        AgentActivityAdmission {
+            ticket,
+            automatic_policy: IdleSuspendAutomaticPolicy::AgentActivity,
+            automatic_enabled: true,
+            accepted_request_id: ticket.request_id,
+            accepted_activity_revision: ticket.activity_revision,
+            accepted_epoch_activity_revision: ticket.epoch_activity_revision,
+            accepted_timing_revision: ticket.timing_revision,
+            now,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_activity_claim_success() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:claim-success";
+        let (terminal, identity, output_seq) = create_test_session(&manager, id);
+        let now = Instant::now();
+        let ticket = make_valid_ticket(&manager, terminal, identity, output_seq, now);
+        let admission = make_valid_admission(&ticket, now);
+
+        let claim = manager
+            .try_claim_agent_activity_handoff(admission)
+            .expect("agent activity claim succeeds");
+        assert!(claim.generation > ticket.fleet_generation);
+        assert!(manager.fleet_snapshot().handoff_active);
+
+        // Terminal creation is rejected during handoff
+        let create_opts = PtyCreateOpts {
+            id: "term:blocked".to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        assert!(matches!(
+            manager.create(create_opts),
+            Err(AppError::IdleSuspendHandoffInProgress(_))
+        ));
+
+        // Terminal write is rejected during handoff
+        assert!(matches!(
+            manager.write(id, b"hello"),
+            Err(AppError::IdleSuspendHandoffInProgress(_))
+        ));
+
+        // Release handoff
+        manager.release_handoff();
+        assert!(!manager.fleet_snapshot().handoff_active);
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_agent_activity_claim_policy_mismatch() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:policy-mismatch";
+        let (terminal, identity, output_seq) = create_test_session(&manager, id);
+        let now = Instant::now();
+        let ticket = make_valid_ticket(&manager, terminal, identity, output_seq, now);
+
+        // EmptyFleet rejected
+        let mut admission = make_valid_admission(&ticket, now);
+        admission.automatic_policy = IdleSuspendAutomaticPolicy::EmptyFleet;
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(admission),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        // Disabled rejected
+        let mut admission_disabled = make_valid_admission(&ticket, now);
+        admission_disabled.automatic_enabled = false;
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(admission_disabled),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_agent_activity_claim_revision_mismatch() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:rev-mismatch";
+        let (terminal, identity, output_seq) = create_test_session(&manager, id);
+        let now = Instant::now();
+        let ticket = make_valid_ticket(&manager, terminal, identity, output_seq, now);
+
+        // Request ID mismatch
+        let mut adm_req = make_valid_admission(&ticket, now);
+        adm_req.accepted_request_id = ticket.request_id + 1;
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_req),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        // Activity revision mismatch
+        let mut adm_act = make_valid_admission(&ticket, now);
+        adm_act.accepted_activity_revision = ticket.activity_revision + 1;
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_act),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        // Epoch activity revision mismatch
+        let mut adm_epoch = make_valid_admission(&ticket, now);
+        adm_epoch.accepted_epoch_activity_revision = ticket.epoch_activity_revision + 1;
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_epoch),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        // Timing revision mismatch
+        let mut adm_timing = make_valid_admission(&ticket, now);
+        adm_timing.accepted_timing_revision = ticket.timing_revision + 1;
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_timing),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_agent_activity_claim_deadline_and_age() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:deadline-age";
+        let (terminal, identity, output_seq) = create_test_session(&manager, id);
+        let now = Instant::now();
+
+        // Deadline not expired
+        let mut ticket_unexpired = make_valid_ticket(&manager, terminal.clone(), identity, Arc::clone(&output_seq), now);
+        ticket_unexpired.eligibility_deadline = now + Duration::from_secs(10);
+        let adm_unexpired = make_valid_admission(&ticket_unexpired, now);
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_unexpired),
+            Err(HandoffClaimError::DeadlineNotExpired)
+        );
+
+        // Observation older than 5 seconds
+        let mut ticket_stale = make_valid_ticket(&manager, terminal, identity, output_seq, now);
+        ticket_stale.completed_at = now - Duration::from_secs(6);
+        let adm_stale = make_valid_admission(&ticket_stale, now);
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_stale),
+            Err(HandoffClaimError::ObservationStale)
+        );
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_agent_activity_claim_input_and_generation_fences() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:input-gen";
+        let (terminal, identity, output_seq) = create_test_session(&manager, id);
+        let now = Instant::now();
+        let ticket = make_valid_ticket(&manager, terminal, identity, output_seq, now);
+
+        // Input revision mismatch
+        manager.test_set_input_revision(999);
+        let adm_input = make_valid_admission(&ticket, now);
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_input),
+            Err(HandoffClaimError::InputRevisionMismatch)
+        );
+        manager.test_set_input_revision(ticket.input_revision);
+
+        // Generation mismatch
+        let mut ticket_gen = ticket.clone();
+        ticket_gen.fleet_generation += 1;
+        let adm_gen = make_valid_admission(&ticket_gen, now);
+        assert!(matches!(
+            manager.try_claim_agent_activity_handoff(adm_gen),
+            Err(HandoffClaimError::GenerationMismatch { .. })
+        ));
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_agent_activity_claim_root_and_output_fences() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:root-output";
+        let (terminal, identity, output_seq) = create_test_session(&manager, id);
+        let now = Instant::now();
+        let ticket = make_valid_ticket(&manager, terminal.clone(), identity, Arc::clone(&output_seq), now);
+
+        // Root PID changed
+        let other_identity = ProcessIdentity { pid: 99999, start_ticks: 999 };
+        manager.test_set_root_qualification(id, RootQualification::Qualified { identity: other_identity });
+        let adm_root = make_valid_admission(&ticket, now);
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_root),
+            Err(HandoffClaimError::RootIdentityMismatch)
+        );
+        manager.test_set_root_qualification(id, RootQualification::Qualified { identity });
+
+        // Raw output advanced
+        manager.test_set_raw_output_sequence(id, 100);
+        let adm_output = make_valid_admission(&ticket, now);
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_output),
+            Err(HandoffClaimError::RawOutputAdvanced)
+        );
+
+        // Raw output saturated
+        manager.test_set_raw_output_sequence(id, SATURATED_COUNTER_SENTINEL);
+        let adm_sat = make_valid_admission(&ticket, now);
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_sat),
+            Err(HandoffClaimError::RawOutputAdvanced)
+        );
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_agent_activity_claim_lifecycle_blockers() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:lifecycle";
+        let (terminal, identity, output_seq) = create_test_session(&manager, id);
+        let now = Instant::now();
+        let ticket = make_valid_ticket(&manager, terminal, identity, output_seq, now);
+
+        // Creating session in flight blocks claim
+        manager.with_fleet_for_test(|f| {
+            f.begin_create("other-session", 1).unwrap();
+        });
+
+        let mut ticket_blocked = ticket.clone();
+        ticket_blocked.fleet_generation = manager.fleet_snapshot().generation;
+        let adm_busy = make_valid_admission(&ticket_blocked, now);
+        assert_eq!(
+            manager.try_claim_agent_activity_handoff(adm_busy),
+            Err(HandoffClaimError::LifecycleBusy)
+        );
+
+        let _ = manager.kill(id);
+    }
+}
+#[cfg(test)]
+#[cfg(unix)]
+mod pty_activity_tests {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::config::schema::RestartPolicy;
+    use crate::error::AppError;
+    use crate::pty::activity::{
+        increment_raw_output_sequence, probe_process_identity, ActivityIncompleteReason,
+        RootQualification, SATURATED_COUNTER_SENTINEL,
+    };
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::manager::{PtyCreateOpts, PtySessionManager};
+
+    async fn tokio_wait_for(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while tokio::time::Instant::now() < deadline {
+            if predicate() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
+    #[test]
+    fn test_raw_output_sequence_increments_and_saturates() {
+        let counter = AtomicU64::new(0);
+        increment_raw_output_sequence(&counter);
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+
+        counter.store(SATURATED_COUNTER_SENTINEL - 1, Ordering::Relaxed);
+        increment_raw_output_sequence(&counter);
+        assert_eq!(counter.load(Ordering::Relaxed), SATURATED_COUNTER_SENTINEL);
+
+        // Never wraps
+        increment_raw_output_sequence(&counter);
+        assert_eq!(counter.load(Ordering::Relaxed), SATURATED_COUNTER_SENTINEL);
+    }
+
+    #[test]
+    fn test_proc_stat_parser_and_self_probe() {
+        let pid = std::process::id();
+        let identity = probe_process_identity(pid).expect("probe self process identity");
+        assert_eq!(identity.pid, pid);
+        assert!(identity.start_ticks > 0);
+    }
+
+    #[tokio::test]
+    async fn test_input_revision_advances_only_on_nonempty_input() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:input-rev-test";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        manager.create(opts).expect("create session");
+
+        assert_eq!(manager.input_revision(), 0);
+        assert!(manager.last_input_at().is_none());
+
+        let watcher = manager.activity_watcher();
+        let initial_watch = watcher.revision();
+
+        // Empty input is a no-op
+        manager.write(id, b"").expect("empty write ok");
+        assert_eq!(manager.input_revision(), 0);
+        assert!(manager.last_input_at().is_none());
+        assert_eq!(watcher.revision(), initial_watch);
+
+        // Non-empty input advances revision and watcher
+        manager.write(id, b"a").expect("write ok");
+        assert_eq!(manager.input_revision(), 1);
+        assert!(manager.last_input_at().is_some());
+        assert!(watcher.revision() > initial_watch);
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_handoff_gate_rejects_write_without_recording_activity() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:handoff-write-test";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        manager.create(opts).expect("create session");
+
+        let gen = manager.fleet_snapshot().generation;
+        let _claim = manager.try_claim_forced_handoff(gen).expect("claim handoff");
+
+        // Write during handoff is rejected
+        let err = manager.write(id, b"test").expect_err("write must fail during handoff");
+        assert!(matches!(err, AppError::IdleSuspendHandoffInProgress(_)));
+        assert_eq!(manager.input_revision(), 0);
+
+        // Release handoff
+        manager.release_handoff();
+
+        // Write now succeeds and increments input revision
+        manager.write(id, b"valid").expect("write after release succeeds");
+        assert_eq!(manager.input_revision(), 1);
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_reused_session_id_has_independent_output_counter() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:reused-counter-test";
+        let make_opts = || PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sleep 10".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+
+        let meta1 = manager.create(make_opts()).expect("create session 1");
+        let snap1 = manager.capture_activity_snapshot();
+        assert_eq!(snap1.roots.len(), 1);
+        let counter1 = snap1.roots[0].raw_output_sequence.clone();
+        assert_eq!(counter1.load(Ordering::Relaxed), 0);
+
+        // Kill session 1 and recreate with same public ID
+        let _ = manager.kill(id);
+        let meta2 = manager.create(make_opts()).expect("create session 2");
+        assert!(meta2.incarnation > meta1.incarnation);
+
+        let snap2 = manager.capture_activity_snapshot();
+        assert_eq!(snap2.roots.len(), 1);
+        let counter2 = snap2.roots[0].raw_output_sequence.clone();
+        assert_eq!(counter2.load(Ordering::Relaxed), 0);
+
+        // Mutating old counter does not affect replacement's counter
+        let c1_before = counter1.load(Ordering::Relaxed);
+        increment_raw_output_sequence(&counter1);
+        assert_eq!(counter1.load(Ordering::Relaxed), c1_before + 1);
+        assert_eq!(counter2.load(Ordering::Relaxed), 0);
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_hydration_and_resize_does_not_advance_raw_output_counter() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:hydrate-no-output";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sleep 10".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+
+        let initial_buffer = Some((b"pre-existing scrollback\n".to_vec(), 24));
+        manager.create_with_buffer(opts, initial_buffer).expect("create with buffer");
+
+        let snap = manager.capture_activity_snapshot();
+        assert_eq!(snap.roots.len(), 1);
+        let root = &snap.roots[0];
+        assert_eq!(root.raw_output_sequence.load(Ordering::Relaxed), 0);
+
+        // Resize the terminal
+        manager.resize(id, 100, 50).expect("resize succeeds");
+        let snap_after_resize = manager.capture_activity_snapshot();
+        assert_eq!(snap_after_resize.roots[0].raw_output_sequence.load(Ordering::Relaxed), 0);
+
+        // Attach snapshot read does not increment raw output
+        let attach = manager.get_attach_snapshot(id, None).expect("attach snapshot");
+        assert!(attach.replay.data.contains("pre-existing scrollback"));
+        let snap_after_attach = manager.capture_activity_snapshot();
+        assert_eq!(snap_after_attach.roots[0].raw_output_sequence.load(Ordering::Relaxed), 0);
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_real_pty_root_activity_smoke_and_observation() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:real-smoke";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        let meta = manager.create(opts).expect("create real shell");
+        assert!(meta.alive);
+
+        let snap = manager.capture_activity_snapshot();
+        assert_eq!(snap.roots.len(), 1);
+        let root = &snap.roots[0];
+        assert_eq!(root.terminal.session_id, id);
+        assert_eq!(root.terminal.incarnation, meta.incarnation);
+
+        #[cfg(target_os = "linux")]
+        {
+            assert!(root.qualification.is_qualified(), "Root must be qualified on Linux");
+            let identity = root.qualification.process_identity().unwrap();
+            assert!(identity.pid > 0);
+            assert!(identity.start_ticks > 0);
+        }
+
+        // Send a command to produce raw PTY output
+        manager.write(id, b"echo __ACTIVE__\n").expect("write command");
+        assert_eq!(manager.input_revision(), 1);
+
+        // Wait for PTY reader to process chunk and increment counter
+        let counter = root.raw_output_sequence.clone();
+        let saw_output = tokio_wait_for(Duration::from_secs(3), || {
+            counter.load(Ordering::Relaxed) > 0
+        }).await;
+        assert!(saw_output, "Raw output counter must increment after child emits output");
+
+        let snap_after_output = manager.capture_activity_snapshot();
+        assert!(snap_after_output.roots[0].raw_output_sequence.load(Ordering::Relaxed) > 0);
+        assert!(snap_after_output.is_complete());
+
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_activity_snapshot_incomplete_reasons() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:incomplete-test";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            project: None,
+            worktree_path: None,
+            command: "/bin/sleep 10".to_string(),
+            cwd: "/tmp".to_string(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+        manager.create(opts).expect("create session");
+
+        // 1. Initially complete (on Linux)
+        let snap = manager.capture_activity_snapshot();
+        #[cfg(target_os = "linux")]
+        assert!(snap.is_complete());
+
+        // 2. Counter saturated makes snapshot incomplete
+        manager.test_set_raw_output_sequence(id, SATURATED_COUNTER_SENTINEL);
+        let snap_saturated = manager.capture_activity_snapshot();
+        assert!(!snap_saturated.is_complete());
+        assert!(matches!(
+            snap_saturated.incomplete_reason,
+            Some(ActivityIncompleteReason::CounterSaturated { .. })
+        ));
+
+        // Reset counter
+        manager.test_set_raw_output_sequence(id, 1);
+
+        // 3. Uncertain qualification makes snapshot incomplete
+        manager.test_set_root_qualification(
+            id,
+            RootQualification::Uncertain {
+                pid: 99999,
+                reason: "mock uncertain probe".into(),
+            },
+        );
+        let snap_uncertain = manager.capture_activity_snapshot();
+        assert!(!snap_uncertain.is_complete());
+        assert!(matches!(
+            snap_uncertain.incomplete_reason,
+            Some(ActivityIncompleteReason::RootUnqualified { pid: Some(99999), .. })
+        ));
+
+        // 4. Revision saturated makes snapshot incomplete and rejects write
+        manager.test_set_input_revision(u64::MAX);
+        let snap_rev = manager.capture_activity_snapshot();
+        assert!(!snap_rev.is_complete());
+        assert!(matches!(
+            snap_rev.incomplete_reason,
+            Some(ActivityIncompleteReason::RevisionSaturated)
+        ));
+        let write_err = manager.write(id, b"blocked").expect_err("write must fail when saturated");
+        assert!(matches!(write_err, AppError::Unavailable(_)));
+        let _ = manager.kill(id);
+    }
+}

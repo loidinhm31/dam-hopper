@@ -26,6 +26,10 @@ pub trait EventSink: Send + Sync + 'static {
     ) {
         let _ = incident;
     }
+    /// Idle suspend revision notification for connected clients.
+    fn send_idle_suspend_changed(&self, revision: u64) {
+        let _ = revision;
+    }
 
     /// Enhanced terminal exit with restart metadata.
     /// Optional fields are skipped if None (backward-compatible JSON).
@@ -114,13 +118,22 @@ impl EventSink for NoopEventSink {
 pub struct BroadcastEventSink {
     tx: broadcast::Sender<String>,
     host_alert_tx: broadcast::Sender<String>,
+    idle_suspend_tx: broadcast::Sender<String>,
 }
 
 impl BroadcastEventSink {
     pub fn new(capacity: usize) -> (Self, broadcast::Receiver<String>) {
         let (tx, rx) = broadcast::channel(capacity);
         let (host_alert_tx, _) = broadcast::channel(capacity);
-        (Self { tx, host_alert_tx }, rx)
+        let (idle_suspend_tx, _) = broadcast::channel(capacity);
+        (
+            Self {
+                tx,
+                host_alert_tx,
+                idle_suspend_tx,
+            },
+            rx,
+        )
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<String> {
@@ -131,6 +144,10 @@ impl BroadcastEventSink {
     /// cannot make an alert transition disappear from a connected client.
     pub fn subscribe_host_alerts(&self) -> broadcast::Receiver<String> {
         self.host_alert_tx.subscribe()
+    }
+    /// Idle suspend revision hints have an independent bounded stream.
+    pub fn subscribe_idle_suspend(&self) -> broadcast::Receiver<String> {
+        self.idle_suspend_tx.subscribe()
     }
 
     fn send_json(&self, msg: serde_json::Value) {
@@ -193,6 +210,18 @@ impl EventSink for BroadcastEventSink {
         let _ = self
             .host_alert_tx
             .send(json!({ "kind": "host:alertChanged", "payload": incident }).to_string());
+    }
+    fn send_idle_suspend_changed(&self, revision: u64) {
+        let _ = self.idle_suspend_tx.send(
+            serde_json::json!({
+                "kind": "host:idleSuspendChanged",
+                "payload": {
+                    "version": 1,
+                    "revision": revision,
+                }
+            })
+            .to_string(),
+        );
     }
 
     fn send_terminal_exit_enhanced(

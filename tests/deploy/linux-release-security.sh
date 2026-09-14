@@ -38,6 +38,28 @@ if ! grep -q "User=@API_USER@" "$API_UNIT"; then
     fail "API unit template must declare User=@API_USER@"
 fi
 
+# Verify API unit template exact canonical ExecStart and sandboxing directives
+if ! grep -q "ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config @API_HOME@/dam-hopper.toml --host 0.0.0.0 --port 4801" "$API_UNIT"; then
+    fail "API unit template missing exact canonical ExecStart"
+fi
+if grep -q "/etc/dam-hopper/dam-hopper.toml" "$API_UNIT"; then
+    fail "API unit template must not reference legacy /etc/dam-hopper/dam-hopper.toml"
+fi
+
+# Exactly one privileged provisioner ExecStartPre
+prestart_count="$(grep -c "^ExecStartPre=" "$API_UNIT" || true)"
+if [[ "$prestart_count" -ne 1 ]]; then
+    fail "API unit template must declare exactly one ExecStartPre (got $prestart_count)"
+fi
+if ! grep -q "^ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime" "$API_UNIT"; then
+    fail "API unit template must declare exact privileged provisioner ExecStartPre"
+fi
+
+# Absence of StateDirectory and StateDirectoryMode
+if grep -E "^StateDirectory(=|Mode=)" "$API_UNIT"; then
+    fail "API unit template must not declare StateDirectory or StateDirectoryMode"
+fi
+
 # 2. Check for accidental leakage of secret/runtime files in release assets or repo
 BUNDLE_DIR="$TEST_ROOT/bundle"
 mkdir -p "$BUNDLE_DIR"

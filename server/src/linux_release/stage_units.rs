@@ -1,13 +1,16 @@
 //! Staging and isolated verification of candidate systemd units and public host config.
 
+use super::constants::HELPER_SERVICE_UNIT;
 use super::durable_fs::atomic_write_file;
 use super::error::ReleaseError;
-use super::host_config::{HostPublicConfig, load_host_public_config, save_host_public_config};
+use super::host_config::{load_host_public_config, save_host_public_config, HostPublicConfig};
 use super::inventory::TargetRole;
 use super::layout::Layout;
 use super::manifest::ReleaseManifest;
 use super::systemd::systemd_analyze_verify;
-use super::unit::{UnitRenderContext, render_api_unit, render_recovery_unit, render_web_unit};
+use super::unit::{
+    render_api_unit, render_helper_unit, render_recovery_unit, render_web_unit, UnitRenderContext,
+};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -32,6 +35,34 @@ pub fn stage_candidate_units(
         &layout.pending_host_config_json_path(),
         true,
         false,
+        None,
+    )
+}
+
+/// Re-render transaction-scoped units with an explicit API user before activation.
+pub(crate) fn stage_candidate_units_for_release_with_identity(
+    layout: &Layout,
+    target_dir: &Path,
+    render_root: &Path,
+    manifest: &ReleaseManifest,
+    role: TargetRole,
+    allow_origins: &[String],
+    pending_units_dir: &Path,
+    pending_host_config_path: &Path,
+    service_user: Option<&str>,
+) -> Result<PathBuf, ReleaseError> {
+    stage_candidate_units_inner(
+        layout,
+        target_dir,
+        render_root,
+        manifest,
+        role,
+        allow_origins,
+        pending_units_dir,
+        pending_host_config_path,
+        false,
+        true,
+        service_user,
     )
 }
 
@@ -57,9 +88,9 @@ pub(crate) fn stage_candidate_units_for_release_with_render_root_and_config(
         pending_host_config_path,
         false,
         true,
+        None,
     )
 }
-
 fn stage_candidate_units_inner(
     layout: &Layout,
     target_dir: &Path,
@@ -71,6 +102,7 @@ fn stage_candidate_units_inner(
     pending_host_config_path: &Path,
     allow_checked_in_fallback: bool,
     require_systemd_validation: bool,
+    service_user_override: Option<&str>,
 ) -> Result<PathBuf, ReleaseError> {
     match fs::symlink_metadata(pending_units_dir) {
         Ok(meta) if meta.file_type().is_dir() => {
@@ -113,41 +145,40 @@ fn stage_candidate_units_inner(
     let api_url = existing_public_config.and_then(|config| config.api_url);
 
     let host_config = super::host_config::load_host_config(&layout.host_config_path())?;
-    let (service_user, service_group, service_home) = if let Some(config) = &host_config {
-        if let Some(user_name) = &config.service_user {
-            if let Some(user) = super::account::get_user_by_name(user_name) {
-                let group =
-                    super::account::get_group_by_gid(user.gid).unwrap_or_else(|| user_name.clone());
-                (user_name.clone(), group, "/var/lib/dam-hopper".to_string())
-            } else {
-                (
-                    user_name.clone(),
-                    user_name.clone(),
-                    "/var/lib/dam-hopper".to_string(),
-                )
-            }
-        } else {
-            resolve_staging_service_identity()
-        }
-    } else {
-        resolve_staging_service_identity()
-    };
-
-    let ctx = UnitRenderContext::new(
+    let explicit_user = service_user_override.or_else(|| {
+        host_config
+            .as_ref()
+            .and_then(|config| config.service_user.as_deref())
+    });
+    let base_ctx = UnitRenderContext::new(
         render_root.to_path_buf(),
         manifest.release.version.clone(),
         layout.host_config_json_path(),
         allow_origins.to_vec(),
-    )?
-    .with_api_identity(service_user, service_group, service_home)?;
-    let mut staged_unit_paths = Vec::new();
-
+    )?;
+    let ctx = if role.includes_server() {
+        let service_user = super::account::resolve_service_user(explicit_user, true)?;
+        let user_info = super::account::verify_api_service_account(&service_user)?;
+        let service_group = super::account::get_group_by_gid(user_info.gid).ok_or_else(|| {
+            ReleaseError::Config(format!(
+                "primary group for API service user '{service_user}' does not resolve"
+            ))
+        })?;
+        base_ctx.with_api_identity(
+            service_user,
+            service_group,
+            super::constants::API_SERVICE_HOME.to_string(),
+        )?
+    } else {
+        base_ctx
+    };
     let recovery_template = load_release_template(
         target_dir,
         "systemd/dam-hopper-recovery.service.in",
         "systemd/dam-hopper-recovery.service",
         allow_checked_in_fallback,
     )?;
+    let mut staged_unit_paths = Vec::new();
     let rendered_recovery = render_recovery_unit(&recovery_template, &ctx)?;
     let recovery_unit_path = pending_units_dir.join("dam-hopper-recovery.service");
     write_file_with_mode(&recovery_unit_path, rendered_recovery.as_bytes(), 0o644)?;
@@ -164,6 +195,17 @@ fn stage_candidate_units_inner(
         let unit_path = pending_units_dir.join("dam-hopper-api.service");
         write_file_with_mode(&unit_path, rendered.as_bytes(), 0o644)?;
         staged_unit_paths.push(unit_path);
+
+        let helper_template = load_release_template(
+            target_dir,
+            "systemd/dam-hopper-idle-suspend-helper.service.in",
+            "systemd/dam-hopper-idle-suspend-helper.service",
+            allow_checked_in_fallback,
+        )?;
+        let rendered_helper = render_helper_unit(&helper_template, &ctx)?;
+        let helper_unit_path = pending_units_dir.join(HELPER_SERVICE_UNIT);
+        write_file_with_mode(&helper_unit_path, rendered_helper.as_bytes(), 0o644)?;
+        staged_unit_paths.push(helper_unit_path);
     }
 
     if role.includes_web() {
@@ -304,6 +346,9 @@ fn load_template(
             p if p.contains("dam-hopper-web") => {
                 include_str!("../../../deploy/systemd/dam-hopper-web.service.in")
             }
+            p if p.contains("dam-hopper-idle-suspend-helper") => {
+                include_str!("../../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in")
+            }
             _ => "",
         };
         if !fallback.is_empty() {
@@ -327,31 +372,4 @@ fn which_bin_exists(bin: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-}
-
-fn resolve_staging_service_identity() -> (String, String, String) {
-    if let Ok(su) = std::env::var("SUDO_USER") {
-        let trimmed = su.trim();
-        if !trimmed.is_empty() && trimmed != "root" {
-            if let Some(user) = super::account::get_user_by_name(trimmed) {
-                if user.uid != 0 {
-                    let group = super::account::get_group_by_gid(user.gid)
-                        .unwrap_or_else(|| trimmed.to_string());
-                    return (trimmed.to_string(), group, user.home);
-                }
-            }
-        }
-    }
-    if let Some(user) = super::account::get_user_by_name("dam-hopper") {
-        if user.uid != 0 {
-            let group = super::account::get_group_by_gid(user.gid)
-                .unwrap_or_else(|| "dam-hopper".to_string());
-            return ("dam-hopper".to_string(), group, user.home);
-        }
-    }
-    (
-        "dam-hopper".to_string(),
-        "dam-hopper".to_string(),
-        "/var/lib/dam-hopper".to_string(),
-    )
 }

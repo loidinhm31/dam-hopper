@@ -38,6 +38,12 @@ server/src/
 │       ├── file-decoration-icon.tsx # Thin icon wrapper around the shared registry
 │       └── mime-to-language.ts      # Compatibility wrapper for MIME-only callers
 ├── pty/              # Terminal sessions
+├── idle_suspend/     # Bounded suspend policy, helper IPC, preflight, audit
+│   ├── protocol.rs   # Versioned frames and execution-only validation
+│   ├── backend.rs    # Option<u64> RTC seam and fixed suspend backend
+│   ├── preflight.rs  # Suspend/RTC/inhibitor checks
+│   ├── helper_server.rs # Peer, dedupe, audit, and side-effect ordering
+│   └── audit.rs      # Bounded mode-0600 helper JSONL audit
 ├── git/              # Git operations
 ├── agent_store/      # Item distribution
 └── commands/         # Command registry
@@ -66,12 +72,503 @@ Top-level `AppError` wraps module errors:
 ```rust
 pub enum AppError {
     Fs(FsError),
+
     Git(GitError),
     NotFound(String),
 }
 ```
 
 API handlers map to HTTP status via `ApiError::from(AppError)`.
+
+### Idle-suspend protocol and helper patterns (Phase 01)
+
+Keep automatic timing validation separate from execution validation:
+
+- `validate_timing_pair` and persisted `IdleSuspendConfig` retain
+  `quiet_period_seconds`/`wake_after_seconds` bounds of `60..=86400`.
+- `validate_suspend_wake_seconds` accepts only `0` or `60..=86400` for the
+  fixed helper request. Do not widen the shared configuration minimum.
+- Keep the wire DTO numeric and required (`wakeAfterSeconds`); convert `0` to
+  `Option<u64>::None` only at the helper/backend boundary.
+
+Side-effect ordering is part of the security contract:
+
+1. Verify enrolled peer credentials and decode one bounded version-1 frame.
+2. Validate request ID/wake domain, then deduplicate the request ID.
+3. Run suspend, RTC ownership, and inhibitor preflight.
+4. Sync the helper intent audit before any RTC mutation.
+5. Clear/read back RTC state; timed mode then writes and verifies a checked
+   target epoch. `None` must never enter epoch arithmetic.
+6. Invoke only the fixed suspend backend and write a typed completion audit.
+
+Drop synchronous mutex guards before every `.await`; the helper dedupe guard is
+scoped before response writes and backend work. Error paths are fail-closed:
+busy alarms, audit-intent failures, RTC clear/readback/write failures,
+unsupported capabilities, and inhibitors produce no suspend call. Tests use
+`tempfile` RTC/audit paths and fake preflight/backends; never use real power
+management or host RTC state.
+### Helper audit v2 patterns (Phase 04)
+
+Keep helper audit evolution in the existing
+`/var/log/dam-hopper/idle-suspend-helper.jsonl`; do not add a second helper
+event file or change `HELPER_PROTOCOL_VERSION`.
+
+- `HELPER_AUDIT_SCHEMA_VERSION` is independently `2`. Existing
+  `acceptedIntent`, `executionCompleted`, and `executionRejected` records keep
+  their established fields; legacy lines without a version deserialize as v1.
+- New lines add `timestampMs`, boot/producer identity, checked
+  `producerSequence`, a safely parsed UUID `correlationId`, and optional
+  closed `HelperReasonCode`/`HelperOutcomeCode` values where applicable. Rust
+  milestone variants are `RequestRejected`, `CapabilityResult`,
+  `PreflightResult`, `RtcProgrammingResult`, and `SuspendInvoked`; serialized
+  `recordType` values use lower camel case.
+- Capability, authentication, and frame records use null correlation when no
+  validated action request ID exists. Never invent IDs; protocol request IDs
+  are correlation evidence, while enrolled peer UID/PID remains authorization.
+- `HelperAudit::record` reserves a checked, non-wrapping sequence under its
+  mutex and consumes it on serialization/open/write/sync failure. It enriches
+  a cloned logical record, bounds each JSONL line to 16 KiB, writes mode
+  `0600` with `O_NOFOLLOW`, and calls `sync_all`.
+- Preserve side-effect ordering: emit preflight before intent, sync
+  `acceptedIntent` before RTC mutation, record RTC result, emit
+  `suspendInvoked` immediately before the fixed suspend call, then record the
+  actual completion. Only intent failure blocks execution; later milestone
+  failures are diagnostic gaps and cannot replace a backend outcome.
+- Keep at most 10,000 records. Overflow pruning writes the newest half through
+  an exclusive mode-`0600` no-follow temporary file, syncs file and parent
+  directory before rename, and removes the temporary file on failure.
+
+Tests inject identity, temporary audit and RTC paths, credentials, preflight,
+and backends. They must prove v1 compatibility, sequence gaps,
+milestone order, and prune cleanup without invoking real systemd, RTC, or
+suspend.
+
+### Canonical idle-suspend event writer (Phases 02–03)
+
+Keep semantic events separate from the legacy untagged `ServerAuditRecord`.
+Use the closed `IdleSuspendEventEnvelopeV1`/payload model with camelCase,
+`deny_unknown_fields`, explicit event/data pairing, and event-specific reason
+and timing validation. Do not add free-form maps, operational text, or a third
+legacy-audit variant.
+
+`ProducerIdentity` is the only producer identity source: read the canonical
+boot UUID, generate one UUID v4 process instance, and never substitute a PID,
+hostname, epoch, revision, or timestamp. `ActionCorrelationId` accepts only a
+canonical lowercase UUID v4 and must remain valid for helper protocol-v1
+request IDs.
+
+Reserve `producerSequence` under the writer's one `parking_lot::Mutex` only
+after validation. Start at one, use checked nonwrapping increments, and never
+reuse a sequence after serialization/open/write/sync failure; overflow
+permanently disables emission. Keep formatting and file I/O inside the same
+critical section so records and gaps retain producer order.
+
+The writer must refuse an unsafe parent or target, append one bounded JSONL
+line to a regular mode-`0600` file with `O_NOFOLLOW`, and call `sync_data()`
+before success. It never creates, repairs, chmods, rotates, or truncates the
+parent or existing target. Tests inject identity/path and use temporary files;
+they do not mutate process-wide environment or production audit paths.
+
+### Coordinator event and correlation rules (Phase 03)
+
+`AppState::new` derives the event path from `DiagnosticStore::log_path()`
+parent and stores one optional `Arc<IdleSuspendEventWriter>`. Initialization
+failure records a sanitized diagnostic and leaves semantic emission disabled;
+the coordinator must keep serving normal suspend/status behavior. Startup
+passes this writer through `start_with_sink` to `run_coordinator`.
+
+Allocate one `AttemptContext` UUID v4 before `attemptStarted` for every
+automatic candidate and manual command that reaches attempt validation.
+Carry that immutable context through arm/final-check, handoff, dispatch,
+outcome, and reconciliation. Reuse its exact canonical lowercase UUID for
+event `correlationId`, `SuspendWithRtcWakeRequest.request_id`, the accepted
+manual response, and the existing manual audit record. Epochs, revisions,
+timestamps, PIDs, and fleet generations are evidence, never correlation IDs;
+never recreate `epoch-N` or `manual-<uuid>` aliases.
+
+Emit only authoritative semantic boundaries: one `coordinatorStarted` per
+producer, attempt/arm start and cancellation, final-check start/result,
+handoff claim result, helper dispatch, actual helper outcome, reconciliation,
+and terminal rejection. For `agent-activity`, emit process-wide
+`measurementUnavailable`/`measurementRecovered` only on availability-class
+transitions; scheduled samples, status heartbeats, unchanged snapshots, and
+repeated unavailable results are silent.
+
+Keep event writes outside PTY/session locks and treat them as diagnostic
+best-effort. A writer failure logs a warning but cannot rewrite coordinator
+state, a real executor outcome, or handoff release. Existing manual audit
+failure remains fail-closed before dispatch. Treat `ArmCancelled` as the
+terminal boundary for the cancelled attempt; shutdown, activity, and other
+admission invalidations additionally emit their typed `terminalRejected`
+event, while a grace cancellation can end without that companion event.
+
+Keep the Phase 01 policy/configuration contract separate from runtime
+observation:
+
+- `IdleSuspendAutomaticPolicy` serializes as `empty-fleet` (the default) or
+  `agent-activity`.
+- `IdleSuspendConfig` uses camelCase JSON fields (`automaticPolicy` and
+  `agentExecutables`) with snake_case input aliases; canonical TOML writes
+  `automatic_policy` and `agent_executables`.
+- Agent entries are literal, case-sensitive basenames or absolute paths. Keep
+  validation lexical and deterministic: require 1–32 unique entries, bound
+  each entry to 1–256 UTF-8 bytes, and reject controls, traversal, path
+  metacharacters, and generic interpreter basenames.
+- `StartupIdleSuspendPolicy` owns the validated policy and matcher set after
+  startup. Reload, import, and workspace activation must reapply those
+  startup-owned values; only the runtime timing pair is mutable.
+
+### PTY activity observation and input admission (Phase 02)
+
+Keep PTY activity evidence at the existing manager/session boundaries; do not
+derive authority from terminal text, display labels, retained scrollback, or
+foreground process-group IDs. The detailed contract is in
+[PTY Activity Observation](./pty-activity-observation.md).
+
+- Store each concrete PTY incarnation as `TerminalIdentity { session_id,
+incarnation }` plus `RootQualification`. A qualified `ProcessIdentity`
+  requires both the child PID and `/proc/<pid>/stat` `start_ticks`; failed or
+  unsupported probes remain explicit `Uncertain`/`Unavailable` states while
+  the terminal stays usable.
+- Allocate one `Arc<AtomicU64>` raw-output sequence per incarnation. Start it
+  at zero for create, restore, and respawn; increment once for each successful
+  nonempty raw reader chunk before parser, buffer, persistence, or event work.
+  Use the shared saturating helper and treat `u64::MAX` as unavailable; never
+  wrap or convert the sequence into a byte count.
+- Keep `input_revision` and `last_input_at` manager-wide and private. Empty
+  input is a no-op. Under the existing manager lock, gate nonempty writes on
+  handoff/manager/session state, record evidence before `LiveSession::write`,
+  and roll back the evidence if the writer returns an error. Rejected input is
+  not queued or replayed, and no client-side expected revision is implied.
+- `PtyActivitySnapshot` is bounded and content-free. Capture fleet state,
+  input revision/time, root identities, and cloned counter handles under the
+  manager lock; never perform procfs I/O or copy terminal content there.
+  Exceeding 256 live roots, an unqualified root, counter saturation, or
+  revision saturation must be represented as incomplete, not as quiet.
+- `PtyActivityWatcher` is a private coalescing `watch` receiver, not an event
+  log or public status channel. Mark cloned receivers seen before waiting.
+  Combine it with `PtyFleetWatcher` when complete lifecycle wakeups are
+  required.
+
+No PTY reader/input path may log or persist command text, arguments,
+environment, terminal bytes, or socket details. Phase 03 process discovery
+consumes this seam through a bounded `ProcessSource`; Phase 04 TCP sampling
+and the Phase 05 transactional sampler preserve fail-closed behavior and do
+not add a second writer path. See [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).
+
+### Bounded process discovery and attribution (Phase 03)
+
+Keep Linux process discovery behind the synchronous, private
+`ProcessSource` trait. `LinuxProcSource` is the production `/proc`
+implementation; tests should use `ProcessDiscovery::with_source` with a
+deterministic source rather than host process state. Preparation must happen
+outside PTY manager locks and must commit state only after the complete sample
+is accepted.
+
+- Use exact `(pid, start_ticks)` identities and stat-before/stat-after checks
+  around mutable procfs reads. Walk managed-root and retained descendants,
+  require exactly one root attribution, and retain detached lineage across
+  samples. Never substitute process-group IDs or a PID-only match.
+- Match native executables by exact configured basename or normalized absolute
+  path. For `node`, `bun`, Python, and supported shells, use the finite
+  entrypoint grammar; reject eval/print/`-c`/stdin/unknown forms and
+  substring matches. Store only the bounded safe executable identity needed
+  for evidence.
+- Enforce hard limits of 256 live roots, 8,192 listed processes, 1,024
+  relevant processes, 4,096 file descriptors per process, 8,192 owned socket
+  inodes, and 16 KiB command lines. Require relevant processes to share the
+  terminal network namespace.
+- Treat procfs permission, timeout, disappearance, identity, namespace,
+  malformed-socket, counter, and bound failures as typed unavailable outcomes.
+  Never convert partial discovery into a quiet/eligible result. A zero-agent
+  sample must not perform file-descriptor or socket scanning.
+- Keep `PreparedProcessSample` transactional: compare against committed
+  identity/output observations, then call `commit_sample` only once the sample
+  passes all checks. Invalidation may clear the baseline while preserving
+  retained attribution needed for reparenting.
+
+### Owned TCP byte observation and baseline comparison (Phase 04)
+
+Keep Linux socket diagnostics behind the synchronous, private
+`SocketDiagnosticsSource` trait. `LinuxSocketDiagnostics` is the production
+`NETLINK_SOCK_DIAG` implementation; tests should inject deterministic sources
+instead of depending on host sockets or network traffic.
+
+- Parse kernel wire data with explicit checked offsets, slice bounds, native
+  endian conversions, and 4-byte alignment. Never cast netlink payloads or
+  `INET_DIAG_INFO` bytes to local C structs. Require the 208-byte `tcp_info`
+  prefix before reading `tcpi_bytes_received` (`128..136`) and
+  `tcpi_bytes_sent` (`200..208`); accept trailing kernel extensions.
+- Open only an unprivileged nonblocking socket. Encode
+  `SOCK_DIAG_BY_FAMILY` requests with explicit sequence numbers and validate
+  sender PID, sequence, message type, lengths, attributes, `NLMSG_DONE`,
+  `NLMSG_ERROR`, and `NLM_F_DUMP_INTR`. Treat malformed, interrupted,
+  overrun, duplicate, or truncated streams as unavailable; never use a
+  partial dump as quiet evidence.
+- Carry one monotonic `Instant` deadline through poll, send, peek, receive,
+  and every dump. Use `MSG_PEEK | MSG_TRUNC` to size each datagram before
+  allocation and enforce the global 16 MiB response budget before allocating.
+- Verify `NetworkNamespaceIdentity::current_thread()` immediately before and
+  after collection. Do not change namespaces. Classify owned inodes still
+  unresolved after all applicable dumps as retryable close races; malformed or
+  corrupt records remain hard diagnostics failures.
+- Key persistent sockets by namespace, family, and diagnostic cookie. Keep
+  inode only as join/reuse metadata. Compare each socket independently:
+  `BaselineEstablished` initializes state, `Unchanged` requires identical
+  keys/inodes/counters, and `Activity` covers byte changes/resets, new or
+  retired sockets, and inode replacement.
+- Keep `prepare_sample` read-only and return an explicit prepared state.
+  Commit the next baseline only after the caller accepts the complete sample;
+  invalidation must force a new baseline. Do not expose raw netlink payloads,
+  addresses, command data, credentials, or terminal content.
+
+### Transactional sampling and automatic admission (Phase 05)
+
+Keep the configured-agent integration private and single-owner. Construct one
+sampler worker per coordinator; the worker owns `ProcessDiscovery` and
+`TcpObserver` state and exposes only bounded observations or opaque final
+tickets to the coordinator. Do not move either baseline into a Tokio task or
+create a parallel observer.
+
+- Use a one-slot mailbox with scheduled coalescing. Final requests supersede
+  queued work and cancel in-flight work cooperatively. Recovery requests
+  invalidate both baselines after resume or handoff release.
+- Carry one monotonic deadline through process preparation, TCP diagnostics,
+  output fencing, and the post-snapshot check. Retry one retryable close race
+  only while that original deadline remains; never retry arbitrary diagnostics
+  failures.
+- Prepare process and TCP samples sequentially. Enrich TCP failures with at
+  most 32 safe process identities from the uncommitted process preparation,
+  then drop that preparation. Commit both prepared states back-to-back only
+  after cancellation, deadline, raw-output, fleet-generation, and input
+  revision checks pass.
+- Treat only an unchanged final sample as ticket-eligible. The manager gate
+  must verify policy, request/activity/epoch/timing revisions, quiet deadline,
+  observation age, input revision, fleet generation, exact root incarnation
+  identities, raw output counters, and closing/disposal/lifecycle flags under
+  one `PtySessionManager` lock.
+- Keep `automaticPolicy` required in v1 status. Emit `activity` only for
+  `agent-activity`; warnings contain a closed reason and at most 32 sorted,
+  deduplicated PID/safe-identity records. Never expose args, environment,
+  terminal bytes, socket addresses, inodes, or raw diagnostics.
+- `is_meaningful_change` must ignore heartbeat/timestamp and elapsed-duration
+  churn while preserving semantic state, activity, warning, fleet, timing, and
+  epoch changes. Join the sampler before PTY teardown during shutdown.
+
+### Production diagnostics bundle engine (Phase 05)
+
+Keep `server/src/linux_release/diagnostics/` pure and narrow. `model.rs` owns
+the closed bundle/source DTOs and fixed bounds; `file_sources.rs` owns the
+shared no-follow bounded scanner plus exactly four source adapters;
+`redaction.rs` owns source-specific allowlist projectors; `correlation.rs`
+owns exact-UUID chains/gaps/restarts; and `collector.rs` owns completeness,
+assembly, and final-size reduction. Do not add a generic source-plugin
+registry, JSON passthrough, host command, network client, output writer, or
+filesystem mutation to this core.
+
+- Open producer files read-only with no-follow semantics. Reject symlinks and
+  non-regular files. Enforce 16 MiB/source, 16 KiB/line, and 10,000
+  accepted-record bounds before allocation. Preserve valid records around
+  malformed lines while marking source status and typed errors.
+- Treat missing, readable-empty, malformed, retention-limited, truncated, and
+  coverage-unknown sources as distinct evidence states. Never claim historical
+  completeness from newest-record presence alone; required-source status,
+  requested window, producer start/sequence, and gap indicators must agree.
+- Project before sizing. Validate closed schema/enums and canonical UUIDs,
+  allowlist fields, map free text to closed codes, bound strings/maps, and
+  exclude terminal/PTY data, credentials, argv/environment, addresses, raw
+  frames, journal message text, and unrestricted stderr.
+- Correlate only exact validated UUIDs. Time, PID, epoch, revision, and
+  producer proximity are not identity. After any record eviction, recompute
+  correlations and completeness from the retained set.
+- Enforce the 8,388,608-byte final JSON limit by evicting whole records in a
+  deterministic source priority. Never byte-slice serialized JSON; mark every
+  affected source truncated and retain bundle metadata/privacy metadata.
+- Keep fixture tests for malformed middle/tail input, bounds, redaction,
+  unknown schema/UUID, exact joins, sequence gaps/duplicates, restarts,
+  orphan chains, cap reduction, and source byte/metadata immutability. Tests
+  use temporary files and deterministic identities; they must not mutate a
+  producer path or invoke suspend.
+
+### Production diagnostics host integration (Phase 06)
+
+Keep the CLI integration narrow and fixed:
+
+- `collector.rs` composes the Phase 05 pure readers with role, EUID, host
+  command, local API, current-probe, and output seams. A source failure marks
+  that source and does not abort independent collection.
+- `host_commands.rs` exposes only the closed `systemctl`, `journalctl`, and
+  `systemd-inhibit` command variants. Compile fixed argv, locale `C`, null
+  stdin, discarded stderr, a five-second deadline, and bounded stdout; never
+  shell out or accept operator command text.
+- `local_api.rs` uses only the fixed loopback idle-status URL and token path,
+  disables redirects, bounds the response to 256 KiB, and never logs or
+  serializes the token.
+- `host_probes.rs` reads fixed RTC/power/PID/enrollment inputs and aggregates
+  inhibitors without mutation. Keep probe data non-historical; omit raw
+  process/inhibitor identities, message text, terminal bytes, arguments,
+  credentials, and addresses, retaining only approved executable identity.
+- `output.rs` validates an owned non-symlink `0700` directory, creates an
+  exclusive no-follow temporary file with mode `0600`, syncs and renames it,
+  then syncs the directory. Resolve root output through `Layout`; resolve
+  non-root output through absolute `XDG_STATE_HOME` or `HOME` only, never
+  `/tmp`.
+- `cli.rs` accepts exactly `diagnose --json`; `dam-hopper.rs` prints no
+  progress and maps complete/partial/fatal to exit `0`/`2`/`1`. Print the
+  absolute final path only after durable output; fatal output/serialization
+  errors print no path.
+
+`verify_privileges` must allow `diagnose` for every EUID while preserving
+root-only mutating commands and non-root-only acquisition. Role applicability
+comes only from `Layout::host_config_path()`: `server`/`both` require server
+sources, `web` marks them `notApplicable`, and unknown role remains partial.
+Non-root collection never calls `sudo`, setuid helpers, or another escalation;
+root-only helper evidence is an explicit `permissionDenied` source state.
+
+### Protected status decoding and presentation (Phase 06)
+
+Keep external status data at an explicit `unknown` boundary. The
+`api.system.idleSuspendStatus()` transport call must decode through
+`decodeIdleSuspendStatusV1`; TypeScript generic casts are not runtime
+validation. Validate the base version-1 fields and all additive policy/activity
+constraints before exposing data to React Query.
+
+- Normalize only a valid base payload with both additive own properties absent.
+  Reject XOR omission, present `undefined`, unknown enums, unsafe numeric
+  domains, invalid warning ordering/identity bounds, and policy/activity
+  mismatches. Preserve transport/auth errors; never catch and fabricate legacy
+  status, zero counts, or quiet state.
+- Keep warning reason mappings exhaustive and local to the UI. Render nullable
+  counts as `Unknown`, and keep coordinator state independent from measurement
+  state. Initializing/unavailable measurement must not claim quiet or completion.
+- Derive the only browser countdown from server `armDeadlineMs`. A bounded
+  local display tick may render elapsed warning duration, but it must not poll,
+  invalidate queries, publish events, persist status, or make eligibility
+  decisions. Stop the tick when no deadline/warning remains.
+- Preserve manual force behavior: confirmation uses
+  `liveCount + creatingCount + restartPendingCount`, never observer counts or
+  reason codes. Keep existing handoff, pending, conflict, retry, auth, origin,
+  and audit gates.
+- Expose only the bounded warning projection (PID and safe executable identity).
+  Do not log or render command arguments, matcher lists, environment, terminal
+  or socket identities, bytes, tokens, counters, or raw diagnostics. Use
+  accessible persistent text; do not make limitations hover-only or color-only.
+
+### Integrated qualification and test-surface ownership (Phase 07)
+
+Keep integrated verification at the public boundary it protects:
+
+- `server/tests/idle_suspend.rs` uses the real `PtySessionManager`, public
+  coordinator, fixture-owned PTYs, and a fake executor. Assert state,
+  eligibility/deadline, lifecycle counts, and exact executor calls; do not
+  reach into crate-private observer state.
+- `server/src/api/tests.rs` uses the Axum router boundary for authentication,
+  `Cache-Control: no-store`, policy/activity nullability, warning bounds, and
+  privacy omissions. Serialize and inspect consumer-visible DTOs rather than
+  echoing constructor fields.
+- `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx` uses
+  Chromium and rendered/accessibility assertions for status, warnings,
+  countdown, manual action, and old-server compatibility. Keep jsdom/unit
+  tests for pure decode or component behavior, not browser proof.
+- `activity_live_linux_pty_tcp_smoke` is an explicitly ignored Linux
+  qualification test. It may use test-owned loopback TCP and direct procfs/
+  netlink observation, but its executor must panic on suspend. It must never
+  invoke the helper, RTC, `systemctl suspend`, `sudo`, root installation, or
+  external services.
+
+Record command-level results and the target-host context in the Phase 07 QA
+report. A passing fake or live observer test is not evidence of a real suspend
+canary; that decision belongs to Operations.
+
+### Documentation, controlled rollout, and operational standards (Phase 08)
+
+Phase 08 establishes operational documentation, controlled rollout, and maintenance standards for the `agent-activity` idle-suspend feature:
+
+1. **Documentation Truthfulness and Honest Boundaries**:
+   - Documentation must never represent automated test passes as real-host suspend qualification. Automated tests use fake executors; real-host execution is an Operations gate.
+   - Explicitly document all heuristic limitations in operator-facing guides: polling intervals can miss short-lived processes, detached descendants may escape attribution, raw PTY bytes cannot identify individual writers, and service-only terminals do not prevent sleep.
+   - Never market `networkCoverage: "tcp4-tcp6"` as generic networking; explicitly state that UDP, QUIC, external proxies, and non-observer namespaces fail closed or remain unmeasured.
+
+2. **Bounded Parser and Socket Diagnostics Rules**:
+   - All procfs and socket diagnostics parsers must enforce hard bounds: 256 live roots, 8,192 listed processes, 1,024 relevant processes, 4,096 file descriptors, 8,192 owned socket inodes, 16 KiB command lines, and 16 MiB netlink buffer.
+   - `tcp_info` parsing requires a 208-byte prefix and native-endian slice decoding of byte counters; raw netlink bytes must never be cast directly to C structs.
+
+3. **Monotonic Revisions and WebSocket Meaningful-Change Filtering**:
+   - Coordinator state revisions, PTY input revisions, and epoch counters must advance monotonically.
+   - WebSocket notifications (`host:idleSuspendChanged`) must be filtered with `is_meaningful_change` to prevent notifying on periodic 2s heartbeats, display timestamps (`sampledAtMs`, `lastActivityAtMs`), or elapsed warning durations.
+
+4. **Lock Invariant: No Blocking Work Under Manager Lock**:
+   - Procfs traversal, netlink socket polling, sleep intervals, file I/O, and helper IPC must never be executed while holding `PtySessionManager` synchronous locks.
+   - Snapshots and admission claims must be completed in bounded, atomic transactions under lock.
+
+5. **Fake-Only Automated Suspend Testing**:
+   - All tests in `server/tests/` and unit test suites must use fake executors or panic executors.
+   - Automated tests are strictly prohibited from programming real host RTC wakealarms (`/sys/class/rtc/rtc0/wakealarm`), calling `systemctl suspend`, executing `sudo`, or modifying host systemd state.
+
+### Linux release manager service lifecycle and verification (Production CLI Phases 03–04)
+
+Keep helper lifecycle ownership centralized in `server/src/linux_release/`:
+
+- Define `HELPER_SERVICE_UNIT` once and include it in `ALL_SERVICE_UNITS`; use
+  those constants for stop, backup, restore, enable, and status paths.
+- For every server-role `start`, attempt the helper before the API. Log helper
+  start/enable errors with `tracing::warn!` and continue API activation; API
+  startup and API/web health-gate errors remain fatal.
+- Stop the managed-unit set before replacing units or release pointers. Restore
+  transaction-owned files before `daemon-reload`, then restart helper before API
+  and re-run the health gate.
+- Boot recovery must disable the helper with application units for pending
+  state, repair helper enablement only for server roles, and stop/disable every
+  managed unit on `RECOVERY_REQUIRED`.
+- Keep `status` read-only: report systemd active state and best-effort process
+  evidence for API, helper, web, and recovery; Phase 04 check 14 confirms the
+  helper constant, server-role staging/start wiring, and status projection.
+- Do not treat missing helper process evidence as a suspend or API-operation
+  exception. Check 13 separately protects API `PIDFile`, `ExecStartPost`, and
+  `ExecStopPost` enrollment hooks.
+
+### Linux release manifest and runtime identity invariants
+
+The release boundary is Manifest v2; persisted manager state remains schema v1
+and is independent. API identity is never serialized in a release manifest.
+The finalized API unit's single exact non-root `User=`/`Group=` pair is the sole
+runtime identity input for health and ownership; do not infer it from manifests,
+host selection, `SUDO_USER`, username-as-group, or root fallbacks.
+
+The API unit has no `StateDirectory=` or `StateDirectoryMode=`. Its only
+privileged pre-start gate is the fixed zero-operand
+`+<release-root>/bin/dam-hopper-manager provision-api-runtime` command. The
+template's sole `ExecStart` uses `--config @API_HOME@/dam-hopper.toml`; the
+checked-in production-default unit must stay synchronized at
+`/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801`.
+`validate_api_unit_policy` requires exactly one `ExecStart` equal to the
+rendered command and exactly one privileged prestart. It rejects legacy or
+alternate config paths, duplicate directives, shell wrappers, and extra
+arguments. The descriptor-relative provisioner creates or validates
+`/var/lib/dam-hopper`, `.config`, `.config/dam-hopper`, canonical
+`/var/lib/dam-hopper/dam-hopper.toml`, and
+`/var/lib/dam-hopper/idle-suspend-audit.jsonl` with final API metadata. It
+reads `/etc/dam-hopper/dam-hopper.toml` only as a validated, read-only,
+copy-once migration source when canonical config is absent. Symlinks, special
+files, metadata mismatches, unsafe legacy content, and no-replace publication
+races are refusals, never repairs or replacements. Failed calls clean only
+matching objects created by that call; the helper must not claim API state.
+
+The release publication migration gate requires a fresh complete manager-first
+inventory with Manifest v2/manager-state v1 capability, production environment,
+release-bound forward and rollback manifest/archive bytes, a semantically older
+rollback, bounded timestamps, and externally verified attestation records. The
+checker performs bounded exact structural, schema, path, and whole-file digest
+validation, including unique remote asset names and API-reported SHA-256
+digests. It does not inspect archive entries against manifest inventory; the
+Rust manager's `validate_manifest_and_archive` deep validator remains required
+before release approval. It rejects mixed or schema-v1 evidence,
+stale/future/long-lived timestamps, unsigned/path-unsafe/detached records,
+reused rollback source/manifest bytes, and manager downgrade while v2 assets
+are active. Evidence must come from the authoritative target inventory; it is
+not fabricated from local release asset names. The checker does not itself
+provide a GitHub DSSE/certificate trust root, so external verification remains
+explicit and missing evidence holds stable publication.
 
 ### Async Patterns
 
@@ -568,7 +1065,7 @@ ship a harness-specific producer.
 - `SessionStatus` is `Running | Ended | Abandoned`.
 - `ResourceLinkType` is `Terminal | Agent`.
 - `ResourceObservedState` is `Attached | Exited | Stale | Detached | Crashed |
-  `Unknown`; terminal lifecycle processing emits the first five as applicable.
+`Unknown`; terminal lifecycle processing emits the first five as applicable.
 - `WorkflowSource` identifies `Manual | Terminal | Git | Agent | System`.
 - `WorkflowEventType` is a closed set of item, session, resource, note, and
   workspace activity classifications.
@@ -593,11 +1090,11 @@ it is a canonical filesystem path, not client data.
 
 **Plan-first hierarchy invariant:**
 
-| Child kind | Allowed parent |
-| --- | --- |
-| `Plan` | None (root only) |
-| `Phase` | `Plan` (required) |
-| `Task` | None, `Plan`, or `Phase` |
+| Child kind | Allowed parent           |
+| ---------- | ------------------------ |
+| `Plan`     | None (root only)         |
+| `Phase`    | `Plan` (required)        |
+| `Task`     | None, `Plan`, or `Phase` |
 
 `Task` cannot parent another task. Item creation reads the parent inside the
 same transaction, checks workspace and project scope, walks ancestors, rejects
@@ -623,15 +1120,15 @@ after commit. Any error drops the transaction and rolls back both entity and
 event. Read methods use the locked connection and include workspace scope in
 entity lookups.
 
-| Repository area | Required behavior |
-| --- | --- |
-| Workspace | Get-or-create by unique canonical locator; look up by ID or locator. |
-| Items | Create/update/delete with hierarchy and transition checks; list with project/status filters and bounded limits. |
-| Sessions | Start with optional item, resource link, and event atomically; end/abandon only through validated transitions; overlapping sessions are allowed. |
-| Resources | Upsert by session/type/external ID; observations update link state and suggested end time only, never session status or timestamps; compare terminal incarnations and keep unlink idempotent. |
-| Notes | Require an item or session target in the same workspace; soft-delete first; list can include deleted rows. |
-| Events | `INSERT OR IGNORE` by event ID for retry idempotency; keyset page by `(recorded_at DESC, id DESC)`; purge expiry in bounded transactions. |
-| Overview | Bound project/item/session counts, include a `truncated` flag, attach non-deleted notes and active sessions, and compute factual task progress. |
+| Repository area | Required behavior                                                                                                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace       | Get-or-create by unique canonical locator; look up by ID or locator.                                                                                                                          |
+| Items           | Create/update/delete with hierarchy and transition checks; list with project/status filters and bounded limits.                                                                               |
+| Sessions        | Start with optional item, resource link, and event atomically; end/abandon only through validated transitions; overlapping sessions are allowed.                                              |
+| Resources       | Upsert by session/type/external ID; observations update link state and suggested end time only, never session status or timestamps; compare terminal incarnations and keep unlink idempotent. |
+| Notes           | Require an item or session target in the same workspace; soft-delete first; list can include deleted rows.                                                                                    |
+| Events          | `INSERT OR IGNORE` by event ID for retry idempotency; keyset page by `(recorded_at DESC, id DESC)`; purge expiry in bounded transactions.                                                     |
+| Overview        | Bound project/item/session counts, include a `truncated` flag, attach non-deleted notes and active sessions, and compute factual task progress.                                               |
 
 `WorkflowStoreError` is the public repository error boundary. Keep SQLite
 errors, model validation errors, not-found errors, duplicate requests, and

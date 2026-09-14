@@ -48,6 +48,9 @@ import type {
   SshForgetCredentialResult,
   SshLoadKeyResult,
   Worktree,
+  IdleSuspendStatusV1,
+  IdleSuspendTimingPatchRequest,
+  ForceSuspendRequest,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
@@ -440,6 +443,45 @@ export function useHostResourceAlerts(enabled: boolean, limit = 20) {
     queryFn: () => api.system.resourceAlerts(limit),
     enabled,
     refetchInterval: enabled ? 30_000 : false,
+  });
+}
+export const IDLE_SUSPEND_STATUS_QUERY_KEY = [
+  "system",
+  "idle-suspend",
+  "v1",
+  "status",
+] as const;
+
+export function useIdleSuspendStatus(enabled = true) {
+  return useQuery<IdleSuspendStatusV1>({
+    queryKey: IDLE_SUSPEND_STATUS_QUERY_KEY,
+    queryFn: () => api.system.idleSuspendStatus(),
+    enabled,
+    staleTime: 5_000,
+  });
+}
+
+export function useUpdateIdleSuspendTiming() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (timing: IdleSuspendTimingPatchRequest) =>
+      api.system.updateIdleSuspendTiming(timing),
+    retry: false,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: IDLE_SUSPEND_STATUS_QUERY_KEY });
+    },
+  });
+}
+
+export function useForceSuspend() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (request: ForceSuspendRequest) =>
+      api.system.forceSuspend(request),
+    retry: false,
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: IDLE_SUSPEND_STATUS_QUERY_KEY });
+    },
   });
 }
 

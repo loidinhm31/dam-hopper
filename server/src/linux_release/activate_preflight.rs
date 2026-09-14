@@ -1,9 +1,10 @@
 //! Preflight validation and health target construction for release activation.
 
-use super::account::verify_web_sysuser_account;
+use super::account::{resolve_api_runtime_identity, verify_web_sysuser_account};
 use super::constants::{
-    API_SERVICE_HEALTH_PATH, API_SERVICE_PORT, API_SERVICE_UNIT, RECOVERY_SERVICE_UNIT,
-    WEB_SERVICE_HEALTH_PATH, WEB_SERVICE_IDENTITY, WEB_SERVICE_PORT, WEB_SERVICE_UNIT,
+    API_SERVICE_HEALTH_PATH, API_SERVICE_PORT, API_SERVICE_UNIT, HELPER_SERVICE_UNIT,
+    RECOVERY_SERVICE_UNIT, WEB_SERVICE_HEALTH_PATH, WEB_SERVICE_IDENTITY, WEB_SERVICE_PORT,
+    WEB_SERVICE_UNIT,
 };
 use super::error::ReleaseError;
 use super::health::HealthProbeTarget;
@@ -21,85 +22,189 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 const MAX_RUNTIME_CONFIG_BYTES: usize = 64 * 1024;
+const DEFAULT_SESSION_DB_PATH: &str = "~/.config/dam-hopper/sessions.db";
 
-/// Resolve all potential SQLite database paths configured in `dam-hopper.toml` or defaults.
-pub fn resolve_configured_sqlite_paths(layout: &Layout) -> Result<Vec<PathBuf>, ReleaseError> {
-    let mut candidates = Vec::new();
-    let config_path = layout.etc_dir.join("dam-hopper.toml");
-    let default_session_path = "~/.config/dam-hopper/sessions.db";
-    let raw_path = match fs::symlink_metadata(&config_path) {
-        Ok(metadata) if metadata.file_type().is_file() => {
-            let mut file = fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&config_path)
-                .map_err(|error| ReleaseError::Io {
-                    action: "open API configuration with no-follow",
-                    details: error.to_string(),
-                })?;
-            let mut bytes = Vec::new();
-            file.by_ref()
-                .take(MAX_RUNTIME_CONFIG_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|error| ReleaseError::Io {
-                    action: "read API configuration",
-                    details: error.to_string(),
-                })?;
-            if bytes.len() > MAX_RUNTIME_CONFIG_BYTES {
-                return Err(ReleaseError::Config(format!(
-                    "API configuration exceeds maximum size of {MAX_RUNTIME_CONFIG_BYTES} bytes"
-                )));
-            }
-            let content = String::from_utf8(bytes).map_err(|error| {
-                ReleaseError::Config(format!("API configuration is not valid UTF-8: {error}"))
-            })?;
-            let toml_val = toml::from_str::<toml::Value>(&content).map_err(|error| {
-                ReleaseError::Config(format!(
-                    "failed to parse API configuration at '{}': {error}",
-                    config_path.display()
-                ))
-            })?;
-            toml_val
-                .get("server")
-                .and_then(|server| server.get("session_db_path"))
-                .and_then(|path| path.as_str())
-                .unwrap_or(default_session_path)
-                .to_string()
-        }
-        Ok(_) => {
-            return Err(ReleaseError::OwnershipViolation {
-                path: config_path.display().to_string(),
-                expected: "regular API configuration file".into(),
-                got: "symbolic link or non-regular file".into(),
-            });
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            default_session_path.to_string()
-        }
-        Err(error) => {
+fn inspect_config_session_path(config_path: &Path) -> Result<Option<String>, ReleaseError> {
+    let metadata = match fs::symlink_metadata(config_path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
             return Err(ReleaseError::Io {
-                action: "inspect API configuration",
-                details: error.to_string(),
+                action: "inspect API configuration metadata",
+                details: e.to_string(),
             });
         }
     };
 
-    if let Some(suffix) = raw_path.strip_prefix("~/") {
-        candidates.push(PathBuf::from("/root").join(suffix));
-        if let Some(home) = dirs::home_dir() {
-            candidates.push(home.join(suffix));
-        }
-    } else if raw_path == "~" {
-        candidates.push(PathBuf::from("/root"));
-        if let Some(home) = dirs::home_dir() {
-            candidates.push(home);
-        }
-    } else {
-        candidates.push(PathBuf::from(raw_path));
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(ReleaseError::OwnershipViolation {
+            path: config_path.display().to_string(),
+            expected: "regular API configuration file".into(),
+            got: if metadata.file_type().is_symlink() {
+                "symbolic link".into()
+            } else {
+                "non-regular file".into()
+            },
+        });
     }
 
-    candidates.push(layout.etc_dir.join("sessions.db"));
-    Ok(candidates)
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(config_path)
+        .map_err(|error| {
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                ReleaseError::OwnershipViolation {
+                    path: config_path.display().to_string(),
+                    expected: "regular API configuration file".into(),
+                    got: "symbolic link".into(),
+                }
+            } else {
+                ReleaseError::Io {
+                    action: "open API configuration with no-follow",
+                    details: error.to_string(),
+                }
+            }
+        })?;
+
+    let fd_metadata = file.metadata().map_err(|error| ReleaseError::Io {
+        action: "verify API configuration file descriptor",
+        details: error.to_string(),
+    })?;
+    if !fd_metadata.file_type().is_file() {
+        return Err(ReleaseError::OwnershipViolation {
+            path: config_path.display().to_string(),
+            expected: "regular API configuration file".into(),
+            got: "non-regular file descriptor".into(),
+        });
+    }
+
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(MAX_RUNTIME_CONFIG_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| ReleaseError::Io {
+            action: "read API configuration",
+            details: error.to_string(),
+        })?;
+
+    if bytes.len() > MAX_RUNTIME_CONFIG_BYTES {
+        return Err(ReleaseError::Config(format!(
+            "API configuration at '{}' exceeds maximum size of {MAX_RUNTIME_CONFIG_BYTES} bytes",
+            config_path.display()
+        )));
+    }
+
+    let content = String::from_utf8(bytes).map_err(|error| {
+        ReleaseError::Config(format!(
+            "API configuration at '{}' is not valid UTF-8: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    let toml_val = toml::from_str::<toml::Value>(&content).map_err(|error| {
+        ReleaseError::Config(format!(
+            "failed to parse API configuration at '{}': {error}",
+            config_path.display()
+        ))
+    })?;
+
+    let session_path = if let Some(server) = toml_val.get("server") {
+        if let Some(val) = server.get("session_db_path") {
+            val.as_str()
+                .ok_or_else(|| {
+                    ReleaseError::Config(format!(
+                        "API configuration at '{}' field server.session_db_path must be a string",
+                        config_path.display()
+                    ))
+                })?
+                .to_string()
+        } else {
+            DEFAULT_SESSION_DB_PATH.to_string()
+        }
+    } else {
+        DEFAULT_SESSION_DB_PATH.to_string()
+    };
+
+    Ok(Some(session_path))
+}
+
+fn resolve_sqlite_candidate_path(
+    api_home: &Path,
+    raw_path: &str,
+) -> Result<PathBuf, ReleaseError> {
+    if let Some(suffix) = raw_path.strip_prefix("~/") {
+        Ok(api_home.join(suffix))
+    } else if raw_path == "~" {
+        Ok(api_home.to_path_buf())
+    } else if raw_path.starts_with('~') {
+        Err(ReleaseError::Config(format!(
+            "unsupported tilde path '{raw_path}' in API configuration; ~user expansion is not supported"
+        )))
+    } else if Path::new(raw_path).is_absolute() {
+        Ok(PathBuf::from(raw_path))
+    } else {
+        Ok(api_home.join(raw_path))
+    }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if let Some(std::path::Component::Normal(_)) = components.last() {
+                    components.pop();
+                } else if !path.is_absolute() {
+                    components.push(comp);
+                }
+            }
+            _ => components.push(comp),
+        }
+    }
+    components.into_iter().collect()
+}
+
+/// Resolve all potential SQLite database paths configured in `dam-hopper.toml` or defaults.
+pub fn resolve_configured_sqlite_paths(layout: &Layout) -> Result<Vec<PathBuf>, ReleaseError> {
+    let mut candidates = Vec::new();
+    let api_home = layout.api_state_dir();
+
+    let canonical_path = layout.api_daemon_config_path();
+    let legacy_path = layout.legacy_api_daemon_config_path();
+
+    let canonical_session = inspect_config_session_path(&canonical_path)?;
+    let legacy_session = inspect_config_session_path(&legacy_path)?;
+
+    let mut any_config_found = false;
+
+    if let Some(raw) = canonical_session {
+        any_config_found = true;
+        candidates.push(resolve_sqlite_candidate_path(&api_home, &raw)?);
+    }
+
+    if let Some(raw) = legacy_session {
+        any_config_found = true;
+        candidates.push(resolve_sqlite_candidate_path(&api_home, &raw)?);
+    }
+
+    if !any_config_found {
+        candidates.push(layout.api_config_dir().join("sessions.db"));
+    }
+
+    // Retain legacy /etc/dam-hopper/sessions.db fallback during migration window
+    candidates.push(layout.api_etc_dir().join("sessions.db"));
+
+    let mut deduped = Vec::new();
+    for candidate in candidates {
+        let normalized = normalize_path(&candidate);
+        if !deduped.contains(&normalized) {
+            deduped.push(normalized);
+        }
+    }
+
+    Ok(deduped)
 }
 
 /// Validate a staged candidate before any service switch.
@@ -248,10 +353,34 @@ fn validate_preflight(
         });
     }
     if candidate.role.includes_server() {
-        verify_candidate_file(&units_path.join(API_SERVICE_UNIT), 0o644, None)?;
+        let expected_api_hash = candidate.api_unit_sha256.as_ref().ok_or_else(|| {
+            ReleaseError::Config("server candidate is missing the finalized API unit digest".into())
+        })?;
+        verify_candidate_file(
+            &units_path.join(API_SERVICE_UNIT),
+            0o644,
+            Some(expected_api_hash),
+        )?;
+        let expected_helper_hash = candidate.helper_unit_sha256.as_ref().ok_or_else(|| {
+            ReleaseError::Config(
+                "server candidate is missing the finalized helper unit digest".into(),
+            )
+        })?;
+        verify_candidate_file(
+            &units_path.join(HELPER_SERVICE_UNIT),
+            0o644,
+            Some(expected_helper_hash),
+        )?;
     }
     if candidate.role.includes_web() {
-        verify_candidate_file(&units_path.join(WEB_SERVICE_UNIT), 0o644, None)?;
+        let expected_web_hash = candidate.web_unit_sha256.as_ref().ok_or_else(|| {
+            ReleaseError::Config("web candidate is missing the finalized Web unit digest".into())
+        })?;
+        verify_candidate_file(
+            &units_path.join(WEB_SERVICE_UNIT),
+            0o644,
+            Some(expected_web_hash),
+        )?;
         if pending_artifacts {
             verify_candidate_file(&units_path.join("dam-hopper-web.conf"), 0o644, None)?;
         } else {
@@ -276,12 +405,17 @@ fn validate_preflight(
             });
         }
     }
-    verify_candidate_file(host_config_path, 0o644, None)?;
+    let expected_host_config_hash = candidate.host_config_sha256.as_ref().ok_or_else(|| {
+        ReleaseError::Config(
+            "candidate is missing the finalized public host configuration digest".into(),
+        )
+    })?;
+    verify_candidate_file(host_config_path, 0o644, Some(expected_host_config_hash))?;
     let public_config = load_host_public_config(host_config_path)?
         .ok_or_else(|| ReleaseError::Config("public host configuration is missing".to_string()))?;
     if public_config.role != candidate.role {
         return Err(ReleaseError::Config(
-            "public host configuration role does not match candidate".to_string(),
+            "public host configuration role does not match candidate".into(),
         ));
     }
 
@@ -290,11 +424,11 @@ fn validate_preflight(
             reason: "forbidden legacy port 4800 is listening".into(),
         });
     }
-
-    for db_path in resolve_configured_sqlite_paths(layout)? {
-        verify_no_foreign_sqlite_holders(&db_path, allowed_sqlite_pids)?;
+    if candidate.role.includes_server() {
+        for db_path in resolve_configured_sqlite_paths(layout)? {
+            verify_no_foreign_sqlite_holders(&db_path, allowed_sqlite_pids)?;
+        }
     }
-
     Ok(manifest)
 }
 
@@ -340,23 +474,35 @@ fn verify_candidate_file(
     Ok(())
 }
 
-/// Construct health probe targets for the candidate release role.
+/// Construct health probe targets from the applicable finalized unit under `layout`.
 pub fn build_candidate_health_targets(
+    layout: &Layout,
     candidate: &PendingCandidateRecord,
 ) -> Result<Vec<HealthProbeTarget>, ReleaseError> {
     let release_root = PathBuf::from(&candidate.release_path);
     let mut targets = Vec::new();
 
     if candidate.role.includes_server() {
-        let (api_uid, api_gid) = resolve_api_service_uid_gid(candidate);
+        let units_dir = candidate
+            .pending_units_path
+            .as_deref()
+            .map(Path::new)
+            .unwrap_or(&layout.systemd_unit_dir);
+        let api_path = units_dir.join(API_SERVICE_UNIT);
+        let content = fs::read_to_string(&api_path).map_err(|e| ReleaseError::Io {
+            action: "read finalized API unit for health identity",
+            details: e.to_string(),
+        })?;
+        let parsed = ParsedUnit::parse(&content)?;
+        let identity = resolve_api_runtime_identity(&parsed)?;
         targets.push(HealthProbeTarget {
             unit_name: API_SERVICE_UNIT.into(),
             role: "api".into(),
             port: API_SERVICE_PORT,
             path: API_SERVICE_HEALTH_PATH.into(),
             expected_version: candidate.tag.trim_start_matches('v').into(),
-            expected_uid: api_uid,
-            expected_gid: api_gid,
+            expected_uid: identity.uid,
+            expected_gid: identity.gid,
             expected_exe_prefix: release_root.join("bin/dam-hopper-server"),
         });
     }
@@ -376,59 +522,4 @@ pub fn build_candidate_health_targets(
     }
 
     Ok(targets)
-}
-
-fn resolve_api_service_uid_gid(candidate: &PendingCandidateRecord) -> (u32, u32) {
-    if let Some(ref units_path_str) = candidate.pending_units_path {
-        let api_unit = Path::new(units_path_str).join(API_SERVICE_UNIT);
-        if let Ok(content) = fs::read_to_string(&api_unit) {
-            if let Some(uid_gid) = parse_user_gid_from_unit(&content) {
-                return uid_gid;
-            }
-        }
-    }
-
-    let installed_unit = Layout::new().systemd_unit_dir.join(API_SERVICE_UNIT);
-    if let Ok(content) = fs::read_to_string(&installed_unit) {
-        if let Some(uid_gid) = parse_user_gid_from_unit(&content) {
-            return uid_gid;
-        }
-    }
-
-    if let Ok(Some(cfg)) = super::host_config::load_host_config(&Layout::new().host_config_path()) {
-        if let Some(user_name) = cfg.service_user {
-            if let Some(user) = super::account::get_user_by_name(&user_name) {
-                return (user.uid, user.gid);
-            }
-        }
-    }
-
-    if let Ok(su) = std::env::var("SUDO_USER") {
-        if let Some(user) = super::account::get_user_by_name(su.trim()) {
-            if user.uid != 0 {
-                return (user.uid, user.gid);
-            }
-        }
-    }
-
-    if let Some(user) = super::account::get_user_by_name("dam-hopper") {
-        return (user.uid, user.gid);
-    }
-
-    (0, 0)
-}
-
-fn parse_user_gid_from_unit(content: &str) -> Option<(u32, u32)> {
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(user_name) = trimmed.strip_prefix("User=") {
-            let user_clean = user_name.trim();
-            if !user_clean.starts_with('@') {
-                if let Some(user) = super::account::get_user_by_name(user_clean) {
-                    return Some((user.uid, user.gid));
-                }
-            }
-        }
-    }
-    None
 }

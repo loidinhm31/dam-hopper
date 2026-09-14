@@ -19,10 +19,16 @@ pub use parser::{read_config, write_config};
 pub use presets::{get_effective_command, get_preset, get_project_services};
 pub use resolve::{resolve_startup_config, ConfigResolution, ConfigResolutionInput, ConfigSource};
 pub use schema::{
+    default_idle_suspend_agent_executables, default_idle_suspend_automatic_policy,
+    is_generic_interpreter, validate_agent_executable_entry, validate_agent_executables,
     AgentAssignment, AgentStoreConfig, CommandKind, DamHopperConfig, FeaturesConfig, GlobalConfig,
-    KnownWorkspace, ProjectAgents, ProjectConfig, ProjectType, RestartPolicy, ServerConfig,
-    ServiceConfig, TelemetryCollectorConfig, TelemetryConfig, TerminalProfile, WorkspaceInfo,
-    DEFAULT_RESTART_MAX_RETRIES,
+    IdleSuspendAutomaticPolicy, IdleSuspendCapabilitySelection, IdleSuspendConfig, KnownWorkspace,
+    ProjectAgents, ProjectConfig, ProjectType, RestartPolicy, ServerConfig, ServiceConfig,
+    TelemetryCollectorConfig, TelemetryConfig, TerminalProfile, WorkspaceInfo,
+    DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+    DEFAULT_RESTART_MAX_RETRIES, MAX_IDLE_SUSPEND_AGENT_EXECUTABLES,
+    MAX_IDLE_SUSPEND_AGENT_EXECUTABLE_BYTES, MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+    MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS, MIN_IDLE_SUSPEND_AGENT_EXECUTABLES,
+    MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
 };
-
 pub use crate::system::config::HostResourceMonitorConfig;

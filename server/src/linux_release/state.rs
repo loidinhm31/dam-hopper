@@ -3,7 +3,7 @@
 //! Stored in `/var/lib/dam-hopper-manager/state.json` with permissions `0600`.
 //! Monotonic generation increments with every durable commit or boundary.
 
-use super::constants::{MAX_STATE_BYTES, SCHEMA_VERSION};
+use super::constants::{MANAGER_STATE_SCHEMA_VERSION, MAX_STATE_BYTES};
 use super::durable_fs::{atomic_write_json, copy_file_durable};
 use super::error::ReleaseError;
 use super::journal::DeploymentState;
@@ -39,7 +39,7 @@ pub struct ManagerState {
 impl Default for ManagerState {
     fn default() -> Self {
         Self {
-            schema_version: SCHEMA_VERSION,
+            schema_version: MANAGER_STATE_SCHEMA_VERSION,
             generation: 1,
             updated_at: Utc::now().to_rfc3339(),
             active: None,
@@ -57,10 +57,10 @@ impl ManagerState {
     }
 
     pub fn validate(&self) -> Result<(), ReleaseError> {
-        if self.schema_version != SCHEMA_VERSION {
+        if self.schema_version != MANAGER_STATE_SCHEMA_VERSION {
             return Err(ReleaseError::Config(format!(
                 "unsupported state schema version {}, expected {}",
-                self.schema_version, SCHEMA_VERSION
+                self.schema_version, MANAGER_STATE_SCHEMA_VERSION
             )));
         }
         if self.generation == 0 {

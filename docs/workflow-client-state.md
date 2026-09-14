@@ -13,16 +13,16 @@ keeps the Phase 04 transport/query contract authoritative.
 
 ## Module map
 
-| Module | Responsibility |
-| --- | --- |
-| `packages/ui/src/api/workflow-dto-types.ts` | Wire DTOs, request payloads, and closed string unions. |
-| `packages/ui/src/api/workflow-domain-helpers.ts` | Pure hierarchy, status, progress, timestamp, duration, and ordering helpers. |
-| `packages/ui/src/api/workflow-types.ts` | Barrel export for DTOs and domain helpers. |
-| `packages/ui/src/api/client.ts` | Transport-agnostic `api.workflow` facade and shared target/error types. |
-| `packages/ui/src/api/ws-transport.ts` | Channel-to-REST method, path, query, and body mapping used by browser/native clients. |
-| `packages/ui/src/api/workflow-queries.ts` | Workflow query keys, overview/events hooks, request IDs, and mutation wrappers. |
-| `packages/ui/src/api/queries.ts` | Existing shared hooks for non-workflow surfaces and re-export of workflow hooks from the focused module. |
-| `packages/ui/src/api/query-client.ts` | Profile-aware TanStack Query key hashing used by both hosts. |
+| Module                                           | Responsibility                                                                                           |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `packages/ui/src/api/workflow-dto-types.ts`      | Wire DTOs, request payloads, and closed string unions.                                                   |
+| `packages/ui/src/api/workflow-domain-helpers.ts` | Pure hierarchy, status, progress, timestamp, duration, and ordering helpers.                             |
+| `packages/ui/src/api/workflow-types.ts`          | Barrel export for DTOs and domain helpers.                                                               |
+| `packages/ui/src/api/client.ts`                  | Transport-agnostic `api.workflow` facade and shared target/error types.                                  |
+| `packages/ui/src/api/ws-transport.ts`            | Channel-to-REST method, path, query, and body mapping used by browser/native clients.                    |
+| `packages/ui/src/api/workflow-queries.ts`        | Workflow query keys, overview/events hooks, request IDs, and mutation wrappers.                          |
+| `packages/ui/src/api/queries.ts`                 | Existing shared hooks for non-workflow surfaces and re-export of workflow hooks from the focused module. |
+| `packages/ui/src/api/query-client.ts`            | Profile-aware TanStack Query key hashing used by both hosts.                                             |
 
 The focused modules keep `client.ts`, the general query hook module, and the
 transport interface from accumulating workflow-specific logic.
@@ -97,21 +97,21 @@ active transport uses browser fetch, a native host, or an idle setup transport.
 `WsTransport.channelToEndpoint` maps the following 13 operation names to the
 protected REST API:
 
-| Channel | HTTP request |
-| --- | --- |
-| `workflow:overview` | `GET /api/workflow/overview` |
-| `workflow:events` | `GET /api/workflow/events`, with optional URL-encoded `cursor` and `limit` query parameters |
-| `workflow:createItem` | `POST /api/workflow/items`, body unchanged |
-| `workflow:patchItem` | `PATCH /api/workflow/items/{id}`, URL-encoded `id`; `id` removed from JSON body |
-| `workflow:deleteItem` | `DELETE /api/workflow/items/{id}`, URL-encoded `id`; `id` removed from JSON body |
-| `workflow:createSession` | `POST /api/workflow/sessions`, body unchanged |
-| `workflow:endSession` | `POST /api/workflow/sessions/{id}/end`, URL-encoded `id`; body excludes `id` |
-| `workflow:abandonSession` | `POST /api/workflow/sessions/{id}/abandon`, URL-encoded `id`; body excludes `id` |
-| `workflow:linkResource` | `POST /api/workflow/sessions/{sessionId}/links`, URL-encoded `sessionId`; body excludes `sessionId` |
+| Channel                   | HTTP request                                                                                          |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `workflow:overview`       | `GET /api/workflow/overview`                                                                          |
+| `workflow:events`         | `GET /api/workflow/events`, with optional URL-encoded `cursor` and `limit` query parameters           |
+| `workflow:createItem`     | `POST /api/workflow/items`, body unchanged                                                            |
+| `workflow:patchItem`      | `PATCH /api/workflow/items/{id}`, URL-encoded `id`; `id` removed from JSON body                       |
+| `workflow:deleteItem`     | `DELETE /api/workflow/items/{id}`, URL-encoded `id`; `id` removed from JSON body                      |
+| `workflow:createSession`  | `POST /api/workflow/sessions`, body unchanged                                                         |
+| `workflow:endSession`     | `POST /api/workflow/sessions/{id}/end`, URL-encoded `id`; body excludes `id`                          |
+| `workflow:abandonSession` | `POST /api/workflow/sessions/{id}/abandon`, URL-encoded `id`; body excludes `id`                      |
+| `workflow:linkResource`   | `POST /api/workflow/sessions/{sessionId}/links`, URL-encoded `sessionId`; body excludes `sessionId`   |
 | `workflow:unlinkResource` | `DELETE /api/workflow/sessions/{sessionId}/links`, URL-encoded `sessionId`; body excludes `sessionId` |
-| `workflow:createNote` | `POST /api/workflow/notes`, body unchanged |
-| `workflow:deleteNote` | `DELETE /api/workflow/notes/{id}`, URL-encoded `id`; body excludes `id` |
-| `workflow:purgeHistory` | `DELETE /api/workflow/history`, body unchanged |
+| `workflow:createNote`     | `POST /api/workflow/notes`, body unchanged                                                            |
+| `workflow:deleteNote`     | `DELETE /api/workflow/notes/{id}`, URL-encoded `id`; body excludes `id`                               |
+| `workflow:purgeHistory`   | `DELETE /api/workflow/history`, body unchanged                                                        |
 
 `invoke` joins relative paths to the profile's base URL, adds the profile-bound
 Bearer header when available, sends cookies with `credentials: include`, and

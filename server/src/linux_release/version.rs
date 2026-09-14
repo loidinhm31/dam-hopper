@@ -28,10 +28,12 @@ pub fn validate_release_tag(tag: &str, expected_version: &str) -> Result<(), Rel
 
 /// Validate that a git release tag matches the `v<SemVer>` format.
 pub fn validate_tag_format(tag: &str) -> Result<Version, ReleaseError> {
-    let version_part = tag.strip_prefix('v').ok_or_else(|| ReleaseError::InvalidTag {
-        tag: tag.to_string(),
-        version: "missing 'v' prefix".to_string(),
-    })?;
+    let version_part = tag
+        .strip_prefix('v')
+        .ok_or_else(|| ReleaseError::InvalidTag {
+            tag: tag.to_string(),
+            version: "missing 'v' prefix".to_string(),
+        })?;
     validate_version(version_part)
 }
 

@@ -901,6 +901,7 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
             workflow_event_retention_days: 90,
             workflow_deleted_note_retention_days: 7,
             workflow_stale_after_hours: 24,
+            idle_suspend: Default::default(),
         },
     };
 

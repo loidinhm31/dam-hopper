@@ -344,6 +344,276 @@ impl TelemetryConfig {
     }
 }
 
+// ──────────────────────────────────────────────
+// Idle suspend config
+// ──────────────────────────────────────────────
+
+pub const MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS: u64 = 60;
+pub const MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS: u64 = 86400;
+pub const DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS: u64 = 900;
+
+pub const MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS: u64 = 60;
+pub const MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS: u64 = 86400;
+pub const DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS: u64 = 600;
+
+pub const fn default_idle_suspend_quiet_period_seconds() -> u64 {
+    DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS
+}
+
+pub const fn default_idle_suspend_wake_after_seconds() -> u64 {
+    DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+}
+pub const MIN_IDLE_SUSPEND_AGENT_EXECUTABLES: usize = 1;
+pub const MAX_IDLE_SUSPEND_AGENT_EXECUTABLES: usize = 32;
+pub const MAX_IDLE_SUSPEND_AGENT_EXECUTABLE_BYTES: usize = 256;
+
+pub fn default_idle_suspend_automatic_policy() -> IdleSuspendAutomaticPolicy {
+    IdleSuspendAutomaticPolicy::EmptyFleet
+}
+
+pub fn default_idle_suspend_agent_executables() -> Vec<String> {
+    vec![
+        "codex".to_string(),
+        "omp".to_string(),
+        "claude".to_string(),
+        "agy".to_string(),
+    ]
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum IdleSuspendAutomaticPolicy {
+    #[default]
+    EmptyFleet,
+    AgentActivity,
+}
+
+impl IdleSuspendAutomaticPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::EmptyFleet => "empty-fleet",
+            Self::AgentActivity => "agent-activity",
+        }
+    }
+}
+
+pub fn is_generic_interpreter(name: &str) -> bool {
+    match name {
+        "node" | "nodejs" | "bun" | "sh" | "bash" | "dash" | "zsh" | "ksh" | "fish" => true,
+        "python" => true,
+        _ => {
+            if let Some(rest) = name.strip_prefix("python") {
+                if let Some(first) = rest.chars().next() {
+                    first.is_ascii_digit()
+                } else {
+                    true
+                }
+            } else {
+                false
+            }
+        }
+    }
+}
+
+pub fn validate_agent_executable_entry(entry: &str) -> Result<(), String> {
+    if entry.is_empty() {
+        return Err("server.idle_suspend.agent_executables entries cannot be empty".to_string());
+    }
+    if entry.len() > MAX_IDLE_SUSPEND_AGENT_EXECUTABLE_BYTES {
+        return Err(format!(
+            "server.idle_suspend.agent_executables entry '{}' exceeds maximum length of {} bytes",
+            entry, MAX_IDLE_SUSPEND_AGENT_EXECUTABLE_BYTES
+        ));
+    }
+    if entry.chars().any(|c| c.is_whitespace() || c.is_control() || c == '\0') {
+        return Err(format!(
+            "server.idle_suspend.agent_executables entry '{}' contains whitespace or control characters",
+            entry
+        ));
+    }
+
+    let (_, basename) = if let Some(path_without_root) = entry.strip_prefix('/') {
+        if path_without_root.is_empty() {
+            return Err("server.idle_suspend.agent_executables entry '/' is not a valid executable path".to_string());
+        }
+        if path_without_root.ends_with('/') {
+            return Err(format!(
+                "server.idle_suspend.agent_executables entry '{}' cannot have a trailing slash",
+                entry
+            ));
+        }
+        if path_without_root.contains("//") {
+            return Err(format!(
+                "server.idle_suspend.agent_executables entry '{}' cannot contain repeated slashes",
+                entry
+            ));
+        }
+        let mut last_component = "";
+        for component in path_without_root.split('/') {
+            if component == "." || component == ".." {
+                return Err(format!(
+                    "server.idle_suspend.agent_executables entry '{}' contains invalid '.' or '..' component",
+                    entry
+                ));
+            }
+            if !component.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || c == '_'
+                    || c == '-'
+                    || c == '.'
+                    || c == '+'
+                    || c == '@'
+            }) {
+                return Err(format!(
+                    "server.idle_suspend.agent_executables entry '{}' contains invalid characters in component '{}'",
+                    entry, component
+                ));
+            }
+            last_component = component;
+        }
+        (true, last_component)
+    } else {
+        if entry.contains('/') {
+            return Err(format!(
+                "server.idle_suspend.agent_executables relative path entry '{}' containing '/' is forbidden; use an absolute path or basename",
+                entry
+            ));
+        }
+        if entry == "." || entry == ".." {
+            return Err(format!(
+                "server.idle_suspend.agent_executables entry '{}' cannot be '.' or '..'",
+                entry
+            ));
+        }
+        if !entry.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || c == '_'
+                || c == '-'
+                || c == '.'
+                || c == '+'
+                || c == '@'
+        }) {
+            return Err(format!(
+                "server.idle_suspend.agent_executables entry '{}' contains invalid characters",
+                entry
+            ));
+        }
+        (false, entry)
+    };
+
+    if is_generic_interpreter(basename) {
+        return Err(format!(
+            "server.idle_suspend.agent_executables entry '{}' cannot use generic interpreter basename '{}'",
+            entry, basename
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn validate_agent_executables(executables: &[String]) -> Result<(), String> {
+    if executables.is_empty() || executables.len() > MAX_IDLE_SUSPEND_AGENT_EXECUTABLES {
+        return Err(format!(
+            "server.idle_suspend.agent_executables must contain between {} and {} entries",
+            MIN_IDLE_SUSPEND_AGENT_EXECUTABLES, MAX_IDLE_SUSPEND_AGENT_EXECUTABLES
+        ));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(executables.len());
+    for entry in executables {
+        validate_agent_executable_entry(entry)?;
+        if !seen.insert(entry.as_str()) {
+            return Err(format!(
+                "server.idle_suspend.agent_executables contains duplicate entry '{}'",
+                entry
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum IdleSuspendCapabilitySelection {
+    #[default]
+    Auto,
+    SystemdLogind,
+    Rtcwake,
+}
+
+impl IdleSuspendCapabilitySelection {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::SystemdLogind => "systemd-logind",
+            Self::Rtcwake => "rtcwake",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdleSuspendConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_idle_suspend_quiet_period_seconds", alias = "quiet_period_seconds")]
+    pub quiet_period_seconds: u64,
+    #[serde(default = "default_idle_suspend_wake_after_seconds", alias = "wake_after_seconds")]
+    pub wake_after_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "enrollment_reference")]
+    pub enrollment_reference: Option<String>,
+    #[serde(default, alias = "capability_selection")]
+    pub capability_selection: IdleSuspendCapabilitySelection,
+    #[serde(default = "default_idle_suspend_automatic_policy", alias = "automatic_policy")]
+    pub automatic_policy: IdleSuspendAutomaticPolicy,
+    #[serde(default = "default_idle_suspend_agent_executables", alias = "agent_executables")]
+    pub agent_executables: Vec<String>,
+}
+
+impl Default for IdleSuspendConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            quiet_period_seconds: DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+            wake_after_seconds: DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+            enrollment_reference: None,
+            capability_selection: IdleSuspendCapabilitySelection::default(),
+            automatic_policy: IdleSuspendAutomaticPolicy::default(),
+            agent_executables: default_idle_suspend_agent_executables(),
+        }
+    }
+}
+
+impl IdleSuspendConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.quiet_period_seconds < MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS
+            || self.quiet_period_seconds > MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS
+        {
+            return Err(format!(
+                "server.idle_suspend.quiet_period_seconds must be between {} and {}",
+                MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS
+            ));
+        }
+        if self.wake_after_seconds < MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+            || self.wake_after_seconds > MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+        {
+            return Err(format!(
+                "server.idle_suspend.wake_after_seconds must be between {} and {}",
+                MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+            ));
+        }
+        if let Some(enrollment) = &self.enrollment_reference {
+            if enrollment.trim().is_empty() {
+                return Err("server.idle_suspend.enrollment_reference cannot be empty when provided".into());
+            }
+            if enrollment.len() > 256 {
+                return Err("server.idle_suspend.enrollment_reference exceeds maximum length of 256 characters".into());
+            }
+        }
+        validate_agent_executables(&self.agent_executables)?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerConfig {
@@ -363,8 +633,9 @@ pub struct ServerConfig {
     pub workflow_deleted_note_retention_days: u32,
     #[serde(default = "default_workflow_stale_after_hours", alias = "workflow_stale_after_hours")]
     pub workflow_stale_after_hours: u32,
+    #[serde(default, alias = "idle_suspend")]
+    pub idle_suspend: IdleSuspendConfig,
 }
-
 pub const fn default_workflow_event_retention_days() -> u32 { 90 }
 pub const fn default_workflow_deleted_note_retention_days() -> u32 { 7 }
 pub const fn default_workflow_stale_after_hours() -> u32 { 24 }
@@ -381,6 +652,7 @@ impl ServerConfig {
         if !(1..=8760).contains(&self.workflow_stale_after_hours) {
             return Err("server.workflow_stale_after_hours must be between 1 and 8760".into());
         }
+        self.idle_suspend.validate()?;
         Ok(())
     }
 }
@@ -395,6 +667,7 @@ impl Default for ServerConfig {
             workflow_event_retention_days: default_workflow_event_retention_days(),
             workflow_deleted_note_retention_days: default_workflow_deleted_note_retention_days(),
             workflow_stale_after_hours: default_workflow_stale_after_hours(),
+            idle_suspend: IdleSuspendConfig::default(),
         }
     }
 }
