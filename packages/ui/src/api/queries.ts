@@ -50,9 +50,7 @@ import type {
   Worktree,
   IdleSuspendStatusV1,
   IdleSuspendTimingPatchRequest,
-  IdleSuspendTimingPatchResponse,
   ForceSuspendRequest,
-  ForceSuspendAcceptedResponse,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";

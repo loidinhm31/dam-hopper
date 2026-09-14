@@ -7,6 +7,7 @@ import type {
   ItemOverviewNodeDto,
   ItemStatus,
   LinkDto,
+  NoteDto,
   ProjectDto,
   ResourceLinkType,
   SessionDto,
@@ -38,7 +39,12 @@ export interface WorkflowContextSheetProps {
   onSelectItem: (item: ItemDto | null) => void;
   onStatusChange?: (item: ItemDto, status: ItemStatus) => void;
   onDeleteItem?: (item: ItemDto) => void;
+  onEditItem?: (
+    item: ItemDto,
+    updates: { title?: string; summary?: string | null },
+  ) => Promise<unknown> | void;
   onAddNote?: (itemId: string, note: string) => void;
+  onDeleteNote?: (note: NoteDto) => Promise<unknown> | void;
   onStartSession?: (startedAt: string, itemId?: string | null) => void;
   onEndSession?: (sessionId: string, endedAt: string) => void;
   onAbandonSession?: (sessionId: string) => void;
@@ -72,7 +78,9 @@ export function WorkflowContextSheet({
   onSelectItem,
   onStatusChange,
   onDeleteItem,
+  onEditItem,
   onAddNote,
+  onDeleteNote,
   onStartSession,
   onEndSession,
   onAbandonSession,
@@ -173,7 +181,9 @@ export function WorkflowContextSheet({
                 onSelectItem={onSelectItem}
                 onStatusChange={onStatusChange}
                 onDeleteItem={onDeleteItem}
+                onEditItem={onEditItem}
                 onAddNote={onAddNote}
+                onDeleteNote={onDeleteNote}
                 onOpenQuickCapture={onOpenQuickCapture}
               />
             )

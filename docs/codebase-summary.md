@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-14 from `repomix-output.xml` (Repomix v1.18.0; 1,877
-files, 4,136,543 tokens, 17,081,986 characters; five security-flagged files
+**Generated:** 2026-09-14 from `repomix-output.xml` (Repomix v1.18.0; 1,919
+files, 4,218,979 tokens, 17,418,881 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -46,6 +46,36 @@ resource links, notes, and bounded events in SQLite. The telemetry subsystem is
 separate and opt-in, with private SQLite storage and bounded aggregate queries.
 Media tickets and browser-debug artifacts use authenticated, scoped, expiring
 capabilities rather than project-path access.
+
+## Workflow tracking
+
+`server/src/workflow/` is a domain-first service over the shared SQLite
+`sessions.db`; migration `010_workflow_tracking.sql` adds bounded Plan/Phase/Task
+items, scoped manual sessions, terminal/agent resource links, notes, and activity
+events without changing existing terminal-session tables.
+
+- `model/` owns closed enums, camelCase DTOs, and validation for hierarchy,
+  limits, timestamps, and transitions.
+- `store/` owns synchronous transactional repositories, bounded overview/event
+  reads, keyset history, idempotent request handling, and retention purge.
+- `service.rs` snapshots current workspace/profile scope, validates configured
+  projects and registered worktrees, and dispatches SQLite work through
+  `spawn_blocking`.
+- `observation.rs` and `reconcile.rs` keep PTY lifecycle correlation off hot
+  paths: allowlisted lifecycle facts use non-blocking `try_send` to a bounded
+  `sync_channel(256)`, then reconcile `(sessionId, incarnation)` links after PTY
+  restore. Queue/storage failures never block terminal I/O; manual workflow
+  session status and timestamps remain user-controlled.
+- `server/src/api/workflow/` exposes protected overview, event, item, session,
+  link, note, and history routes with strict camelCase DTOs, request UUIDs,
+  optimistic `updatedAt` checks, bounded payloads, and sanitized errors.
+
+The shared UI mirrors this contract through typed `api.workflow`, generation- and
+profile-scoped React Query keys, and success-only `['workflow']` invalidation.
+Workflow data stays memory-only; selection, notes, edits, and elapsed clocks stay
+component-local. `WorkflowSelectedItemBar` and its notes/edit molecules use the
+selected DTO `updatedAt` for CAS and refresh authoritative overview data after a
+successful mutation.
 
 ## Terminal idle suspend
 
@@ -199,6 +229,19 @@ separate Phase 07 cross-layer target passed 2/2. The latest cycle-2 review
 approved the change at 10.0/10. No coverage percentage or real suspend canary
 is claimed.
 
+### Explorer HTML preview
+
+The shared UI routes `.html`, `.htm`, and `.xhtml` files through
+`isHtmlFile`/`isHtmlPreviewCandidate` and lazy `HtmlHost` before generic Monaco
+fallbacks. `HtmlHost` preserves the editor callback/view-state contract while
+switching among full Edit, 50/50 Split, and full Preview layouts. `HtmlPreview`
+feeds debounced content to one iframe, exposes reload, and omits
+`allow-same-origin` from its explicit sandbox; `html-preview-transform.ts` adds
+only in-memory storage and in-frame alert shims. `FileTree` exposes Preview from
+`TreeContextMenu` only for live HTML files smaller than 5 MiB. Mode state is a
+browser-local `dam-hopper:html-view-mode:v1` value and the
+`dam-hopper:html-view-mode-changed` event synchronizes mounted tabs.
+
 ## Linux release and deployment
 
 `server/src/linux_release/` owns manifest validation, role projection, unit
@@ -208,6 +251,15 @@ runtime identity is taken from the finalized unit's `User=`/`Group=` pair;
 release tooling refuses unsafe path ownership or symlink substitutions rather
 than repairing them. The helper remains root-owned and uses a restricted Unix
 socket with peer credentials.
+
+### Phase 00 merge boundary (2026-09-14)
+
+The merge reconciliation keeps refusal-based descriptor provisioning and
+excludes recursive string-path `chown`, while incorporating origin/main's
+workflow and Explorer HTML preview surfaces. The API unit renders
+`--config /var/lib/dam-hopper/dam-hopper.toml`; daemon-state config/audit
+migration and preflight alignment remain Phase 01–03 work. The merge commit is
+still pending.
 
 ## Frontend architecture
 

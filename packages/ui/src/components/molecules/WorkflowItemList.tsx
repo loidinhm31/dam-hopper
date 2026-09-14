@@ -5,6 +5,7 @@ import type {
   ItemKind,
   ItemOverviewNodeDto,
   ItemStatus,
+  NoteDto,
 } from "@/api/workflow-dto-types.js";
 import { Button } from "@/components/atoms/Button.js";
 import { flattenOverviewNodes } from "@/api/workflow-selectors.js";
@@ -18,8 +19,13 @@ export interface WorkflowItemListProps {
   onSelectItem: (item: ItemDto | null) => void;
   onStatusChange?: (item: ItemDto, status: ItemStatus) => void;
   onAddNote?: (itemId: string, noteBody: string) => void;
+  onDeleteNote?: (note: NoteDto) => Promise<unknown> | void;
   onStartSession?: (itemId: string) => void;
   onDeleteItem?: (item: ItemDto) => void;
+  onEditItem?: (
+    item: ItemDto,
+    updates: { title?: string; summary?: string | null },
+  ) => Promise<unknown> | void;
   onOpenQuickCapture?: (kind?: ItemKind, parentId?: string | null) => void;
   emptyState?: ReactNode;
 }
@@ -31,8 +37,10 @@ export function WorkflowItemList({
   onSelectItem,
   onStatusChange,
   onAddNote,
+  onDeleteNote,
   onStartSession,
   onDeleteItem,
+  onEditItem,
   onOpenQuickCapture,
   emptyState,
 }: WorkflowItemListProps) {
@@ -123,8 +131,10 @@ export function WorkflowItemList({
           selectedNode={selectedNode}
           onStatusChange={onStatusChange}
           onAddNote={onAddNote}
+          onDeleteNote={onDeleteNote}
           onStartSession={onStartSession}
           onDeleteItem={onDeleteItem}
+          onEditItem={onEditItem}
           onOpenQuickCapture={onOpenQuickCapture}
         />
       )}

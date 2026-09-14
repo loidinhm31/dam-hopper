@@ -21,7 +21,7 @@ Environment=DAM_HOPPER_CORS_ORIGINS=@API_ORIGINS@
 EnvironmentFile=-/etc/dam-hopper/server.env
 EnvironmentFile=-/etc/dam-hopper/server-safety.env
 ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime
-ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config /etc/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801
+ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config @API_HOME@/dam-hopper.toml --host 0.0.0.0 --port 4801
 ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'
 ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid
 Restart=on-failure

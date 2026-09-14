@@ -42,8 +42,22 @@ pub fn parse_os_release(content: &str) -> OsRelease {
 
 /// Supported Linux distribution identifiers with systemd.
 pub const SUPPORTED_OS_IDS: &[&str] = &[
-    "fedora", "ubuntu", "debian", "centos", "rhel", "rocky", "almalinux", "arch", "pop",
-    "linuxmint", "manjaro", "opensuse", "opensuse-leap", "opensuse-tumbleweed", "amazon", "oracle",
+    "fedora",
+    "ubuntu",
+    "debian",
+    "centos",
+    "rhel",
+    "rocky",
+    "almalinux",
+    "arch",
+    "pop",
+    "linuxmint",
+    "manjaro",
+    "opensuse",
+    "opensuse-leap",
+    "opensuse-tumbleweed",
+    "amazon",
+    "oracle",
     "linux",
 ];
 
@@ -171,11 +185,10 @@ pub fn verify_host_platform() -> Result<(), ReleaseError> {
         return Err(ReleaseError::SystemdNotActive);
     }
 
-    let sysd_ver =
-        get_runtime_systemd_version().ok_or(ReleaseError::SystemdVersionTooLow {
-            expected: PROFILE_SYSTEMD_MIN,
-            got: 0,
-        })?;
+    let sysd_ver = get_runtime_systemd_version().ok_or(ReleaseError::SystemdVersionTooLow {
+        expected: PROFILE_SYSTEMD_MIN,
+        got: 0,
+    })?;
     verify_systemd_version(sysd_ver)?;
 
     Ok(())

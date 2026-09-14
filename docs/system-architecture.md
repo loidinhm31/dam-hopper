@@ -62,6 +62,15 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Phase 00 merge boundary (2026-09-14)
+
+Phase 00 reconciles `origin/main` with `feat/terminal-idle-suspend`. The merged
+surface retains refusal-based descriptor operations (recursive string-path
+`chown` is not part of the release path) and combines idle-suspend diagnostics,
+workflow tracking, and Explorer HTML preview. The API unit renders
+`--config /var/lib/dam-hopper/dam-hopper.toml`; runtime config/audit migration
+and preflight reconciliation remain Phase 01–03 work.
+
 ## Server-Authoritative Terminal Idle Suspend Architecture
 
 The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend
@@ -634,13 +643,16 @@ All adapters use fixed allowlisted authorities; custom or alternate layouts are
 `unsupported`, not guessed. The API service has `HOME=/var/lib/dam-hopper` and
 `XDG_CONFIG_HOME=/var/lib/dam-hopper/.config`, which defines the server event
 and backend diagnostic paths. `AppState` derives the compatibility server audit
-from the fixed `/etc/dam-hopper/dam-hopper.toml` parent. The helper systemd unit
-owns the root log through `LogsDirectory=dam-hopper`.
+from the loaded `config.config_path` parent. The Phase 00 API unit renders
+`--config /var/lib/dam-hopper/dam-hopper.toml`; the Phase 00
+collector/provisioner still treats `/etc/dam-hopper/idle-suspend-audit.jsonl`
+as its legacy source. Phase 01–03 reconcile those authorities. The helper
+systemd unit owns the root log through `LogsDirectory=dam-hopper`.
 
 | Source or output                                           | Fixed authority                                                                               | Historicity and applicability                                                                  |
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | Server events                                              | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`             | historical; required attempt for `Server`/`Both`                                               |
-| Server timing/manual audit                                 | `/etc/dam-hopper/idle-suspend-audit.jsonl`                                                    | historical; required attempt for `Server`/`Both`                                               |
+| Server timing/manual audit                                 | `/etc/dam-hopper/idle-suspend-audit.jsonl` (legacy provisioner/collector path during Phase 00) | historical; required attempt for `Server`/`Both`                                               |
 | Backend diagnostics                                        | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/backend-log.jsonl`                        | historical; required attempt for `Server`/`Both`; terminal tails excluded                      |
 | Helper audit                                               | `/var/log/dam-hopper/idle-suspend-helper.jsonl`                                               | historical; required attempt for root `Server`/`Both`; non-root is `permissionDenied`          |
 | API/helper journal and lifecycle                           | fixed `dam-hopper-api.service` and `dam-hopper-idle-suspend-helper.service`                   | historical; required attempt for `Server`/`Both`; unreadable evidence makes the bundle partial |
@@ -712,7 +724,7 @@ implements the host/API/command/output adapters around this pure core.
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | API state                                     | Final rendered API `User:Group` (default `dam-hopper:dam-hopper`); `/var/lib/dam-hopper`, `.config`, and `.config/dam-hopper` are directories `0700` |
 | `/etc/dam-hopper`                             | Installer root `0:0`; fixed anchor directory `0755`; created when absent and exact-validated when present; mismatches are refused, never repaired |
-| `/etc/dam-hopper/idle-suspend-audit.jsonl`    | Final rendered API UID/GID; regular file `0600`; provisioned before API start beneath the root-owned `0755` anchor; existing bytes and inode are preserved; absent/unwritable path makes the audit gate fail closed |
+| `/etc/dam-hopper/idle-suspend-audit.jsonl` (legacy) | Final rendered API UID/GID; regular file `0600`; provisioned before API start beneath the root-owned `0755` anchor during Phase 00; Phase 01–03 migrate the API audit beside canonical state |
 | Phase 05 pure diagnostics files                  | Not managed by `provision-api-runtime`; readers consume existing producer files and never provision or repair them |
 | Helper audit                                  | systemd `LogsDirectory=dam-hopper`; helper is `root:API_GROUP` and retains its existing runtime/log/protocol contract |
 
@@ -1963,15 +1975,18 @@ the UI does not infer missing child items.
 
 **Component responsibilities:**
 
-| Component                                       | Architectural role                                                                                                                                            |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WorkflowContextRibbon`                         | `h-9` ambient `region`; target label, active item, status, elapsed duration, latest note/progress, loading/error/retry, and polite live text.                 |
-| `WorkflowContextDeck`                           | Open-only non-modal desktop `region`; `320px` minimum, `360px` base, `440px` maximum; two columns at `md`, and `220px / flexible / 300px` panes at `lg`.      |
-| `WorkflowContextSheet`                          | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `35dvh` collapsed and `90dvh` expanded. |
-| `WorkflowProjectList`                           | Exact target selection plus plan, task, and running-session counts.                                                                                           |
-| `WorkflowItemList` / `WorkflowItemRow`          | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy.                                  |
-| `WorkflowQuickCapture`                          | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request.                                                 |
-| `WorkflowExecutionList` / `WorkflowSessionCard` | Explicit start/end timestamps, Now actions, elapsed duration, abandon, observed links, and manual Agent Harness/Agent Run metadata.                           |
+| Component | Architectural role |
+| --- | --- |
+| `WorkflowContextRibbon` | `h-9` ambient `region`; target label, active item, status, elapsed duration, latest note/progress, loading/error/retry, and polite live text. |
+| `WorkflowContextDeck` | Open-only non-modal desktop `region`; `320px` minimum, `360px` base, `440px` maximum; two columns at `md`, and `220px / flexible / 300px` panes at `lg`. |
+| `WorkflowContextSheet` | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `35dvh` collapsed and `90dvh` expanded. |
+| `WorkflowProjectList` | Exact target selection plus plan, task, and running-session counts. |
+| `WorkflowItemList` / `WorkflowItemRow` | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy. |
+| `WorkflowSelectedItemBar` | Selected-item status/session/child actions, note drafting, ordered note display/deletion, item deletion, and edit entry point. |
+| `WorkflowSelectedItemEditForm` | Local title/summary drafts, normalization, keyboard shortcuts, and Save/Cancel presentation. |
+| `WorkflowSelectedItemNotesList` | Bounded independently scrollable note detail with semantic timestamps and note-scoped deletion. |
+| `WorkflowQuickCapture` | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request. |
+| `WorkflowExecutionList` / `WorkflowSessionCard` | Explicit start/end timestamps, Now actions, elapsed duration, abandon, observed links, and manual Agent Harness/Agent Run metadata. |
 
 The surface owns only presentation state: open state, selected target/item,
 quick-capture drafts, mobile segment, and a single one-second elapsed timer
@@ -1987,18 +2002,19 @@ semantics. The focus helper restores a connected element defensively.
 
 `use-workflow-surface-actions.ts` maps UI actions to typed workflow mutations,
 generates a UUID `requestId` per request, preserves the selected target, and
-uses current ISO timestamps for status/session writes. Observed resource
-`suggestedEndTime` values only prefill a draft after an explicit user action;
-observation never changes manual workflow-session status or timestamps. Creating
-an item with immediate start creates the follow-up session with the current
-time.
+uses current ISO timestamps for status/session writes. Item edits pass the
+selected item's current `updatedAt`; note deletion passes the note's current
+`updatedAt`. Observed resource `suggestedEndTime` values only prefill a draft
+after an explicit user action; observation never changes manual workflow-session
+status or timestamps. Creating an item with immediate start creates the
+follow-up session with the current time.
 
 The focused Phase 05 report records 62/62 targeted UI/workflow tests, with
 1,493/1,493 full UI tests and 907/907 Rust tests (two ignored). Those tests do
 not qualify browser geometry, safe-area/touch behavior, focus continuity, or
-real host integration. Current implementation notes: resource-attention fields
-from `selectAttentionSummary` remain false/zero, and item-list action
-callbacks are broader than the controls currently rendered by the list.
+real host integration. Resource-attention fields from `selectAttentionSummary`
+remain false/zero; selected-item note and edit controls are now rendered by
+`WorkflowSelectedItemBar` and its focused molecules.
 
 ### WorkspacePage and shell integration (UI Phase 06)
 
@@ -2167,6 +2183,40 @@ described as equivalent to the Unix/Linux guarantee.
 - Lazy init: ProjectSandbox stored as Option (Unavailable if init failed)
 - Seeded/reinitialized from config projects on startup and workspace switch
 - Cheap clone pattern
+
+### Explorer HTML preview (Phases 01–03)
+
+HTML preview is a shared-UI concern; it does not add a server route, static file
+origin, or alternate filesystem authority. `EditorTabs` checks `isHtmlFile` and
+lazy-loads `HtmlHost` before the generic Monaco fallback. `HtmlHost` preserves
+normal editor callbacks and view state while selecting one of three layouts:
+
+```mermaid
+flowchart LR
+    Tab["EditorTabs active HTML tab"] --> Host["Lazy HtmlHost"]
+    Host -->|Edit| Monaco["MonacoHost 100%"]
+    Host -->|Split| Split["MonacoHost 50% + HtmlPreview 50%"]
+    Host -->|Preview| Preview["HtmlPreview 100%"]
+    Explorer["FileTree Preview action"] --> Mode["saveHtmlViewMode('preview')"]
+    Mode --> Host
+```
+
+`HtmlPreview` sends the latest editor buffer to one iframe after a 200 ms
+ debounce and exposes a reload action. The iframe sandbox is exactly
+`sandbox="allow-scripts allow-modals allow-forms allow-popups allow-pointer-lock"`;
+`allow-same-origin` is intentionally absent, so workspace markup runs with an
+opaque `null` origin and cannot read parent cookies or storage. The transform
+injects only an in-memory `localStorage`/`sessionStorage` fallback and an
+in-frame `window.alert()` modal for this sandbox environment.
+
+`html-view-mode-persistence.ts` stores `"edit" | "split" | "preview"` under
+`dam-hopper:html-view-mode:v1`, defaults to `"edit"` on invalid/unavailable
+storage, and emits `dam-hopper:html-view-mode-changed` so mounted tabs update
+without a remount. `FileTree` offers the `Eye`/`Preview` action only for live
+HTML files below 5 MiB; the action sets preview mode then opens the existing tab.
+Directories, language-scan rows, non-HTML files, and oversized files do not enter
+this path. Relative multi-file asset resolution and backend static serving remain
+out of scope.
 
 ### Explorer video playback and download (Phase 04 browser-host validation complete)
 
@@ -4171,6 +4221,7 @@ API layer (handlers) catch AppError → HTTP status:
   as a single versioned localStorage value; files without a valid value use
   Split. Storage failures and invalid values are non-fatal; this preference
   never changes server, workspace, project-file, API, or database state.
+- **HTML split-view preview:** `HtmlHost` + `HtmlPreview` components in packages/ui/src/components/organisms/. EditorTabs routes .html/.htm/.xhtml files to `HtmlHost`. Toggle modes: Edit | Split | Preview-only with a sandboxed iframe (`sandbox="allow-scripts allow-modals"` omitting `allow-same-origin`). View mode preference persists to localStorage under `dam-hopper:html-view-mode:v1` (default `"edit"`).
 - **Drag-and-drop file move:** FileTree.tsx DnD via react-arborist's built-in `onMove`. Drop on dir → move into dir. Drop on file → move to file's parent. Calls existing `ops.move()` with server-side sandbox validation.
 - **Backend search API:** `GET /api/fs/search?project=X&q=QUERY[&case=bool&max=N]` in server/src/api/fs.rs. Uses `ignore` crate v0.4 for .gitignore-aware directory walking. Plain text search (regex-escaped server-side). Results capped at 1000, default 200.
 - **Persistent explorer tree expansion:** `packages/ui/src/stores/explorer-tree.ts` (`useExplorerTreeStore`) persists directory open/close states in `localStorage` under `dam-hopper:explorer-tree-state` keyed by target scope (`${project}::${targetKey}`). `FileTree` uses this state for `initialOpenState`, cascading child hydration on remount, error-safe directory pruning, and rename/move/delete tree synchronization.

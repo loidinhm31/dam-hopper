@@ -1,11 +1,12 @@
 import {
   ClipboardCopy,
   Copy,
+  Download,
+  Eye,
   FilePlus,
   FolderPlus,
   Pencil,
   Trash2,
-  Download,
   Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
@@ -22,6 +23,7 @@ export interface ContextMenuAction {
 export interface TreeContextMenuHandlers {
   onCopyAbsolutePath: () => void;
   onCopyRelativePath: () => void;
+  onPreview?: () => void;
   onNewFile: () => void;
   onNewFolder: () => void;
   onRename: () => void;
@@ -34,6 +36,8 @@ interface BuildItemsArgs extends TreeContextMenuHandlers {
   isDir: boolean;
   /** When true (e.g. project root unknown), disable the absolute-path copy. */
   absolutePathDisabled?: boolean;
+  /** When true (e.g. HTML file), render preview action. */
+  isHtml?: boolean;
 }
 
 /**
@@ -43,8 +47,10 @@ interface BuildItemsArgs extends TreeContextMenuHandlers {
 export function getTreeContextMenuItems({
   isDir,
   absolutePathDisabled = false,
+  isHtml = false,
   onCopyAbsolutePath,
   onCopyRelativePath,
+  onPreview,
   onNewFile,
   onNewFolder,
   onRename,
@@ -64,6 +70,15 @@ export function getTreeContextMenuItems({
       icon: <Copy className="h-3.5 w-3.5" />,
       onClick: onCopyRelativePath,
     },
+    ...(!isDir && isHtml && onPreview
+      ? [
+          {
+            label: "Preview",
+            icon: <Eye className="h-3.5 w-3.5" />,
+            onClick: onPreview,
+          },
+        ]
+      : []),
     ...(isDir
       ? [
           {

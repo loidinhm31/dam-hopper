@@ -14,9 +14,9 @@ use serde::Deserialize;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::os::unix::fs::MetadataExt;
 
 pub const LEGACY_FORMAT2_USER: &str = "loidinh";
 pub const LEGACY_FORMAT2_PORT: u16 = 4801;
@@ -76,7 +76,10 @@ pub async fn inspect_format2_installation(
         action: "read format-2 wants link target",
         details: e.to_string(),
     })?;
-    if !wants_target.to_string_lossy().ends_with(LEGACY_FORMAT2_UNIT) {
+    if !wants_target
+        .to_string_lossy()
+        .ends_with(LEGACY_FORMAT2_UNIT)
+    {
         return Err(ReleaseError::LegacyMigrationRejected {
             reason: format!("format-2 wants link does not target {LEGACY_FORMAT2_UNIT}"),
         });
@@ -145,13 +148,11 @@ pub async fn inspect_format2_installation(
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| ReleaseError::Config(format!("failed to build HTTP client: {e}")))?;
-        let resp = client
-            .get(&probe_url)
-            .send()
-            .await
-            .map_err(|e| ReleaseError::LegacyMigrationRejected {
+        let resp = client.get(&probe_url).send().await.map_err(|e| {
+            ReleaseError::LegacyMigrationRejected {
                 reason: format!("health probe failed at {probe_url}: {e}"),
-            })?;
+            }
+        })?;
         if resp.status() != reqwest::StatusCode::OK {
             return Err(ReleaseError::LegacyMigrationRejected {
                 reason: format!("health probe returned status {}", resp.status()),
@@ -189,8 +190,8 @@ pub async fn inspect_format2_installation(
             }
             bytes.extend_from_slice(&chunk);
         }
-        let health_json: LegacyHealthResponse = serde_json::from_slice(&bytes)
-            .map_err(|e| ReleaseError::LegacyMigrationRejected {
+        let health_json: LegacyHealthResponse =
+            serde_json::from_slice(&bytes).map_err(|e| ReleaseError::LegacyMigrationRejected {
                 reason: format!("health response is invalid JSON: {e}"),
             })?;
         if health_json.schema_version != 1
@@ -269,12 +270,11 @@ pub fn verify_format2_live_preflight(layout: &Layout) -> Result<String, ReleaseE
     check_ports_free(&[4800, 4802])?;
 
     let address = SocketAddr::from(([127, 0, 0, 1], LEGACY_FORMAT2_PORT));
-    let mut stream =
-        TcpStream::connect_timeout(&address, Duration::from_secs(3)).map_err(|e| {
-            ReleaseError::LegacyMigrationRejected {
-                reason: format!("legacy health connection failed: {e}"),
-            }
-        })?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3)).map_err(|e| {
+        ReleaseError::LegacyMigrationRejected {
+            reason: format!("legacy health connection failed: {e}"),
+        }
+    })?;
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .and_then(|_| stream.set_write_timeout(Some(Duration::from_secs(3))))
@@ -341,7 +341,10 @@ pub fn verify_format2_live_preflight(layout: &Layout) -> Result<String, ReleaseE
         })?;
     if health.schema_version != 1 {
         return Err(ReleaseError::LegacyMigrationRejected {
-            reason: format!("legacy health schemaVersion is not 1: {}", health.schema_version),
+            reason: format!(
+                "legacy health schemaVersion is not 1: {}",
+                health.schema_version
+            ),
         });
     }
     if health.status != "ok" {

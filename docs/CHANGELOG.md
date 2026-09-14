@@ -20,7 +20,25 @@
   codebase-summary, PDR, and rollout/rollback documentation with the delivered
   fixed-source, bounded, privacy-safe collector.
 
+- **System daemon state configuration — Phase 00 merge reconciliation complete
+  (2026-09-14).** Reconciled `origin/main` into
+  `feat/terminal-idle-suspend` without importing recursive `chown`; preserved
+  refusal-based descriptor provisioning, aligned the API systemd template/unit
+  policy, accepted upstream `use-clipboard.ts` and `WATCHDOG.yml` changes, and
+  synthesized all conflicting docs plus the workflow context page.
+- Cycle-2 review approved **10/10** and confirmed 85 staged files, 0 unmerged
+  files, and 0 conflict markers. The merge commit remains pending; daemon-state
+  cutover is Phase 01–03 scope. [Phase 00 plan](../plans/260914-0854-system-daemon-state-config/phase-00-merge-origin-main-and-reconcile-conflicts.md) ·
+  [Cycle-2 review](../plans/reports/code-review-260914-1158-phase-00-merge-origin-main-cycle2.md).
+
 # 2026-09-13
+
+- **Interactive Script and Sandbox Enhancements in HTML Preview.** Added `html-preview-transform.ts` and updated `HtmlPreview.tsx` to enable full interaction with embedded `<script>` tags, forms, and browser APIs inside sandboxed HTML previews while strictly maintaining `null`-origin parent isolation (omitting `allow-same-origin`).
+  - Added `allow-forms`, `allow-popups`, and `allow-pointer-lock` to iframe sandbox attributes (`sandbox="allow-scripts allow-modals allow-forms allow-popups allow-pointer-lock"`), enabling form submissions, button interactions, popups, and pointer-lock APIs.
+  - Injected an in-memory `localStorage` and `sessionStorage` fallback shim to prevent fatal `SecurityError: The document is sandboxed and lacks the 'allow-same-origin' flag` exceptions when user scripts access storage.
+  - Injected an in-frame visual modal alert fallback for `window.alert()` to overcome modern browser suppression of native dialogs in cross-origin/sandboxed iframes.
+- Validation: Vitest unit tests **59/59 passed** across all HTML preview suites (including 4 new tests in `html-preview-transform.test.ts`). Chromium browser tests **14/14 passed** across `consumer-context-menu.browser.tsx` and `script-interaction.browser.tsx` verifying DOM manipulation, interactive counter script, form submission, in-memory localStorage, and in-frame alert modal. TypeScript build (`tsc -p tsconfig.json`) passed cleanly.
+
 - **Production idle-suspend diagnostics — Phase 06 Linux CLI integration complete (2026-09-13).** Added the exact `dam-hopper diagnose --json` grammar, role-aware fixed host/API/command/probe adapters, non-root permission boundaries, atomic root/user output (`0700`/`0600`), path-only stdout, and complete/partial/fatal exit mapping (`0`/`2`/`1`). Phase 07 rollout remains planned.
 - **Production idle-suspend diagnostics — Phase 05 bundle/correlation engine complete (2026-09-13).** Delivered the pure bundle-v1 model, bounded no-follow JSONL readers, strict privacy projection, source completeness/status, exact UUID correlation, gap/restart/orphan analysis, and deterministic 8-MiB whole-record reduction.
 - Validation passed: **202/202 tests** (**16 diagnostics + 186 `idle_suspend`**); Cycle 2 code review approved **9.5/10**; canonical advisor lifecycle completed. [Phase 05 plan](../plans/260912-0027-production-idle-suspend-diagnostics/phase-05-bundle-correlation-engine.md) · [Code review](../plans/reports/code-review-260913-2327-phase-05-bundle-correlation-engine-cycle2.md).
@@ -32,6 +50,15 @@
 
 - **Production idle-suspend diagnostics — Phase 02 canonical event foundation complete (2026-09-13).** Added the closed canonical event model, boot/producer identity, checked sequence and UUID correlation primitives, plus a bounded mode-0600 no-follow synced JSONL writer. Existing untagged server-audit behavior remains unchanged; at that point Phases 03–07 were pending.
 - Validation passed: canonical event tests **11/11**, server-audit compatibility **1/1**, and full `idle_suspend::` module **143/143**; code review approved **9.5/10** with no critical findings. [Phase 02 test report](../plans/reports/tester-260913-1637-phase02-canonical-event-foundation.md) · [Code review](../plans/reports/code-review-260913-1639-phase02-event-writer.md).
+
+# 2026-09-12
+
+- **Phase 03: Explorer Context Menu Integration and Test Coverage.** Added "Preview" action with `Eye` icon to `TreeContextMenu.tsx` for HTML files. Integrated preview handler in `FileTree.tsx` guarded by a 5MB size safety threshold (`node.size < 5 * 1024 * 1024`), setting view mode to `"preview"` before triggering `onFileOpen`. Introduced `HTML_VIEW_MODE_CHANGED_EVENT` (`dam-hopper:html-view-mode-changed`) dispatched by `saveHtmlViewMode` and observed by `HtmlHost.tsx` to ensure mounted tabs immediately switch to preview mode when launched from Explorer.
+- Validation: Vitest unit tests **55/55 passed** across context menu consumers, TreeContextMenu, HtmlHost, HtmlPreview, html-file, and html-view-mode-persistence test suites. Chromium browser tests **10/10 passed** in `consumer-context-menu.browser.tsx` verifying context menu preview rendering, file opening, preference persistence, and non-HTML filtering. UI build (`tsc -p tsconfig.json`) passed cleanly. [Phase 03 Plan](../plans/260912-2240-explorer-html-preview/phase-03-explorer-menu-and-tests.md).
+- **Phase 02: HtmlHost Editor Component and EditorTabs Routing.** Added `HtmlHost.tsx` containing Edit | Split | Preview mode toggle controls, lazy-loaded MonacoHost editor integration, and `HtmlPreview` pane. Implemented Edit mode (100% Monaco), Split mode (50/50 Monaco and sandboxed preview with divider), and Preview mode (100% sandboxed preview), with preferences persisted to `dam-hopper:html-view-mode:v1` and support for `initialMode` overrides. Integrated lazy-loaded `HtmlHost` routing with Suspense in `EditorTabs.tsx` for HTML files matching `isHtmlFile(activeTab.name)`.
+- Validation: Vitest unit tests **6/6 passed** in `HtmlHost.test.tsx` (default mode rendering, initialMode override, mode toggling, preference persistence, readOnly propagation). Full suite across HTML preview helpers and components **28/28 passed**. TypeScript compilation passed. [Phase 02 Plan](../plans/260912-2240-explorer-html-preview/phase-02-html-host-and-editor-tabs.md).
+- **Phase 01: HTML File Helper, Mode Persistence, and Sandboxed HtmlPreview.** Added `html-file.ts` with case-insensitive `.html`/`.htm`/`.xhtml` detection and MIME resolution, `html-view-mode-persistence.ts` storing `"edit" | "split" | "preview"` mode under `dam-hopper:html-view-mode:v1` (defaulting to `"edit"`), and the sandboxed `HtmlPreview.tsx` iframe component with `sandbox="allow-scripts allow-modals"` (opaque origin isolation), 200ms debounce, and reload button. Also resolved timer typing in `use-clipboard.ts`.
+- Validation: Vitest unit and component tests **22/22 passed** across `html-file.test.ts`, `html-view-mode-persistence.test.ts`, and `HtmlPreview.test.tsx`. TypeScript build (`tsc -p tsconfig.json`) passed cleanly. [Phase 01 Plan](../plans/260912-2240-explorer-html-preview/phase-01-helpers-and-html-preview.md).
 
 # 2026-09-11
 
@@ -91,6 +118,9 @@
 - Validation passed: systemd unit verification, release/unit-policy tests, idle-suspend tests, and boundary checks **102/102**; cycle-2 review approved **10/10**. Release-manager staging, lifecycle, and end-to-end phases remain pending.
 
 # 2026-09-07
+
+- **Plan item notes and editing.** Restored selected Plan item note rendering with multiline bodies, semantic timestamps, and per-note deletion. Added inline title/summary editing across desktop Deck and compact Sheet, reusing existing workflow PATCH/delete-note mutations with fresh request IDs and exact CAS timestamps.
+- Validation: focused workflow Vitest suites **27/27 passed** across action hooks, selected-item UI, responsive Surface, Deck, and Sheet. Changed-file TypeScript checks passed; coverage provider unavailable and an unrelated `use-clipboard.ts` type error remains. Code review 8.5/10, no critical issues; asynchronous edit rejection retention remains a non-blocking follow-up. [Plan](../plans/260907-0013-plan-item-notes-and-edit/plan.md) · [QA report](../plans/reports/qa-260907-0029-plan-item-notes-and-edit.md) · [Review report](../plans/reports/code-review-260907-0031-restore-plan-item-notes-and-edit.md).
 
 - **Cross-Origin Port Transport Guard Fix.**
   Aligned privileged mutation CSRF guards on idle-suspend (`force-suspend`, `timing`) and host actions (`intents`, `approve`, `executions`) with validated Bearer authentication and the server's exact CORS origin allowlist (`AppState::origin_is_allowed`).
