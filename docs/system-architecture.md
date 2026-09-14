@@ -72,6 +72,41 @@ legacy config read-only for one-time migration, and refuses unsafe metadata or
 publication races before API start. Phase 02–03 semantic event writing remains
 separate from this gate.
 
+### Phase 03 preflight, installer, and reset boundary (2026-09-14)
+
+Production state has one active authority:
+
+| Concern | Authority and mutation boundary |
+| --- | --- |
+| API startup configuration | `/var/lib/dam-hopper/dam-hopper.toml`, the sole systemd `--config` operand |
+| Server timing/manual audit | `/var/lib/dam-hopper/idle-suspend-audit.jsonl`, API-owned `0600` JSONL |
+| Initial state | The API runtime provisioner at the privileged pre-start; it seeds or performs the validated one-time legacy copy |
+| Normal config updates | Authenticated API, same-directory atomic replacement as the API identity |
+| Release preflight | Read-only SQLite discovery and holder checks before quiesce or service switch |
+| Bootstrap installer | Release staging only; no daemon TOML creation, copy, chmod, chown, or repair |
+| Emergency reset | Canonical config by default; explicit `--config` only for a controlled alternate layout |
+
+For `server` and `both` candidates, preflight opens the canonical TOML first and
+an extant `/etc/dam-hopper/dam-hopper.toml` second with no-follow semantics,
+`fstat` regular-file verification, a 64 KiB read bound, and UTF-8/TOML parsing.
+Unsafe presence (including links, special files, unreadable, oversized, or
+malformed content) fails closed; only a missing file is absent. Each file's
+effective `server.session_db_path` is resolved using the API's fixed
+`HOME`/working directory `/var/lib/dam-hopper`; `~user` syntax is rejected.
+When both TOMLs are absent, preflight includes the canonical default
+`/var/lib/dam-hopper/.config/dam-hopper/sessions.db`; it also retains the
+explicit `/etc/dam-hopper/sessions.db` compatibility candidate during the
+migration window. Paths are normalized and stable-deduplicated, then each
+candidate's database, `-wal`, and `-shm` handles are checked. Web-only
+preflight skips this API-state discovery. No preflight path creates or changes
+files.
+
+The bootstrap installer leaves Server/Both installs pending and contains no
+`/etc` TOML provisioning. The first explicit start invokes the runtime
+provisioner; a Web-only install never provisions API state. The canonical
+server audit and any legacy config/audit remain available for rollback evidence,
+but legacy files are not startup authorities.
+
 ## Server-Authoritative Terminal Idle Suspend Architecture
 
 The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend

@@ -342,30 +342,6 @@ echo "============================================================"
 echo "Staging release ${TAG} for role '${ROLE}' (requires sudo)..."
 echo "============================================================"
 
-if [[ ! -f /etc/dam-hopper/dam-hopper.toml ]]; then
-    if [[ $EUID -eq 0 ]]; then
-        mkdir -p -m 0755 /etc/dam-hopper
-        cat > /etc/dam-hopper/dam-hopper.toml <<'EOF'
-[workspace]
-name = "default"
-EOF
-        chmod 0644 /etc/dam-hopper/dam-hopper.toml
-    else
-        sudo mkdir -p -m 0755 /etc/dam-hopper
-        sudo tee /etc/dam-hopper/dam-hopper.toml >/dev/null <<'EOF'
-[workspace]
-name = "default"
-EOF
-        sudo chmod 0644 /etc/dam-hopper/dam-hopper.toml
-    fi
-fi
-if [[ $EUID -eq 0 ]]; then
-    chmod 0755 /etc/dam-hopper 2>/dev/null || true
-    [[ -f /etc/dam-hopper/dam-hopper.toml ]] && chmod 0644 /etc/dam-hopper/dam-hopper.toml 2>/dev/null || true
-else
-    sudo chmod 0755 /etc/dam-hopper 2>/dev/null || true
-    [[ -f /etc/dam-hopper/dam-hopper.toml ]] && sudo chmod 0644 /etc/dam-hopper/dam-hopper.toml 2>/dev/null || true
-fi
 
 if [[ $EUID -eq 0 ]]; then
     "${INSTALL_CMD[@]}"

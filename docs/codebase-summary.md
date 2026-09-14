@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-14 from `repomix-output.xml` (Repomix v1.18.0; 1,926
-files, 4,245,772 tokens, 17,529,345 characters; five security-flagged files
+**Generated:** 2026-09-14 from `repomix-output.xml` (Repomix v1.18.0; 1,930
+files, 4,260,856 tokens, 17,591,533 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -280,6 +280,27 @@ exactly one canonical `ExecStart` and one zero-operand privileged
 `provision-api-runtime` prestart. Staging renders, parses, and policy-checks
 the same unit; duplicate directives, legacy/alternate paths, and extra
 arguments fail closed. Focused unit-policy/staging evidence records 29/29.
+
+### Phase 03 preflight, installer, and reset boundary (2026-09-14)
+
+`activate_preflight.rs` gates SQLite holder checks only for `server`/`both`
+roles. It inspects canonical `/var/lib/dam-hopper/dam-hopper.toml` first and
+the extant `/etc/dam-hopper/dam-hopper.toml` migration source second, using
+no-follow regular-file descriptors, a 64 KiB bound, UTF-8/TOML parsing, and
+fixed API `HOME`/working-directory path semantics. Unsafe presence fails closed;
+missing is the only absence state. Missing keys use the schema default for that
+config; when both TOMLs are absent, the canonical default is included. Results
+retain the migration-window `/etc/dam-hopper/sessions.db` fallback, with
+stable-deduplicated DB, `-wal`, and `-shm` holder checks without filesystem mutation.
+
+The bootstrap installer stages release-manager bytes only. It does not create,
+copy, chmod, chown, or repair daemon TOML; first `server`/`both` start invokes
+the runtime provisioner, while `web` remains API-state-free. The reset tool
+defaults to the canonical config, refuses unsafe metadata, and performs a
+same-directory atomic replacement as the exact API identity, preserving
+`0600` ownership/mode and parseable TOML. Dry-run is observation-only; helper
+units, audits, and foreign RTC alarms remain preserved. Clean-install,
+security, and reset smoke journeys pin these boundaries.
 
 ## Frontend architecture
 

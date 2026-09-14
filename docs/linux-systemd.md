@@ -565,24 +565,22 @@ or real RTC hardware; qualify a real host separately.
 
 ### 11.4 Rollback and Emergency Reset
 
-To completely disenroll the privileged helper, revert configuration, and restore host integrity:
-
+To disenroll the helper and disable idle suspend, verify no active/in-flight handoff, then run:
 ```bash
-# Dry-run simulation:
-./deploy/reset-linux-production.sh --dry-run
-
-# Full production reset (requires root):
-sudo ./deploy/reset-linux-production.sh
+./deploy/reset-linux-production.sh --dry-run --config /var/lib/dam-hopper/dam-hopper.toml
+sudo ./deploy/reset-linux-production.sh --config /var/lib/dam-hopper/dam-hopper.toml
 ```
+The default is `/var/lib/dam-hopper/dam-hopper.toml`; normal changes use authenticated API writes, not root file replacement. The live reset parses the installed API unit's exact non-root `User=`/`Group=`, refuses missing/link/non-regular or wrong-owner/group/mode (`0600`) files, and never repairs unsafe metadata. It drops to that API identity, writes a mode-`0600` same-directory temporary, `fsync`s, atomically renames, syncs the parent, and verifies parseable TOML with `[server.idle_suspend] enabled = false`.
+If dry-run refuses, inspect `systemctl cat dam-hopper-api.service` and `stat`, restore trusted content/metadata through a controlled API-identity repair procedure, rerun dry-run, then run live reset. Preserve canonical/legacy config evidence, `/var/lib/dam-hopper/idle-suspend-audit.jsonl`, helper audit, and foreign RTC alarms.
 
 Rollback guarantees:
+1. Reset leaves services untouched until metadata and handoff checks pass.
+2. It atomically disables `enabled = false` under `[server.idle_suspend]`.
+3. It stops/disables helper units and removes only manifest-owned helper assets.
+4. It preserves external RTC alarms.
+5. It runs `systemctl daemon-reload` after unit removal.
+6. It preserves audit logs for post-mortem analysis.
 
-1. The operator first verifies the authoritative server status has no active or in-flight handoff. The reset script checks socket presence only; it cannot inspect coordinator state.
-2. Atomically disables `enabled = false` under `[server.idle_suspend]`.
-3. Stops and disables the manager-managed helper service; it also stops, disables, and removes the optional helper socket unit when present.
-4. Preserves external RTC alarms (never clears unrelated alarms).
-5. Removes only manifest-owned helper assets and runs `systemctl daemon-reload`.
-6. Preserves audit logs for post-mortem operator analysis.
 
 ### 11.5 Manual Force Sleep Qualification & Canary Runbook
 

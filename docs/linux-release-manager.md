@@ -98,6 +98,61 @@ fails, the API records a sanitized diagnostic and continues without semantic
 event emission; the missing producer evidence is therefore partial rather than
 silently redirected.
 
+### Phase 03 preflight SQLite migration protection
+
+`validate_candidate_preflight` and active-start preflight discover SQLite
+holders only for `server`/`both`; `web` reads no API state. Discovery is
+read-only and completes before quiesce, stop, or switch:
+
+1. Inspect canonical `/var/lib/dam-hopper/dam-hopper.toml`, then extant
+   `/etc/dam-hopper/dam-hopper.toml`, with no-follow open, descriptor `fstat`,
+   regular-file check, 64 KiB bound, UTF-8 decode, and TOML parse.
+2. Only `ENOENT` is absent. Links, special/unreadable/oversized/malformed
+   files, or inspection errors refuse even when the other file is valid.
+3. Resolve each `server.session_db_path` with API semantics: `~` and plain
+   relative paths use fixed `/var/lib/dam-hopper` HOME/working directory;
+   absolute paths remain unchanged; `~user` is rejected. A missing key uses
+   that file's schema default.
+4. If both TOMLs are absent, include
+   `/var/lib/dam-hopper/.config/dam-hopper/sessions.db`; retain explicit
+   `/etc/dam-hopper/sessions.db` during migration. Normalize and
+   stable-deduplicate candidates.
+5. Check each candidate plus `-wal`/`-shm` sidecars with the existing foreign
+   holder verifier; only allowed API PIDs are exempt.
+
+Preflight never creates, edits, chmods, chowns, or deletes config/database
+files. Canonical TOML is startup authority; legacy TOML is safety coverage and
+copy-once migration source only.
+
+This is intentionally broader than provisioning: canonical presence suppresses
+legacy copying in the runtime gate, but Phase 03 preflight still inspects an
+extant legacy TOML for SQLite holder safety.
+
+### Installer and reset ownership boundary
+
+`dam-hopper-install.sh` verifies assets and stages a pending release only. It
+does not provision/repair daemon TOML under `/etc` or `/var/lib`;
+`server`/`both` first provision fixed state at explicit `sudo dam-hopper start`,
+while `web` never invokes the provisioner.
+
+Reset defaults to `/var/lib/dam-hopper/dam-hopper.toml`; explicit `--config`
+is for controlled alternate layouts. It parses the installed API unit for the
+exact non-root `User=`/`Group=`, refuses absent/link/non-regular or
+wrong-owner/group/mode (`0600`) files, and never repairs those preconditions.
+With safe metadata it drops to the API identity, same-directory atomically
+replaces the file, verifies parseable TOML and
+`server.idle_suspend.enabled = false`, and preserves helper/server audits and
+foreign RTC alarms.
+
+Operator repair: confirm no handoff; record canonical/legacy config and audit
+paths; inspect `systemctl cat dam-hopper-api.service` and `stat`; restore
+trusted content/metadata through a controlled API-identity procedure (reset
+must not normalize mismatches); rerun
+`./deploy/reset-linux-production.sh --dry-run`; then run live reset as root
+and verify API `0600` ownership, parseable disabled TOML, preserved audits/RTC,
+and stopped helper units before restarting the API.
+
+
 ## Bootstrap handoff (Phase 06)
 
 The published `dam-hopper-install.sh` is a non-root wrapper around this
@@ -388,7 +443,8 @@ cargo test -p dam-hopper-server \
   --test linux_release_staging \
   --test linux_release_ownership \
   --test linux_release_state_machine \
-  --test linux_release_publisher_contract
+  --test linux_release_publisher_contract \
+  --test linux_release_preflight_sqlite
 cargo test -p dam-hopper-server linux_release::api_runtime::tests
 cargo test -p dam-hopper-server \
   idle_suspend::tests::test_server_audit_preprovisioned_contract
@@ -410,15 +466,14 @@ The migration checker validates owner-supplied evidence structure and digest
 binding. It does not embed a GitHub DSSE/certificate trust root or synthesize
 target inventory. External attestation verification remains a prerequisite;
 the protected stable publish job is held when migration evidence is absent.
-The final bounded Phase 03 qualification (2026-09-13) recorded 84 passed, 0
-failed, and 0 ignored across the seven focused Rust integration suites listed
-above. `pnpm release:verify` passed, and `pnpm test:deploy` passed all six
-deployment journeys. This approval is limited to the bounded checker and
-runtime qualification; stable publication, external trust-root verification,
-authoritative target-inventory integration, and workflow deep validation remain
-separate gates.
-Run the focused commands above for current counts rather than relying on
-historical phase totals.
+The earlier bounded Phase 03 qualification (2026-09-13) recorded 84 passed, 0
+failed, and 0 ignored across the seven release-manager integration suites
+available at that time. `pnpm release:verify` passed, and the package's
+`pnpm test:deploy` command invokes seven deployment journeys, including clean
+install, security, and reset smoke. Re-run the focused commands and the
+protected runtime matrix for current Phase 03 evidence; stable publication,
+external trust-root verification, authoritative target-inventory integration,
+and workflow deep validation remain separate gates.
 
 `server/tests/linux_release_staging.rs` checks helper/API staging for a server
 role, helper hardening and fixed socket/audit/enrolled-PID arguments, API

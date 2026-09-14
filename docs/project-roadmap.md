@@ -4,9 +4,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### System daemon state configuration migration (2026-09-14)
 
-- **Plan status: IN PROGRESS (3/4 phases; 30/44h).** Phase 00 merge
-  reconciliation, Phase 01 runtime provisioning, and Phase 02 systemd/unit
-  policy alignment are complete; Phase 03 remains pending.
+- **Plan status: COMPLETE (4/4 phases; 44/44h).** Phases 00–03 are complete as of 2026-09-14; the daemon-state cutover is ready for controlled rollout.
 - **Phase 00 — DONE (2026-09-14; 100%; 6/6h):** Reconciled `origin/main` into
   `feat/terminal-idle-suspend` while preserving refusal-based descriptor
   provisioning (no recursive `chown`), aligning API systemd template/unit policy,
@@ -31,13 +29,19 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   Focused unit-policy and staging gates passed **29/29**; cycle-2 review
   approved **10/10**. See the [Phase 02 plan](../plans/260914-0854-system-daemon-state-config/phase-02-systemd-unit-template-checked-in-unit-and-policy.md)
   and [code review](../plans/reports/code-review-260914-1805-phase02-systemd-unit-template-and-policy-cycle2.md).
-- **Next step:** Begin Phase 03 — Preflight, scripts, and smoke tests. Update
-  preflight SQLite discovery to protect both migration candidates, update
-  installer/reset scripts, and execute deployment smoke journeys.
+- **Phase 03 — DONE (2026-09-14; 100%; 14/14h):** Added role-gated, read-only canonical/legacy SQLite discovery with bounded no-follow TOML inspection, stable candidate deduplication, and DB/WAL/SHM holder protection. The bootstrap installer now stages only; it does not provision daemon TOML. Reset defaults to the canonical API config and uses refusal-based, API-identity atomic disablement. Clean-install, security, reset, rootless, migration, and release-artifact checks pin the boundaries.
+- Local qualification passed 11/11 Rust preflight tests and seven deploy journeys; Cycle-2 review approved **10/10** with no critical issues, warnings, or unresolved questions. Protected Fedora runtime scenarios require dedicated runner hooks and are not claimed as local execution.
+- Operator documentation and release notes were refreshed; the final documentation validator passed **327 internal links across 29 files**.
+- [Phase 03 plan](../plans/260914-0854-system-daemon-state-config/phase-03-preflight-installer-reset-and-smoke-tests.md) ·
+  [Cycle-2 review](../plans/reports/code-review-260914-2028-phase03-preflight-installer-reset-and-smoke.md).
+- **Plan completion:** 4/4 phases complete; 44/44h delivered (2026-09-14).
+- **Next step:** Controlled rollout: preserve canonical and legacy/audit rollback evidence, deploy to one disposable/canary Server host, verify authenticated config PUT plus restart, then expand. Legacy source/fallback retirement remains a separately reviewed change.
 - **Scope:** Phase 00 changes merge state and documentation only; Phase 01
   completes fixed runtime layout/provisioning; Phase 02 completes the
-  systemd/unit policy cutover. The daemon-state cutover still requires Phase
-  03.
+  systemd/unit policy cutover; Phase 03 completes preflight, installer/reset,
+  smoke qualification, release-artifact synchronization, and operator
+  documentation. Legacy source/fallback retirement remains a separately
+  reviewed change.
 - [Plan](../plans/260914-0854-system-daemon-state-config/plan.md) ·
   [Phase 01 plan](../plans/260914-0854-system-daemon-state-config/phase-01-layout-and-descriptor-relative-runtime-provisioning.md) ·
   [Phase 01 test report](../plans/reports/tester-260914-1417-phase01-layout-runtime-provisioning.md) ·
