@@ -511,6 +511,12 @@ fn validate(path: &'static str, stat: Stat, expected: (ObjectType, u32, u32, u32
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingDirModePolicy {
+    Exact,
+    TightenFrom(u32),
+}
+
 fn ensure_dir<S: RuntimeSyscalls>(
     sys: &S,
     parent: RawFd,
@@ -519,13 +525,27 @@ fn ensure_dir<S: RuntimeSyscalls>(
     uid: u32,
     gid: u32,
     mode: u32,
+    policy: ExistingDirModePolicy,
     created: &mut Vec<CreatedObject>,
 ) -> Result<DirFd, ReleaseError> {
     let expected = (ObjectType::Directory, uid, gid, mode);
     let mut created_index = None;
     let fd = match sys.stat_at(parent, name) {
         Ok(stat) => {
-            validate(path, stat, expected)?;
+            match policy {
+                ExistingDirModePolicy::Exact => {
+                    validate(path, stat, expected)?;
+                }
+                ExistingDirModePolicy::TightenFrom(legacy_mode) => {
+                    if stat.object_type != ObjectType::Directory
+                        || stat.uid != uid
+                        || stat.gid != gid
+                        || (stat.mode != mode && stat.mode != legacy_mode)
+                    {
+                        return Err(mismatch(path, expected, stat));
+                    }
+                }
+            }
             sys.open_dir_at(parent, name)
                 .map_err(|e| io_error(path, "open directory", e))?
         }
@@ -555,6 +575,21 @@ fn ensure_dir<S: RuntimeSyscalls>(
             .map_err(|e| io_error(path, "set directory ownership", e))?;
         sys.chmod(guard.0, mode)
             .map_err(|e| io_error(path, "set directory mode", e))?;
+    } else if let ExistingDirModePolicy::TightenFrom(legacy_mode) = policy {
+        let current_stat = sys
+            .fstat(guard.0)
+            .map_err(|e| io_error(path, "verify directory metadata", e))?;
+        if current_stat.object_type != ObjectType::Directory
+            || current_stat.uid != uid
+            || current_stat.gid != gid
+            || (current_stat.mode != mode && current_stat.mode != legacy_mode)
+        {
+            return Err(mismatch(path, expected, current_stat));
+        }
+        if current_stat.mode == legacy_mode {
+            sys.chmod(guard.0, mode)
+                .map_err(|e| io_error(path, "tighten directory mode", e))?;
+        }
     }
     let stat = sys
         .fstat(guard.0)
@@ -833,10 +868,30 @@ fn provision_with<S: RuntimeSyscalls>(
     let mut created = Vec::new();
     let mut dir_guards = Vec::new();
     let result = (|| {
-        let var = ensure_dir(sys, root_guard.0, "var", VAR_PATH, 0, 0, ROOT_DIR_MODE, &mut created)?;
+        let var = ensure_dir(
+            sys,
+            root_guard.0,
+            "var",
+            VAR_PATH,
+            0,
+            0,
+            ROOT_DIR_MODE,
+            ExistingDirModePolicy::Exact,
+            &mut created,
+        )?;
         let var_fd = var.0;
         dir_guards.push(var);
-        let var_lib = ensure_dir(sys, var_fd, "lib", VAR_LIB_PATH, 0, 0, ROOT_DIR_MODE, &mut created)?;
+        let var_lib = ensure_dir(
+            sys,
+            var_fd,
+            "lib",
+            VAR_LIB_PATH,
+            0,
+            0,
+            ROOT_DIR_MODE,
+            ExistingDirModePolicy::Exact,
+            &mut created,
+        )?;
         let var_lib_fd = var_lib.0;
         dir_guards.push(var_lib);
         let state = ensure_dir(
@@ -847,6 +902,7 @@ fn provision_with<S: RuntimeSyscalls>(
             identity.uid,
             identity.gid,
             API_DIR_MODE,
+            ExistingDirModePolicy::TightenFrom(0o755),
             &mut created,
         )?;
         let state_fd = state.0;
@@ -859,6 +915,7 @@ fn provision_with<S: RuntimeSyscalls>(
             identity.uid,
             identity.gid,
             API_DIR_MODE,
+            ExistingDirModePolicy::Exact,
             &mut created,
         )?;
         let dot_config_fd = dot_config.0;
@@ -871,6 +928,7 @@ fn provision_with<S: RuntimeSyscalls>(
             identity.uid,
             identity.gid,
             API_DIR_MODE,
+            ExistingDirModePolicy::Exact,
             &mut created,
         )?;
         dir_guards.push(config);
@@ -1688,7 +1746,7 @@ mod tests {
         let (_tmp, layout, fake, identity) = provisioned_fake();
         let valid = fake.stat_for(API_STATE_PATH).unwrap();
         let mut invalid = valid;
-        invalid.mode = 0o755;
+        invalid.mode = 0o750;
         fake.set_stat(API_STATE_PATH, invalid);
         fake.clear_calls();
         assert!(provision_with(&layout, &identity, &fake).is_err());
@@ -1697,6 +1755,51 @@ mod tests {
         fake.set_stat(API_STATE_PATH, valid);
         fake.clear_calls();
         provision_with(&layout, &identity, &fake).unwrap();
+        assert_no_mutation(&fake.calls());
+    }
+
+    #[test]
+    fn legacy_state_root_mode_0755_is_tightened_to_0700_and_subsequent_runs_are_read_only() {
+        let (_tmp, layout, fake, identity) = provisioned_fake();
+        let valid = fake.stat_for(API_STATE_PATH).unwrap();
+        let mut legacy = valid;
+        legacy.mode = 0o755;
+        fake.set_stat(API_STATE_PATH, legacy);
+        fake.clear_calls();
+
+        provision_with(&layout, &identity, &fake).unwrap();
+        assert_eq!(fake.stat_for(API_STATE_PATH).unwrap().mode, 0o700);
+        let chmod_calls: Vec<_> = fake
+            .calls()
+            .into_iter()
+            .filter(|c| c.operation == "chmod" && c.path == API_STATE_PATH)
+            .collect();
+        assert_eq!(chmod_calls.len(), 1);
+
+        fake.clear_calls();
+        provision_with(&layout, &identity, &fake).unwrap();
+        assert_no_mutation(&fake.calls());
+    }
+
+    #[test]
+    fn legacy_state_root_mode_0755_with_wrong_owner_or_non_directory_is_refused() {
+        let (_tmp, layout, fake, identity) = provisioned_fake();
+        let valid = fake.stat_for(API_STATE_PATH).unwrap();
+        let mut invalid = valid;
+        invalid.mode = 0o755;
+        invalid.uid = valid.uid + 1;
+        fake.set_stat(API_STATE_PATH, invalid);
+        fake.clear_calls();
+
+        assert!(provision_with(&layout, &identity, &fake).is_err());
+        assert_no_mutation(&fake.calls());
+
+        invalid.uid = valid.uid;
+        invalid.object_type = ObjectType::Symlink;
+        fake.set_stat(API_STATE_PATH, invalid);
+        fake.clear_calls();
+
+        assert!(provision_with(&layout, &identity, &fake).is_err());
         assert_no_mutation(&fake.calls());
     }
 

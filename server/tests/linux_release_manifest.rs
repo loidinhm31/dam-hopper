@@ -144,6 +144,7 @@ pub fn create_valid_manifest() -> ReleaseManifest {
         services: ServicesMeta {
             api: ApiServiceContract {
                 unit_name: API_SERVICE_UNIT.to_string(),
+                identity: None,
                 bind_host: API_SERVICE_BIND_HOST.to_string(),
                 port: API_SERVICE_PORT,
                 health_path: API_SERVICE_HEALTH_PATH.to_string(),
@@ -226,4 +227,78 @@ fn test_release_and_manager_state_versions_are_independent() {
         ManagerState::new().schema_version,
         MANAGER_STATE_SCHEMA_VERSION
     );
+}
+
+#[test]
+fn test_installed_release_accepts_v1_manifest_with_root_identity() {
+    let mut manifest = create_valid_manifest();
+    manifest.schema_version = 1;
+    manifest.services.api.identity = Some("root".to_string());
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+
+    // Strict parser rejects v1
+    assert!(matches!(
+        ReleaseManifest::parse_and_validate(&bytes),
+        Err(ReleaseError::InvalidSchemaVersion {
+            expected: 2,
+            got: 1,
+        })
+    ));
+
+    // Installed-release parser accepts v1
+    let parsed = ReleaseManifest::parse_and_validate_installed_release(&bytes).unwrap();
+    assert_eq!(parsed.schema_version, 1);
+    assert_eq!(parsed.services.api.identity.as_deref(), Some("root"));
+}
+
+#[test]
+fn test_installed_release_rejects_v1_with_invalid_identity() {
+    let mut manifest = create_valid_manifest();
+    manifest.schema_version = 1;
+    manifest.services.api.identity = Some("dam-hopper".to_string());
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    assert!(matches!(
+        ReleaseManifest::parse_and_validate_installed_release(&bytes),
+        Err(ReleaseError::ServiceContractMismatch {
+            service: "api",
+            field: "identity",
+            ..
+        })
+    ));
+
+    manifest.services.api.identity = None;
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    assert!(matches!(
+        ReleaseManifest::parse_and_validate_installed_release(&bytes),
+        Err(ReleaseError::ServiceContractMismatch {
+            service: "api",
+            field: "identity",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn test_v2_manifest_serialization_omits_api_identity() {
+    let manifest = create_valid_manifest();
+    let json_str = serde_json::to_string(&manifest).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert!(v["services"]["api"].get("identity").is_none());
+    assert_eq!(v["services"]["web"]["identity"], "dam-hopper-web");
+}
+
+#[test]
+fn test_installed_release_rejects_unsupported_schemas() {
+    for unsupported_version in [0, 3] {
+        let mut manifest = create_valid_manifest();
+        manifest.schema_version = unsupported_version;
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        assert!(matches!(
+            ReleaseManifest::parse_and_validate_installed_release(&bytes),
+            Err(ReleaseError::InvalidSchemaVersion {
+                expected: 2,
+                got,
+            }) if got == unsupported_version
+        ));
+    }
 }

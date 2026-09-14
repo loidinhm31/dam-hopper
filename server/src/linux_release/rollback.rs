@@ -76,7 +76,7 @@ fn stage_previous_release_candidate(
         action: "read previous release manifest for rollback",
         details: e.to_string(),
     })?;
-    let manifest = ReleaseManifest::parse_and_validate(&manifest_bytes)?;
+    let manifest = ReleaseManifest::parse_and_validate_installed_release(&manifest_bytes)?;
     if manifest.release.tag != release.tag || manifest.release.version != release.version {
         return Err(ReleaseError::Config(
             "previous release metadata does not match its release manifest".into(),

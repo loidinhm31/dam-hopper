@@ -101,7 +101,11 @@ fn test_reject_removed_api_identity() {
     let bytes = serde_json::to_vec(&val).unwrap();
     assert!(matches!(
         ReleaseManifest::parse_and_validate(&bytes),
-        Err(ReleaseError::JsonDeserialization(_))
+        Err(ReleaseError::ServiceContractMismatch {
+            service: "api",
+            field: "identity",
+            ..
+        })
     ));
 }
 
