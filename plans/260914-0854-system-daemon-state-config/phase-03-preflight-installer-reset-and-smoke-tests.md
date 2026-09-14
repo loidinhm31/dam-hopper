@@ -5,14 +5,14 @@
 - [Plan](plan.md)
 - [Phase 01](phase-01-layout-and-descriptor-relative-runtime-provisioning.md) · [Phase 02](phase-02-systemd-unit-template-checked-in-unit-and-policy.md)
 - [Scout report](agent://ScoutConfigUsage)
-- [Research report](../reports/researcher-260914-0854-daemon-state-config.md)
+- [Research report](../reports/researcher-260914-0854-daemon-state-config.md) · [Review Cycle 1](../reports/code-review-260914-1936-phase03-preflight-installer-reset-and-smoke.md) · [Review Cycle 2](../reports/code-review-260914-2028-phase03-preflight-installer-reset-and-smoke.md)
 - [`activate_preflight.rs`](../../server/src/linux_release/activate_preflight.rs) · [`dam-hopper-install.sh`](../../deploy/release/dam-hopper-install.sh) · [`reset-linux-production.sh`](../../deploy/reset-linux-production.sh)
-- [Protected runtime smoke](../../tests/deploy/linux-release-protected-runtime.sh) · [Deployment security smoke](../../tests/deploy/linux-release-security.sh)
+- [Protected runtime smoke](../../tests/deploy/linux-release-protected-runtime.sh) · [Deployment security smoke](../../tests/deploy/linux-release-security.sh) · [Reset smoke](../../tests/deploy/linux-release-reset-smoke.sh)
 
 ## Overview
 
 - Priority: P2
-- Status: pending
+- Status: DONE (2026-09-14)
 - Effort: 14h
 - Goal: make preflight protect every SQLite candidate during the migration window, remove shell provisioning/repair, make reset mutate canonical config without breaking ownership, and qualify the cutover through focused and real-host journeys.
 - Dependencies: Phase 01 accessors/metadata contract and Phase 02 exact unit command.
@@ -66,13 +66,13 @@
 
 ### Side-Effect Review Checklist
 
-- [ ] Preflight reads only, server roles only, before any service lifecycle mutation.
-- [ ] Installer never seeds, copies, chmods, or chowns daemon TOML in `/etc` or `/var/lib`.
-- [ ] Reset config replacement runs as final API identity and never repairs unsafe metadata.
-- [ ] No smoke touches a nondisposable host; privileged scenarios require existing protected snapshot guard/hooks.
-- [ ] Rootless explicit config, format-2 migration fixture paths, host files, environment files, helper audit/protocol, and generic config discovery are unchanged.
-- [ ] Old audit/config sources are preserved for rollback evidence; docs clearly distinguish inactive legacy source from canonical authority.
-- [ ] Generated release output is regenerated/compared, not edited as a second source.
+- [x] Preflight reads only, server roles only, before any service lifecycle mutation.
+- [x] Installer never seeds, copies, chmods, or chowns daemon TOML in `/etc` or `/var/lib`.
+- [x] Reset config replacement runs as final API identity and never repairs unsafe metadata.
+- [x] No smoke touches a nondisposable host; privileged scenarios require existing protected snapshot guard/hooks.
+- [x] Rootless explicit config, format-2 migration fixture paths, host files, environment files, helper audit/protocol, and generic config discovery are unchanged.
+- [x] Old audit/config sources are preserved for rollback evidence; docs clearly distinguish inactive legacy source from canonical authority.
+- [x] Generated release output is regenerated/compared, not edited as a second source.
 
 ## Architecture
 
@@ -125,15 +125,39 @@ Canonical is startup authority; legacy inspection is temporary safety coverage a
 
 ## Todo list
 
-- [ ] Implement role-aware canonical+legacy SQLite discovery.
-- [ ] Prove DB/WAL/SHM holder coverage and unsafe-candidate refusal.
-- [ ] Remove installer TOML provisioning/repair.
-- [ ] Make reset canonical, atomic, and API-identity preserving.
-- [ ] Extend clean-install and security smoke.
-- [ ] Extend protected migration/runtime smoke matrix.
-- [ ] Preserve rootless and historical format-2 contracts.
-- [ ] Regenerate release artifact and update architecture/runbooks.
-- [ ] Complete final side-effect review and stale-path audit.
+- [x] Implement role-aware canonical+legacy SQLite discovery.
+- [x] Prove DB/WAL/SHM holder coverage and unsafe-candidate refusal.
+- [x] Remove installer TOML provisioning/repair.
+- [x] Make reset canonical, atomic, and API-identity preserving.
+- [x] Extend clean-install and security smoke.
+- [x] Extend protected migration/runtime smoke matrix.
+- [x] Preserve rootless and historical format-2 contracts.
+- [x] Regenerate release artifact and update architecture/runbooks.
+- [x] Complete final side-effect review and stale-path audit.
+
+**Completion:** 9/9 todo items complete (2026-09-14). Cycle 2 review approved the implementation 10/10 with no critical issues, warnings, or unresolved questions.
+
+## Final test evidence
+
+All evidence below was recorded on 2026-09-14 in the [Phase 03 Cycle 2 review](../reports/code-review-260914-2028-phase03-preflight-installer-reset-and-smoke.md):
+
+| Command | Result |
+| --- | --- |
+| `cargo test --test linux_release_preflight_sqlite` | PASS — 11/11 |
+| `bash -n deploy/release/*.sh deploy/*.sh tests/deploy/*.sh` | PASS |
+| `bash tests/deploy/linux-release-clean-install.sh` | PASS |
+| `bash tests/deploy/linux-release-security.sh` | PASS |
+| `bash tests/deploy/linux-release-reset-smoke.sh` | PASS |
+| `bash tests/deploy/linux-release-upgrade-rollback.sh` | PASS |
+| `bash tests/deploy/linux-release-crash-recovery.sh` | PASS |
+| `bash tests/deploy/linux-release-web-contract.sh` | PASS |
+| `bash tests/deploy/fedora44-format2-migration.sh` | PASS |
+| `bash tests/deploy/linux-release-rootless-smoke.sh` | PASS |
+| `diff -u deploy/release/dam-hopper-install.sh artifacts/final/dam-hopper-install.sh` | PASS — identical |
+
+Review also confirmed zero-mutation preflight behavior, canonical/legacy SQLite holder coverage, installer no-provisioning behavior, API-identity-preserving reset, and synchronized release artifacts.
+Local qualification covered the 11 Rust preflight tests and seven deploy journeys; the protected Fedora runtime scenarios require the dedicated runner hooks and are not claimable from this worktree.
+Documentation finalization passed the fallback validator with 327 internal links across 29 files; the refreshed Repomix/codebase summary and operator docs are synchronized.
 
 ## Success Criteria
 
@@ -165,6 +189,6 @@ Canonical is startup authority; legacy inspection is temporary safety coverage a
 
 ## Next steps
 
-After all scoped and protected proofs pass, update plan status/evidence and prepare release rollout: back up canonical and preserved legacy/audit files, deploy to one disposable/canary Server host, verify config PUT plus restart, then expand. Legacy source/fallback retirement is a separate clean-cut change after rollback window and fleet inventory confirm no old daemon or `/etc` DB holders.
+After Phase 03 completion, the migration plan is ready for controlled rollout: preserve canonical and legacy/audit rollback evidence, deploy to one disposable/canary Server host, verify authenticated config PUT plus restart, then expand. Legacy source/fallback retirement remains a separate clean-cut change after the rollback window and fleet inventory confirm no old daemon or `/etc` DB holders.
 
 **Unresolved questions:** None.

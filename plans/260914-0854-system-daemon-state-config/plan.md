@@ -1,7 +1,7 @@
 ---
 title: "System daemon state configuration migration"
 description: "Move production API configuration and adjacent server audit from /etc into refusal-provisioned daemon state under /var/lib/dam-hopper."
-status: in-progress
+status: completed
 priority: P2
 effort: 44h
 branch: feat/terminal-idle-suspend
@@ -17,10 +17,11 @@ Make `/var/lib/dam-hopper/dam-hopper.toml` the sole production API configuration
 
 ## Status
 
-- **Plan:** in-progress (3/4 phases complete; 30/44h; updated 2026-09-14 19:17:04 +07:00).
+- **Plan:** completed (4/4 phases complete; 44/44h; updated 2026-09-14).
 - **Phase 01:** DONE (2026-09-14; 100%; 18/18h). Focused runtime/layout and diagnostics evidence is recorded in the [test report](../reports/tester-260914-1417-phase01-layout-runtime-provisioning.md) and [code review](../reports/code-review-260914-1421-phase01-layout-runtime-provisioning.md).
 - **Phase 02:** DONE (2026-09-14 19:17:04 +07:00; 100%; 6/6h). Template, checked-in unit, rendered policy, and staging aligned on canonical ExecStart; focused unit-policy/staging gates passed 29/29; [cycle-2 review](../reports/code-review-260914-1805-phase02-systemd-unit-template-and-policy-cycle2.md).
-- **Next:** Phase 03 — Preflight, scripts, and smoke tests.
+- **Phase 03:** DONE (2026-09-14; 100%; 14/14h). Preflight SQLite discovery, installer/reset cutover, release artifact synchronization, and deployment smoke evidence are complete; [cycle-2 review](../reports/code-review-260914-2028-phase03-preflight-installer-reset-and-smoke.md).
+- **Next:** Controlled rollout and canary verification; legacy source/fallback retirement remains a separately reviewed change.
 
 ## Read first
 
@@ -45,9 +46,11 @@ Make `/var/lib/dam-hopper/dam-hopper.toml` the sole production API configuration
 | [00 — Merge origin/main and reconcile conflicts](phase-00-merge-origin-main-and-reconcile-conflicts.md) | completed (2026-09-14; ready to commit) | 6h | origin/main merged; activate.rs chown discarded; docs-manager synthesizes all 10 conflicting docs |
 | [01 — Layout and descriptor-relative runtime provisioning](phase-01-layout-and-descriptor-relative-runtime-provisioning.md) | DONE (2026-09-14; 100%) | 18h | Canonical config/audit are safely provisioned or migrated under API state; mismatch and cleanup behavior proven by fake syscalls |
 | [02 — Systemd units and unit policy](phase-02-systemd-unit-template-checked-in-unit-and-policy.md) | DONE (2026-09-14; 100%) | 6h | Template, checked-in unit, rendered policy, and staging agree on one canonical `ExecStart` |
-| [03 — Preflight, scripts, and smoke tests](phase-03-preflight-installer-reset-and-smoke-tests.md) | pending | 14h | SQLite discovery protects both migration candidates; installer/reset behavior and real deployment journeys prove the cutover |
+| [03 — Preflight, scripts, and smoke tests](phase-03-preflight-installer-reset-and-smoke-tests.md) | DONE (2026-09-14; 100%) | 14h | SQLite discovery protects both migration candidates; installer/reset behavior and deployment smoke journeys prove the cutover |
 
-**Next step:** Begin Phase 03 — Preflight, scripts, and smoke tests. Update preflight SQLite discovery to protect both migration candidates, update installer/reset scripts, and execute deployment smoke journeys.
+**Plan completion:** 4/4 phases complete; 44/44h delivered (2026-09-14).
+
+**Next step:** Controlled rollout: preserve canonical and legacy/audit rollback evidence, deploy to one disposable/canary Server host, verify authenticated config PUT plus restart, then expand. Legacy source/fallback retirement is separate.
 ## Preflight contract
 
 - Server/Both only: safely inspect canonical and any extant legacy TOML; malformed, oversized, unreadable, linked, or non-regular candidates fail before service stop/switch.
@@ -59,10 +62,10 @@ Make `/var/lib/dam-hopper/dam-hopper.toml` the sole production API configuration
 
 - [x] Provisioning mutates only call-created fixed state objects; never repairs/replaces a pre-existing canonical, legacy, or audit object.
 - [x] Failed create cleans only the recorded temporary/inode before publication; races and replacements are retained and reported.
-- [ ] Web-only install creates no API state; installer performs no TOML seed/chmod/chown/copy.
+- [x] Web-only install creates no API state; installer performs no TOML seed/chmod/chown/copy.
 - [x] `PUT /api/config` and reset writes retain API UID:GID `0600` and same-directory atomic replacement capability without sudo.
 - [x] Unit hardening, one privileged prestart, restart behavior, explicit rootless config, host metadata, helper state, and legacy format-2 evidence stay unchanged.
-- [ ] Docs and diagnostics name the new config/audit authorities only after runtime smoke passes.
+- [x] Docs and diagnostics name the new config/audit authorities only after runtime smoke passes.
 
 ## Cross-phase acceptance
 
