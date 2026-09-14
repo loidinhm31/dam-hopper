@@ -1233,10 +1233,16 @@ NOT EXISTS` preserves existing session data.
 Migration 010 does not itself add workflow routes, automatic terminal/agent
 attachment, or inferred session completion.
 
-### PDR: System daemon state configuration (Phase 01)
+### PDR: System daemon state configuration (Phases 01–02)
 
-**Status:** Complete, 2026-09-14  
-**Scope:** Linux release-manager API runtime provisioning
+**Status:** Complete through Phase 02, 2026-09-14  
+**Scope:** Linux release-manager API runtime provisioning and systemd unit policy
+
+Phase 02 binds the template, checked-in unit, rendered policy, and staged API
+unit to one canonical `ExecStart` config operand:
+`/var/lib/dam-hopper/dam-hopper.toml`. The policy requires exactly one
+zero-operand privileged `provision-api-runtime` prestart and exactly one
+canonical `ExecStart`; checked-in and staged units must remain synchronized.
 
 #### Product requirement
 

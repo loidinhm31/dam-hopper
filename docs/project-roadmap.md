@@ -4,13 +4,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### System daemon state configuration migration (2026-09-14)
 
-- **Plan status: IN PROGRESS (2/4 phases; 24/44h).** Phase 00 merge
-  reconciliation and Phase 01 runtime provisioning are complete; Phase 00 remains
-  ready to commit, and Phases 02–03 remain pending.
+- **Plan status: IN PROGRESS (3/4 phases; 30/44h).** Phase 00 merge
+  reconciliation, Phase 01 runtime provisioning, and Phase 02 systemd/unit
+  policy alignment are complete; Phase 03 remains pending.
 - **Phase 00 — DONE (2026-09-14; 100%; 6/6h):** Reconciled `origin/main` into
   `feat/terminal-idle-suspend` while preserving refusal-based descriptor
   provisioning (no recursive `chown`), aligning API systemd template/unit policy,
-  accepting upstream clipboard/`WATCHDOG.yml` changes, and synthesizing all
+  accepting upstream clipboard/`WATCHDOG.yml` changes, and synthesizing all 10
   conflicting docs plus the workflow context page. Cycle-2 review approved
   **10/10** and confirmed 85 staged files, 0 unmerged files, and 0 conflict
   markers. The merge commit remains pending.
@@ -24,20 +24,26 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   plan](../plans/260914-0854-system-daemon-state-config/phase-01-layout-and-descriptor-relative-runtime-provisioning.md),
   [test report](../plans/reports/tester-260914-1417-phase01-layout-runtime-provisioning.md),
   and [code review](../plans/reports/code-review-260914-1421-phase01-layout-runtime-provisioning.md).
-- **Phase 02 — NEXT / PENDING:** Align systemd templates, checked-in units,
-  rendered policy, and staging on one canonical API `ExecStart`.
-- **Next step:** Update the template, checked-in unit, strict policy, and
-  staging together; retain one privileged prestart and all existing identity,
-  hardening, HOME/XDG, and restart contracts.
-- **Phase 03 — PENDING:** Complete preflight, installer/reset behavior, and
-  deployment smoke coverage for canonical/legacy state and SQLite holders.
+- **Phase 02 — DONE (2026-09-14 19:17:04 +07:00; 100%; 6/6h):** Aligned the
+  systemd template, checked-in unit, rendered policy, and staged API unit on
+  `/var/lib/dam-hopper/dam-hopper.toml`; preserved the single privileged
+  prestart, non-root identity, and existing hardening/restart contracts.
+  Focused unit-policy and staging gates passed **29/29**; cycle-2 review
+  approved **10/10**. See the [Phase 02 plan](../plans/260914-0854-system-daemon-state-config/phase-02-systemd-unit-template-checked-in-unit-and-policy.md)
+  and [code review](../plans/reports/code-review-260914-1805-phase02-systemd-unit-template-and-policy-cycle2.md).
+- **Next step:** Begin Phase 03 — Preflight, scripts, and smoke tests. Update
+  preflight SQLite discovery to protect both migration candidates, update
+  installer/reset scripts, and execute deployment smoke journeys.
 - **Scope:** Phase 00 changes merge state and documentation only; Phase 01
-  completes fixed runtime layout/provisioning. The daemon-state cutover still
-  requires Phases 02–03.
+  completes fixed runtime layout/provisioning; Phase 02 completes the
+  systemd/unit policy cutover. The daemon-state cutover still requires Phase
+  03.
 - [Plan](../plans/260914-0854-system-daemon-state-config/plan.md) ·
   [Phase 01 plan](../plans/260914-0854-system-daemon-state-config/phase-01-layout-and-descriptor-relative-runtime-provisioning.md) ·
   [Phase 01 test report](../plans/reports/tester-260914-1417-phase01-layout-runtime-provisioning.md) ·
   [Phase 01 code review](../plans/reports/code-review-260914-1421-phase01-layout-runtime-provisioning.md) ·
+  [Phase 02 plan](../plans/260914-0854-system-daemon-state-config/phase-02-systemd-unit-template-checked-in-unit-and-policy.md) ·
+  [Phase 02 code review](../plans/reports/code-review-260914-1805-phase02-systemd-unit-template-and-policy-cycle2.md) ·
   [Phase 00 plan](../plans/260914-0854-system-daemon-state-config/phase-00-merge-origin-main-and-reconcile-conflicts.md) ·
   [Cycle-2 review](../plans/reports/code-review-260914-1158-phase-00-merge-origin-main-cycle2.md).
 

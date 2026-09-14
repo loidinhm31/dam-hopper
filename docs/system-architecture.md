@@ -743,12 +743,18 @@ implements the host/API/command/output adapters around this pure core.
 | Helper audit                                  | systemd `LogsDirectory=dam-hopper`; helper is `root:API_GROUP` and retains its existing runtime/log/protocol contract |
 
 The API unit has no `StateDirectory=` or `StateDirectoryMode=` directives. Its
-single exact pre-start gate is
-`ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime`.
-The gate has no operands beyond `provision-api-runtime`; systemd reruns it on
-each API start/restart, and API `ExecStart` is unreachable when provisioning
-refuses a mismatch. Activation and rollback therefore provision immediately
-before starting the API. Boot recovery uses
+single privileged pre-start gate is exactly
+`ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime`;
+the gate has no operands beyond `provision-api-runtime`.
+The template's sole API command uses `--config @API_HOME@/dam-hopper.toml`;
+the synchronized checked-in production-default unit resolves it to
+`ExecStart=/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801`.
+`validate_api_unit_policy` requires exactly one `ExecStart` equal to that
+rendered command and rejects legacy/alternate paths, duplicates, or extra
+arguments. Systemd reruns the pre-start on each API start/restart, and API
+`ExecStart` is unreachable when provisioning refuses a mismatch. Activation and
+rollback therefore provision immediately before starting the API.
+Boot recovery uses
 `provision_installed_api_runtime` to reparse the installed API unit and provision
 an active server's fixed paths without starting services; service starts remain
 activation/rollback responsibilities.
