@@ -3,7 +3,7 @@
 use super::constants::MAX_MANIFEST_BYTES;
 use super::error::ReleaseError;
 use super::inventory::{InventoryEntry, TargetRole};
-use super::manifest_validation::validate_manifest_invariants;
+use super::manifest_validation::{validate_installed_manifest_invariants, validate_manifest_invariants};
 use serde::{Deserialize, Serialize};
 
 /// Root release manifest representation.
@@ -67,6 +67,9 @@ pub struct ComponentsMeta {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApiServiceContract {
     pub unit_name: String,
+    /// Manifest v1 read compatibility only. Never runtime identity authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
     pub bind_host: String,
     pub port: u16,
     pub health_path: String,
@@ -107,6 +110,19 @@ impl ReleaseManifest {
             .map_err(|e| ReleaseError::JsonDeserialization(e.to_string()))?;
 
         validate_manifest_invariants(&manifest)?;
+        Ok(manifest)
+    }
+
+    /// Parse and validate an installed release manifest (v1 or v2).
+    pub fn parse_and_validate_installed_release(raw_bytes: &[u8]) -> Result<Self, ReleaseError> {
+        if raw_bytes.len() > MAX_MANIFEST_BYTES {
+            return Err(ReleaseError::PayloadTooLarge(raw_bytes.len()));
+        }
+
+        let manifest: ReleaseManifest = serde_json::from_slice(raw_bytes)
+            .map_err(|e| ReleaseError::JsonDeserialization(e.to_string()))?;
+
+        validate_installed_manifest_invariants(&manifest)?;
         Ok(manifest)
     }
 

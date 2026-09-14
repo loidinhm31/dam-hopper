@@ -267,7 +267,10 @@ The Rust manager is the runtime consumer of Manifest v2:
   after exact API/web health remains stable for 20 consecutive 500 ms probes.
 - `rollback` and `recover` use recorded transaction backups and state; they do
   not reconstruct units or choose a release from `/opt/dam-hopper/current`.
-
+  For managed active/previous release trees referenced by manager state, the
+  manager dual-reads Manifest v1 (`schemaVersion: 1`, legacy API `identity: "root"`)
+  or v2, ensuring safe rollback to installed v0.2.0 releases while external candidate
+  publication and staging remain strictly Manifest v2.
 The manager guide documents the command grammar, state machine, health gate,
 rollback semantics, recovery unit, and filesystem layout:
 [Linux Release Manager](./linux-release-manager.md).

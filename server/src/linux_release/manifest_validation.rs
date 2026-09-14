@@ -6,6 +6,9 @@ use super::inventory::validate_inventory;
 use super::manifest::ReleaseManifest;
 use super::version::*;
 
+/// Legacy systemd execution user for the API server (manifest v1 identity contract).
+pub const LEGACY_API_SERVICE_IDENTITY: &str = "root";
+
 /// Verify all cross-field contract invariants for a decoded release manifest.
 pub fn validate_manifest_invariants(m: &ReleaseManifest) -> Result<(), ReleaseError> {
     if m.schema_version != RELEASE_MANIFEST_SCHEMA_VERSION {
@@ -15,6 +18,25 @@ pub fn validate_manifest_invariants(m: &ReleaseManifest) -> Result<(), ReleaseEr
         });
     }
 
+    validate_manifest_invariants_internal(m, false)
+}
+
+/// Verify contract invariants for an installed release manifest (v1 or v2).
+pub fn validate_installed_manifest_invariants(m: &ReleaseManifest) -> Result<(), ReleaseError> {
+    if m.schema_version != 1 && m.schema_version != RELEASE_MANIFEST_SCHEMA_VERSION {
+        return Err(ReleaseError::InvalidSchemaVersion {
+            expected: RELEASE_MANIFEST_SCHEMA_VERSION,
+            got: m.schema_version,
+        });
+    }
+
+    validate_manifest_invariants_internal(m, true)
+}
+
+fn validate_manifest_invariants_internal(
+    m: &ReleaseManifest,
+    allow_installed_v1: bool,
+) -> Result<(), ReleaseError> {
     validate_version(&m.release.version)?;
     validate_release_tag(&m.release.tag, &m.release.version)?;
     validate_commit_sha(&m.release.commit_sha)?;
@@ -22,7 +44,7 @@ pub fn validate_manifest_invariants(m: &ReleaseManifest) -> Result<(), ReleaseEr
     validate_profile(m)?;
     validate_archive(m)?;
     validate_components(m)?;
-    validate_services(m)?;
+    validate_services(m, allow_installed_v1)?;
     validate_rollback(m)?;
 
     validate_inventory(&m.inventory)?;
@@ -118,8 +140,43 @@ fn validate_components(m: &ReleaseManifest) -> Result<(), ReleaseError> {
     Ok(())
 }
 
-fn validate_services(m: &ReleaseManifest) -> Result<(), ReleaseError> {
+fn validate_services(m: &ReleaseManifest, allow_installed_v1: bool) -> Result<(), ReleaseError> {
     let api = &m.services.api;
+    if m.schema_version == 1 {
+        if !allow_installed_v1 {
+            return Err(ReleaseError::InvalidSchemaVersion {
+                expected: RELEASE_MANIFEST_SCHEMA_VERSION,
+                got: m.schema_version,
+            });
+        }
+        match api.identity.as_deref() {
+            Some(LEGACY_API_SERVICE_IDENTITY) => {}
+            Some(got) => {
+                return Err(ReleaseError::ServiceContractMismatch {
+                    service: "api",
+                    field: "identity",
+                    expected: LEGACY_API_SERVICE_IDENTITY.to_string(),
+                    got: got.to_string(),
+                });
+            }
+            None => {
+                return Err(ReleaseError::ServiceContractMismatch {
+                    service: "api",
+                    field: "identity",
+                    expected: LEGACY_API_SERVICE_IDENTITY.to_string(),
+                    got: "absent".to_string(),
+                });
+            }
+        }
+    } else if let Some(got) = &api.identity {
+        return Err(ReleaseError::ServiceContractMismatch {
+            service: "api",
+            field: "identity",
+            expected: "absent".to_string(),
+            got: got.clone(),
+        });
+    }
+
     if api.unit_name != API_SERVICE_UNIT {
         return Err(ReleaseError::ServiceContractMismatch {
             service: "api",

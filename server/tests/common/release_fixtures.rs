@@ -215,6 +215,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
         services: ServicesMeta {
             api: ApiServiceContract {
                 unit_name: API_SERVICE_UNIT.to_string(),
+                identity: None,
                 bind_host: API_SERVICE_BIND_HOST.to_string(),
                 port: API_SERVICE_PORT,
                 health_path: API_SERVICE_HEALTH_PATH.to_string(),

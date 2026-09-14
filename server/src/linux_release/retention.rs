@@ -196,7 +196,7 @@ fn verify_candidate_integrity(path: &Path) -> Result<(), ReleaseError> {
         action: "read candidate manifest for retention",
         details: e.to_string(),
     })?;
-    ReleaseManifest::parse_and_validate(&bytes)?;
+    ReleaseManifest::parse_and_validate_installed_release(&bytes)?;
     verify_release_ownership(path, false)?;
     Ok(())
 }

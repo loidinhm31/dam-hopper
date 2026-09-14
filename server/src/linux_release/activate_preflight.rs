@@ -290,7 +290,7 @@ fn validate_preflight(
         });
     }
 
-    let manifest = ReleaseManifest::parse_and_validate(&manifest_bytes)?;
+    let manifest = ReleaseManifest::parse_and_validate_installed_release(&manifest_bytes)?;
     if manifest.release.tag != candidate.tag {
         return Err(ReleaseError::Config(
             "candidate tag does not match its release manifest".into(),
