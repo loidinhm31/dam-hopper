@@ -20,6 +20,17 @@
   codebase-summary, PDR, and rollout/rollback documentation with the delivered
   fixed-source, bounded, privacy-safe collector.
 
+- **System daemon state configuration — Phase 01 complete (2026-09-14).**
+  Canonical API configuration is `/var/lib/dam-hopper/dam-hopper.toml`
+  (final API UID:GID, mode `0600`); `/etc/dam-hopper/dam-hopper.toml` is a
+  validated, read-only, copy-once migration source. Server timing/manual audit
+  state is `/var/lib/dam-hopper/idle-suspend-audit.jsonl`. Provisioning walks
+  trusted descriptors, stages exact bytes in a no-follow sibling, publishes
+  with Linux `renameat2(RENAME_NOREPLACE)`, synchronizes the state directory,
+  and cleans only identity-matching unpublished objects. Unsafe metadata,
+  invalid legacy state, races, and publication failures fail closed. See
+  [Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md).
+
 - **System daemon state configuration — Phase 00 merge reconciliation complete
   (2026-09-14).** Reconciled `origin/main` into
   `feat/terminal-idle-suspend` without importing recursive `chown`; preserved
@@ -28,7 +39,7 @@
   synthesized all conflicting docs plus the workflow context page.
 - Cycle-2 review approved **10/10** and confirmed 85 staged files, 0 unmerged
   files, and 0 conflict markers. The merge commit remains pending; daemon-state
-  cutover is Phase 01–03 scope. [Phase 00 plan](../plans/260914-0854-system-daemon-state-config/phase-00-merge-origin-main-and-reconcile-conflicts.md) ·
+  cutover is Phase 02–03 scope. [Phase 00 plan](../plans/260914-0854-system-daemon-state-config/phase-00-merge-origin-main-and-reconcile-conflicts.md) ·
   [Cycle-2 review](../plans/reports/code-review-260914-1158-phase-00-merge-origin-main-cycle2.md).
 
 # 2026-09-13

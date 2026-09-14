@@ -11,6 +11,13 @@ Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with
 3. **Dedicated Narrow Action & Timing Authority**: Browser actors cannot execute arbitrary commands, shell scripts, or generic host remediation. Manual suspend is available only through the dedicated, audited `POST /api/system/idle-suspend/v1/force-suspend` endpoint requiring an enabled database-authenticated actor, cookie same-origin protection, strict DTO validation, and explicit active-fleet confirmation. It is independent of automatic `enabled` policy but remains unavailable without the enrolled helper/capability path. Timing mutations remain restricted to the bounded quiet period and wake delay pair via `PATCH /api/system/idle-suspend/v1/timing`.
 4. **No-Auth Mode Rejection**: The timing mutation and manual force-suspend endpoints explicitly reject `--no-auth` / development mode (`403 idleSuspendTimingDisabledNoAuth`, `403 idleSuspendDisabledNoAuth`) to prevent unauthenticated host suspension or timing tampering on untrusted local networks.
 5. **Fail-Closed by Default**: Unsupported platforms, unconfigured helper enrollment, sleep inhibitors, missing RTC alarms, or audit/persistence failures prevent suspend entirely without automatic retries.
+6. **Descriptor-Relative Runtime State**: The API provisioner derives
+   `/var/lib/dam-hopper/dam-hopper.toml` and
+   `/var/lib/dam-hopper/idle-suspend-audit.jsonl` from trusted descriptors,
+   validates exact metadata, and refuses unsafe objects or publication races.
+   `/etc/dam-hopper/dam-hopper.toml` is a bounded, read-only, copy-once source
+   only when canonical config is absent; no legacy file or old `/etc` audit is
+   repaired, truncated, or deleted.
 
 ## Threat Analysis and Mitigations
 
@@ -27,7 +34,10 @@ Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with
 
 ## Audit Retention and Path Policy
 
-- **Path**: Located at `idle-suspend-audit.jsonl` adjacent to the canonical server configuration directory.
+- **Path**: The server timing/manual audit is
+  `/var/lib/dam-hopper/idle-suspend-audit.jsonl`; the old
+  `/etc/dam-hopper/idle-suspend-audit.jsonl`, if present, is untouched legacy
+  state.
 - **Permissions**: Created with mode `0600` (read/write by server process owner only), opened with `O_NOFOLLOW` on Unix.
 - **Retention**: Server audit reads cap each result at the most recent 10,000 records, but the append-only server JSONL is not pruned or rotated by the process. Operators must apply secure filesystem retention. The privileged helper audit performs bounded pruning at 10,000 records.
 - **Audited Events**:

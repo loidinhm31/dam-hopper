@@ -70,7 +70,7 @@ async fn test_idle_suspend_diagnostics_read_only_linux_smoke() {
 
     // 1. Snapshot before state
     let host_toml_before = hash_file(&layout.host_config_path());
-    let server_config_before = hash_file(&layout.etc_dir.join("dam-hopper.toml"));
+    let server_config_before = hash_file(&layout.api_daemon_config_path());
     let helper_audit_before = hash_file(&layout.helper_audit_path());
     let server_events_before = hash_file(&layout.server_events_path());
     let rtc_before = read_rtc_wakealarm();
@@ -115,7 +115,7 @@ async fn test_idle_suspend_diagnostics_read_only_linux_smoke() {
 
     // 4. Snapshot after state and assert zero mutation
     let host_toml_after = hash_file(&layout.host_config_path());
-    let server_config_after = hash_file(&layout.etc_dir.join("dam-hopper.toml"));
+    let server_config_after = hash_file(&layout.api_daemon_config_path());
     let helper_audit_after = hash_file(&layout.helper_audit_path());
     let server_events_after = hash_file(&layout.server_events_path());
     let rtc_after = read_rtc_wakealarm();

@@ -62,14 +62,15 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Phase 00 merge boundary (2026-09-14)
+### Phase 01 runtime-state boundary (2026-09-14)
 
-Phase 00 reconciles `origin/main` with `feat/terminal-idle-suspend`. The merged
-surface retains refusal-based descriptor operations (recursive string-path
-`chown` is not part of the release path) and combines idle-suspend diagnostics,
-workflow tracking, and Explorer HTML preview. The API unit renders
-`--config /var/lib/dam-hopper/dam-hopper.toml`; runtime config/audit migration
-and preflight reconciliation remain Phase 01–03 work.
+Phase 01 completes the Linux API runtime-state cutover after the Phase 00
+merge. The final API unit still renders
+`--config /var/lib/dam-hopper/dam-hopper.toml`; the descriptor-relative
+provisioner now owns canonical config and server audit creation, validates
+legacy config read-only for one-time migration, and refuses unsafe metadata or
+publication races before API start. Phase 02–03 semantic event writing remains
+separate from this gate.
 
 ## Server-Authoritative Terminal Idle Suspend Architecture
 
@@ -596,11 +597,13 @@ All reason codes belong to the closed set of 26 variants:
 ##### Writer concurrency and safety contract
 
 The writer operates under a single-instance, single-process contract: exactly one `IdleSuspendEventWriter` in the API process, serialized across local Tokio threads via one `parking_lot::Mutex`. Sequence allocation starts at 1 per producer instance and increments checked under the lock only after event validation succeeds. Any failure during serialization (< 16 KiB buffer), open, write, or sync consumes the sequence, leaving an observable gap. The parent directory is strictly enforced: missing, symlinked, replaced, non-directory, or non-`0700` parent paths are rejected without repair or traversal (`EventWriteError::ParentPathRejected`). Files are opened with `O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW` with mode `0600`; existing targets are verified with `fstat` and rejected if non-`0600` or non-regular, with zero chmod or repair. All writes are flushed via `sync_data` before returning success.
-The existing untagged server timing/manual audit remains
-`/etc/dam-hopper/idle-suspend-audit.jsonl` for the fixed deployment config. It
-remains mode `0600`, opened with no-follow semantics, and written as synchronized
-JSONL. Semantic events never become a third `ServerAuditRecord` variant; the
-server writes a separate tagged stream at
+The untagged server timing/manual audit is now
+`/var/lib/dam-hopper/idle-suspend-audit.jsonl` for the fixed deployment
+config. It remains mode `0600`, opened with no-follow semantics, and written
+as synchronized JSONL. A prior `/etc/dam-hopper/idle-suspend-audit.jsonl` is
+legacy operator state that Phase 01 leaves untouched. Semantic events never
+become a third `ServerAuditRecord` variant; the server writes a separate tagged
+stream at
 `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`,
 also mode `0600`, no-follow, append-only, and synchronized. Semantic event
 initialization failure disables only semantic emission and exposes a producer
@@ -643,16 +646,17 @@ All adapters use fixed allowlisted authorities; custom or alternate layouts are
 `unsupported`, not guessed. The API service has `HOME=/var/lib/dam-hopper` and
 `XDG_CONFIG_HOME=/var/lib/dam-hopper/.config`, which defines the server event
 and backend diagnostic paths. `AppState` derives the compatibility server audit
-from the loaded `config.config_path` parent. The Phase 00 API unit renders
-`--config /var/lib/dam-hopper/dam-hopper.toml`; the Phase 00
-collector/provisioner still treats `/etc/dam-hopper/idle-suspend-audit.jsonl`
-as its legacy source. Phase 01–03 reconcile those authorities. The helper
-systemd unit owns the root log through `LogsDirectory=dam-hopper`.
+from the loaded `config.config_path` parent. Phase 01 provisions the canonical
+config at `/var/lib/dam-hopper/dam-hopper.toml` and the untagged server audit at
+`/var/lib/dam-hopper/idle-suspend-audit.jsonl`; an absent canonical file may be
+seeded from the validated, read-only `/etc/dam-hopper/dam-hopper.toml` exactly
+once. The helper systemd unit owns the root log through
+`LogsDirectory=dam-hopper`.
 
 | Source or output                                           | Fixed authority                                                                               | Historicity and applicability                                                                  |
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | Server events                                              | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`             | historical; required attempt for `Server`/`Both`                                               |
-| Server timing/manual audit                                 | `/etc/dam-hopper/idle-suspend-audit.jsonl` (legacy provisioner/collector path during Phase 00) | historical; required attempt for `Server`/`Both`                                               |
+| Server timing/manual audit                                 | `/var/lib/dam-hopper/idle-suspend-audit.jsonl`                          | historical; required attempt for `Server`/`Both`; prior `/etc` copy is untouched legacy state |
 | Backend diagnostics                                        | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/backend-log.jsonl`                        | historical; required attempt for `Server`/`Both`; terminal tails excluded                      |
 | Helper audit                                               | `/var/log/dam-hopper/idle-suspend-helper.jsonl`                                               | historical; required attempt for root `Server`/`Both`; non-root is `permissionDenied`          |
 | API/helper journal and lifecycle                           | fixed `dam-hopper-api.service` and `dam-hopper-idle-suspend-helper.service`                   | historical; required attempt for `Server`/`Both`; unreadable evidence makes the bundle partial |
@@ -683,8 +687,8 @@ in the source table above; no row repairs or normalizes an existing object.
 | `/var/lib/dam-hopper/.config` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
 | `/var/lib/dam-hopper/.config/dam-hopper` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
 | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics` | directory | final API UID | final API GID | `0700` | API `DiagnosticStore` creates a missing parent while the final API unit has `UMask=0077`; collector only verifies an existing entry. Mismatch makes `serverEvents` and `diagnosticEvents` `unsupported` partial sources. |
-| `/etc` | directory | `0` | `0` | `0755` | API runtime provisioner; existing and newly created entries must match. |
-| `/etc/dam-hopper` | directory | `0` | `0` | `0755` | API runtime provisioner; existing and newly created entries must match. |
+| `/etc` | directory | `0` | `0` | `0755` | Legacy migration traversal only; absent is allowed, present metadata must match, and the API gate never creates or repairs it. |
+| `/etc/dam-hopper` | directory | `0` | `0` | `0755` | Legacy migration traversal only; absent is allowed, present metadata must match, and the API gate never creates or repairs it. |
 | `/var/log/dam-hopper` | directory | `0` | final API GID | `0755` | Fixed helper unit: `User=root`, `Group=API_GROUP`, `LogsDirectory=dam-hopper`, and default `LogsDirectoryMode=0755`. Collector requires the effective fixed helper unit to retain these values; deviation makes only helper audit, journal, and lifecycle sources `unsupported` partial evidence. |
 
 `/` and `/var/log` are host traversal anchors, not product metadata
@@ -708,12 +712,20 @@ collector reports identity evidence from this finalized unit and never selects
 another identity.
 
 The descriptor-relative, refusal-based API runtime provisioner is the sole
-provisioning authority for the fixed API state and audit paths. It walks from
-the trusted layout root with directory descriptors and no-follow operations,
-creates missing objects with final metadata, validates every pre-existing
-object as exact type/owner/group/mode, and refuses mismatches without repair,
-replacement, truncation, or content mutation. A failed call cleans only empty
-objects created by that call, in reverse order.
+provisioning authority for the fixed API state, canonical config, and server
+audit paths. It walks from the trusted layout root with directory descriptors
+and no-follow operations, creates missing objects with final metadata, validates
+every pre-existing object as exact type/owner/group/mode, and refuses
+mismatches without repair, replacement, truncation, or content mutation.
+
+When canonical config is absent, the gate validates the optional legacy
+`/etc/dam-hopper/dam-hopper.toml` read-only or selects the fixed seed. It stages
+the chosen bytes in an exclusive `.dam-hopper.toml.provisioning` sibling,
+synchronizes the file, applies final API metadata, verifies identity and size,
+and publishes with Linux `renameat2(RENAME_NOREPLACE)` before synchronizing the
+state directory. A race preserves the winner; a post-rename directory-sync
+failure does not roll back the visible canonical file. Failed calls clean only
+identity-matching unpublished objects created by that call, in reverse order.
 
 Installed ownership and creation are part of the implemented runtime contract
 only for the fixed API paths below. Phase 05 readers/projectors only inspect
@@ -723,9 +735,11 @@ implements the host/API/command/output adapters around this pure core.
 | Path class                                    | Required owner/group and creation rule                                                                                                                                                                 |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | API state                                     | Final rendered API `User:Group` (default `dam-hopper:dam-hopper`); `/var/lib/dam-hopper`, `.config`, and `.config/dam-hopper` are directories `0700` |
-| `/etc/dam-hopper`                             | Installer root `0:0`; fixed anchor directory `0755`; created when absent and exact-validated when present; mismatches are refused, never repaired |
-| `/etc/dam-hopper/idle-suspend-audit.jsonl` (legacy) | Final rendered API UID/GID; regular file `0600`; provisioned before API start beneath the root-owned `0755` anchor during Phase 00; Phase 01–03 migrate the API audit beside canonical state |
-| Phase 05 pure diagnostics files                  | Not managed by `provision-api-runtime`; readers consume existing producer files and never provision or repair them |
+| `/var/lib/dam-hopper/dam-hopper.toml`         | Final rendered API UID/GID; regular file `0600`; canonical config is seeded or copied once from validated legacy bytes, then exact-validated without rewrite |
+| `/var/lib/dam-hopper/idle-suspend-audit.jsonl` | Final rendered API UID/GID; regular file `0600`; created or exact-validated only after config publication |
+| `/etc/dam-hopper`                             | Legacy migration anchor `0:0`, directory `0755` when present; API runtime never creates, repairs, or mutates it |
+| `/etc/dam-hopper/dam-hopper.toml`             | Legacy migration source `0:0`, regular file `0644`; read-only, validated, and preserved byte-for-byte |
+| Phase 05 pure diagnostics files               | Not managed by `provision-api-runtime`; readers consume existing producer files and never provision or repair them |
 | Helper audit                                  | systemd `LogsDirectory=dam-hopper`; helper is `root:API_GROUP` and retains its existing runtime/log/protocol contract |
 
 The API unit has no `StateDirectory=` or `StateDirectoryMode=` directives. Its
