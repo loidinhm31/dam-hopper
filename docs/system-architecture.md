@@ -44,6 +44,7 @@
 │  │  ├─ /api/workspace/* → Config switching                │
 │  │  ├─ /api/workflow/* → WorkflowService REST boundary  │
 │  │  ├─ /api/browser-debug/* → Ephemeral artifacts         │
+│  │  ├─ /api/system/idle-suspend/v1/* → Status/timing pair │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
@@ -55,9 +56,930 @@
 │     ├─ AgentStoreService (symlink distribution)           │
 │     ├─ WorkflowService → WorkflowStore + startup reconcile │
 │     ├─ CommandRegistry (BM25 search)                      │
+│     ├─ IdleSuspendCoordinator (fleet quiescence & timing) │
+│     │  └─ SystemdIdleSuspendExecutor → Unix-socket IPC    │
 │     └─ Broadcast channels (PTY output, git progress)      │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Phase 01 runtime-state boundary (2026-09-14)
+
+Phase 01 completes the Linux API runtime-state cutover after the Phase 00
+merge. The final API unit still renders
+`--config /var/lib/dam-hopper/dam-hopper.toml`; the descriptor-relative
+provisioner now owns canonical config and server audit creation, validates
+legacy config read-only for one-time migration, and refuses unsafe metadata or
+publication races before API start. Phase 02–03 semantic event writing remains
+separate from this gate.
+
+### Phase 03 preflight, installer, and reset boundary (2026-09-14)
+
+Production state has one active authority:
+
+| Concern | Authority and mutation boundary |
+| --- | --- |
+| API startup configuration | `/var/lib/dam-hopper/dam-hopper.toml`, the sole systemd `--config` operand |
+| Server timing/manual audit | `/var/lib/dam-hopper/idle-suspend-audit.jsonl`, API-owned `0600` JSONL |
+| Initial state | The API runtime provisioner at the privileged pre-start; it seeds or performs the validated one-time legacy copy |
+| Normal config updates | Authenticated API, same-directory atomic replacement as the API identity |
+| Release preflight | Read-only SQLite discovery and holder checks before quiesce or service switch |
+| Bootstrap installer | Release staging only; no daemon TOML creation, copy, chmod, chown, or repair |
+| Emergency reset | Canonical config by default; explicit `--config` only for a controlled alternate layout |
+
+For `server` and `both` candidates, preflight opens the canonical TOML first and
+an extant `/etc/dam-hopper/dam-hopper.toml` second with no-follow semantics,
+`fstat` regular-file verification, a 64 KiB read bound, and UTF-8/TOML parsing.
+Unsafe presence (including links, special files, unreadable, oversized, or
+malformed content) fails closed; only a missing file is absent. Each file's
+effective `server.session_db_path` is resolved using the API's fixed
+`HOME`/working directory `/var/lib/dam-hopper`; `~user` syntax is rejected.
+When both TOMLs are absent, preflight includes the canonical default
+`/var/lib/dam-hopper/.config/dam-hopper/sessions.db`; it also retains the
+explicit `/etc/dam-hopper/sessions.db` compatibility candidate during the
+migration window. Paths are normalized and stable-deduplicated, then each
+candidate's database, `-wal`, and `-shm` handles are checked. Web-only
+preflight skips this API-state discovery. No preflight path creates or changes
+files.
+
+The bootstrap installer leaves Server/Both installs pending and contains no
+`/etc` TOML provisioning. The first explicit start invokes the runtime
+provisioner; a Web-only install never provisions API state. The canonical
+server audit and any legacy config/audit remain available for rollback evidence,
+but legacy files are not startup authorities.
+
+## Server-Authoritative Terminal Idle Suspend Architecture
+
+The opt-in terminal idle suspend subsystem adds fail-closed Linux suspend
+automation with two startup-selected policies: `empty-fleet` requires no live,
+creating, or restart-pending managed PTYs, while `agent-activity` uses
+configured-agent PTY/process/TCP evidence and may suspend with service-only
+terminals still open. Both policies use single-flight idle epochs, bounded
+authenticated timing mutations, and a hardened Unix-socket helper service.
+Automatic idle timing remains bounded; the helper's execution-only
+`wakeAfterSeconds: 0` sentinel represents indefinite sleep.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Browser UI                                                 │
+│  ├─ SettingsIdleSuspendTimingSection (PATCH /timing)        │
+│  ├─ HostResourcePopover / HostIdleSuspendStatus             │
+│  ├─ ForceSleepDialog (POST /force-suspend)                  │
+│  └─ WsTransport ← host:idleSuspendChanged revision hint    │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ REST (GET /status, PATCH /timing, POST /force-suspend)
+┌──────────────────────▼──────────────────────────────────────┐
+│  dam-hopper-server (Axum, Tokio)                            │
+│  ├─ IdleSuspendCoordinator (Async state machine)            │
+│  │  ├─ PtyFleetWatcher (empty-fleet; lifecycle fences)      │
+│  │  ├─ IdleSuspendTimingStore (atomic TOML pair write)      │
+│  │  ├─ IdleSuspendServerAudit (server-side mode 0600 log)    │
+│  │  └─ BroadcastEventSink (isolated revision hint channel)   │
+│  └─ SystemdIdleSuspendExecutor (Unix domain socket client) │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ /run/dam-hopper/idle-suspend.sock (SO_PEERCRED)
+┌──────────────────────▼──────────────────────────────────────┐
+│  dam-hopper-idle-suspend-helper (Root-owned Systemd Helper) │
+│  ├─ Peer auth verification (UID matching server, MainPID)   │
+│  ├─ SysfsPreflightChecker (/sys/class/rtc/rtc0/wakealarm)   │
+│  ├─ Active inhibitor preflight (systemd-inhibit)              │
+│  ├─ RTC clear/program/readback verification                  │
+│  ├─ Fixed `systemctl suspend` execution path                 │
+│  └─ HelperAudit (/var/log/dam-hopper/idle-suspend-helper.jsonl)
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Phase 01 policy/configuration contract
+
+`IdleSuspendConfig` accepts an `automatic_policy` selector and an
+`agent_executables` list. The selector defaults to `empty-fleet` and also
+accepts `agent-activity`; selecting the latter stores the startup policy while
+Phase 05 combines private PTY, process, and TCP evidence for automatic
+eligibility and final admission. The default executable list is `codex`, `omp`,
+`claude`, and `agy`.
+
+Executable entries are literal, case-sensitive basenames or absolute paths.
+Validation requires 1–32 unique entries, 1–256 UTF-8 bytes per entry, and only
+ASCII letters, digits, `_`, `-`, `.`, `+`, and `@` in path components.
+Whitespace, controls/NUL, disallowed shell/glob/regex metacharacters,
+relative slash-containing paths, `.`/`..`, repeated or trailing `/`, and
+generic interpreter basenames (`node`, `nodejs`, `bun`, `python`, names
+beginning with `python` followed by an ASCII digit, `sh`, `bash`, `dash`, `zsh`,
+`ksh`, and `fish`) are rejected.
+Validation is lexical: it does not expand variables, launch a process, or
+require the executable to exist.
+
+`StartupIdleSuspendPolicy` captures `enabled`, enrollment, capability
+selection, the automatic policy, and the validated executable set once at
+startup. Config reload, settings import, and workspace activation overlay
+those startup-owned values back onto the newly loaded config; only the timing
+pair remains runtime-mutable. The canonical TOML writer emits
+`[server.idle_suspend]` with snake_case keys; config-shaped JSON serializes the
+same fields as `server.idleSuspend`, `automaticPolicy`, and
+`agentExecutables` (snake_case aliases are accepted on input). Default policy
+and list values may be omitted from TOML and then resolve to their defaults.
+The matcher list is retained by startup authority and is not a status or
+WebSocket field.
+
+### Key Invariants
+
+1. **Fleet Quiescence & Latching**:
+   `empty-fleet` arms only after an active-to-empty transition; `agent-activity` arms only after a complete baseline, qualifying activity context, clear lifecycle, and an unspent epoch revision. Both policies are single-flight: one admitted execution per eligible period; resume/failure reconciles state, and agent recovery does not advance `current_epoch` or silently re-trigger a spent epoch.
+2. **Admission & Handoff Order**:
+   A timing update received while armed cancels the arm deadline, commits both values to canonical TOML and memory, and re-evaluates the fleet. Once a handoff claim is accepted (`CoordinatorState::HandedOff`), incoming timing updates immediately return `409 idleSuspendHandoffInProgress` with zero memory or disk mutation until resume reconciliation.
+3. **Non-blocking In-Flight Handoff**:
+   The coordinator event loop manages the in-flight suspend future concurrently with the command receiver, ensuring timing requests during suspend are responded to immediately with `409` rather than blocking the server.
+4. **Root & Server Audit Separation**:
+   Privileged helper operations are recorded to `/var/log/dam-hopper/idle-suspend-helper.jsonl` (mode `0600`). Server timing and manual-action records are appended to `idle-suspend-audit.jsonl` beside the canonical registry/config directory (mode `0600`; recent-read APIs cap results at 10,000). No tokens, credentials, terminal contents, or command strings are ever audited.
+5. **Authenticated Manual Force Sleep & Active Fleet Confirmation**:
+   Manual force sleep (`POST /api/system/idle-suspend/v1/force-suspend`) provides a production action for authenticated, enabled operators with database authentication. When the PTY fleet is active (`live + creating + restartPending > 0`), the request requires explicit confirmation (`force: true`); `force: false` returns `409 idleSuspendActiveFleetConfirmationRequired` with content-free counts. `force: true` bypasses fleet quiescence only—never authentication, CSRF/same-origin checks, generation verification, durable audit logging, capability preflight, inhibitor checks, or helper peer authentication. Once admitted, the coordinator admits one handoff (`CoordinatorState::HandedOff`), cancels any in-flight automatic armed grace period, audits the intent, dispatches the helper request, and reconciles state upon resume.
+6. **Release-manager helper lifecycle and verification**:
+   When the selected role includes `server`, `dam-hopper start` starts
+   `dam-hopper-idle-suspend-helper.service` before `dam-hopper-api.service`.
+   Helper start or enable failure is warning-only; API/web startup and health
+   failures trigger activation rollback. Stop, backup, restore, and recovery
+   manage the helper with the other units; Phase 04 staging/policy suites pass
+   9/9 and 10/10, the boundary verifier passes 14/14, and `status --json`
+   exposes the API, helper, web, and recovery service records.
+
+### Manual force-suspend admission and reconciliation
+
+The protected endpoint accepts strict JSON `{ "wakeAfterSeconds": 0, "force": false }` (or a bounded nonzero wake value) under the 16 KiB request limit. Execution accepts exactly `0` or `60..=86400`; persisted automatic timing remains `60..=86400`. The fleet snapshot exposes only `generation`, `liveCount`, `creatingCount`, `restartPendingCount`, `disposing`, `closing`, and `handoffActive`.
+
+- `202 Accepted` means the audited handoff was admitted, not that the host has already suspended. The response carries `state: "handedOff"`, `requestId`, `statusRevision`, `wakeAfterSeconds`, `forced`, and the fleet snapshot; every response is `Cache-Control: no-store`.
+- The browser submits at most one POST (`retry: false`). If delivery is ambiguous because the host suspends, reconnect and reconcile with the status endpoint and `host:idleSuspendChanged` revision hint; never replay the action.
+- Automatic scheduling may be disabled while manual execution remains available to an authenticated enabled actor when the helper is enrolled and capability checks pass. Missing helper, capability, inhibitor, RTC ownership, audit, generation, or handoff preconditions still fail closed.
+
+Manual suspend remains separate from the planned generic host-resource remediation helper. Monitoring and alert surfaces describe host state; only the explicit, authenticated ForceSleepDialog action can request suspend.
+
+### Configured-agent activity evidence (Phases 01–05)
+
+Phase 01 implements the persisted policy/configuration contract. Phase 02
+supplies private PTY root identity, raw-read evidence, accepted-input
+admission, bounded snapshots, and invalidation handles. Phase 03 adds bounded
+configured-agent process discovery, retained attribution, and an
+observer-namespace-qualified `OwnedSocketSet`. Phase 04 consumes that set,
+reads cumulative TCP counters through an unprivileged Linux socket-diagnostics
+transport, and compares per-socket baselines. Phase 05 combines both prepared
+samples in a dedicated worker, performs automatic eligibility and
+manager-locked final admission, projects bounded measurement warnings, and
+drives the `agent-activity` coordinator path. See [PTY Activity Observation](./pty-activity-observation.md),
+[Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
+and [Owned TCP Byte Observation](./tcp-activity-observation.md); the complete
+integration contract is [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).
+
+- `ProcessDiscovery<S>` performs one bounded, synchronous preparation pass
+  through the private `ProcessSource` seam. Production uses `LinuxProcSource`
+  over `/proc`; tests can supply a deterministic source. The pass validates
+  exact `(pid, start_ticks)` identities, walks root/retained descendants, and
+  commits only after the complete sample is accepted.
+- Attribution is lineage-based rather than PGID-based. A process must resolve
+  to exactly one managed PTY root; reparented descendants remain attributable
+  through retained identity state, while ambiguous or stale identities fail
+  closed. Native executables match exact configured basename/path entries.
+  Supported `node`, `bun`, Python, and shell invocations use finite,
+  entrypoint-aware grammars; substring matches and arbitrary command forms do
+  not qualify.
+- Deep procfs reads are bounded: 256 live roots, 8,192 listed processes,
+  1,024 relevant processes, 4,096 file descriptors per process, 8,192 owned
+  socket inodes, and 16 KiB command lines. Relevant processes must remain in
+  the terminal's network namespace, and stat/executable identity is checked
+  around reads to detect reuse or races.
+- `tcp_info` parsing requires a 208-byte prefix and decodes
+  `tcpi_bytes_received` at bytes `128..136` and `tcpi_bytes_sent` at
+  `200..208` with checked slices/native-endian decoding. Extended payloads are
+  accepted; raw bytes are never cast to a local C structure.
+- `LinuxSocketDiagnostics` opens an unprivileged nonblocking
+  `NETLINK_SOCK_DIAG` socket and sends `SOCK_DIAG_BY_FAMILY` dump requests for
+  TCP v4/v6, then unresolved UDP/Unix inodes. Polling uses one monotonic
+  deadline. Datagram lengths are obtained with `MSG_PEEK | MSG_TRUNC`, and a
+  global 16 MiB response budget prevents unbounded allocation.
+- Multipart parsing validates sender/sequence identity, framing/alignment,
+  attributes, `NLMSG_DONE`, `NLMSG_ERROR`, and `NLM_F_DUMP_INTR`. Interrupted,
+  malformed, duplicate, truncated, or overrun streams fail closed. The thread
+  network namespace is checked before and after collection; unresolved owned
+  inodes are classified as retryable close races.
+- `TcpObserver` keeps a transactional baseline keyed by network namespace,
+  address family, and diagnostic cookie. `BaselineEstablished` is returned
+  for the first valid baseline, `Unchanged` requires identical keys/inodes and
+  counters, and `Activity` covers byte changes/resets, new or retired sockets,
+  and inode replacement. The inode is comparison metadata, not identity.
+- The result contains no terminal bytes, command arguments, environment,
+  credentials, addresses, or raw diagnostic payloads. Procfs/netlink
+  permission, timeout, disappearance, namespace, identity, malformed-frame,
+  unsupported-transport, and bound failures are explicit unavailable
+  outcomes; no automatic suspend claim is made here.
+
+### Phase 05 transactional sampler and automatic admission
+
+Under `agent-activity`, `coordinator.rs` starts one `ActivitySampler` with a
+joinable `idle-suspend-sampler` thread. The worker owns the stateful
+`ProcessDiscovery` and `TcpObserver`, accepts one coalescing mailbox slot, and
+handles `Scheduled`, `Final`, and `Recovery` requests. `Final` supersedes
+queued work and cancels an in-flight sample cooperatively; recovery invalidates
+both baselines.
+
+Each sample captures an initial PTY snapshot, prepares process evidence, prepares
+owned-TCP diagnostics, verifies raw-output checkpoints, and captures a second
+manager snapshot. A generation or input revision change, cancellation, deadline,
+counter overflow, or incomplete root fails the sample before commit. TCP
+retryable close races receive one retry within the one-second acceptance
+deadline; TCP failure context may include at most 32 safe process identities.
+Only after all checks pass does the worker commit process and TCP baselines
+back-to-back, classify input/output/network/process/lifecycle activity, and
+emit an available observation. An unchanged `Final` observation additionally
+mints an opaque ticket with revision, generation, root, input, output, age, and
+quiet-deadline fences.
+
+The coordinator presents that ticket to
+`PtySessionManager::try_claim_agent_activity_handoff`, which checks policy,
+all revisions, deadline, five-second observation age, manager input revision,
+fleet generation, exact live root incarnations, raw output counters, and
+closing/disposal/creating/restart/handoff lifecycle state under one manager
+lock. A successful claim latches the epoch revision, enters `HandedOff`, and
+dispatches one executor future. Any failed gate returns to `Watching` without
+spending the epoch.
+
+The v1 status snapshot always includes `automaticPolicy`; `activity` is null
+for `empty-fleet` and contains measurement state, reason, bounded counts,
+timestamps, TCP coverage, and an optional warning for `agent-activity`.
+Warnings are sorted and deduplicated by PID, capped at 32 records, and expose
+only PID plus optional safe executable identity. Status meaningful-change
+filtering ignores heartbeat timestamp and elapsed-duration churn. Coordinator
+shutdown joins the sampler before `main.rs` stops PTY readers and tears down
+the manager.
+
+### Phase 06 protected status and browser presentation
+
+The protected `GET /api/system/idle-suspend/v1/status` remains the single
+server-authoritative snapshot. `packages/ui/src/api/client.ts` receives the
+transport result as `unknown`, validates the complete version-1 base and
+additive policy/activity shape, and returns a normalized object to the existing
+query. It performs only one compatibility branch: a valid old response with
+both additive keys absent becomes `automaticPolicy: "empty-fleet"` and
+`activity: null`; partial or malformed responses and rejected requests remain
+errors.
+
+`HostIdleSuspendStatus` renders coordinator state separately from observer
+measurement. Empty-fleet has no invented observer values. Agent mode displays
+measurement state/reason, nullable aggregate counts, `tcp4-tcp6` coverage, and
+the bounded warning projection. A warning contains only sorted PID/safe
+identity examples, blocked onset, reason, and truncation; no private process,
+terminal, socket, command, or credential material crosses the REST/UI
+boundary. The visible notice describes the heuristic limitation and service-
+only blind spot.
+
+The browser derives its sole arm countdown from `armDeadlineMs`. A local
+one-second display clock may also compute warning elapsed duration, but neither
+wall-clock display fact nor timer tick changes coordinator eligibility, query
+state, status revisions, or WebSocket payloads. The existing
+`host:idleSuspendChanged` message remains a revision-only GET invalidation hint.
+Manual force confirmation continues to use actual fleet counts and existing
+handoff/closing/disposal/pending gates, never recognized-agent counts.
+
+### Configured-agent activity integrated qualification (Phase 07, 2026-09-11)
+
+The integrated qualification ladder keeps each authority at its owning boundary:
+
+1. `server/tests/idle_suspend.rs` drives the public coordinator with a real
+   `PtySessionManager` and fake executor. It proves service-only PTY output,
+   accepted-input invalidation, manual/final-check ordering, disabled
+   observation, and sampler shutdown/join behavior.
+2. `server/src/api/tests.rs` exercises protected status at the Axum router
+   boundary. It checks authentication, `Cache-Control: no-store`, the exact
+   empty-fleet/agent-activity union, initializing/disabled/available warning
+   states, bounds, and privacy omissions.
+3. `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx` uses
+   Chromium to verify rendered counts, heuristic notice, warning duration and
+   safe identities, truncation, countdown, manual action, and old-server
+   compatibility.
+4. The ignored `activity_live_linux_pty_tcp_smoke` test uses a test-owned
+   managed PTY, loopback TCP, direct procfs/netlink observation, and a panic
+   executor. It qualifies observer seams only; it cannot authorize or invoke
+   host suspend.
+
+Configured-agent activity Phase 07 reports **323 backend/PTY/API/integration
+tests**, **14/14** boundary checks, **16/16** Chromium tests, a **0.72s** live
+Linux smoke, and **9.4/10** code review approval. Automated qualification uses
+fakes/temporary resources; the real automatic suspend/resume canary remains an
+Operations-owned target-host gate. See [configured-agent Phase 07 verification
+report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
+
+### Phase 08 documentation, controlled rollout, and operational boundaries
+
+Phase 08 completes operator documentation, operations runbooks, controlled rollout stages, and explicit failure/rollback procedures for the `agent-activity` idle-suspend enhancement.
+
+#### Implemented observer and coordinator data flow
+
+The implemented configured-agent activity path replaces planned heuristics with strict private symbol ownership across six layers:
+
+1. **Restored and Managed PTYs**: `pty::PtySessionManager` tracks live PTY sessions, allocates a zeroed saturating raw-read counter per incarnation, and records accepted nonempty input with an atomic manager-wide revision before writer dispatch.
+2. **Observer and Coordinator Initialization**: When `automatic_policy = "agent-activity"` is active, `idle_suspend::coordinator` starts one `ActivitySampler` worker thread (`idle-suspend-sampler`). The worker thread owns stateful `ProcessDiscovery` and `TcpObserver` instances, so procfs scans and netlink socket baselines remain confined to a single dedicated thread.
+3. **Scheduled and Fresh Sampling**: The sampler polls on a two-second cadence. Each sample takes a pre-snapshot of PTY state, prepares process attribution via `LinuxProcSource` under `/proc`, prepares netlink socket diagnostics via `LinuxSocketDiagnostics`, validates raw output counters, and takes a post-snapshot under manager lock. At quiet deadline expiry, a fresh `Final` sample is executed to verify quiescence before handoff.
+4. **Ticketed Manager Claim**: An unchanged `Final` observation mints an opaque ticket carrying revision, generation, root, input, output, age, and quiet-deadline fences. The coordinator presents this ticket to `PtySessionManager::try_claim_agent_activity_handoff`, which validates all fences under a single manager lock.
+5. **Existing Executor Dispatch**: Upon successful claim, the coordinator enters `HandedOff`, latches the epoch revision, and dispatches the existing suspend future to the systemd helper over `/run/dam-hopper/idle-suspend.sock`.
+6. **Baseline Reconciliation and Bounded Shutdown**: Following resume or handoff failure, the coordinator requests a `Recovery` sample that invalidates baselines and requires a new genuine activity transition before re-arming. On server shutdown, the coordinator signals the sampler and joins the thread before `main.rs` stops PTY readers or tears down session state.
+
+#### Explicit limitations and heuristic boundaries
+
+The `agent-activity` policy is an activity heuristic, not semantic proof that an autonomous agent has finished work:
+
+- **Polling race**: Polling can miss a short-lived process or socket created and retired between scans. A cached or fresh final sample does not prove no future autonomous work begins after comparison.
+- **Detached descendants**: Newly created detached descendants never observed under a managed root can escape attribution. Already observed identities remain attributed while alive across reparenting.
+- **Transport coverage**: Measurement is limited strictly to `networkCoverage: "tcp4-tcp6"`. Owned UDP or QUIC sockets fail closed (`reasonCode: "unsupportedTransport"`). AF_UNIX delegation to an untracked daemon, network namespaces other than the observer's namespace, and external proxies are outside the observation guarantee.
+- **Raw PTY anonymity**: Raw terminal bytes cannot identify their writer. Spinner or status output and services in a mixed agent terminal keep the host awake.
+- **Silent agent waits**: A silent agent waiting for an LLM provider response, computing locally, or delaying retry does not produce PTY output or TCP traffic. Full quiet is not proof of completed work.
+- **Service-only terminals**: Service-only terminals, output, traffic, and listeners do not reset agent-policy quiet. Selecting `agent-activity` explicitly permits automatic suspend while service-only PTYs remain open.
+- **Kernel handoff race**: An activity change occurring in the kernel immediately after final comparison can race handoff. The implementation fences server-admitted input, creation, and restarts, but does not freeze processes or guarantee atomic absence of work.
+- **Host qualification requirement**: Process/socket permissions, kernel features, namespace topology, or latency exceeding the 1-second budget make a host permanently unavailable for this mode. There is no fallback to unverified interface metrics.
+
+### Production idle-suspend diagnostics (Phases 01–07 completed)
+
+Status: Phase 01 architecture/schema/security contract approved (third
+reviewer: 10/10 with no findings). Phase 02 canonical event foundation, Phase
+03 coordinator integration, Phase 04 helper audit milestone enrichment, and the
+Phase 05 pure bundle/correlation engine were implemented on 2026-09-13.
+Phase 06 role-aware host/API/command/probe adapters, secure atomic output, and
+`dam-hopper diagnose --json` dispatch were completed on 2026-09-14.
+Phase 07 cross-layer verification, architecture check, zero-mutation read-only
+Linux smoke, and rollout docs are completed.
+
+The canonical producer foundation is shipped in
+`server/src/idle_suspend/event.rs` and re-exported by `idle_suspend::mod`.
+It defines the closed server event model, strict identity/correlation
+validators, and hardened writer. Phase 03 now constructs one optional writer
+through `AppState` and passes it to the coordinator; the existing untagged
+server audit remains a separate compatibility stream.
+
+#### Phase 02 canonical event foundation (implemented)
+
+`IdleSuspendEventEnvelopeV1` is the separately tagged, camelCase,
+deny-unknown-fields server envelope. The implementation freezes 14 closed
+event types, 26 closed reason codes, typed payload variants, attempt scope,
+mode legality, and the `eventSchemaVersion: 1` contract. Payload validation
+enforces the existing quiet/wake bounds and event-specific reason subsets.
+
+`ProducerIdentity::load` reads and validates the canonical host boot ID and
+generates one UUID v4 `producerInstanceId` per process. `ActionCorrelationId`
+accepts only canonical lowercase UUID v4 strings and checks helper protocol
+request-ID compatibility. The writer starts `producerSequence` at one per
+identity, consumes each reserved sequence exactly once, leaves visible gaps
+after serialization or I/O failure, and permanently disables itself on
+overflow.
+
+`IdleSuspendEventWriter` owns the identity, sequence state, mutex, and fixed
+event path. It refuses an unsafe parent or target, appends one bounded JSONL
+record to a regular mode-`0600` file with no-follow flags, and calls
+`sync_data()` before reporting success. `with_identity` provides deterministic
+test construction; production `new` loads host identity.
+
+#### Phase 03 coordinator and correlation integration (implemented)
+
+`AppState::new` derives the canonical event path from the
+`DiagnosticStore` log parent and initializes an optional
+`IdleSuspendEventWriter`. If that initialization fails, it records a
+sanitized backend diagnostic and leaves the writer absent; the coordinator
+and suspend service remain available, but later diagnostics must expose the
+missing producer evidence as partial. `start_idle_suspend_coordinator` passes
+the shared writer through `start_with_sink` into `run_coordinator`.
+
+`run_coordinator` emits one process-wide `coordinatorStarted` event at
+startup. It keeps one in-memory `AttemptContext` for each automatic or manual
+attempt. The context allocates one UUID v4 before `attemptStarted` and carries
+the mode, fleet/activity/timing/status revisions, generation, and wake value
+through the attempt. The exact UUID is reused as the helper protocol-v1
+`requestId`, accepted manual response ID, existing manual audit ID, and every
+attempt-scoped semantic event. Epochs, revisions, timestamps, PIDs, and fleet
+generations remain evidence only.
+
+Automatic `empty-fleet` attempts emit `attemptStarted` and `armStarted`, then
+`finalCheckStarted`/`finalCheckCompleted`, `handoffClaimAccepted` or
+`handoffClaimRejected`, and `helperRequestDispatched`. Active-fleet,
+generation, recent-activity, timing, and shutdown invalidations emit typed
+`armCancelled`/`terminalRejected` boundaries. `agent-activity` follows the
+same correlation lifecycle after an unchanged final observation; process-wide
+`measurementUnavailable` and `measurementRecovered` events are emitted only
+when availability changes, never once per scheduled sample.
+
+Manual force-suspend allocates the same context type before admission checks.
+Accepted requests emit the handoff and dispatch boundaries before the executor
+call; an actual executor result emits exactly one `helperOutcomeReceived` and,
+after handoff release, one `reconciliationCompleted`. Capability, active-fleet
+confirmation, conflict, audit, and shutdown rejections emit typed terminal
+evidence without dispatch. Semantic writer failures are warning-only and
+cannot replace coordinator state, helper outcomes, audit fail-closed behavior,
+or handoff release.
+
+The integration is covered by deterministic writer/coordinator tests and the
+public idle-suspend integration suite; fixtures inject trusted temporary event
+paths, fake clocks, and fake executors. No event is emitted for scheduled
+samples, status heartbeats, unchanged fleet snapshots, or repeated
+unavailable measurements. See the
+[Phase 03 review report](../plans/reports/code-review-260913-1807-phase03-coordinator-instrumentation.md).
+
+```
+IdleSuspendCoordinator ── semantic server events ──┐
+                                                    │
+SystemdIdleSuspendExecutor ── protocol v1 UUID ────┼─> root helper audit v2
+                                                    │
+fixed read-only source adapters <──────────────────┘
+        │
+        └─> typed projection + correlation + redaction
+                └─> atomic local diagnostic bundle
+```
+
+The collector has no resident process, UI, telemetry, alerting, upload, AI
+credential, external egress, shell, operator-selected path/source/command, or
+public tuning flag. It never reads terminal/PTY content or mutates RTC,
+suspend, systemd, audit, configuration, or source files.
+
+#### Phase 05 pure bundle, bounded readers, privacy, and correlation engine (implemented)
+
+Phase 05 is complete in `server/src/linux_release/diagnostics/`. The
+`linux_release::diagnostics` module exports a pure model, four compatibility
+readers, explicit projectors, exact-UUID correlation analysis, and bundle
+assembly; `server/src/linux_release/mod.rs` declares the module without
+widening release-manager exports. The core accepts typed source results and a
+captured generation timestamp. It performs no command execution, network
+access, output write, producer-file repair, or disk mutation.
+
+`DiagnosticBundleV1` is a camelCase, `deny_unknown_fields` bundle with
+`bundleSchemaVersion: 1`, request/window and host metadata, completeness,
+bounds, latest status, historical source envelopes, correlations, privacy
+manifest, and typed errors. Every source envelope carries collection status,
+historicity, applicability/requiredness, record and byte counts, malformed
+count, coverage, retention/rotation/drop/truncation indicators, and bounded
+typed errors. A readable empty file is `available` with zero records; missing,
+denied, malformed, unsupported, partial-tail, retention-limited, and unknown
+coverage remain explicit partial evidence.
+
+The shared bounded JSONL scanner verifies regular non-symlink files, opens
+read-only with no-follow semantics, scans at most 16 MiB per source, caps each
+line at 16 KiB, accepts at most 10,000 records, and discards oversized lines
+without an unbounded buffer. Oversize files are tail-scanned and marked
+retention-limited; malformed records do not hide valid records on either side.
+The four fixed adapters are:
+
+- `read_server_events` — canonical semantic event schema v1;
+- `read_server_audit` — legacy timing/manual audit records;
+- `read_helper_audit` — helper audit compatibility records across v1/v2;
+- `read_backend_diagnostics` — backend diagnostic JSONL with terminal sources
+  excluded by projection.
+
+Projectors validate schema, closed enums, and canonical UUIDs before retaining
+fields. Server actors are reduced to `actorPresent`; helper detail and free
+text become closed detail/outcome codes; backend text is re-redacted and
+bounded. Terminal/PTY bytes and tails, argv/environment, credentials/tokens,
+socket/IP addresses, inhibitor identity, raw helper frames, journal messages,
+and unbounded stderr never enter the bundle. All retained strings and field
+maps are bounded before final-size calculation.
+
+Correlation is authoritative only on exact validated UUIDs. The engine
+deterministically orders server events, compatibility audits, and helper
+records, then reports chains, open chains, orphan records, duplicate or
+missing producer sequences, and producer restart boundaries. Time proximity,
+epochs, revisions, PIDs, and legacy `epoch-N` values never synthesize a join.
+Legacy manual records join only when their UUID validates; helper records
+without an `attemptStarted` event remain orphans.
+
+`collector::assemble_bundle` calculates the trailing 60-minute request,
+correlations, and historical completeness, then applies a whole-record
+reduction when serialized JSON exceeds 8,388,608 bytes. It marks
+`bounds.truncated` and affected source envelopes, evicts records in the
+frozen source priority (journald, backend diagnostics, compatibility audit,
+non-endpoint semantic events, non-endpoint helper records, then remaining
+endpoints), and never byte-slices JSON. It reserializes in bounded batches and
+recomputes correlations and completeness from the retained records, so
+reported chains and gaps cannot refer to evicted evidence. Bundle metadata,
+privacy manifest, and the single systemd status projection are retained.
+
+Fixture-driven tests cover empty versus missing files, symlink/non-regular
+sources, malformed middle and tail lines, unknown schema/enums, invalid UUIDs,
+line/file/record bounds, redaction corpus, exact joins, gaps, duplicates,
+restarts, orphan helpers, cap reduction, and source immutability. The
+immutability test compares source bytes, length, and permissions before and
+after a reader call; no compaction, truncation, rotation, lock, or repair is
+performed.
+
+#### Independent version and identity contracts
+
+The following constants are independent; changing one never implies a protocol
+change in another:
+
+- `IDLE_SUSPEND_EVENT_SCHEMA_VERSION = 1` is the tagged server semantic stream.
+- `HELPER_AUDIT_SCHEMA_VERSION = 2` evolves the existing helper audit in place.
+- `DIAGNOSTIC_BUNDLE_SCHEMA_VERSION = 1` is the local collector output.
+- `HELPER_PROTOCOL_VERSION = 1` remains the existing bounded 4-KiB wire format.
+
+Each automatic or manual attempt creates one UUID v4 before `attemptStarted`.
+One `AttemptContext` carries it unchanged through arm, final admission, claim,
+helper dispatch, helper outcome, and reconciliation. The helper wire
+`requestId` is exactly that UUID string; `epoch-N`, revisions, timestamps,
+PIDs, and fleet generations are evidence only and never identities. A restart
+abandons in-memory attempts, so a later producer identity plus an open chain is
+a restart boundary, never a synthesized success. Legacy automatic `epoch-N`
+records are `legacyAmbiguous`; legacy manual records join only on an exact
+validated ID.
+
+Unknown schema or enum versions, invalid UUIDs, duplicate producer sequences,
+partial final lines, and malformed JSON are parse evidence. Readers retain
+valid surrounding records but mark the affected source partial; they never
+coerce unknown input into successful evidence.
+
+#### Producer schemas and durability
+
+`IdleSuspendEventEnvelopeV1` is camelCase, explicitly tagged, and
+deny-unknown-fields. It contains `eventSchemaVersion`: strictly `1` (`u32`),
+`timestampMs: u64` (wall-clock evidence, not ordering identity), the canonical
+lowercase RFC 4122 UUID `bootId` from `/proc/sys/kernel/random/boot_id` (capped at
+128 bytes, trimmed), one canonical lowercase UUID v4 `producerInstanceId` per
+API process, checked nonwrapping `producerSequence: u64` starting at one, a
+closed `eventType`, nullable lowercase UUID v4 `correlationId`, nullable
+`"automatic" | "manual"` `mode`, and a closed bounded event payload. Sequence
+allocation occurs under the writer lock only after request validation succeeds;
+every attempted append (including serialization/open/write/sync failures) consumes
+a sequence, so a subsequent record exposes an append failure as a gap.
+
+##### Exhaustive 14-event matrix
+
+| Event Type | Scope | `correlationId` | `mode` | Exact Payload Fields | Allowed Payload Rules & Bounds |
+|---|---|---|---|---|---|
+| `coordinatorStarted` | Process-wide | `null` | `null` | `automaticPolicy`<br>`quietPeriodSeconds`<br>`wakeAfterSeconds`<br>`timingRevision`<br>`statusRevision` | `automaticPolicy`: `"emptyFleet" \| "agentActivity"`<br>`quietPeriodSeconds`: `60 ..= 86400`<br>`wakeAfterSeconds`: `0 \| 60 ..= 86400`<br>`timingRevision`: `u64`<br>`statusRevision`: `u64` |
+| `attemptStarted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration`<br>`activityRevision`<br>`timingRevision`<br>`statusRevision`<br>`wakeAfterSeconds` | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null` (must be `null` if `mode == "manual"` or `policy == "emptyFleet"`)<br>`timingRevision`: `u64`<br>`statusRevision`: `u64`<br>`wakeAfterSeconds`: `0 \| 60 ..= 86400` |
+| `armStarted` | Attempt | Required UUID v4 | `"automatic"` | `fleetGeneration`<br>`activityRevision`<br>`quietPeriodSeconds`<br>`deadlineAfterSeconds` | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null`<br>`quietPeriodSeconds`: `60 ..= 86400`<br>`deadlineAfterSeconds`: `1 ..= 86400` |
+| `armCancelled` | Attempt | Required UUID v4 | `"automatic"` | `reasonCode`<br>`fleetGeneration`<br>`activityRevision` | `reasonCode`: Subset **R_ARM**<br>`fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null` |
+| `measurementUnavailable` | Process-wide | `null` | `null` | `reasonCode` | `reasonCode`: strictly `"measurementUnavailable"` |
+| `measurementRecovered` | Process-wide | `null` | `null` | `activityRevision` | `activityRevision`: `u64` |
+| `finalCheckStarted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration`<br>`activityRevision`<br>`timingRevision` | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null`<br>`timingRevision`: `u64` |
+| `finalCheckCompleted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `accepted`<br>`reasonCode`<br>`fleetGeneration`<br>`activityRevision` | `accepted`: `boolean`<br>If `accepted == true`: `reasonCode` must be `null`<br>If `accepted == false`: `reasonCode` must be Subset **R_FINAL**<br>`fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null` |
+| `handoffClaimAccepted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration` | `fleetGeneration`: `u64` |
+| `handoffClaimRejected` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode`<br>`expectedFleetGeneration`<br>`actualFleetGeneration` | `reasonCode`: Subset **R_HANDOFF**<br>If `reasonCode == "staleFleetGeneration"`: `expectedFleetGeneration` and `actualFleetGeneration` must both be `u64`<br>For all other reasons: both must be `null` |
+| `helperRequestDispatched` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `wakeAfterSeconds` | `wakeAfterSeconds`: `0 \| 60 ..= 86400` |
+| `helperOutcomeReceived` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode` | `reasonCode`: Subset **R_OUTCOME** |
+| `reconciliationCompleted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode` | `reasonCode`: Subset **R_OUTCOME** |
+| `terminalRejected` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode`<br>`fleetGeneration`<br>`activityRevision` | `reasonCode`: Subset **R_TERMINAL**<br>`fleetGeneration`: `u64 \| null`<br>`activityRevision`: `u64 \| null` |
+
+##### Closed reason code subsets (`ServerIdleSuspendReasonCodeV1`)
+
+All reason codes belong to the closed set of 26 variants:
+`policyDisabled`, `startupGuard`, `emptyFleet`, `activeFleet`, `recentInput`, `recentOutput`, `recentNetwork`, `measurementUnavailable`, `staleActivityRevision`, `staleFleetGeneration`, `graceCancelled`, `finalCheckFailed`, `handoffBusy`, `handoffLost`, `helperUnavailable`, `capabilityUnsupported`, `inhibitorPresent`, `shutdown`, `auditWriteFailed`, `protocolInvalid`, `duplicateRequest`, `rtcBusy`, `rtcProgrammingFailed`, `suspendFailed`, `suspendReturned`, `resumedSuccessfully`.
+
+- **R_ARM** (`armCancelled`): `recentInput`, `recentOutput`, `recentNetwork`, `staleActivityRevision`, `staleFleetGeneration`, `activeFleet`, `graceCancelled`, `shutdown`.
+- **R_FINAL** (`finalCheckCompleted` when `accepted == false`): `finalCheckFailed`, `recentInput`, `recentOutput`, `recentNetwork`, `measurementUnavailable`, `staleActivityRevision`, `staleFleetGeneration`, `activeFleet`, `shutdown`.
+- **R_HANDOFF** (`handoffClaimRejected`): `handoffBusy`, `handoffLost`, `staleFleetGeneration`, `activeFleet`, `shutdown`.
+- **R_OUTCOME** (`helperOutcomeReceived`, `reconciliationCompleted`): `resumedSuccessfully`, `activeFleet`, `inhibitorPresent`, `capabilityUnsupported`, `rtcBusy`, `rtcProgrammingFailed`, `suspendFailed`, `suspendReturned`, `helperUnavailable`, `protocolInvalid`, `duplicateRequest`.
+- **R_TERMINAL** (`terminalRejected`): `policyDisabled`, `startupGuard`, `emptyFleet`, `activeFleet`, `recentInput`, `recentOutput`, `recentNetwork`, `measurementUnavailable`, `staleActivityRevision`, `staleFleetGeneration`, `finalCheckFailed`, `handoffBusy`, `handoffLost`, `helperUnavailable`, `capabilityUnsupported`, `shutdown`, `auditWriteFailed`, `protocolInvalid`.
+
+##### Writer concurrency and safety contract
+
+The writer operates under a single-instance, single-process contract: exactly one `IdleSuspendEventWriter` in the API process, serialized across local Tokio threads via one `parking_lot::Mutex`. Sequence allocation starts at 1 per producer instance and increments checked under the lock only after event validation succeeds. Any failure during serialization (< 16 KiB buffer), open, write, or sync consumes the sequence, leaving an observable gap. The parent directory is strictly enforced: missing, symlinked, replaced, non-directory, or non-`0700` parent paths are rejected without repair or traversal (`EventWriteError::ParentPathRejected`). Files are opened with `O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW` with mode `0600`; existing targets are verified with `fstat` and rejected if non-`0600` or non-regular, with zero chmod or repair. All writes are flushed via `sync_data` before returning success.
+The untagged server timing/manual audit is now
+`/var/lib/dam-hopper/idle-suspend-audit.jsonl` for the fixed deployment
+config. It remains mode `0600`, opened with no-follow semantics, and written
+as synchronized JSONL. A prior `/etc/dam-hopper/idle-suspend-audit.jsonl` is
+legacy operator state that Phase 01 leaves untouched. Semantic events never
+become a third `ServerAuditRecord` variant; the server writes a separate tagged
+stream at
+`/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`,
+also mode `0600`, no-follow, append-only, and synchronized. Semantic event
+initialization failure disables only semantic emission and exposes a producer
+gap through backend diagnostics/current status; it does not fabricate identity
+or stop the server. Post-action writes are diagnostic best effort: they expose
+a producer gap but cannot rewrite a real suspend outcome. Existing manual
+acceptance audit remains a required pre-action compatibility gate.
+
+The root helper retains one in-place audit at
+`/var/log/dam-hopper/idle-suspend-helper.jsonl`. V2 preserves the existing
+`acceptedIntent`, `executionCompleted`, and `executionRejected` names and
+compatibility fields. Every newly emitted line carries audit schema version,
+timestamp, boot ID, producer instance/sequence, a nullable safely parsed
+request ID, protocol version, numeric peer PID/UID, applicable wake seconds,
+and optional closed reason/outcome codes where applicable. `requestId: null`
+is required for authentication or frame failures with no validated ID and for
+capability records without an action correlation; no ID is invented. Additive
+Rust variants are `RequestRejected`, `CapabilityResult`, `PreflightResult`,
+`RtcProgrammingResult`, and `SuspendInvoked` (serialized as lower camel-case
+`recordType` values). Restricted legacy `detail` remains source-only and never
+enters a bundle.
+The helper audit is bounded at 10,000 records. When the limit is exceeded,
+pruning retains the newest half through an exclusive `create_new` mode-`0600`
+no-follow temporary file, syncs the retained file and parent directory before
+atomic replacement, and removes the temporary file on failure; no parallel
+helper log is created.
+
+The helper authenticates, decodes one bounded protocol-v1 frame, validates and
+deduplicates it, then emits safe rejection/capability/preflight evidence when
+possible. It must `sync_all` `acceptedIntent` before RTC mutation; failure
+returns an execution failure and invokes no backend. Afterward it records RTC
+result and, only on RTC success, emits `suspendInvoked` immediately before the
+fixed backend call, captures the actual outcome, and attempts completion. A
+post-action failure cannot alter the outcome; it is an evidence gap. No
+parallel helper log is permitted.
+
+#### Fixed source, output, and completeness model (Phase 06 implemented)
+
+All adapters use fixed allowlisted authorities; custom or alternate layouts are
+`unsupported`, not guessed. The API service has `HOME=/var/lib/dam-hopper` and
+`XDG_CONFIG_HOME=/var/lib/dam-hopper/.config`, which defines the server event
+and backend diagnostic paths. `AppState` derives the compatibility server audit
+from the loaded `config.config_path` parent. Phase 01 provisions the canonical
+config at `/var/lib/dam-hopper/dam-hopper.toml` and the untagged server audit at
+`/var/lib/dam-hopper/idle-suspend-audit.jsonl`; an absent canonical file may be
+seeded from the validated, read-only `/etc/dam-hopper/dam-hopper.toml` exactly
+once. The helper systemd unit owns the root log through
+`LogsDirectory=dam-hopper`.
+
+| Source or output                                           | Fixed authority                                                                               | Historicity and applicability                                                                  |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Server events                                              | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`             | historical; required attempt for `Server`/`Both`                                               |
+| Server timing/manual audit                                 | `/var/lib/dam-hopper/idle-suspend-audit.jsonl`                          | historical; required attempt for `Server`/`Both`; prior `/etc` copy is untouched legacy state |
+| Backend diagnostics                                        | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/backend-log.jsonl`                        | historical; required attempt for `Server`/`Both`; terminal tails excluded                      |
+| Helper audit                                               | `/var/log/dam-hopper/idle-suspend-helper.jsonl`                                               | historical; required attempt for root `Server`/`Both`; non-root is `permissionDenied`          |
+| API/helper journal and lifecycle                           | fixed `dam-hopper-api.service` and `dam-hopper-idle-suspend-helper.service`                   | historical; required attempt for `Server`/`Both`; unreadable evidence makes the bundle partial |
+| Protected local idle status                                | fixed loopback API and token lookup                                                           | latest; best effort only                                                                       |
+| RTC, power-state, inhibitor, and enrolled PID/executable probes            | fixed read-only host adapters                                                                 | nonHistorical; best effort only                                                                |
+| Role                                                       | `/etc/dam-hopper/host.toml` via `Layout::host_config_path()`                                  | `Server`/`Both` apply idle sources; `Web` is `notApplicable`                                   |
+| Root bundle                                                | `/var/lib/dam-hopper-manager/diagnostics/dam-hopper-diagnose-<generatedAtMs>-<bundleId>.json` | trusted root output                                                                            |
+| Non-root bundle                                            | `$XDG_STATE_HOME/dam-hopper/diagnostics`, else `$HOME/.local/state/dam-hopper/diagnostics`    | valid partial output; no `/tmp` fallback                                                       |
+
+Every file source begins from the trusted layout-root descriptor and opens only
+its fixed components with `openat2`
+`RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV`, or an equivalent
+descriptor walk. A symlink, replacement, mount transition, missing handle-safe
+primitive, or failed descriptor-continuity check discards the affected source as
+typed partial evidence; it never follows or scans an alternate path. The
+`NO_XDEV` rule intentionally makes a separate `/var` or `/var/log` filesystem
+an `unsupported` partial source rather than a supported alternate layout.
+
+The collector uses the following exact metadata comparators for
+product-controlled **ancestor directories**. The final-file comparators remain
+in the source table above; no row repairs or normalizes an existing object.
+
+| Path | Type | UID | GID | Mode | Sole authority and mismatch result |
+| --- | --- | ---: | ---: | ---: | --- |
+| `/var` | directory | `0` | `0` | `0755` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/lib` | directory | `0` | `0` | `0755` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/lib/dam-hopper` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/lib/dam-hopper/.config` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/lib/dam-hopper/.config/dam-hopper` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
+| `/var/lib/dam-hopper/.config/dam-hopper/diagnostics` | directory | final API UID | final API GID | `0700` | API `DiagnosticStore` creates a missing parent while the final API unit has `UMask=0077`; collector only verifies an existing entry. Mismatch makes `serverEvents` and `diagnosticEvents` `unsupported` partial sources. |
+| `/etc` | directory | `0` | `0` | `0755` | Legacy migration traversal only; absent is allowed, present metadata must match, and the API gate never creates or repairs it. |
+| `/etc/dam-hopper` | directory | `0` | `0` | `0755` | Legacy migration traversal only; absent is allowed, present metadata must match, and the API gate never creates or repairs it. |
+| `/var/log/dam-hopper` | directory | `0` | final API GID | `0755` | Fixed helper unit: `User=root`, `Group=API_GROUP`, `LogsDirectory=dam-hopper`, and default `LogsDirectoryMode=0755`. Collector requires the effective fixed helper unit to retain these values; deviation makes only helper audit, journal, and lifecycle sources `unsupported` partial evidence. |
+
+`/` and `/var/log` are host traversal anchors, not product metadata
+authorities. For them the collector requires only a directory descriptor,
+no symlink or mount transition, and descriptor continuity before projection; it
+does not invent an exact UID, GID, or mode. For every product-controlled row
+and final file, it validates type/owner/group/mode with `fstat` before and
+after projection, enforces source and line caps before allocation, and reports a
+replacement, special file, metadata mismatch, or race as typed partial
+evidence. The collector never locks, compacts, repairs, rotates, truncates,
+rewrites, or follows a producer path.
+
+The finalized API systemd unit's exact `User=`/`Group=` pair is the sole
+numeric runtime identity authority for API-owned state. The manager parses
+exactly one of each from the final unit, resolves both account names, requires a
+non-root UID/GID and a `Group=` matching the user's primary GID, and uses that
+numeric pair for health expectations and provisioning. Release manifests carry
+no API identity; host configuration, CLI selection, `SUDO_USER`, username-as-
+group inference, and root/(0,0) fallbacks cannot override the final unit. The
+collector reports identity evidence from this finalized unit and never selects
+another identity.
+
+The descriptor-relative, refusal-based API runtime provisioner is the sole
+provisioning authority for the fixed API state, canonical config, and server
+audit paths. It walks from the trusted layout root with directory descriptors
+and no-follow operations, creates missing objects with final metadata, validates
+every pre-existing object as exact type/owner/group/mode, and refuses
+mismatches without repair, replacement, truncation, or content mutation.
+
+When canonical config is absent, the gate validates the optional legacy
+`/etc/dam-hopper/dam-hopper.toml` read-only or selects the fixed seed. It stages
+the chosen bytes in an exclusive `.dam-hopper.toml.provisioning` sibling,
+synchronizes the file, applies final API metadata, verifies identity and size,
+and publishes with Linux `renameat2(RENAME_NOREPLACE)` before synchronizing the
+state directory. A race preserves the winner; a post-rename directory-sync
+failure does not roll back the visible canonical file. Failed calls clean only
+identity-matching unpublished objects created by that call, in reverse order.
+
+Installed ownership and creation are part of the implemented runtime contract
+only for the fixed API paths below. Phase 05 readers/projectors only inspect
+producer files and never provision, repair, or lazily create them; Phase 06
+implements the host/API/command/output adapters around this pure core.
+
+| Path class                                    | Required owner/group and creation rule                                                                                                                                                                 |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| API state                                     | Final rendered API `User:Group` (default `dam-hopper:dam-hopper`); `/var/lib/dam-hopper`, `.config`, and `.config/dam-hopper` are directories `0700` |
+| `/var/lib/dam-hopper/dam-hopper.toml`         | Final rendered API UID/GID; regular file `0600`; canonical config is seeded or copied once from validated legacy bytes, then exact-validated without rewrite |
+| `/var/lib/dam-hopper/idle-suspend-audit.jsonl` | Final rendered API UID/GID; regular file `0600`; created or exact-validated only after config publication |
+| `/etc/dam-hopper`                             | Legacy migration anchor `0:0`, directory `0755` when present; API runtime never creates, repairs, or mutates it |
+| `/etc/dam-hopper/dam-hopper.toml`             | Legacy migration source `0:0`, regular file `0644`; read-only, validated, and preserved byte-for-byte |
+| Phase 05 pure diagnostics files               | Not managed by `provision-api-runtime`; readers consume existing producer files and never provision or repair them |
+| Helper audit                                  | systemd `LogsDirectory=dam-hopper`; helper is `root:API_GROUP` and retains its existing runtime/log/protocol contract |
+
+The API unit has no `StateDirectory=` or `StateDirectoryMode=` directives. Its
+single privileged pre-start gate is exactly
+`ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime`;
+the gate has no operands beyond `provision-api-runtime`.
+The template's sole API command uses `--config @API_HOME@/dam-hopper.toml`;
+the synchronized checked-in production-default unit resolves it to
+`ExecStart=/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801`.
+`validate_api_unit_policy` requires exactly one `ExecStart` equal to that
+rendered command and rejects legacy/alternate paths, duplicates, or extra
+arguments. Systemd reruns the pre-start on each API start/restart, and API
+`ExecStart` is unreachable when provisioning refuses a mismatch. Activation and
+rollback therefore provision immediately before starting the API.
+Boot recovery uses
+`provision_installed_api_runtime` to reparse the installed API unit and provision
+an active server's fixed paths without starting services; service starts remain
+activation/rollback responsibilities.
+
+Journald ownership remains systemd's fixed authority; unit selection is closed
+to the API and helper constants. A provisioning, owner, parent-mode, or
+symlink mismatch is an explicit source error and blocks `complete`; scanning
+an alternate path is forbidden.
+
+Every source reports independent `collectionStatus`, `historicity`,
+`applicability`, `requiredForHistoricalCompleteness`, `recordCount`,
+`byteCount`, `malformedCount`, `coverage`, truncation/retention/rotation/drop
+indicators, and typed errors. `applicability` is `applicable`,
+`notApplicable`, or `unknown`; `coverage` records the requested window, proven
+start/end, and `coverageUnknown` reason when the interval cannot be proven.
+`collectionStatus` is one of `available`, `missing`, `permissionDenied`,
+`authRequired`, `malformed`, `truncated`, `retentionLimited`, `notApplicable`,
+`unsupported`, or `ioError`; historicity is `historical`, `latest`, or
+`nonHistorical`. An empty record array is valid only for a successfully
+readable `available` source. Unknown role, applicability, or window coverage
+is partial evidence, never an empty success.
+
+For a required historical source, coverage is proven only when the requested
+60-minute interval, accepted timestamps, producer boot/sequence evidence, and
+available unit invocation/retention evidence establish the readable interval.
+Rotation or retention that cannot be distinguished is `coverageUnknown`; no
+source may claim completeness from a newest record alone.
+
+Historical `complete` requires a known role and every applicable required
+historical source to be available, supported, within bounds, and free of
+malformed tail, unknown version, unexplained sequence gap, producer drop,
+rotation, and retention loss. Latest/current probe failure remains visible but
+does not alone downgrade historical completeness. EUID is sampled once: root
+attempts helper evidence; non-root never invokes sudo, setuid helpers, or other
+escalation and emits a valid partial bundle with root-only sources marked
+`permissionDenied`.
+
+The collector writes a no-follow exclusive temporary file in the final trusted
+directory, applies `0600`, flushes and syncs it, atomically renames it, then
+syncs the directory. Output directories are trusted, owned, mode `0700`, and
+have no symlink traversal. Exit `0` writes a historically complete bundle;
+exit `2` writes a valid partial bundle; exit `1` writes no bundle safely. Exit
+`0` or `2` prints exactly one absolute final path plus newline on stdout; exit
+`1` prints no stdout. Sanitized bounded diagnostics use stderr only.
+
+#### Bundle, correlation, privacy, and fixed bounds
+
+Bundle v1 keys are `bundleSchemaVersion`, `bundleId`, `generatedAtMs`,
+`collectorVersion`, `request`, `completeness`, `bounds`, `host`, `idleStatus`,
+`events`, `serverAudit`, `helperAudit`, `diagnosticEvents`, `journald`,
+`systemd`, `currentHostProbes`, `correlations`, `privacy`, and `errors`.
+Collection captures the clock once and uses the trailing 60-minute window.
+Fixed internal limits are: 10,000 accepted records per record source;
+8,388,608 bytes for final JSON including syntax; 16 KiB per JSONL line; 16 MiB
+file scan per source; 2 MiB stdout for every fixed host command and each
+journal/unit query; 256 KiB local API body; 512 bytes for every retained
+redacted text string; 256 source errors; 32 warning/probe examples; 10,000
+items for any record or correlation array; 512 bytes for every serialized
+string; maximum nested DTO depth eight; and five-second fixed command/API
+deadlines. Closed DTOs have no generic maps; all arrays, strings, nested
+records, and command output are rejected or truncated at these limits before
+allocation. Public cap or path flags do not exist.
+
+Projection occurs before sizing and serialization. The immutable top-level
+bundle metadata and privacy manifest, plus the single systemd status
+projection, are never evicted. If the final JSON is too large,
+`reduce_to_cap` marks `bounds.truncated` and removes whole records in a frozen
+source priority: `journald`, backend diagnostics, compatibility server audit,
+non-endpoint semantic server events, non-endpoint helper audit records, then
+remaining semantic/helper endpoint records. Records retain their source order
+within each priority; no JSON byte slicing or partial record is allowed.
+The reducer evicts in bounded batches, reserializes until the output is at
+most 8,388,608 bytes, marks each affected source `truncated`, and recomputes
+correlations and historical completeness from retained records. A source can
+therefore be partial after reduction even when its input was readable.
+
+Correlation joins exact UUIDs only and orders records by
+`(timestampMs, producerInstanceId, producerSequence, sourceName, sourceOffset)`.
+It exposes deterministic chains, orphans, sequence gaps, and restart
+boundaries. Open chains, orphan helper intent/completion, dispatch without
+outcome, duplicate sequence/ID, boot/producer changes, malformed/rotated
+sources, and legacy ambiguity remain discontinuities rather than diagnoses.
+
+The shared projector retains only strictly validated UUIDs, the approved
+bounded safe executable identity, and bounded numeric/closed values. An
+executable identity is either a literal case-sensitive basename or normalized
+absolute path, 1–256 UTF-8 bytes, with components limited to ASCII letters,
+digits, `_`, `-`, `.`, `+`, and `@`; controls, NUL, whitespace, glob/regex or
+shell metacharacters, relative slash-containing paths, traversal, repeated or
+trailing `/`, and generic interpreter basenames are rejected. Matching is
+exact after normalization; no substring or command-line interpretation is
+allowed.
+The projector omits server audit actors (only `actorPresent` remains),
+helper detail and unknown free text (mapped to `restrictedDetailOmitted`),
+inhibitor identity, journal `MESSAGE`, stderr, terminal data, process
+argv/environment, raw IPC frames, socket/IP addresses, tokens, credentials,
+Authorization headers, and cookies. Backend diagnostic text is re-redacted,
+bounded, marked untrusted, and excludes terminal sources/tails. Typed source
+errors contain no raw I/O error, command stderr, arbitrary path, or source line
+text.
+
+#### Collector boundary, compatibility, and rollback (Phases 06–07 implemented)
+
+The completed Phase 05 core under `linux_release/diagnostics/` accepts typed
+source envelopes and fixed file paths for its four read-only JSONL adapters.
+Phases 06 and 07 now compose those adapters with role, EUID, fixed-command,
+local-API, current-probe, trusted-output, and host descriptor boundaries. It has
+no resident process, UI, telemetry, alerting, upload, AI credential, external
+egress, shell, operator-selected path/source/command, or public tuning flag.
+Source failure does not stop independent collection or pure assembly; an
+unsafe output operation is fatal.
+
+Roll-forward is additive: protocol v1 and existing audit files remain readable,
+no systemd unit or observer is added, and a new collector is the only component
+allowed to claim historical completeness. Compatibility is explicit:
+
+| Server | Helper | Collector | Result                                                                                                                      |
+| ------ | ------ | --------- | --------------------------------------------------------------------------------------------------------------------------- |
+| old    | old    | new       | Partial: legacy timing/manual and helper v1 records may be projected; absent canonical streams/milestones prevent complete  |
+| new    | old    | new       | Partial: server semantic events join established helper v1 records; missing helper v2 milestones prevent complete           |
+| old    | new    | new       | Partial: helper v2 records remain visible; absent server semantic chain prevents complete                                   |
+| new    | new    | old       | Partial: old reader keeps established records and ignores additive streams; it cannot claim the v1 bundle contract complete |
+| new    | new    | new       | Complete only when every applicable required source, coverage interval, and gap gate passes                                 |
+
+Mixed-version, restart, rotation, malformed, and dropped evidence always
+remain partial. Legacy automatic `epoch-N` IDs never join across producer
+restarts; legacy manual IDs join only on an exact validated ID. A manual API
+response returns the same UUID used as `correlationId` and helper protocol-v1
+`requestId`; it never creates a `manual-<uuid>` alias. Older readers may ignore
+additive helper-v2 milestones while retaining existing action names and fields.
+Rollback stops new emission and collector use but never deletes evidence.
+Phase 03 coordinator emission, Phase 04 helper milestones, Phase 05 pure
+collector, Phase 06 host integration, and Phase 07 cross-layer verification,
+architecture reconciliation, read-only Linux smoke, and rollout documentation
+are complete as of 2026-09-14.
+Phase 07 evidence is split by boundary: `server/tests/idle_suspend_phase07.rs`
+passes 2/2 deterministic automatic/manual cross-layer tests; the diagnostics
+entrypoint delegates to six focused modules covering fault, redaction, bounds,
+role, and atomic-output behavior; and
+`server/tests/idle_suspend_diagnostics_linux_smoke.rs` passes as an ignored
+Linux-only read-only smoke with unchanged source, RTC, and API/helper unit
+snapshots. The five-command focused gate recorded 223/223 aggregate executed
+tests with zero failures; this is not a coverage percentage and does not claim
+a real suspend canary.
+
+#### Phase 01 review disposition
+
+Cycle 1 warnings are dispositioned as follows: source-open security and
+owner/group assumptions are frozen above; field/array/nested and command
+bounds are explicit above; source-priority reduction and endpoint retention
+are fixed, deterministic, and repeatable above; applicability and coverage
+metadata including `coverageUnknown` and `malformedCount` are explicit above;
+helper IDs are nullable above; the old/new compatibility matrix, legacy
+restart rule, and manual UUID reuse are explicit above; safe executable
+identity is allowlisted above.
+
+Cycle 2's deployability contradiction is resolved in the implementation. The
+finalized API unit's exact `User=`/`Group=` pair is the sole numeric identity
+authority, and descriptor-relative refusal-based provisioning is the only
+provisioning authority for fixed API runtime paths. The pre-provisioned
+compatibility audit is opened only as an existing verified file; absent,
+unwritable, or mismatched state fails closed instead of triggering lazy creation
+or repair. Neither API nor helper uses `StateDirectory=` or
+`StateDirectoryMode=`. The API gate is exactly
+`+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime`; active,
+candidate, rollback, and automatic-restart API starts pass through it, while
+boot recovery provisions without starting services. API identity is not read
+from a release manifest and cannot override the final unit. Phase 05's pure
+diagnostics producer/collector remains separate from this implemented runtime
+reconciliation; Phase 06 owns host integration.
+
+### Phase 01 helper execution contract
+
+`SuspendWithRtcWakeRequest` keeps protocol version 1, a required camelCase
+`requestId`, and a required `wakeAfterSeconds` `u64` in a length-prefixed frame
+bounded to 4 KiB. The execution validator accepts exactly `0` or `60..=86400`;
+the automatic timing/configuration validator remains `60..=86400`.
+
+The helper authenticates the enrolled peer, validates protocol version and
+request ID, rejects replayed IDs, checks suspend/RTC/inhibitor preflight, and
+records an intent audit before touching RTC state. Zero converts to `None`,
+which writes `0`, reads it back, and skips target-epoch arithmetic and writes.
+A nonzero request clears and verifies first, then computes a checked `now + seconds`,
+writes the target, and verifies the readback. Any clear/readback/write or
+preflight failure returns a typed failure and does not call suspend. Completion
+audit records preserve `wakeAfterSeconds: 0` explicitly.
+
+Preflight rejects any non-empty RTC alarm (`RtcAlarmBusy`) under the
+DamHopper-exclusive ownership policy. Automated tests use temporary RTC files
+and fake backends only; they never program a host RTC or invoke suspend.
 
 The overview names both launch modes for context. The systemd deployment uses
 `0.0.0.0:4801` for Tailscale access; the host firewall and Tailscale ACLs must
@@ -854,14 +1776,14 @@ entities therefore share the configured `sessions.db` file and its Unix
 
 **Migration 010 tables:**
 
-| Table | Stored contract |
-| --- | --- |
-| `workflow_workspaces` | Text `id` (generated UUID), unique caller-resolved config `locator`, display `name`, and create/update millisecond timestamps. |
-| `workflow_items` | Workspace/project/optional worktree scope, optional parent, `kind` (`plan`, `phase`, `task`), title/summary, status, ordering, source, lifecycle timestamps, and optional completion/archive timestamps. Workspace deletion cascades. |
-| `workflow_sessions` | Workspace/project/optional worktree scope, optional item link, lifecycle status (`running`, `ended`, `abandoned`), start/end timestamps, source, and create/update timestamps. Workspace deletion cascades; deleting an item sets `item_id` to `NULL`. |
+| Table                     | Stored contract                                                                                                                                                                                                                                                                         |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workflow_workspaces`     | Text `id` (generated UUID), unique caller-resolved config `locator`, display `name`, and create/update millisecond timestamps.                                                                                                                                                          |
+| `workflow_items`          | Workspace/project/optional worktree scope, optional parent, `kind` (`plan`, `phase`, `task`), title/summary, status, ordering, source, lifecycle timestamps, and optional completion/archive timestamps. Workspace deletion cascades.                                                   |
+| `workflow_sessions`       | Workspace/project/optional worktree scope, optional item link, lifecycle status (`running`, `ended`, `abandoned`), start/end timestamps, source, and create/update timestamps. Workspace deletion cascades; deleting an item sets `item_id` to `NULL`.                                  |
 | `workflow_resource_links` | Session correlation for `terminal` or `agent` resources, external/incarnation identity, optional harness/run metadata, observed state, suggested end time, first/last seen, source, and timestamps. `(session_id, resource_type, external_id)` is unique and session deletion cascades. |
-| `workflow_notes` | Workspace-scoped text attached to an item, a session, or both. `deleted_at` implements soft deletion; a check constraint requires at least one target. Item/session/workspace deletion cascades. |
-| `workflow_events` | Append-only activity records with event type/source, optional project/worktree/item/session scope, occurred/recorded times, optional JSON payload, and optional expiry. Event item/session identifiers are metadata rather than foreign keys so history can outlive entity cleanup. |
+| `workflow_notes`          | Workspace-scoped text attached to an item, a session, or both. `deleted_at` implements soft deletion; a check constraint requires at least one target. Item/session/workspace deletion cascades.                                                                                        |
+| `workflow_events`         | Append-only activity records with event type/source, optional project/worktree/item/session scope, occurred/recorded times, optional JSON payload, and optional expiry. Event item/session identifiers are metadata rather than foreign keys so history can outlive entity cleanup.     |
 
 Indexes cover workspace/project/status queries, item parent traversal,
 session/item lookup, resource external identity, note targets/deletion, and
@@ -916,15 +1838,15 @@ workflow routes, leaving PTY and IDE APIs operational.
 
 **Protected REST surface:**
 
-| Route | Responsibility |
-| --- | --- |
-| `GET /api/workflow/overview` | Bounded workspace, project, Plan/Phase/Task tree, notes, active sessions, progress, and recent events. |
-| `GET /api/workflow/events` | Descending `(recorded_at, id)` keyset history with opaque cursor. |
-| `POST /api/workflow/items`; `PATCH/DELETE /api/workflow/items/{id}` | Plan-first item mutations; PATCH/DELETE require `updatedAt` CAS. |
-| `POST /api/workflow/sessions`; `POST /api/workflow/sessions/{id}/end`; `POST /api/workflow/sessions/{id}/abandon` | Manual session lifecycle with explicit RFC3339 work times. |
-| `POST/DELETE /api/workflow/sessions/{id}/links` | Terminal/agent resource link and CAS unlink. |
-| `POST /api/workflow/notes`; `DELETE /api/workflow/notes/{id}` | Durable note creation and CAS soft deletion. |
-| `DELETE /api/workflow/history` | Explicit permanent purge of old events and soft-deleted notes. |
+| Route                                                                                                             | Responsibility                                                                                         |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET /api/workflow/overview`                                                                                      | Bounded workspace, project, Plan/Phase/Task tree, notes, active sessions, progress, and recent events. |
+| `GET /api/workflow/events`                                                                                        | Descending `(recorded_at, id)` keyset history with opaque cursor.                                      |
+| `POST /api/workflow/items`; `PATCH/DELETE /api/workflow/items/{id}`                                               | Plan-first item mutations; PATCH/DELETE require `updatedAt` CAS.                                       |
+| `POST /api/workflow/sessions`; `POST /api/workflow/sessions/{id}/end`; `POST /api/workflow/sessions/{id}/abandon` | Manual session lifecycle with explicit RFC3339 work times.                                             |
+| `POST/DELETE /api/workflow/sessions/{id}/links`                                                                   | Terminal/agent resource link and CAS unlink.                                                           |
+| `POST /api/workflow/notes`; `DELETE /api/workflow/notes/{id}`                                                     | Durable note creation and CAS soft deletion.                                                           |
+| `DELETE /api/workflow/history`                                                                                    | Explicit permanent purge of old events and soft-deleted notes.                                         |
 
 The route group inherits the existing auth middleware and applies a focused
 32 KiB request limit. Request DTOs deny unknown fields and use camelCase.
@@ -977,12 +1899,12 @@ delivery; restart observations are incarnation-aware and replay-safe.
 
 Terminal link state is distinct from manual workflow-session lifecycle:
 
-| Link state | Transition source |
-| --- | --- |
-| `Attached` | Successful PTY create/restart or live startup reconciliation. |
-| `Stale` | Exit observed with an automatic restart pending. |
-| `Exited` | Final exit observed with code `0`. |
-| `Crashed` | Final exit observed with non-zero or unavailable code. |
+| Link state | Transition source                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------- |
+| `Attached` | Successful PTY create/restart or live startup reconciliation.                                           |
+| `Stale`    | Exit observed with an automatic restart pending.                                                        |
+| `Exited`   | Final exit observed with code `0`.                                                                      |
+| `Crashed`  | Final exit observed with non-zero or unavailable code.                                                  |
 | `Detached` | Explicit PTY removal or active (`attached`/`stale`) link missing or dead during startup reconciliation. |
 
 An incoming observation with an older incarnation is ignored. Equal replay
@@ -1316,6 +2238,40 @@ described as equivalent to the Unix/Linux guarantee.
 - Lazy init: ProjectSandbox stored as Option (Unavailable if init failed)
 - Seeded/reinitialized from config projects on startup and workspace switch
 - Cheap clone pattern
+
+### Explorer HTML preview (Phases 01–03)
+
+HTML preview is a shared-UI concern; it does not add a server route, static file
+origin, or alternate filesystem authority. `EditorTabs` checks `isHtmlFile` and
+lazy-loads `HtmlHost` before the generic Monaco fallback. `HtmlHost` preserves
+normal editor callbacks and view state while selecting one of three layouts:
+
+```mermaid
+flowchart LR
+    Tab["EditorTabs active HTML tab"] --> Host["Lazy HtmlHost"]
+    Host -->|Edit| Monaco["MonacoHost 100%"]
+    Host -->|Split| Split["MonacoHost 50% + HtmlPreview 50%"]
+    Host -->|Preview| Preview["HtmlPreview 100%"]
+    Explorer["FileTree Preview action"] --> Mode["saveHtmlViewMode('preview')"]
+    Mode --> Host
+```
+
+`HtmlPreview` sends the latest editor buffer to one iframe after a 200 ms
+ debounce and exposes a reload action. The iframe sandbox is exactly
+`sandbox="allow-scripts allow-modals allow-forms allow-popups allow-pointer-lock"`;
+`allow-same-origin` is intentionally absent, so workspace markup runs with an
+opaque `null` origin and cannot read parent cookies or storage. The transform
+injects only an in-memory `localStorage`/`sessionStorage` fallback and an
+in-frame `window.alert()` modal for this sandbox environment.
+
+`html-view-mode-persistence.ts` stores `"edit" | "split" | "preview"` under
+`dam-hopper:html-view-mode:v1`, defaults to `"edit"` on invalid/unavailable
+storage, and emits `dam-hopper:html-view-mode-changed` so mounted tabs update
+without a remount. `FileTree` offers the `Eye`/`Preview` action only for live
+HTML files below 5 MiB; the action sets preview mode then opens the existing tab.
+Directories, language-scan rows, non-HTML files, and oversized files do not enter
+this path. Relative multi-file asset resolution and backend static serving remain
+out of scope.
 
 ### Explorer video playback and download (Phase 04 browser-host validation complete)
 
@@ -2082,7 +3038,7 @@ hash-bound packaged runtime evidence owned by a release engineer. Windows/macOS/
 show the listener works for a second local process before Stop and is unreachable after Stop, scope
 switch, and graceful app exit; missing/manual-pending evidence is not a release pass.
 
-### pty/ (Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅ / Phase 03: Workflow correlation ✅)
+### pty/ (Phase 02: Activity evidence ✅ / Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅ / Phase 03: Workflow correlation ✅)
 
 Manages portable terminal sessions with automatic restart capabilities and idempotent creation.
 
@@ -2104,6 +3060,27 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
   restarted, final-exit, and removal facts through non-blocking `try_send` to
   the separate workflow observation worker. It carries no command, CWD, env, or
   output data and never opens SQLite from PTY reader/supervisor paths.
+
+**activity.rs** — Phase 02 private PTY activity seam:
+
+- `ProcessIdentity` pairs child PID with Linux `/proc/<pid>/stat`
+  `start_ticks` to reject PID reuse; `RootQualification` preserves qualified,
+  uncertain, and unavailable probe results without blocking terminal use.
+- `PtyActivitySnapshot` captures content-free fleet/input state, bounded live
+  root records, cloned per-incarnation raw-read counters, and explicit
+  incompleteness reasons. `PtyActivityWatcher` is a private coalescing
+  invalidation receiver; it is not a public event stream.
+- `parse_proc_stat` safely handles parenthesized command names and is the
+  shared identity parser for the next process-discovery phase.
+
+`manager.rs` initializes root identity and a zeroed `Arc<AtomicU64>` counter
+for every create, restored session, and respawn. The reader increments the
+counter once per successful nonempty raw chunk before parser/buffer/event work.
+`PtySessionManager::write` gates nonempty input on handoff/manager/session
+state, records the manager-wide input revision/time before writer dispatch, and
+rolls the evidence back on writer failure. See
+[PTY Activity Observation](./pty-activity-observation.md) for the full
+admission order and watcher/fleet-watcher boundary.
 
 **api/terminal.rs** — terminal creation env resolution:
 
@@ -3215,6 +4192,12 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 - SshCredStore: Mutex<...>
 
 **Broadcast channels:** PTY output fan-out to multiple WebSocket clients.
+
+- Private PTY activity invalidation uses a coalescing `watch` revision for
+  accepted input and create/respawn boundaries; `PtyFleetWatcher` remains the
+  authoritative source for all lifecycle counts, generations, handoff, and
+  disposal transitions. Consumers capture a fresh private activity snapshot
+  after wakeup rather than treating either watcher as an event log.
 
 **Important:** Never hold FsSubsystem, PtySessionManager locks across `.await` — clone fields out first.
 

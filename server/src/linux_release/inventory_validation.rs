@@ -75,8 +75,10 @@ fn validate_entry_kind(entry: &InventoryEntry) -> Result<(), ReleaseError> {
 struct RequiredPathsTracker {
     has_manager: bool,
     has_server: bool,
+    has_helper: bool,
     has_web: bool,
     has_api_unit: bool,
+    has_helper_unit: bool,
     has_web_unit: bool,
     has_recovery_unit: bool,
     has_web_sysusers: bool,
@@ -109,6 +111,17 @@ impl RequiredPathsTracker {
                 }
                 self.has_server = true;
             }
+            "bin/dam-hopper-idle-suspend-helper" => {
+                if entry.kind != EntryKind::File
+                    || !entry.roles.contains(&ReleaseRole::Server)
+                    || entry.mode & 0o111 == 0
+                {
+                    return Err(ReleaseError::InvalidRequiredPath {
+                        path: "bin/dam-hopper-idle-suspend-helper",
+                    });
+                }
+                self.has_helper = true;
+            }
             "bin/dam-hopper-web" => {
                 if entry.kind != EntryKind::File
                     || !entry.roles.contains(&ReleaseRole::Web)
@@ -128,6 +141,15 @@ impl RequiredPathsTracker {
                 }
                 self.has_api_unit = true;
             }
+            "systemd/dam-hopper-idle-suspend-helper.service"
+            | "systemd/dam-hopper-idle-suspend-helper.service.in" => {
+                if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Server) {
+                    return Err(ReleaseError::InvalidRequiredPath {
+                        path: "systemd/dam-hopper-idle-suspend-helper.service",
+                    });
+                }
+                self.has_helper_unit = true;
+            }
             "systemd/dam-hopper-web.service" | "systemd/dam-hopper-web.service.in" => {
                 if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Web) {
                     return Err(ReleaseError::InvalidRequiredPath {
@@ -136,8 +158,7 @@ impl RequiredPathsTracker {
                 }
                 self.has_web_unit = true;
             }
-            "systemd/dam-hopper-recovery.service"
-            | "systemd/dam-hopper-recovery.service.in" => {
+            "systemd/dam-hopper-recovery.service" | "systemd/dam-hopper-recovery.service.in" => {
                 if entry.kind != EntryKind::File || !entry.roles.contains(&ReleaseRole::Common) {
                     return Err(ReleaseError::InvalidRequiredPath {
                         path: "systemd/dam-hopper-recovery.service",
@@ -172,8 +193,13 @@ impl RequiredPathsTracker {
         let checks = [
             (self.has_manager, "bin/dam-hopper-manager"),
             (self.has_server, "bin/dam-hopper-server"),
+            (self.has_helper, "bin/dam-hopper-idle-suspend-helper"),
             (self.has_web, "bin/dam-hopper-web"),
             (self.has_api_unit, "systemd/dam-hopper-api.service"),
+            (
+                self.has_helper_unit,
+                "systemd/dam-hopper-idle-suspend-helper.service",
+            ),
             (self.has_web_unit, "systemd/dam-hopper-web.service"),
             (
                 self.has_recovery_unit,

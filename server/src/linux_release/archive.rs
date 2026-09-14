@@ -79,9 +79,7 @@ impl<R: Read> Read for BoundedArchiveReader<R> {
     }
 }
 
-pub(crate) fn bounded_gzip_reader<R: Read>(
-    reader: R,
-) -> BoundedArchiveReader<GzDecoder<R>> {
+pub(crate) fn bounded_gzip_reader<R: Read>(reader: R) -> BoundedArchiveReader<GzDecoder<R>> {
     BoundedArchiveReader::new(GzDecoder::new(reader))
 }
 
@@ -124,8 +122,7 @@ pub fn inspect_and_validate_archive<R: Read>(
         .map_err(|e| map_archive_read_error("read archive entries", e.to_string()))?;
 
     for entry_result in entries {
-        let mut entry = entry_result
-            .map_err(|e| map_entry_error("unknown", e.to_string()))?;
+        let mut entry = entry_result.map_err(|e| map_entry_error("unknown", e.to_string()))?;
 
         let entry_type = entry.header().entry_type();
         let raw_path = entry
@@ -250,7 +247,6 @@ pub fn inspect_and_validate_archive<R: Read>(
 
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

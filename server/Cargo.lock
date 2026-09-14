@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "dam-hopper-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -715,6 +715,7 @@ dependencies = [
  "once_cell",
  "opaque-ke",
  "opentelemetry-proto",
+ "parking_lot",
  "pathdiff",
  "png",
  "portable-pty",

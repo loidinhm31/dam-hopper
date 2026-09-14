@@ -161,6 +161,11 @@ pub async fn init_workspace(
             load_workspace_config(&path).map_err(ApiError::from_app)?
         }
     };
+    let mut cfg = cfg;
+    {
+        let timing = state.idle_suspend_timing.read().await;
+        state.idle_suspend_policy.apply_to_config(&mut cfg, &timing);
+    }
 
     let _workspace_context = state.workspace_context_guard.write().await;
     state.media_tickets.revoke_all();
@@ -183,8 +188,11 @@ pub async fn switch_workspace(
     Json(body): Json<PathBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = std::path::PathBuf::from(&body.path);
-    let cfg = load_config_from_workspace_or_file(&path).map_err(ApiError::from_app)?;
-
+    let mut cfg = load_config_from_workspace_or_file(&path).map_err(ApiError::from_app)?;
+    {
+        let timing = state.idle_suspend_timing.read().await;
+        state.idle_suspend_policy.apply_to_config(&mut cfg, &timing);
+    }
     state.pty_manager.dispose().map_err(ApiError::from_app)?;
 
     let _workspace_context = state.workspace_context_guard.write().await;

@@ -26,8 +26,23 @@ export default [
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      "react-hooks/set-state-in-effect": "warn",
       "@typescript-eslint/no-unused-vars": "warn",
       "@typescript-eslint/no-explicit-any": "warn",
+    },
+  },
+  {
+    files: [
+      "**/*.test.ts",
+      "**/*.test.tsx",
+      "**/*.browser.ts",
+      "**/*.browser.tsx",
+      "**/browser-tests/**",
+    ],
+    rules: {
+      "react-hooks/globals": "off",
+      "react-hooks/immutability": "off",
+      "react-hooks/purity": "off",
     },
   },
 ];

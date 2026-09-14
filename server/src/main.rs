@@ -364,6 +364,23 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Start idle-suspend coordinator after persistence restore completes.
+    // In Phase 03, resolve executor: enroll SystemdIdleSuspendExecutor with privileged helper socket path.
+    // SystemdIdleSuspendExecutor dynamically checks socket presence and health per-request,
+    // avoiding permanent latching if the helper daemon starts after the API server.
+    let idle_suspend_executor: Arc<dyn dam_hopper_server::idle_suspend::IdleSuspendExecutor> = {
+        let socket_path = std::env::var("DAM_HOPPER_IDLE_SUSPEND_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/run/dam-hopper/idle-suspend.sock"));
+        tracing::info!(
+            socket = %socket_path.display(),
+            socket_exists = socket_path.exists(),
+            "Enrolling SystemdIdleSuspendExecutor with privileged helper socket"
+        );
+        Arc::new(dam_hopper_server::idle_suspend::SystemdIdleSuspendExecutor::new(&socket_path))
+    };
+    state.start_idle_suspend_coordinator(idle_suspend_executor).await;
+
     let host_resource_monitor_shutdown = state.host_resource_monitor.clone();
     state.host_resource_monitor.start();
 
@@ -384,7 +401,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(proc_poll_loop(port_forward_manager));
 
     let telemetry_shutdown = state.telemetry_runtime.clone();
-    let router = build_router_with_web_dir_and_origins(state, allowed_origins, cli.web_dir);
+    let router = build_router_with_web_dir_and_origins(state.clone(), allowed_origins, cli.web_dir);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
 
@@ -418,6 +435,7 @@ async fn main() -> anyhow::Result<()> {
     .with_graceful_shutdown(shutdown_signal)
     .await;
 
+    state.shutdown_idle_suspend_coordinator().await;
     host_resource_monitor_shutdown.shutdown().await;
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
     tunnel_manager_shutdown.dispose_all().await;

@@ -10,8 +10,8 @@ use super::error::ReleaseError;
 use super::layout::Layout;
 use super::manifest::ReleaseManifest;
 use super::ownership::verify_release_ownership;
-use super::version::validate_tag_format;
 use super::state::ManagerState;
+use super::version::validate_tag_format;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,10 +50,15 @@ pub fn apply_retention(layout: &Layout, state: &ManagerState) -> Result<usize, R
     })?;
 
     let canonical_current = if layout.current_link().exists() {
-        Some(layout.current_link().canonicalize().map_err(|e| ReleaseError::Io {
-            action: "canonicalize current symlink",
-            details: e.to_string(),
-        })?)
+        Some(
+            layout
+                .current_link()
+                .canonicalize()
+                .map_err(|e| ReleaseError::Io {
+                    action: "canonicalize current symlink",
+                    details: e.to_string(),
+                })?,
+        )
     } else {
         None
     };
@@ -99,7 +104,8 @@ pub fn apply_retention(layout: &Layout, state: &ManagerState) -> Result<usize, R
 
             if !canonical_path.starts_with(&canonical_releases_dir) {
                 return Err(ReleaseError::Config(format!(
-                    "candidate path escapes releases directory: {}", path.display()
+                    "candidate path escapes releases directory: {}",
+                    path.display()
                 )));
             }
 
@@ -151,7 +157,10 @@ pub fn apply_retention(layout: &Layout, state: &ManagerState) -> Result<usize, R
 fn verify_candidate_integrity(path: &Path) -> Result<(), ReleaseError> {
     if path.file_name() == Some(std::ffi::OsStr::new("imported-format-2")) {
         let bin = path.join("server").join("bin").join("dam-hopper-server");
-        let unit = path.join("server").join("systemd").join("dam-hopper.service");
+        let unit = path
+            .join("server")
+            .join("systemd")
+            .join("dam-hopper.service");
         if !bin.is_file() || !unit.is_file() {
             return Err(ReleaseError::InvalidBundle {
                 path: path.display().to_string(),

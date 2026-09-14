@@ -210,8 +210,42 @@ vi.mock("@/api/queries.js", () => ({
     isPending: false,
     error: null,
   }),
+  useIdleSuspendStatus: () => ({
+    data: {
+      version: 1,
+      statusRevision: 1,
+      state: "watching",
+      enabled: true,
+      timingMutable: true,
+      timingMutableReason: null,
+      capabilityCode: "systemdLogindRtc",
+      currentEpoch: 1,
+      quietPeriodSeconds: 300,
+      wakeAfterSeconds: 600,
+      minQuietPeriodSeconds: 60,
+      maxQuietPeriodSeconds: 86400,
+      minWakeAfterSeconds: 60,
+      maxWakeAfterSeconds: 86400,
+      fleetSnapshot: {
+        generation: 1,
+        liveCount: 0,
+        creatingCount: 0,
+        restartPendingCount: 0,
+        quiescent: true,
+        disposing: false,
+        closing: false,
+        handoffActive: false,
+      },
+      timestampMs: Date.now(),
+    },
+    isLoading: false,
+    isError: false,
+  }),
+  useForceSuspend: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
-
 import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.js";
 import { useHostResourceAlertPresentationStore } from "@/hooks/use-host-resource-alert-presentation.js";
 import { resetTransportListeners, useIpc } from "@/hooks/use-sse.js";
@@ -526,7 +560,7 @@ describe("host resource monitoring in Chromium", () => {
     });
     expect(document.activeElement).toBe(disclosure.element());
     expect(disclosure.element().getAttribute("aria-expanded")).toBe("false");
-    expect(dialog?.textContent).toContain("Read-only monitoring and diagnosis");
+    expect(dialog?.textContent).toContain("Monitoring, diagnosis, and host sleep control");
     expect(dialog?.textContent).toContain("Operator guidance");
     await act(async () => userEvent.click(disclosure));
     const battery = page.getByRole("region", { name: "Battery", exact: true });
@@ -695,6 +729,41 @@ describe("host resource monitoring in Chromium", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it("hands off from popover to Radix ForceSleepDialog and restores trigger focus on close", async () => {
+    legacyMetricsResult = { data: legacyMetrics };
+    await act(async () => root.render(<HostResourcePopover />));
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="dialog"]',
+    );
+    await act(async () => trigger?.click());
+
+    const forceButton = page.getByRole("button", {
+      name: "Force Machine to Sleep",
+    });
+    await expect.element(forceButton).toBeVisible();
+
+    await act(async () => userEvent.click(forceButton));
+
+    expect(
+      container.querySelector("header h2")?.textContent,
+    ).not.toBe("Host resources");
+
+    const forceDialog = page.getByRole("dialog");
+    await expect.element(forceDialog).toBeVisible();
+    await expect.element(forceDialog).toHaveTextContent("Force Machine to Sleep");
+    await expect.element(forceDialog).toHaveTextContent(
+      "Sleep indefinitely (default)",
+    );
+
+    const cancelButton = page.getByRole("button", { name: "Cancel" });
+    await act(async () => userEvent.click(cancelButton));
+
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("contains keyboard focus and keeps interactive targets at least 44px", async () => {
     legacyMetricsResult = { data: legacyMetrics };
     const { trigger, dialog } = await renderOpenPanel(
@@ -705,13 +774,18 @@ describe("host resource monitoring in Chromium", () => {
     const closeButton = dialog.querySelector<HTMLButtonElement>(
       'button[aria-label="Close host resources"]',
     );
+    const forceButton = dialog.querySelector<HTMLButtonElement>(
+      'button[aria-label="Force Machine to Sleep"]',
+    );
     const storageButton = dialog.querySelector<HTMLButtonElement>(
       'button[aria-controls$="-diagnosis"]',
     );
     expect(closeButton).not.toBeNull();
+    expect(forceButton).not.toBeNull();
     expect(storageButton).not.toBeNull();
     assertMinimumControlSize(trigger);
     assertMinimumControlSize(closeButton as HTMLButtonElement);
+    assertMinimumControlSize(forceButton as HTMLButtonElement);
     assertMinimumControlSize(storageButton as HTMLButtonElement);
 
     await act(async () => userEvent.keyboard("{Tab}"));
@@ -726,6 +800,9 @@ describe("host resource monitoring in Chromium", () => {
         getOpaqueBackground(closeButton as HTMLButtonElement),
       ),
     ).toBeGreaterThanOrEqual(3);
+
+    await act(async () => userEvent.keyboard("{Tab}"));
+    expect(document.activeElement).toBe(forceButton);
 
     await act(async () => userEvent.keyboard("{Tab}"));
     expect(document.activeElement).toBe(storageButton);

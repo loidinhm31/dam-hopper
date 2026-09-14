@@ -371,6 +371,7 @@ mod tests {
                 workflow_event_retention_days: 90,
                 workflow_deleted_note_retention_days: 7,
                 workflow_stale_after_hours: 24,
+                idle_suspend: Default::default(),
             },
             projects: vec![ProjectConfig {
                 name: "test-project".to_string(),

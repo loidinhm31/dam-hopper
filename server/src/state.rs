@@ -23,11 +23,11 @@ use crate::system::HostResourceMonitor;
 use crate::telemetry::worker::TelemetryHandle;
 use crate::telemetry::{codex_otlp::CodexExporterManager, TelemetryRuntime};
 use crate::tunnel::TunnelSessionManager;
+use crate::workflow::{WorkflowService, WorkflowStore};
 use crate::workspace_target::{
     ProjectTargetRef, ProjectWorktree, ResolvedProjectTarget, WorkspaceTargetError,
     WorkspaceTargetResolver,
 };
-use crate::workflow::{WorkflowService, WorkflowStore};
 
 /// Shared application state across all Axum handlers.
 ///
@@ -111,6 +111,22 @@ pub struct AppState {
     /// Optional workflow store/service. Workflow availability never gates PTY APIs.
     pub workflow: Option<Arc<WorkflowService>>,
     pub workspace_target_resolver: WorkspaceTargetResolver,
+    /// Startup policy for server-authoritative terminal idle suspend.
+    pub idle_suspend_policy: Arc<crate::idle_suspend::StartupIdleSuspendPolicy>,
+    /// Mutable runtime timing configuration with status revision tracking.
+    pub idle_suspend_timing: Arc<RwLock<crate::idle_suspend::RuntimeIdleSuspendTiming>>,
+    /// Narrow atomic pair store for canonical registry persistence.
+    pub idle_suspend_store: Arc<crate::idle_suspend::IdleSuspendTimingStore>,
+    /// Server-private audit log for idle suspend timing and manual force mutations.
+    pub idle_suspend_audit: Arc<crate::idle_suspend::IdleSuspendServerAudit>,
+    /// Active idle suspend coordinator, initialized after persistence restoration.
+    pub idle_suspend_coordinator:
+        Arc<RwLock<Option<Arc<crate::idle_suspend::IdleSuspendCoordinator>>>>,
+    /// Authoritative event writer for canonical server semantic events.
+    pub idle_suspend_event_writer:
+        Option<Arc<crate::idle_suspend::IdleSuspendEventWriter>>,
+    /// Monotonic timestamp for idle suspend fallback warning onset.
+    pub fallback_warning_onset_ms: u64,
 }
 
 impl AppState {
@@ -173,6 +189,44 @@ impl AppState {
             .ok_or(AppError::WorkspaceTarget(
                 WorkspaceTargetError::UnknownProject,
             ))
+    }
+
+    pub async fn start_idle_suspend_coordinator(
+        &self,
+        executor: Arc<dyn crate::idle_suspend::IdleSuspendExecutor>,
+    ) -> Arc<crate::idle_suspend::IdleSuspendCoordinator> {
+        let mut guard = self.idle_suspend_coordinator.write().await;
+        if let Some(existing) = &*guard {
+            return Arc::clone(existing);
+        }
+
+        let coordinator = Arc::new(
+            crate::idle_suspend::IdleSuspendCoordinator::start_with_sink(
+                (*self.idle_suspend_policy).clone(),
+                Arc::clone(&self.idle_suspend_timing),
+                Some((*self.idle_suspend_store).clone()),
+                Some((*self.idle_suspend_audit).clone()),
+                executor,
+                self.pty_manager.clone(),
+                Some(Arc::new(self.event_sink.clone())),
+                self.idle_suspend_event_writer.clone(),
+            ),
+        );
+        *guard = Some(Arc::clone(&coordinator));
+        coordinator
+    }
+
+    pub async fn get_idle_suspend_coordinator(
+        &self,
+    ) -> Option<Arc<crate::idle_suspend::IdleSuspendCoordinator>> {
+        self.idle_suspend_coordinator.read().await.clone()
+    }
+
+    pub async fn shutdown_idle_suspend_coordinator(&self) {
+        let coordinator = self.idle_suspend_coordinator.write().await.take();
+        if let Some(coord) = coordinator {
+            coord.shutdown().await;
+        }
     }
 
     /// Create new AppState with production safety validation for no-auth mode.
@@ -251,6 +305,45 @@ impl AppState {
         let video_stream_tickets = VideoStreamTicketStore::from_media(media_tickets.clone());
         let image_stream_tickets = ImageStreamTicketStore::from_media(media_tickets.clone());
 
+        let idle_suspend_policy =
+            Arc::new(crate::idle_suspend::StartupIdleSuspendPolicy::from_config(
+                &config.config_path,
+                &config.server.idle_suspend,
+            ));
+        let idle_suspend_timing = Arc::new(RwLock::new(
+            crate::idle_suspend::RuntimeIdleSuspendTiming::from_config(&config.server.idle_suspend)
+                .map_err(|e| anyhow::anyhow!("Invalid idle suspend timing: {e}"))?,
+        ));
+        let idle_suspend_store = Arc::new(crate::idle_suspend::IdleSuspendTimingStore::new(
+            idle_suspend_policy.canonical_registry_path.clone(),
+        ));
+        let idle_suspend_audit_dir = config
+            .config_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(".config/dam-hopper"));
+        let idle_suspend_audit = Arc::new(crate::idle_suspend::IdleSuspendServerAudit::new(
+            idle_suspend_audit_dir.join("idle-suspend-audit.jsonl"),
+        ));
+        let idle_suspend_event_writer = diagnostics
+            .log_path()
+            .parent()
+            .map(|p| p.join("idle-suspend-events-v1.jsonl"))
+            .and_then(|path| match crate::idle_suspend::IdleSuspendEventWriter::new(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(err) => {
+                    let mut fields = std::collections::BTreeMap::new();
+                    fields.insert("error".to_string(), err.to_string());
+                    diagnostics.record_event(crate::diagnostics::DiagnosticEvent {
+                        timestamp_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(),
+                        level: "WARN".to_string(),
+                        source: "idle_suspend::event_writer".to_string(),
+                        message: "Failed to initialize idle suspend canonical event writer".to_string(),
+                        fields,
+                    });
+                    None
+                }
+            });
         Ok(Self {
             workspace_dir,
             config: Arc::new(RwLock::new(config)),
@@ -284,6 +377,13 @@ impl AppState {
             telemetry_coordinator: Arc::new(tokio::sync::Mutex::new(())),
             workflow: None,
             workspace_target_resolver: WorkspaceTargetResolver::new(),
+            idle_suspend_policy,
+            idle_suspend_timing,
+            idle_suspend_store,
+            idle_suspend_audit,
+            idle_suspend_coordinator: Arc::new(RwLock::new(None)),
+            idle_suspend_event_writer,
+            fallback_warning_onset_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(),
         })
     }
     /// Attach the optional workflow repository using the existing session DB connection.
@@ -324,15 +424,29 @@ impl AppState {
 
     /// Whether a request carries an exact configured or same-origin browser origin.
     pub fn origin_is_allowed(&self, headers: &HeaderMap) -> bool {
-        let Some(origin) = headers
-            .get(header::ORIGIN)
-            .and_then(|value| value.to_str().ok())
-        else {
+        let mut origin_iter = headers.get_all(header::ORIGIN).iter();
+        let Some(origin_val) = origin_iter.next() else {
+            return false;
+        };
+        if origin_iter.next().is_some() {
+            return false;
+        }
+        let Ok(origin) = origin_val.to_str() else {
             return false;
         };
         if self.cors_origins.iter().any(|allowed| allowed == origin) {
             return true;
         }
+        let mut host_iter = headers.get_all(header::HOST).iter();
+        let Some(host_val) = host_iter.next() else {
+            return false;
+        };
+        if host_iter.next().is_some() {
+            return false;
+        }
+        let Ok(host) = host_val.to_str() else {
+            return false;
+        };
         let Ok(uri) = origin.parse::<Uri>() else {
             return false;
         };
@@ -346,10 +460,7 @@ impl AppState {
         {
             return false;
         }
-        headers
-            .get(header::HOST)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|host| authority.as_str().eq_ignore_ascii_case(host))
+        authority.as_str().eq_ignore_ascii_case(host)
     }
 
     pub fn set_telemetry(&self, telemetry: TelemetryHandle) {

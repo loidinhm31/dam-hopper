@@ -20,14 +20,15 @@ ALLOW_ORIGINS=()
 VERIFY_ATTESTATION=0
 SERVICE_USER=""
 REINSTALL=0
-
+BUNDLE_PATH=""
 usage() {
     cat <<EOF
-Usage: $0 (--version <vX.Y.Z> | --latest) --role <server|web|both> [options]
+Usage: $0 (--version <vX.Y.Z> | --latest | --bundle <dir>) --role <server|web|both> [options]
 
 Options:
   --version <tag>         Exact release version tag to install (e.g. v0.1.0)
   --latest                Resolve and install the latest stable release
+  --bundle <dir>          Path to local bundle directory containing release-manifest.json and archive
   --role <role>           Target host role: 'server', 'web', or 'both' [required]
   --reinstall             Stop running services and overwrite existing installation for this version
   --allow-web-origin <url> Allowed web origin for CORS (may be specified multiple times)
@@ -55,6 +56,10 @@ while [[ $# -gt 0 ]]; do
         --reinstall)
             REINSTALL=1
             shift
+            ;;
+        --bundle)
+            BUNDLE_PATH="$2"
+            shift 2
             ;;
         --allow-web-origin)
             ALLOW_ORIGINS+=("$2")
@@ -88,8 +93,8 @@ if [[ "${ROLE}" != "server" && "${ROLE}" != "web" && "${ROLE}" != "both" ]]; the
     exit 1
 fi
 
-if [[ -z "${VERSION}" && ${LATEST} -eq 0 ]]; then
-    echo "Error: Either --version <vX.Y.Z> or --latest is required" >&2
+if [[ -z "${VERSION}" && ${LATEST} -eq 0 && -z "${BUNDLE_PATH}" ]]; then
+    echo "Error: Either --version <vX.Y.Z>, --latest, or --bundle <dir> is required" >&2
     usage
 fi
 
@@ -98,8 +103,17 @@ if [[ -n "${VERSION}" && ${LATEST} -eq 1 ]]; then
     usage
 fi
 
+if [[ -n "${BUNDLE_PATH}" && ${LATEST} -eq 1 ]]; then
+    echo "Error: Cannot specify both --bundle and --latest" >&2
+    usage
+fi
+
 # Dependency check
-for cmd in curl sha256sum tar; do
+REQUIRED_CMDS=(sha256sum tar)
+if [[ -z "${BUNDLE_PATH}" ]]; then
+    REQUIRED_CMDS+=(curl)
+fi
+for cmd in "${REQUIRED_CMDS[@]}"; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
         echo "Error: Required command '${cmd}' not found on host" >&2
         exit 1
@@ -120,62 +134,102 @@ if command -v getconf >/dev/null 2>&1; then
     fi
 fi
 
-# Resolve release tag
-TAG=""
-if [[ ${LATEST} -eq 1 ]]; then
-    echo "Resolving latest stable release for ${REPO_OWNER}/${REPO_NAME}..."
-    LATEST_JSON=$(curl -fsSL -H "Accept: application/vnd.github+json" "${API_BASE}/releases/latest" 2>/dev/null || true)
-    if [[ -n "${LATEST_JSON}" ]]; then
-        TAG=$(echo "${LATEST_JSON}" | awk -F'"' '/"tag_name":/ { print $4; exit }')
-    fi
-    if [[ -z "${TAG}" ]]; then
-        echo "Error: Could not resolve latest stable release tag from GitHub API" >&2
-        exit 1
-    fi
-    echo "Resolved latest release: ${TAG}"
-else
-    TAG="${VERSION}"
-fi
-
-if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Error: Tag '${TAG}' does not match expected format vMAJOR.MINOR.PATCH" >&2
-    exit 1
-fi
-
-ARCHIVE_NAME="dam-hopper-${TAG}-linux-x86_64-systemd.tar.gz"
-DOWNLOAD_URL_BASE="${GITHUB_BASE}/releases/download/${TAG}"
-
 TMP_DIR="$(mktemp -d -t dam-hopper-bootstrap-XXXXXXXX)"
 chmod 0700 "${TMP_DIR}"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-BUNDLE_DIR="${TMP_DIR}/bundle"
-mkdir -p "${BUNDLE_DIR}"
-
-MANIFEST_FILE="${BUNDLE_DIR}/release-manifest.json"
-ARCHIVE_FILE="${BUNDLE_DIR}/${ARCHIVE_NAME}"
-
-echo "Downloading release manifest: ${TAG}..."
-if ! curl -fsSL --connect-timeout 15 --max-time 60 \
-    "${DOWNLOAD_URL_BASE}/release-manifest.json" -o "${MANIFEST_FILE}"; then
-    echo "Error: Failed to download release-manifest.json for ${TAG}" >&2
-    exit 1
-fi
-
-echo "Downloading release archive: ${ARCHIVE_NAME}..."
-if ! curl -fsSL --connect-timeout 15 --max-time 300 \
-    "${DOWNLOAD_URL_BASE}/${ARCHIVE_NAME}" -o "${ARCHIVE_FILE}"; then
-    FALLBACK_ARCHIVE="dam-hopper-${TAG}-fedora44-x86_64-systemd.tar.gz"
-    echo "Primary archive not found, trying fallback: ${FALLBACK_ARCHIVE}..."
-    ARCHIVE_NAME="${FALLBACK_ARCHIVE}"
-    ARCHIVE_FILE="${BUNDLE_DIR}/${ARCHIVE_NAME}"
-    if ! curl -fsSL --connect-timeout 15 --max-time 300 \
-        "${DOWNLOAD_URL_BASE}/${ARCHIVE_NAME}" -o "${ARCHIVE_FILE}"; then
-        echo "Error: Failed to download release archive for ${TAG}" >&2
+if [[ -n "${BUNDLE_PATH}" ]]; then
+    if [[ ! -d "${BUNDLE_PATH}" ]]; then
+        echo "Error: Bundle directory '${BUNDLE_PATH}' does not exist" >&2
         exit 1
     fi
-fi
+    BUNDLE_DIR="$(cd "${BUNDLE_PATH}" && pwd)"
+    MANIFEST_FILE="${BUNDLE_DIR}/release-manifest.json"
+    if [[ ! -f "${MANIFEST_FILE}" ]]; then
+        echo "Error: release-manifest.json not found in '${BUNDLE_DIR}'" >&2
+        exit 1
+    fi
+    if [[ -z "${VERSION}" ]]; then
+        TAG=$(awk -F'"' '/"tag":/ { print $4; exit }' "${MANIFEST_FILE}")
+        if [[ -z "${TAG}" ]]; then
+            echo "Error: Could not extract release tag from ${MANIFEST_FILE}" >&2
+            exit 1
+        fi
+    else
+        TAG="${VERSION}"
+    fi
+    ARCHIVE_NAME="dam-hopper-${TAG}-linux-x86_64-systemd.tar.gz"
+    if [[ -f "${BUNDLE_DIR}/${ARCHIVE_NAME}" ]]; then
+        ARCHIVE_FILE="${BUNDLE_DIR}/${ARCHIVE_NAME}"
+    elif [[ -f "${BUNDLE_DIR}/dam-hopper-${TAG}-fedora44-x86_64-systemd.tar.gz" ]]; then
+        ARCHIVE_NAME="dam-hopper-${TAG}-fedora44-x86_64-systemd.tar.gz"
+        ARCHIVE_FILE="${BUNDLE_DIR}/${ARCHIVE_NAME}"
+    else
+        MATCHED_ARCHIVE=$(find "${BUNDLE_DIR}" -maxdepth 1 -name "dam-hopper-*.tar.gz" 2>/dev/null | head -1)
+        if [[ -n "${MATCHED_ARCHIVE}" ]]; then
+            ARCHIVE_FILE="${MATCHED_ARCHIVE}"
+            ARCHIVE_NAME="$(basename "${ARCHIVE_FILE}")"
+        else
+            echo "Error: Release archive for ${TAG} not found in '${BUNDLE_DIR}'" >&2
+            exit 1
+        fi
+    fi
+    echo "Using local release bundle from: ${BUNDLE_DIR}"
+    echo "Release tag: ${TAG}"
+    echo "Archive: ${ARCHIVE_NAME}"
+else
+    # Resolve release tag
+    TAG=""
+    if [[ ${LATEST} -eq 1 ]]; then
+        echo "Resolving latest stable release for ${REPO_OWNER}/${REPO_NAME}..."
+        LATEST_JSON=$(curl -fsSL -H "Accept: application/vnd.github+json" "${API_BASE}/releases/latest" 2>/dev/null || true)
+        if [[ -n "${LATEST_JSON}" ]]; then
+            TAG=$(echo "${LATEST_JSON}" | awk -F'"' '/"tag_name":/ { print $4; exit }')
+        fi
+        if [[ -z "${TAG}" ]]; then
+            echo "Error: Could not resolve latest stable release tag from GitHub API" >&2
+            exit 1
+        fi
+        echo "Resolved latest release: ${TAG}"
+    else
+        TAG="${VERSION}"
+    fi
 
+    if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "Error: Tag '${TAG}' does not match expected format vMAJOR.MINOR.PATCH" >&2
+        exit 1
+    fi
+
+    ARCHIVE_NAME="dam-hopper-${TAG}-linux-x86_64-systemd.tar.gz"
+    DOWNLOAD_URL_BASE="${GITHUB_BASE}/releases/download/${TAG}"
+
+    BUNDLE_DIR="${TMP_DIR}/bundle"
+    mkdir -p "${BUNDLE_DIR}"
+
+    MANIFEST_FILE="${BUNDLE_DIR}/release-manifest.json"
+    ARCHIVE_FILE="${BUNDLE_DIR}/${ARCHIVE_NAME}"
+
+    echo "Downloading release manifest: ${TAG}..."
+    if ! curl -fsSL --connect-timeout 15 --max-time 60 \
+        "${DOWNLOAD_URL_BASE}/release-manifest.json" -o "${MANIFEST_FILE}"; then
+        echo "Error: Failed to download release-manifest.json for ${TAG}" >&2
+        exit 1
+    fi
+
+    echo "Downloading release archive: ${ARCHIVE_NAME}..."
+    if ! curl -fsSL --connect-timeout 15 --max-time 300 \
+        "${DOWNLOAD_URL_BASE}/${ARCHIVE_NAME}" -o "${ARCHIVE_FILE}"; then
+        FALLBACK_ARCHIVE="dam-hopper-${TAG}-fedora44-x86_64-systemd.tar.gz"
+        echo "Primary archive not found, trying fallback: ${FALLBACK_ARCHIVE}..."
+        ARCHIVE_NAME="${FALLBACK_ARCHIVE}"
+        ARCHIVE_FILE="${BUNDLE_DIR}/${ARCHIVE_NAME}"
+        if ! curl -fsSL --connect-timeout 15 --max-time 300 \
+            "${DOWNLOAD_URL_BASE}/${ARCHIVE_NAME}" -o "${ARCHIVE_FILE}"; then
+            echo "Error: Failed to download release archive for ${TAG}" >&2
+            exit 1
+        fi
+    fi
+fi
 # Parse expected sha256 from manifest
 EXPECTED_SHA=$(awk -F'"' '/"archive"/,/\}/ { if ($2 == "sha256") { print $4; exit } }' "${MANIFEST_FILE}")
 if [[ -z "${EXPECTED_SHA}" ]]; then
@@ -288,30 +342,6 @@ echo "============================================================"
 echo "Staging release ${TAG} for role '${ROLE}' (requires sudo)..."
 echo "============================================================"
 
-if [[ ! -f /etc/dam-hopper/dam-hopper.toml ]]; then
-    if [[ $EUID -eq 0 ]]; then
-        mkdir -p -m 0755 /etc/dam-hopper
-        cat > /etc/dam-hopper/dam-hopper.toml <<'EOF'
-[workspace]
-name = "default"
-EOF
-        chmod 0644 /etc/dam-hopper/dam-hopper.toml
-    else
-        sudo mkdir -p -m 0755 /etc/dam-hopper
-        sudo tee /etc/dam-hopper/dam-hopper.toml >/dev/null <<'EOF'
-[workspace]
-name = "default"
-EOF
-        sudo chmod 0644 /etc/dam-hopper/dam-hopper.toml
-    fi
-fi
-if [[ $EUID -eq 0 ]]; then
-    chmod 0755 /etc/dam-hopper 2>/dev/null || true
-    [[ -f /etc/dam-hopper/dam-hopper.toml ]] && chmod 0644 /etc/dam-hopper/dam-hopper.toml 2>/dev/null || true
-else
-    sudo chmod 0755 /etc/dam-hopper 2>/dev/null || true
-    [[ -f /etc/dam-hopper/dam-hopper.toml ]] && sudo chmod 0644 /etc/dam-hopper/dam-hopper.toml 2>/dev/null || true
-fi
 
 if [[ $EUID -eq 0 ]]; then
     "${INSTALL_CMD[@]}"
