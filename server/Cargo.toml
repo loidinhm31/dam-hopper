@@ -1,6 +1,6 @@
 [package]
 name = "dam-hopper-server"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 description = "Rust backend server for the DamHopper multi-project development workspace UI"
@@ -27,6 +27,10 @@ path = "src/bin/dam-hopper.rs"
 name = "dam-hopper-web"
 path = "src/bin/dam-hopper-web.rs"
 
+[[bin]]
+name = "dam-hopper-idle-suspend-helper"
+path = "src/bin/dam-hopper-idle-suspend-helper.rs"
+
 [features]
 # Bundle libgit2 + openssl statically — used for portable release binaries in CI
 vendored = ["git2/vendored-libgit2", "git2/vendored-openssl"]
@@ -35,7 +39,8 @@ vendored = ["git2/vendored-libgit2", "git2/vendored-openssl"]
 # Web framework
 axum = { version = "0.8", features = ["ws", "json", "macros"] }
 axum-extra = { version = "0.10", features = ["cookie", "typed-header"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
+parking_lot = "0.12"
 futures-util = "0.3"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs", "limit"] }

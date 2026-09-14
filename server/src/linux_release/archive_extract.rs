@@ -1,10 +1,10 @@
 //! Archive extraction and role projection to destination directory.
 
 use super::archive::{bounded_gzip_reader, map_archive_read_error, map_entry_error};
+use super::constants::MAX_ARCHIVE_ENTRY_BYTES;
 use super::error::ReleaseError;
 use super::inventory::{check_disallowed_files, normalize_inventory_path, TargetRole};
 use super::manifest::ReleaseManifest;
-use super::constants::MAX_ARCHIVE_ENTRY_BYTES;
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -22,9 +22,9 @@ pub fn extract_role_projection<R: Read>(
     let mut archive = Archive::new(gz);
     archive.set_ignore_zeros(false);
 
-    let entries = archive
-        .entries()
-        .map_err(|e| map_archive_read_error("read archive entries for extraction", e.to_string()))?;
+    let entries = archive.entries().map_err(|e| {
+        map_archive_read_error("read archive entries for extraction", e.to_string())
+    })?;
 
     for entry_result in entries {
         let mut entry = entry_result.map_err(|e| map_entry_error("unknown", e.to_string()))?;

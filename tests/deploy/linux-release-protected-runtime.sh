@@ -364,7 +364,7 @@ assert_active "$CURRENT_TAG" server "$TEST_ROOT/status.json"
 
 # Unit identity and sandbox checks are made against the installed units and
 # effective process metadata, not source text alone.
-assert_identity dam-hopper-api.service root root
+assert_identity dam-hopper-api.service dam-hopper dam-hopper
 assert_identity dam-hopper-web.service dam-hopper-web dam-hopper-web
 systemd-analyze security dam-hopper-web.service --no-pager >/dev/null
 

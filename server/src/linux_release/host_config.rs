@@ -192,7 +192,8 @@ pub fn load_host_public_config(path: &Path) -> Result<Option<HostPublicConfig>, 
 pub fn save_host_public_config(path: &Path, config: &HostPublicConfig) -> Result<(), ReleaseError> {
     validate_web_origins(&config.allowed_web_origins)?;
 
-    let serialized = serde_json::to_string_pretty(config)
-        .map_err(|e| ReleaseError::Config(format!("failed to serialize public host config: {e}")))?;
+    let serialized = serde_json::to_string_pretty(config).map_err(|e| {
+        ReleaseError::Config(format!("failed to serialize public host config: {e}"))
+    })?;
     atomic_write_file(path, serialized.as_bytes(), Some(0o644))
 }

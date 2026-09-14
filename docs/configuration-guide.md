@@ -218,6 +218,286 @@ period. The release owner approved Phase 07 completion with the still-unobserved
 Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and
 rollback rehearsal deferred as post-release work; none is passed evidence.
 
+## Terminal Idle Suspend (Opt-in Linux Suspend)
+
+The server-authoritative terminal idle suspend feature has two automatic
+policies. `empty-fleet` requests suspend only after all managed PTYs are no
+longer live, creating, or restart-pending. `agent-activity` observes configured
+agent PTY/process/TCP evidence and may suspend while service-only terminals
+remain open; it is an activity heuristic, not proof that an agent has
+finished. Both policies use RTC wake after a bounded quiet period. The enrolled
+helper also supports the Phase 01 execution-only indefinite-sleep sentinel; that
+path is not a configuration mutation.
+
+The feature is **disabled by default** (`enabled = false`) and requires explicit
+host configuration under `[server.idle_suspend]` in the loaded registry TOML
+(`~/.config/dam-hopper/dam-hopper.toml`).
+
+[server.idle_suspend]
+enabled = false
+quiet_period_seconds = 900
+wake_after_seconds = 600
+capability_selection = "auto"
+automatic_policy = "empty-fleet"
+agent_executables = ["codex", "omp", "claude", "agy"]
+
+# enrollment_reference = "systemd:dam-hopper-idle-suspend-helper.service"
+
+### Policy and agent-executable fields (Phase 01)
+
+`automatic_policy` accepts `empty-fleet` (the default) or `agent-activity`.
+Phase 01 freezes this selector and its configuration contract. Phase 02
+provides private PTY root/raw-output/input evidence, Phase 03 provides bounded
+configured-agent process discovery and retained attribution through a private
+procfs seam, and Phase 04 provides owned TCP byte observation and per-socket
+baseline comparison. Phase 05 completes the dedicated transactional sampler,
+manager-locked final admission, bounded warning projection, and
+`agent-activity` coordinator path. Phase 06 adds protected status decoding and
+aggregate browser presentation without adding a policy/matcher editor or
+mutation route. Phase 07 qualifies the integrated manager/API/Chromium path,
+the fake-executor safety boundary, and the explicitly selected Linux PTY/TCP
+observer smoke; it does not authorize a real suspend canary. See [PTY Activity
+Observation](./pty-activity-observation.md), [Configured-Agent Process
+Discovery](./agent-activity-process-discovery.md), [Owned TCP Byte
+Observation](./tcp-activity-observation.md), [Agent Activity Automatic
+Admission](./agent-activity-automatic-admission.md), and [Protected Status and
+Browser UI](./idle-suspend-status-ui.md).
+
+Under `agent-activity`, the server starts one joinable sampler worker after
+persistence restoration. It requests scheduled samples, a fresh final sample at
+the quiet deadline, and recovery sampling after resume or handoff release.
+Measurement failures remain visible as bounded status warnings and never
+authorize automatic suspend. The default `empty-fleet` policy keeps its
+fleet-transition behavior and does not start the activity sampler.
+
+Each sample runs on a two-second cadence with a one-second monotonic acceptance
+deadline and a five-second maximum accepted age; a quiet deadline always
+triggers a fresh final sample, and late samples cannot claim a handoff.
+Cancellation is cooperative: a kernel-stalled syscall cannot be forcibly
+stopped, so shutdown join may be delayed. That join caveat is separate from
+normal target-host latency qualification and is a rollout blocker when it
+persists.
+
+`agent_executables` defaults to `["codex", "omp", "claude", "agy"]`. Entries
+are literal, case-sensitive basenames or absolute paths, never regular
+expressions. The list must contain 1–32 unique entries; each entry is
+1–256 UTF-8 bytes and each path component may contain only ASCII letters,
+digits, `_`, `-`, `.`, `+`, and `@`. Whitespace/control/NUL characters,
+disallowed shell/glob/regex metacharacters, relative slash-containing paths,
+`.`/`..`, repeated or trailing `/`, and generic interpreter basenames (`node`,
+`nodejs`, `bun`, `sh`, `bash`, `dash`, `zsh`, `ksh`, `fish`, `python`, or
+`python` followed by an ASCII digit) are rejected. Validation is lexical and
+does not expand variables, inspect the filesystem, launch a process, or
+silently deduplicate input; invalid lists are rejected even when idle suspend
+is disabled.
+
+TOML uses the snake_case keys shown above. Config-shaped JSON uses
+`server.idleSuspend.automaticPolicy` and
+`server.idleSuspend.agentExecutables`; snake_case aliases are accepted on
+input. The canonical writer may omit default-valued policy/list keys, and
+omission resolves to the defaults.
+
+### Configuration Paths and Registry Locations
+
+DamHopper uses three distinct registry locations depending on deployment mode:
+
+1. **Direct/source development default**: `~/.config/dam-hopper/dam-hopper.toml`. Overridden with `--config <path>` or the `DAM_HOPPER_CONFIG` environment variable.
+2. **Release-manager / systemd production**: `/var/lib/dam-hopper/dam-hopper.toml`, owned by the API service identity with mode `0600`; it is the sole `--config` operand in `deploy/systemd/dam-hopper-api.service` `ExecStart`.
+   On first start only, the runtime provisioner may validate and copy the
+   exact bytes from `/etc/dam-hopper/dam-hopper.toml` when the canonical file
+   is absent. The legacy file is read-only and is never synchronized after the
+   canonical file exists. The server timing/manual audit is
+   `/var/lib/dam-hopper/idle-suspend-audit.jsonl`, also mode `0600`.
+3. **UAT runner default**: `/tmp/dam-hopper-uat/dam-hopper.toml` generated by `scripts/run-uat.sh`. Never treat this temporary path as the production registry.
+
+### Production configuration ownership and updates
+
+For systemd deployments, `/var/lib/dam-hopper/dam-hopper.toml` is the
+canonical daemon registry and the only startup authority. The API service owns
+the file as its configured `User=`/`Group=` with mode `0600`; the legacy
+`/etc/dam-hopper/dam-hopper.toml` is a read-only migration source and is not a
+second live configuration.
+
+Use the authenticated API for normal changes:
+
+- `PUT /api/config` replaces the registry through the API's same-directory
+  atomic TOML writer.
+- `PATCH /api/config/projects/:name` applies a project change through the same
+  atomic writer.
+- Idle-suspend timing changes use the timing endpoint documented above; they
+  also commit through the API-owned canonical file.
+
+Do not use root `sed -i`, `tee`, `cp`, `chown`, or `chmod` against the
+canonical file. Those operations can replace an API-owned inode or change its
+metadata. After an API update, restart
+`dam-hopper-api.service` when changing startup-owned policy fields and verify
+the canonical file remains a regular API-owned `0600` file. The reset tool is
+the only privileged repair workflow: it refuses missing, linked, non-regular,
+or mismatched files instead of repairing them, then performs an API-identity
+atomic disablement when preconditions pass.
+
+
+### Canonical TOML Examples
+
+#### 1. Safe default configuration (upgrade / release-dark baseline)
+
+```toml
+[server.idle_suspend]
+enabled = false
+automatic_policy = "empty-fleet"
+agent_executables = ["codex", "omp", "claude", "agy"]
+quiet_period_seconds = 900
+wake_after_seconds = 600
+capability_selection = "auto"
+# enrollment_reference = "systemd:dam-hopper-idle-suspend-helper.service"
+```
+
+#### 2. Observation-only qualification stage (measurement active, automatic suspend disabled)
+
+```toml
+[server.idle_suspend]
+enabled = false
+automatic_policy = "agent-activity"
+agent_executables = ["codex", "omp", "claude", "agy"]
+quiet_period_seconds = 900
+wake_after_seconds = 600
+capability_selection = "auto"
+```
+
+#### 3. Automatic enablement (opt-in automatic suspend)
+
+```toml
+[server.idle_suspend]
+enabled = true
+automatic_policy = "agent-activity"
+agent_executables = ["codex", "omp", "claude", "agy"]
+quiet_period_seconds = 900
+wake_after_seconds = 600
+capability_selection = "auto"
+```
+
+#### 4. Custom interpreted agent entry
+
+When tracking interpreted agents (e.g. Node.js or Python entrypoint scripts), specify the exact, normalized absolute path to the script entrypoint token. Never specify bare `node`, `bun`, `python`, generic script names, shell wrappers, or wildcards:
+
+```toml
+[server.idle_suspend]
+enabled = false
+automatic_policy = "agent-activity"
+agent_executables = ["codex", "omp", "claude", "agy", "/opt/tools/bin/my-agent.js"]
+quiet_period_seconds = 900
+wake_after_seconds = 600
+```
+
+### Startup Ownership and Immutability
+
+- **Startup policy authority**: `StartupIdleSuspendPolicy` captures `enabled`, `enrollment_reference`, `capability_selection`, `automatic_policy`, and the validated executable set at server boot. Workspace switches, config reloads, full-config updates (`PUT /api/config`), and settings imports cannot change these fields on a running server. Changing policy or executable matchers requires restarting the API process; for systemd deployments use `sudo systemctl restart dam-hopper-api.service`.
+- **Timing Updates**: Authenticated operators can tune `quiet_period_seconds` and `wake_after_seconds` via `PATCH /api/system/idle-suspend/v1/timing`. Unrestricted full-config updates preserve the current idle-suspend configuration and reject incoming modifications.
+- **Timing Bounds**:
+  - `quiet_period_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 900 (15 min).
+  - `wake_after_seconds`: Integer between 60 (1 min) and 86400 (24 hours); default 600 (10 min).
+- **Security Safeguards**: Both the timing mutation route and manual force-suspend route are strictly unavailable in development mode (`--no-auth`). All suspend requests fail closed if sleep inhibitors are active, helper enrollment is missing, host capabilities are unsupported, or RTC ownership is ambiguous.
+- **Manual Execution Independence**: Manual force sleep (`POST /api/system/idle-suspend/v1/force-suspend`) is independent of the automatic idle suspend `enabled` setting; it is accessible only to an authenticated enabled actor when helper enrollment and capability checks are satisfied.
+
+### Controlled Rollout Stages
+
+1. **Stage 0 — Release Dark**: Deploy binary release with existing config selecting `automatic_policy = "empty-fleet"` (or omitted). Verify no existing installations change semantics.
+2. **Stage 1 — Observation-Only Soak**: On an approved Linux canary host, set `enabled = false` and `automatic_policy = "agent-activity"`, restart `dam-hopper-api.service`, and observe protected status. The sampler monitors PTYs and sockets and generates warnings, but cannot arm or claim automatic suspend.
+3. **Stage 2 — Target-Host Gate**: Run the ignored live Linux observer smoke (`cargo test --manifest-path server/Cargo.toml --test idle_suspend activity_live_linux_pty_tcp_smoke -- --ignored --exact --nocapture --test-threads=1`) under the deployed service context to verify kernel diagnostics, proc visibility, and the one-second sample budget.
+4. **Stage 3 — Bounded Automatic Canary**: Operations and Security approve a single canary host. Set `enabled = true` and `automatic_policy = "agent-activity"` with a bounded `wake_after_seconds`. Allow exactly one genuine epoch attempt and verify resume, audit, and spent-epoch behavior.
+5. **Stage 4 — Limited Cohort Expansion**: Expand to additional qualified hosts one at a time. Each host must independently pass Stage 2 qualification; never assume kernel compatibility across hosts.
+### Warning and observation interpretation
+
+While `agent-activity` is selected, `activity.measurementWarning` is `null` for
+an available measurement and otherwise contains the closed reason, one
+continuous `blockedSinceMs` interval, and at most 32 current attributable
+`{ pid, executableIdentity }` examples (positive PID order; identity is nullable
+and capped at 256 UTF-8 bytes without controls). The blocked interval is
+measurement-unavailable duration, not quiet time or an automatic countdown. PID
+or cause changes do not restart it; complete available recovery clears it, and a
+later failure starts a new interval. Warning details appear only in the
+authenticated, `Cache-Control: no-store` status response; they are not copied to
+logs, audits, WebSocket hints, or rollout artifacts. Missing or misleading
+warnings are a no-go for enablement.
+
+### Policy Rollback and Emergency Disable
+
+#### Level 1: Activity policy rollback (returns to zero-fleet policy)
+
+1. Inspect protected status `GET /api/system/idle-suspend/v1/status`. If a
+   handoff is active (`finalCheck` or `handedOff`), reconcile its outcome before
+   editing configuration; a config edit is not cancellation.
+2. In `/var/lib/dam-hopper/dam-hopper.toml`, set `automatic_policy = "empty-fleet"`.
+3. Restart the API: `sudo systemctl restart dam-hopper-api.service`.
+4. Refetch status: verify `automaticPolicy: "empty-fleet"` and `activity: null`.
+
+#### Emergency disable (immediately halts automatic scheduling)
+
+1. In `/var/lib/dam-hopper/dam-hopper.toml`, set `enabled = false` and `automatic_policy = "empty-fleet"`.
+2. Restart the API: `sudo systemctl restart dam-hopper-api.service`.
+3. Refetch status: verify `state: "disabled"`.
+
+#### Level 2: Complete feature & helper disenrollment
+
+To remove the privileged helper and disenroll completely, use the root disenrollment script:
+
+```bash
+sudo ./deploy/reset-linux-production.sh --dry-run
+sudo ./deploy/reset-linux-production.sh
+```
+
+### Release-manager helper service (Production CLI Phase 03)
+
+For a `server` or `both` release role, `install` stages
+`dam-hopper-idle-suspend-helper.service` but does not start it. Explicit
+`sudo dam-hopper start` starts the helper before the API; a helper start or
+enable failure logs a warning and leaves ordinary API operations available.
+`stop`, activation rollback, `rollback`, and boot recovery include the helper
+in the managed-unit lifecycle. Inspect it with `dam-hopper status --json` or
+`systemctl status dam-hopper-idle-suspend-helper.service`; see the
+[Linux Release Manager](./linux-release-manager.md#helper-service-lifecycle-production-cli-phase-03)
+guide for ordering and recovery details.
+
+### Execution-only indefinite sleep (Phase 01)
+
+`wake_after_seconds = 0` is **never valid** in this persisted automatic
+configuration or in the timing PATCH. The helper execution protocol accepts
+`wakeAfterSeconds: 0` as a required numeric sentinel for one fixed
+indefinite-sleep request. The helper converts it to clear-only RTC behavior:
+write `0`, read back the clear, and do not calculate or write a target epoch.
+
+Nonzero execution values remain `60..=86400` seconds. The helper clears and
+verifies the RTC alarm before programming a checked target epoch and verifying
+the readback. A non-empty pre-existing `/sys/class/rtc/rtc0/wakealarm` is
+treated as an ownership conflict (`RtcAlarmBusy`), and any preflight, clear,
+readback, write, audit-intent, or suspend failure suppresses the operation.
+Automated tests use temporary files and fake backends; they never suspend the
+test host or program its RTC.
+
+### Manual Force Sleep and Confirmation
+
+Authenticated, database-backed operators can invoke manual force sleep from the Host Resource Popover or via `POST /api/system/idle-suspend/v1/force-suspend`. The strict JSON body is:
+
+```json
+{ "wakeAfterSeconds": 0, "force": false }
+```
+
+Execution accepts exactly `wakeAfterSeconds: 0` (indefinite, clear-only RTC mode) or
+`60..=86400` seconds. The persisted automatic configuration never accepts zero.
+The active fleet count is `live + creating + restartPending`; when it is nonzero,
+the UI requires explicit confirmation and sends `force: true`. A request with
+`force: false` returns `409 idleSuspendActiveFleetConfirmationRequired` without
+claiming the fleet or dispatching the helper. `force: true` bypasses quiescence
+only; authentication, generation, capability, inhibitor, RTC, audit, and helper
+peer checks remain mandatory.
+
+An accepted `202` means an audited handoff was admitted, not that the host has
+already suspended. The browser sends one POST with retries disabled. If delivery
+is ambiguous, reconnect and reconcile from the status endpoint, status revision,
+and `host:idleSuspendChanged`; never replay the action. Manual execution does not
+mutate the persisted automatic timing pair and can remain available when
+automatic `enabled = false`, provided the helper is enrolled and capable.
+
 ### Browser Debug Preview
 
 The Browser tool has no server configuration flag. It embeds the selected
@@ -511,10 +791,58 @@ Diagnostics export does not currently add user-configurable knobs to `dam-hopper
 
 The export API is local-only, uses camelCase on the wire, and accepts `frontend` plus the legacy `frontendSnapshot` alias.
 
+The Phases 02–03 canonical idle-suspend event producer is internal. Its path
+is fixed at
+`/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`;
+there is no configuration key or public path override. Phase 03 wires the
+optional writer into `AppState` and coordinator startup; initialization can
+degrade semantic evidence without disabling suspend/status behavior.
+
+Production collection is a separate read-only CLI path:
+`dam-hopper diagnose --json` (Phases 06–07). The required `--json` flag is the
+complete grammar; path, window, source, unit, URL, command, and verbosity
+overrides are not accepted.
+
+Bundle-v1 bounds are fixed in the implementation:
+
+- 60-minute historical window
+- 10,000 accepted records per source and 10,000 record-array items
+- 16 KiB per JSONL line and 16 MiB maximum file scan
+- 2 MiB maximum host-command stdout and 256 KiB maximum local-API body
+- 8 MiB maximum serialized bundle
+- 512-byte redacted/serialized strings, 256 source errors, 32 warning examples,
+  and nested DTO depth 8
+- 5-second command/API deadlines
+
+These are not `dam-hopper.toml` keys and have no public tuning knobs. The
+default idle-suspend policy (`empty-fleet`) and timeout configuration remain
+unchanged.
+
+The collector uses fixed role-aware host adapters and emits one bounded
+camelCase `bundleSchemaVersion: 1` JSON file. Applicable server/both sources
+are collected for those roles; web-role sources are `notApplicable`; an
+unknown role remains partial. Current host probes are marked latest and
+`nonHistorical`, so they do not establish historical completeness.
+
+Root output is `/var/lib/dam-hopper-manager/diagnostics`. Non-root output is
+`$XDG_STATE_HOME/dam-hopper/diagnostics`, or
+`$HOME/.local/state/dam-hopper/diagnostics` when unset; there is no `/tmp`
+fallback. The output directory is owner-only `0700`, the final bundle is
+owner-only `0600`, and non-root execution never escalates. A root-only helper
+audit is reported as `permissionDenied` for non-root collection and can make a
+valid bundle partial. The command prints only the absolute final bundle path
+after an atomic same-directory write.
+
+The command returns `0` for complete applicable historical evidence, `2` for a
+valid partial bundle, and `1` for serialization or secure-output failure.
+
+See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
+for fixed source paths, adapter behavior, and the atomic write sequence.
+
 - Backend diagnostics are stored locally at `~/.config/dam-hopper/diagnostics/backend-log.jsonl`
 - The backend log keeps a 60-minute retention window and uses restricted `0o600` file permissions on Unix
 - Frontend diagnostics stay in browser `localStorage` under `damhopper_diagnostics_frontend_v1`
-- Exported JSON bundles are created only when the user triggers Settings > Maintenance > Export Diagnostics
+- Exported browser JSON bundles are created only when the user triggers Settings > Maintenance > Export Diagnostics
 - Terminal tails are included by default and may still contain sensitive local/dev output even after best-effort redaction
 
 ## Global Configuration (~/.config/dam-hopper/config.toml)
