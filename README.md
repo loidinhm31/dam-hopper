@@ -13,6 +13,7 @@ A web-based app for managing multi-project development environments. Manage git 
 - **Multi-server profiles** — Profile-scoped URLs, credentials, and local metadata with native/web transport boundaries
 - **Browser Debug** — Web iframe fallback and optional native child WebView (Windows v1; Linux runtime-unverified)
 - **Agent store** — Distribute Claude/Gemini agent configs (skills, commands, hooks) across projects via symlinks
+- **Terminal idle suspend** — Opt-in host suspend with RTC wakealarm scheduling: default `empty-fleet` policy or configured `agent-activity` policy observing PTY raw output and attributable TCP byte activity. See [Configuration Guide](./docs/configuration-guide.md#terminal-idle-suspend-opt-in-linux-suspend) and [Security Guide](./docs/terminal-idle-suspend-security.md).
 
 ## Requirements
 

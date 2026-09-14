@@ -4,29 +4,35 @@ use std::{
     io::Read as _,
     path::{Path, PathBuf},
     sync::{
-        Arc, Condvar, Mutex,
         atomic::{AtomicUsize, Ordering},
+        Arc, Condvar, Mutex,
     },
     thread::JoinHandle,
     time::Duration,
 };
 
+use std::sync::atomic::AtomicU64;
 use portable_pty::{Child as PtyChild, CommandBuilder, NativePtySystem, PtySize, PtySystem as _};
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
+use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::Notify;
-use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::{
     config::schema::RestartPolicy,
-    diagnostics::{DiagnosticStore, TerminalTail, redact_diagnostic_text},
+    diagnostics::{redact_diagnostic_text, DiagnosticStore, TerminalTail},
     error::AppError,
     fs::FsSubsystem,
     persistence::SessionStore,
     port_forward::PortForwardManager,
     pty::{
+        activity::{
+            increment_raw_output_sequence, probe_process_identity, ActivityIncompleteReason,
+            PtyActivitySnapshot, PtyActivityWatcher, RootActivityRecord, RootQualification,
+            TerminalIdentity, MAX_LIVE_ROOTS_LIMIT, SATURATED_COUNTER_SENTINEL,
+        },
         event_sink::EventSink,
         output_control_parser::Utf8StreamDecoder,
         session::{DeadSession, LiveSession, RespawnOpts, SessionMeta, SessionType},
@@ -34,8 +40,8 @@ use crate::{
         shell_lifecycle::{LifecycleEvent, LifecycleState, ShellLifecycle},
     },
     workspace_target::{
-        ProjectTargetRef, WorkspaceTargetError, WorkspaceTargetResolver, target_path_identity,
-        target_path_is_within, target_path_relative,
+        target_path_identity, target_path_is_within, target_path_relative, ProjectTargetRef,
+        WorkspaceTargetError, WorkspaceTargetResolver,
     },
 };
 
@@ -564,6 +570,8 @@ pub struct PtySessionManager {
     /// commands. Shutdown waits for this to reach zero before closing the
     /// persistence worker.
     active_reader_count: Arc<AtomicUsize>,
+    fleet_watcher: crate::pty::fleet_state::PtyFleetWatcher,
+    activity_watcher: PtyActivityWatcher,
     #[cfg(test)]
     respawn_test_hook: Arc<RespawnTestHook>,
     #[cfg(test)]
@@ -573,6 +581,7 @@ pub struct PtySessionManager {
 }
 
 struct Inner {
+    fleet: crate::pty::fleet_state::PtyFleetState,
     live: HashMap<String, LiveSession>,
     dead: HashMap<String, DeadSession>,
     /// Target-scoped creates that failed before an in-memory tombstone could
@@ -601,6 +610,12 @@ struct Inner {
     /// a slow stale create/respawn from publishing after a newer replacement
     /// has started.
     pending_replacements: HashMap<String, u64>,
+    /// Monotonic revision of admitted nonempty terminal input across all sessions.
+    input_revision: u64,
+    /// Instant when nonempty terminal input was last admitted.
+    last_input_at: Option<std::time::Instant>,
+    /// Broadcast watch channel for private coalescing activity invalidation.
+    activity_watch_tx: tokio::sync::watch::Sender<u64>,
 }
 
 struct FailedReplacement {
@@ -633,8 +648,12 @@ impl From<&PtyCreateOpts> for FailedReplacementPersistence {
 }
 
 impl Inner {
-    fn new() -> Self {
+    fn new(
+        fleet: crate::pty::fleet_state::PtyFleetState,
+        activity_watch_tx: tokio::sync::watch::Sender<u64>,
+    ) -> Self {
         Self {
+            fleet,
             live: HashMap::new(),
             dead: HashMap::new(),
             failed_replacements: HashMap::new(),
@@ -644,6 +663,103 @@ impl Inner {
             killed: HashSet::new(),
             suppress_exit_counts: HashMap::new(),
             pending_replacements: HashMap::new(),
+            input_revision: 0,
+            last_input_at: None,
+            activity_watch_tx,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_test() -> Self {
+        let (fleet, _) = crate::pty::fleet_state::PtyFleetState::new();
+        let (activity_watch_tx, _) = tokio::sync::watch::channel(1);
+        Self::new(fleet, activity_watch_tx)
+    }
+
+    fn publish_activity_invalidation(&mut self) {
+        let current = *self.activity_watch_tx.borrow();
+        let next = current.wrapping_add(1);
+        let _ = self.activity_watch_tx.send(next);
+    }
+
+    fn capture_activity_snapshot(&self) -> PtyActivitySnapshot {
+        let fleet_snapshot = self.fleet.snapshot();
+        let live_count = self.live.len();
+        let input_revision = self.input_revision;
+        let last_input_at = self.last_input_at;
+        let captured_at = std::time::Instant::now();
+
+        if live_count > MAX_LIVE_ROOTS_LIMIT {
+            return PtyActivitySnapshot {
+                fleet: fleet_snapshot,
+                input_revision,
+                last_input_at,
+                roots: Vec::new(),
+                captured_at,
+                incomplete_reason: Some(ActivityIncompleteReason::ScanLimitExceeded {
+                    count: live_count,
+                    limit: MAX_LIVE_ROOTS_LIMIT,
+                }),
+            };
+        }
+
+        let mut roots = Vec::with_capacity(live_count);
+        let mut incomplete_reason = None;
+
+        if input_revision == u64::MAX {
+            incomplete_reason = Some(ActivityIncompleteReason::RevisionSaturated);
+        }
+
+        for (id, session) in &self.live {
+            let raw_seq = session.raw_output_sequence.load(Ordering::Relaxed);
+            if raw_seq == SATURATED_COUNTER_SENTINEL && incomplete_reason.is_none() {
+                incomplete_reason = Some(ActivityIncompleteReason::CounterSaturated {
+                    session_id: id.clone(),
+                    incarnation: session.incarnation,
+                });
+            }
+
+            match &session.root_qualification {
+                RootQualification::Qualified { .. } => {}
+                RootQualification::Uncertain { pid, reason } => {
+                    if incomplete_reason.is_none() {
+                        incomplete_reason = Some(ActivityIncompleteReason::RootUnqualified {
+                            session_id: id.clone(),
+                            incarnation: session.incarnation,
+                            pid: Some(*pid),
+                            details: reason.clone(),
+                        });
+                    }
+                }
+                RootQualification::Unavailable { reason } => {
+                    if incomplete_reason.is_none() {
+                        incomplete_reason = Some(ActivityIncompleteReason::RootUnqualified {
+                            session_id: id.clone(),
+                            incarnation: session.incarnation,
+                            pid: None,
+                            details: reason.clone(),
+                        });
+                    }
+                }
+            }
+
+            roots.push(RootActivityRecord {
+                terminal: TerminalIdentity {
+                    session_id: id.clone(),
+                    incarnation: session.incarnation,
+                },
+                qualification: session.root_qualification.clone(),
+                raw_output_sequence: session.raw_output_sequence_ref(),
+            });
+        }
+
+        PtyActivitySnapshot {
+            fleet: fleet_snapshot,
+            input_revision,
+            last_input_at,
+            roots,
+            captured_at,
+            incomplete_reason,
         }
     }
 
@@ -889,7 +1005,9 @@ impl PtySessionManager {
         let persist_tx_clone = persist_tx.clone();
         let session_store_clone = session_store.clone();
 
-        let mut initial_inner = Inner::new();
+        let (fleet_state, fleet_watcher) = crate::pty::fleet_state::PtyFleetState::new();
+        let (activity_watch_tx, activity_watch_rx) = tokio::sync::watch::channel(1);
+        let mut initial_inner = Inner::new(fleet_state, activity_watch_tx);
         if let Some(store) = &session_store {
             match store.max_session_incarnation() {
                 Ok(maximum) => initial_inner.advance_past(maximum),
@@ -913,6 +1031,8 @@ impl PtySessionManager {
                 crate::workflow::NoopWorkflowObservationRecorder,
             ))),
             active_reader_count: Arc::new(AtomicUsize::new(0)),
+            fleet_watcher,
+            activity_watcher: PtyActivityWatcher::new(activity_watch_rx),
             #[cfg(test)]
             respawn_test_hook: Arc::new(RespawnTestHook::new()),
             #[cfg(test)]
@@ -960,6 +1080,159 @@ impl PtySessionManager {
         manager
     }
 
+    pub fn fleet_watcher(&self) -> crate::pty::fleet_state::PtyFleetWatcher {
+        let mut watcher = self.fleet_watcher.clone();
+        watcher.mark_seen();
+        watcher
+    }
+
+    pub fn activity_watcher(&self) -> PtyActivityWatcher {
+        let mut watcher = self.activity_watcher.clone();
+        watcher.mark_seen();
+        watcher
+    }
+
+    pub fn capture_activity_snapshot(&self) -> PtyActivitySnapshot {
+        self.inner.lock().unwrap().capture_activity_snapshot()
+    }
+
+    pub fn input_revision(&self) -> u64 {
+        self.inner.lock().unwrap().input_revision
+    }
+
+    pub fn last_input_at(&self) -> Option<std::time::Instant> {
+        self.inner.lock().unwrap().last_input_at
+    }
+
+    pub fn fleet_snapshot(&self) -> crate::pty::fleet_state::PtyFleetSnapshot {
+        self.inner.lock().unwrap().fleet.snapshot()
+    }
+    /// Event sink for broadcasting terminal and host lifecycle events.
+    pub fn sink(&self) -> Arc<dyn EventSink> {
+        Arc::clone(&self.sink)
+    }
+
+    pub fn try_claim_handoff(
+        &self,
+        expected_generation: u64,
+    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError>
+    {
+        self.inner
+            .lock()
+            .unwrap()
+            .fleet
+            .try_claim_handoff(expected_generation)
+    }
+
+    pub fn try_claim_forced_handoff(
+        &self,
+        expected_generation: u64,
+    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError>
+    {
+        self.inner
+            .lock()
+            .unwrap()
+            .fleet
+            .try_claim_forced_handoff(expected_generation)
+    }
+    /// Attempt to claim agent activity handoff admission.
+    ///
+    /// Under the single manager inner lock, verifies startup policy, ticket and revision
+    /// fences, deadline, observation age, input revision, fleet generation, exact live roots,
+    /// raw output checkpoints, and lifecycle state before setting handoff_active.
+    pub(crate) fn try_claim_agent_activity_handoff(
+        &self,
+        admission: crate::idle_suspend::activity::AgentActivityAdmission<'_>,
+    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError> {
+        let mut inner = self.inner.lock().unwrap();
+
+        // 1. Startup automatic policy must be AgentActivity and enabled
+        if admission.automatic_policy != crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentActivity
+            || !admission.automatic_enabled
+        {
+            return Err(crate::pty::fleet_state::HandoffClaimError::PolicyMismatch);
+        }
+
+        // 2. Request and revision values must match accepted admission
+        if admission.accepted_request_id != admission.ticket.request_id
+            || admission.accepted_activity_revision != admission.ticket.activity_revision
+            || admission.accepted_epoch_activity_revision != admission.ticket.epoch_activity_revision
+            || admission.accepted_timing_revision != admission.ticket.timing_revision
+        {
+            return Err(crate::pty::fleet_state::HandoffClaimError::PolicyMismatch);
+        }
+
+        // 3. Monotonic deadline must remain expired
+        if admission.now < admission.ticket.eligibility_deadline {
+            return Err(crate::pty::fleet_state::HandoffClaimError::DeadlineNotExpired);
+        }
+
+        // 4. Observation age must be <= 5 seconds
+        if admission
+            .now
+            .saturating_duration_since(admission.ticket.completed_at)
+            > crate::idle_suspend::activity::MAX_ACCEPTED_OBSERVATION_AGE
+        {
+            return Err(crate::pty::fleet_state::HandoffClaimError::ObservationStale);
+        }
+
+        // 5. Input revision must match ticket
+        if inner.input_revision != admission.ticket.input_revision {
+            return Err(crate::pty::fleet_state::HandoffClaimError::InputRevisionMismatch);
+        }
+
+        // 6. Fleet generation must match ticket
+        if inner.fleet.generation() != admission.ticket.fleet_generation {
+            return Err(crate::pty::fleet_state::HandoffClaimError::GenerationMismatch {
+                expected: admission.ticket.fleet_generation,
+                actual: inner.fleet.generation(),
+            });
+        }
+
+        // 7. Check live sessions match roots in ticket
+        if inner.live.len() != admission.ticket.roots.len() {
+            return Err(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch);
+        }
+        for (terminal, expected_root) in &admission.ticket.roots {
+            let session = inner
+                .live
+                .get(&terminal.session_id)
+                .ok_or(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch)?;
+            if session.incarnation != terminal.incarnation {
+                return Err(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch);
+            }
+            if session.root_qualification.process_identity() != Some(*expected_root) {
+                return Err(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch);
+            }
+        }
+
+        // 8. Check raw output fences
+        for fence in &admission.ticket.output_fences {
+            let current_seq = fence.output_sequence.load(std::sync::atomic::Ordering::Acquire);
+            if current_seq >= crate::pty::activity::SATURATED_COUNTER_SENTINEL
+                || current_seq != fence.accepted_sequence
+            {
+                return Err(crate::pty::fleet_state::HandoffClaimError::RawOutputAdvanced);
+            }
+        }
+
+        // 9. Atomic fleet handoff claim (checks closing, disposing, handoff_active, creating, restart_pending)
+        inner.fleet.try_claim_agent_handoff(admission.ticket.fleet_generation)
+    }
+
+    pub fn release_handoff(&self) {
+        self.inner.lock().unwrap().fleet.release_handoff();
+    }
+
+    #[doc(hidden)]
+    pub fn with_fleet_for_test<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut crate::pty::fleet_state::PtyFleetState) -> R,
+    {
+        let mut inner = self.inner.lock().unwrap();
+        f(&mut inner.fleet)
+    }
+
     pub fn set_target_context(&self, context: PtyTargetContext) {
         let mut target_context = self.target_context.write().unwrap();
         *target_context = Some(context);
@@ -997,6 +1270,28 @@ impl PtySessionManager {
     #[cfg(test)]
     pub(crate) fn test_is_disposing(&self) -> bool {
         self.lifecycle_gate.is_disposing()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_raw_output_sequence(&self, id: &str, value: u64) {
+        let inner = self.inner.lock().unwrap();
+        if let Some(session) = inner.live.get(id) {
+            session.raw_output_sequence.store(value, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_root_qualification(&self, id: &str, qualification: RootQualification) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(session) = inner.live.get_mut(id) {
+            session.root_qualification = qualification;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_input_revision(&self, revision: u64) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.input_revision = revision;
     }
 
     /// Wire the workflow observation recorder after construction (Phase 03).
@@ -1048,6 +1343,17 @@ impl PtySessionManager {
         let _lifecycle_permit = self.lifecycle_gate.begin()?;
         let _persistence_guard = self.persistence_gate.lock().unwrap();
 
+        {
+            let inner = self.inner.lock().unwrap();
+            if inner.fleet.is_handoff_active() {
+                return Err(AppError::IdleSuspendHandoffInProgress(
+                    "Cannot create terminal while host suspend is in progress".into(),
+                ));
+            }
+            if inner.closing {
+                return Err(AppError::Unavailable("PTY manager is shutting down".into()));
+            }
+        }
         let (retrying_unavailable_target, retry_buffer) = {
             let inner = self.inner.lock().unwrap();
             inner
@@ -1071,7 +1377,10 @@ impl PtySessionManager {
         // their persistence commands must never be able to mutate this one.
         let incarnation = {
             let mut inner = self.inner.lock().unwrap();
-            inner.begin_replacement(&opts.id)
+            let incarnation = inner.begin_replacement(&opts.id);
+            inner.fleet.begin_create(&opts.id, incarnation)?;
+            inner.publish_activity_invalidation();
+            incarnation
         };
         let mut failure_meta = SessionMeta::new_with_target(
             opts.id.clone(),
@@ -1151,6 +1460,17 @@ impl PtySessionManager {
             );
             AppError::PtyError(error)
         })?;
+        let child_pid = child.process_id();
+        let root_qualification = match child_pid {
+            Some(pid) => match probe_process_identity(pid) {
+                Ok(identity) => RootQualification::Qualified { identity },
+                Err(reason) => RootQualification::Uncertain { pid, reason },
+            },
+            None => RootQualification::Unavailable {
+                reason: "PTY child did not provide a process ID".into(),
+            },
+        };
+        let raw_output_sequence = Arc::new(AtomicU64::new(0));
 
         // portable-pty requires clone_reader before take_writer
         let reader = match pair.master.try_clone_reader() {
@@ -1205,6 +1525,8 @@ impl PtySessionManager {
             respawn_opts,
             lifecycle,
             integration,
+            root_qualification,
+            Arc::clone(&raw_output_sequence),
         );
         let buffer = session.buffer_ref();
         let shutdown = session.shutdown_ref();
@@ -1217,6 +1539,7 @@ impl PtySessionManager {
         let generation = {
             let mut inner = self.inner.lock().unwrap();
             if !inner.replacement_is_current(&opts.id, incarnation) {
+                inner.fleet.cancel_create(&opts.id, incarnation);
                 drop(inner);
                 session.terminate();
                 return Err(AppError::PtyError(
@@ -1227,6 +1550,7 @@ impl PtySessionManager {
                 || inner.closing
                 || inner.generation != creation_generation
             {
+                inner.fleet.cancel_create(&opts.id, incarnation);
                 drop(inner);
                 session.terminate();
                 return Err(AppError::Unavailable(
@@ -1246,6 +1570,8 @@ impl PtySessionManager {
             // This ensures create() is fully idempotent across race conditions.
             inner.killed.remove(&opts.id);
             inner.live.insert(opts.id.clone(), session);
+            inner.fleet.publish_live(&opts.id, incarnation);
+            inner.publish_activity_invalidation();
             creation_generation
         };
 
@@ -1338,6 +1664,7 @@ impl PtySessionManager {
         self.active_reader_count.fetch_add(1, Ordering::AcqRel);
         let workflow_recorder = self.workflow_recorder.read().unwrap().clone();
         let active_reader_count = Arc::clone(&self.active_reader_count);
+        let raw_output_sequence_for_reader = Arc::clone(&raw_output_sequence);
         let reader_handle = std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
             .spawn(move || {
@@ -1363,6 +1690,7 @@ impl PtySessionManager {
                     published_editing,
                     active_reader_count,
                     workflow_recorder,
+                    raw_output_sequence_for_reader,
                 );
             })
             .map_err(|e| {
@@ -1403,14 +1731,53 @@ impl PtySessionManager {
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), AppError> {
-        let inner = self.inner.lock().unwrap();
-        let session = inner
-            .live
-            .get(id)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
-        session
-            .write(data)
-            .map_err(|e| AppError::PtyError(e.to_string()))
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let mut inner = self.inner.lock().unwrap();
+        if inner.fleet.is_handoff_active() {
+            return Err(AppError::IdleSuspendHandoffInProgress(
+                "Cannot send terminal input while host suspend handoff is in progress".into(),
+            ));
+        }
+        if inner.closing {
+            return Err(AppError::Unavailable(
+                "PTY manager is shutting down".into(),
+            ));
+        }
+        if inner.fleet.is_disposing() {
+            return Err(AppError::Unavailable(
+                "PTY manager is disposing sessions".into(),
+            ));
+        }
+
+        if !inner.live.contains_key(id) {
+            return Err(AppError::SessionNotFound(id.to_string()));
+        }
+
+        if inner.input_revision == u64::MAX {
+            return Err(AppError::Unavailable(
+                "Terminal input revision saturated".into(),
+            ));
+        }
+
+        let prev_revision = inner.input_revision;
+        let prev_last_input_at = inner.last_input_at;
+
+        inner.input_revision = inner.input_revision.saturating_add(1);
+        inner.last_input_at = Some(std::time::Instant::now());
+        inner.publish_activity_invalidation();
+
+        let write_res = inner.live.get(id).unwrap().write(data);
+        match write_res {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                inner.input_revision = prev_revision;
+                inner.last_input_at = prev_last_input_at;
+                Err(AppError::PtyError(e.to_string()))
+            }
+        }
     }
 
     /// Capture replay bytes and lifecycle state at one PTY boundary.
@@ -1689,6 +2056,7 @@ impl PtySessionManager {
             inner.pending_replacements.remove(id);
             inner.failed_replacements.remove(id);
             inner.killed.insert(id.to_string());
+            inner.fleet.remove_all_for_id(id);
             let was_live = if let Some(session) = inner.live.remove(id) {
                 session.terminate();
                 true
@@ -1818,6 +2186,7 @@ impl PtySessionManager {
         inner.pending_replacements.remove(&id);
         inner.failed_replacements.remove(&id);
         inner.killed.remove(&id);
+        inner.fleet.remove_all_for_id(&id);
         inner
             .dead
             .insert(id, DeadSession::target_unavailable(meta, incarnation));
@@ -2023,6 +2392,7 @@ impl PtySessionManager {
 
             inner.pending_replacements.remove(id);
             inner.killed.insert(id.to_string());
+            inner.fleet.remove_all_for_id(id);
             let session = live_matches.then(|| inner.live.remove(id).unwrap());
             if dead_matches {
                 inner.dead.remove(id);
@@ -2050,6 +2420,11 @@ impl PtySessionManager {
             let mut inner = self.inner.lock().unwrap();
             info!(count = inner.live.len(), "Disposing all PTY sessions");
             inner.closing |= closing;
+            if closing {
+                inner.fleet.mark_closing(true);
+            } else {
+                inner.fleet.mark_disposing(true);
+            }
             let previous_generation = inner.generation;
             inner.generation = inner.generation.wrapping_add(1);
             let mut identities = inner
@@ -2148,6 +2523,9 @@ impl PtySessionManager {
                 pfm.unregister_session(&id, incarnation);
             }
         }
+        if !closing {
+            self.inner.lock().unwrap().fleet.mark_disposing(false);
+        }
         Ok(())
     }
 
@@ -2158,6 +2536,7 @@ impl PtySessionManager {
         let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
         {
             let mut inner = self.inner.lock().unwrap();
+            inner.fleet.mark_closing(true);
             let sessions = inner
                 .live
                 .iter()
@@ -2290,6 +2669,7 @@ impl PtySessionManager {
         // Mark as killed BEFORE removing from live — reader thread checks this.
         inner.killed.insert(id.to_string());
         inner.pending_replacements.remove(id);
+        inner.fleet.remove_all_for_id(id);
         let removed_incarnation = if let Some(session) = inner.live.remove(id) {
             if suppress_exit {
                 *inner
@@ -2369,6 +2749,7 @@ fn reader_thread(
     published_editing: Arc<std::sync::atomic::AtomicBool>,
     active_reader_count: Arc<AtomicUsize>,
     workflow_recorder: Arc<dyn crate::workflow::WorkflowObservationRecorder>,
+    raw_output_sequence: Arc<AtomicU64>,
 ) {
     let _reader_guard = ReaderGuard(active_reader_count);
     // Local helper to record a terminal lifecycle event from the reader thread.
@@ -2389,7 +2770,7 @@ fn reader_thread(
     // snapshot before its lifecycle transition.
     let mut bytes_since_snapshot = 0usize;
     const SNAPSHOT_THRESHOLD: usize = 16 * 1024; // 16KB
-    // Lifecycle-only chunks must not announce editing before prompt bytes exist.
+                                                 // Lifecycle-only chunks must not announce editing before prompt bytes exist.
     let mut pending_lifecycle_events: Vec<(u64, LifecycleEvent)> = Vec::new();
     let mut visible_output_since_boundary = false;
 
@@ -2489,6 +2870,9 @@ fn reader_thread(
                 break;
             }
             Ok(n) => {
+                if n > 0 {
+                    increment_raw_output_sequence(&raw_output_sequence);
+                }
                 process_chunk(&chunk[..n]);
             }
             Err(e) if is_eof_error(&e) => {
@@ -2573,6 +2957,13 @@ fn reader_thread(
                 (false, None)
             };
 
+            if will_restart {
+                inner_guard
+                    .fleet
+                    .transition_live_to_restart_pending(&session_id, incarnation);
+            } else {
+                inner_guard.fleet.remove_live(&session_id, incarnation);
+            }
             // Reset restart_count to 0 if this was a clean exit after a previous restart.
             let next_restart_count = if exit_code == 0 && restart_count > 0 {
                 0
@@ -2762,6 +3153,11 @@ fn reader_thread(
                 error = %e,
                 "Respawn queue full — supervisor may be dead/slow, dropping restart request"
             );
+            inner
+                .lock()
+                .unwrap()
+                .fleet
+                .cancel_restart_pending(&session_id, incarnation);
         }
     }
 
@@ -2854,11 +3250,14 @@ async fn supervisor_loop(
 
         // Check if session was killed during backoff.
         {
-            let inner_guard = inner.lock().unwrap();
+            let mut inner_guard = inner.lock().unwrap();
             if !inner_guard.respawn_source_is_current(&session_id, cmd.incarnation)
                 || inner_guard.generation != cmd.generation
                 || inner_guard.killed.contains(&session_id)
             {
+                inner_guard
+                    .fleet
+                    .cancel_restart_pending(&session_id, cmd.incarnation);
                 info!(id = %session_id, "Session killed during backoff — skipping restart");
                 continue;
             }
@@ -3132,6 +3531,9 @@ fn finish_failed_replacement_locked(
         if !guard.replacement_is_current(session_id, replacement_incarnation) {
             return;
         }
+        guard
+            .fleet
+            .cancel_create(session_id, replacement_incarnation);
 
         let live_is_current = guard
             .live
@@ -3585,9 +3987,26 @@ async fn respawn_internal(
     let (replacement_incarnation, preserve_target_unavailable, source_buffer) = {
         let mut guard = inner.lock().unwrap();
         if !guard.respawn_source_is_current(session_id, source_incarnation) {
+            guard
+                .fleet
+                .cancel_restart_pending(session_id, source_incarnation);
             return Err(AppError::PtyError(
                 "PTY respawn was superseded by a newer request".into(),
             ));
+        }
+        if guard.fleet.is_handoff_active() {
+            guard
+                .fleet
+                .cancel_restart_pending(session_id, source_incarnation);
+            return Err(AppError::IdleSuspendHandoffInProgress(
+                "Cannot restart terminal while host suspend is in progress".into(),
+            ));
+        }
+        if guard.closing {
+            guard
+                .fleet
+                .cancel_restart_pending(session_id, source_incarnation);
+            return Err(AppError::Unavailable("PTY manager is shutting down".into()));
         }
         // A rename may have occurred after the reader queued this command.
         // The dead tombstone is authoritative for the replacement.
@@ -3603,30 +4022,40 @@ async fn respawn_internal(
             .dead
             .get(session_id)
             .and_then(|session| session.buffer.as_ref().map(Arc::clone));
-        (
-            guard.begin_replacement(session_id),
-            preserve_target_unavailable,
-            source_buffer,
-        )
+        let inc = guard.begin_replacement(session_id);
+        guard
+            .fleet
+            .transition_restart_pending_to_creating(session_id, source_incarnation, inc)?;
+        guard.publish_activity_invalidation();
+        (inc, preserve_target_unavailable, source_buffer)
     };
     let opts = &cmd.respawn_opts;
 
     let Some(_lifecycle_permit) = lifecycle_gate.try_begin() else {
         info!(id = %session_id, "Respawn skipped while PTY manager is disposing");
-        inner
-            .lock()
-            .unwrap()
-            .finish_replacement(session_id, replacement_incarnation);
+        let mut guard = inner.lock().unwrap();
+        guard
+            .fleet
+            .cancel_create(session_id, replacement_incarnation);
+        guard.finish_replacement(session_id, replacement_incarnation);
         return Ok(None);
     };
     // Check before opening a PTY, then repeat the check immediately before
     // publishing the new session. dispose() can race with either phase.
 
     let stale = {
-        let inner_guard = inner.lock().unwrap();
-        lifecycle_gate.is_disposing()
+        let mut inner_guard = inner.lock().unwrap();
+        if lifecycle_gate.is_disposing()
             || inner_guard.generation != cmd.generation
             || inner_guard.killed.contains(session_id)
+        {
+            inner_guard
+                .fleet
+                .cancel_create(session_id, replacement_incarnation);
+            true
+        } else {
+            false
+        }
     };
     if stale {
         info!(id = %session_id, "Stale respawn request — skipping restart");
@@ -3693,6 +4122,17 @@ async fn respawn_internal(
             return Err(AppError::PtyError(format!("spawn failed: {error}")));
         }
     };
+    let child_pid = child.process_id();
+    let root_qualification = match child_pid {
+        Some(pid) => match probe_process_identity(pid) {
+            Ok(identity) => RootQualification::Qualified { identity },
+            Err(reason) => RootQualification::Uncertain { pid, reason },
+        },
+        None => RootQualification::Unavailable {
+            reason: "PTY child did not provide a process ID".into(),
+        },
+    };
+    let raw_output_sequence = Arc::new(AtomicU64::new(0));
 
     let reader = match pair.master.try_clone_reader() {
         Ok(reader) => reader,
@@ -3762,6 +4202,8 @@ async fn respawn_internal(
         opts.clone(),
         lifecycle,
         integration,
+        root_qualification,
+        Arc::clone(&raw_output_sequence),
     );
     let buffer = session.buffer_ref();
     let shutdown = session.shutdown_ref();
@@ -3784,6 +4226,7 @@ async fn respawn_internal(
         let mut inner_guard = inner.lock().unwrap();
         if !inner_guard.respawn_replacement_is_current(session_id, source_incarnation, incarnation)
         {
+            inner_guard.fleet.cancel_create(session_id, incarnation);
             drop(inner_guard);
             inner
                 .lock()
@@ -3798,6 +4241,7 @@ async fn respawn_internal(
             || inner_guard.generation != cmd.generation
             || inner_guard.killed.contains(session_id)
         {
+            inner_guard.fleet.cancel_create(session_id, incarnation);
             drop(inner_guard);
             inner
                 .lock()
@@ -3819,6 +4263,8 @@ async fn respawn_internal(
         inner_guard.killed.remove(session_id);
         inner_guard.dead.remove(session_id);
         inner_guard.live.insert(session_id.to_string(), session);
+        inner_guard.fleet.publish_live(session_id, incarnation);
+        inner_guard.publish_activity_invalidation();
     }
 
     if let Some(pfm) = &port_forward_manager {
@@ -3863,6 +4309,7 @@ async fn respawn_internal(
     let port_forward_manager_for_failure = port_forward_manager.clone();
     active_reader_count.fetch_add(1, Ordering::AcqRel);
     let active_reader_count_for_reader = Arc::clone(&active_reader_count);
+    let raw_output_sequence_for_reader = Arc::clone(&raw_output_sequence);
     let reader_handle = std::thread::Builder::new()
         .name(format!("pty-reader:{id_clone}"))
         .spawn(move || {
@@ -3888,6 +4335,7 @@ async fn respawn_internal(
                 published_editing,
                 active_reader_count_for_reader,
                 workflow_recorder,
+                raw_output_sequence_for_reader,
             );
         })
         .map_err(|error| {
@@ -4020,28 +4468,43 @@ fn apply_child_env(cmd: &mut CommandBuilder, env: &HashMap<String, String>) {
 }
 #[cfg(unix)]
 fn resolve_current_user_account() -> Option<(String, String, String)> {
-    let euid = unsafe { libc::geteuid() };
-    let pwd = unsafe { libc::getpwuid(euid) };
-    if pwd.is_null() {
-        return None;
-    }
-    let pwd_ref = unsafe { &*pwd };
-    let name = unsafe {
-        std::ffi::CStr::from_ptr(pwd_ref.pw_name)
-            .to_string_lossy()
-            .into_owned()
-    };
-    let home = unsafe {
-        std::ffi::CStr::from_ptr(pwd_ref.pw_dir)
-            .to_string_lossy()
-            .into_owned()
-    };
-    let shell = unsafe {
-        std::ffi::CStr::from_ptr(pwd_ref.pw_shell)
-            .to_string_lossy()
-            .into_owned()
-    };
-    Some((name, home, shell))
+    static CACHE: std::sync::LazyLock<Option<(String, String, String)>> = std::sync::LazyLock::new(|| {
+        let euid = unsafe { libc::geteuid() };
+        let mut pwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut result = std::ptr::null_mut();
+        let mut buf = vec![0u8; 4096];
+        let rc = unsafe {
+            libc::getpwuid_r(
+                euid,
+                pwd.as_mut_ptr(),
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+                &mut result,
+            )
+        };
+        if rc == 0 && !result.is_null() {
+            let pwd_ref = unsafe { &*result };
+            let name = unsafe {
+                std::ffi::CStr::from_ptr(pwd_ref.pw_name)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let home = unsafe {
+                std::ffi::CStr::from_ptr(pwd_ref.pw_dir)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let shell = unsafe {
+                std::ffi::CStr::from_ptr(pwd_ref.pw_shell)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            Some((name, home, shell))
+        } else {
+            None
+        }
+    });
+    CACHE.clone()
 }
 
 fn build_child_env(env: &HashMap<String, String>) -> Vec<(String, OsString)> {
@@ -4345,7 +4808,7 @@ mod command_builder_tests {
 
 #[cfg(test)]
 mod attach_snapshot_tests {
-    use super::{ShellLifecycle, attach_editing_generation};
+    use super::{attach_editing_generation, ShellLifecycle};
 
     #[test]
     fn parsed_editing_is_not_attachable_until_prompt_boundary_is_published() {
@@ -4433,7 +4896,7 @@ mod tests {
 
     #[test]
     fn stale_respawn_reservation_cannot_publish_after_newer_replacement() {
-        let mut inner = Inner::new();
+        let mut inner = Inner::new_test();
         let source_incarnation = 41;
         let meta = SessionMeta::new(
             "terminal:race".to_string(),
@@ -4467,7 +4930,7 @@ mod tests {
     fn incarnation_event_sink_drops_output_after_replacement_starts() {
         let (sink, mut receiver) = crate::pty::BroadcastEventSink::new(8);
         let sink: Arc<dyn EventSink> = Arc::new(sink);
-        let inner = Arc::new(Mutex::new(Inner::new()));
+        let inner = Arc::new(Mutex::new(Inner::new_test()));
         let id = "terminal:event-race";
         let meta = SessionMeta::new(
             id.to_string(),
@@ -4500,7 +4963,7 @@ mod tests {
     fn incarnation_event_sink_drops_stale_target_loss_notifications() {
         let (sink, mut receiver) = crate::pty::BroadcastEventSink::new(8);
         let sink: Arc<dyn EventSink> = Arc::new(sink);
-        let inner = Arc::new(Mutex::new(Inner::new()));
+        let inner = Arc::new(Mutex::new(Inner::new_test()));
         let id = "terminal:target-event-race";
         let mut meta = SessionMeta::new(
             id.to_string(),
@@ -4533,7 +4996,7 @@ mod tests {
 
     #[test]
     fn source_respawn_failure_cannot_mutate_a_newer_pending_replacement() {
-        let inner = Arc::new(Mutex::new(Inner::new()));
+        let inner = Arc::new(Mutex::new(Inner::new_test()));
         let id = "terminal:source-failure-race";
         let meta = SessionMeta::new(
             id.to_string(),
@@ -4645,12 +5108,10 @@ mod tests {
         );
 
         assert!(manager.mark_target_unavailable(id, "demo", target));
-        assert!(
-            receiver
-                .try_recv()
-                .expect("target-loss event should be emitted")
-                .contains("terminal:target-unavailable")
-        );
+        assert!(receiver
+            .try_recv()
+            .expect("target-loss event should be emitted")
+            .contains("terminal:target-unavailable"));
         let session = manager
             .list()
             .into_iter()
@@ -4795,7 +5256,7 @@ mod tests {
 
     #[test]
     fn failed_replacement_retains_source_buffer_fallback() {
-        let inner = Arc::new(Mutex::new(Inner::new()));
+        let inner = Arc::new(Mutex::new(Inner::new_test()));
         let id = "terminal:respawn-buffer-fallback";
         let source_buffer = Arc::new(Mutex::new(crate::pty::buffer::ScrollbackBuffer::new(1024)));
         source_buffer.lock().unwrap().push(b"previous output\n");
@@ -5116,13 +5577,11 @@ mod tests {
             Some((b"tail".to_vec(), 4))
         );
         persist_session_exited(&persist_tx, Some(&store), &exited_meta.id, 3);
-        assert!(
-            store
-                .load_sessions()
-                .unwrap()
-                .iter()
-                .all(|session| session.meta.id != exited_meta.id)
-        );
+        assert!(store
+            .load_sessions()
+            .unwrap()
+            .iter()
+            .all(|session| session.meta.id != exited_meta.id));
     }
 
     #[tokio::test]
@@ -5175,7 +5634,7 @@ mod tests {
     }
     #[test]
     fn cleanup_prunes_orphaned_killed_markers() {
-        let mut inner = Inner::new();
+        let mut inner = Inner::new_test();
         inner.killed.extend([
             "orphaned".to_string(),
             "dead-session".to_string(),

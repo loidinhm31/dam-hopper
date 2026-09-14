@@ -10,6 +10,7 @@ pub mod fs;
 pub mod git;
 pub mod host_actions;
 pub mod linux_release;
+pub mod idle_suspend;
 pub mod persistence;
 pub mod port_forward;
 pub mod pty;

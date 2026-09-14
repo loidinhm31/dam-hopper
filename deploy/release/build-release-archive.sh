@@ -121,6 +121,12 @@ if [[ ! -f "${SERVER_BIN}" ]]; then
     exit 1
 fi
 
+HELPER_BIN="${TARGET_DIR}/dam-hopper-idle-suspend-helper"
+if [[ ! -f "${HELPER_BIN}" ]]; then
+    echo "Error: 'dam-hopper-idle-suspend-helper' binary not found in '${TARGET_DIR}'" >&2
+    exit 1
+fi
+
 WEB_BIN="${TARGET_DIR}/dam-hopper-web"
 if [[ ! -f "${WEB_BIN}" ]]; then
     echo "Error: 'dam-hopper-web' binary not found in '${TARGET_DIR}'" >&2
@@ -137,8 +143,10 @@ WEB_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-web.service.in"
 RECOVERY_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-recovery.service.in"
 SYSUSERS_CONF="${REPO_ROOT}/deploy/sysusers.d/dam-hopper-web.conf"
 LICENSE_FILE="${REPO_ROOT}/LICENSE"
+HELPER_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-idle-suspend-helper.service.in"
 
-for req_file in "${API_SERVICE_IN}" "${WEB_SERVICE_IN}" "${RECOVERY_SERVICE_IN}" "${SYSUSERS_CONF}" "${LICENSE_FILE}"; do
+for req_file in "${API_SERVICE_IN}" "${WEB_SERVICE_IN}" "${RECOVERY_SERVICE_IN}" \
+    "${HELPER_SERVICE_IN}" "${SYSUSERS_CONF}" "${LICENSE_FILE}"; do
     if [[ ! -f "${req_file}" ]]; then
         echo "Error: Required asset file '${req_file}' not found" >&2
         exit 1
@@ -168,6 +176,8 @@ chmod 0755 "${TMP_STAGE}/bin/dam-hopper-server"
 cp -p "${WEB_BIN}" "${TMP_STAGE}/bin/dam-hopper-web"
 chmod 0755 "${TMP_STAGE}/bin/dam-hopper-web"
 
+cp -p "${HELPER_BIN}" "${TMP_STAGE}/bin/dam-hopper-idle-suspend-helper"
+chmod 0755 "${TMP_STAGE}/bin/dam-hopper-idle-suspend-helper"
 # Copy systemd units and sysusers
 cp -p "${API_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-api.service"
 chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-api.service"
@@ -178,8 +188,12 @@ chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-web.service"
 cp -p "${RECOVERY_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-recovery.service"
 chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-recovery.service"
 
+cp -p "${HELPER_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-idle-suspend-helper.service"
+chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-idle-suspend-helper.service"
+
 cp -p "${SYSUSERS_CONF}" "${TMP_STAGE}/sysusers.d/dam-hopper-web.conf"
 chmod 0644 "${TMP_STAGE}/sysusers.d/dam-hopper-web.conf"
+
 
 # Copy LICENSE
 cp -p "${LICENSE_FILE}" "${TMP_STAGE}/LICENSE"

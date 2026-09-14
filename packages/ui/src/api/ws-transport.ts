@@ -1098,6 +1098,20 @@ function channelToEndpoint(
         url: `/api/system/resources/v1/alerts?limit=${encodeURIComponent(String(limit))}`,
       };
     }
+    case "system:idleSuspendStatus":
+      return { method: "GET", url: "/api/system/idle-suspend/v1/status" };
+    case "system:updateIdleSuspendTiming":
+      return {
+        method: "PATCH",
+        url: "/api/system/idle-suspend/v1/timing",
+        body: data,
+      };
+    case "system:forceSuspend":
+      return {
+        method: "POST",
+        url: "/api/system/idle-suspend/v1/force-suspend",
+        body: data,
+      };
 
     // Usage analytics (REST only; never sent to the terminal WebSocket).
     case "usage:summary": {
@@ -2210,6 +2224,7 @@ export class WsTransport implements Transport {
           err.error ?? `HTTP ${response.status}`,
           response.status,
           err.code,
+          err,
         );
       }
       const ct = response.headers.get("content-type") ?? "";

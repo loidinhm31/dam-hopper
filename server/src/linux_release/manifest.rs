@@ -65,7 +65,16 @@ pub struct ComponentsMeta {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ServiceContract {
+pub struct ApiServiceContract {
+    pub unit_name: String,
+    pub bind_host: String,
+    pub port: u16,
+    pub health_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebServiceContract {
     pub unit_name: String,
     pub identity: String,
     pub bind_host: String,
@@ -76,8 +85,8 @@ pub struct ServiceContract {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServicesMeta {
-    pub api: ServiceContract,
-    pub web: ServiceContract,
+    pub api: ApiServiceContract,
+    pub web: WebServiceContract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,7 +97,7 @@ pub struct RollbackMeta {
 }
 
 impl ReleaseManifest {
-    /// Parse and validate a UTF-8 manifest JSON string against strict v1 schema and contract invariants.
+    /// Parse and validate a UTF-8 v2 release manifest.
     pub fn parse_and_validate(raw_bytes: &[u8]) -> Result<Self, ReleaseError> {
         if raw_bytes.len() > MAX_MANIFEST_BYTES {
             return Err(ReleaseError::PayloadTooLarge(raw_bytes.len()));

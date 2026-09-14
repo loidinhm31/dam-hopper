@@ -3,9 +3,9 @@
 use super::archive::inspect_and_validate_archive;
 use super::archive_extract::extract_role_projection;
 use super::attestation::verify_file_attestation;
-use super::constants::MAX_MANIFEST_BYTES;
+use super::constants::{HELPER_SERVICE_UNIT, MAX_MANIFEST_BYTES};
 use super::error::ReleaseError;
-use super::host_config::{HostConfig, load_host_config, save_host_config};
+use super::host_config::{load_host_config, save_host_config, HostConfig};
 use super::inventory::TargetRole;
 use super::layout::Layout;
 use super::lock::DeploymentLock;
@@ -207,28 +207,31 @@ pub fn stage_release_bundle(
             hash_optional_file(&pending_units_dir.join(super::constants::API_SERVICE_UNIT))?;
         let web_unit_sha256 =
             hash_optional_file(&pending_units_dir.join(super::constants::WEB_SERVICE_UNIT))?;
+        let helper_unit_sha256 = hash_optional_file(&pending_units_dir.join(HELPER_SERVICE_UNIT))?;
         let host_config_sha256 = hash_file(&pending_host_config_path)?;
         Ok::<_, ReleaseError>((
             manifest_sha256,
             api_unit_sha256,
             web_unit_sha256,
+            helper_unit_sha256,
             host_config_sha256,
         ))
     })();
-    let (manifest_sha256, api_unit_sha256, web_unit_sha256, host_config_sha256) = match digests {
-        Ok(digests) => digests,
-        Err(error) => {
-            return Err(cleanup_staging_failure(
-                error,
-                layout,
-                &target_dir,
-                &pending_units_dir,
-                &pending_host_config_path,
-                migration_opt.as_ref(),
-                previous_host_config.as_ref(),
-            ));
-        }
-    };
+    let (manifest_sha256, api_unit_sha256, web_unit_sha256, helper_unit_sha256, host_config_sha256) =
+        match digests {
+            Ok(digests) => digests,
+            Err(error) => {
+                return Err(cleanup_staging_failure(
+                    error,
+                    layout,
+                    &target_dir,
+                    &pending_units_dir,
+                    &pending_host_config_path,
+                    migration_opt.as_ref(),
+                    previous_host_config.as_ref(),
+                ));
+            }
+        };
 
     let pending_record = super::state_record::PendingCandidateRecord {
         tag: manifest.release.tag.clone(),
@@ -241,6 +244,7 @@ pub fn stage_release_bundle(
         pending_host_config_path: Some(pending_host_config_path.display().to_string()),
         api_unit_sha256,
         web_unit_sha256,
+        helper_unit_sha256,
         host_config_sha256: Some(host_config_sha256),
     };
 

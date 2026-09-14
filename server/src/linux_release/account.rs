@@ -1,7 +1,53 @@
 //! User account information and system identity verification via libc.
 
+use super::constants::DEFAULT_API_SERVICE_USER;
 use super::error::ReleaseError;
+use super::unit_parser::ParsedUnit;
 use std::ffi::CString;
+
+/// Concrete API runtime identity resolved from a finalized systemd unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiRuntimeIdentity {
+    pub user: String,
+    pub group: String,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+/// Resolve exactly one non-root User=/Group= pair from a finalized API unit.
+pub fn resolve_api_runtime_identity(unit: &ParsedUnit) -> Result<ApiRuntimeIdentity, ReleaseError> {
+    let users = unit.get_all_values("Service", "User");
+    let groups = unit.get_all_values("Service", "Group");
+    if users.len() != 1 || groups.len() != 1 {
+        return Err(ReleaseError::Config(format!(
+            "API unit requires exactly one User= and one Group= directive (got {} and {})",
+            users.len(),
+            groups.len()
+        )));
+    }
+    let user = users[0].trim();
+    let group = groups[0].trim();
+    if user.is_empty() || group.is_empty() || user == "root" || group == "root" {
+        return Err(ReleaseError::Config(
+            "API unit runtime identity must be non-root".into(),
+        ));
+    }
+    let user_info = verify_api_service_account(user)?;
+    let gid = get_group_gid_by_name(group).ok_or_else(|| {
+        ReleaseError::Config(format!("API unit Group='{group}' does not resolve"))
+    })?;
+    if gid == 0 || gid != user_info.gid {
+        return Err(ReleaseError::Config(format!(
+            "API unit Group='{group}' is not User='{user}' primary group"
+        )));
+    }
+    Ok(ApiRuntimeIdentity {
+        user: user.to_string(),
+        group: group.to_string(),
+        uid: user_info.uid,
+        gid,
+    })
+}
 
 /// Resolved user account information from libc passwd database.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,8 +137,17 @@ pub fn get_group_by_gid(gid: u32) -> Option<String> {
             .into_owned()
     })
 }
+/// Retrieve group ID by name.
+pub fn get_group_gid_by_name(groupname: &str) -> Option<u32> {
+    let c_name = CString::new(groupname).ok()?;
+    let grp = unsafe { libc::getgrnam(c_name.as_ptr()) };
+    if grp.is_null() {
+        return None;
+    }
+    Some(unsafe { (*grp).gr_gid })
+}
 
-/// Verify that the API service account exists and is not root.
+/// Verify that the API service account exists, has a primary group, and is not root.
 pub fn verify_api_service_account(username: &str) -> Result<UserInfo, ReleaseError> {
     let trimmed = username.trim();
     if trimmed.is_empty() {
@@ -100,48 +155,21 @@ pub fn verify_api_service_account(username: &str) -> Result<UserInfo, ReleaseErr
     }
     let user = get_user_by_name(trimmed)
         .ok_or_else(|| ReleaseError::Config(format!("system user '{trimmed}' does not exist")))?;
-
-    if user.uid == 0 || trimmed == "root" {
+    if trimmed == "root" || user.uid == 0 {
         return Err(ReleaseError::Config(format!(
             "service user '{trimmed}' cannot be root (UID 0)"
         )));
     }
-
+    if user.gid == 0 || get_group_by_gid(user.gid).is_none() {
+        return Err(ReleaseError::Config(format!(
+            "service user '{trimmed}' has no valid non-root primary group"
+        )));
+    }
     Ok(user)
 }
 
-/// Ensure the requested service user exists, creating it as a system user if root and missing.
+/// Verify an explicitly selected API service user; never creates or repairs accounts.
 pub fn ensure_or_verify_service_user(username: &str) -> Result<UserInfo, ReleaseError> {
-    if let Some(_user) = get_user_by_name(username) {
-        return verify_api_service_account(username);
-    }
-    #[cfg(unix)]
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!(
-            "User '{username}' does not exist. Creating dedicated system user '{username}'..."
-        );
-        let res = std::process::Command::new("useradd")
-            .args([
-                "--system",
-                "--shell",
-                "/usr/sbin/nologin",
-                "--home-dir",
-                &format!("/var/lib/{username}"),
-                "--create-home",
-                username,
-            ])
-            .output();
-        if let Ok(output) = res {
-            if output.status.success() {
-                eprintln!("Successfully created system user '{username}'.");
-            }
-        }
-        if get_user_by_name(username).is_none() {
-            let _ = std::process::Command::new("useradd")
-                .args(["--system", "--create-home", username])
-                .output();
-        }
-    }
     verify_api_service_account(username)
 }
 
@@ -156,33 +184,22 @@ pub fn resolve_service_user(
         return Ok(trimmed.to_string());
     }
 
-    let sudo_user = std::env::var("SUDO_USER")
-        .ok()
-        .filter(|u| !u.trim().is_empty());
-    let default_candidate = if let Some(su) = &sudo_user {
-        if su != "root" && get_user_by_name(su).map(|u| u.uid != 0).unwrap_or(false) {
-            Some(su.clone())
-        } else {
-            None
-        }
+    let default_user = if get_user_by_name(DEFAULT_API_SERVICE_USER)
+        .map(|u| u.uid != 0 && u.gid != 0)
+        .unwrap_or(false)
+    {
+        Some(DEFAULT_API_SERVICE_USER.to_string())
     } else {
         None
     };
 
-    let default_user = default_candidate.or_else(|| {
-        if get_user_by_name("dam-hopper")
-            .map(|u| u.uid != 0)
-            .unwrap_or(false)
-        {
-            Some("dam-hopper".to_string())
-        } else {
-            None
-        }
-    });
-
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() && !non_interactive {
-        let prompt_default = default_user.as_deref().unwrap_or("dam-hopper");
+        let prompt_default = default_user.as_deref().ok_or_else(|| {
+            ReleaseError::Config(
+                "default API service user is unavailable; specify --service-user".into(),
+            )
+        })?;
         eprintln!("Select the system user to run dam-hopper-api (cannot be root):");
         eprint!("Service user [{prompt_default}]: ");
         use std::io::Write;

@@ -39,6 +39,7 @@ export class ApiRequestError extends Error {
     message: string,
     public readonly status: number,
     public readonly code?: string,
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = "ApiRequestError";
@@ -558,6 +559,646 @@ export interface SshForgetCredentialResult {
   success: boolean;
   forgotten: boolean;
   error?: string;
+}
+// ── Terminal Idle Suspend Types ───────────────────────────────────────────────
+
+export type IdleSuspendCoordinatorState =
+  | "disabled"
+  | "watching"
+  | "armed"
+  | "finalCheck"
+  | "handedOff"
+  | "suppressed"
+  | "failed"
+  | "resumed";
+
+export interface IdleSuspendFleetSnapshot {
+  generation: number;
+  liveCount: number;
+  creatingCount: number;
+  restartPendingCount: number;
+  quiescent?: boolean;
+  disposing: boolean;
+  closing?: boolean;
+  handoffActive: boolean;
+}
+
+export type IdleSuspendOutcome =
+  | { type: "resumedSuccessfully"; resumedAtMs: number }
+  | { type: "rejectedFleetActive"; reason: string }
+  | { type: "blockedByInhibitor"; inhibitor: string }
+  | { type: "unsupportedCapability"; detail: string }
+  | { type: "executionFailed"; error: string };
+
+export type IdleSuspendAutomaticPolicy = "empty-fleet" | "agent-activity";
+
+export type IdleSuspendActivityReasonCode =
+  | "recentInput"
+  | "recentOutput"
+  | "recentNetwork"
+  | "agentChanged"
+  | "lifecycleBusy"
+  | "quiet"
+  | "procAccess"
+  | "scanLimit"
+  | "scanTimeout"
+  | "socketDiagnostics"
+  | "unsupportedTransport"
+  | "namespaceMismatch"
+  | "staleObservation"
+  | "identityUncertain"
+  | "counterOverflow"
+  | "reconciling"
+  | "epochSpent";
+
+export type IdleSuspendActivityMeasurementState =
+  | "initializing"
+  | "available"
+  | "unavailable";
+
+export type IdleSuspendMeasurementWarningReasonCode =
+  | "procAccess"
+  | "scanLimit"
+  | "scanTimeout"
+  | "socketDiagnostics"
+  | "unsupportedTransport"
+  | "namespaceMismatch"
+  | "staleObservation"
+  | "identityUncertain"
+  | "counterOverflow"
+  | "reconciling";
+
+export interface IdleSuspendWarningProcessV1 {
+  pid: number;
+  executableIdentity: string | null;
+}
+
+export interface IdleSuspendMeasurementWarningV1 {
+  reasonCode: IdleSuspendMeasurementWarningReasonCode;
+  blockedSinceMs: number;
+  processes: IdleSuspendWarningProcessV1[];
+  processesTruncated: boolean;
+}
+
+export interface IdleSuspendActivityStatusV1 {
+  measurementState: IdleSuspendActivityMeasurementState;
+  reasonCode: IdleSuspendActivityReasonCode | null;
+  recognizedAgentCount: number | null;
+  monitoredTerminalCount: number | null;
+  sampledAtMs: number | null;
+  lastActivityAtMs: number | null;
+  networkCoverage: "tcp4-tcp6";
+  measurementWarning: IdleSuspendMeasurementWarningV1 | null;
+}
+
+export interface IdleSuspendStatusV1 {
+  version: 1;
+  statusRevision: number;
+  state: IdleSuspendCoordinatorState;
+  automaticPolicy: IdleSuspendAutomaticPolicy;
+  enabled: boolean;
+  timingMutable: boolean;
+  timingMutableReason?: string | null;
+  capabilityCode: string;
+  currentEpoch: number;
+  quietPeriodSeconds: number;
+  wakeAfterSeconds: number;
+  minQuietPeriodSeconds: number;
+  maxQuietPeriodSeconds: number;
+  minWakeAfterSeconds: number;
+  maxWakeAfterSeconds: number;
+  fleetSnapshot: IdleSuspendFleetSnapshot;
+  armDeadlineMs?: number | null;
+  lastOutcome?: IdleSuspendOutcome | null;
+  detail?: string | null;
+  activity: IdleSuspendActivityStatusV1 | null;
+  timestampMs: number;
+}
+
+const COORDINATOR_STATES: Record<string, true> = {
+  disabled: true,
+  watching: true,
+  armed: true,
+  finalCheck: true,
+  handedOff: true,
+  suppressed: true,
+  failed: true,
+  resumed: true,
+};
+
+const ACTIVITY_REASON_CODES: Record<string, true> = {
+  recentInput: true,
+  recentOutput: true,
+  recentNetwork: true,
+  agentChanged: true,
+  lifecycleBusy: true,
+  quiet: true,
+  procAccess: true,
+  scanLimit: true,
+  scanTimeout: true,
+  socketDiagnostics: true,
+  unsupportedTransport: true,
+  namespaceMismatch: true,
+  staleObservation: true,
+  identityUncertain: true,
+  counterOverflow: true,
+  reconciling: true,
+  epochSpent: true,
+};
+
+const WARNING_REASON_CODES: Record<string, true> = {
+  procAccess: true,
+  scanLimit: true,
+  scanTimeout: true,
+  socketDiagnostics: true,
+  unsupportedTransport: true,
+  namespaceMismatch: true,
+  staleObservation: true,
+  identityUncertain: true,
+  counterOverflow: true,
+  reconciling: true,
+};
+
+const MEASUREMENT_STATES: Record<string, true> = {
+  initializing: true,
+  available: true,
+  unavailable: true,
+};
+
+function isNonNegativeSafeInteger(val: unknown): val is number {
+  return typeof val === "number" && Number.isSafeInteger(val) && val >= 0;
+}
+
+function isPositiveSafeInteger(val: unknown): val is number {
+  return typeof val === "number" && Number.isSafeInteger(val) && val > 0;
+}
+
+function isValidEpochMs(val: unknown): val is number {
+  return (
+    typeof val === "number" &&
+    Number.isSafeInteger(val) &&
+    val >= 0 &&
+    val <= 8640000000000000
+  );
+}
+
+function isPlainObject(val: unknown): val is Record<string, unknown> {
+  return typeof val === "object" && val !== null && !Array.isArray(val);
+}
+
+const textEncoder = new TextEncoder();
+
+function isValidExecutableIdentity(val: unknown): val is string | null {
+  if (val === null) return true;
+  if (typeof val !== "string") return false;
+  if (val.length === 0) return false;
+  if (/[\x00-\x1F\x7F]/.test(val)) return false;
+  return textEncoder.encode(val).length <= 256;
+}
+
+function decodeMeasurementWarning(
+  val: unknown,
+): IdleSuspendMeasurementWarningV1 {
+  if (!isPlainObject(val)) {
+    throw new Error("Invalid measurementWarning: expected plain object");
+  }
+  if (
+    typeof val.reasonCode !== "string" ||
+    !WARNING_REASON_CODES[val.reasonCode]
+  ) {
+    throw new Error("Invalid measurementWarning: invalid reasonCode");
+  }
+  if (!isValidEpochMs(val.blockedSinceMs)) {
+    throw new Error("Invalid measurementWarning: invalid blockedSinceMs");
+  }
+  if (typeof val.processesTruncated !== "boolean") {
+    throw new Error("Invalid measurementWarning: invalid processesTruncated");
+  }
+  if (!Array.isArray(val.processes) || val.processes.length > 32) {
+    throw new Error("Invalid measurementWarning: invalid processes array");
+  }
+  const processes: IdleSuspendWarningProcessV1[] = [];
+  let prevPid = 0;
+  for (let i = 0; i < val.processes.length; i++) {
+    const item = val.processes[i];
+    if (!isPlainObject(item)) {
+      throw new Error(
+        "Invalid measurementWarning process: expected plain object",
+      );
+    }
+    if (!isPositiveSafeInteger(item.pid)) {
+      throw new Error("Invalid measurementWarning process: invalid pid");
+    }
+    if (item.pid <= prevPid) {
+      throw new Error(
+        "Invalid measurementWarning process: pids must be strictly ascending",
+      );
+    }
+    prevPid = item.pid;
+    if (!isValidExecutableIdentity(item.executableIdentity)) {
+      throw new Error(
+        "Invalid measurementWarning process: invalid executableIdentity",
+      );
+    }
+    processes.push({
+      pid: item.pid,
+      executableIdentity: item.executableIdentity,
+    });
+  }
+
+  return {
+    reasonCode: val.reasonCode as IdleSuspendMeasurementWarningReasonCode,
+    blockedSinceMs: val.blockedSinceMs,
+    processes,
+    processesTruncated: val.processesTruncated,
+  };
+}
+
+function decodeActivityStatus(val: unknown): IdleSuspendActivityStatusV1 {
+  if (!isPlainObject(val)) {
+    throw new Error("Invalid activity: expected plain object");
+  }
+  if (
+    typeof val.measurementState !== "string" ||
+    !MEASUREMENT_STATES[val.measurementState]
+  ) {
+    throw new Error("Invalid activity: invalid measurementState");
+  }
+  const measurementState =
+    val.measurementState as IdleSuspendActivityMeasurementState;
+
+  let reasonCode: IdleSuspendActivityReasonCode | null = null;
+  if (val.reasonCode !== null && val.reasonCode !== undefined) {
+    if (
+      typeof val.reasonCode !== "string" ||
+      !ACTIVITY_REASON_CODES[val.reasonCode]
+    ) {
+      throw new Error("Invalid activity: invalid reasonCode");
+    }
+    reasonCode = val.reasonCode as IdleSuspendActivityReasonCode;
+  }
+
+  let recognizedAgentCount: number | null = null;
+  if (
+    val.recognizedAgentCount !== null &&
+    val.recognizedAgentCount !== undefined
+  ) {
+    if (!isNonNegativeSafeInteger(val.recognizedAgentCount)) {
+      throw new Error("Invalid activity: invalid recognizedAgentCount");
+    }
+    recognizedAgentCount = val.recognizedAgentCount;
+  }
+
+  let monitoredTerminalCount: number | null = null;
+  if (
+    val.monitoredTerminalCount !== null &&
+    val.monitoredTerminalCount !== undefined
+  ) {
+    if (!isNonNegativeSafeInteger(val.monitoredTerminalCount)) {
+      throw new Error("Invalid activity: invalid monitoredTerminalCount");
+    }
+    monitoredTerminalCount = val.monitoredTerminalCount;
+  }
+
+  let sampledAtMs: number | null = null;
+  if (val.sampledAtMs !== null && val.sampledAtMs !== undefined) {
+    if (!isValidEpochMs(val.sampledAtMs)) {
+      throw new Error("Invalid activity: invalid sampledAtMs");
+    }
+    sampledAtMs = val.sampledAtMs;
+  }
+
+  let lastActivityAtMs: number | null = null;
+  if (val.lastActivityAtMs !== null && val.lastActivityAtMs !== undefined) {
+    if (!isValidEpochMs(val.lastActivityAtMs)) {
+      throw new Error("Invalid activity: invalid lastActivityAtMs");
+    }
+    lastActivityAtMs = val.lastActivityAtMs;
+  }
+
+  if (val.networkCoverage !== "tcp4-tcp6") {
+    throw new Error("Invalid activity: networkCoverage must be 'tcp4-tcp6'");
+  }
+
+  let measurementWarning: IdleSuspendMeasurementWarningV1 | null = null;
+  if (measurementState === "available") {
+    if (val.measurementWarning !== null) {
+      throw new Error(
+        "Invalid activity: measurementWarning must be null when available",
+      );
+    }
+  } else {
+    if (
+      val.measurementWarning === null ||
+      val.measurementWarning === undefined
+    ) {
+      throw new Error(
+        "Invalid activity: measurementWarning required when initializing or unavailable",
+      );
+    }
+    measurementWarning = decodeMeasurementWarning(val.measurementWarning);
+  }
+
+  return {
+    measurementState,
+    reasonCode,
+    recognizedAgentCount,
+    monitoredTerminalCount,
+    sampledAtMs,
+    lastActivityAtMs,
+    networkCoverage: "tcp4-tcp6",
+    measurementWarning,
+  };
+}
+
+function decodeFleetSnapshot(val: unknown): IdleSuspendFleetSnapshot {
+  if (!isPlainObject(val)) {
+    throw new Error("Invalid fleetSnapshot: expected plain object");
+  }
+  if (!isNonNegativeSafeInteger(val.generation)) {
+    throw new Error("Invalid fleetSnapshot: invalid generation");
+  }
+  if (!isNonNegativeSafeInteger(val.liveCount)) {
+    throw new Error("Invalid fleetSnapshot: invalid liveCount");
+  }
+  if (!isNonNegativeSafeInteger(val.creatingCount)) {
+    throw new Error("Invalid fleetSnapshot: invalid creatingCount");
+  }
+  if (!isNonNegativeSafeInteger(val.restartPendingCount)) {
+    throw new Error("Invalid fleetSnapshot: invalid restartPendingCount");
+  }
+  if (typeof val.disposing !== "boolean") {
+    throw new Error("Invalid fleetSnapshot: invalid disposing");
+  }
+  if (typeof val.handoffActive !== "boolean") {
+    throw new Error("Invalid fleetSnapshot: invalid handoffActive");
+  }
+  if (val.quiescent !== undefined && typeof val.quiescent !== "boolean") {
+    throw new Error("Invalid fleetSnapshot: invalid quiescent");
+  }
+  if (val.closing !== undefined && typeof val.closing !== "boolean") {
+    throw new Error("Invalid fleetSnapshot: invalid closing");
+  }
+  return {
+    generation: val.generation,
+    liveCount: val.liveCount,
+    creatingCount: val.creatingCount,
+    restartPendingCount: val.restartPendingCount,
+    disposing: val.disposing,
+    handoffActive: val.handoffActive,
+    quiescent: val.quiescent as boolean | undefined,
+    closing: val.closing as boolean | undefined,
+    ...(isNonNegativeSafeInteger((val as Record<string, unknown>).runningCount)
+      ? {
+          runningCount: (val as Record<string, unknown>).runningCount as number,
+        }
+      : {}),
+  };
+}
+
+export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
+  if (!isPlainObject(value)) {
+    throw new Error("Invalid idle suspend status: expected plain object");
+  }
+
+  if (value.version !== 1) {
+    throw new Error("Invalid idle suspend status: expected version 1");
+  }
+  if (!isNonNegativeSafeInteger(value.statusRevision)) {
+    throw new Error("Invalid idle suspend status: invalid statusRevision");
+  }
+  if (typeof value.state !== "string" || !COORDINATOR_STATES[value.state]) {
+    throw new Error("Invalid idle suspend status: invalid coordinator state");
+  }
+  if (typeof value.enabled !== "boolean") {
+    throw new Error("Invalid idle suspend status: invalid enabled");
+  }
+  if (typeof value.timingMutable !== "boolean") {
+    throw new Error("Invalid idle suspend status: invalid timingMutable");
+  }
+  if (
+    value.timingMutableReason !== undefined &&
+    value.timingMutableReason !== null &&
+    typeof value.timingMutableReason !== "string"
+  ) {
+    throw new Error("Invalid idle suspend status: invalid timingMutableReason");
+  }
+  if (typeof value.capabilityCode !== "string") {
+    throw new Error("Invalid idle suspend status: invalid capabilityCode");
+  }
+  if (!isNonNegativeSafeInteger(value.currentEpoch)) {
+    throw new Error("Invalid idle suspend status: invalid currentEpoch");
+  }
+  if (!isNonNegativeSafeInteger(value.quietPeriodSeconds)) {
+    throw new Error("Invalid idle suspend status: invalid quietPeriodSeconds");
+  }
+  if (!isNonNegativeSafeInteger(value.wakeAfterSeconds)) {
+    throw new Error("Invalid idle suspend status: invalid wakeAfterSeconds");
+  }
+  if (!isNonNegativeSafeInteger(value.minQuietPeriodSeconds)) {
+    throw new Error(
+      "Invalid idle suspend status: invalid minQuietPeriodSeconds",
+    );
+  }
+  if (!isNonNegativeSafeInteger(value.maxQuietPeriodSeconds)) {
+    throw new Error(
+      "Invalid idle suspend status: invalid maxQuietPeriodSeconds",
+    );
+  }
+  if (!isNonNegativeSafeInteger(value.minWakeAfterSeconds)) {
+    throw new Error("Invalid idle suspend status: invalid minWakeAfterSeconds");
+  }
+  if (!isNonNegativeSafeInteger(value.maxWakeAfterSeconds)) {
+    throw new Error("Invalid idle suspend status: invalid maxWakeAfterSeconds");
+  }
+  if (
+    value.armDeadlineMs !== undefined &&
+    value.armDeadlineMs !== null &&
+    !isValidEpochMs(value.armDeadlineMs)
+  ) {
+    throw new Error("Invalid idle suspend status: invalid armDeadlineMs");
+  }
+  if (
+    value.detail !== undefined &&
+    value.detail !== null &&
+    typeof value.detail !== "string"
+  ) {
+    throw new Error("Invalid idle suspend status: invalid detail");
+  }
+  if (!isValidEpochMs(value.timestampMs)) {
+    throw new Error("Invalid idle suspend status: invalid timestampMs");
+  }
+
+  const fleetSnapshot = decodeFleetSnapshot(value.fleetSnapshot);
+
+  const hasAutomaticPolicy = Object.prototype.hasOwnProperty.call(
+    value,
+    "automaticPolicy",
+  );
+  const hasActivity = Object.prototype.hasOwnProperty.call(value, "activity");
+
+  let automaticPolicy: IdleSuspendAutomaticPolicy;
+  let activity: IdleSuspendActivityStatusV1 | null;
+
+  if (!hasAutomaticPolicy && !hasActivity) {
+    automaticPolicy = "empty-fleet";
+    activity = null;
+  } else if (!hasAutomaticPolicy || !hasActivity) {
+    throw new Error(
+      "Invalid idle suspend status: partial additive fields (one of automaticPolicy/activity missing)",
+    );
+  } else {
+    if (value.automaticPolicy === undefined || value.activity === undefined) {
+      throw new Error(
+        "Invalid idle suspend status: additive fields cannot be undefined",
+      );
+    }
+    if (value.automaticPolicy === "empty-fleet") {
+      if (value.activity !== null) {
+        throw new Error(
+          "Invalid idle suspend status: activity must be null for empty-fleet policy",
+        );
+      }
+      automaticPolicy = "empty-fleet";
+      activity = null;
+    } else if (value.automaticPolicy === "agent-activity") {
+      if (value.activity === null || typeof value.activity !== "object") {
+        throw new Error(
+          "Invalid idle suspend status: activity object required for agent-activity policy",
+        );
+      }
+      automaticPolicy = "agent-activity";
+      activity = decodeActivityStatus(value.activity);
+    } else {
+      throw new Error("Invalid idle suspend status: unknown automaticPolicy");
+    }
+  }
+
+  return {
+    version: 1,
+    statusRevision: value.statusRevision as number,
+    state: value.state as IdleSuspendCoordinatorState,
+    automaticPolicy,
+    enabled: value.enabled as boolean,
+    timingMutable: value.timingMutable as boolean,
+    timingMutableReason: (value.timingMutableReason ?? null) as string | null,
+    capabilityCode: value.capabilityCode as string,
+    currentEpoch: value.currentEpoch as number,
+    quietPeriodSeconds: value.quietPeriodSeconds as number,
+    wakeAfterSeconds: value.wakeAfterSeconds as number,
+    minQuietPeriodSeconds: value.minQuietPeriodSeconds as number,
+    maxQuietPeriodSeconds: value.maxQuietPeriodSeconds as number,
+    minWakeAfterSeconds: value.minWakeAfterSeconds as number,
+    maxWakeAfterSeconds: value.maxWakeAfterSeconds as number,
+    fleetSnapshot,
+    armDeadlineMs: (value.armDeadlineMs ?? null) as number | null,
+    lastOutcome: (value.lastOutcome ?? null) as IdleSuspendOutcome | null,
+    detail: (value.detail ?? null) as string | null,
+    activity,
+    timestampMs: value.timestampMs as number,
+  };
+}
+
+export function isIdleSuspendStatusV1(
+  value: unknown,
+): value is IdleSuspendStatusV1 {
+  try {
+    decodeIdleSuspendStatusV1(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function asIdleSuspendStatusV1(
+  value: unknown,
+): IdleSuspendStatusV1 | null {
+  try {
+    return decodeIdleSuspendStatusV1(value);
+  } catch {
+    return null;
+  }
+}
+
+export interface IdleSuspendTimingPatchRequest {
+  quietPeriodSeconds: number;
+  wakeAfterSeconds: number;
+}
+
+export interface IdleSuspendTimingPatchResponse {
+  version: 1;
+  changed: boolean;
+  statusRevision: number;
+  quietPeriodSeconds: number;
+  wakeAfterSeconds: number;
+}
+
+export interface ForceSuspendRequest {
+  wakeAfterSeconds: number;
+  force: boolean;
+}
+
+export interface ForceSuspendAcceptedResponse {
+  version: number;
+  requestId: string;
+  statusRevision: number;
+  state: "handedOff" | string;
+  wakeAfterSeconds: number;
+  forced: boolean;
+  fleetSnapshot: IdleSuspendFleetSnapshot;
+}
+
+export interface IdleSuspendConflictResponse {
+  error: string;
+  code: string;
+  activeSessionCount: number;
+  fleetSnapshot: IdleSuspendFleetSnapshot;
+}
+
+export function isForceSuspendAcceptedResponse(
+  value: unknown,
+): value is ForceSuspendAcceptedResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const s = value as Record<string, unknown>;
+  return (
+    typeof s.version === "number" &&
+    typeof s.requestId === "string" &&
+    typeof s.statusRevision === "number" &&
+    typeof s.state === "string" &&
+    typeof s.wakeAfterSeconds === "number" &&
+    typeof s.forced === "boolean" &&
+    typeof s.fleetSnapshot === "object" &&
+    s.fleetSnapshot !== null
+  );
+}
+
+export function isIdleSuspendConflictResponse(
+  value: unknown,
+): value is IdleSuspendConflictResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const s = value as Record<string, unknown>;
+  return (
+    typeof s.error === "string" &&
+    typeof s.code === "string" &&
+    typeof s.activeSessionCount === "number" &&
+    typeof s.fleetSnapshot === "object" &&
+    s.fleetSnapshot !== null
+  );
+}
+
+export function asIdleSuspendConflictResponse(
+  error: unknown,
+): IdleSuspendConflictResponse | null {
+  if (
+    error instanceof ApiRequestError &&
+    error.status === 409 &&
+    error.details
+  ) {
+    if (isIdleSuspendConflictResponse(error.details)) {
+      return error.details;
+    }
+  }
+  return null;
 }
 
 // ── Memory + Import Types ─────────────────────────────────────────────────────
@@ -1675,6 +2316,22 @@ export const api = {
         {
           limit,
         },
+      ),
+    idleSuspendStatus: async () => {
+      const raw = await getTransport().invoke<unknown>(
+        "system:idleSuspendStatus",
+      );
+      return decodeIdleSuspendStatusV1(raw);
+    },
+    updateIdleSuspendTiming: (timing: IdleSuspendTimingPatchRequest) =>
+      getTransport().invoke<IdleSuspendTimingPatchResponse>(
+        "system:updateIdleSuspendTiming",
+        timing,
+      ),
+    forceSuspend: (request: ForceSuspendRequest) =>
+      getTransport().invoke<ForceSuspendAcceptedResponse>(
+        "system:forceSuspend",
+        request,
       ),
   },
   usage: {

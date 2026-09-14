@@ -17,6 +17,12 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Workflow Context Surface](./workflow-context-surface.md)** — Responsive Plan/item details, notes, and inline editing
 - **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries
 - **[Worktree Operations](./worktree-operation.md)** — Target selection and safe worktree lifecycle
+- **[Terminal Idle Suspend Security](./terminal-idle-suspend-security.md)** — Automatic timing bounds, helper IPC, RTC ownership, audit, and fail-closed rules
+- **[PTY Activity Observation](./pty-activity-observation.md)** — Phase 02 private root identity, raw output, input admission, snapshot, and watcher contract
+- **[Configured-Agent Process Discovery](./agent-activity-process-discovery.md)** — Phase 03 bounded procfs discovery, attribution, and `ProcessSource` contract
+- **[Owned TCP Byte Observation](./tcp-activity-observation.md)** — Phase 04 bounded `NETLINK_SOCK_DIAG`, `tcp_info`, and per-socket baseline contract
+- **[Agent Activity Automatic Admission](./agent-activity-automatic-admission.md)** — Phase 05 transactional sampler, generation-fenced final claim, status warning, and coordinator lifecycle
+- **[Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md)** — Phase 06 decoder, aggregate activity presentation, warning/privacy boundary, and manual-force preservation
 
 ## Reference Documentation
 
@@ -28,17 +34,19 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
 - **[Changelog](./CHANGELOG.md)** — Dated feature, persistence, and release notes
+- **[Terminal Idle Suspend Security](./terminal-idle-suspend-security.md)** — Security invariants and helper execution policy
 
 ## Deployment
 
 - **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
 - **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
+- **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, Phase 06 diagnostics, helper service lifecycle, activation, rollback, and recovery
+- **[Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md)** — Canonical API config/audit state, copy-once legacy migration, and descriptor-relative refusal boundaries
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
 - Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
 
 Historical implementation plans are not indexed here; verify that a plan path
 exists before linking it from a new document.
-
 
 ## Key Sections
 
@@ -90,6 +98,66 @@ exists before linking it from a new document.
 - **Phase 06:** Lifecycle UI with status dots, restart badges, exit/restart/reconnect banners
 - See: [API Reference](./api-reference.md#terminals)
 
+**Terminal Idle Suspend** — Server-authoritative, opt-in Linux suspend with
+bounded automatic timing, a fixed enrolled helper, and two automatic policies:
+`empty-fleet` (zero live/creating/restart-pending PTYs) and `agent-activity`
+(configured-agent PTY/process/TCP activity heuristic; service-only terminals may
+remain open). Quiet is not proof of agent completion, and `tcp4-tcp6` is not
+generic network coverage.
+
+- Status: `GET /api/system/idle-suspend/v1/status`; timing: `PATCH .../timing`
+- Automatic persisted wake values remain `60..=86400` seconds; quiet default is
+  900 seconds (15 minutes).
+- Phase 01 configuration stores `automaticPolicy` and `agentExecutables`
+  under `server.idleSuspend`; the selector defaults to `empty-fleet`.
+- Production diagnostics Phases 01–07 are complete: `dam-hopper diagnose --json`
+  invokes fixed role-aware systemd/journal/local-API/host-probe adapters,
+  writes a bounded `bundleSchemaVersion: 1` JSON bundle, and returns exit
+  `0` for complete, `2` for valid partial, or `1` for fatal
+  serialization/output failure. Root output uses
+  `/var/lib/dam-hopper-manager/diagnostics`; non-root output uses
+  `$XDG_STATE_HOME/dam-hopper/diagnostics` or `$HOME/.local/state/dam-hopper/diagnostics`.
+  Non-root collection never escalates; root-only helper evidence is
+  `permissionDenied`, so server/both runs may be partial. See the
+  [Linux Release Manager](./linux-release-manager.md#production-diagnostics-phase-06)
+  guide and [diagnostics plan](../plans/260912-0027-production-idle-suspend-diagnostics/plan.md).
+- Phase 07 cross-layer verification, architecture reconciliation, documentation,
+  and staged read-only rollout are complete (2026-09-14). See the
+  [Phase 07 test report](../plans/reports/tester-260914-0106-phase07-cycle2-verification.md)
+  and [code review](../plans/reports/code-review-260914-0109-phase-07-production-idle-suspend-diagnostics-cycle2.md).
+- Configured-agent activity Phase 02 provides private PTY evidence and input
+  admission; its Phase 03 provides bounded process discovery and retained
+  attribution. Phase 04 provides owned TCP byte observation and per-socket
+  baseline comparison. Phase 05 adds the dedicated transactional sampler,
+  manager-locked final admission, bounded status warnings, and the
+  `agent-activity` state path.
+- Phase 06 adds strict client decoding with narrow old-server normalization,
+  aggregate status/measurement-warning presentation, a sole arm countdown, and
+  Chromium/manual-force regressions. It does not add matcher controls, policy
+  mutation, a new endpoint, or automatic authority in the browser.
+- Phase 07 completes integrated qualification across deterministic activity,
+  PTY, API, Chromium, security-boundary, and Linux live-observer surfaces.
+  Evidence: **323 backend/PTY/API/integration tests**, **14/14** boundary
+  checks, **16/16** Chromium tests, and the ignored Linux PTY/TCP smoke passed
+  in **0.72s**; code review approved **9.4/10**. See the
+  [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
+- Phase 08 documentation, operations runbooks, controlled rollout, and rollback
+  are complete. QA evidence: **14/14** boundary checks, **20/20** idle-suspend
+  integration scenarios including the ignored live smoke (**0.74s**), **16/16**
+  Chromium tests, and **1606/1606** UI tests. The real automatic suspend canary
+  remains an Operations gate; see the [Phase 08 QA report](../plans/reports/qa-260911-1207-phase08-idle-suspend-rollout.md).
+- See [PTY Activity Observation](./pty-activity-observation.md),
+  [Configured-Agent Process Discovery](./agent-activity-process-discovery.md),
+  [Owned TCP Byte Observation](./tcp-activity-observation.md), [Agent Activity
+  Automatic Admission](./agent-activity-automatic-admission.md), and
+  [Protected Status and Browser UI](./idle-suspend-status-ui.md).
+- Phase 01 helper execution accepts `wakeAfterSeconds: 0` for clear-only,
+  indefinite sleep; it clears and verifies RTC state without target arithmetic.
+- Unexpected pre-existing RTC alarms, inhibitors, capability failures, and RTC
+  or audit failures suppress suspend. See [API Reference](./api-reference.md#terminal-idle-suspend),
+  [Configuration Guide](./configuration-guide.md#terminal-idle-suspend-opt-in-linux-suspend),
+  and [Systemd runbook](./linux-systemd.md#11-terminal-idle-suspend-helper-enrollment--rollback-runbook).
+
 **Git Operations** — Clone, push, pull, status, branch actions, history edits.
 
 - API: /api/git/{project}/clone, /push, /status, /branches, /branches/checkout, /cherry-pick, /reset
@@ -128,7 +196,6 @@ transport channels, profile-safe React Query state, and mutation wrappers.
   [Project Overview & PDR](./project-overview-pdr.md#pr-014-workflow-client-types-transport-and-query-state-phase-04),
   [Codebase Summary](./codebase-summary.md#workflow-client-types-transport-and-query-state-phase-04),
   and [Code Standards](./code-standards.md#workflow-client-contracts-phase-04).
-
 
 ## Common Tasks
 
@@ -304,22 +371,23 @@ See [System Architecture](./system-architecture.md) for detailed breakdown.
 
 server/
 ├── src/
-│   ├── persistence/              # SQLite session store and migrations
-│   └── workflow/                 # Domain, REST, observation, reconciliation
+│ ├── persistence/ # SQLite session store and migrations
+│ └── workflow/ # Domain, REST, observation, reconciliation
 apps/
-├── web/                          # Thin Vite browser host
+├── web/ # Thin Vite browser host
 packages/
-├── ui/                           # Shared React UI package
+├── ui/ # Shared React UI package
 docs/
-├── README.md                     # This file
-├── project-overview-pdr.md       # Product requirements & roadmap
-├── system-architecture.md        # Module breakdown & data flow
-├── api-reference.md              # REST/WebSocket endpoints
-├── workflow-api.md               # Phase 03 workflow REST/lifecycle contract
-├── configuration-guide.md        # dam-hopper.toml & setup
-├── code-standards.md             # Patterns, testing, security
-├── codebase-summary.md           # Quick module reference
-└── CHANGELOG.md                  # Dated implementation and release notes
+├── README.md # This file
+├── project-overview-pdr.md # Product requirements & roadmap
+├── system-architecture.md # Module breakdown & data flow
+├── api-reference.md # REST/WebSocket endpoints
+├── workflow-api.md # Phase 03 workflow REST/lifecycle contract
+├── configuration-guide.md # dam-hopper.toml & setup
+├── code-standards.md # Patterns, testing, security
+├── codebase-summary.md # Quick module reference
+└── CHANGELOG.md # Dated implementation and release notes
+
 ```
 
 Each file is self-contained but linked for cross-reference.
@@ -351,3 +419,4 @@ Always verify docs against actual code implementation before publishing.
 - Review code comments (// or /// in Rust/TypeScript)
 - Run tests: `cd server && cargo test`
 - Check logs: `RUST_LOG=dam_hopper=debug cargo run ...`
+```
