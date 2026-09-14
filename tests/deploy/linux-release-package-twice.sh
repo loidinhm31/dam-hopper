@@ -51,7 +51,7 @@ if [[ -z "$TARGET_DIR" ]]; then
 fi
 WEB_DIST="${WEB_DIST:-$REPO_ROOT/apps/web/dist}"
 
-for binary in dam-hopper dam-hopper-server dam-hopper-web; do
+for binary in dam-hopper dam-hopper-server dam-hopper-web dam-hopper-idle-suspend-helper; do
     if [[ ! -f "$TARGET_DIR/$binary" || ! -x "$TARGET_DIR/$binary" ]]; then
         printf 'Error: required executable is missing or not executable: %s/%s\n' "$TARGET_DIR" "$binary" >&2
         exit 1
