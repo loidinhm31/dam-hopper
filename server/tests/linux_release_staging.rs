@@ -76,6 +76,20 @@ fn test_staging_fresh_install_success() {
     // Verify candidate units are isolated to this transaction.
     let pending_units = std::path::PathBuf::from(pending.pending_units_path.as_deref().unwrap());
     assert!(pending_units.join("dam-hopper-api.service").exists());
+    let api_unit_path = pending_units.join("dam-hopper-api.service");
+    let api_content = fs::read_to_string(&api_unit_path).unwrap();
+    let parsed_api = ParsedUnit::parse(&api_content).expect("parse staged API unit");
+    let expected_api_exec = format!(
+        "{}/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801",
+        role_dir.display()
+    );
+    assert_eq!(
+        parsed_api.get_all_values("Service", "ExecStart"),
+        vec![expected_api_exec.as_str()]
+    );
+    assert!(api_content.contains("/var/lib/dam-hopper/dam-hopper.toml"));
+    assert!(!api_content.contains("/etc/dam-hopper/dam-hopper.toml"));
+    assert!(!api_content.contains('@'));
     assert!(!pending_units.join("dam-hopper-web.service").exists());
     assert!(pending_units
         .join("dam-hopper-idle-suspend-helper.service")
@@ -304,6 +318,11 @@ fn test_staging_helper_unit_and_pidfile_content() {
     assert!(api_content
         .contains("ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'"));
     assert!(api_content.contains("ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid"));
+    let parsed_api = ParsedUnit::parse(&api_content).expect("parse staged API unit");
+    assert_eq!(parsed_api.get_all_values("Service", "ExecStart").len(), 1);
+    assert!(api_content.contains("/var/lib/dam-hopper/dam-hopper.toml"));
+    assert!(!api_content.contains("/etc/dam-hopper/dam-hopper.toml"));
+    assert!(!api_content.contains('@'));
 }
 
 #[test]

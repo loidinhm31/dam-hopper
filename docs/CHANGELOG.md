@@ -30,6 +30,18 @@
   and cleans only identity-matching unpublished objects. Unsafe metadata,
   invalid legacy state, races, and publication failures fail closed. See
   [Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md).
+- **System daemon state configuration — Phase 02 complete (2026-09-14).**
+  Aligned the API systemd template, checked-in unit, strict rendered policy,
+  and staged output on canonical `/var/lib/dam-hopper/dam-hopper.toml`.
+- `validate_api_unit_policy` now requires exactly one canonical `ExecStart`
+  and the sole zero-operand privileged `provision-api-runtime` prestart;
+  legacy `/etc` paths, duplicates, alternate operands, and extra arguments
+  are rejected.
+- Focused unit-policy and staging evidence passed **29/29**; cycle-2 review
+  approved the phase **10/10**. Existing identity, HOME/XDG, hardening,
+  lifecycle hooks, and restart behavior remain unchanged.
+- [Phase 02 plan](../plans/260914-0854-system-daemon-state-config/phase-02-systemd-unit-template-checked-in-unit-and-policy.md) ·
+  [Cycle-2 review](../plans/reports/code-review-260914-1805-phase02-systemd-unit-template-and-policy-cycle2.md).
 
 - **System daemon state configuration — Phase 00 merge reconciliation complete
   (2026-09-14).** Reconciled `origin/main` into

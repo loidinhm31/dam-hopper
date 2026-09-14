@@ -538,8 +538,14 @@ host selection, `SUDO_USER`, username-as-group, or root fallbacks.
 The API unit has no `StateDirectory=` or `StateDirectoryMode=`. Its only
 privileged pre-start gate is the fixed zero-operand
 `+<release-root>/bin/dam-hopper-manager provision-api-runtime` command. The
-descriptor-relative provisioner creates or validates `/var/lib/dam-hopper`,
-`.config`, `.config/dam-hopper`, canonical
+template's sole `ExecStart` uses `--config @API_HOME@/dam-hopper.toml`; the
+checked-in production-default unit must stay synchronized at
+`/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801`.
+`validate_api_unit_policy` requires exactly one `ExecStart` equal to the
+rendered command and exactly one privileged prestart. It rejects legacy or
+alternate config paths, duplicate directives, shell wrappers, and extra
+arguments. The descriptor-relative provisioner creates or validates
+`/var/lib/dam-hopper`, `.config`, `.config/dam-hopper`, canonical
 `/var/lib/dam-hopper/dam-hopper.toml`, and
 `/var/lib/dam-hopper/idle-suspend-audit.jsonl` with final API metadata. It
 reads `/etc/dam-hopper/dam-hopper.toml` only as a validated, read-only,

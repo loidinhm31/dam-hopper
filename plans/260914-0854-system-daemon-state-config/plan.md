@@ -17,9 +17,10 @@ Make `/var/lib/dam-hopper/dam-hopper.toml` the sole production API configuration
 
 ## Status
 
-- **Plan:** in-progress (2/4 phases complete; 24/44h; updated 2026-09-14).
+- **Plan:** in-progress (3/4 phases complete; 30/44h; updated 2026-09-14 19:17:04 +07:00).
 - **Phase 01:** DONE (2026-09-14; 100%; 18/18h). Focused runtime/layout and diagnostics evidence is recorded in the [test report](../reports/tester-260914-1417-phase01-layout-runtime-provisioning.md) and [code review](../reports/code-review-260914-1421-phase01-layout-runtime-provisioning.md).
-- **Next:** Phase 02 — Systemd unit template, checked-in unit, and unit policy.
+- **Phase 02:** DONE (2026-09-14 19:17:04 +07:00; 100%; 6/6h). Template, checked-in unit, rendered policy, and staging aligned on canonical ExecStart; focused unit-policy/staging gates passed 29/29; [cycle-2 review](../reports/code-review-260914-1805-phase02-systemd-unit-template-and-policy-cycle2.md).
+- **Next:** Phase 03 — Preflight, scripts, and smoke tests.
 
 ## Read first
 
@@ -43,10 +44,10 @@ Make `/var/lib/dam-hopper/dam-hopper.toml` the sole production API configuration
 | --- | --- | ---: | --- |
 | [00 — Merge origin/main and reconcile conflicts](phase-00-merge-origin-main-and-reconcile-conflicts.md) | completed (2026-09-14; ready to commit) | 6h | origin/main merged; activate.rs chown discarded; docs-manager synthesizes all 10 conflicting docs |
 | [01 — Layout and descriptor-relative runtime provisioning](phase-01-layout-and-descriptor-relative-runtime-provisioning.md) | DONE (2026-09-14; 100%) | 18h | Canonical config/audit are safely provisioned or migrated under API state; mismatch and cleanup behavior proven by fake syscalls |
-| [02 — Systemd units and unit policy](phase-02-systemd-unit-template-checked-in-unit-and-policy.md) | pending | 6h | Template, checked-in unit, rendered policy, and staging agree on one canonical `ExecStart` |
+| [02 — Systemd units and unit policy](phase-02-systemd-unit-template-checked-in-unit-and-policy.md) | DONE (2026-09-14; 100%) | 6h | Template, checked-in unit, rendered policy, and staging agree on one canonical `ExecStart` |
 | [03 — Preflight, scripts, and smoke tests](phase-03-preflight-installer-reset-and-smoke-tests.md) | pending | 14h | SQLite discovery protects both migration candidates; installer/reset behavior and real deployment journeys prove the cutover |
 
-**Next step:** Begin Phase 02 — Systemd unit template, checked-in unit, and unit policy. Align template, checked-in unit, rendered policy, and staging on `/var/lib/dam-hopper/dam-hopper.toml` while preserving the single privileged prestart and existing identity, hardening, and restart contracts. Phase 03 follows with preflight, installer/reset, and deployment smoke validation.
+**Next step:** Begin Phase 03 — Preflight, scripts, and smoke tests. Update preflight SQLite discovery to protect both migration candidates, update installer/reset scripts, and execute deployment smoke journeys.
 ## Preflight contract
 
 - Server/Both only: safely inspect canonical and any extant legacy TOML; malformed, oversized, unreadable, linked, or non-regular candidates fail before service stop/switch.
@@ -60,7 +61,7 @@ Make `/var/lib/dam-hopper/dam-hopper.toml` the sole production API configuration
 - [x] Failed create cleans only the recorded temporary/inode before publication; races and replacements are retained and reported.
 - [ ] Web-only install creates no API state; installer performs no TOML seed/chmod/chown/copy.
 - [x] `PUT /api/config` and reset writes retain API UID:GID `0600` and same-directory atomic replacement capability without sudo.
-- [ ] Unit hardening, one privileged prestart, restart behavior, explicit rootless config, host metadata, helper state, and legacy format-2 evidence stay unchanged.
+- [x] Unit hardening, one privileged prestart, restart behavior, explicit rootless config, host metadata, helper state, and legacy format-2 evidence stay unchanged.
 - [ ] Docs and diagnostics name the new config/audit authorities only after runtime smoke passes.
 
 ## Cross-phase acceptance

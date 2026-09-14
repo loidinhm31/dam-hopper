@@ -302,7 +302,7 @@ omission resolves to the defaults.
 DamHopper uses three distinct registry locations depending on deployment mode:
 
 1. **Direct/source development default**: `~/.config/dam-hopper/dam-hopper.toml`. Overridden with `--config <path>` or the `DAM_HOPPER_CONFIG` environment variable.
-2. **Release-manager / systemd production**: `/var/lib/dam-hopper/dam-hopper.toml`, owned by the API service identity with mode `0600`, as configured and passed by `deploy/systemd/dam-hopper-api.service`.
+2. **Release-manager / systemd production**: `/var/lib/dam-hopper/dam-hopper.toml`, owned by the API service identity with mode `0600`; it is the sole `--config` operand in `deploy/systemd/dam-hopper-api.service` `ExecStart`.
    On first start only, the runtime provisioner may validate and copy the
    exact bytes from `/etc/dam-hopper/dam-hopper.toml` when the canonical file
    is absent. The legacy file is read-only and is never synchronized after the

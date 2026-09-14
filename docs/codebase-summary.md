@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-14 from `repomix-output.xml` (Repomix v1.18.0; 1,923
-files, 4,236,103 tokens, 17,492,098 characters; five security-flagged files
+**Generated:** 2026-09-14 from `repomix-output.xml` (Repomix v1.18.0; 1,926
+files, 4,245,772 tokens, 17,529,345 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -269,6 +269,17 @@ only when canonical state is absent. Staging uses an exclusive no-follow
 temporary sibling and Linux `renameat2(RENAME_NOREPLACE)`; mismatches, unsafe
 legacy state, races, and post-publication failures remain refusal/reporting
 boundaries. See [Linux API Runtime State Provisioning](./linux-release-runtime-provisioning.md).
+
+### Phase 02 systemd unit/policy boundary (2026-09-14)
+
+`deploy/systemd/dam-hopper-api.service.in` renders
+`--config @API_HOME@/dam-hopper.toml`; the checked-in unit resolves that
+operand to `/var/lib/dam-hopper/dam-hopper.toml` and must stay synchronized
+with the production-default rendering. `validate_api_unit_policy` requires
+exactly one canonical `ExecStart` and one zero-operand privileged
+`provision-api-runtime` prestart. Staging renders, parses, and policy-checks
+the same unit; duplicate directives, legacy/alternate paths, and extra
+arguments fail closed. Focused unit-policy/staging evidence records 29/29.
 
 ## Frontend architecture
 
