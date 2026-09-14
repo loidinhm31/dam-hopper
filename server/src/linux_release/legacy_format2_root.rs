@@ -47,7 +47,9 @@ pub fn inspect_format2_root(
     }
     if entries != [".systemd-fresh-install", "bin"] {
         return Err(ReleaseError::LegacyMigrationRejected {
-            reason: format!("root entries must be exactly ['.systemd-fresh-install', 'bin'], got {entries:?}"),
+            reason: format!(
+                "root entries must be exactly ['.systemd-fresh-install', 'bin'], got {entries:?}"
+            ),
         });
     }
 
@@ -84,7 +86,9 @@ pub fn inspect_format2_root(
     }
     if bin_entries != ["dam-hopper-server"] {
         return Err(ReleaseError::LegacyMigrationRejected {
-            reason: format!("bin entries must be exactly ['dam-hopper-server'], got {bin_entries:?}"),
+            reason: format!(
+                "bin entries must be exactly ['dam-hopper-server'], got {bin_entries:?}"
+            ),
         });
     }
     let server_bin = bin_dir.join("dam-hopper-server");
@@ -146,7 +150,9 @@ pub fn inspect_format2_root(
     }
     if marker_entries != ["manifest", "nonce"] {
         return Err(ReleaseError::LegacyMigrationRejected {
-            reason: format!("marker entries must be exactly ['manifest', 'nonce'], got {marker_entries:?}"),
+            reason: format!(
+                "marker entries must be exactly ['manifest', 'nonce'], got {marker_entries:?}"
+            ),
         });
     }
 

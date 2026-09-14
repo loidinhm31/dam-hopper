@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-pub mod release_fixtures;
 pub mod format2_fixtures;
+pub mod release_fixtures;
 
 use std::sync::Arc;
 

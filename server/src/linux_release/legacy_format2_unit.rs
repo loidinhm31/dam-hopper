@@ -33,13 +33,16 @@ pub fn validate_format2_unit(
     let computed_unit_hash = hex::encode(Sha256::digest(&unit_bytes));
     if computed_unit_hash != expected_sha256 {
         return Err(ReleaseError::LegacyMigrationRejected {
-            reason: format!("unit hash mismatch: expected {expected_sha256}, got {computed_unit_hash}"),
+            reason: format!(
+                "unit hash mismatch: expected {expected_sha256}, got {computed_unit_hash}"
+            ),
         });
     }
 
-    let unit_str = String::from_utf8(unit_bytes).map_err(|e| ReleaseError::LegacyMigrationRejected {
-        reason: format!("unit file contains invalid UTF-8: {e}"),
-    })?;
+    let unit_str =
+        String::from_utf8(unit_bytes).map_err(|e| ReleaseError::LegacyMigrationRejected {
+            reason: format!("unit file contains invalid UTF-8: {e}"),
+        })?;
 
     let env_files: Vec<&str> = unit_str
         .lines()
