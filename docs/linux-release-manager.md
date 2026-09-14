@@ -54,21 +54,32 @@ ExecStartPre=+<release-root>/bin/dam-hopper-manager provision-api-runtime
 ```
 
 The command has no operands and runs before every API start or restart. It
-reparses the final unit, resolves its non-root numeric UID/GID, and creates or
-validates only these fixed paths:
+reparses the final unit, resolves its non-root numeric UID/GID, creates or
+validates only these fixed paths, and reads the optional legacy config
+without mutating it:
 
 | Path | Required metadata |
 | --- | --- |
+| `/var` and `/var/lib` | `root:root`, directories `0755` |
 | `/var/lib/dam-hopper` | API UID/GID, directory `0700` |
 | `/var/lib/dam-hopper/.config` | API UID/GID, directory `0700` |
 | `/var/lib/dam-hopper/.config/dam-hopper` | API UID/GID, directory `0700` |
-| `/etc/dam-hopper` | `root:root`, directory `0755` |
-| `/etc/dam-hopper/idle-suspend-audit.jsonl` | API UID/GID, regular file `0600` |
+| `/var/lib/dam-hopper/dam-hopper.toml` | API UID/GID, regular file `0600` |
+| `/var/lib/dam-hopper/idle-suspend-audit.jsonl` | API UID/GID, regular file `0600` |
+| `/etc/dam-hopper/dam-hopper.toml` | Optional migration source: `root:root`, regular file `0644`; read-only |
+
+The canonical config and server audit are under `/var/lib/dam-hopper`. When the
+canonical config is absent, the provisioner validates the optional legacy file
+and publishes an exact-byte copy once; it never creates or repairs `/etc` or
+the legacy tree. A valid canonical file takes precedence and prevents any
+legacy inspection.
 
 Pre-existing type, owner, group, or mode mismatches refuse without repair,
 replacement, truncation, or content mutation. Failure cleanup removes only
 empty objects created by the same call whose recorded identity still matches.
-The API audit consumer never lazily creates or follows this file.
+The API audit consumer never lazily creates or follows this file. See
+[Linux API Runtime State Provisioning](./linux-release-runtime-provisioning.md)
+for the decision table, descriptor walk, and publication refusal boundaries.
 
 The Phase 02 canonical event writer is deliberately outside this provisioning
 set. It requires an already-existing diagnostics parent and refuses a missing,
@@ -320,22 +331,38 @@ failed or the selected role does not include `server`.
 The opt-in `agent-activity` idle suspend enhancement interacts cleanly with the release manager without altering unit staging or service lifecycle:
 
 1. **Canonical Production Configuration**:
-   In systemd deployments, `dam-hopper-api.service` reads its canonical registry from `/etc/dam-hopper/dam-hopper.toml`. Operators configure `[server.idle_suspend]` options (`automatic_policy`, `agent_executables`, `quiet_period_seconds`, `wake_after_seconds`) directly in this file.
+   In systemd deployments, `dam-hopper-api.service` reads its canonical
+   registry from `/var/lib/dam-hopper/dam-hopper.toml`. Operators configure
+   `[server.idle_suspend]` options (`automatic_policy`, `agent_executables`,
+   `quiet_period_seconds`, `wake_after_seconds`) directly in this file. If the
+   canonical file is absent on first start, the runtime gate performs a
+   validated, exact-byte, copy-once migration from
+   `/etc/dam-hopper/dam-hopper.toml`; the legacy file remains untouched.
 
 2. **Helper Lifecycle and Audit**:
+   The server timing/manual audit is
+   `/var/lib/dam-hopper/idle-suspend-audit.jsonl` with API-only mode `0600`.
    The helper service (`dam-hopper-idle-suspend-helper.service`) and socket
-   (`/run/dam-hopper/idle-suspend.sock`) lifecycle remain unchanged. The helper
-   continues to execute privileged host suspend actions, while its single
-   `/var/log/dam-hopper/idle-suspend-helper.jsonl` audit evolves in place to
-   schema v2 with typed milestones and bounded secure pruning. The activity
-   observer operates entirely within the unprivileged API server process.
+   (`/run/dam-hopper/idle-suspend.sock`) lifecycle remain unchanged. The
+   helper continues to execute privileged host suspend actions, while its
+   separate `/var/log/dam-hopper/idle-suspend-helper.jsonl` audit evolves in
+   place to schema v2 with typed milestones and bounded secure pruning. The
+   activity observer operates entirely within the unprivileged API server
+   process.
 
 3. **Per-Host Qualification Requirement**:
    Do not assume fleet-wide compatibility from release deployment. Each target host must qualify procfs visibility and `NETLINK_SOCK_DIAG` socket diagnostics under the deployed API service user context before enabling the policy.
 
 4. **Restart vs. Release Rollback Ordering**:
-   - **Policy Change**: Setting `automatic_policy = "agent-activity"` or `"empty-fleet"` in `/etc/dam-hopper/dam-hopper.toml` takes effect upon running `sudo systemctl restart dam-hopper-api.service`. It does not require a release-manager transaction or candidate redeployment.
-   - **Policy Rollback**: Reverting from `agent-activity` to `empty-fleet` is an immediate configuration edit and API service restart. `sudo dam-hopper rollback` is reserved for binary release rollbacks, while `./deploy/reset-linux-production.sh` is reserved for complete helper disenrollment.
+   - **Policy Change**: Setting `automatic_policy = "agent-activity"` or
+     `"empty-fleet"` in `/var/lib/dam-hopper/dam-hopper.toml` takes effect upon
+     running `sudo systemctl restart dam-hopper-api.service`. It does not
+     require a release-manager transaction or candidate redeployment.
+   - **Policy Rollback**: Reverting from `agent-activity` to `empty-fleet` is
+     an immediate canonical configuration edit and API service restart.
+     `sudo dam-hopper rollback` is reserved for binary release rollbacks,
+     while `./deploy/reset-linux-production.sh` is reserved for complete
+     helper disenrollment.
 
 ## Verification and end-to-end coverage
 
@@ -547,6 +574,10 @@ under a temporary root and no host files are changed.
 | `/etc/dam-hopper/host.toml`                                    | Recorded role and exact web origins       |
 | `/etc/dam-hopper/server.env`                                   | Machine-local API environment             |
 | `/etc/dam-hopper/web.env`                                      | Machine-local web environment             |
+| `/etc/dam-hopper/dam-hopper.toml`                              | Legacy API registry; read-only migration source |
+| `/var/lib/dam-hopper/`                                         | API-owned state root (`0700`, final API UID/GID) |
+| `/var/lib/dam-hopper/dam-hopper.toml`                          | Canonical API registry (`0600`, final API UID/GID) |
+| `/var/lib/dam-hopper/idle-suspend-audit.jsonl`                  | Server timing/manual audit (`0600`, final API UID/GID) |
 | `/var/lib/dam-hopper-manager/pending-units-<tx_id>/`           | Rendered candidate units/sysusers         |
 | `/var/lib/dam-hopper-manager/pending-host-config-<tx_id>.json` | Candidate public config                   |
 | `/var/lib/dam-hopper-manager/state.json`                       | Authoritative state envelope (mode 0600)  |

@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-14 from `repomix-output.xml` (Repomix v1.18.0; 1,919
-files, 4,218,979 tokens, 17,418,881 characters; five security-flagged files
+**Generated:** 2026-09-14 from `repomix-output.xml` (Repomix v1.18.0; 1,923
+files, 4,236,103 tokens, 17,492,098 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -254,12 +254,21 @@ socket with peer credentials.
 
 ### Phase 00 merge boundary (2026-09-14)
 
-The merge reconciliation keeps refusal-based descriptor provisioning and
-excludes recursive string-path `chown`, while incorporating origin/main's
-workflow and Explorer HTML preview surfaces. The API unit renders
-`--config /var/lib/dam-hopper/dam-hopper.toml`; daemon-state config/audit
-migration and preflight alignment remain Phase 01–03 work. The merge commit is
-still pending.
+The merge reconciliation kept refusal-based descriptor provisioning and
+excluded recursive string-path `chown`, while incorporating the workflow and
+Explorer HTML preview surfaces. The API unit renders
+`--config /var/lib/dam-hopper/dam-hopper.toml`; the merge boundary is complete.
+
+### Phase 01 runtime-state boundary (2026-09-14)
+
+`server/src/linux_release/api_runtime.rs` now provisions the descriptor-relative
+API state root, canonical `/var/lib/dam-hopper/dam-hopper.toml`, and server
+`/var/lib/dam-hopper/idle-suspend-audit.jsonl`. A validated legacy
+`/etc/dam-hopper/dam-hopper.toml` is an optional exact-byte, copy-once source
+only when canonical state is absent. Staging uses an exclusive no-follow
+temporary sibling and Linux `renameat2(RENAME_NOREPLACE)`; mismatches, unsafe
+legacy state, races, and post-publication failures remain refusal/reporting
+boundaries. See [Linux API Runtime State Provisioning](./linux-release-runtime-provisioning.md).
 
 ## Frontend architecture
 
@@ -307,6 +316,9 @@ latest probes or terminal text.
   phase acceptance criteria.
 - [Configuration Guide](./configuration-guide.md) — configuration and runtime
   setup.
+- [Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md) —
+  canonical/legacy config migration, audit state, descriptor safety, and
+  no-replace publication.
 - [API Reference](./api-reference.md) — REST and WebSocket contracts.
 - [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md) —
   suspend/helper threat model and fail-closed rules.

@@ -73,9 +73,21 @@ impl Layout {
         self.trusted_root().join("etc/dam-hopper")
     }
 
-    /// Provisioned API audit file (`/etc/dam-hopper/idle-suspend-audit.jsonl`).
+    /// Canonical API daemon configuration file (`/var/lib/dam-hopper/dam-hopper.toml`).
+    pub fn api_daemon_config_path(&self) -> PathBuf {
+        self.api_state_dir().join("dam-hopper.toml")
+    }
+
+    /// Legacy migration-only API daemon configuration file (`/etc/dam-hopper/dam-hopper.toml`).
+    ///
+    /// Checked strictly for one-time legacy migration; never a generic config authority.
+    pub fn legacy_api_daemon_config_path(&self) -> PathBuf {
+        self.api_etc_dir().join("dam-hopper.toml")
+    }
+
+    /// Provisioned API audit file (`/var/lib/dam-hopper/idle-suspend-audit.jsonl`).
     pub fn api_audit_path(&self) -> PathBuf {
-        self.api_etc_dir().join("idle-suspend-audit.jsonl")
+        self.api_state_dir().join("idle-suspend-audit.jsonl")
     }
 
     /// Root-only staging directory for in-flight transactions:
@@ -289,4 +301,43 @@ where
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_canonical_and_legacy_paths_default_root() {
+        let layout = Layout::new();
+        assert_eq!(
+            layout.api_daemon_config_path(),
+            PathBuf::from("/var/lib/dam-hopper/dam-hopper.toml")
+        );
+        assert_eq!(
+            layout.legacy_api_daemon_config_path(),
+            PathBuf::from("/etc/dam-hopper/dam-hopper.toml")
+        );
+        assert_eq!(
+            layout.api_audit_path(),
+            PathBuf::from("/var/lib/dam-hopper/idle-suspend-audit.jsonl")
+        );
+    }
+
+    #[test]
+    fn test_canonical_and_legacy_paths_with_root() {
+        let layout = Layout::with_root("/custom/root");
+        assert_eq!(
+            layout.api_daemon_config_path(),
+            PathBuf::from("/custom/root/var/lib/dam-hopper/dam-hopper.toml")
+        );
+        assert_eq!(
+            layout.legacy_api_daemon_config_path(),
+            PathBuf::from("/custom/root/etc/dam-hopper/dam-hopper.toml")
+        );
+        assert_eq!(
+            layout.api_audit_path(),
+            PathBuf::from("/custom/root/var/lib/dam-hopper/idle-suspend-audit.jsonl")
+        );
+    }
 }

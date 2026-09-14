@@ -11,7 +11,8 @@
 ## Overview
 
 - Priority: P2
-- Status: pending
+- Status: DONE (2026-09-14)
+- Progress: 100%
 - Effort: 18h
 - Goal: extend the existing fixed-path, refusal-based runtime gate so config and its coupled server audit live under `/var/lib/dam-hopper`, with deterministic copy-once legacy migration and failure-safe publication.
 - Dependency: final rendered API identity and one privileged prestart from the completed runtime-identity plan.
@@ -62,13 +63,13 @@
 
 ### Side-effect review checklist
 
-- [ ] Existing canonical: no create/write/sync-metadata/chown/chmod/rename/unlink.
-- [ ] Existing legacy: read only; never mutate even after successful migration.
-- [ ] Failed staged config: only recorded unpublished temp eligible for cleanup.
-- [ ] Valid rerun: no metadata/content/inode change for config or audit.
-- [ ] Parent/type mismatch: no traversal below mismatched object and no starter call.
-- [ ] Web role: this provisioner is never invoked by install/start/recovery.
-- [ ] `state.rs` needs no alternate audit override; its config-parent behavior now agrees with `Layout`.
+- [x] Existing canonical: no create/write/sync-metadata/chown/chmod/rename/unlink.
+- [x] Existing legacy: read only; never mutate even after successful migration.
+- [x] Failed staged config: only recorded unpublished temp eligible for cleanup.
+- [x] Valid rerun: no metadata/content/inode change for config or audit.
+- [x] Parent/type mismatch: no traversal below mismatched object and no starter call.
+- [x] Web role: this provisioner is never invoked by install/start/recovery.
+- [x] `state.rs` needs no alternate audit override; its config-parent behavior now agrees with `Layout`.
 
 ## Architecture
 
@@ -122,14 +123,16 @@ Sole authority means the privileged gate provisions these fixed objects. The unp
 
 ## Todo list
 
-- [ ] Add canonical and migration-only Layout accessors.
-- [ ] Relocate canonical audit authority.
-- [ ] Implement canonical-first, legacy-only, and fresh-seed states.
-- [ ] Implement durable exclusive staged publication.
-- [ ] Extend identity-bound cleanup to unpublished config temp.
-- [ ] Remove active API provisioning under `/etc`.
-- [ ] Expand fake syscalls and focused failure/race coverage.
-- [ ] Verify diagnostics and API atomic-write side effects.
+- [x] Add canonical and migration-only Layout accessors.
+- [x] Relocate canonical audit authority.
+- [x] Implement canonical-first, legacy-only, and fresh-seed states.
+- [x] Implement durable exclusive staged publication.
+- [x] Extend identity-bound cleanup to unpublished config temp.
+- [x] Remove active API provisioning under `/etc`.
+- [x] Expand fake syscalls and focused failure/race coverage.
+- [x] Verify diagnostics and API atomic-write side effects.
+
+**Completion:** 8/8 todo items complete (2026-09-14).
 
 ## Success Criteria
 
@@ -159,6 +162,6 @@ Sole authority means the privileged gate provisions these fixed objects. The unp
 
 ## Next steps
 
-Phase 02 may change `ExecStart` only after these Layout/provisioning contracts and focused tests pass. Hand Phase 03 the canonical/legacy accessors and exact metadata/content decision table; it must not reimplement provisioning.
+Phase 02 is now the next execution step: align the systemd template, checked-in unit, rendered policy, and staging on the canonical `/var/lib/dam-hopper/dam-hopper.toml` command while preserving the single privileged prestart and existing unit hardening. Then hand Phase 03 the completed accessors and decision table; it must not reimplement provisioning.
 
 **Unresolved questions:** None.

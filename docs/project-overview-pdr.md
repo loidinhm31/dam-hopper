@@ -1233,6 +1233,69 @@ NOT EXISTS` preserves existing session data.
 Migration 010 does not itself add workflow routes, automatic terminal/agent
 attachment, or inferred session completion.
 
+### PDR: System daemon state configuration (Phase 01)
+
+**Status:** Complete, 2026-09-14  
+**Scope:** Linux release-manager API runtime provisioning
+
+#### Product requirement
+
+The production API must have one descriptor-relative, fail-closed authority for
+durable configuration and server timing/manual audit state. Runtime startup
+must not depend on mutable release assets, recursive path operations, or
+operator-owned legacy files being writable by the API.
+
+#### Functional requirements
+
+1. Use `/var/lib/dam-hopper/dam-hopper.toml` as the canonical API registry,
+   owned by the final API UID:GID with mode `0600`.
+2. Use `/var/lib/dam-hopper/idle-suspend-audit.jsonl` as the server timing and
+   manual audit, with the same API ownership and mode `0600`.
+3. When canonical config is absent, accept
+   `/etc/dam-hopper/dam-hopper.toml` only as a validated, root-owned `0644`,
+   read-only, copy-once migration source. Preserve its bytes, inode, and
+   metadata; do not synchronize it later.
+4. If both config locations are absent, publish the bounded default seed
+   `[workspace]\nname = "default"\n`.
+5. Create or validate fixed ancestors with exact type, owner, group, and mode:
+   `/var` and `/var/lib` are `root:root` `0755`; API state/config directories
+   are API-owned `0700`.
+
+#### Non-functional and security requirements
+
+- Walk from the trusted layout root using directory descriptors and no-follow
+  operations. Reject symlinks, special files, unsafe metadata, invalid
+  UTF-8/TOML, project-path traversal, and content over 64 KiB.
+- Stage exact bytes in the fixed exclusive
+  `.dam-hopper.toml.provisioning` sibling, synchronize file data, apply final
+  metadata, and publish with Linux `renameat2(RENAME_NOREPLACE)`.
+- Preserve a concurrent winner and never roll back a canonical file after a
+  successful rename. Synchronization errors remain visible to the caller.
+- On failure, remove only identity-matching objects created by the same call;
+  retain replaced, nonempty, or unidentifiable objects and report cleanup
+  failures without exposing content or user-controlled path text.
+- Do not create, chmod, chown, truncate, rename, or delete legacy `/etc` files.
+  The old `/etc/dam-hopper/idle-suspend-audit.jsonl` is untouched.
+
+#### Acceptance criteria
+
+- A valid canonical file takes precedence over any legacy file and is not
+  rewritten.
+- A valid legacy file is copied byte-for-byte once and remains unchanged.
+- Missing canonical and legacy files produce the exact bounded seed.
+- Metadata/content/refusal cases fail before API start; publication races
+  preserve the winner and clean only the caller's unpublished temporary file.
+- A successful config publication precedes audit creation; audit or directory
+  synchronization failures are reported without rollback of published config.
+- The ignored Linux diagnostics smoke remains read-only and verifies config,
+  audit, RTC, and unit snapshots are unchanged.
+
+Implementation is in `server/src/linux_release/layout.rs`,
+`api_runtime.rs`, and `error.rs`; focused behavior is covered by the
+`linux_release::api_runtime` tests and
+`server/tests/idle_suspend_diagnostics_linux_smoke.rs`. The operational
+runbook is [Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md).
+
 ## Roadmap
 
 ### Phase 01: IDE File Explorer (Complete)

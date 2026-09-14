@@ -4,8 +4,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### System daemon state configuration migration (2026-09-14)
 
-- **Plan status: IN PROGRESS (1/4 phases; 6/44h).** Phase 00 merge
-  reconciliation is complete and ready to commit; Phases 01–03 remain pending.
+- **Plan status: IN PROGRESS (2/4 phases; 24/44h).** Phase 00 merge
+  reconciliation and Phase 01 runtime provisioning are complete; Phase 00 remains
+  ready to commit, and Phases 02–03 remain pending.
 - **Phase 00 — DONE (2026-09-14; 100%; 6/6h):** Reconciled `origin/main` into
   `feat/terminal-idle-suspend` while preserving refusal-based descriptor
   provisioning (no recursive `chown`), aligning API systemd template/unit policy,
@@ -13,16 +14,31 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   conflicting docs plus the workflow context page. Cycle-2 review approved
   **10/10** and confirmed 85 staged files, 0 unmerged files, and 0 conflict
   markers. The merge commit remains pending.
-- **Phase 01 — PENDING:** Implement canonical `/var/lib/dam-hopper` API
-  config/audit runtime provisioning and copy-once migration with descriptor-
-  relative refusal and cleanup tests.
-- **Phase 02 — PENDING:** Align systemd templates, checked-in units, rendered
-  policy, and staging on one canonical API `ExecStart`.
+- **Phase 01 — DONE (2026-09-14; 100%; 18/18h):** Added canonical
+  `/var/lib/dam-hopper/dam-hopper.toml` and adjacent
+  `idle-suspend-audit.jsonl` provisioning. Canonical-first validation,
+  exact-byte legacy migration, fresh seed, descriptor-relative no-follow
+  traversal, staged no-replace publication, identity-bound cleanup, and
+  refusal/race/failure tests are complete. Focused runtime/layout tests and
+  the explicitly ignored Linux diagnostics smoke passed; see the [Phase 01
+  plan](../plans/260914-0854-system-daemon-state-config/phase-01-layout-and-descriptor-relative-runtime-provisioning.md),
+  [test report](../plans/reports/tester-260914-1417-phase01-layout-runtime-provisioning.md),
+  and [code review](../plans/reports/code-review-260914-1421-phase01-layout-runtime-provisioning.md).
+- **Phase 02 — NEXT / PENDING:** Align systemd templates, checked-in units,
+  rendered policy, and staging on one canonical API `ExecStart`.
+- **Next step:** Update the template, checked-in unit, strict policy, and
+  staging together; retain one privileged prestart and all existing identity,
+  hardening, HOME/XDG, and restart contracts.
 - **Phase 03 — PENDING:** Complete preflight, installer/reset behavior, and
   deployment smoke coverage for canonical/legacy state and SQLite holders.
-- **Scope:** Phase 00 changes merge state and documentation only; it does not
-  complete the daemon-state cutover.
-- [Phase 00 plan](../plans/260914-0854-system-daemon-state-config/phase-00-merge-origin-main-and-reconcile-conflicts.md) ·
+- **Scope:** Phase 00 changes merge state and documentation only; Phase 01
+  completes fixed runtime layout/provisioning. The daemon-state cutover still
+  requires Phases 02–03.
+- [Plan](../plans/260914-0854-system-daemon-state-config/plan.md) ·
+  [Phase 01 plan](../plans/260914-0854-system-daemon-state-config/phase-01-layout-and-descriptor-relative-runtime-provisioning.md) ·
+  [Phase 01 test report](../plans/reports/tester-260914-1417-phase01-layout-runtime-provisioning.md) ·
+  [Phase 01 code review](../plans/reports/code-review-260914-1421-phase01-layout-runtime-provisioning.md) ·
+  [Phase 00 plan](../plans/260914-0854-system-daemon-state-config/phase-00-merge-origin-main-and-reconcile-conflicts.md) ·
   [Cycle-2 review](../plans/reports/code-review-260914-1158-phase-00-merge-origin-main-cycle2.md).
 
 ### Idle-suspend runtime identity reconciliation (2026-09-12–13)

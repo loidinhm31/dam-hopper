@@ -538,12 +538,15 @@ host selection, `SUDO_USER`, username-as-group, or root fallbacks.
 The API unit has no `StateDirectory=` or `StateDirectoryMode=`. Its only
 privileged pre-start gate is the fixed zero-operand
 `+<release-root>/bin/dam-hopper-manager provision-api-runtime` command. The
-descriptor-relative provisioner creates or validates only the documented fixed
-state, anchor, and audit paths, rejects symlinks/special files and metadata
-mismatches without repair, and cleans only matching empty objects created by
-the same failed call. The audit consumer opens an existing regular `0600` file
-without lazy creation or path-following. Preserve the helper's runtime, log,
-hardening, and protocol-v1 behavior; it must not claim the API state directory.
+descriptor-relative provisioner creates or validates `/var/lib/dam-hopper`,
+`.config`, `.config/dam-hopper`, canonical
+`/var/lib/dam-hopper/dam-hopper.toml`, and
+`/var/lib/dam-hopper/idle-suspend-audit.jsonl` with final API metadata. It
+reads `/etc/dam-hopper/dam-hopper.toml` only as a validated, read-only,
+copy-once migration source when canonical config is absent. Symlinks, special
+files, metadata mismatches, unsafe legacy content, and no-replace publication
+races are refusals, never repairs or replacements. Failed calls clean only
+matching objects created by that call; the helper must not claim API state.
 
 The release publication migration gate requires a fresh complete manager-first
 inventory with Manifest v2/manager-state v1 capability, production environment,
