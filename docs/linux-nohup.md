@@ -167,6 +167,7 @@ remediation capability.
 ```bash
 deploy/run-linux-nohup.sh stop
 ```
+
 Do not recursively remove the runtime tree as part of legacy recovery;
 user configuration, databases, and application data must be preserved.
 The release manager does not purge runtime directories.

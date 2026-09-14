@@ -1,0 +1,34 @@
+[Unit]
+Description=DamHopper Idle Suspend Privileged Helper
+Documentation=https://github.com/loidinhm31/dam-hopper
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=@API_GROUP@
+RuntimeDirectory=dam-hopper
+RuntimeDirectoryMode=0775
+LogsDirectory=dam-hopper
+ExecStart=@RELEASE_ROOT@/bin/dam-hopper-idle-suspend-helper --socket /run/dam-hopper/idle-suspend.sock --audit-file /var/log/dam-hopper/idle-suspend-helper.jsonl --enrolled-pid-file /run/dam-hopper/server.pid
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=15s
+UMask=0007
+
+# Sandboxing and security hardening (Approved 2026-09-05)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=CAP_WAKE_ALARM
+AmbientCapabilities=
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dam-hopper-idle-suspend-helper
+
+[Install]
+WantedBy=multi-user.target

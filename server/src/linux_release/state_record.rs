@@ -23,6 +23,8 @@ pub struct ReleaseRecord {
     pub web_unit_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_config_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helper_unit_sha256: Option<String>,
 }
 
 impl ReleaseRecord {
@@ -39,6 +41,9 @@ impl ReleaseRecord {
             validate_sha256_hex(h)?;
         }
         if let Some(h) = &self.host_config_sha256 {
+            validate_sha256_hex(h)?;
+        }
+        if let Some(h) = &self.helper_unit_sha256 {
             validate_sha256_hex(h)?;
         }
         Ok(())
@@ -65,6 +70,8 @@ pub struct PendingCandidateRecord {
     pub web_unit_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_config_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helper_unit_sha256: Option<String>,
 }
 
 impl PendingCandidateRecord {
@@ -79,6 +86,9 @@ impl PendingCandidateRecord {
             validate_sha256_hex(h)?;
         }
         if let Some(h) = &self.host_config_sha256 {
+            validate_sha256_hex(h)?;
+        }
+        if let Some(h) = &self.helper_unit_sha256 {
             validate_sha256_hex(h)?;
         }
         Ok(())

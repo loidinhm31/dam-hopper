@@ -91,9 +91,8 @@ WantedBy=multi-user.target
     fs::set_permissions(&marker_dir, fs::Permissions::from_mode(0o700)).unwrap();
 
     let nonce = "0123456789abcdef0123456789abcdef".to_string();
-    let manifest_content = format!(
-        "binary_sha256={binary_hash}\nformat=2\nnonce={nonce}\nunit_sha256={unit_hash}\n"
-    );
+    let manifest_content =
+        format!("binary_sha256={binary_hash}\nformat=2\nnonce={nonce}\nunit_sha256={unit_hash}\n");
     let manifest_path = marker_dir.join("manifest");
     fs::write(&manifest_path, manifest_content).unwrap();
     fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600)).unwrap();

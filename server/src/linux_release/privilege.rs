@@ -12,7 +12,7 @@ pub fn current_euid() -> u32 {
 ///
 /// - `fetch` must run as unprivileged user (EUID != 0).
 /// - `install`, `role set`, `start`, `rollback`, `recover` must run as root (EUID == 0).
-/// - `status` and `version` can run under any privilege.
+/// - `status`, `version`, `validate`, and `diagnose` can run under any privilege.
 pub fn verify_privileges(command: &Commands, euid: u32) -> Result<(), ReleaseError> {
     match command {
         Commands::Fetch(_) => {
@@ -77,7 +77,16 @@ pub fn verify_privileges(command: &Commands, euid: u32) -> Result<(), ReleaseErr
                 });
             }
         }
-        Commands::Status(_) | Commands::Version | Commands::Validate(_) => {}
+        Commands::Status(_) | Commands::Version | Commands::Validate(_) | Commands::Diagnose(_) => {}
+        Commands::ProvisionApiRuntime => {
+            if euid != 0 {
+                return Err(ReleaseError::PrivilegeRequired {
+                    operation: "provision-api-runtime",
+                    expected_euid: 0,
+                    actual_euid: euid,
+                });
+            }
+        }
     }
     Ok(())
 }

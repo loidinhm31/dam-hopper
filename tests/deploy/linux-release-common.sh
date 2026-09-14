@@ -103,15 +103,19 @@ create_mock_release_bundle() {
 
     local manager_bin="$out_dir/staging/bin/dam-hopper-manager"
     local server_bin="$out_dir/staging/bin/dam-hopper-server"
+    local helper_bin="$out_dir/staging/bin/dam-hopper-idle-suspend-helper"
     local web_bin="$out_dir/staging/bin/dam-hopper-web"
 
     printf '#!/bin/sh\necho manager %s\n' "$ver" > "$manager_bin"
     printf '#!/bin/sh\necho server %s\n' "$ver" > "$server_bin"
+    printf '#!/bin/sh\necho helper %s\n' "$ver" > "$helper_bin"
     printf '#!/bin/sh\necho web %s\n' "$ver" > "$web_bin"
-    chmod 755 "$manager_bin" "$server_bin" "$web_bin"
+    chmod 755 "$manager_bin" "$server_bin" "$helper_bin" "$web_bin"
 
     cp "$REPO_ROOT/deploy/systemd/dam-hopper-api.service.in" \
         "$out_dir/staging/systemd/dam-hopper-api.service"
+    cp "$REPO_ROOT/deploy/systemd/dam-hopper-idle-suspend-helper.service.in" \
+        "$out_dir/staging/systemd/dam-hopper-idle-suspend-helper.service"
     cp "$REPO_ROOT/deploy/systemd/dam-hopper-web.service.in" \
         "$out_dir/staging/systemd/dam-hopper-web.service"
     cp "$REPO_ROOT/deploy/systemd/dam-hopper-recovery.service.in" \
@@ -127,7 +131,17 @@ create_mock_release_bundle() {
 
     tar --sort=name --mtime='@1700000000' --owner=0 --group=0 --numeric-owner \
         -czf "$archive_path" -C "$out_dir/staging" \
-        bin systemd sysusers.d web LICENSE
+        bin/dam-hopper-manager \
+        bin/dam-hopper-server \
+        bin/dam-hopper-idle-suspend-helper \
+        bin/dam-hopper-web \
+        systemd/dam-hopper-api.service \
+        systemd/dam-hopper-idle-suspend-helper.service \
+        systemd/dam-hopper-recovery.service \
+        systemd/dam-hopper-web.service \
+        sysusers.d/dam-hopper-web.conf \
+        web \
+        LICENSE
 
     local archive_sha
     archive_sha="$(sha256sum "$archive_path" | awk '{print $1}')"
@@ -135,11 +149,13 @@ create_mock_release_bundle() {
     archive_size="$(stat -c '%s' "$archive_path" 2>/dev/null || stat -f '%z' "$archive_path")"
 
     # Compute entry SHA256s
-    local mgr_sha srv_sha web_sha api_unit_sha web_unit_sha recovery_unit_sha sysusers_sha html_sha lic_sha
+    local mgr_sha srv_sha helper_sha web_sha api_unit_sha helper_unit_sha web_unit_sha recovery_unit_sha sysusers_sha html_sha lic_sha
     mgr_sha="$(sha256sum "$manager_bin" | awk '{print $1}')"
     srv_sha="$(sha256sum "$server_bin" | awk '{print $1}')"
+    helper_sha="$(sha256sum "$helper_bin" | awk '{print $1}')"
     web_sha="$(sha256sum "$web_bin" | awk '{print $1}')"
     api_unit_sha="$(sha256sum "$out_dir/staging/systemd/dam-hopper-api.service" | awk '{print $1}')"
+    helper_unit_sha="$(sha256sum "$out_dir/staging/systemd/dam-hopper-idle-suspend-helper.service" | awk '{print $1}')"
     web_unit_sha="$(sha256sum "$out_dir/staging/systemd/dam-hopper-web.service" | awk '{print $1}')"
     recovery_unit_sha="$(sha256sum "$out_dir/staging/systemd/dam-hopper-recovery.service" | awk '{print $1}')"
     sysusers_sha="$(sha256sum "$out_dir/staging/sysusers.d/dam-hopper-web.conf" | awk '{print $1}')"
@@ -149,7 +165,7 @@ create_mock_release_bundle() {
     local manifest_path="$out_dir/release-manifest.json"
     cat > "$manifest_path" <<EOF
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "release": {
     "tag": "$tag",
     "version": "$ver",
@@ -178,8 +194,10 @@ create_mock_release_bundle() {
   "inventory": [
     { "path": "bin/dam-hopper-manager", "kind": "file", "roles": ["common"], "mode": 493, "size": $(stat -c '%s' "$manager_bin"), "sha256": "$mgr_sha" },
     { "path": "bin/dam-hopper-server", "kind": "file", "roles": ["server"], "mode": 493, "size": $(stat -c '%s' "$server_bin"), "sha256": "$srv_sha" },
+    { "path": "bin/dam-hopper-idle-suspend-helper", "kind": "file", "roles": ["server"], "mode": 493, "size": $(stat -c '%s' "$helper_bin"), "sha256": "$helper_sha" },
     { "path": "bin/dam-hopper-web", "kind": "file", "roles": ["web"], "mode": 493, "size": $(stat -c '%s' "$web_bin"), "sha256": "$web_sha" },
     { "path": "systemd/dam-hopper-api.service", "kind": "file", "roles": ["server"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-api.service"), "sha256": "$api_unit_sha" },
+    { "path": "systemd/dam-hopper-idle-suspend-helper.service", "kind": "file", "roles": ["server"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-idle-suspend-helper.service"), "sha256": "$helper_unit_sha" },
     { "path": "systemd/dam-hopper-recovery.service", "kind": "file", "roles": ["common"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-recovery.service"), "sha256": "$recovery_unit_sha" },
     { "path": "systemd/dam-hopper-web.service", "kind": "file", "roles": ["web"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-web.service"), "sha256": "$web_unit_sha" },
     { "path": "sysusers.d/dam-hopper-web.conf", "kind": "file", "roles": ["web"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/sysusers.d/dam-hopper-web.conf"), "sha256": "$sysusers_sha" },
@@ -190,7 +208,6 @@ create_mock_release_bundle() {
   "services": {
     "api": {
       "unitName": "dam-hopper-api.service",
-      "identity": "root",
       "bindHost": "0.0.0.0",
       "port": 4801,
       "healthPath": "/api/health"

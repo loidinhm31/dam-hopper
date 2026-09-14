@@ -93,6 +93,47 @@ unread`. Opening acknowledges the presentation count only; this read-only UI
 does not change query, acknowledgement, bounds, fallback, active incidents, or
 dismissal behavior.
 
+## Terminal idle-suspend status (Phases 06–07)
+
+**Locations:** `packages/ui/src/api/client.ts`,
+`packages/ui/src/api/queries.ts`, and
+`packages/ui/src/components/organisms/HostIdleSuspendStatus.tsx`.
+
+`api.system.idleSuspendStatus()` invokes the strict
+`decodeIdleSuspendStatusV1` boundary on an `unknown` transport response. The
+decoder accepts the existing version-1 status plus required
+`automaticPolicy`/`activity` additive fields, normalizes only a valid old
+server that omits both fields, and leaves malformed, partial, authentication,
+and transport failures as query errors. It never echoes rejected payloads.
+
+`HostIdleSuspendStatus` keeps coordinator state, actual fleet counts, timing,
+capability, detail, generated-at time, and the manual Force Machine to Sleep
+action. Agent mode adds independent measurement state/reason, nullable
+recognized-agent and monitored-terminal counts (`Unknown` when null),
+`tcp4-tcp6` coverage, and a persistent accessible heuristic notice. The notice
+states that silence does not prove completion, only attributable TCP4/TCP6 is
+measured, and service-only terminals may still be suspended.
+
+Initializing/unavailable observation is never rendered as quiet, zero, or
+automatic-ready. Measurement warnings use a persistent `role="alert"` with
+reason, elapsed blocked duration, bounded PID/safe identity examples, an
+identity-unavailable label, and a truncation/incomplete label. The warning's
+process projection excludes command arguments, matcher data, environment,
+terminal/session/root/start identities, socket details, bytes, tokens, and raw
+diagnostics.
+
+One local display clock serves both the `armDeadlineMs` countdown and warning
+elapsed duration, ticks at most once per second, clamps negative values at zero,
+and stops when neither display is present. Sample and activity timestamps are
+display-only; ticks never refetch, publish a status hint, or affect admission.
+Manual confirmation continues to use actual
+`liveCount + creatingCount + restartPendingCount`, independent of agent counts
+or measurement warnings. See [Protected Idle-Suspend Status and Browser UI](./idle-suspend-status-ui.md).
+Phase 07 Chromium qualification covers the rendered agent-activity policy,
+available/initializing/unavailable/disabled measurement, warning duration and
+safe identity/truncation, countdown, manual force flow, and old-server
+compatibility. See [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
+
 ## Error Boundary and stale lazy-chunk recovery
 
 **Location:** `packages/ui/src/components/ui/ErrorBoundary.tsx`
@@ -246,9 +287,22 @@ Provides file detection, presentation persistence, editor host routing, context 
 
 - **Detection (`html-file.ts`):** Identifies `.html`, `.htm`, and `.xhtml` case-insensitively, maps to standard HTML/XHTML MIME types (`text/html`, `application/xhtml+xml`), and checks preview candidate suitability (excluding diff, large, and binary tabs). Dotfiles without a base name (e.g. `.html`) are excluded.
 - **View Mode Persistence (`html-view-mode-persistence.ts`):** Manages user view mode selection (`"edit" | "split" | "preview"`) via browser `localStorage` key `dam-hopper:html-view-mode:v1`, defaulting to `"edit"`. Storage access is safe and resilient to exceptions or unavailable storage environments. Dispatches the `dam-hopper:html-view-mode-changed` (`HTML_VIEW_MODE_CHANGED_EVENT`) window event on save, enabling live synchronization across mounted tabs without requiring a remount or page reload.
-- **Sandboxed Rendering (`HtmlPreview.tsx` & `html-preview-transform.ts`):** Renders HTML content inside a sandboxed `<iframe>` with `sandbox="allow-scripts allow-modals allow-forms allow-popups allow-pointer-lock"`. Omission of `allow-same-origin` ensures the document executes with an opaque origin (`"null"`), restricting script access to host parent storage, cookies, and network capabilities. Updates to editor content are debounced by 200ms to avoid DOM thrashing, and an explicit reload control enables forced remounting of the iframe. To ensure embedded `<script>` tags and standard interactions work reliably in the sandboxed preview without throwing fatal security exceptions, `prepareHtmlPreviewContent` injects non-invasive shims:
-  - **In-Memory Storage Shim:** Provides an in-memory `localStorage` and `sessionStorage` fallback when native access throws `SecurityError` under the `null` origin, allowing scripts with storage calls to execute smoothly.
-  - **In-Frame Visual Alert Modal:** Intercepts `window.alert()` to render an in-frame visual dismissible modal dialog, overcoming modern browser suppression of native dialogs in cross-origin sandboxed frames.
+- **Sandboxed Rendering (`HtmlPreview.tsx` & `html-preview-transform.ts`):**
+  Renders HTML content inside a sandboxed `<iframe>` with
+  `sandbox="allow-scripts allow-modals allow-forms allow-popups allow-pointer-lock"`.
+  Omission of `allow-same-origin` gives the document an opaque origin (`"null"`),
+  preventing access to parent cookies and storage; network requests remain
+  subject to browser/CORS policy. Updates to editor content are debounced by
+  200ms to avoid DOM thrashing, and an explicit reload control enables forced
+  remounting of the iframe. To ensure embedded `<script>` tags and standard
+  interactions work reliably in the sandboxed preview without fatal security
+  exceptions, `prepareHtmlPreviewContent` injects non-invasive shims:
+  - **In-Memory Storage Shim:** Provides an in-memory `localStorage` and
+    `sessionStorage` fallback when native access throws `SecurityError` under
+    the `null` origin, allowing scripts with storage calls to execute smoothly.
+  - **In-Frame Visual Alert Modal:** Intercepts `window.alert()` to render an
+    in-frame visual dismissible modal dialog, overcoming modern browser
+    suppression of native dialogs in cross-origin sandboxed frames.
 - **Editor Host (`HtmlHost.tsx`):** Split-view HTML editor component offering an **Edit | Split | Preview** top toggle bar. Lazily imports `MonacoHost` to keep initial bundle size lean. Listens to `HTML_VIEW_MODE_CHANGED_EVENT` to react dynamically to external mode changes, while supporting an optional `initialMode` prop override (e.g., when launched into preview mode from an Explorer context menu action) and defaulting to user preference loaded from `dam-hopper:html-view-mode:v1`.
   - **Edit Mode:** 100% width Monaco code editor.
   - **Split Mode:** 50% left Monaco editor with divider border, 50% right `HtmlPreview`.
@@ -256,7 +310,10 @@ Provides file detection, presentation persistence, editor host routing, context 
   - Seamlessly forwards editor lifecycle properties (`tabKey`, `path`, `content`, `tier`, `mime`, `viewState`, `readOnly`, `onChange`, `onSave`, `onViewStateChange`, `lineChanges`, `onGitIndicatorClick`).
 - **EditorTabs Routing (`EditorTabs.tsx`):** Detects HTML files via `isHtmlFile(activeTab.name)` before fallback MonacoHost, dynamically loading `HtmlHost` inside a `Suspense` boundary with a centered loading spinner fallback.
 - **Explorer Context Menu Integration (`TreeContextMenu.tsx` & `FileTree.tsx`):** Exposes a dedicated "Preview" action with an `Eye` icon in the right-click context menu for HTML files.
-  - **5 MB Size Threshold:** Restricted strictly to files smaller than 5 MB (`node.size < 5 * 1024 * 1024`). Files exceeding 5 MB, directories, and non-HTML files omit the preview item to avoid memory and performance degradation in the iframe.
+  - **5 MiB Size Threshold:** Restricted strictly to files smaller than 5 MiB
+    (`node.size < 5 * 1024 * 1024`). Files at or above 5 MiB, directories, and
+    non-HTML files omit the preview item to avoid memory and performance
+    degradation in the iframe.
   - **Action Flow:** Clicking "Preview" calls `saveHtmlViewMode("preview")`, which emits `HTML_VIEW_MODE_CHANGED_EVENT` and invokes `onFileOpen(node)`, opening the document directly into Preview mode or live-switching an existing active tab.
 
 ## Terminal Agent Notifications
@@ -917,6 +974,7 @@ snapshot.
 **Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views. The Explorer header area also hosts `GitBranchControl` so users can switch or create branches without leaving the file browser.
 
 **Persistent Tree Expansion:** Directory open/closed states are managed by `useExplorerTreeStore` (`packages/ui/src/stores/explorer-tree.ts`) and persisted in `localStorage` under `dam-hopper:explorer-tree-state`. This ensures that expanded folders survive sidebar tool switching (e.g. Explorer ↔ Search), sidebar collapses, workspace mode transitions (IDE ↔ Terminal), and full browser page reloads.
+
 - **Target scoping:** Scoped per project target via `explorerTreeScopeKey(target)` (`${normalized.project}::${projectTargetCacheKey(normalized)}`), isolating regular project trees and worktree targets.
 - **Initial open state & toggle:** `FileTree` supplies `initialOpenState={openMap}` to `react-arborist` and synchronizes toggle events via `onToggle` and `setFolderOpen`. Toggling closed removes the key to keep persisted storage compact.
 - **Cascading child auto-hydration:** When mounting with persisted open folders, `FileTree` scans for open folders with unloaded children (`children === null`) and automatically triggers `loadChildren(id)`. If loading fails (e.g. directory deleted externally), `prunePath` cleans up the invalid path.
@@ -1003,11 +1061,11 @@ Surface](./workflow-context-surface.md) for that contract.
 `WorkflowContextSurface`. The same node passes through the existing
 `toolbarActions` prop in every workspace branch:
 
-| Shell | Placement |
-| --- | --- |
-| `IdeShell` | 40px companion row above editor/tool content. |
-| `TerminalWorkspaceShell` | 40px companion row above terminal/overlay content. |
-| `MobileWorkspaceShell` | Safe-area-aware inline action row; existing compact surface selector remains unchanged. |
+| Shell                    | Placement                                                                               |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `IdeShell`               | 40px companion row above editor/tool content.                                           |
+| `TerminalWorkspaceShell` | 40px companion row above terminal/overlay content.                                      |
+| `MobileWorkspaceShell`   | Safe-area-aware inline action row; existing compact surface selector remains unchanged. |
 
 The surface is not a route, activity-bar tool, mobile surface, TopNav item, or
 second PTY lifecycle. Shell mode changes therefore preserve the existing

@@ -7,8 +7,8 @@ use super::state::{save_manager_state, ManagerState};
 use super::state_record::{FailureRecord, TransactionPhase, TransactionRecord};
 use chrono::Utc;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// Transaction context managing in-flight deployment phases and backups.
@@ -132,7 +132,9 @@ impl ActivationTransaction {
             }
             None => {
                 let pending = state.pending.as_ref().ok_or_else(|| {
-                    ReleaseError::Config("cannot start transaction without pending candidate".into())
+                    ReleaseError::Config(
+                        "cannot start transaction without pending candidate".into(),
+                    )
                 })?;
                 let prev_tag = state.active.as_ref().map(|a| a.tag.clone());
                 let prev_role = state.active.as_ref().map(|a| a.role);

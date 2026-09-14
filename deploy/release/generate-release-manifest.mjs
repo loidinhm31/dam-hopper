@@ -120,9 +120,11 @@ function assignRoles(relPath) {
   if (relPath === "bin/dam-hopper-manager") return ["common"];
   if (relPath === "bin/dam-hopper-server") return ["server"];
   if (relPath === "bin/dam-hopper-web") return ["web"];
+  if (relPath === "bin/dam-hopper-idle-suspend-helper") return ["server"];
   if (relPath === "systemd/dam-hopper-api.service") return ["server"];
   if (relPath === "systemd/dam-hopper-web.service") return ["web"];
   if (relPath === "systemd/dam-hopper-recovery.service") return ["common"];
+  if (relPath === "systemd/dam-hopper-idle-suspend-helper.service") return ["server"];
   if (relPath === "sysusers.d/dam-hopper-web.conf") return ["web"];
   if (relPath === "LICENSE" || relPath === "NOTICES") return ["common"];
   if (relPath === "web" || relPath.startsWith("web/")) return ["web"];
@@ -263,7 +265,7 @@ function main() {
     inventory.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
     const manifest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       release: {
         tag,
         version,
@@ -293,7 +295,6 @@ function main() {
       services: {
         api: {
           unitName: "dam-hopper-api.service",
-          identity: "root",
           bindHost: "0.0.0.0",
           port: 4801,
           healthPath: "/api/health",

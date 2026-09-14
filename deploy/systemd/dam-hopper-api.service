@@ -1,0 +1,39 @@
+[Unit]
+Description=DamHopper API Server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=dam-hopper
+Group=dam-hopper
+ExecStartPre=+/opt/dam-hopper/current/bin/dam-hopper-manager provision-api-runtime
+RuntimeDirectory=dam-hopper
+PIDFile=/run/dam-hopper/server.pid
+WorkingDirectory=/var/lib/dam-hopper
+Environment=HOME=/var/lib/dam-hopper
+Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config
+Environment=RUST_LOG=info
+Environment=RUST_ENV=production
+Environment=GIT_CONFIG_COUNT=1
+Environment=GIT_CONFIG_KEY_0=safe.directory
+Environment=GIT_CONFIG_VALUE_0=*
+Environment=DAM_HOPPER_CORS_ORIGINS=*
+EnvironmentFile=-/etc/dam-hopper/server.env
+EnvironmentFile=-/etc/dam-hopper/server-safety.env
+ExecStart=/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801
+ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'
+ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=20s
+UMask=0077
+NoNewPrivileges=false
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dam-hopper-api
+
+[Install]
+WantedBy=multi-user.target

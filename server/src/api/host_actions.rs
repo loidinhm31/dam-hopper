@@ -16,9 +16,13 @@ use crate::{
     state::AppState,
 };
 
-/// Mutation requests using a cookie must prove they originated from this host.
+/// Mutation requests using a cookie must prove they originated from an allowed origin.
 /// Bearer callers are not browser-CSRF capable, but still require a one-shot approval.
-pub async fn require_action_request(request: Request, next: Next) -> Response {
+pub async fn require_action_request(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
     let headers = request.headers();
     let json = headers
         .get(header::CONTENT_TYPE)
@@ -31,8 +35,9 @@ pub async fn require_action_request(request: Request, next: Next) -> Response {
             "action requests require application/json",
         );
     }
-    let uses_cookie = headers.get(header::COOKIE).is_some();
-    if uses_cookie && !same_origin(headers) {
+    let is_bearer = auth::extract_bearer_token(headers).is_some();
+    let uses_cookie = !is_bearer && headers.get(header::COOKIE).is_some();
+    if uses_cookie && !state.origin_is_allowed(headers) {
         return action_response(
             StatusCode::FORBIDDEN,
             "invalidOrigin",
@@ -257,22 +262,6 @@ fn helper_available(state: &AppState) -> Result<(), Box<Response>> {
             "host action helper is not enrolled",
         )))
     }
-}
-
-fn same_origin(headers: &axum::http::HeaderMap) -> bool {
-    let Some(origin) = headers
-        .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return false;
-    };
-    let Some(host) = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return false;
-    };
-    origin == format!("http://{host}") || origin == format!("https://{host}")
 }
 
 fn action_error(error: HostActionError) -> Response {

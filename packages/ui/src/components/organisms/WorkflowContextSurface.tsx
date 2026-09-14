@@ -47,7 +47,7 @@ export function WorkflowContextSurface({
   const [quickCaptureKind, setQuickCaptureKind] = useState<ItemKind>("plan");
   const [quickCaptureParentId, setQuickCaptureParentId] = useState<string | null>(null);
   const [mobileSegment, setMobileSegment] = useState<MobileWorkflowSegment>("items");
-  const [nowMs, setNowMs] = useState(Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const isOpen = controlledIsOpen ?? localIsOpen;
   const setIsOpen = (open: boolean) => {
     setLocalIsOpen(open);

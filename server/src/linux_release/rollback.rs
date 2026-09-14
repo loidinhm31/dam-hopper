@@ -1,28 +1,29 @@
 //! Automatic and manual rollback restoration with verified health stability.
 
 use super::account::get_user_by_name;
-use super::activate_preflight::build_candidate_health_targets;
+use super::activate_preflight::{build_candidate_health_targets, validate_active_preflight};
 use super::constants::{
-    ALL_SERVICE_UNITS, API_SERVICE_HEALTH_PATH, API_SERVICE_UNIT, RECOVERY_SERVICE_UNIT,
-    WEB_SERVICE_UNIT,
+    ALL_SERVICE_UNITS, API_SERVICE_HEALTH_PATH, API_SERVICE_UNIT, HELPER_SERVICE_UNIT,
+    RECOVERY_SERVICE_UNIT, WEB_SERVICE_UNIT,
 };
 use super::durable_fs::{atomic_symlink, copy_file_durable};
 use super::error::ReleaseError;
 use super::health::{
-    DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_STARTUP_DEADLINE,
-    wait_for_health_stability,
+    wait_for_health_stability, DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE,
+    DEFAULT_STARTUP_DEADLINE,
 };
 use super::host_config::load_host_public_config;
 use super::layout::Layout;
 use super::legacy_format2::{
-    LEGACY_FORMAT2_PORT, LEGACY_FORMAT2_TAG, LEGACY_FORMAT2_UNIT, LEGACY_FORMAT2_USER,
-    validate_format2_unit,
+    validate_format2_unit, LEGACY_FORMAT2_PORT, LEGACY_FORMAT2_TAG, LEGACY_FORMAT2_UNIT,
+    LEGACY_FORMAT2_USER,
 };
 use super::lock::DeploymentLock;
 use super::manifest::ReleaseManifest;
 use super::process::{check_ports_free, inspect_service_process, is_port_listening_wildcard};
 use super::stage_units::stage_candidate_units_for_release_with_render_root_and_config;
 use super::state::{load_or_init_manager_state, save_manager_state};
+use super::api_runtime::provision_and_start_api;
 use super::state_record::{FailureRecord, PendingCandidateRecord, ReleaseRecord, TransactionPhase};
 use super::systemd::{
     remove_unit_file, restore_unit_files, systemctl_daemon_reload, systemctl_disable,
@@ -62,6 +63,7 @@ fn release_to_candidate(r: &ReleaseRecord) -> PendingCandidateRecord {
         api_unit_sha256: r.api_unit_sha256.clone(),
         web_unit_sha256: r.web_unit_sha256.clone(),
         host_config_sha256: r.host_config_sha256.clone(),
+        helper_unit_sha256: r.helper_unit_sha256.clone(),
     }
 }
 fn stage_previous_release_candidate(
@@ -126,9 +128,15 @@ fn stage_previous_release_candidate(
         let host_config_sha256 = hash_file(&pending_host_config_path)?;
         let api_unit_sha256 = hash_optional_file(&pending_units_dir.join(API_SERVICE_UNIT))?;
         let web_unit_sha256 = hash_optional_file(&pending_units_dir.join(WEB_SERVICE_UNIT))?;
-        Ok::<_, ReleaseError>((host_config_sha256, api_unit_sha256, web_unit_sha256))
+        let helper_unit_sha256 = hash_optional_file(&pending_units_dir.join(HELPER_SERVICE_UNIT))?;
+        Ok::<_, ReleaseError>((
+            host_config_sha256,
+            api_unit_sha256,
+            web_unit_sha256,
+            helper_unit_sha256,
+        ))
     })();
-    let (host_config_sha256, api_unit_sha256, web_unit_sha256) = match digests {
+    let (host_config_sha256, api_unit_sha256, web_unit_sha256, helper_unit_sha256) = match digests {
         Ok(digests) => digests,
         Err(error) => {
             let cleanup_result =
@@ -154,6 +162,7 @@ fn stage_previous_release_candidate(
         api_unit_sha256,
         web_unit_sha256,
         host_config_sha256: Some(host_config_sha256),
+        helper_unit_sha256,
     })
 }
 
@@ -590,19 +599,49 @@ pub async fn rollback_activation_failure(
                 }
             }
         }
+        if let Some(bkp) = &tx.config_backup_path {
+            let p = Path::new(bkp);
+            match fs::symlink_metadata(p) {
+                Ok(meta) if meta.file_type().is_file() => {
+                    copy_file_durable(p, &layout.host_config_path(), Some(0o644))?;
+                }
+                Ok(_) => {
+                    return Err(ReleaseError::OwnershipViolation {
+                        path: p.display().to_string(),
+                        expected: "regular host configuration backup".into(),
+                        got: "symbolic link or non-regular file".into(),
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(ReleaseError::Io {
+                        action: "inspect host configuration backup",
+                        details: error.to_string(),
+                    });
+                }
+            }
+        }
     }
     systemctl_daemon_reload()?;
+    let cand = release_to_candidate(&active);
+    validate_active_preflight(layout, &cand, &[])?;
+    let targets = build_candidate_health_targets(layout, &cand)?;
     systemctl_enable(RECOVERY_SERVICE_UNIT)?;
 
     if active.role.includes_server() {
-        systemctl_start("dam-hopper-api.service")?;
+        if let Err(e) = systemctl_start(HELPER_SERVICE_UNIT) {
+            tracing::warn!("idle-suspend helper service startup failed on rollback: {e}");
+        }
+        provision_and_start_api(
+            layout,
+            &layout.systemd_unit_dir.join(API_SERVICE_UNIT),
+            || systemctl_start(API_SERVICE_UNIT),
+        )?;
     }
     if active.role.includes_web() {
-        systemctl_start("dam-hopper-web.service")?;
+        systemctl_start(WEB_SERVICE_UNIT)?;
     }
 
-    let cand = release_to_candidate(&active);
-    let targets = build_candidate_health_targets(&cand)?;
     if let Err(e) = wait_for_health_stability(
         &targets,
         DEFAULT_STARTUP_DEADLINE,
@@ -611,7 +650,7 @@ pub async fn rollback_activation_failure(
     )
     .await
     {
-        if let Some(ref mut tx) = state.transaction {
+        if let Some(tx) = &mut state.transaction {
             tx.phase = TransactionPhase::Failed;
         }
         state.latest_failure = Some(FailureRecord {

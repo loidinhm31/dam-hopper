@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::Write as _,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::Instant,
@@ -21,6 +21,7 @@ use crate::config::schema::RestartPolicy;
 use crate::pty::buffer::ScrollbackBuffer;
 use crate::pty::shell_integration::ShellIntegration;
 use crate::pty::shell_lifecycle::ShellLifecycle;
+use crate::pty::activity::RootQualification;
 
 pub const SCROLLBACK_CAPACITY: usize = 1024 * 1024;
 
@@ -206,6 +207,10 @@ pub struct LiveSession {
     pub published_editing: Arc<AtomicBool>,
     /// Keeps the temporary adapter files alive for the child process lifetime.
     pub shell_integration: Option<ShellIntegration>,
+    /// Qualification status of the child process root identity.
+    pub root_qualification: RootQualification,
+    /// Raw output sequence counter for this incarnation.
+    pub raw_output_sequence: Arc<AtomicU64>,
 }
 
 impl LiveSession {
@@ -218,6 +223,8 @@ impl LiveSession {
         respawn_opts: RespawnOpts,
         lifecycle: Option<Arc<Mutex<ShellLifecycle>>>,
         shell_integration: Option<ShellIntegration>,
+        root_qualification: RootQualification,
+        raw_output_sequence: Arc<AtomicU64>,
     ) -> Self {
         Self {
             buffer: Arc::new(Mutex::new(ScrollbackBuffer::new(SCROLLBACK_CAPACITY))),
@@ -231,6 +238,8 @@ impl LiveSession {
             lifecycle,
             published_editing: Arc::new(AtomicBool::new(false)),
             shell_integration,
+            root_qualification,
+            raw_output_sequence,
         }
     }
 
@@ -301,6 +310,14 @@ impl LiveSession {
 
     pub fn published_editing_ref(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.published_editing)
+    }
+
+    pub fn raw_output_sequence_ref(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.raw_output_sequence)
+    }
+
+    pub fn root_qualification(&self) -> &RootQualification {
+        &self.root_qualification
     }
 }
 

@@ -12,6 +12,7 @@ import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppear
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
 import { SettingsUsageInsightsSection } from "@/components/organisms/SettingsUsageInsightsSection.js";
 import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
+import { SettingsIdleSuspendTimingSection } from "@/components/organisms/SettingsIdleSuspendTimingSection.js";
 import { SettingsSectionAccordion } from "@/components/pages/settings-page/SettingsSectionAccordion.js";
 import { SettingsMaintenancePanel } from "@/components/pages/settings-page/SettingsMaintenancePanel.js";
 import { SettingsImportExportPanel } from "@/components/pages/settings-page/SettingsImportExportPanel.js";
@@ -147,6 +148,13 @@ export function SettingsPage() {
           defaultOpen
         >
           <SettingsUsageInsightsSection />
+        </SettingsSectionAccordion>
+        <SettingsSectionAccordion
+          title="Terminal Idle Suspend"
+          description="Configure quiet duration and scheduled RTC wake timer for server-authoritative suspend."
+          defaultOpen
+        >
+          <SettingsIdleSuspendTimingSection />
         </SettingsSectionAccordion>
 
         <SettingsSectionAccordion

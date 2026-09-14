@@ -5,29 +5,32 @@ use super::activate_preflight::{
     build_candidate_health_targets, validate_active_preflight, validate_candidate_preflight,
 };
 use super::constants::{
-    ALL_SERVICE_UNITS, API_SERVICE_UNIT, RECOVERY_SERVICE_UNIT, WEB_SERVICE_UNIT,
+    ALL_SERVICE_UNITS, API_SERVICE_UNIT, HELPER_SERVICE_UNIT, RECOVERY_SERVICE_UNIT,
+    WEB_SERVICE_UNIT,
 };
 use super::durable_fs::{atomic_symlink, copy_file_durable};
 use super::error::ReleaseError;
 use super::health::{
-    DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE, DEFAULT_STARTUP_DEADLINE,
-    wait_for_health_stability,
+    wait_for_health_stability, DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE,
+    DEFAULT_STARTUP_DEADLINE,
 };
 use super::journal::DeploymentState;
 use super::layout::Layout;
 use super::lock::DeploymentLock;
 use super::process::inspect_service_process;
 use super::rollback::rollback_activation_failure;
-use super::state::{ManagerState, load_or_init_manager_state, save_manager_state};
+use super::stage_units::stage_candidate_units_for_release_with_identity;
+use super::state::{load_or_init_manager_state, save_manager_state, ManagerState};
 use super::state_record::{PendingCandidateRecord, ReleaseRecord, TransactionPhase};
 use super::systemd::{
     backup_unit_files, disable_if_enabled, install_unit_file, systemctl_daemon_reload,
     systemctl_enable, systemctl_start, systemctl_stop, systemd_sysusers,
 };
+use super::api_runtime::provision_and_start_api;
 use super::transaction::ActivationTransaction;
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::IsTerminal;
 use std::path::Path;
 
 pub async fn execute_activation(layout: &Layout) -> Result<(), ReleaseError> {
@@ -62,7 +65,9 @@ pub async fn execute_activation_locked_with_args(
         _ => {}
     }
 
-    let candidate = match state.pending.clone() {
+    let mut identity_override = None;
+    let mut identity_already_staged = false;
+    let mut candidate = match state.pending.clone() {
         Some(candidate) => candidate,
         None => {
             let active = state.active.as_ref().ok_or_else(|| {
@@ -80,6 +85,7 @@ pub async fn execute_activation_locked_with_args(
                 api_unit_sha256: active.api_unit_sha256.clone(),
                 web_unit_sha256: active.web_unit_sha256.clone(),
                 host_config_sha256: active.host_config_sha256.clone(),
+                helper_unit_sha256: active.helper_unit_sha256.clone(),
             };
             if active_candidate.tag == super::legacy_format2::LEGACY_FORMAT2_TAG {
                 let active_record = active.clone();
@@ -94,106 +100,109 @@ pub async fn execute_activation_locked_with_args(
                     .await?;
                 return Ok(());
             }
-            validate_active_preflight(layout, &active_candidate, &allowed_sqlite_pids)?;
-            if active_candidate.role.includes_server() {
-                let host_config = super::host_config::load_host_config(&layout.host_config_path())?;
-                let user_candidate = if let Some(u) = &args.service_user {
-                    Some(u.as_str())
-                } else {
-                    host_config.as_ref().and_then(|c| c.service_user.as_deref())
-                };
-                if user_candidate.is_some()
-                    || args.service_user.is_some()
-                    || std::io::stdin().is_terminal()
-                {
-                    let user_name =
-                        super::account::resolve_service_user(user_candidate, args.non_interactive)?;
-                    let user_info = super::account::verify_api_service_account(&user_name)?;
-                    let group_name = super::account::get_group_by_gid(user_info.gid)
-                        .unwrap_or_else(|| user_name.clone());
-                    let installed_api_unit = layout.systemd_unit_dir.join(API_SERVICE_UNIT);
-                    if installed_api_unit.exists() {
-                        if let Ok(content) = fs::read_to_string(&installed_api_unit) {
-                            if let Ok(updated) = update_unit_service_identity(
-                                &content,
-                                &user_name,
-                                &group_name,
-                                super::constants::API_SERVICE_HOME,
-                            ) {
-                                let _ = fs::write(&installed_api_unit, updated.as_bytes());
-                                let _ = systemctl_daemon_reload();
-                            }
-                        }
+
+            let restage_for_override = if active_candidate.role.includes_server() {
+                match args.service_user.as_deref() {
+                    Some(_) => true,
+                    None => {
+                        let unit_path = layout.systemd_unit_dir.join(API_SERVICE_UNIT);
+                        let content =
+                            fs::read_to_string(&unit_path).map_err(|error| ReleaseError::Io {
+                                action: "read installed API unit",
+                                details: error.to_string(),
+                            })?;
+                        let parsed = super::unit_parser::ParsedUnit::parse(&content)?;
+                        super::account::resolve_api_runtime_identity(&parsed)?;
+                        false
                     }
-                    ensure_user_config_ownership(&user_info.home, user_info.uid, user_info.gid);
                 }
-                ensure_etc_config_permissions(layout);
-                systemctl_start("dam-hopper-api.service")?;
+            } else {
+                false
+            };
+
+            if restage_for_override {
+                let requested = args.service_user.as_deref().ok_or_else(|| {
+                    ReleaseError::Config("service-user override unexpectedly missing".into())
+                })?;
+                let staged =
+                    stage_service_user_override_candidate(layout, &active_candidate, requested)?;
+                state.pending = Some(staged.clone());
+                save_manager_state(&layout.manager_state_path(), &mut state)?;
+                identity_override = Some(requested.trim().to_string());
+                identity_already_staged = true;
+                staged
+            } else {
+                validate_active_preflight(layout, &active_candidate, &allowed_sqlite_pids)?;
+                let targets = build_candidate_health_targets(layout, &active_candidate)?;
+                if active_candidate.role.includes_server() {
+                    if let Err(e) = systemctl_start(HELPER_SERVICE_UNIT) {
+                        tracing::warn!(
+                            "idle-suspend helper service startup failed (continuing API startup): {e}"
+                        );
+                    }
+                    provision_and_start_api(
+                        layout,
+                        &layout.systemd_unit_dir.join(API_SERVICE_UNIT),
+                        || systemctl_start(API_SERVICE_UNIT),
+                    )?;
+                }
+                if active_candidate.role.includes_web() {
+                    super::systemd::systemd_sysusers(&layout.sysusers_conf_path(), None)?;
+                    super::account::verify_web_sysuser_account(
+                        super::constants::WEB_SERVICE_IDENTITY,
+                    )?;
+                    systemctl_start("dam-hopper-web.service")?;
+                }
+                wait_for_health_stability(
+                    &targets,
+                    DEFAULT_STARTUP_DEADLINE,
+                    DEFAULT_REQUIRED_CONSECUTIVE,
+                    DEFAULT_PROBE_INTERVAL,
+                )
+                .await?;
+                return Ok(());
             }
-            if active_candidate.role.includes_web() {
-                super::systemd::systemd_sysusers(&layout.sysusers_conf_path(), None)?;
-                super::account::verify_web_sysuser_account(super::constants::WEB_SERVICE_IDENTITY)?;
-                systemctl_start("dam-hopper-web.service")?;
-            }
-            let targets = build_candidate_health_targets(&active_candidate)?;
-            wait_for_health_stability(
-                &targets,
-                DEFAULT_STARTUP_DEADLINE,
-                DEFAULT_REQUIRED_CONSECUTIVE,
-                DEFAULT_PROBE_INTERVAL,
-            )
-            .await?;
-            return Ok(());
         }
     };
-    let mut candidate = candidate;
     if candidate.role.includes_server() {
-        let host_config = super::host_config::load_host_config(&layout.host_config_path())?;
-        let user_candidate = if let Some(u) = &args.service_user {
-            Some(u.as_str())
-        } else {
-            host_config.as_ref().and_then(|c| c.service_user.as_deref())
-        };
-
-        let user_name = super::account::resolve_service_user(user_candidate, args.non_interactive)?;
-        let user_info = super::account::verify_api_service_account(&user_name)?;
-        let group_name =
-            super::account::get_group_by_gid(user_info.gid).unwrap_or_else(|| user_name.clone());
-
-        let mut config_to_save = host_config.unwrap_or_else(|| {
-            super::host_config::HostConfig::new(candidate.role, vec![]).unwrap()
-        });
-        if config_to_save.service_user.as_deref() != Some(&user_name) {
-            config_to_save.service_user = Some(user_name.clone());
-            super::host_config::save_host_config(&layout.host_config_path(), &config_to_save)?;
-        }
-        ensure_user_config_ownership(&user_info.home, user_info.uid, user_info.gid);
-        ensure_etc_config_permissions(layout);
-
-        if let Some(ref units_path_str) = candidate.pending_units_path {
-            let units_dir = std::path::Path::new(units_path_str);
-            let api_unit_path = units_dir.join(API_SERVICE_UNIT);
-            if api_unit_path.exists() {
-                let unit_content =
-                    fs::read_to_string(&api_unit_path).map_err(|e| ReleaseError::Io {
-                        action: "read pending api unit",
-                        details: e.to_string(),
-                    })?;
-                let updated = update_unit_service_identity(
-                    &unit_content,
-                    &user_name,
-                    &group_name,
-                    super::constants::API_SERVICE_HOME,
-                )?;
-                fs::write(&api_unit_path, updated.as_bytes()).map_err(|e| ReleaseError::Io {
-                    action: "write updated pending api unit",
-                    details: e.to_string(),
-                })?;
-                let new_hash = hash_optional_file(&api_unit_path)?;
-                candidate.api_unit_sha256 = new_hash;
+        let units_dir = candidate
+            .pending_units_path
+            .as_deref()
+            .map(Path::new)
+            .ok_or_else(|| {
+                ReleaseError::Config("pending candidate has no API unit directory".into())
+            })?;
+        if let Some(requested) = args.service_user.as_deref() {
+            if !identity_already_staged {
+                candidate = stage_service_user_override_candidate(layout, &candidate, requested)?;
                 state.pending = Some(candidate.clone());
                 save_manager_state(&layout.manager_state_path(), &mut state)?;
+                identity_override = Some(requested.trim().to_string());
             }
+            let api_unit_path = candidate
+                .pending_units_path
+                .as_deref()
+                .map(Path::new)
+                .ok_or_else(|| {
+                    ReleaseError::Config("staged candidate has no API unit directory".into())
+                })?
+                .join(API_SERVICE_UNIT);
+            let content = fs::read_to_string(&api_unit_path).map_err(|e| ReleaseError::Io {
+                action: "read finalized pending API unit",
+                details: e.to_string(),
+            })?;
+            super::account::resolve_api_runtime_identity(&super::unit_parser::ParsedUnit::parse(
+                &content,
+            )?)?;
+        } else {
+            let api_unit_path = units_dir.join(API_SERVICE_UNIT);
+            let content = fs::read_to_string(&api_unit_path).map_err(|e| ReleaseError::Io {
+                action: "read pending API unit",
+                details: e.to_string(),
+            })?;
+            super::account::resolve_api_runtime_identity(&super::unit_parser::ParsedUnit::parse(
+                &content,
+            )?)?;
         }
     }
 
@@ -214,7 +223,14 @@ pub async fn execute_activation_locked_with_args(
         .transaction
         .as_ref()
         .and_then(|transaction| transaction.migration.clone());
-    let pipeline_res = execute_activation_pipeline(layout, &tx, &candidate, &mut state).await;
+    let pipeline_res = execute_activation_pipeline(
+        layout,
+        &tx,
+        &candidate,
+        &mut state,
+        identity_override.as_deref(),
+    )
+    .await;
 
     if let Err(err) = pipeline_res {
         let err_msg = err.to_string();
@@ -284,6 +300,7 @@ async fn execute_activation_pipeline(
     tx: &ActivationTransaction,
     candidate: &PendingCandidateRecord,
     state: &mut ManagerState,
+    service_user_override: Option<&str>,
 ) -> Result<(), ReleaseError> {
     let is_migration = state
         .transaction
@@ -407,7 +424,7 @@ async fn execute_activation_pipeline(
             });
         }
         match entry.file_name().to_string_lossy().as_ref() {
-            API_SERVICE_UNIT | WEB_SERVICE_UNIT | RECOVERY_SERVICE_UNIT => {
+            API_SERVICE_UNIT | WEB_SERVICE_UNIT | RECOVERY_SERVICE_UNIT | HELPER_SERVICE_UNIT => {
                 install_unit_file(&path, &layout.systemd_unit_dir)?;
             }
             "dam-hopper-web.conf" if candidate.role.includes_web() => {
@@ -441,6 +458,20 @@ async fn execute_activation_pipeline(
             });
         }
     }
+    match fs::symlink_metadata(&layout.host_config_path()) {
+        Ok(_) => copy_file_durable(
+            &layout.host_config_path(),
+            &tx.config_backup_path,
+            Some(0o644),
+        )?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(ReleaseError::Io {
+                action: "inspect active host configuration",
+                details: error.to_string(),
+            });
+        }
+    }
 
     let config_path = candidate
         .pending_host_config_path
@@ -463,12 +494,43 @@ async fn execute_activation_pipeline(
             });
         }
     }
+    let finalized_service_user = if let Some(service_user) = service_user_override {
+        Some(service_user.trim().to_string())
+    } else if candidate.role.includes_server() {
+        let units_path = candidate.pending_units_path.as_deref().ok_or_else(|| {
+            ReleaseError::Config("server candidate has no finalized unit directory".into())
+        })?;
+        let api_unit_path = Path::new(units_path).join(API_SERVICE_UNIT);
+        let api_unit = fs::read_to_string(&api_unit_path).map_err(|error| ReleaseError::Io {
+            action: "read finalized API unit for host identity reconciliation",
+            details: error.to_string(),
+        })?;
+        Some(
+            super::account::resolve_api_runtime_identity(&super::unit_parser::ParsedUnit::parse(
+                &api_unit,
+            )?)?
+            .user,
+        )
+    } else {
+        None
+    };
+    if let Some(service_user) = finalized_service_user {
+        let origins = super::host_config::load_host_public_config(Path::new(config_path))?
+            .map(|config| config.allowed_web_origins)
+            .unwrap_or_default();
+        let mut config = super::host_config::load_host_config(&layout.host_config_path())?
+            .unwrap_or_else(|| {
+                super::host_config::HostConfig::new(candidate.role, origins)
+                    .expect("validated public origins")
+            });
+        config.service_user = Some(service_user);
+        super::host_config::save_host_config(&layout.host_config_path(), &config)?;
+    }
     copy_file_durable(
         Path::new(config_path),
         &layout.host_config_json_path(),
         Some(0o644),
     )?;
-
     systemctl_daemon_reload()?;
     tx.record_phase(
         layout,
@@ -476,10 +538,22 @@ async fn execute_activation_pipeline(
         DeploymentState::Switched,
         TransactionPhase::Switched,
     )?;
-    ensure_etc_config_permissions(layout);
+    let mut health_candidate = candidate.clone();
+    health_candidate.pending_units_path = None;
+    validate_active_preflight(layout, &health_candidate, &[])?;
+    let targets = build_candidate_health_targets(layout, &health_candidate)?;
 
     if candidate.role.includes_server() {
-        systemctl_start(API_SERVICE_UNIT)?;
+        if let Err(e) = systemctl_start(HELPER_SERVICE_UNIT) {
+            tracing::warn!(
+                "idle-suspend helper service startup failed (continuing API startup): {e}"
+            );
+        }
+        provision_and_start_api(
+            layout,
+            &layout.systemd_unit_dir.join(API_SERVICE_UNIT),
+            || systemctl_start(API_SERVICE_UNIT),
+        )?;
     }
     if candidate.role.includes_web() {
         systemctl_start(WEB_SERVICE_UNIT)?;
@@ -491,8 +565,6 @@ async fn execute_activation_pipeline(
         DeploymentState::Probing,
         TransactionPhase::Probing,
     )?;
-
-    let targets = build_candidate_health_targets(candidate)?;
     wait_for_health_stability(
         &targets,
         DEFAULT_STARTUP_DEADLINE,
@@ -503,8 +575,12 @@ async fn execute_activation_pipeline(
 
     // Enable/disable units, propagating any failure
     if candidate.role.includes_server() {
+        if let Err(e) = systemctl_enable(HELPER_SERVICE_UNIT) {
+            tracing::warn!("idle-suspend helper service enable failed: {e}");
+        }
         systemctl_enable(API_SERVICE_UNIT)?;
     } else {
+        let _ = disable_if_enabled(HELPER_SERVICE_UNIT);
         disable_if_enabled(API_SERVICE_UNIT)?;
     }
     systemctl_enable(RECOVERY_SERVICE_UNIT)?;
@@ -537,6 +613,7 @@ async fn execute_activation_pipeline(
             api_unit_sha256: Some(mig.legacy_unit_sha256.clone()),
             web_unit_sha256: None,
             host_config_sha256: None,
+            helper_unit_sha256: None,
         });
     } else {
         state.previous = state.active.take();
@@ -560,6 +637,7 @@ async fn execute_activation_pipeline(
         api_unit_sha256: candidate.api_unit_sha256.clone(),
         web_unit_sha256: candidate.web_unit_sha256.clone(),
         host_config_sha256: candidate.host_config_sha256.clone(),
+        helper_unit_sha256: candidate.helper_unit_sha256.clone(),
     });
     state.pending = None;
     state.transaction = None;
@@ -569,197 +647,118 @@ async fn execute_activation_pipeline(
     Ok(())
 }
 
-fn update_unit_service_identity(
-    unit_content: &str,
-    user: &str,
-    group: &str,
-    home: &str,
-) -> Result<String, ReleaseError> {
-    let mut lines = Vec::new();
-    let mut in_service = false;
-    let mut has_user = false;
-    let mut has_group = false;
-    let mut has_workdir = false;
-    let mut has_home_env = false;
-    let mut has_xdg_env = false;
+fn stage_service_user_override_candidate(
+    layout: &Layout,
+    base: &PendingCandidateRecord,
+    service_user: &str,
+) -> Result<PendingCandidateRecord, ReleaseError> {
+    super::account::verify_api_service_account(service_user)?;
 
-    for line in unit_content.lines() {
-        let trimmed = line.trim();
-        if trimmed == "[Service]" {
-            in_service = true;
-            lines.push(line.to_string());
-            continue;
-        } else if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if in_service {
-                if !has_user {
-                    lines.push(format!("User={user}"));
-                }
-                if !has_group {
-                    lines.push(format!("Group={group}"));
-                }
-                if !has_workdir {
-                    lines.push(format!("WorkingDirectory={home}"));
-                }
-                if !has_home_env {
-                    lines.push(format!("Environment=HOME={home}"));
-                }
-                if !has_xdg_env {
-                    lines.push(format!("Environment=XDG_CONFIG_HOME={home}/.config"));
-                }
-                in_service = false;
-            }
-            lines.push(line.to_string());
-            continue;
-        }
+    let release_path = Path::new(&base.release_path);
+    let manifest_path = release_path.join("release-manifest.json");
+    let manifest = super::manifest::validate_manifest_and_archive(&manifest_path, None)?;
+    let installed_public_config_path = layout.host_config_json_path();
+    let public_config_path = base
+        .pending_host_config_path
+        .as_deref()
+        .map(Path::new)
+        .unwrap_or(&installed_public_config_path);
+    let public_config = super::host_config::load_host_public_config(public_config_path)?
+        .ok_or_else(|| ReleaseError::Config("public host configuration is missing".into()))?;
 
-        if in_service {
-            if trimmed.starts_with("User=") {
-                lines.push(format!("User={user}"));
-                has_user = true;
-                continue;
-            } else if trimmed.starts_with("Group=") {
-                lines.push(format!("Group={group}"));
-                has_group = true;
-                continue;
-            } else if trimmed.starts_with("WorkingDirectory=") {
-                lines.push(format!("WorkingDirectory={home}"));
-                has_workdir = true;
-                continue;
-            } else if trimmed.starts_with("Environment=HOME=") {
-                lines.push(format!("Environment=HOME={home}"));
-                has_home_env = true;
-                continue;
-            } else if trimmed.starts_with("Environment=XDG_CONFIG_HOME=") {
-                lines.push(format!("Environment=XDG_CONFIG_HOME={home}/.config"));
-                has_xdg_env = true;
-                continue;
-            }
-        }
-        lines.push(line.to_string());
+    let transaction_id = uuid::Uuid::new_v4().to_string();
+    let pending_units_dir = layout.transaction_pending_units_dir(&transaction_id);
+    let pending_host_config_path =
+        layout.transaction_pending_host_config_json_path(&transaction_id);
+    let stage_result = stage_candidate_units_for_release_with_identity(
+        layout,
+        release_path,
+        release_path,
+        &manifest,
+        base.role,
+        &public_config.allowed_web_origins,
+        &pending_units_dir,
+        &pending_host_config_path,
+        Some(service_user),
+    );
+    if let Err(error) = stage_result {
+        let _ = fs::remove_dir_all(&pending_units_dir);
+        let _ = fs::remove_file(&pending_host_config_path);
+        return Err(error);
     }
 
-    if in_service {
-        if !has_user {
-            lines.push(format!("User={user}"));
-        }
-        if !has_group {
-            lines.push(format!("Group={group}"));
-        }
-        if !has_workdir {
-            lines.push(format!("WorkingDirectory={home}"));
-        }
-        if !has_home_env {
-            lines.push(format!("Environment=HOME={home}"));
-        }
-        if !has_xdg_env {
-            lines.push(format!("Environment=XDG_CONFIG_HOME={home}/.config"));
-        }
-    }
+    let digest_result = (|| {
+        let api_unit_sha256 = hash_optional_activation_file(
+            &pending_units_dir.join(API_SERVICE_UNIT),
+            "read finalized API unit for digest",
+        )?;
+        let web_unit_sha256 = hash_optional_activation_file(
+            &pending_units_dir.join(WEB_SERVICE_UNIT),
+            "read finalized Web unit for digest",
+        )?;
+        let helper_unit_sha256 = hash_optional_activation_file(
+            &pending_units_dir.join(HELPER_SERVICE_UNIT),
+            "read finalized helper unit for digest",
+        )?;
+        let host_config_sha256 = hash_required_activation_file(
+            &pending_host_config_path,
+            "read finalized public host configuration for digest",
+        )?;
+        Ok::<_, ReleaseError>((
+            api_unit_sha256,
+            web_unit_sha256,
+            helper_unit_sha256,
+            host_config_sha256,
+        ))
+    })();
+    let (api_unit_sha256, web_unit_sha256, helper_unit_sha256, host_config_sha256) =
+        match digest_result {
+            Ok(digests) => digests,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&pending_units_dir);
+                let _ = fs::remove_file(&pending_host_config_path);
+                return Err(error);
+            }
+        };
 
-    Ok(lines.join("\n") + "\n")
+    let mut candidate = base.clone();
+    candidate.pending_units_path = Some(pending_units_dir.display().to_string());
+    candidate.pending_host_config_path = Some(pending_host_config_path.display().to_string());
+    candidate.api_unit_sha256 = api_unit_sha256;
+    candidate.web_unit_sha256 = web_unit_sha256;
+    candidate.helper_unit_sha256 = helper_unit_sha256;
+    candidate.host_config_sha256 = Some(host_config_sha256);
+    Ok(candidate)
 }
 
-fn hash_optional_file(path: &Path) -> Result<Option<String>, ReleaseError> {
+fn hash_required_activation_file(
+    path: &Path,
+    action: &'static str,
+) -> Result<String, ReleaseError> {
+    let bytes = fs::read(path).map_err(|error| ReleaseError::Io {
+        action,
+        details: error.to_string(),
+    })?;
+    Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+fn hash_optional_activation_file(
+    path: &Path,
+    action: &'static str,
+) -> Result<Option<String>, ReleaseError> {
     match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_file() => {
-            let bytes = fs::read(path).map_err(|e| ReleaseError::Io {
-                action: "read file for hash",
-                details: e.to_string(),
-            })?;
-            use sha2::{Digest, Sha256};
-            Ok(Some(format!("{:x}", Sha256::digest(&bytes))))
+        Ok(metadata) if metadata.file_type().is_file() => {
+            Ok(Some(hash_required_activation_file(path, action)?))
         }
-        Ok(_) => Err(ReleaseError::InvalidBundle {
+        Ok(_) => Err(ReleaseError::OwnershipViolation {
             path: path.display().to_string(),
-            reason: "staged unit path is not a regular file".to_string(),
+            expected: "regular file".into(),
+            got: "non-regular file".into(),
         }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(ReleaseError::Io {
-            action: "inspect staged unit file",
+            action: "inspect finalized unit for digest",
             details: error.to_string(),
         }),
-    }
-}
-
-fn ensure_user_config_ownership(user_home: &str, uid: u32, gid: u32) {
-    let targets = if user_home == super::constants::API_SERVICE_HOME {
-        vec![std::path::PathBuf::from(super::constants::API_SERVICE_HOME)]
-    } else {
-        vec![
-            std::path::PathBuf::from(super::constants::API_SERVICE_HOME),
-            std::path::PathBuf::from(user_home),
-        ]
-    };
-    for base in targets {
-        let _ = fs::create_dir_all(&base);
-        let dot_config = base.join(".config");
-        let user_config_dir = dot_config.join("dam-hopper");
-        let _ = fs::create_dir_all(&user_config_dir);
-        let user_toml = user_config_dir.join("dam-hopper.toml");
-        if !user_toml.exists() {
-            let etc_toml = std::path::Path::new("/etc/dam-hopper/dam-hopper.toml");
-            if etc_toml.exists() {
-                let _ = fs::copy(etc_toml, &user_toml);
-            } else {
-                let _ = fs::write(&user_toml, "[workspace]\nname = \"default\"\n");
-            }
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&user_config_dir, fs::Permissions::from_mode(0o700));
-            if user_toml.exists() {
-                let _ = fs::set_permissions(&user_toml, fs::Permissions::from_mode(0o600));
-            }
-            chown_single(&base, uid, gid);
-            chown_single(&dot_config, uid, gid);
-            chown_recursive(&user_config_dir, uid, gid);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn chown_single(path: &std::path::Path, uid: u32, gid: u32) {
-    if let Ok(c_path) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) {
-        unsafe {
-            libc::chown(c_path.as_ptr(), uid, gid);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn chown_recursive(path: &std::path::Path, uid: u32, gid: u32) {
-    chown_single(path, uid, gid);
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                chown_recursive(&p, uid, gid);
-            } else {
-                chown_single(&p, uid, gid);
-            }
-        }
-    }
-}
-
-fn ensure_etc_config_permissions(layout: &Layout) {
-    let etc_dir = &layout.etc_dir;
-    let _ = fs::create_dir_all(etc_dir);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(etc_dir, fs::Permissions::from_mode(0o755));
-        let toml_path = etc_dir.join("dam-hopper.toml");
-        if toml_path.exists() {
-            let _ = fs::set_permissions(&toml_path, fs::Permissions::from_mode(0o644));
-        }
-        let host_toml = layout.host_config_path();
-        if host_toml.exists() {
-            let _ = fs::set_permissions(&host_toml, fs::Permissions::from_mode(0o644));
-        }
-        let host_json = layout.host_config_json_path();
-        if host_json.exists() {
-            let _ = fs::set_permissions(&host_json, fs::Permissions::from_mode(0o644));
-        }
     }
 }

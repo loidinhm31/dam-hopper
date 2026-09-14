@@ -2,10 +2,11 @@
 
 use clap::Parser;
 use dam_hopper_server::linux_release::{
-    ALL_SERVICE_UNITS, Cli, Commands, HostConfig, Layout, RoleCommands, acquire_release,
-    current_euid, execute_activation_with_args, execute_manual_rollback, execute_recovery,
-    load_host_config, load_or_init_manager_state, save_host_config, stage_release_bundle,
-    verify_api_service_account, verify_privileges,
+    acquire_release, current_euid, execute_activation_with_args, execute_manual_rollback,
+    execute_recovery, load_host_config, load_or_init_manager_state, save_host_config,
+    stage_release_bundle, verify_api_service_account, verify_privileges, Cli, CollectorAdapters,
+    Commands, HostConfig, Layout, ReleaseError, RoleCommands, TargetRole, ALL_SERVICE_UNITS,
+    run_diagnose,
 };
 use std::process::ExitCode;
 
@@ -50,19 +51,13 @@ async fn main() -> ExitCode {
                     eprintln!("invalid service user: {e}");
                     return ExitCode::from(1);
                 }
-                let mut host_cfg = load_host_config(&layout.host_config_path())
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| {
-                        HostConfig::new(
-                            args.role
-                                .unwrap_or(dam_hopper_server::linux_release::TargetRole::Both),
-                            args.allow_web_origins.clone(),
-                        )
-                        .unwrap()
-                    });
-                host_cfg.service_user = Some(user.clone());
-                let _ = save_host_config(&layout.host_config_path(), &host_cfg);
+                let role = args.role.unwrap_or(TargetRole::Both);
+                if let Err(e) =
+                    persist_service_user_selection(&layout, role, &args.allow_web_origins, user)
+                {
+                    eprintln!("failed to persist service user: {e}");
+                    return ExitCode::from(1);
+                }
             }
             println!(
                 "Installing release bundle from '{}'...",
@@ -101,14 +96,15 @@ async fn main() -> ExitCode {
                         eprintln!("invalid service user: {e}");
                         return ExitCode::from(1);
                     }
-                    let mut host_cfg = load_host_config(&layout.host_config_path())
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| {
-                            HostConfig::new(args.role, args.allow_web_origins.clone()).unwrap()
-                        });
-                    host_cfg.service_user = Some(user.clone());
-                    let _ = save_host_config(&layout.host_config_path(), &host_cfg);
+                    if let Err(e) = persist_service_user_selection(
+                        &layout,
+                        args.role,
+                        &args.allow_web_origins,
+                        user,
+                    ) {
+                        eprintln!("failed to persist service user: {e}");
+                        return ExitCode::from(1);
+                    }
                 }
                 println!(
                     "Switching deployment role to '{}' using bundle '{}'...",
@@ -207,10 +203,12 @@ async fn main() -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
+            let services = dam_hopper_server::linux_release::collect_all_services_status();
             if args.json {
                 let status_val = serde_json::json!({
                     "hostConfig": host_config,
                     "state": mgr_state,
+                    "services": services,
                 });
                 println!("{status_val}");
             } else {
@@ -222,29 +220,78 @@ async fn main() -> ExitCode {
                     println!("  (not configured)");
                 }
                 println!("Active Release:");
-                if let Some(ref active) = mgr_state.active {
+                if let Some(active) = &mgr_state.active {
                     println!("  Tag: {}", active.tag);
                     println!("  Role: {}", active.role);
                     println!("  Committed At: {}", active.committed_at);
                 } else {
                     println!("  (none)");
                 }
+                println!("Services:");
+                println!("  Server:");
+                for svc in services.iter().filter(|s| s.role == "server") {
+                    let mut details = if svc.active {
+                        "active".to_string()
+                    } else {
+                        "inactive".to_string()
+                    };
+                    if let Some(pid) = svc.pid {
+                        details.push_str(&format!(" (pid: {pid}"));
+                        if let Some(uid) = svc.uid {
+                            details.push_str(&format!(", uid: {uid}"));
+                        }
+                        details.push(')');
+                    }
+                    println!("    {}: {details}", svc.unit_name);
+                }
+                println!("  Web:");
+                for svc in services.iter().filter(|s| s.role == "web") {
+                    let mut details = if svc.active {
+                        "active".to_string()
+                    } else {
+                        "inactive".to_string()
+                    };
+                    if let Some(pid) = svc.pid {
+                        details.push_str(&format!(" (pid: {pid}"));
+                        if let Some(uid) = svc.uid {
+                            details.push_str(&format!(", uid: {uid}"));
+                        }
+                        details.push(')');
+                    }
+                    println!("    {}: {details}", svc.unit_name);
+                }
+                println!("  Recovery:");
+                for svc in services.iter().filter(|s| s.role == "recovery") {
+                    let mut details = if svc.active {
+                        "active".to_string()
+                    } else {
+                        "inactive".to_string()
+                    };
+                    if let Some(pid) = svc.pid {
+                        details.push_str(&format!(" (pid: {pid}"));
+                        if let Some(uid) = svc.uid {
+                            details.push_str(&format!(", uid: {uid}"));
+                        }
+                        details.push(')');
+                    }
+                    println!("    {}: {details}", svc.unit_name);
+                }
                 println!("Previous Release:");
-                if let Some(ref previous) = mgr_state.previous {
+                if let Some(previous) = &mgr_state.previous {
                     println!("  Tag: {}", previous.tag);
                     println!("  Role: {}", previous.role);
                 } else {
                     println!("  (none)");
                 }
                 println!("Pending Candidate:");
-                if let Some(ref candidate) = mgr_state.pending {
+                if let Some(candidate) = &mgr_state.pending {
                     println!("  Tag: {}", candidate.tag);
                     println!("  Role: {}", candidate.role);
                     println!("  Staged At: {}", candidate.staged_at);
                 } else {
                     println!("  (none)");
                 }
-                if let Some(ref failure) = mgr_state.latest_failure {
+                if let Some(failure) = &mgr_state.latest_failure {
                     println!("Latest Failure:");
                     println!("  Phase: {}", failure.phase);
                     println!("  Error: {}", failure.sanitized_error);
@@ -318,9 +365,34 @@ async fn main() -> ExitCode {
             println!("profile: {}", dam_hopper_server::linux_release::PROFILE_ID);
             println!(
                 "schema: {}",
-                dam_hopper_server::linux_release::SCHEMA_VERSION
+                dam_hopper_server::linux_release::RELEASE_MANIFEST_SCHEMA_VERSION
             );
             ExitCode::SUCCESS
         }
+        Commands::Diagnose(_args) => {
+            let adapters = CollectorAdapters::default();
+            run_diagnose(&layout, &adapters).await
+        }
+        Commands::ProvisionApiRuntime => {
+            match dam_hopper_server::linux_release::provision_installed_api_runtime(&layout) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error: API runtime provisioning failed: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
     }
+}
+
+fn persist_service_user_selection(
+    layout: &Layout,
+    role: TargetRole,
+    allow_web_origins: &[String],
+    user: &str,
+) -> Result<(), ReleaseError> {
+    let mut host_config = load_host_config(&layout.host_config_path())?
+        .unwrap_or(HostConfig::new(role, allow_web_origins.to_vec())?);
+    host_config.service_user = Some(user.trim().to_string());
+    save_host_config(&layout.host_config_path(), &host_config)
 }

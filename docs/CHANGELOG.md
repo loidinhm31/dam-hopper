@@ -1,3 +1,79 @@
+# 2026-09-14
+
+- **Production idle-suspend diagnostics — Phase 07 complete.** Cross-layer
+  verification, architecture reconciliation, read-only Linux smoke, security
+  review, documentation, and rollout qualification are complete.
+- Added `server/tests/idle_suspend_phase07.rs` with 2/2 deterministic automatic
+  and manual lifecycle checks. Added the six-module
+  `server/tests/idle_suspend_diagnostics.rs` suite with 8/8 deterministic
+  fault, redaction-corpus, bounds, role/EUID, local-API, and atomic-output
+  checks.
+- Added the explicitly ignored
+  `server/tests/idle_suspend_diagnostics_linux_smoke.rs` production-adapter
+  smoke with temporary output and unchanged host/configuration/audit, RTC, and
+  API/helper unit snapshots.
+- The five-command focused gate recorded **223/223 aggregate executions** with
+  zero failures; the separate cross-layer target passed **2/2** and the latest
+  cycle-2 review approved the scope at **10.0/10**. No coverage percentage or
+  real suspend/resume canary is claimed.
+- Reconciled architecture, API, configuration, security, Linux/systemd,
+  codebase-summary, PDR, and rollout/rollback documentation with the delivered
+  fixed-source, bounded, privacy-safe collector.
+
+- **System daemon state configuration — Phase 01 complete (2026-09-14).**
+  Canonical API configuration is `/var/lib/dam-hopper/dam-hopper.toml`
+  (final API UID:GID, mode `0600`); `/etc/dam-hopper/dam-hopper.toml` is a
+  validated, read-only, copy-once migration source. Server timing/manual audit
+  state is `/var/lib/dam-hopper/idle-suspend-audit.jsonl`. Provisioning walks
+  trusted descriptors, stages exact bytes in a no-follow sibling, publishes
+  with Linux `renameat2(RENAME_NOREPLACE)`, synchronizes the state directory,
+  and cleans only identity-matching unpublished objects. Unsafe metadata,
+  invalid legacy state, races, and publication failures fail closed. See
+  [Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md).
+- **System daemon state configuration — Phase 02 complete (2026-09-14).**
+  Aligned the API systemd template, checked-in unit, strict rendered policy,
+  and staged output on canonical `/var/lib/dam-hopper/dam-hopper.toml`.
+- `validate_api_unit_policy` now requires exactly one canonical `ExecStart`
+  and the sole zero-operand privileged `provision-api-runtime` prestart;
+  legacy `/etc` paths, duplicates, alternate operands, and extra arguments
+  are rejected.
+- Focused unit-policy and staging evidence passed **29/29**; cycle-2 review
+  approved the phase **10/10**. Existing identity, HOME/XDG, hardening,
+  lifecycle hooks, and restart behavior remain unchanged.
+- [Phase 02 plan](../plans/260914-0854-system-daemon-state-config/phase-02-systemd-unit-template-checked-in-unit-and-policy.md) ·
+  [Cycle-2 review](../plans/reports/code-review-260914-1805-phase02-systemd-unit-template-and-policy-cycle2.md).
+
+- **System daemon state configuration — Phase 03 complete (2026-09-14).**
+  Preflight now performs server-role-only, read-only canonical/legacy SQLite
+  discovery with bounded no-follow TOML inspection, API HOME/working-directory
+  path semantics, stable deduplication, and database/WAL/SHM holder protection.
+  The release installer stages pending bytes without daemon-TOML provisioning;
+  first Server/Both start remains the runtime provisioner's boundary, while
+  Web-only installs remain API-state-free.
+- Reset now defaults to `/var/lib/dam-hopper/dam-hopper.toml` and performs
+  refusal-based, API-identity same-directory atomic disablement while
+  preserving audits and foreign RTC state. Clean-install, security, reset,
+  migration, rootless, and release-artifact checks passed; the focused Rust
+  preflight suite passed **11/11** and Cycle-2 review approved **10/10**.
+- Architecture, configuration, release-manager, systemd, roadmap, and
+  codebase-summary docs now describe these authorities and repair workflow;
+  final documentation validation passed **327 internal links across 29 files**.
+  Protected Fedora runtime qualification requires dedicated runner hooks and
+  is not claimed as local execution.
+- [Phase 03 plan](../plans/260914-0854-system-daemon-state-config/phase-03-preflight-installer-reset-and-smoke-tests.md) ·
+  [Cycle-2 review](../plans/reports/code-review-260914-2028-phase03-preflight-installer-reset-and-smoke.md).
+
+- **System daemon state configuration — Phase 00 merge reconciliation complete
+  (2026-09-14).** Reconciled `origin/main` into
+  `feat/terminal-idle-suspend` without importing recursive `chown`; preserved
+  refusal-based descriptor provisioning, aligned the API systemd template/unit
+  policy, accepted upstream `use-clipboard.ts` and `WATCHDOG.yml` changes, and
+  synthesized all conflicting docs plus the workflow context page.
+- Cycle-2 review approved **10/10** and confirmed 85 staged files, 0 unmerged
+  files, and 0 conflict markers. The merge commit remains pending; daemon-state
+  cutover is Phase 02–03 scope. [Phase 00 plan](../plans/260914-0854-system-daemon-state-config/phase-00-merge-origin-main-and-reconcile-conflicts.md) ·
+  [Cycle-2 review](../plans/reports/code-review-260914-1158-phase-00-merge-origin-main-cycle2.md).
+
 # 2026-09-13
 
 - **Interactive Script and Sandbox Enhancements in HTML Preview.** Added `html-preview-transform.ts` and updated `HtmlPreview.tsx` to enable full interaction with embedded `<script>` tags, forms, and browser APIs inside sandboxed HTML previews while strictly maintaining `null`-origin parent isolation (omitting `allow-same-origin`).
@@ -5,6 +81,18 @@
   - Injected an in-memory `localStorage` and `sessionStorage` fallback shim to prevent fatal `SecurityError: The document is sandboxed and lacks the 'allow-same-origin' flag` exceptions when user scripts access storage.
   - Injected an in-frame visual modal alert fallback for `window.alert()` to overcome modern browser suppression of native dialogs in cross-origin/sandboxed iframes.
 - Validation: Vitest unit tests **59/59 passed** across all HTML preview suites (including 4 new tests in `html-preview-transform.test.ts`). Chromium browser tests **14/14 passed** across `consumer-context-menu.browser.tsx` and `script-interaction.browser.tsx` verifying DOM manipulation, interactive counter script, form submission, in-memory localStorage, and in-frame alert modal. TypeScript build (`tsc -p tsconfig.json`) passed cleanly.
+
+- **Production idle-suspend diagnostics — Phase 06 Linux CLI integration complete (2026-09-13).** Added the exact `dam-hopper diagnose --json` grammar, role-aware fixed host/API/command/probe adapters, non-root permission boundaries, atomic root/user output (`0700`/`0600`), path-only stdout, and complete/partial/fatal exit mapping (`0`/`2`/`1`). Phase 07 rollout remains planned.
+- **Production idle-suspend diagnostics — Phase 05 bundle/correlation engine complete (2026-09-13).** Delivered the pure bundle-v1 model, bounded no-follow JSONL readers, strict privacy projection, source completeness/status, exact UUID correlation, gap/restart/orphan analysis, and deterministic 8-MiB whole-record reduction.
+- Validation passed: **202/202 tests** (**16 diagnostics + 186 `idle_suspend`**); Cycle 2 code review approved **9.5/10**; canonical advisor lifecycle completed. [Phase 05 plan](../plans/260912-0027-production-idle-suspend-diagnostics/phase-05-bundle-correlation-engine.md) · [Code review](../plans/reports/code-review-260913-2327-phase-05-bundle-correlation-engine-cycle2.md).
+
+- **Production idle-suspend diagnostics — Phase 03 coordinator integration complete (2026-09-13).** `AppState` now owns one optional canonical event writer; the coordinator emits authoritative automatic/manual lifecycle events, preserves exact UUID correlation through helper dispatch, audit, accepted responses, outcome, and reconciliation, and keeps event emission silent for scheduled samples.
+- Validation passed: focused coordinator event tests **7/7**, full `idle_suspend::tests::` unit filter **84/84**, and `server/tests/idle_suspend` integration tests **19/19**; code review approved **9.3/10** with no critical findings. [Phase 03 test report](../plans/reports/tester-260913-1806-phase03-server-coordinator-instrumentation.md) · [Code review](../plans/reports/code-review-260913-1807-phase03-coordinator-instrumentation.md).
+- **Production idle-suspend diagnostics — Phase 04 helper audit milestone enrichment complete (2026-09-13).** Evolved the existing root helper audit in place to schema v2 with producer identity/sequence, typed rejection/capability/preflight/RTC/invocation/outcome milestones, exact UUID propagation, durable intent ordering, secure bounded pruning, and legacy protocol/action compatibility.
+- Validation passed: focused helper tests **23/23**, full `idle_suspend` module **172/172**, and helper binary build; Cycle 2 code review approved **9.8/10** with no critical or high findings. [Phase 04 plan](../plans/260912-0027-production-idle-suspend-diagnostics/phase-04-helper-milestone-enrichment.md) · [Test report](../plans/reports/tester-260913-1935-phase04-helper-audit-milestone-enrichment-cycle2.md) · [Code review](../plans/reports/code-review-260913-1937-phase-04-helper-milestone-enrichment-cycle2.md).
+
+- **Production idle-suspend diagnostics — Phase 02 canonical event foundation complete (2026-09-13).** Added the closed canonical event model, boot/producer identity, checked sequence and UUID correlation primitives, plus a bounded mode-0600 no-follow synced JSONL writer. Existing untagged server-audit behavior remains unchanged; at that point Phases 03–07 were pending.
+- Validation passed: canonical event tests **11/11**, server-audit compatibility **1/1**, and full `idle_suspend::` module **143/143**; code review approved **9.5/10** with no critical findings. [Phase 02 test report](../plans/reports/tester-260913-1637-phase02-canonical-event-foundation.md) · [Code review](../plans/reports/code-review-260913-1639-phase02-event-writer.md).
 
 # 2026-09-12
 
@@ -15,10 +103,109 @@
 - **Phase 01: HTML File Helper, Mode Persistence, and Sandboxed HtmlPreview.** Added `html-file.ts` with case-insensitive `.html`/`.htm`/`.xhtml` detection and MIME resolution, `html-view-mode-persistence.ts` storing `"edit" | "split" | "preview"` mode under `dam-hopper:html-view-mode:v1` (defaulting to `"edit"`), and the sandboxed `HtmlPreview.tsx` iframe component with `sandbox="allow-scripts allow-modals"` (opaque origin isolation), 200ms debounce, and reload button. Also resolved timer typing in `use-clipboard.ts`.
 - Validation: Vitest unit and component tests **22/22 passed** across `html-file.test.ts`, `html-view-mode-persistence.test.ts`, and `HtmlPreview.test.tsx`. TypeScript build (`tsc -p tsconfig.json`) passed cleanly. [Phase 01 Plan](../plans/260912-2240-explorer-html-preview/phase-01-helpers-and-html-preview.md).
 
+# 2026-09-11
+
+- **Configured-agent activity idle suspend — Phase 08 documentation, runbooks, and controlled rollout complete (2026-09-11).** Integrated operator documentation, operations runbooks, controlled rollout stages, and rollback procedures across all system guides.
+- Delivered across: `system-architecture.md` (implemented dataflow & heuristic boundaries), `api-reference.md` (v1 status DTO, all enums, nullable counts, privacy boundaries), `configuration-guide.md` (exact paths, startup immutability, TOML examples, rollout stages, two-level rollback), `terminal-idle-suspend-security.md` (unprivileged procfs/netlink boundaries, fail-closed policy, warning exclusions, final race caveat, canary prerequisites), `linux-systemd.md` (observer qualification, operator reason guide, observation soak, bounded canary, stop criteria, rollback runbooks), `linux-release-manager.md`, `code-standards.md`, `codebase-summary.md`, `project-overview-pdr.md`, `project-roadmap.md`, `docs/README.md`, `README.md`, and `scripts/run-uat.sh`.
+- Validation passed: boundary checks **14/14**; idle-suspend integration exercised **20/20** scenarios (**19/19** default tests plus **1/1** ignored live Linux smoke in **0.74s**, with 2 other tests ignored); Chromium browser tests **16/16**; full UI suite **1606/1606** across 233 files (1,642 qualified tests plus 14 boundary checks); code review approved **9.6/10**. See [Phase 08 QA](../plans/reports/qa-260911-1207-phase08-idle-suspend-rollout.md) and [code review](../plans/reports/code-review-260911-1208-phase08-docs-rollout-rollback.md).
+- Plan progress: **COMPLETE (100%; 8/8 phases done; 111/111h)**. Real-host automatic suspend canary remains an explicit Operations-supervised deployment gate with host qualification, exclusive RTC ownership, and bounded wake.
+
+- **Configured-agent activity idle suspend — Phase 07 integrated qualification complete (2026-09-11).** Qualified managed PTY output/input, attributable TCP traffic, protected status/API warnings, Chromium rendering, fake suspend admission, recovery, and shutdown.
+- Validation passed: backend/PTY/API/integration **323 passed**, security boundary **14/14**, Chromium **16/16**, and the ignored live Linux PTY/TCP smoke **1/1 in 0.72s**; code review approved **9.4/10**. Automated evidence used fake suspend outcomes and did not invoke host suspend, RTC programming, helper execution, sudo, or root installation.
+- **Configured-agent activity idle suspend — Phase 06 complete.** Added a
+  strict `unknown`-to-`IdleSuspendStatusV1` decoder with exact two-field
+  old-server normalization and fail-closed malformed/partial response
+  handling. The protected status remains version 1, authenticated, and
+  `Cache-Control: no-store`.
+- Extended `HostIdleSuspendStatus` with policy, aggregate measurement state and
+  reason, nullable/unknown counts, TCP4/TCP6 coverage, persistent heuristic
+  limits, bounded measurement-warning duration and PID/safe identity examples,
+  and the sole `armDeadlineMs` countdown. Manual force confirmation still uses
+  actual fleet counts and existing handoff/409/no-retry behavior.
+- Validation passed: protected API **9/9**, frontend unit **41/41**, Chromium
+  **13/13**; code review approved **9.7/10**. Warning serialization tests
+  reject command arguments, matcher data, socket details, terminal/session
+  identities, and tokens. Integrated real-observer qualification remains Phase
+  07 work.
+
+- **Configured-agent activity idle suspend — Phase 05 complete.** Added the
+  dedicated joinable transactional sampler worker, sequential process/TCP
+  prepare with raw-output and manager invalidation fences, one-deep
+  retryable-close-race retry, back-to-back baseline commit, and opaque final
+  admission tickets.
+- Added manager-locked automatic admission for policy, request/activity/epoch/
+  timing revisions, quiet deadline, observation age, input/generation/root/
+  output fences, and PTY lifecycle blockers. Public status now requires
+  `automaticPolicy`, reports nullable `activity`, and projects bounded
+  `measurementWarning` process identities (maximum 32, no args or socket
+  details). Coordinator recovery latches spent epochs and joins the sampler
+  before PTY teardown.
+
+- **Configured-agent activity idle suspend — Phase 02 complete.** PTY sessions now capture qualified root `(pid, start_ticks)` identity per incarnation, count raw PTY reads with a saturating counter, fence accepted input before writer dispatch, reject writes during handoff, and expose bounded private observation snapshots without leaking terminal content.
+- Validation passed: focused PTY activity tests **8/8**; PTY module suite **159 passed, 1 ignored** (pre-existing performance gate). Code review scored **9.5/10** with no critical issues. At that point, Phase 03 and Phase 04 completion entries followed and Phases 05–08 were pending.
+- **Configured-agent activity idle suspend — Phase 03 complete.** Added private bounded `ProcessDiscovery<S>` over `ProcessSource`/`LinuxProcSource`, exact identity-safe root/retained descendant attribution, finite executable matching, same-namespace socket ownership, and transactional prepared samples.
+- Enforced caps for 256 roots, 8,192 scanned processes, 1,024 relevant processes, 4,096 FDs per process, 8,192 socket inodes, and 16 KiB command lines; incomplete, stale, and ambiguous observations fail closed.
+- Validation passed: latest focused process discovery validation **18/18**, idle-suspend **100/100**, and PTY **187/187** (one pre-existing performance test ignored). Code review approved **9.0/10** with no critical issues. At that point, Phase 04 and later phases were pending.
+- **Configured-agent activity idle suspend — Phase 04 complete.** Added direct unprivileged `NETLINK_SOCK_DIAG` TCP4/TCP6 byte observation, bounded multipart framing and `TCP_INFO` parsing, persistent cookie/family/namespace identity, per-socket differential activity, transactional prepare/commit, and fail-closed transport/privacy handling.
+- Validation passed: Phase 04 TCP/netlink focus **40/40**, latest activity suite **59/59**, full idle-suspend library **128/128**, and crate-wide **142/142**; all reported runs passed. Cycle-2 code review approved **9.8/10** with no critical issues. At that point, Phases 05–08 were pending.
+
+# 2026-09-10
+
+- **Production CLI Deployment Setup for Idle Suspend Helper & Socket — Phases 01–04 complete.** Phase 04 closes staged-unit, rendered-policy, role-isolation, boundary, and CLI status verification; release-manager activation starts the helper before the API with non-fatal fallback, and rollback/recovery retain helper ownership.
+- Validation passed: `linux_release_staging` **9/9**, `linux_release_unit_policy` **10/10**, `idle_suspend` library **69/69**, `idle_suspend` integration **14/14** (**102/102** focused Rust tests); `verify-idle-suspend-boundary.sh` **14/14** checks; `dam-hopper status --json` reports API and helper under `server`.
+- Boundary checks 13 and 14 assert API `PIDFile`/`ExecStartPost`/`ExecStopPost` hooks and helper release-manager registration, staging, activation, and status inspection. Automated tests use temporary files/fakes and do not invoke host suspend or real RTC hardware.
+
+# 2026-09-09
+
+- **Production CLI Deployment Setup for Idle Suspend Helper & Socket — Phase 01 complete.** Systemd API/helper units now create and remove `/run/dam-hopper/server.pid`, share a group-writable runtime directory, and expose the helper socket to the authorized API service group.
+- Validation passed: systemd unit verification, release/unit-policy tests, idle-suspend tests, and boundary checks **102/102**; cycle-2 review approved **10/10**. Release-manager staging, lifecycle, and end-to-end phases remain pending.
+
 # 2026-09-07
 
 - **Plan item notes and editing.** Restored selected Plan item note rendering with multiline bodies, semantic timestamps, and per-note deletion. Added inline title/summary editing across desktop Deck and compact Sheet, reusing existing workflow PATCH/delete-note mutations with fresh request IDs and exact CAS timestamps.
 - Validation: focused workflow Vitest suites **27/27 passed** across action hooks, selected-item UI, responsive Surface, Deck, and Sheet. Changed-file TypeScript checks passed; coverage provider unavailable and an unrelated `use-clipboard.ts` type error remains. Code review 8.5/10, no critical issues; asynchronous edit rejection retention remains a non-blocking follow-up. [Plan](../plans/260907-0013-plan-item-notes-and-edit/plan.md) · [QA report](../plans/reports/qa-260907-0029-plan-item-notes-and-edit.md) · [Review report](../plans/reports/code-review-260907-0031-restore-plan-item-notes-and-edit.md).
+
+- **Cross-Origin Port Transport Guard Fix.**
+  Aligned privileged mutation CSRF guards on idle-suspend (`force-suspend`, `timing`) and host actions (`intents`, `approve`, `executions`) with validated Bearer authentication and the server's exact CORS origin allowlist (`AppState::origin_is_allowed`).
+  Resolved `403 invalidOrigin` failure on split-port architectures (e.g. UAT web `:4804` / API `:4803`; production `:4802` / `:4801`) where browsers send `credentials: "include"`.
+  Applied zero-allocation iterator checks to header cardinality validation; strict foreign, duplicate-Origin, and userinfo rejection preserved.
+
+# 2026-09-06
+
+- **Authenticated Manual Force Sleep — Phase 01 protocol/helper complete.**
+  Extended the version-1 enrolled helper execution domain to accept
+  `wakeAfterSeconds: 0` as an indefinite-sleep sentinel while keeping persisted
+  automatic timing at `60..=86400`.
+- Zero converts to clear-only RTC behavior: write and verify `0`, with no
+  target-epoch arithmetic or write. Timed values clear and verify, calculate a
+  checked target, write it, and verify the readback.
+- Added fail-closed RTC ownership preflight (`RtcAlarmBusy`), explicit
+  zero-valued helper intent/completion audit records, and no-suspend behavior
+  for RTC, audit, capability, inhibitor, or preflight failures.
+- Added protocol, backend, preflight, helper IPC, audit, and automatic timing
+  regression coverage using temporary files and fake backends only; tests never
+  invoke host suspend, logind, or real RTC hardware.
+
+- **Authenticated Manual Force Sleep — Phase 02 coordinator/fleet complete.**
+  Added generation-fenced forced fleet admission that bypasses only active-fleet
+  quiescence, preserves audit/capability/inhibitor/RTC/peer gates, serializes
+  manual work with automatic timing, and releases the handoff on every outcome.
+- **Authenticated Manual Force Sleep — Phase 03 REST API complete (2026-09-06 12:00:21 +07:00).**
+  Added the protected `POST /api/system/idle-suspend/v1/force-suspend` endpoint
+  with strict DTOs and wake bounds, cookie same-origin and enabled-actor
+  enforcement, a 16 KiB body cap, coordinator-only dispatch, audited `202`
+  admission, typed fleet/handoff conflicts, sanitized closed errors, and
+  `Cache-Control: no-store` responses.
+- **Authenticated Manual Force Sleep — Phase 04 host popover UI and confirmation dialog complete (2026-09-06 12:20:00 +07:00).**
+  Added the destructive "Force Machine to Sleep" action within
+  HostIdleSuspendStatus and HostResourcePopover with clean modal handoff to
+  Radix ForceSleepDialog, indefinite default (`wakeAfterSeconds: 0`), optional
+  bounded RTC wake duration input, active managed session warning and
+  confirmation checkbox, authoritative 409 conflict refresh, disabled
+  controls during pending mutation, live regions, and 44px touch targets.
+- **Authenticated Manual Force Sleep — Phase 05 integration, qualification, and documentation complete (2026-09-06 15:45:00 +07:00).**
+  Closed the requirements-to-evidence matrix, protocol/coordinator/REST/UI integration gates, non-privileged boundary verifier, rollback review, and synchronized architecture, API, configuration, security, operations, product, and codebase documentation.
+- Validation passed: 81/81 Rust idle-suspend tests, 3/3 UI Vitest tests, 10/10 Chromium browser tests, 12/12 boundary checks, and `cargo check`. Automated evidence uses fakes and temporary files only; the indefinite real-host canary remains explicitly deferred pending Operations approval and verified physical/out-of-band recovery.
 
 # 2026-09-02
 
@@ -105,7 +292,6 @@
 - Keyboard/focus contracts preserve editor and xterm ownership, return focus to the workflow trigger on Escape, expose named regions and status text, enforce 44px touch targets, bound the desktop deck and mobile 35/90dvh sheet, honor safe-area and reduced-motion behavior, and prevent horizontal overflow.
 - Validation: focused Rust gates **134/134 passed**, focused UI Vitest **122/122 passed** across 13 files, and real-server Chromium browser **4/4 passed** against the actual no-auth backend, covering workflow state/actions, responsive keyboard/focus behavior, unavailable fallback, and terminal continuity. [Phase 07 plan](../plans/260901-0919-workflow-tracking-notes/phase-07-verification-rollout-observability-and-docs.md).
 - **Workflow note and summary multiline Textarea improvement.** Added the shared `Textarea` atom primitive (`packages/ui/src/components/ui/Textarea.tsx`) matching the `glass-input` design tokens and focus ring styling. Updated `WorkflowSelectedItemBar` to use `Textarea` for note drafting with multiline input, autoFocus, explicit `aria-label="Note content"`, Ctrl+Enter / Meta+Enter submission, and Escape cancellation. Updated `WorkflowQuickCapture` summary region to use `Textarea` for multiline item summary descriptions.
-
 
 # 2026-08-31
 
@@ -282,7 +468,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   through a bounded non-blocking telemetry sink. The default path is no-op and
   non-durable; `ChannelTelemetrySink` is reserved as the Phase 03 durable-worker
   boundary.
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+  and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 

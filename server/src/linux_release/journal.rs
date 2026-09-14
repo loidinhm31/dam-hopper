@@ -103,9 +103,8 @@ pub fn classify_recovery(state: &ManagerState) -> RecoveryAction {
         | TransactionPhase::RollingBack => RecoveryAction::RestorePrevious,
         TransactionPhase::Committed => RecoveryAction::RepairCommitted,
         TransactionPhase::RolledBack => RecoveryAction::NoAction,
-        TransactionPhase::Failed => RecoveryAction::RecoveryRequired(format!(
-            "in-flight transaction {} failed",
-            tx.tx_id
-        )),
+        TransactionPhase::Failed => {
+            RecoveryAction::RecoveryRequired(format!("in-flight transaction {} failed", tx.tx_id))
+        }
     }
 }
