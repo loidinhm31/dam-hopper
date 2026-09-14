@@ -57,17 +57,17 @@ a root-only recovery unit:
 | `dam-hopper-idle-suspend-helper.service` | `dam-hopper-idle-suspend-helper` | `root:dam-hopper` (rendered API group) | `/run/dam-hopper/idle-suspend.sock` | `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `CAP_WAKE_ALARM` |
 | `dam-hopper-api.service`                 | `dam-hopper-server`              | `dam-hopper:dam-hopper` (default rendered identity) | `0.0.0.0:4801`                      | Dedicated PTY/auth/file operations; `NoNewPrivileges=false`                                          |
 | `dam-hopper-web.service`                 | `dam-hopper-web`                 | `dam-hopper-web:dam-hopper-web`        | `0.0.0.0:4802`                      | Read-only static host; `ProtectSystem=strict`, `NoNewPrivileges=true`                                |
-
-> **Security Notice on API Identity:** The checked-in API unit and default
-> release-manager render run `dam-hopper-api.service` as the unprivileged
-> `dam-hopper:dam-hopper` account. A custom rendered identity must remain
-> non-root; verify the effective `User=`/`Group=` on each host. An API or PTY
-> compromise is therefore bounded by that service account's access, while host
-> firewall and Tailscale ACLs still must limit port `4801`. The web service
-> runs under a dedicated, unprivileged system account (`dam-hopper-web`) with
-> strict filesystem sandboxing. The helper is root-owned but accepts only the
-> enrolled API peer over its local socket.
-
+> **API identity and command contract:** The checked-in API unit and the
+> default release-manager render run `dam-hopper-api.service` as the
+> unprivileged `dam-hopper:dam-hopper` account. Custom identities must remain
+> non-root; verify `User=`/`Group=` on each host.
+> Template source is `ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config @API_HOME@/dam-hopper.toml --host 0.0.0.0 --port 4801`; default rendering is:
+> `ExecStart=/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801`.
+> The checked-in unit is this concrete production-default rendering and must
+> stay synchronized. It has exactly one privileged
+> `ExecStartPre=+/opt/dam-hopper/current/bin/dam-hopper-manager provision-api-runtime`
+> and exactly one `ExecStart`; strict policy rejects legacy `/etc` paths,
+> alternate config operands, duplicates, and extra arguments.
 ### Deployment Roles
 
 - `server`: Deploys and manages `dam-hopper-idle-suspend-helper.service` and

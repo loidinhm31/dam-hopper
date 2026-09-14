@@ -11,7 +11,8 @@
 ## Overview
 
 - Priority: P2
-- Status: pending
+- Status: DONE (2026-09-14 19:17:04 +07:00)
+- Progress: 100%
 - Effort: 6h
 - Goal: cut production systemd startup to the canonical state TOML and make template, checked-in rendered example, strict Rust policy, integration tests, and staged output agree exactly.
 - Dependency: Phase 01 must provision `/var/lib/dam-hopper/dam-hopper.toml` before the existing `ExecStartPre` returns.
@@ -38,11 +39,11 @@
 
 ### Side-effect review checklist
 
-- [ ] Only API `ExecStart` path changes in unit assets.
-- [ ] One privileged prestart remains byte-for-byte and order-equivalent.
-- [ ] User/group/HOME/XDG/working directory/mode/restart/PID/hardening remain unchanged.
-- [ ] No `StateDirectory*`, shell wrapper, fallback config, optional config, or new token is introduced.
-- [ ] Web, helper, recovery, rootless direct invocation, and format-2 legacy unit contracts remain unchanged.
+- [x] Only API `ExecStart` path changes in unit assets.
+- [x] One privileged prestart remains byte-for-byte and order-equivalent.
+- [x] User/group/HOME/XDG/working directory/mode/restart/PID/hardening remain unchanged.
+- [x] No `StateDirectory*`, shell wrapper, fallback config, optional config, or new token is introduced.
+- [x] Web, helper, recovery, rootless direct invocation, and format-2 legacy unit contracts remain unchanged.
 
 ## Architecture
 
@@ -84,12 +85,12 @@ The template uses existing `@API_HOME@` for DRY source intent. Rendering resolve
 
 ## Todo list
 
-- [ ] Cut template `ExecStart` to `@API_HOME@/dam-hopper.toml`.
-- [ ] Synchronize checked-in concrete unit.
-- [ ] Tighten strict expected command in `unit_policy.rs`.
-- [ ] Add canonical positive and legacy negative policy assertions.
-- [ ] Add exact staged-unit path assertion.
-- [ ] Complete unit side-effect review.
+- [x] Cut template `ExecStart` to `@API_HOME@/dam-hopper.toml`.
+- [x] Synchronize checked-in concrete unit.
+- [x] Tighten strict expected command in `unit_policy.rs`.
+- [x] Add canonical positive and legacy negative policy assertions.
+- [x] Add exact staged-unit path assertion.
+- [x] Complete unit side-effect review.
 
 ## Success Criteria
 
@@ -116,6 +117,6 @@ The template uses existing `@API_HOME@` for DRY source intent. Rendering resolve
 
 ## Next steps
 
-Phase 03 must update preflight and operator tooling before rollout, then prove actual staged/installed service behavior. Do not publish a release with Phase 02 units while old preflight still protects only the legacy SQLite path.
+Phase 02 is complete. Proceed to Phase 03 — Preflight, scripts, and smoke tests to update preflight and operator tooling before rollout, then prove actual staged/installed service behavior.
 
 **Unresolved questions:** None.

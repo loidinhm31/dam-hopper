@@ -4,6 +4,7 @@ use dam_hopper_server::linux_release::*;
 use std::path::PathBuf;
 
 const API_TEMPLATE: &str = include_str!("../../deploy/systemd/dam-hopper-api.service.in");
+const CHECKED_IN_API_UNIT: &str = include_str!("../../deploy/systemd/dam-hopper-api.service");
 const WEB_TEMPLATE: &str = include_str!("../../deploy/systemd/dam-hopper-web.service.in");
 const HELPER_TEMPLATE: &str =
     include_str!("../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in");
@@ -37,9 +38,18 @@ fn test_render_api_unit_success() {
     ));
     assert!(rendered.contains("Environment=HOME=/var/lib/dam-hopper"));
     assert!(rendered.contains("Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config"));
-    assert!(
-        rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801")
+    let parsed = ParsedUnit::parse(&rendered).expect("parse rendered API unit");
+    let expected_exec = format!(
+        "{}/bin/dam-hopper-server --config {}/dam-hopper.toml --host 0.0.0.0 --port 4801",
+        ctx.release_root.display(),
+        ctx.api_home
     );
+    assert_eq!(
+        parsed.get_all_values("Service", "ExecStart"),
+        vec![expected_exec.as_str()]
+    );
+    assert!(rendered.contains("/var/lib/dam-hopper/dam-hopper.toml"));
+    assert!(!rendered.contains("/etc/dam-hopper/dam-hopper.toml"));
     assert!(rendered.contains("Environment=DAM_HOPPER_CORS_ORIGINS=http://localhost:4802"));
     assert!(rendered.contains("SyslogIdentifier=dam-hopper-api"));
     assert!(rendered.contains("PIDFile=/run/dam-hopper/server.pid"));
@@ -65,6 +75,7 @@ fn test_api_unit_identity_and_start_gate_are_single_and_final() {
             ctx.release_root.display()
         )]
     );
+    assert_eq!(parsed.get_all_values("Service", "ExecStart").len(), 1);
     assert_eq!(identity.user, ctx.api_user);
     assert_eq!(identity.group, ctx.api_group);
 
@@ -112,6 +123,69 @@ fn test_api_unit_policy_rejects_state_directory_and_duplicate_prestart() {
         Err(ReleaseError::UnitPolicyViolation { reason, .. })
             if reason.contains("exactly one")
     ));
+
+}
+
+#[test]
+fn test_api_unit_policy_rejects_duplicate_execstart() {
+    let ctx = create_valid_context();
+    let duplicate_execstart_template = API_TEMPLATE.replace(
+        "\nExecStart=",
+        "\nExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801\nExecStart=",
+    );
+    assert!(matches!(
+        render_api_unit(&duplicate_execstart_template, &ctx),
+        Err(ReleaseError::UnitPolicyViolation { reason, .. })
+            if reason.contains("ExecStart")
+    ));
+}
+
+#[test]
+fn test_api_unit_policy_rejects_legacy_etc_config_path() {
+    let ctx = create_valid_context();
+    let legacy_etc_template = API_TEMPLATE.replace(
+        "--config @API_HOME@/dam-hopper.toml",
+        "--config /etc/dam-hopper/dam-hopper.toml",
+    );
+    assert!(matches!(
+        render_api_unit(&legacy_etc_template, &ctx),
+        Err(ReleaseError::UnitPolicyViolation { reason, .. })
+            if reason.contains("ExecStart")
+    ));
+}
+
+#[test]
+fn test_checked_in_api_unit_passes_policy_and_omits_legacy_path() {
+    let parsed = ParsedUnit::parse(CHECKED_IN_API_UNIT).expect("parse checked-in unit");
+
+    assert_eq!(
+        parsed.get_all_values("Service", "ExecStart"),
+        vec!["/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801"]
+    );
+    assert_eq!(
+        parsed.get_all_values("Service", "ExecStartPre"),
+        vec!["+/opt/dam-hopper/current/bin/dam-hopper-manager provision-api-runtime"]
+    );
+    assert_eq!(parsed.get_value("Service", "User"), Some("dam-hopper"));
+    assert_eq!(parsed.get_value("Service", "Group"), Some("dam-hopper"));
+    assert!(parsed.get_all_values("Service", "StateDirectory").is_empty());
+    assert!(parsed.get_all_values("Service", "StateDirectoryMode").is_empty());
+    assert_eq!(parsed.get_value("Service", "Type"), Some("exec"));
+    assert_eq!(parsed.get_value("Service", "WorkingDirectory"), Some("/var/lib/dam-hopper"));
+    assert_eq!(parsed.get_value("Service", "UMask"), Some("0077"));
+    assert_eq!(parsed.get_value("Service", "PIDFile"), Some("/run/dam-hopper/server.pid"));
+    assert_eq!(parsed.get_value("Service", "Restart"), Some("on-failure"));
+    assert_eq!(parsed.get_value("Service", "RestartSec"), Some("5s"));
+    assert_eq!(parsed.get_value("Service", "KillSignal"), Some("SIGTERM"));
+    assert_eq!(parsed.get_value("Service", "KillMode"), Some("mixed"));
+    assert_eq!(parsed.get_value("Service", "TimeoutStopSec"), Some("20s"));
+    assert_eq!(parsed.get_value("Service", "NoNewPrivileges"), Some("false"));
+    assert_eq!(parsed.get_value("Service", "SyslogIdentifier"), Some("dam-hopper-api"));
+
+    assert!(!CHECKED_IN_API_UNIT.contains("/etc/dam-hopper/dam-hopper.toml"));
+    assert!(!API_TEMPLATE.contains("/etc/dam-hopper/dam-hopper.toml"));
+    assert!(CHECKED_IN_API_UNIT.contains("/var/lib/dam-hopper/dam-hopper.toml"));
+    assert!(API_TEMPLATE.contains("@API_HOME@/dam-hopper.toml"));
 }
 
 #[test]

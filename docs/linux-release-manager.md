@@ -80,6 +80,14 @@ empty objects created by the same call whose recorded identity still matches.
 The API audit consumer never lazily creates or follows this file. See
 [Linux API Runtime State Provisioning](./linux-release-runtime-provisioning.md)
 for the decision table, descriptor walk, and publication refusal boundaries.
+The same unit contract fixes one API command: the template uses
+`@API_HOME@/dam-hopper.toml`; the checked-in production-default unit renders
+`/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801`.
+It is a synchronized reference, not a second policy source.
+`validate_api_unit_policy` requires exactly one `ExecStart` equal to the
+rendered command and preserves exactly one zero-operand privileged prestart;
+staging uses the same render → parse → policy path and fails closed on legacy,
+alternate, duplicate, or extra command operands.
 
 The Phase 02 canonical event writer is deliberately outside this provisioning
 set. It requires an already-existing diagnostics parent and refuses a missing,

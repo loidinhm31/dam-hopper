@@ -120,6 +120,12 @@ pub fn validate_api_unit_policy(
         ctx.release_root.display(),
         ctx.api_home
     );
+    if unit.get_all_values("Service", "ExecStart").len() != 1 {
+        return Err(ReleaseError::UnitPolicyViolation {
+            unit: name.into(),
+            reason: "API unit must contain exactly one ExecStart directive".into(),
+        });
+    }
     assert_eq_prop(unit, name, "Service", "ExecStart", &expected_exec)?;
 
     assert_eq_prop(unit, name, "Install", "WantedBy", "multi-user.target")?;
