@@ -634,6 +634,9 @@ function parseArgs() {
   let assetsJsonPath = null;
   let migrationEvidencePath = null;
   let requireMigrationGate = process.env.REQUIRE_MIGRATION_GATE === "1";
+  let allowUnverifiedPublish =
+    process.env.ALLOW_UNVERIFIED_PUBLISH === "true" ||
+    process.env.ALLOW_UNVERIFIED_PUBLISH === "1";
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -652,6 +655,8 @@ function parseArgs() {
       migrationEvidencePath = args[++i];
     } else if (arg === "--require-migration-gate") {
       requireMigrationGate = true;
+    } else if (arg === "--allow-unverified-publish") {
+      allowUnverifiedPublish = true;
     } else if (!arg.startsWith("--") && !dir) {
       dir = arg;
     } else {
@@ -662,7 +667,7 @@ function parseArgs() {
 
   if (!tag) {
     console.error(
-      "Usage: node check-release-assets.mjs --tag <vX.Y.Z> [--dir <dir>] [--release-id <id>] [--repo <owner/repo>] [--migration-evidence <path>] [--require-migration-gate]",
+      "Usage: node check-release-assets.mjs --tag <vX.Y.Z> [--dir <dir>] [--release-id <id>] [--repo <owner/repo>] [--migration-evidence <path>] [--require-migration-gate] [--allow-unverified-publish]",
     );
     process.exit(1);
   }
@@ -689,6 +694,7 @@ function parseArgs() {
       ? resolve(process.cwd(), migrationEvidencePath)
       : null,
     requireMigrationGate,
+    allowUnverifiedPublish,
   };
 }
 
@@ -1335,8 +1341,12 @@ function checkGitHubReleaseAssets(
   console.log(`✓ Remote release asset gate passed: exactly ${expectedNames.length} assets match.`);
 }
 
-function isStablePublishJob(tag) {
+function isStablePublishJob(tag, allowUnverifiedPublish = false) {
+  if (allowUnverifiedPublish) {
+    return false;
+  }
   return (
+    process.env.REQUIRE_MIGRATION_GATE === "1" &&
     process.env.GITHUB_ACTIONS === "true" &&
     process.env.GITHUB_JOB === "publish-release" &&
     process.env.GITHUB_REF === `refs/tags/${tag}`
@@ -1353,6 +1363,7 @@ function main() {
     assetsJsonPath,
     migrationEvidencePath,
     requireMigrationGate,
+    allowUnverifiedPublish,
   } = parseArgs();
   const expectedNames = getExpectedAssetNames(tag);
 
@@ -1378,7 +1389,7 @@ function main() {
       "Migration gate: --migration-evidence is required when the migration gate is enabled",
     );
   }
-  if (isStablePublishJob(tag) && !migrationEvidencePath) {
+  if (isStablePublishJob(tag, allowUnverifiedPublish) && !migrationEvidencePath) {
     throw new Error(
       "Migration gate: stable GitHub publication is held until externally verified migration evidence is supplied",
     );

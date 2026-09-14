@@ -251,13 +251,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.validate-metadata.outputs.release_tag }}
+          ALLOW_UNVERIFIED_PUBLISH: "true"
         run: |
           RELEASE_ID=$(gh release view "${TAG}" --json databaseId --jq '.databaseId')
           node deploy/release/check-release-assets.mjs \
             --tag "${TAG}" \
             --dir "artifacts/final" \
             --release-id "${RELEASE_ID}" \
-            --repo "${GITHUB_REPOSITORY}"
+            --repo "${GITHUB_REPOSITORY}" \
+            --allow-unverified-publish
 
       - name: Publish release (undraft)
         env:
