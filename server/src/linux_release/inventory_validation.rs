@@ -6,8 +6,16 @@ use super::inventory::{EntryKind, InventoryEntry, ReleaseRole};
 use super::inventory_path::{check_disallowed_files, normalize_inventory_path};
 use std::collections::HashSet;
 
-/// Validate an inventory collection for size bounds, duplicates, path normalization, and required paths.
+/// Validate an inventory collection for size bounds, duplicates, path normalization, and required paths for current schema (v2).
 pub fn validate_inventory(entries: &[InventoryEntry]) -> Result<(), ReleaseError> {
+    validate_inventory_for_schema(entries, 2)
+}
+
+/// Validate an inventory collection for size bounds, duplicates, path normalization, and required paths according to schema version.
+pub fn validate_inventory_for_schema(
+    entries: &[InventoryEntry],
+    schema_version: u32,
+) -> Result<(), ReleaseError> {
     if entries.len() > MAX_INVENTORY_ENTRIES {
         return Err(ReleaseError::InventoryTooLarge(entries.len()));
     }
@@ -38,7 +46,7 @@ pub fn validate_inventory(entries: &[InventoryEntry]) -> Result<(), ReleaseError
         req.check_entry(entry)?;
     }
 
-    req.assert_complete()
+    req.assert_complete_for_schema(schema_version)
 }
 
 fn validate_entry_kind(entry: &InventoryEntry) -> Result<(), ReleaseError> {
@@ -189,17 +197,12 @@ impl RequiredPathsTracker {
         Ok(())
     }
 
-    fn assert_complete(&self) -> Result<(), ReleaseError> {
-        let checks = [
+    fn assert_complete_for_schema(&self, schema_version: u32) -> Result<(), ReleaseError> {
+        let common_checks = [
             (self.has_manager, "bin/dam-hopper-manager"),
             (self.has_server, "bin/dam-hopper-server"),
-            (self.has_helper, "bin/dam-hopper-idle-suspend-helper"),
             (self.has_web, "bin/dam-hopper-web"),
             (self.has_api_unit, "systemd/dam-hopper-api.service"),
-            (
-                self.has_helper_unit,
-                "systemd/dam-hopper-idle-suspend-helper.service",
-            ),
             (self.has_web_unit, "systemd/dam-hopper-web.service"),
             (
                 self.has_recovery_unit,
@@ -209,9 +212,23 @@ impl RequiredPathsTracker {
             (self.has_web_payload, "web"),
             (self.has_license_or_notices, "LICENSE"),
         ];
-        for (present, path) in checks {
+        for (present, path) in common_checks {
             if !present {
                 return Err(ReleaseError::MissingRequiredPath { path });
+            }
+        }
+        if schema_version >= 2 {
+            let v2_checks = [
+                (self.has_helper, "bin/dam-hopper-idle-suspend-helper"),
+                (
+                    self.has_helper_unit,
+                    "systemd/dam-hopper-idle-suspend-helper.service",
+                ),
+            ];
+            for (present, path) in v2_checks {
+                if !present {
+                    return Err(ReleaseError::MissingRequiredPath { path });
+                }
             }
         }
         Ok(())

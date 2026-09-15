@@ -2,15 +2,17 @@
 
 - **Linux release manager v0.3.1 upgrade & rollback resilience fix.** Fixed
   two-stage activation and rollback failure during upgrade from v0.2.0:
-  - Reconciled existing API state directory `/var/lib/dam-hopper` by safely
-    tightening directory permissions from legacy `0755` (created by systemd
-    `StateDirectory=`) to required `0700` (`fchmod` via descriptor) after
-    validating genuine directory and expected UID:GID ownership.
+  - Reconciled existing API state directories `/var/lib/dam-hopper`,
+    `/var/lib/dam-hopper/.config`, and `/var/lib/dam-hopper/.config/dam-hopper`
+    by safely tightening directory permissions from legacy `0755` to required
+    `0700` (`fchmod` via descriptor) after validating genuine directory and
+    expected UID:GID ownership.
   - Added backward-compatible reading of installed Manifest v1 for managed
     active and previous releases (`schemaVersion: 1`, optional legacy API
-    `identity: "root"` field) during rollback, active preflight, recovery,
-    and retention. External candidate staging and publishing remain strictly
-    Manifest v2.
+    `identity: "root"` field, and inventory validation without requiring
+    idle-suspend helper components introduced in v0.3.0) during rollback,
+    active preflight, recovery, and retention. External candidate staging and
+    publishing remain strictly Manifest v2.
 
 # 2026-09-14
 
