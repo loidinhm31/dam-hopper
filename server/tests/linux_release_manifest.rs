@@ -234,6 +234,8 @@ fn test_installed_release_accepts_v1_manifest_with_root_identity() {
     let mut manifest = create_valid_manifest();
     manifest.schema_version = 1;
     manifest.services.api.identity = Some("root".to_string());
+    // Real v0.2.0 manifests did not contain idle-suspend helper assets
+    manifest.inventory.retain(|e| !e.path.contains("idle-suspend-helper"));
     let bytes = serde_json::to_vec(&manifest).unwrap();
 
     // Strict parser rejects v1

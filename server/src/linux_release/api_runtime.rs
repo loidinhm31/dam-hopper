@@ -915,7 +915,7 @@ fn provision_with<S: RuntimeSyscalls>(
             identity.uid,
             identity.gid,
             API_DIR_MODE,
-            ExistingDirModePolicy::Exact,
+            ExistingDirModePolicy::TightenFrom(0o755),
             &mut created,
         )?;
         let dot_config_fd = dot_config.0;
@@ -928,7 +928,7 @@ fn provision_with<S: RuntimeSyscalls>(
             identity.uid,
             identity.gid,
             API_DIR_MODE,
-            ExistingDirModePolicy::Exact,
+            ExistingDirModePolicy::TightenFrom(0o755),
             &mut created,
         )?;
         dir_guards.push(config);
@@ -1761,20 +1761,23 @@ mod tests {
     #[test]
     fn legacy_state_root_mode_0755_is_tightened_to_0700_and_subsequent_runs_are_read_only() {
         let (_tmp, layout, fake, identity) = provisioned_fake();
-        let valid = fake.stat_for(API_STATE_PATH).unwrap();
-        let mut legacy = valid;
-        legacy.mode = 0o755;
-        fake.set_stat(API_STATE_PATH, legacy);
+        for path in [API_STATE_PATH, API_DOT_CONFIG_PATH, API_CONFIG_PATH] {
+            let mut legacy = fake.stat_for(path).unwrap();
+            legacy.mode = 0o755;
+            fake.set_stat(path, legacy);
+        }
         fake.clear_calls();
 
         provision_with(&layout, &identity, &fake).unwrap();
-        assert_eq!(fake.stat_for(API_STATE_PATH).unwrap().mode, 0o700);
+        for path in [API_STATE_PATH, API_DOT_CONFIG_PATH, API_CONFIG_PATH] {
+            assert_eq!(fake.stat_for(path).unwrap().mode, 0o700);
+        }
         let chmod_calls: Vec<_> = fake
             .calls()
             .into_iter()
-            .filter(|c| c.operation == "chmod" && c.path == API_STATE_PATH)
+            .filter(|c| c.operation == "chmod")
             .collect();
-        assert_eq!(chmod_calls.len(), 1);
+        assert_eq!(chmod_calls.len(), 3);
 
         fake.clear_calls();
         provision_with(&layout, &identity, &fake).unwrap();

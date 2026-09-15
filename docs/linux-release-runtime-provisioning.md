@@ -25,8 +25,8 @@ root is opened.
 | `/var` | `root:root`, directory `0755` | Fixed traversal ancestor; created only when missing and exact-validated thereafter. |
 | `/var/lib` | `root:root`, directory `0755` | Fixed traversal ancestor; created only when missing and exact-validated thereafter. |
 | `/var/lib/dam-hopper` | API UID:GID, directory `0700` | Durable API state root. Reconciles pre-existing `0755` (created by systemd `StateDirectory=` in v0.2.0) by safely tightening to `0700` via descriptor `fchmod`. |
-| `/var/lib/dam-hopper/.config` | API UID:GID, directory `0700` | API configuration root. |
-| `/var/lib/dam-hopper/.config/dam-hopper` | API UID:GID, directory `0700` | API diagnostics and token parent. |
+| `/var/lib/dam-hopper/.config` | API UID:GID, directory `0700` | API configuration root. Reconciles pre-existing `0755` by safely tightening to `0700` via descriptor `fchmod`. |
+| `/var/lib/dam-hopper/.config/dam-hopper` | API UID:GID, directory `0700` | API diagnostics and token parent. Reconciles pre-existing `0755` by safely tightening to `0700` via descriptor `fchmod`. |
 | `/var/lib/dam-hopper/dam-hopper.toml` | API UID:GID, regular file `0600` | Canonical API registry consumed at startup. |
 | `/var/lib/dam-hopper/idle-suspend-audit.jsonl` | API UID:GID, regular file `0600` | Server timing/manual audit. |
 | `/etc/dam-hopper/dam-hopper.toml` | `root:root`, regular file `0644` | Optional, read-only migration source used only while canonical config is absent. |

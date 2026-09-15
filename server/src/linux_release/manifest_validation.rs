@@ -2,7 +2,7 @@
 
 use super::constants::*;
 use super::error::ReleaseError;
-use super::inventory::validate_inventory;
+use super::inventory_validation::validate_inventory_for_schema;
 use super::manifest::ReleaseManifest;
 use super::version::*;
 
@@ -47,7 +47,7 @@ fn validate_manifest_invariants_internal(
     validate_services(m, allow_installed_v1)?;
     validate_rollback(m)?;
 
-    validate_inventory(&m.inventory)?;
+    validate_inventory_for_schema(&m.inventory, m.schema_version)?;
 
     Ok(())
 }
