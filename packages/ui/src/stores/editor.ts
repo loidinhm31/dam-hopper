@@ -193,6 +193,7 @@ interface EditorState {
   saveViewState: (key: string, vs: unknown) => void;
   getActiveTab: (target: ProjectTargetInput) => Tab | null;
   loadContent: (key: string) => Promise<void>;
+  reconcileTabFreshness: (key: string) => Promise<void>;
   markTargetUnavailable: (
     target: ProjectTargetInput,
     worktreePath?: string,
@@ -504,6 +505,25 @@ export const useEditorStore = create<EditorState>()(
             set((s) => ({
               activeKeys: { ...s.activeKeys, [scopeKey]: key },
             }));
+            const isDifferent =
+              typeof node.mtime === "number" &&
+              typeof existing.mtime === "number" &&
+              (node.mtime > existing.mtime ||
+                (node.mtime === existing.mtime && node.size !== existing.size));
+
+            if (isDifferent && !existing.loading) {
+              if (!existing.dirty) {
+                void get().reloadTab(existing.key);
+              } else if (!existing.stale) {
+                set((s) => ({
+                  tabs: s.tabs.map((t) =>
+                    t.key === key ? { ...t, stale: true } : t,
+                  ),
+                }));
+              }
+            } else if ((!node.mtime || node.mtime === 0) && !existing.loading) {
+              void get().reconcileTabFreshness(existing.key);
+            }
             return;
           }
 
@@ -1058,20 +1078,28 @@ export const useEditorStore = create<EditorState>()(
             }
             const decoded = result.binary ? "" : b64ToUtf8(result.content);
             set((s) => ({
-              tabs: s.tabs.map((t) =>
-                t.key === key
-                  ? {
-                      ...t,
-                      loading: false,
-                      content: decoded,
-                      savedContent: decoded,
-                      mtime: result.mtime,
-                      dirty: false,
-                      stale: false,
-                      binaryBase64: result.binary ? result.content : undefined,
-                    }
-                  : t,
-              ),
+              tabs: s.tabs.map((t) => {
+                if (t.key !== key) return t;
+                if (t.dirty) {
+                  return {
+                    ...t,
+                    loading: false,
+                    stale: true,
+                  };
+                }
+                return {
+                  ...t,
+                  loading: false,
+                  content: decoded,
+                  savedContent: decoded,
+                  mtime: result.mtime,
+                  size:
+                    typeof result.size === "number" ? result.size : t.size,
+                  dirty: false,
+                  stale: false,
+                  binaryBase64: result.binary ? result.content : undefined,
+                };
+              }),
             }));
           } catch (e) {
             const message = e instanceof Error ? e.message : "Reload failed";
@@ -1088,7 +1116,7 @@ export const useEditorStore = create<EditorState>()(
                       ...t,
                       loading: false,
                       targetAvailable: !targetUnavailable,
-                      error: message,
+                      error: t.content ? undefined : message,
                     }
                   : t,
               ),
@@ -1344,6 +1372,50 @@ export const useEditorStore = create<EditorState>()(
             }));
           }
         },
+        reconcileTabFreshness: async (key: string) => {
+          const tab = get().tabs.find((t) => t.key === key);
+          if (
+            !tab ||
+            !tab.targetAvailable ||
+            tab.loading ||
+            tab.tier === "diff" ||
+            isPreviewOnlyFile(tab.tier, tab.name)
+          ) {
+            return;
+          }
+
+          try {
+            const stat = await transport().fsRead(tab.target, tab.path, {
+              offset: 0,
+              len: 0,
+            });
+            if (!stat.ok) return;
+
+            const current = get().tabs.find((t) => t.key === key);
+            if (
+              !current ||
+              current.loading ||
+              typeof stat.mtime !== "number" ||
+              typeof current.mtime !== "number" ||
+              (stat.mtime <= current.mtime && stat.size === current.size)
+            ) {
+              return;
+            }
+
+            if (!current.dirty) {
+              await get().reloadTab(key);
+            } else if (!current.stale) {
+              set((s) => ({
+                tabs: s.tabs.map((t) =>
+                  t.key === key ? { ...t, stale: true } : t,
+                ),
+              }));
+            }
+          } catch {
+            // Non-blocking freshness probe; keep current buffer on network failure
+          }
+        },
+
 
         markTargetUnavailable: (
           target: ProjectTargetInput,

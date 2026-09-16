@@ -740,3 +740,417 @@ describe("editor store view state persistence and hydration", () => {
     expect(updatedTab.viewState).toEqual(sampleViewState);
   });
 });
+
+describe("editor store reopen freshness check", () => {
+  beforeEach(() => {
+    resetEditorStore();
+    fsRead.mockClear();
+  });
+  afterEach(() => {
+    resetEditorStore();
+    fsRead.mockClear();
+  });
+  it("reloads a clean tab when reopened with newer mtime from tree node", async () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/file.ts"),
+      content: "old content",
+      savedContent: "old content",
+      mtime: 100,
+      size: 11,
+      dirty: false,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("new content from disk"),
+      mime: "text/typescript",
+      mtime: 200,
+      size: 22,
+    } as SuccessfulRead);
+
+    const node = {
+      id: "src/file.ts",
+      name: "file.ts",
+      kind: "file" as const,
+      size: 22,
+      mtime: 200,
+      isSymlink: false,
+      children: null,
+    };
+
+    await useEditorStore.getState().open({ project: "alpha" }, node);
+    await Promise.resolve();
+
+    const updated = useEditorStore.getState().tabs[0];
+    expect(fsRead).toHaveBeenCalledWith({ project: "alpha" }, "src/file.ts");
+    expect(updated?.content).toBe("new content from disk");
+    expect(updated?.mtime).toBe(200);
+    expect(updated?.size).toBe(22);
+    expect(updated?.dirty).toBe(false);
+    expect(updated?.stale).toBe(false);
+  });
+
+  it("preserves dirty tab content and marks stale when reopened with newer mtime", async () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/dirty.ts"),
+      content: "local unsaved edits",
+      savedContent: "initial content",
+      mtime: 100,
+      size: 15,
+      dirty: true,
+      stale: false,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    const node = {
+      id: "src/dirty.ts",
+      name: "dirty.ts",
+      kind: "file" as const,
+      size: 30,
+      mtime: 200,
+      isSymlink: false,
+      children: null,
+    };
+
+    await useEditorStore.getState().open({ project: "alpha" }, node);
+
+    const updated = useEditorStore.getState().tabs[0];
+    expect(fsRead).not.toHaveBeenCalled();
+    expect(updated?.content).toBe("local unsaved edits");
+    expect(updated?.dirty).toBe(true);
+    expect(updated?.stale).toBe(true);
+  });
+
+  it("does not reload or mark stale when reopened with equal or older mtime", async () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/same.ts"),
+      content: "unchanged content",
+      savedContent: "unchanged content",
+      mtime: 100,
+      size: 17,
+      dirty: false,
+      stale: false,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    const node = {
+      id: "src/same.ts",
+      name: "same.ts",
+      kind: "file" as const,
+      size: 17,
+      mtime: 100,
+      isSymlink: false,
+      children: null,
+    };
+
+    await useEditorStore.getState().open({ project: "alpha" }, node);
+
+    const updated = useEditorStore.getState().tabs[0];
+    expect(fsRead).not.toHaveBeenCalled();
+    expect(updated?.content).toBe("unchanged content");
+    expect(updated?.stale).toBe(false);
+  });
+
+  it("retains existing content and keeps tab usable if reload fails", async () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/fail.ts"),
+      content: "cached working content",
+      savedContent: "cached working content",
+      mtime: 100,
+      size: 22,
+      dirty: false,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    fsRead.mockRejectedValueOnce(new Error("Connection reset"));
+
+    const node = {
+      id: "src/fail.ts",
+      name: "fail.ts",
+      kind: "file" as const,
+      size: 25,
+      mtime: 200,
+      isSymlink: false,
+      children: null,
+    };
+
+    await useEditorStore.getState().open({ project: "alpha" }, node);
+    await Promise.resolve();
+
+    const updated = useEditorStore.getState().tabs[0];
+    expect(updated?.content).toBe("cached working content");
+    expect(updated?.loading).toBe(false);
+    expect(updated?.error).toBeUndefined();
+  });
+
+  it("preserves edits made while freshness reload is in-flight and marks stale", async () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/race.ts"),
+      content: "initial version",
+      savedContent: "initial version",
+      mtime: 100,
+      size: 15,
+      dirty: false,
+      stale: false,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    const readDeferred = deferred<SuccessfulRead>();
+    fsRead.mockReturnValueOnce(readDeferred.promise);
+
+    const node = {
+      id: "src/race.ts",
+      name: "race.ts",
+      kind: "file" as const,
+      size: 20,
+      mtime: 200,
+      isSymlink: false,
+      children: null,
+    };
+
+    // Trigger open with newer mtime -> starts reloadTab in background
+    await useEditorStore.getState().open({ project: "alpha" }, node);
+
+    // User types in editor while reload is in-flight
+    useEditorStore.getState().setContent(tab.key, "user typed edit");
+    expect(useEditorStore.getState().tabs[0]?.dirty).toBe(true);
+
+    // Now fsRead resolves with disk content
+    readDeferred.resolve({
+      ok: true,
+      binary: false,
+      content: btoa("external change on disk"),
+      mime: "text/typescript",
+      mtime: 200,
+      size: 23,
+    } as SuccessfulRead);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const updated = useEditorStore.getState().tabs[0];
+    // In-flight edits must NOT be overwritten by the delayed read response
+    expect(updated?.content).toBe("user typed edit");
+    expect(updated?.dirty).toBe(true);
+    expect(updated?.stale).toBe(true);
+    expect(updated?.loading).toBe(false);
+  });
+});
+
+describe("editor store reconcileTabFreshness", () => {
+  beforeEach(() => {
+    resetEditorStore();
+    fsRead.mockClear();
+  });
+  afterEach(() => {
+    resetEditorStore();
+    fsRead.mockClear();
+  });
+
+  it("reloads a clean tab when disk has newer mtime on stat check", async () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/file.ts"),
+      content: "old content",
+      savedContent: "old content",
+      mtime: 100,
+      size: 11,
+      dirty: false,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    // First call: stat check { offset: 0, len: 0 }
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: "",
+      mime: "text/typescript",
+      mtime: 200,
+      size: 25,
+    } as SuccessfulRead);
+
+    // Second call: reloadTab content fetch
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("refreshed content"),
+      mime: "text/typescript",
+      mtime: 200,
+      size: 25,
+    } as SuccessfulRead);
+
+    await useEditorStore.getState().reconcileTabFreshness(tab.key);
+
+    expect(fsRead).toHaveBeenNthCalledWith(
+      1,
+      { project: "alpha" },
+      "src/file.ts",
+      { offset: 0, len: 0 },
+    );
+    expect(fsRead).toHaveBeenNthCalledWith(
+      2,
+      { project: "alpha" },
+      "src/file.ts",
+    );
+
+    const updated = useEditorStore.getState().tabs[0];
+    expect(updated?.content).toBe("refreshed content");
+    expect(updated?.mtime).toBe(200);
+    expect(updated?.dirty).toBe(false);
+    expect(updated?.stale).toBe(false);
+  });
+
+  it("marks a dirty tab stale without overwriting edits when disk has newer mtime", async () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/dirty.ts"),
+      content: "my unsaved changes",
+      savedContent: "initial content",
+      mtime: 100,
+      size: 18,
+      dirty: true,
+      stale: false,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: "",
+      mime: "text/typescript",
+      mtime: 300,
+      size: 40,
+    } as SuccessfulRead);
+
+    await useEditorStore.getState().reconcileTabFreshness(tab.key);
+
+    // Only stat check should be performed, no content reload
+    expect(fsRead).toHaveBeenCalledTimes(1);
+    expect(fsRead).toHaveBeenCalledWith(
+      { project: "alpha" },
+      "src/dirty.ts",
+      { offset: 0, len: 0 },
+    );
+
+    const updated = useEditorStore.getState().tabs[0];
+    expect(updated?.content).toBe("my unsaved changes");
+    expect(updated?.dirty).toBe(true);
+    expect(updated?.stale).toBe(true);
+  });
+
+  it("no-ops when disk mtime is equal or older", async () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/current.ts"),
+      content: "current content",
+      savedContent: "current content",
+      mtime: 200,
+      size: 15,
+      dirty: false,
+      stale: false,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: "",
+      mime: "text/typescript",
+      mtime: 200,
+      size: 15,
+    } as SuccessfulRead);
+
+    await useEditorStore.getState().reconcileTabFreshness(tab.key);
+
+    expect(fsRead).toHaveBeenCalledTimes(1);
+    const updated = useEditorStore.getState().tabs[0];
+    expect(updated?.content).toBe("current content");
+    expect(updated?.stale).toBe(false);
+  });
+
+  it("gracefully catches stat failure without throwing or modifying buffer", async () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/offline.ts"),
+      content: "stable buffer",
+      savedContent: "stable buffer",
+      mtime: 100,
+      size: 13,
+      dirty: false,
+      stale: false,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    fsRead.mockRejectedValueOnce(new Error("Network timeout"));
+
+    await expect(
+      useEditorStore.getState().reconcileTabFreshness(tab.key),
+    ).resolves.not.toThrow();
+
+    const updated = useEditorStore.getState().tabs[0];
+    expect(updated?.content).toBe("stable buffer");
+    expect(updated?.error).toBeUndefined();
+  });
+
+  it("preserves existing content and dirty state when reloadTab rejects", async () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/reload-fail.ts"),
+      content: "pre-reload content",
+      savedContent: "pre-reload saved content",
+      mtime: 100,
+      size: 18,
+      dirty: true,
+      stale: false,
+    };
+
+    useEditorStore.setState({
+      tabs: [tab],
+      activeKeys: { [editorTargetScopeKey({ project: "alpha" })]: tab.key },
+    });
+
+    fsRead.mockRejectedValueOnce(new Error("Disk read I/O error"));
+
+    await useEditorStore.getState().reloadTab(tab.key);
+
+    const updated = useEditorStore.getState().tabs[0];
+    expect(updated?.content).toBe("pre-reload content");
+    expect(updated?.savedContent).toBe("pre-reload saved content");
+    expect(updated?.dirty).toBe(true);
+    expect(updated?.loading).toBe(false);
+    expect(updated?.error).toBeUndefined();
+  });
+});
