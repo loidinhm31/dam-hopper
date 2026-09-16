@@ -1736,16 +1736,24 @@ async fn agent_memory_templates_returns_list() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn settings_export_returns_json() {
+async fn settings_export_returns_raw_toml() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let resp = get(state, "/api/settings/export").await;
+    let resp = get(state, "/api/settings/export/workspace.toml").await;
     assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/toml; charset=utf-8"
+    );
+    assert_eq!(
+        resp.headers().get("content-disposition").unwrap(),
+        "attachment; filename=\"dam-hopper.toml\""
+    );
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json["config"].is_object());
+    let toml_str = std::str::from_utf8(&body).unwrap();
+    assert!(toml_str.contains("[workspace]"));
 }
 
 // ---------------------------------------------------------------------------
@@ -6370,18 +6378,24 @@ async fn settings_import_rejects_idle_suspend_delta() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state_with_project(&tmp);
 
-    let mut gc = crate::config::GlobalConfig::default();
-    gc.server.idle_suspend.enabled = true;
-    gc.server.idle_suspend.quiet_period_seconds = 1800;
+    let candidate_toml = r#"
+[workspace]
+name = "test-workspace"
 
-    let resp = post_json(
-        state.clone(),
-        "/api/settings/import",
-        serde_json::json!({
-            "globalConfig": gc
-        }),
-    )
-    .await;
+[server.idle_suspend]
+enabled = true
+quiet_period_seconds = 1800
+"#;
+
+    let router = build_router(state);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/settings/import/workspace.toml")
+        .header("Cookie", auth_cookie())
+        .header("Content-Type", "application/toml")
+        .body(Body::from(candidate_toml))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 

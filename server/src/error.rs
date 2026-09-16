@@ -66,6 +66,11 @@ pub enum AppError {
 
     #[error("Idle suspend handoff in progress: {0}")]
     IdleSuspendHandoffInProgress(String),
+    #[error("Unsupported media type: {0}")]
+    UnsupportedMediaType(String),
+
+    #[error("Conflict: {0}")]
+    Conflict(String),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -94,6 +99,8 @@ impl AppError {
             | AppError::WorktreeDirty(_)
             | AppError::IdleSuspendHandoffInProgress(_) => 409,
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
+            AppError::UnsupportedMediaType(_) => 415,
+            AppError::Conflict(_) => 409,
             AppError::Fs(e) => e.status_code(),
             AppError::Unavailable(_) => 503,
             AppError::WorkspaceTarget(error) => match error {

@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-14 from `repomix-output.xml` (Repomix v1.18.0; 1,930
-files, 4,260,856 tokens, 17,591,533 characters; five security-flagged files
+**Generated:** 2026-09-16 from `repomix-output.xml` (Repomix v1.18.0; 1,945
+files, 4,277,708 tokens, 17,713,278 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -46,6 +46,26 @@ resource links, notes, and bounded events in SQLite. The telemetry subsystem is
 separate and opt-in, with private SQLite storage and bounded aggregate queries.
 Media tickets and browser-debug artifacts use authenticated, scoped, expiring
 capabilities rather than project-path access.
+
+## Workspace settings import/export
+
+The Settings page and protected Rust API exchange only the active workspace
+TOML. `GET /api/settings/export/workspace.toml` returns the file's exact bytes
+with an attachment filename and `Cache-Control: no-store`; browser code
+downloads the raw text through a Blob. `POST /api/settings/import/workspace.toml`
+accepts raw `application/toml` under a
+route-local 1 MiB cap, validates UTF-8/TOML/schema/path rules, and rejects
+changes to startup-authoritative idle-suspend or telemetry settings. It
+serializes with workspace switching, creates an exclusive mode-`0600`
+`dam-hopper.toml.bak.<UTC>` containing old bytes, atomically publishes the
+request bytes, reloads runtime dependents, and atomically restores the prior
+file bytes while reapplying prior runtime state on reload failure. Successful
+imports best-effort retain only the five newest server backups with the exact
+timestamp form; manual backups with other names are preserved. Non-TOML media
+returns `415` and workspace admission changes return `409`. Transport, query, and
+Settings UI modules use raw text, browser file input, Blob download, and
+workspace-derived query invalidation. Focused endpoint, transport, and page
+tests cover byte fidelity, headers, validation, backup, retention, and feedback.
 
 ## Workflow tracking
 

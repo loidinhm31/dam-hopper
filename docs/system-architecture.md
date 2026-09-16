@@ -1,5 +1,31 @@
 # System Architecture
 
+## Proposed concurrent runtime cutover (2026-09-16; not implemented)
+
+Design authority: [all-workspaces implementation plan](../plans/260916-1904-all-workspaces-runtime/plan.md).
+The existing sections below describe the current runtime; this proposal does not
+claim that concurrent workspaces or profiles have shipped.
+
+- One unified workbench uses explicit browser-local server profile references and
+  persistent server-owned workspace UUIDs. Project focus changes navigation only.
+- Each server keeps one authentication boundary, PTY fleet, persistence worker,
+  telemetry runtime, host monitor, and suspend coordinator. A workspace registry
+  supplies independent configuration, sandbox, target resolver, lifecycle guard,
+  agent service, SSH credential, and publication revision per workspace.
+- Startup-selected configuration remains authoritative for server settings.
+  The global catalog stores workspace identity and registration tombstones;
+  workspace configuration/import cannot overwrite server-owned settings.
+- Workspace REST routes, WS continuations, events, terminal keys, persistence,
+  workflow mappings, media tickets, queries, editor resources, and secret caches
+  carry explicit ownership. Connection generations reject stale async results.
+- Legacy unscoped terminal data blocks terminal admission until explicit
+  server-specific clearing; it is never automatically attributed or discarded.
+- Browser connections and native SSH profile scopes coexist independently.
+  Existing transport capability, trust, origin, sandbox, and host-action limits
+  remain unchanged. Shared UI preferences come from one explicitly chosen server.
+- Implementation and release require the plan's multi-server isolation,
+  migration/failure, live browser, and supported-native verification gates.
+
 ## High-Level Overview
 
 ```
@@ -45,6 +71,8 @@
 │  │  ├─ /api/workflow/* → WorkflowService REST boundary  │
 │  │  ├─ /api/browser-debug/* → Ephemeral artifacts         │
 │  │  ├─ /api/system/idle-suspend/v1/* → Status/timing pair │
+│  │  ├─ /api/settings/export/workspace.toml → Raw TOML     │
+│  │  ├─ /api/settings/import/workspace.toml → Import/backup│
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
@@ -179,6 +207,38 @@ same fields as `server.idleSuspend`, `automaticPolicy`, and
 and list values may be omitted from TOML and then resolve to their defaults.
 The matcher list is retained by startup authority and is not a status or
 WebSocket field.
+
+### Workspace Settings Import/Export Boundary
+
+Workspace settings import/export transfers only the active workspace's
+`dam-hopper.toml`; global configuration is never read or written by these
+routes.
+
+- **Export (`GET /api/settings/export/workspace.toml`)**: Reads and returns the
+  active file's exact bytes without parsing or reserialization. The response
+  uses `Content-Type: application/toml; charset=utf-8`,
+  `Content-Disposition: attachment; filename="dam-hopper.toml"`, and
+  `Cache-Control: no-store`; comments, whitespace, and ordering are preserved.
+- **Import (`POST /api/settings/import/workspace.toml`)**: Accepts a raw
+  `application/toml` payload (optional UTF-8 charset) under a route-local 1 MiB
+  cap. It validates UTF-8, TOML/schema semantics, and destination-relative path
+  rules before mutation. The effective `server.idle_suspend` and
+  `server.telemetry` values must match their authoritative runtime values;
+  protected-field deltas return `400`. The request snapshots the active config
+  path, acquires workspace write ownership, and rechecks that path; a workspace
+  change during admission returns `409`.
+- **Transaction and retention**: The server creates an exclusive
+  mode-`0600` `dam-hopper.toml.bak.<UTC>` containing the exact prior bytes,
+  atomically replaces the active file with the original request bytes, and
+  reloads runtime state and its dependent sandboxes/resolvers/monitors. A
+  reload failure atomically restores the prior bytes and reapplies the prior
+  runtime state; the transaction backup is removed only after confirmed rollback
+  and is retained if recovery fails. Successful imports best-effort retain the
+  five newest
+  server backups whose basenames match the exact timestamp format
+  `%Y%m%dT%H%M%S_%6fZ`; manual backups with other names, including
+  similar-prefix names, are not pruned. Non-TOML media
+  types return `415`, and oversized requests return `413`.
 
 ### Key Invariants
 

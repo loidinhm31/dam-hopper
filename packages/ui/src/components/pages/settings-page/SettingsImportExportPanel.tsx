@@ -1,3 +1,4 @@
+import { useRef, type ChangeEvent } from "react";
 import {
   SettingsActionRow,
   SettingsStatusMessage,
@@ -8,7 +9,7 @@ interface SettingsImportExportPanelProps {
   exportPending: boolean;
   exportMsg: string | null;
   exportErr: string | null;
-  onImport: () => void;
+  onImportFile: (file: File) => void;
   importPending: boolean;
   importMsg: string | null;
   importErr: string | null;
@@ -19,20 +20,33 @@ export function SettingsImportExportPanel({
   exportPending,
   exportMsg,
   exportErr,
-  onImport,
+  onImportFile,
   importPending,
   importMsg,
   importErr,
 }: SettingsImportExportPanelProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleImportClick() {
+    fileInputRef.current?.click();
+  }
+
+  function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) {
+      onImportFile(file);
+    }
+  }
   return (
     <div className="divide-y divide-[var(--color-border)]">
       <SettingsActionRow
         title="Export Settings"
         description={
           <>
-            Save a copy of the current{" "}
-            <code className="text-[var(--color-primary)]">dam-hopper.toml</code>{" "}
-            to a chosen location. Preserves all formatting and comments.
+            Download the active workspace{" "}
+            <code className="text-[var(--color-primary)]">dam-hopper.toml</code>.
+            Preserves all formatting and comments.
           </>
         }
         status={
@@ -65,9 +79,9 @@ export function SettingsImportExportPanel({
         title="Import Settings"
         description={
           <>
-            Replace the current workspace config with a{" "}
-            <code className="text-[var(--color-primary)]">.toml</code> file. The
-            file is validated before being written.
+            Replace the active workspace configuration with a{" "}
+            <code className="text-[var(--color-primary)]">.toml</code> file.
+            Validates syntax, schema, and paths before writing; creates an automatic backup.
           </>
         }
         status={
@@ -85,14 +99,25 @@ export function SettingsImportExportPanel({
           </>
         }
         action={
-          <button
-            type="button"
-            className="btn-bracket"
-            onClick={onImport}
-            disabled={importPending}
-          >
-            {importPending ? "Importing…" : "Import"}
-          </button>
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".toml"
+              className="sr-only"
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={handleFileChange}
+            />
+            <button
+              type="button"
+              className="btn-bracket"
+              onClick={handleImportClick}
+              disabled={importPending}
+            >
+              {importPending ? "Importing…" : "Import"}
+            </button>
+          </>
         }
       />
     </div>

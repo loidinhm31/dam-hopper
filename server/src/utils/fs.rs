@@ -5,6 +5,12 @@ use crate::error::AppError;
 /// Write `content` to `target` atomically (temp → rename, same filesystem).
 /// On Unix, the temp file is created with mode 0o600.
 pub fn atomic_write(target: &Path, content: &str) -> Result<(), AppError> {
+    atomic_write_bytes(target, content.as_bytes())
+}
+
+/// Write byte `content` to `target` atomically (temp → rename, same filesystem).
+/// On Unix, the temp file is created with mode 0o600.
+pub fn atomic_write_bytes(target: &Path, content: &[u8]) -> Result<(), AppError> {
     let dir = target.parent().unwrap_or(Path::new("/"));
     std::fs::create_dir_all(dir)
         .map_err(|e| AppError::Config(format!("Cannot create dir {}: {}", dir.display(), e)))?;
@@ -13,9 +19,10 @@ pub fn atomic_write(target: &Path, content: &str) -> Result<(), AppError> {
         ".dam-hopper-tmp-{}.tmp",
         uuid::Uuid::new_v4().simple()
     ));
-
-    write_with_mode(&tmp, content)?;
-
+    if let Err(e) = write_with_mode(&tmp, content) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     std::fs::rename(&tmp, target).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         AppError::Config(format!(
@@ -30,7 +37,7 @@ pub fn atomic_write(target: &Path, content: &str) -> Result<(), AppError> {
 }
 
 #[cfg(unix)]
-fn write_with_mode(path: &Path, content: &str) -> Result<(), AppError> {
+fn write_with_mode(path: &Path, content: &[u8]) -> Result<(), AppError> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let mut file = std::fs::OpenOptions::new()
@@ -40,12 +47,12 @@ fn write_with_mode(path: &Path, content: &str) -> Result<(), AppError> {
         .mode(0o600)
         .open(path)
         .map_err(|e| AppError::Config(format!("Cannot open {}: {}", path.display(), e)))?;
-    file.write_all(content.as_bytes())
+    file.write_all(content)
         .map_err(|e| AppError::Config(format!("Cannot write {}: {}", path.display(), e)))
 }
 
 #[cfg(not(unix))]
-fn write_with_mode(path: &Path, content: &str) -> Result<(), AppError> {
+fn write_with_mode(path: &Path, content: &[u8]) -> Result<(), AppError> {
     std::fs::write(path, content)
         .map_err(|e| AppError::Config(format!("Cannot write {}: {}", path.display(), e)))
 }

@@ -7,6 +7,7 @@ use crate::error::AppError;
 // ApiError — converts AppError to HTTP responses
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
 pub struct ApiError(pub AppError);
 
 impl ApiError {
@@ -41,6 +42,7 @@ impl IntoResponse for ApiError {
             404 => StatusCode::NOT_FOUND,
             409 => StatusCode::CONFLICT,
             413 => StatusCode::PAYLOAD_TOO_LARGE,
+            415 => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             503 => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };

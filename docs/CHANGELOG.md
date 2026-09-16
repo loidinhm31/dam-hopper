@@ -1,3 +1,27 @@
+# 2026-09-16
+
+- **Settings Page workspace TOML import & export restored.** Fixed the
+  browser-native import/export flow across the web UI and Rust API:
+  - Export: `GET /api/settings/export/workspace.toml` returns the active
+    `dam-hopper.toml` bytes unchanged as `application/toml; charset=utf-8`,
+    preserves comments/whitespace/order, forces
+    `Content-Disposition: attachment; filename="dam-hopper.toml"`, and sets
+    `Cache-Control: no-store`; the browser downloads it through a Blob.
+  - Import: `POST /api/settings/import/workspace.toml` accepts the raw TOML
+    payload (optional UTF-8 charset) with a route-local 1 MiB cap, validates
+    UTF-8/TOML/schema/path rules and protected telemetry/idle-suspend fields,
+    creates an exclusive mode-`0600` `dam-hopper.toml.bak.<UTC>` containing
+    exact prior bytes, atomically publishes the request bytes, and reloads
+    runtime state.
+  - Failure safety: A reload failure atomically restores the prior file bytes
+    and reapplies prior runtime state; the transaction backup is removed only
+    after confirmed rollback and is retained if recovery fails.
+  - Retention: Successful imports best-effort keep the five newest server
+    backups whose names match the exact UTC timestamp format; manual backups with other names,
+    including similar-prefix names, are preserved.
+  - Error handling: HTTP `415` rejects non-TOML content types, `413` rejects
+    oversized payloads, and `409` rejects a workspace change during admission.
+
 # 2026-09-15
 
 - **Linux release manager v0.3.1 upgrade & rollback resilience fix.** Fixed

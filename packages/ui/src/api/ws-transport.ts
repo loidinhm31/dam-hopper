@@ -225,7 +225,7 @@ const USAGE_DELETE_KEYS = new Set(["confirmation", "from", "to"]);
 function channelToEndpoint(
   channel: string,
   data: unknown,
-): { method: string; url: string; body?: unknown } {
+): { method: string; url: string; body?: unknown; contentType?: string } {
   switch (channel) {
     // Workspace
     case "workspace:status":
@@ -481,9 +481,14 @@ function channelToEndpoint(
     case "workspace:reset":
       return { method: "POST", url: "/api/settings/reset" };
     case "settings:export":
-      return { method: "GET", url: "/api/settings/export" };
+      return { method: "GET", url: "/api/settings/export/workspace.toml" };
     case "settings:import":
-      return { method: "POST", url: "/api/settings/import", body: data };
+      return {
+        method: "POST",
+        url: "/api/settings/import/workspace.toml",
+        body: data,
+        contentType: "application/toml; charset=utf-8",
+      };
     case "diagnostics:export":
       return { method: "POST", url: "/api/diagnostics/export", body: data };
 
@@ -2184,7 +2189,12 @@ export class WsTransport implements Transport {
     data?: unknown,
     timeoutMs = 30000,
   ): Promise<T> {
-    const { method, url: relativeUrl, body } = channelToEndpoint(channel, data);
+    const {
+      method,
+      url: relativeUrl,
+      body,
+      contentType,
+    } = channelToEndpoint(channel, data);
 
     const fullUrl = relativeUrl.startsWith("/")
       ? `${this.baseUrl}${relativeUrl}`
@@ -2193,7 +2203,9 @@ export class WsTransport implements Transport {
     const headers: Record<string, string> = {
       ...this.buildAuthHeaders(),
     };
-    if (body !== undefined) {
+    if (contentType !== undefined) {
+      headers["Content-Type"] = contentType;
+    } else if (body !== undefined) {
       headers["Content-Type"] = "application/json";
     }
 
@@ -2207,7 +2219,12 @@ export class WsTransport implements Transport {
       signal: controller.signal,
     };
     if (body !== undefined) {
-      init.body = JSON.stringify(body);
+      init.body =
+        contentType &&
+        contentType.includes("application/toml") &&
+        typeof body === "string"
+          ? body
+          : JSON.stringify(body);
     }
 
     try {

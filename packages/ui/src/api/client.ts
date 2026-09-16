@@ -158,6 +158,13 @@ export interface ShipResult {
   targetPath?: string;
 }
 
+export interface SettingsImportResponse {
+  imported: boolean;
+  fileName: string;
+  backupFileName: string;
+  workspaceName?: string;
+}
+
 export interface ProjectAgentScanResult {
   projectName: string;
   projectPath: string;
@@ -2128,11 +2135,9 @@ export const api = {
       getTransport().invoke<{ cleared: boolean }>("cache:clear"),
     reset: () => getTransport().invoke<{ reset: boolean }>("workspace:reset"),
     exportConfig: () =>
-      getTransport().invoke<{ exported: boolean; path?: string }>(
-        "settings:export",
-      ),
-    importConfig: () =>
-      getTransport().invoke<{ imported: boolean }>("settings:import"),
+      getTransport().invoke<string>("settings:export"),
+    importConfig: (tomlContent: string) =>
+      getTransport().invoke<SettingsImportResponse>("settings:import", tomlContent),
   },
   diagnostics: {
     export: (request: DiagnosticExportRequest) =>
