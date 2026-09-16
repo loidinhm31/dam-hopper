@@ -1,8 +1,67 @@
 # System Architecture
 
+## Proposed unified-profile workbench (2026-09-16; not implemented)
+
+Design authority for the unified-profile request:
+[implementation plan](../plans/260916-2137-unified-profile/plan.md), based on
+[the unified-profile preplan](../plans/reports/preplan-260916-2135-unified-profile.md).
+This is a frontend ownership cutover, not the backend workspace-registry redesign
+described in the separate proposal below. Do not combine their identities,
+migrations, or acceptance gates. Existing runtime sections remain descriptions of
+shipped code; neither proposal is implemented by this documentation change.
+
+- One shared shell, QueryClient, terminal manager and keep-alive host. Each saved
+  profile owns an independent endpoint-bound authenticated connection runtime.
+- Durable project/terminal/editor references include profile identity; in-flight
+  work additionally captures connection generation. Focus is navigation only.
+  Server project names, terminal incarnations, configuration, PTY persistence and
+  workflow history remain authoritative; no backend workspace UUID/catalog is added.
+- Profile credentials are persisted with endpoint/auth binding. Ordinary HTTP
+  omits cookies and authenticated WS uses its captured token. Reconnect rejects
+  stale work; unknown mutation outcomes are reconciled, never automatically replayed.
+- Queries/events, resource bindings, drafts, encryption and delayed actions retain
+  their originating owner. User-validated cutover drops old browser resource
+  state with no archive or restore UI; saved profiles, native and server data remain.
+- Preferences source, Settings target, selected project and Browser target are
+  independent. Duplicate endpoint profiles are separate clients, not remote tenants.
+- Mandatory new protocol: authenticated status acknowledges `workbenchProtocol: 2`
+  before WS/features; media requires namespaced v2 sessions and Browser artifacts
+  require terminal incarnation checked at atomic write admission. Old protocol
+  branches are removed; deploy matching frontend/backend builds. Native SSH uses
+  independently admitted scopes while preserving global quotas, epoch teardown
+  and existing platform permissions.
+- Contract freeze precedes feature work; each target's complete caller migration
+  precedes simultaneous startup. Qualified web may release independently; native
+  packages await their own runtime/security evidence, including Windows gates.
+  [Validated decisions](../plans/260916-2137-unified-profile/validation-decisions.md)
+  supersede the preplan's resource-restoration and additive-compatibility choices.
+  No application verification is claimed here.
+
+### G0 contract-freeze status (2026-09-17)
+
+Phase 00 is a documentation-only contract freeze, not an application rollout.
+The [inventory](../plans/260916-2137-unified-profile/inventory-and-contract-freeze.md)
+and [phase record](../plans/260916-2137-unified-profile/phase-00-contract-freeze.md)
+freeze profile/generation ownership, endpoint-bound client/API and transport
+operations, query/event/cleanup boundaries, protocol-2/media-v2 and
+artifact-incarnation admission, native-scope identity and single-writer gates.
+Cycle 2 approved the baseline at 9.9/10 and recorded 3,090/3,090 tests (1,412 Cargo +
+1,678 Vitest) as prior review evidence. Phase 00 changed no runtime source and
+makes no runtime-qualification claim; Phases 01–08 and S01–S13 remain future
+implementation and qualification work. Qualified web and native release gates
+remain independent.
+
+The backend workspace-registry redesign in the next section is a separate
+proposal; it is not part of this G0 baseline and must not be treated as sharing
+its identity, migration or acceptance gate.
+
+
 ## Proposed concurrent runtime cutover (2026-09-16; not implemented)
 
-Design authority: [all-workspaces implementation plan](../plans/260916-1904-all-workspaces-runtime/plan.md).
+Reference note: the source all-workspaces implementation plan is not present in
+this checkout. This section is retained only as a separate, unimplemented design
+reference.
+
 The existing sections below describe the current runtime; this proposal does not
 claim that concurrent workspaces or profiles have shipped.
 
