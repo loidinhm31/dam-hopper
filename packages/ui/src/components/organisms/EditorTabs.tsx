@@ -7,10 +7,11 @@
  * - MonacoHost / MarkdownHost are lazy-loaded (dynamic import) to keep the main chunk clean.
  * - ConflictDialog is shown when save returns a conflict.
  */
-import { lazy, Suspense, useState, useEffect, useCallback } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from "react";
 import type * as monacoNs from "monaco-editor";
 import { AlertTriangle, FileCode, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { getTransport } from "@/api/transport.js";
 import {
   editorActiveKeyForTarget,
   editorTargetScopeKey,
@@ -100,6 +101,7 @@ export function EditorTabs({
     markTargetUnavailable,
     beginAsyncRequest,
     isCurrentAsyncRequest,
+    reconcileTabFreshness,
   } = useEditorStore();
 
   const {
@@ -236,12 +238,64 @@ export function EditorTabs({
       activeGitState.rootRelativePath,
     );
   };
+  const activeKeyRef = useRef(activeTab?.key);
+  activeKeyRef.current = activeTab?.key;
+
   // Auto-hydrate active tab if content is not loaded
   useEffect(() => {
     if (activeTab?.hydrated && !activeTab.loading) {
       void loadContent(activeTab.key);
     }
   }, [activeTab?.key, activeTab?.hydrated, activeTab?.loading, loadContent]);
+
+  // Reconcile tab freshness on mount and tab switch
+  useEffect(() => {
+    const key = activeTab?.key;
+    if (key && !activeTab.loading) {
+      void reconcileTabFreshness(key);
+    }
+  }, [activeTab?.key, activeTab?.loading, reconcileTabFreshness]);
+
+  // Reconcile tab freshness on window focus and visibility change
+  useEffect(() => {
+    const checkFreshness = () => {
+      const key = activeKeyRef.current;
+      if (key) {
+        void reconcileTabFreshness(key);
+      }
+    };
+    const onFocus = () => {
+      checkFreshness();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        checkFreshness();
+      }
+    };
+    let unsubStatus: () => void = () => {};
+    try {
+      const t = getTransport() as {
+        onStatusChange?: (cb: (s: string) => void) => () => void;
+      };
+      if (typeof t.onStatusChange === "function") {
+        unsubStatus = t.onStatusChange((status) => {
+          if (status === "connected") {
+            checkFreshness();
+          }
+        });
+      }
+    } catch {
+      // Transport not initialized yet
+    }
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      unsubStatus();
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [reconcileTabFreshness]);
 
   const unavailableTabs = project
     ? tabs.filter((tab) => tab.project === project && !tab.targetAvailable)
