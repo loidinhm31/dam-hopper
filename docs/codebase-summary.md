@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-16 from `repomix-output.xml` (Repomix v1.18.0; 1,945
-files, 4,277,708 tokens, 17,713,278 characters; five security-flagged files
+**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 1,969
+files, 4,360,120 tokens, 18,120,461 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -24,6 +24,16 @@ security scanning are not represented in full.
 - `plans/` — feature plans, research, phase records, and verification reports.
 - `docs/` — operator, API, architecture, standards, and product-requirement
   documentation.
+
+## Phase 00 G0 planning baseline
+
+The unified multi-profile workbench is a proposed frontend ownership cutover.
+Phase 00 froze its caller inventory and cross-profile contracts without changing
+runtime source. The separate backend workspace-registry redesign in
+`docs/system-architecture.md` remains out of scope. Runtime implementation and
+qualification are tracked in `plans/260916-2137-unified-profile/`; no shipped
+behavior should be inferred from these planning records.
+
 
 ## Backend boundaries
 
