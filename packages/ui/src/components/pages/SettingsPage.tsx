@@ -81,12 +81,19 @@ export function SettingsPage() {
     setExportMsg(null);
     setExportErr(null);
     try {
-      const result = await exportSettings.mutateAsync();
-      setExportMsg(
-        result.exported
-          ? `Exported → ${result.path ?? "saved"}`
-          : "Export cancelled.",
-      );
+      const tomlContent = await exportSettings.mutateAsync();
+      const blob = new Blob([tomlContent], {
+        type: "application/toml; charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "dam-hopper.toml";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setExportMsg("Downloaded dam-hopper.toml");
     } catch (err) {
       setExportErr(err instanceof Error ? err.message : String(err));
     }
@@ -96,14 +103,34 @@ export function SettingsPage() {
     }, 5000);
   }
 
-  async function handleImport() {
+  const MAX_IMPORT_SIZE = 1024 * 1024; // 1 MiB
+
+  async function handleImportFile(file: File) {
     setImportMsg(null);
     setImportErr(null);
+
+    if (file.size > MAX_IMPORT_SIZE) {
+      setImportErr("File size exceeds 1 MiB limit.");
+      setTimeout(() => setImportErr(null), 6000);
+      return;
+    }
+
+    const wsName = config?.workspace.name ?? "current workspace";
+    const confirmed = window.confirm(
+      `Replace configuration for active workspace "${wsName}" with "${file.name}"?\n\nAn automatic backup will be created before applying.`,
+    );
+    if (!confirmed) {
+      setImportMsg("Import cancelled.");
+      setTimeout(() => setImportMsg(null), 5000);
+      return;
+    }
+
     try {
-      const result = await importSettings.mutateAsync();
+      const tomlContent = await file.text();
+      const result = await importSettings.mutateAsync(tomlContent);
       setImportMsg(
         result.imported
-          ? "Settings imported and config reloaded."
+          ? `Settings imported. Backup saved to ${result.backupFileName}.`
           : "Import cancelled.",
       );
     } catch (err) {
@@ -205,7 +232,7 @@ export function SettingsPage() {
             exportPending={exportSettings.isPending}
             exportMsg={exportMsg}
             exportErr={exportErr}
-            onImport={() => void handleImport()}
+            onImportFile={(file) => void handleImportFile(file)}
             importPending={importSettings.isPending}
             importMsg={importMsg}
             importErr={importErr}

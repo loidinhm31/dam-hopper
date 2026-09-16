@@ -414,8 +414,15 @@ pub fn build_router_with_web_dir_and_origins(
         // Settings
         .route("/api/settings/cache-clear", post(settings::cache_clear))
         .route("/api/settings/reset", post(settings::reset))
-        .route("/api/settings/export", get(settings::export_settings))
-        .route("/api/settings/import", post(settings::import_settings))
+        .route(
+            "/api/settings/export/workspace.toml",
+            get(settings::export_workspace_settings),
+        )
+        .route(
+            "/api/settings/import/workspace.toml",
+            post(settings::import_workspace_settings)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(1024 * 1024)),
+        )
         .merge(workflow_routes)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

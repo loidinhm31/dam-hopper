@@ -1237,3 +1237,70 @@ describe("WsTransport idle suspend endpoints", () => {
     transport.destroy();
   });
 });
+
+describe("WsTransport settings export/import", () => {
+  it("requests workspace TOML export and receives raw text", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("[workspace]\nname = \"ws\"\n", {
+        status: 200,
+        headers: {
+          "content-type": "application/toml; charset=utf-8",
+          "content-disposition": "attachment; filename=\"dam-hopper.toml\"",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await transport.invoke<string>("settings:export");
+    expect(result).toBe("[workspace]\nname = \"ws\"\n");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:4800/api/settings/export/workspace.toml",
+      expect.objectContaining({
+        method: "GET",
+      }),
+    );
+    transport.destroy();
+  });
+
+  it("posts raw TOML import with application/toml content type", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          imported: true,
+          fileName: "dam-hopper.toml",
+          backupFileName: "dam-hopper.toml.bak.123",
+          workspaceName: "ws",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await transport.invoke<{ imported: boolean }>(
+      "settings:import",
+      "[workspace]\nname = \"ws\"\n",
+    );
+    expect(result).toEqual({
+      imported: true,
+      fileName: "dam-hopper.toml",
+      backupFileName: "dam-hopper.toml.bak.123",
+      workspaceName: "ws",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:4800/api/settings/import/workspace.toml",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/toml; charset=utf-8",
+        }),
+        body: "[workspace]\nname = \"ws\"\n",
+      }),
+    );
+    transport.destroy();
+  });
+});

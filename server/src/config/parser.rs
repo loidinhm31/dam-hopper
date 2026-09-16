@@ -20,8 +20,14 @@ pub fn read_config(file_path: &Path) -> Result<DamHopperConfig, AppError> {
             e
         ))
     })?;
+    parse_config_str_at_path(&content, file_path)
+}
 
-    let raw: DamHopperConfigRaw = toml::from_str(&content)
+pub fn parse_config_str_at_path(
+    content: &str,
+    file_path: &Path,
+) -> Result<DamHopperConfig, AppError> {
+    let raw: DamHopperConfigRaw = toml::from_str(content)
         .map_err(|e| AppError::Config(format!("Invalid TOML in {}: {}", file_path.display(), e)))?;
 
     validate_config(&raw)?;

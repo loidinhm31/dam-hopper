@@ -611,8 +611,12 @@ fn json_to_toml(v: &Value) -> Option<toml::Value> {
     }
 }
 
-async fn reload_config(state: &AppState) -> Result<(), ApiError> {
+pub(crate) async fn reload_config(state: &AppState) -> Result<(), ApiError> {
     let _workspace_context = state.workspace_context_guard.write().await;
+    reload_config_locked(state).await
+}
+
+pub(crate) async fn reload_config_locked(state: &AppState) -> Result<(), ApiError> {
     let config_path = state.config.read().await.config_path.clone();
     let mut new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
     {

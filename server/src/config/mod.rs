@@ -6,6 +6,7 @@ pub mod finder;
 pub mod global;
 pub mod parser;
 pub mod presets;
+pub mod replacement;
 pub mod resolve;
 pub mod schema;
 
@@ -15,7 +16,8 @@ pub use global::{
     list_known_workspaces, list_known_workspaces_at, read_global_config, read_global_config_at,
     remove_known_workspace, remove_known_workspace_at, write_global_config, write_global_config_at,
 };
-pub use parser::{read_config, write_config};
+pub use parser::{parse_config_str_at_path, read_config, write_config};
+pub use replacement::validate_protected_config_replacement;
 pub use presets::{get_effective_command, get_preset, get_project_services};
 pub use resolve::{resolve_startup_config, ConfigResolution, ConfigResolutionInput, ConfigSource};
 pub use schema::{

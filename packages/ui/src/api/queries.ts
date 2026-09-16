@@ -1402,7 +1402,7 @@ export function useExportSettings() {
 export function useImportSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.settings.importConfig(),
+    mutationFn: (tomlContent: string) => api.settings.importConfig(tomlContent),
     onSuccess: (result) => {
       if (result?.imported) {
         void qc.invalidateQueries({ queryKey: ["config"] });
