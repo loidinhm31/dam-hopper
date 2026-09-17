@@ -60,6 +60,13 @@ export function sessionProject(session: SessionInfo): string {
   if (parsed.type === "free") return session.project ?? "";
   return session.project ?? parsed.project ?? "";
 }
+function sessionProfileId(session: SessionInfo): string | undefined {
+  if (session && "profileId" in session && typeof session.profileId === "string") {
+    return session.profileId;
+  }
+  return undefined;
+}
+
 
 function sessionTabLabel(
   session: SessionInfo,
@@ -150,15 +157,12 @@ export function deriveTerminalAutoAttachState({
     sessions.map((session) => [session.id, session]),
   );
   const knownSessionIds = new Set(sessions.map((session) => session.id));
-  const existingTabIds = new Set(
-    openTabs
-      .filter((tab) => !profileId || !tab.profileId || tab.profileId === profileId)
-      .map((tab) => tab.sessionId),
+  const sessionKey = (id: string, pId?: string) => (pId ? `${pId}::${id}` : id);
+  const existingTabKeys = new Set(
+    openTabs.map((tab) => sessionKey(tab.sessionId, tab.profileId)),
   );
-  const existingMountedIds = new Set(
-    mountedSessions
-      .filter((m) => !profileId || !m.profileId || m.profileId === profileId)
-      .map((session) => session.sessionId),
+  const existingMountedKeys = new Set(
+    mountedSessions.map((m) => sessionKey(m.sessionId, m.profileId)),
   );
 
   const nextOpenTabs = [
@@ -204,41 +208,50 @@ export function deriveTerminalAutoAttachState({
         return hydratedTab;
       }),
     ...liveSessions
-      .filter((session) => !existingTabIds.has(session.id))
-      .map((session) =>
-        tabForSession(
+      .filter((session) => {
+        const sessionOwner = sessionProfileId(session) ?? profileId;
+        return !existingTabKeys.has(sessionKey(session.id, sessionOwner));
+      })
+      .map((session) => {
+        const sessionOwner = sessionProfileId(session) ?? profileId;
+        return tabForSession(
           session,
           profileSessionIds,
           freeTerminalIndexMap,
           pinnedSessionIds.has(session.id),
-          profileId,
-        ),
-      ),
+          sessionOwner,
+        );
+      }),
   ];
 
   const nextMountedSessions = [
     ...mountedSessions
       .filter(
         (mounted) =>
-          (profileId && mounted.profileId && mounted.profileId !== profileId) ||
-          (!ignoredSessionIds.has(mounted.sessionId) &&
-            (liveById.has(mounted.sessionId) ||
-              pendingSessionIds.has(mounted.sessionId) ||
-              !knownSessionIds.has(mounted.sessionId) ||
-              existingTabIds.has(mounted.sessionId))),
+          !ignoredSessionIds.has(mounted.sessionId) &&
+          (liveById.has(mounted.sessionId) ||
+            pendingSessionIds.has(mounted.sessionId) ||
+            !knownSessionIds.has(mounted.sessionId) ||
+            existingTabKeys.has(sessionKey(mounted.sessionId, mounted.profileId))),
       )
       .map((mounted) => {
-        if (profileId && mounted.profileId && mounted.profileId !== profileId) {
-          return mounted;
-        }
         const session = sessionsById.get(mounted.sessionId);
         return session
-          ? mountedForSession(session, mounted.profileId ?? profileId)
+          ? mountedForSession(
+              session,
+              mounted.profileId ?? sessionProfileId(session) ?? profileId,
+            )
           : mounted;
       }),
     ...liveSessions
-      .filter((session) => !existingMountedIds.has(session.id))
-      .map((session) => mountedForSession(session, profileId)),
+      .filter((session) => {
+        const sessionOwner = sessionProfileId(session) ?? profileId;
+        return !existingMountedKeys.has(sessionKey(session.id, sessionOwner));
+      })
+      .map((session) => {
+        const sessionOwner = sessionProfileId(session) ?? profileId;
+        return mountedForSession(session, sessionOwner);
+      }),
   ];
   const nextActiveTab =
     activeTab &&
