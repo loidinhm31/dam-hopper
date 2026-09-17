@@ -1015,6 +1015,34 @@ The response is an array of operation results; target-scoped entries include
 `worktreePath`, and a failed entry can include `targetUnavailable: true` when
 the server confirmed that target disappeared. Generic request-level failures
 are not attributed to every requested target.
+### Profile-owned file and search requests (Phase 03)
+
+The browser selects a profile-owned `ProjectTargetRef` before calling a
+target-bound route. `profileId` identifies the owner connection and is checked
+client-side; it is intentionally omitted from server wire bodies. The server
+receives the project and optional `worktreePath` and validates the target against
+its current project/worktree registry.
+
+The same target qualification applies to IDE filesystem APIs. In addition to
+the REST list/read/stat/language-file routes, the WebSocket transport uses
+`fs:subscribe_tree`, `fs:unsubscribe_tree`, `fs:read`, `fs:write_begin`,
+`fs:write_chunk_binary`, `fs:write_commit`, `fs:op`, and the
+`fs:upload_begin`/`fs:upload_chunk`/`fs:upload_commit` sequence. Server
+`fs:event` notifications are scoped to the subscription that created them.
+The browser captures the profile connection generation and discards stale
+responses; it never retries a failed target through another profile or root.
+
+Content search is `GET /api/fs/search?q=...` and filename search is
+`GET /api/fs/search-paths?q=...`. Both accept optional `project`,
+`worktreePath`, `case`, `max`, and `scope=workspace`. The client adds the
+originating profile/project/target metadata before combining results. The
+workspace UI limits the aggregate to 500 matches and surfaces either server
+truncation or the aggregate cap as a warning.
+
+See [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)
+for the browser ownership, editor, replace, preview, and invalidation
+contract.
+
 
 ### Worktrees
 
@@ -1691,6 +1719,10 @@ Client behavior:
 - The Git page now uses the same root-aware push path for single-project views, so a selected root is preserved consistently across page-level and sidebar-level push actions.
 - The SSH passphrase retry dialog can retry immediately or save the passphrase for later when the server and OS keyring support it.
 - Retry status messages are rendered through a shared frontend status model, so push/fetch/pull retries report the same wording and state handling.
+- For a bulk operation, the SSH retry request contains only targets whose
+  initial result was an SSH authentication failure. Successful targets remain
+  in the returned combined result and are not replayed. A changed owner
+  generation cancels the pending retry.
 - The backend push path uses libgit2 `Remote::push(...)` with the same credential callback order as fetch/pull: loaded key, SSH agent, credential helper, then default credentials.
 - Push scope is intentionally narrow: the checked-out branch is pushed to its configured upstream only. If `branch.<name>.remote` or `branch.<name>.merge` is missing, the route returns a clear push error instead of inferring a destination. Setting `force: true` changes only the refspec mode; it does not broaden destination inference.
 - See `ProjectInfoPanel.test.ts` and `use-git-with-ssh-retry.test.ts` for the root-selection and retry normalization coverage added in this phase.
@@ -2024,7 +2056,7 @@ Body: `{ path: string, content: string, root?: string }`
 
 ### IDE File Explorer
 
-**GET /api/fs/list?project=NAME&path=REL**
+**GET /api/fs/list?project=NAME&path=REL[&worktreePath=PATH]**
 List directory contents.
 
 Response:
@@ -2043,14 +2075,14 @@ Response:
 }
 ```
 
-**GET /api/fs/read?project=NAME&path=REL[&offset=N&len=M]**
+**GET /api/fs/read?project=NAME&path=REL[&worktreePath=PATH][&offset=N&len=M]**
 Read file content (text or binary detection).
 
 - Text: returns body with Content-Type: text/\*
 - Binary: returns `{ binary: true, mime: "..." }`
 - Max 10MB per read
 
-**GET /api/fs/stat?project=NAME&path=REL**
+**GET /api/fs/stat?project=NAME&path=REL[&worktreePath=PATH]**
 File metadata.
 
 Response:
@@ -2064,6 +2096,18 @@ Response:
   "isBinary": false
 }
 ```
+**GET /api/fs/search?q=QUERY[&project=NAME&worktreePath=PATH&case=true&max=N]**
+Search text content and return `{ query, matches, truncated }`. Each match
+contains a project-relative path, line, column, and text context. The browser
+adds its originating profile and target reference before federating results.
+
+**GET /api/fs/search-paths?q=QUERY[&project=NAME&worktreePath=PATH&case=true&max=N]**
+Search file and directory names and return `{ query, matches, truncated }`.
+`scope=workspace` is accepted by both search routes for compatibility with
+workspace-aware transports; the browser's **All connected profiles** mode
+performs one owner-bound request per eligible profile and applies a 500-match
+aggregate cap.
+
 
 ### Session-Bound Media Capabilities
 
@@ -2220,9 +2264,9 @@ native media. It supports the same range, validator, revalidation, private
 no-store, and indistinguishable `404` behavior as image streams.
 Playback uses inline disposition; download uses a sanitized attachment filename.
 
-**GET /api/fs/language-files?project=NAME**
-Scan the configured project root for supported language files. The endpoint is
-authenticated and project-scoped; it does not accept a caller-supplied root or
+**GET /api/fs/language-files?project=NAME[&worktreePath=PATH]**
+Scan the selected project target for supported language files. The endpoint is
+authenticated and target-scoped; it does not accept a caller-supplied root or
 scan limit. The walk honors Git ignore/global-ignore/repository-exclude rules,
 includes hidden paths, excludes `.git` metadata, and returns regular files only
 (symlinks are not followed or returned).

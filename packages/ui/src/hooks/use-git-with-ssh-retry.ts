@@ -2,15 +2,21 @@ import { useCallback, useRef, useState } from "react";
 import type { ComponentProps } from "react";
 import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import { useSshAddKey, useSshListKeys } from "@/api/queries.js";
-import type { GitOpResult, SshLoadKeyResult } from "@/api/client.js";
-
+import { isCurrentConnection } from "@/api/connections.js";
+import type { ConnectionRef } from "@/api/ownership.js";
+import type {
+  GitOpResult,
+  ProjectTargetInput,
+  SshLoadKeyResult,
+} from "@/api/client.js";
 type GitRetryResult = GitOpResult | GitOpResult[];
 type GitOperationLabel = "fetch" | "pull" | "push";
 
-interface ExecuteWithRetryOptions {
+export interface ExecuteWithRetryOptions {
   operation: GitOperationLabel;
+  owner?: ConnectionRef;
+  targets?: ProjectTargetInput[];
 }
-
 export function normalizeGitRetryResults(
   result: GitRetryResult,
 ): GitOpResult[] {
@@ -164,6 +170,8 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
   const pendingRetryRef = useRef<(() => Promise<GitRetryResult>) | null>(null);
   const resolveRef = useRef<((results: GitOpResult[]) => void) | null>(null);
   const rejectRef = useRef<((err: unknown) => void) | null>(null);
+  const ownerRef = useRef<ConnectionRef | null>(null);
+  const initialSuccessfulResultsRef = useRef<GitOpResult[]>([]);
 
   const sshAddKey = useSshAddKey();
   const { data: availableKeys = [] } = useSshListKeys();
@@ -175,6 +183,7 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
       fn: () => Promise<GitRetryResult>,
     ): Promise<GitOpResult[]> => {
       operationRef.current = options.operation;
+      ownerRef.current = options.owner ?? null;
       setState((current) => ({ ...current, status: undefined }));
       const results = normalizeGitRetryResults(await fn());
 
@@ -185,6 +194,9 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
         }));
         return results;
       }
+
+      // Preserve successful targets from initial attempt so they are never replayed
+      initialSuccessfulResultsRef.current = results.filter((r) => r.success);
 
       // Auth error detected — open dialog and wait for user action
       return new Promise<GitOpResult[]>((resolve, reject) => {
@@ -243,13 +255,36 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
         status,
       });
 
+      // Validate owner generation: disconnect or reconnect cancels prompt
+      if (ownerRef.current && !isCurrentConnection(ownerRef.current)) {
+        setState((current) => ({
+          ...current,
+          open: false,
+          loading: false,
+          error: undefined,
+          status:
+            "Connection changed during authentication; retry cancelled.",
+        }));
+        pendingRetryRef.current = null;
+        resolveRef.current = null;
+        const reject = rejectRef.current;
+        rejectRef.current = null;
+        ownerRef.current = null;
+        initialSuccessfulResultsRef.current = [];
+        reject?.(new Error("SSH_CANCELLED_STALE_CONNECTION"));
+        return;
+      }
+
       const retryFn = pendingRetryRef.current;
       const resolve = resolveRef.current;
       const reject = rejectRef.current;
+      const initialSuccessful = initialSuccessfulResultsRef.current;
 
       pendingRetryRef.current = null;
       resolveRef.current = null;
       rejectRef.current = null;
+      initialSuccessfulResultsRef.current = [];
+      ownerRef.current = null;
 
       if (retryFn && resolve) {
         try {
@@ -257,12 +292,11 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
             operationRef.current,
             retryFn,
           );
-          // If the retry still fails with an auth error the passphrase was wrong —
-          // reset the session cache so the dialog can appear again next time.
+          const combinedResults = [...initialSuccessful, ...retry.results];
           if (retry.status) {
             setState((current) => ({ ...current, status: retry.status }));
           }
-          resolve(retry.results);
+          resolve(combinedResults);
         } catch (err) {
           setState((current) => ({
             ...current,
@@ -282,6 +316,8 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
     pendingRetryRef.current = null;
     resolveRef.current = null;
     rejectRef.current = null;
+    ownerRef.current = null;
+    initialSuccessfulResultsRef.current = [];
     setState((current) => ({
       ...current,
       open: false,
@@ -292,7 +328,6 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
     // Reject with a user-cancelled marker so callers can handle gracefully
     reject?.(new Error("SSH_CANCELLED"));
   }, []);
-
   const passphraseDialogProps = {
     open: state.open,
     onSubmit: handleSubmit,

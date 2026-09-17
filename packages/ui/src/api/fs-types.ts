@@ -2,7 +2,7 @@
  * FS types — mirrors server JSON shapes.
  * Duplication is intentional; web package must not import server crates.
  */
-
+import type { ProjectTargetRef } from "./ownership.js";
 /** Single node in the file tree. id = path relative to subscribed root. */
 export interface FsArborNode {
   id: string;
@@ -82,6 +82,10 @@ export interface SearchMatch {
   text: string;
   /** Present when scope=workspace; identifies the source project */
   project?: string;
+  profileId?: string;
+  profileName?: string;
+  targetRef?: ProjectTargetRef;
+  generation?: number;
 }
 
 export interface SearchResponse {
@@ -94,8 +98,11 @@ export interface PathSearchMatch {
   path: string;
   /** Present when scope=workspace; identifies the source project */
   project?: string;
+  profileId?: string;
+  profileName?: string;
+  targetRef?: ProjectTargetRef;
+  generation?: number;
 }
-
 export interface PathSearchResponse {
   query: string;
   matches: PathSearchMatch[];

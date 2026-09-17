@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 1,987
-files, 4,397,521 tokens, 18,277,206 characters; five security-flagged files
+**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 1,993
+files, 4,416,048 tokens, 18,357,737 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -56,6 +56,40 @@ configuration, PTYs, workflow/usage history, and remote data remain
 server-authoritative. The unified-profile backend-workspace proposal below is
 not part of this implementation.
 
+
+## Unified-profile files, editor, search, and Git (Phase 03)
+
+Phase 03 completes the profile-qualified IDE workbench. The browser target is
+`{ profileId, project, worktreePath? }`; the owner-bound client projects it to
+the server wire target `{ project, worktreePath? }` only after checking the
+captured connection owner. Root and registered worktree targets remain distinct.
+
+| Area | Source boundary | Invariant |
+| --- | --- | --- |
+| Target selection | `stores/project-target.ts` | A missing or prunable worktree is unavailable; requests do not fall back silently. |
+| Editor models | `stores/editor.ts`, `components/organisms/MonacoHost.tsx` | Tab/model keys and in-memory Monaco URIs include profile and target scope. |
+| File tree/watchers | `stores/explorer-tree.ts`, `hooks/use-fs-subscription.ts` | Tree state, events, language scans, and invalidations are target-scoped. |
+| CRUD/upload | `hooks/use-fs-ops.ts`, `hooks/use-fs-upload.ts`, `api/ws-transport.ts` | CRUD, mtime-guarded writes, and acknowledged chunk uploads use the owning transport. |
+| Bounded previews | `components/organisms/LargeFileViewer.tsx`, image/video ticket clients | Large files use read-only 64 KiB range reads; media previews use scoped capabilities. |
+| Federated search | `hooks/use-file-search.ts`, `components/organisms/SearchPanel.tsx` | Project-target and all-connected-profile scopes preserve origin metadata and cap aggregate results at 500. |
+| Search replace | `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts` | Replacement captures the match target; dirty tabs are isolated by profile/project/worktree/path. |
+| Git retry | `hooks/use-git-with-ssh-retry.ts`, `api/queries.ts` | Authentication retry retains successful results and retries only failed targets after owner validation. |
+
+Filesystem `fs:event` handling updates or refetches only the matching target.
+Clean editor tabs reload after external/Git mutations; dirty tabs preserve local
+content and become stale. Connection generation checks prevent old profile
+responses from publishing after disconnect or endpoint replacement.
+
+Search workspace scope queries eligible connected profiles independently (up to
+four concurrent profile requests), exposes per-profile status, deterministically
+sorts results, and warns when server truncation or the 500-result aggregate cap
+may make the result incomplete. `Replace Next` and `Replace All` re-read and
+mtime-check before writing, skip dirty files without overwriting them, and
+reload only clean open tabs.
+
+The focused contract coverage is in
+`packages/ui/src/api/phase-03-files-editor-search-git.test.ts`. The full source
+and behavior map is [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
 
 ## Backend boundaries
 

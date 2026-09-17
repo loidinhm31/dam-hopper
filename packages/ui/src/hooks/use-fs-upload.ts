@@ -1,6 +1,12 @@
 import { useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
+import {
+  captureConnection,
+  getTransport as getConnectionsTransport,
+  isCurrentConnection,
+} from "@/api/connections.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import {
   normalizeProjectTarget,
@@ -34,6 +40,7 @@ export function useFsUpload(
   const project = targetRef.project;
   const worktreePath = targetRef.worktreePath;
   const targetKey = projectTargetCacheKey(targetRef);
+  const profileId = targetRef.profileId;
   const [progress, setProgress] = useState<UploadProgress | null>(null);
 
   const upload = useCallback(
@@ -51,22 +58,64 @@ export function useFsUpload(
       setProgress({ filename: file.name, pct: 0, done: false });
       const requestTarget =
         worktreePath == null ? project : { project, worktreePath };
+      let connectionRef: ConnectionRef | undefined;
+      let t: WsTransport;
+
+      if (profileId) {
+        try {
+          connectionRef = captureConnection(profileId);
+          t = getConnectionsTransport(connectionRef) as WsTransport;
+        } catch (err) {
+          setProgress({
+            filename: file.name,
+            pct: 0,
+            done: true,
+            error:
+              err instanceof Error
+                ? err.message
+                : "Profile disconnected; upload aborted.",
+          });
+          return;
+        }
+      } else {
+        t = getTransport() as WsTransport;
+      }
 
       try {
-        const t = getTransport() as WsTransport;
         const result = await t.fsUploadFile(requestTarget, dir, file, (pct) => {
           setProgress({ filename: file.name, pct, done: false });
         });
 
+        if (connectionRef && !isCurrentConnection(connectionRef)) {
+          setProgress({
+            filename: file.name,
+            pct: 0,
+            done: true,
+            error: "Connection changed during upload",
+          });
+          return;
+        }
+
         if (result.ok) {
           setProgress({ filename: file.name, pct: 100, done: true });
+          if (profileId) {
+            void qc.invalidateQueries({
+              queryKey: [
+                "fs-tree",
+                profileId,
+                project,
+                targetKey,
+                subscribedPath,
+              ],
+            });
+          }
           void qc.invalidateQueries({
             queryKey: ["fs-tree", project, targetKey, subscribedPath],
           });
           const path = dir ? `${dir}/${file.name}` : file.name;
-          void invalidateGitFileOperation(qc, requestTarget, path);
+          void invalidateGitFileOperation(qc, targetRef, path);
         } else {
-          markTargetUnavailableIfNeeded(requestTarget, result.error);
+          markTargetUnavailableIfNeeded(targetRef, result.error);
           setProgress({
             filename: file.name,
             pct: 0,
@@ -75,12 +124,21 @@ export function useFsUpload(
           });
         }
       } catch (e) {
+        if (connectionRef && !isCurrentConnection(connectionRef)) {
+          setProgress({
+            filename: file.name,
+            pct: 0,
+            done: true,
+            error: "Connection changed during upload",
+          });
+          return;
+        }
         const msg = e instanceof Error ? e.message : String(e);
-        markTargetUnavailableIfNeeded(requestTarget, e);
+        markTargetUnavailableIfNeeded(targetRef, e);
         setProgress({ filename: file.name, pct: 0, done: true, error: msg });
       }
     },
-    [project, subscribedPath, targetKey, worktreePath, qc],
+    [project, subscribedPath, targetKey, worktreePath, qc, profileId],
   );
 
   function clearProgress() {

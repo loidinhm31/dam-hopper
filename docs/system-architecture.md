@@ -1,12 +1,12 @@
 # System Architecture
 
-## Unified-profile workbench (Phases 00–02; Phase 02 implemented 2026-09-17)
+## Unified-profile workbench (Phases 00–03; Phase 03 implemented 2026-09-17)
 
 This is the frontend ownership cutover for the unified workbench. It is
 separate from the backend workspace-registry redesign later in this document.
-Phases 00–02 are implemented; Phases 03–09 remain plan-gated. The phase record
-and focused verification evidence live in
-`plans/260916-2137-unified-profile/phase-02-unified-shell-and-profile-migration.md`.
+Phases 00–03 are implemented; later phases remain plan-gated. The Phase 03
+files/editor/search/Git contract is summarized in
+[the dedicated workbench guide](./phase-03-files-editor-search-git.md).
 
 - `DamHopperApp` mounts one shell and route tree even when profiles are empty,
   offline, login-required, or unsupported. Startup reads profiles and launches
@@ -23,7 +23,7 @@ and focused verification evidence live in
   ID and return no token when URL or auth type does not match.
 - Profile rows expose Connect, Disconnect, Login, Logout, Edit, Remove, and
   Auto-connect. Disconnect retires only the profile runtime and keeps
-  credentials; Logout revokes that profile's media session and clears its
+  credentials; Logout revokes that profile's media session and clears
   credentials; Remove performs local profile/native cleanup and never deletes
   remote PTYs or server data.
 - `workspace.selectedProject` is a qualified `{profileId, project}` reference.
@@ -62,7 +62,8 @@ operations, query/event/cleanup boundaries, protocol-2/media-v2 and
 artifact-incarnation admission, native-scope identity and single-writer gates.
 Cycle 2 approved the baseline at 9.9/10 and recorded 3,090/3,090 tests (1,412 Cargo +
 1,678 Vitest) as prior review evidence. Phase 00 changed no runtime source and
-makes no runtime-qualification claim; Phases 01–08 and S01–S13 remain future
+makes no runtime-qualification claim; Phases 01–03 are implemented in the
+frontend ownership cutover, while later phases and S01–S13 remain future
 implementation and qualification work. Qualified web and native release gates
 remain independent.
 
@@ -81,6 +82,55 @@ Phase 01 delivers the explicit ownership runtime and connection foundation:
 The backend workspace-registry redesign in the next section is a separate
 proposal; it is not part of this baseline and must not be treated as sharing
 its identity, migration or acceptance gate.
+### Phase 03 files, editor, search, and Git ownership (2026-09-17)
+
+Phase 03 consumes the Phase 01 owner/generation runtime and extends it from
+project navigation to every IDE resource. The browser identity is
+`{ profileId, project, worktreePath? }`; `profileId` chooses the connection,
+while the server wire target contains only `project` and optional
+`worktreePath`. `toServerProjectTarget()` is the single projection boundary.
+
+```mermaid
+flowchart LR
+    Selection["Project target selector<br/>profile + project + worktree"] --> Owner["ConnectionRef<br/>profileId + generation"]
+    Owner --> Client["Owner-bound API client"]
+    Client --> Fs["Files / CRUD / watcher / upload"]
+    Client --> Editor["Editor tabs + Monaco models"]
+    Client --> Search["Search + replace"]
+    Client --> Git["Fetch / pull / push"]
+    Fs --> Events["Target-scoped fs:event"]
+    Git --> Events
+    Events --> Cache["Target-scoped Query/Zustand caches"]
+    Cache --> Editor
+```
+
+Ownership invariants:
+
+- `project-target.ts` stores root/worktree selection and unavailable targets
+  per profile/project. A missing worktree fails closed; it does not become the
+  project root by implication.
+- `editor.ts` and `MonacoHost` qualify tab/model keys and in-memory URIs with
+  the profile and target scope. Identical paths on different profiles never
+  share a Monaco model or dirty state.
+- Filesystem reads, mtime-guarded writes, CRUD, watcher subscriptions, and
+  chunked uploads capture the owner generation. `fs:event` updates or refetches
+  only the matching target.
+- Clean editor tabs reload after external/Git changes. Dirty tabs retain local
+  bytes and become stale/conflicted; no remote event can overwrite edits.
+- Federated search issues independent owner-bound requests, preserves profile
+  and target metadata on each match, and caps the aggregate UI result set at
+  500. Replace operations resolve the target from the match and skip dirty
+  files.
+- Git fetch/pull preserve independent target results. SSH passphrase retry
+  retains successful initial results, retries only authentication-failed
+  targets after owner validation, and cancels on generation change.
+
+Large files use bounded 64 KiB range reads in a read-only viewer. Image/video
+previews use session-bound opaque capabilities; credentials are never embedded
+in media URLs and the editor never falls back to whole-file Blob materialization.
+The detailed source map is in
+[Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
+
 
 ## Proposed concurrent runtime cutover (2026-09-16; not implemented)
 

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getTransport } from "@/api/transport.js";
+import {
+  captureConnection,
+  getTransport as getConnectionsTransport,
+  isCurrentConnection,
+} from "@/api/connections.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 import type { SearchMatch } from "@/api/fs-types.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import { useEditorStore } from "@/stores/editor.js";
@@ -32,7 +38,10 @@ interface UseSearchPanelReplaceOptions {
 
 function targetScopeKey(target: ProjectTargetInput): string {
   const normalized = normalizeProjectTarget(target);
-  return `${normalized.project}::${projectTargetCacheKey(normalized)}`;
+  const prefix = normalized.profileId
+    ? `${normalized.profileId}::${normalized.project}`
+    : normalized.project;
+  return `${prefix}::${projectTargetCacheKey(normalized)}`;
 }
 
 export function useSearchPanelReplace({
@@ -104,13 +113,19 @@ export function useSearchPanelReplace({
         caseSensitive,
         hasDirtyOpenTab: (targetProject, path) =>
           tabs.some((tab) => {
+            const nextMatch =
+              selectedMatch ?? findNextContentSearchMatch(matches);
             const matchTarget = resolveSearchMatchTarget(
               targetRef,
               targetProject,
               scope,
+              nextMatch?.profileId,
             );
+            const normalizedMatchTarget = normalizeProjectTarget(matchTarget);
             return (
               tab.project === targetProject &&
+              (tab.target.profileId ?? undefined) ===
+                (normalizedMatchTarget.profileId ?? undefined) &&
               tab.path === path &&
               tab.dirty &&
               targetScopeKey(tab.target ?? tab.project) ===
@@ -119,16 +134,34 @@ export function useSearchPanelReplace({
           }),
         openMatch: (match) => openMatch(match, { closeSearch: false }),
         readFile: async (targetProject, path) => {
+          const nextMatch =
+            selectedMatch ?? findNextContentSearchMatch(matches);
           const matchTarget = resolveSearchMatchTarget(
             targetRef,
             targetProject,
             scope,
+            nextMatch?.profileId,
           );
+          const normalizedMatchTarget = normalizeProjectTarget(matchTarget);
+          let t: WsTransport;
+          let connectionRef: ConnectionRef | undefined;
+          if (normalizedMatchTarget.profileId) {
+            try {
+              connectionRef = captureConnection(
+                normalizedMatchTarget.profileId,
+              );
+              t = getConnectionsTransport(connectionRef) as WsTransport;
+            } catch {
+              t = getTransport() as WsTransport;
+            }
+          } else {
+            t = getTransport() as WsTransport;
+          }
           try {
-            const result = await (getTransport() as WsTransport).fsRead(
-              matchTarget,
-              path,
-            );
+            const result = await t.fsRead(matchTarget, path);
+            if (connectionRef && !isCurrentConnection(connectionRef)) {
+              throw new Error("Connection changed during replace");
+            }
             if (!result.ok) markTargetUnavailableIfNeeded(matchTarget, result);
             return result;
           } catch (caught) {
@@ -137,18 +170,39 @@ export function useSearchPanelReplace({
           }
         },
         writeFile: async (targetProject, path, content, expectedMtime) => {
+          const nextMatch =
+            selectedMatch ?? findNextContentSearchMatch(matches);
           const matchTarget = resolveSearchMatchTarget(
             targetRef,
             targetProject,
             scope,
+            nextMatch?.profileId,
           );
+          const normalizedMatchTarget = normalizeProjectTarget(matchTarget);
+          let t: WsTransport;
+          let connectionRef: ConnectionRef | undefined;
+          if (normalizedMatchTarget.profileId) {
+            try {
+              connectionRef = captureConnection(
+                normalizedMatchTarget.profileId,
+              );
+              t = getConnectionsTransport(connectionRef) as WsTransport;
+            } catch {
+              t = getTransport() as WsTransport;
+            }
+          } else {
+            t = getTransport() as WsTransport;
+          }
           try {
-            const result = await (getTransport() as WsTransport).fsWriteFile(
+            const result = await t.fsWriteFile(
               matchTarget,
               path,
               content,
               expectedMtime,
             );
+            if (connectionRef && !isCurrentConnection(connectionRef)) {
+              throw new Error("Connection changed during replace");
+            }
             if (!result.ok) markTargetUnavailableIfNeeded(matchTarget, result);
             return result;
           } catch (caught) {
@@ -158,17 +212,26 @@ export function useSearchPanelReplace({
         },
         refreshMatches,
         reloadOpenTab: async (targetProject, path) => {
+          const nextMatch =
+            selectedMatch ?? findNextContentSearchMatch(matches);
+          const matchTarget = resolveSearchMatchTarget(
+            targetRef,
+            targetProject,
+            scope,
+            nextMatch?.profileId,
+          );
+          const normalizedMatchTarget = normalizeProjectTarget(matchTarget);
           const tab = useEditorStore
             .getState()
             .tabs.find(
               (candidate) =>
                 candidate.project === targetProject &&
+                (candidate.target.profileId ?? undefined) ===
+                  (normalizedMatchTarget.profileId ?? undefined) &&
                 candidate.path === path &&
                 !candidate.dirty &&
                 targetScopeKey(candidate.target ?? candidate.project) ===
-                  targetScopeKey(
-                    resolveSearchMatchTarget(targetRef, targetProject, scope),
-                  ),
+                  targetScopeKey(matchTarget),
             );
           if (tab) {
             await useEditorStore.getState().reloadTab(tab.key);
@@ -222,6 +285,176 @@ export function useSearchPanelReplace({
     targetRef,
   ]);
 
+  const replaceAll = useCallback(async () => {
+    if (replaceDisabled) return;
+
+    setIsReplacing(true);
+    setWarning(null);
+    setError(null);
+
+    try {
+      const snapshotMatches = [...matches];
+      if (snapshotMatches.length === 0) return;
+
+      const fileGroups = new Map<
+        string,
+        {
+          profileId?: string;
+          project: string;
+          path: string;
+          matches: SearchMatch[];
+        }
+      >();
+      for (const m of snapshotMatches) {
+        const fileKey = `${m.profileId ?? ""}:${m.project ?? project}:${m.path}`;
+        let group = fileGroups.get(fileKey);
+        if (!group) {
+          group = {
+            profileId: m.profileId,
+            project: m.project ?? project,
+            path: m.path,
+            matches: [],
+          };
+          fileGroups.set(fileKey, group);
+        }
+        group.matches.push(m);
+      }
+
+      let replacedFiles = 0;
+      let blockedDirtyFiles = 0;
+      let failedFiles = 0;
+
+      for (const group of fileGroups.values()) {
+        const matchTarget = resolveSearchMatchTarget(
+          targetRef,
+          group.project,
+          scope,
+          group.profileId,
+        );
+        const normalizedMatchTarget = normalizeProjectTarget(matchTarget);
+
+        const isBlockedDirty = tabs.some(
+          (tab) =>
+            tab.project === group.project &&
+            (tab.target.profileId ?? undefined) ===
+              (normalizedMatchTarget.profileId ?? undefined) &&
+            tab.path === group.path &&
+            tab.dirty &&
+            targetScopeKey(tab.target ?? tab.project) ===
+              targetScopeKey(matchTarget),
+        );
+        if (isBlockedDirty) {
+          blockedDirtyFiles++;
+          continue;
+        }
+
+        let t: WsTransport;
+        let connectionRef: ConnectionRef | undefined;
+        if (normalizedMatchTarget.profileId) {
+          try {
+            connectionRef = captureConnection(
+              normalizedMatchTarget.profileId,
+            );
+            t = getConnectionsTransport(connectionRef) as WsTransport;
+          } catch {
+            failedFiles++;
+            continue;
+          }
+        } else {
+          t = getTransport() as WsTransport;
+        }
+
+        try {
+          const readResult = await t.fsRead(matchTarget, group.path);
+          if (connectionRef && !isCurrentConnection(connectionRef)) {
+            failedFiles++;
+            continue;
+          }
+          if (!readResult.ok || readResult.binary) {
+            failedFiles++;
+            continue;
+          }
+
+          const content = atob(readResult.content);
+          const binary = new Uint8Array(content.length);
+          for (let i = 0; i < content.length; i++)
+            binary[i] = content.charCodeAt(i);
+          const decoded = new TextDecoder().decode(binary);
+
+          const regex = new RegExp(
+            searchQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+            caseSensitive ? "g" : "gi",
+          );
+          if (!regex.test(decoded)) {
+            continue;
+          }
+
+          const newContent = decoded.replace(regex, replaceQuery);
+          const writeResult = await t.fsWriteFile(
+            matchTarget,
+            group.path,
+            newContent,
+            readResult.mtime,
+          );
+          if (connectionRef && !isCurrentConnection(connectionRef)) {
+            failedFiles++;
+            continue;
+          }
+          if (writeResult.ok) {
+            replacedFiles++;
+            const tab = useEditorStore
+              .getState()
+              .tabs.find(
+                (candidate) =>
+                  candidate.project === group.project &&
+                  (candidate.target.profileId ?? undefined) ===
+                    (normalizedMatchTarget.profileId ?? undefined) &&
+                  candidate.path === group.path &&
+                  !candidate.dirty &&
+                  targetScopeKey(candidate.target ?? candidate.project) ===
+                    targetScopeKey(matchTarget),
+              );
+            if (tab) {
+              await useEditorStore.getState().reloadTab(tab.key);
+            }
+          } else {
+            failedFiles++;
+          }
+        } catch {
+          failedFiles++;
+        }
+      }
+
+      await refreshMatches();
+      if (blockedDirtyFiles > 0) {
+        setWarning(
+          `Replaced in ${replacedFiles} file(s). Skipped ${blockedDirtyFiles} file(s) with unsaved edits.`,
+        );
+      } else if (failedFiles > 0) {
+        setWarning(
+          `Replaced in ${replacedFiles} file(s). Failed in ${failedFiles} file(s).`,
+        );
+      }
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Replace All failed.",
+      );
+    } finally {
+      setIsReplacing(false);
+    }
+  }, [
+    caseSensitive,
+    matches,
+    project,
+    refreshMatches,
+    replaceDisabled,
+    replaceQuery,
+    searchQuery,
+    scope,
+    tabs,
+    targetRef,
+  ]);
+
   return {
     selectedMatchKey,
     isReplacing,
@@ -230,5 +463,6 @@ export function useSearchPanelReplace({
     replaceDisabled,
     selectMatch,
     replaceNext,
+    replaceAll,
   };
 }

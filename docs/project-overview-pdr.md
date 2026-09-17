@@ -253,6 +253,49 @@ fallbacks.
 **Verification record:** The Phase 02 plan records 108 focused Vitest tests,
 1,766 full UI tests, and TypeScript/build checks across `packages/ui`,
 `apps/web`, and `apps/native`; those are phase evidence, not a release claim.
+### PR-007A: Profile-qualified files, editor, search, and Git (Phase 03)
+
+**Status:** Implemented frontend contract on 2026-09-17. This slice extends
+the unified profile/project selection into the IDE resource boundary without
+creating a second server workspace hierarchy.
+
+**Functional requirements:**
+
+- Bind filesystem list/read/stat, CRUD, write, watcher, upload, download, and
+  preview requests to `{ profileId, project, worktreePath? }`.
+- Keep root and registered worktree targets distinct and preserve an explicit
+  unavailable state; never fall back silently after target disappearance.
+- Qualify editor tabs, Monaco models, tree expansion, language scans, caches,
+  search matches, replacements, and Git invalidation by profile and target.
+- Preserve dirty editor content across watcher/Git reloads and isolate dirty
+  state between profiles and worktree targets.
+- Provide Project target and All connected profiles search scopes, with
+  deterministic grouping and an aggregate 500-match/truncation warning.
+- Resolve Replace Next/All writes from each match's originating target; skip
+  dirty files and reload only clean tabs.
+- Return independent Git results per target and retry only SSH-auth failures
+  after passphrase load, without replaying successful targets.
+
+**Acceptance criteria:**
+
+- [x] Owner-bound clients project profile-qualified targets to server wire
+  `{ project, worktreePath? }` only after owner validation.
+- [x] File events, upload completion, Git mutation invalidation, and editor
+  reloads affect only the matching profile/target scope.
+- [x] Monaco and editor tab identity separates equal paths on different
+  profiles; large files use read-only 64 KiB range reads.
+- [x] Federated search preserves originating profile/project metadata, exposes
+  per-profile status, and warns when the server or 500-result client cap
+  truncates results.
+- [x] Replace operations re-read and mtime-check before writing and never
+  overwrite a dirty tab.
+- [x] SSH retry validates the owner generation, retains initial successes, and
+  retries only failed authentication targets.
+
+**Source and verification boundary:** The implementation map and focused
+contract coverage are maintained in
+[Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
+
 
 ### PR-008: Shared Runtime Logging Utilities
 

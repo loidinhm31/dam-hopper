@@ -14,11 +14,17 @@ export function resolveSearchMatchTarget(
   currentTarget: ProjectTargetInput,
   matchProject: string,
   scope: SearchScope,
+  matchProfileId?: string,
 ): ProjectTargetInput {
-  if (scope === "workspace") return matchProject;
-
   const normalized = normalizeProjectTarget(currentTarget);
-  return normalized.project === matchProject ? normalized : matchProject;
+  const profileId = matchProfileId ?? normalized.profileId;
+  if (scope === "workspace") {
+    return profileId ? { profileId, project: matchProject } : matchProject;
+  }
+
+  return normalized.project === matchProject
+    ? normalized
+    : (profileId ? { profileId, project: matchProject } : matchProject);
 }
 
 export interface ReplaceNextOptions {

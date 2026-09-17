@@ -8,7 +8,10 @@ import {
 
 export function explorerTreeScopeKey(target: ProjectTargetInput): string {
   const normalized = normalizeProjectTarget(target);
-  return `${normalized.project}::${projectTargetCacheKey(normalized)}`;
+  const prefix = normalized.profileId
+    ? `${normalized.profileId}::${normalized.project}`
+    : normalized.project;
+  return `${prefix}::${projectTargetCacheKey(normalized)}`;
 }
 
 export type OpenStateMap = Record<string, boolean>;

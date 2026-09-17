@@ -14,6 +14,14 @@
 - [Phase 02 plan](../plans/260916-2137-unified-profile/phase-02-unified-shell-and-profile-migration.md) ·
   [Parent plan](../plans/260916-2137-unified-profile/plan.md) ·
   [Final code review](../plans/reports/code-review-260917-0847-phase-02-unified-shell-cycle-3.md).
+- **Unified multi-profile workbench — Phase 03 files, editor, search, and Git.**
+  Added profile/worktree-qualified filesystem CRUD, watchers, uploads, previews,
+  editor models, federated search, target-captured Replace Next/All, and
+  target-aware Git result/retry documentation. Dirty tabs remain isolated and
+  are not overwritten by watcher or Git reloads; federated search warns when
+  its 500-match aggregate is truncated.
+- See [Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md),
+  [API Reference](./api-reference.md), and [System Architecture](./system-architecture.md).
 
 # 2026-09-16
 

@@ -1027,6 +1027,34 @@ snapshot.
 - **Storage & Hydration:** View state is part of persisted editor tab state under `dam-hopper:editor-state` in `localStorage`. Hydrated tabs retain view state across `loadContent` invocations so opening the file restores line and column positions.
 - **Race-Safe State Capture:** `MonacoHost` captures the originating tab's view state prior to switching active `tabKey` using `prevTabKeyRef` and on unmount, passing `targetKey` explicitly to prevent view states from polluting newly selected tabs.
 
+### Phase 03 files/editor/search ownership
+
+The IDE surfaces consume one qualified target:
+`{ profileId, project, worktreePath? }`. `editorTargetScopeKey()` and
+`projectTargetCacheKey()` keep equal paths on different profiles or worktrees
+separate. `MonacoHost` uses the qualified tab key in its in-memory URI, so
+Monaco view state and dirty state cannot leak between targets.
+
+`use-fs-ops`, `use-fs-subscription`, and `use-fs-upload` route CRUD, writes,
+watchers, and uploads through the captured profile transport. Filesystem events
+update or refetch only the matching target. `LargeFileViewer` uses read-only
+64 KiB range reads for files at least 5 MiB; image/video preview components use
+their owner-scoped media-ticket adapters.
+
+`SearchPanel` exposes Project target and All connected profiles scopes. The
+search hook preserves profile/project/target metadata, reports per-profile
+status, sorts deterministically, and warns when its 500-result aggregate cap or
+the server truncation signal makes results incomplete. The replace hook resolves
+each match's target and never overwrites a dirty tab; Replace All reports
+replaced, skipped-dirty, and failed files.
+
+Git fetch/pull results stay target-specific. The shared SSH retry hook keeps
+successful initial results and retries only authentication-failed targets after
+owner-generation validation. A changed connection cancels the retry.
+
+See [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)
+for the transport and invalidation source map.
+
 ### Explorer language filter
 
 **Locations:** `packages/ui/src/components/organisms/FileTree.tsx`, `packages/ui/src/hooks/use-fs-subscription.ts`, `packages/ui/src/api/queries.ts`, and `packages/ui/src/lib/explorer-language-scan.ts`

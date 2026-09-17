@@ -8,6 +8,17 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { getTransport } from "@/api/transport.js";
+import {
+  captureConnection,
+  getConnectionSnapshot,
+  getTransport as getConnectionsTransport,
+  isCurrentConnection,
+} from "@/api/connections.js";
+import type {
+  ConnectionRef,
+  ProfileId,
+  ResourceBinding,
+} from "@/api/ownership.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import { fileTier, isPreviewOnlyFile } from "@/lib/file-tier.js";
 import type { FileTier as FT } from "@/lib/file-tier.js";
@@ -23,11 +34,14 @@ import {
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 export type FileTier = FT | "diff";
 
-const EDITOR_PERSIST_VERSION = 1;
+const EDITOR_PERSIST_VERSION = 2;
 
 export function editorTargetScopeKey(target: ProjectTargetInput): string {
   const normalized = normalizeProjectTarget(target);
-  return `${normalized.project}::${projectTargetCacheKey(normalized)}`;
+  const prefix = normalized.profileId
+    ? `${normalized.profileId}::${normalized.project}`
+    : normalized.project;
+  return `${prefix}::${projectTargetCacheKey(normalized)}`;
 }
 
 /** Count unsaved editor tabs owned by one immutable project target. */
@@ -49,6 +63,16 @@ function compositeTabKey(
   extra: readonly unknown[] = [],
 ): string {
   const normalized = normalizeProjectTarget(target);
+  if (normalized.profileId) {
+    return JSON.stringify([
+      kind,
+      normalized.profileId,
+      normalized.project,
+      projectTargetCacheKey(normalized),
+      path,
+      ...extra,
+    ]);
+  }
   return JSON.stringify([
     kind,
     normalized.project,
@@ -153,6 +177,8 @@ export interface Tab {
   hydrated?: boolean;
   /** Session-only counter used to remount a clean video preview after external changes. */
   previewRevision?: number;
+  /** Connection and endpoint binding metadata. */
+  resourceBinding?: ResourceBinding;
 }
 
 interface EditorState {
@@ -202,6 +228,7 @@ interface EditorState {
     target: ProjectTargetInput,
     worktreePath?: string,
   ) => void;
+  reconcileProfileTabs: (profileId: string) => Promise<void>;
 }
 
 function availabilityTarget(
@@ -242,10 +269,24 @@ interface MigratedEditorTab {
   gitRootId: string | undefined;
   diffPath: string | undefined;
   hydrated: true;
+  resourceBinding: ResourceBinding | undefined;
 }
 
-function transport(): WsTransport {
-  return getTransport() as WsTransport;
+function resolveTabTransport(tab: Pick<Tab, "target">): {
+  transport: WsTransport;
+  connectionRef?: ConnectionRef;
+} {
+  const profileId = tab.target.profileId;
+  if (profileId) {
+    try {
+      const conn = captureConnection(profileId);
+      const t = getConnectionsTransport(conn) as WsTransport;
+      return { transport: t, connectionRef: conn };
+    } catch {
+      // Disconnected or offline
+    }
+  }
+  return { transport: getTransport() as WsTransport };
 }
 
 /** Decode base64 → UTF-8 string using TextDecoder (handles multi-byte chars). */
@@ -267,6 +308,12 @@ function persistedTarget(
   project: string,
 ): ProjectTargetRef {
   const rawTarget = asRecord(raw.target);
+  const profileId =
+    typeof rawTarget?.profileId === "string"
+      ? rawTarget.profileId
+      : typeof raw.profileId === "string"
+        ? raw.profileId
+        : undefined;
   const worktreePath =
     typeof rawTarget?.worktreePath === "string"
       ? rawTarget.worktreePath
@@ -274,10 +321,13 @@ function persistedTarget(
         ? raw.worktreePath
         : null;
   return normalizeProjectTarget(
-    worktreePath == null ? { project } : { project, worktreePath },
+    worktreePath == null
+      ? (profileId ? { profileId, project } : { project })
+      : (profileId
+          ? { profileId, project, worktreePath }
+          : { project, worktreePath }),
   );
 }
-
 function persistedTab(value: unknown, keyMap: Map<string, string>): Tab | null {
   const raw = asRecord(value);
   if (!raw || typeof raw.project !== "string" || typeof raw.path !== "string") {
@@ -309,6 +359,17 @@ function persistedTab(value: unknown, keyMap: Map<string, string>): Tab | null {
       : editorFileTabKey(target, raw.path);
   if (typeof raw.key === "string") keyMap.set(raw.key, key);
   keyMap.set(key, key);
+  const rawResourceBinding = asRecord(raw.resourceBinding);
+  const resourceBinding: ResourceBinding | undefined =
+    rawResourceBinding && typeof rawResourceBinding.serverUrl === "string"
+      ? {
+          serverUrl: rawResourceBinding.serverUrl,
+          configuredRoot:
+            typeof rawResourceBinding.configuredRoot === "string"
+              ? rawResourceBinding.configuredRoot
+              : undefined,
+        }
+      : undefined;
 
   return {
     key,
@@ -337,6 +398,7 @@ function persistedTab(value: unknown, keyMap: Map<string, string>): Tab | null {
     diffPath,
     hydrated: true,
     stale: false,
+    resourceBinding,
   };
 }
 
@@ -378,6 +440,7 @@ export function migrateEditorState(persisted: unknown): {
         gitRootId: normalized.gitRootId,
         diffPath: normalized.diffPath,
         hydrated: true as const,
+        resourceBinding: normalized.resourceBinding,
       },
     ];
   });
@@ -460,6 +523,15 @@ export const useEditorStore = create<EditorState>()(
             return;
           }
 
+          const profileId = targetRef.profileId;
+          let resourceBinding: ResourceBinding | undefined;
+          if (profileId) {
+            const snapshot = getConnectionSnapshot(profileId);
+            if (snapshot) {
+              resourceBinding = { serverUrl: snapshot.serverUrl };
+            }
+          }
+
           const newTab: Tab = {
             key,
             project,
@@ -485,6 +557,7 @@ export const useEditorStore = create<EditorState>()(
             commitHash,
             gitRootId,
             diffPath,
+            resourceBinding,
           };
 
           set((s) => ({
@@ -530,6 +603,15 @@ export const useEditorStore = create<EditorState>()(
           // Optimistic tier guess from FsArborNode (no isBinary from tree)
           const optimisticTier = fileTier(node.name, node.size, false);
 
+          const profileId = targetRef.profileId;
+          let resourceBinding: ResourceBinding | undefined;
+          if (profileId) {
+            const snapshot = getConnectionSnapshot(profileId);
+            if (snapshot) {
+              resourceBinding = { serverUrl: snapshot.serverUrl };
+            }
+          }
+
           const placeholder: Tab = {
             key,
             project,
@@ -547,14 +629,13 @@ export const useEditorStore = create<EditorState>()(
             loading: !isPreviewOnlyFile(optimisticTier, node.name),
             saving: false,
             conflicted: false,
+            resourceBinding,
           };
 
           set((s) => ({
             tabs: [...s.tabs, placeholder],
             activeKeys: { ...s.activeKeys, [scopeKey]: key },
           }));
-
-          // Video playback owns its native range requests; never materialize it via fsRead.
           // Large files remain handled by LargeFileViewer's bounded range reads.
           if (
             isPreviewOnlyFile(optimisticTier, node.name) ||
@@ -569,10 +650,11 @@ export const useEditorStore = create<EditorState>()(
           }
 
           const requestGeneration = beginRequest(key);
+          const { transport: t, connectionRef } = resolveTabTransport({ target: targetRef });
           try {
-            const result = await transport().fsRead(targetRef, node.id);
+            const result = await t.fsRead(targetRef, node.id);
             if (!isCurrentRequest(key, requestGeneration)) return;
-
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
             if (!result.ok && result.code === "TOO_LARGE") {
               const tl = result as {
                 ok: false;
@@ -814,6 +896,10 @@ export const useEditorStore = create<EditorState>()(
             return false;
 
           const requestGeneration = beginRequest(key);
+          const savedContent = tab.content;
+          const { transport: tabTransport, connectionRef } =
+            resolveTabTransport(tab);
+
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key ? { ...t, saving: true } : t,
@@ -821,13 +907,15 @@ export const useEditorStore = create<EditorState>()(
           }));
 
           try {
-            const result = await transport().fsWriteFile(
+            const result = await tabTransport.fsWriteFile(
               tab.target,
               tab.path,
-              tab.content,
+              savedContent,
               tab.mtime,
             );
             if (!isCurrentRequest(key, requestGeneration)) return false;
+            if (connectionRef && !isCurrentConnection(connectionRef))
+              return false;
 
             if (result.ok) {
               set((s) => ({
@@ -836,9 +924,9 @@ export const useEditorStore = create<EditorState>()(
                     ? {
                         ...t,
                         saving: false,
-                        dirty: false,
+                        dirty: t.content !== savedContent,
                         stale: false,
-                        savedContent: t.content,
+                        savedContent,
                         mtime: result.newMtime,
                       }
                     : t,
@@ -874,6 +962,8 @@ export const useEditorStore = create<EditorState>()(
           } catch (e) {
             const message = e instanceof Error ? e.message : "Save error";
             if (!isCurrentRequest(key, requestGeneration)) return false;
+            if (connectionRef && !isCurrentConnection(connectionRef))
+              return false;
             const targetUnavailable = targetUnavailableForError(
               tab.target,
               errorCode(e),
@@ -908,6 +998,10 @@ export const useEditorStore = create<EditorState>()(
             return;
 
           const requestGeneration = beginRequest(key);
+          const savedContent = tab.content;
+          const { transport: tabTransport, connectionRef } =
+            resolveTabTransport(tab);
+
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key ? { ...t, saving: true, conflicted: false } : t,
@@ -916,11 +1010,12 @@ export const useEditorStore = create<EditorState>()(
 
           try {
             // Fetch current server mtime (0-byte range read just to get mtime).
-            const stat = await transport().fsRead(tab.target, tab.path, {
+            const stat = await tabTransport.fsRead(tab.target, tab.path, {
               offset: 0,
               len: 0,
             });
             if (!isCurrentRequest(key, requestGeneration)) return;
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
 
             const statTargetUnavailable =
               !stat.ok &&
@@ -951,13 +1046,14 @@ export const useEditorStore = create<EditorState>()(
               : "mtime" in stat
                 ? (stat as { mtime: number }).mtime
                 : tab.mtime;
-            const result = await transport().fsWriteFile(
+            const result = await tabTransport.fsWriteFile(
               tab.target,
               tab.path,
-              tab.content,
+              savedContent,
               currentMtime,
             );
             if (!isCurrentRequest(key, requestGeneration)) return;
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
             if (result.ok) {
               set((s) => ({
                 tabs: s.tabs.map((t) =>
@@ -965,9 +1061,9 @@ export const useEditorStore = create<EditorState>()(
                     ? {
                         ...t,
                         saving: false,
-                        dirty: false,
+                        dirty: t.content !== savedContent,
                         stale: false,
-                        savedContent: t.content,
+                        savedContent,
                         mtime: result.newMtime,
                       }
                     : t,
@@ -995,6 +1091,7 @@ export const useEditorStore = create<EditorState>()(
             const message =
               e instanceof Error ? e.message : "Force overwrite failed";
             if (!isCurrentRequest(key, requestGeneration)) return;
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
             const targetUnavailable = targetUnavailableForError(
               tab.target,
               errorCode(e),
@@ -1048,6 +1145,9 @@ export const useEditorStore = create<EditorState>()(
           }
 
           const requestGeneration = beginRequest(key);
+          const { transport: tabTransport, connectionRef } =
+            resolveTabTransport(tab);
+
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key ? { ...t, loading: true, conflicted: false } : t,
@@ -1055,8 +1155,9 @@ export const useEditorStore = create<EditorState>()(
           }));
 
           try {
-            const result = await transport().fsRead(tab.target, tab.path);
+            const result = await tabTransport.fsRead(tab.target, tab.path);
             if (!isCurrentRequest(key, requestGeneration)) return;
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
             if (!result.ok) {
               const targetUnavailable = targetUnavailableForError(
                 tab.target,
@@ -1084,7 +1185,7 @@ export const useEditorStore = create<EditorState>()(
                   return {
                     ...t,
                     loading: false,
-                    stale: true,
+                    stale: decoded !== t.savedContent,
                   };
                 }
                 return {
@@ -1104,6 +1205,7 @@ export const useEditorStore = create<EditorState>()(
           } catch (e) {
             const message = e instanceof Error ? e.message : "Reload failed";
             if (!isCurrentRequest(key, requestGeneration)) return;
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
             const targetUnavailable = targetUnavailableForError(
               tab.target,
               errorCode(e),
@@ -1268,6 +1370,9 @@ export const useEditorStore = create<EditorState>()(
           }
 
           const requestGeneration = beginRequest(key);
+          const { transport: tabTransport, connectionRef } =
+            resolveTabTransport(tab);
+
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key ? { ...t, loading: true } : t,
@@ -1275,8 +1380,9 @@ export const useEditorStore = create<EditorState>()(
           }));
 
           try {
-            const result = await transport().fsRead(tab.target, tab.path);
+            const result = await tabTransport.fsRead(tab.target, tab.path);
             if (!isCurrentRequest(key, requestGeneration)) return;
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
 
             if (!result.ok && result.code === "TOO_LARGE") {
               const tl = result as {
@@ -1332,26 +1438,36 @@ export const useEditorStore = create<EditorState>()(
             const binaryBase64 = result.binary ? result.content : undefined;
 
             set((s) => ({
-              tabs: s.tabs.map((t) =>
-                t.key === key
-                  ? {
-                      ...t,
-                      loading: false,
-                      tier,
-                      mime: result.mime,
-                      mtime: result.mtime,
-                      size: result.size,
-                      content: decoded,
-                      savedContent: decoded,
-                      binaryBase64,
-                      hydrated: false,
-                    }
-                  : t,
-              ),
+              tabs: s.tabs.map((t) => {
+                if (t.key !== key) return t;
+                if (t.dirty) {
+                  return {
+                    ...t,
+                    loading: false,
+                    hydrated: false,
+                    stale: decoded !== t.savedContent,
+                  };
+                }
+                return {
+                  ...t,
+                  loading: false,
+                  tier,
+                  mime: result.mime,
+                  mtime: result.mtime,
+                  size: result.size,
+                  content: decoded,
+                  savedContent: decoded,
+                  binaryBase64,
+                  hydrated: false,
+                  dirty: false,
+                  stale: false,
+                };
+              }),
             }));
           } catch (e) {
             const message = e instanceof Error ? e.message : "Unknown error";
             if (!isCurrentRequest(key, requestGeneration)) return;
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
             const targetUnavailable = targetUnavailableForError(
               tab.target,
               errorCode(e),
@@ -1363,8 +1479,8 @@ export const useEditorStore = create<EditorState>()(
                   ? {
                       ...t,
                       loading: false,
-                      error: message,
                       targetAvailable: !targetUnavailable,
+                      error: message,
                       hydrated: false,
                     }
                   : t,
@@ -1384,11 +1500,17 @@ export const useEditorStore = create<EditorState>()(
             return;
           }
 
+          const requestGeneration = beginRequest(key);
+          const { transport: tabTransport, connectionRef } =
+            resolveTabTransport(tab);
+
           try {
-            const stat = await transport().fsRead(tab.target, tab.path, {
+            const stat = await tabTransport.fsRead(tab.target, tab.path, {
               offset: 0,
               len: 0,
             });
+            if (!isCurrentRequest(key, requestGeneration)) return;
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
             if (!stat.ok) return;
 
             const current = get().tabs.find((t) => t.key === key);
@@ -1415,7 +1537,6 @@ export const useEditorStore = create<EditorState>()(
             // Non-blocking freshness probe; keep current buffer on network failure
           }
         },
-
 
         markTargetUnavailable: (
           target: ProjectTargetInput,
@@ -1448,6 +1569,31 @@ export const useEditorStore = create<EditorState>()(
             ),
           }));
         },
+
+        reconcileProfileTabs: async (profileId: string) => {
+          const snapshot = getConnectionSnapshot(profileId);
+          if (!snapshot || snapshot.status !== "connected") return;
+          const tabs = get().tabs.filter(
+            (t) =>
+              t.target.profileId === profileId &&
+              !t.dirty &&
+              t.targetAvailable,
+          );
+          for (const tab of tabs) {
+            if (
+              tab.resourceBinding?.serverUrl &&
+              tab.resourceBinding.serverUrl !== snapshot.serverUrl
+            ) {
+              set((s) => ({
+                tabs: s.tabs.map((t) =>
+                  t.key === tab.key ? { ...t, targetAvailable: false } : t,
+                ),
+              }));
+              continue;
+            }
+            void get().reconcileTabFreshness(tab.key);
+          }
+        },
       };
     },
     {
@@ -1474,6 +1620,7 @@ export const useEditorStore = create<EditorState>()(
           commitHash: t.commitHash,
           gitRootId: t.gitRootId,
           diffPath: t.diffPath,
+          resourceBinding: t.resourceBinding,
           hydrated: true,
           loading: false,
           dirty: false,
@@ -1481,7 +1628,6 @@ export const useEditorStore = create<EditorState>()(
           conflicted: false,
           stale: false,
         })),
-        activeKeys: state.activeKeys,
       }),
     },
   ),

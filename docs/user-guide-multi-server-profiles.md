@@ -98,6 +98,56 @@ Settings are also profile-qualified:
 - The **Server configuration** section inside Settings uses the same
   profile/project switcher; it is not a second project hierarchy.
 
+## Phase 03: Files, editor, search, and Git
+
+Phase 03 extends the `Profile → Project` selection to a target-qualified IDE
+resource. Every file, editor tab, watcher, search match, replacement, preview,
+and Git operation carries the owning `profileId`, project, and optional
+`worktreePath`. A missing worktree path means the configured project root.
+
+The profile ID selects the browser connection; it is not sent in the server
+target payload. The client captures the profile's connection generation before
+an asynchronous request and ignores stale results after disconnect, endpoint
+replacement, or reconnect. A missing worktree is shown as unavailable instead
+of silently falling back to the root or another profile.
+
+### Files and editor
+
+- File list/read/stat, create/delete, rename/move, upload, download, and tree
+  watchers stay on the selected profile and target.
+- Clean tabs reload after filesystem or Git changes. Dirty tabs retain local
+  edits and show a stale/conflict state; remote bytes never overwrite unsaved
+  content.
+- Monaco model and tab keys include profile and worktree scope. Equal paths on
+  two profiles are separate tabs.
+- Files at least 5 MiB open in the read-only range viewer. Image and video
+  previews use protected, short-lived media capabilities rather than bearer
+  URLs or whole-file Blob reads.
+
+See the [Phase 03 workbench contract](./phase-03-files-editor-search-git.md)
+for transport messages, invalidation rules, and source locations.
+
+### Federated search and replace
+
+Search offers **Project target** and **All connected profiles** scopes. The
+workspace scope keeps each profile's status visible, aggregates matches with
+profile/project identity, and caps the combined result set at 500. A server
+truncation or aggregate cap displays a warning that results may be incomplete.
+
+`Replace Next` and `Replace All` capture the target from each match, including
+its originating profile. A dirty tab blocks only the matching
+profile/project/worktree/path; it never blocks an identical path on another
+target. Replace All reports replaced, skipped-dirty, and failed files and
+reloads only clean tabs.
+
+### Git and SSH retry
+
+Fetch and pull preserve independent results for each selected root/worktree
+target. The shared SSH passphrase flow prompts only for recognized SSH
+authentication failures. After the key loads, only failed targets are retried;
+successful targets are retained and are not replayed. A changed connection
+generation cancels the retry.
+
 ## Persistence and security
 
 | Record | Storage and scope | Behavior |
