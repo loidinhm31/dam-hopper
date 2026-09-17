@@ -208,6 +208,7 @@ async fn test_no_auth_status_shows_dev_mode() {
         json["authenticated"], true,
         "Should be authenticated in dev mode"
     );
+    assert_eq!(json["workbenchProtocol"], 2, "Should include workbenchProtocol 2");
     assert_eq!(json["dev_mode"], true, "Should indicate dev mode");
     assert_eq!(json["user"], "dev-user", "Should show dev-user");
 }

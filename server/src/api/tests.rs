@@ -1272,6 +1272,7 @@ async fn auth_status_returns_200_with_bearer_token() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["authenticated"], true);
+    assert_eq!(json["workbenchProtocol"], 2);
 }
 
 // ---------------------------------------------------------------------------

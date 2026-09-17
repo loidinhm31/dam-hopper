@@ -17,14 +17,14 @@ Implement one shared workbench with simultaneous supported profile connections a
 
 Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.md). This package preserves its nine feature phases and thirteen scenarios, adds a contract-freeze phase and resolves execution dependencies. No backend workspace UUID/catalog redesign, cross-server filesystem move or distribution, global active-profile fallback, app-per-profile remount, or automatic mutation replay.
 
-**Status:** In progress (Phase 00 complete; Phases 01–09 pending; 1/10 phases complete; 10%; updated 2026-09-17).
+**Status:** In progress (Phases 00–01 complete; Phases 02–09 pending; 2/10 phases complete; 20%; updated 2026-09-17).
 
 ## Phases
 
 | Phase | Deliverable | Dependency | Status / progress |
 |---|---|---|---|
 | [00 — Contract freeze](phase-00-contract-freeze.md) | Scope, callers/stores inventory, shared contracts and G0 | None | Completed (G0 frozen) — 2026-09-17 / 100% |
-| [01 — Ownership and connections](phase-01-explicit-ownership-and-connections.md) | Runtime/API/transport/query/event cutover | G0; 02A auth contract | Ready — next; implement against frozen G0 interfaces / 0% |
+| [01 — Ownership and connections](phase-01-explicit-ownership-and-connections.md) | Runtime/API/transport/query/event cutover | G0; 02A auth contract | Completed — 2026-09-17 / 100% |
 | [02 — Shell and profiles](phase-02-unified-shell-and-profile-migration.md) | Independent auth/controls, grouped navigation, fresh resource reset, host bootstrap | G0; 01 interfaces | Pending / 0% |
 | [03 — Files, editor, search and Git](phase-03-files-editor-search-and-git.md) | Qualified models/targets, exact async effects, federated partial results | G0; 01/02; 07 media interface | Pending / 0% |
 | [04 — Terminals and workflow](phase-04-terminals-workflow-and-navigation.md) | Shared keep-alive, qualified layouts/history/links/notifications/diagnostics | G0; 01/02 | Pending / 0% |
@@ -37,7 +37,8 @@ Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.
 ## Current status — 2026-09-17
 
 - **Phase 00:** DONE — G0 contract freeze and caller inventory approved/frozen (100%).
-- **Next:** **Phase 01 — Explicit ownership and connections** is ready for implementation against the frozen G0 interfaces. Begin `ownership.ts`, `connections.ts`, bound API/transport, and query key builders under the foundation writer.
+- **Phase 01:** DONE — explicit ownership and connection foundation complete (100%).
+- **Next:** **Phase 02 — Unified shell and profile migration**.
 
 ## Read before implementation
 

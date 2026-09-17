@@ -398,7 +398,8 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
         return Json(serde_json::json!({
             "authenticated": true,
             "dev_mode": true,
-            "user": "dev-user"
+            "user": "dev-user",
+            "workbenchProtocol": 2
         }))
         .into_response();
     }
@@ -408,7 +409,11 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
         .unwrap_or(false);
 
     if ok {
-        Json(serde_json::json!({ "authenticated": true })).into_response()
+        Json(serde_json::json!({
+            "authenticated": true,
+            "workbenchProtocol": 2
+        }))
+        .into_response()
     } else {
         (
             StatusCode::UNAUTHORIZED,

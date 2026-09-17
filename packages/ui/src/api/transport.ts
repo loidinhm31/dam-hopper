@@ -10,10 +10,32 @@ import type {
   TerminalLifecycleEvent,
 } from "./client.js";
 
+export interface TransportInvokeOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
 export interface Transport {
   /** Request/response — maps to fetch (REST) */
-  invoke<T>(channel: string, data?: unknown): Promise<T>;
+  invoke<T>(
+    channel: string,
+    data?: unknown,
+    options?: TransportInvokeOptions | number,
+  ): Promise<T>;
 
+  /** Closes and disposes all socket, timer, and listener resources. */
+  destroy?(): void;
+
+  // Optional capabilities implemented by WsTransport
+  fsRead?: unknown;
+  fsWriteFile?: unknown;
+  fsPutFile?: unknown;
+  fsPutSave?: unknown;
+  fsSubscribeTree?: unknown;
+  fsUnsubscribeTree?: unknown;
+  onFsEvent?: unknown;
+  fsUploadFile?: unknown;
+  fsOp?: unknown;
   /** Terminal data stream subscription. Returns unsubscribe fn. */
   onTerminalData(id: string, cb: (data: string) => void): () => void;
 

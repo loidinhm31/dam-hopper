@@ -8,7 +8,7 @@
 
 ### Overview
 
-Date: 2026-09-16. Priority: P1. Implementation: pending (0%). Planning status: specified; runtime verification: not run. Scope: Runtime and ownership.
+Date: 2026-09-17. Priority: P1. Implementation: complete (100%; completed 2026-09-17). Planning status: specified; runtime verification: passing (Cycle 2 review complete). Scope: Runtime and ownership.
 
 ### Key Insights
 
@@ -57,12 +57,12 @@ Depends on none. Foundation owner owns shared API/event modules for all later ph
 
 ### Todo list
 
-- [ ] A/B clients with identical local IDs route independently; owner mismatch rejects before network I/O.
-- [ ] Reconnect, URL/auth/token change, removal and late WS callbacks reject old-generation results/events; B remains untouched.
-- [ ] Abort reaches HTTP and PNG network requests; disposing A clears all its pending maps/subscriptions only.
-- [ ] Query hash is deterministic from its arguments; no active-profile dependency or bearer in keys.
-- [ ] Disconnect emits no terminal kill/remove; no automatic mutation replay, including ambiguous transport failure.
-- [ ] All feature clients receive explicit owners; no global query reset remains in connection/navigation paths.
+- [x] A/B clients with identical local IDs route independently; owner mismatch rejects before network I/O.
+- [x] Reconnect, URL/auth/token change, removal and late WS callbacks reject old-generation results/events; B remains untouched.
+- [x] Abort reaches HTTP and PNG network requests; disposing A clears all its pending maps/subscriptions only.
+- [x] Query hash is deterministic from its arguments; no active-profile dependency or bearer in keys.
+- [x] Disconnect emits no terminal kill/remove; no automatic mutation replay, including ambiguous transport failure.
+- [x] All feature clients receive explicit owners; no global query reset remains in connection/navigation paths.
 
 ### Success Criteria
 
@@ -89,3 +89,7 @@ Implementation commands from repository root: `pnpm --filter @dam-hopper/ui buil
 Paths such as `api/`, `hooks/`, `stores/`, `components/`, `contexts/` and `lib/` in this phase are relative to `packages/ui/src/` unless an explicit `server/` or `apps/` prefix is shown. Existing tests mentioned here are updated only where their observable contract changes; proposed test files are not represented as existing. Shared API/shell files follow [execution-map.md](execution-map.md), not concurrent feature ownership.
 
 Unresolved questions: no product decision deferred. Record unavailable qualification prerequisites or contract-relevant source drift before execution.
+
+#### Progress and Next Steps (Cycle 2 Review)
+1. Cycle 2 review completed: 0 critical issues; Cycle 1 remediations verified (idempotency, in-flight deduplication, 10s timeout, credentials omit, tsc TS2550 resolved via createDeferred, query client injection via setConnectionRegistryQueryClient, single external store in useTransportGeneration).
+2. Next: Proceed to Phase 02 (Unified shell and profile migration) and begin migrating callers to explicit owners.

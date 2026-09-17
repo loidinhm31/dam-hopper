@@ -1,4 +1,4 @@
-import type { Transport } from "./transport.js";
+import type { Transport, TransportInvokeOptions } from "./transport.js";
 import type { WsStatus } from "./ws-transport.js";
 
 function noopUnsubscribe(): () => void {
@@ -7,10 +7,15 @@ function noopUnsubscribe(): () => void {
 
 /** Transport used while the setup screen has no active server profile. */
 export class IdleTransport implements Transport {
-  invoke<T>(): Promise<T> {
+  invoke<T>(
+    _channel?: string,
+    _data?: unknown,
+    _options?: TransportInvokeOptions | number,
+  ): Promise<T> {
     return Promise.reject(new Error("Server profile required"));
   }
 
+  destroy(): void {}
   getStatus(): WsStatus {
     return "disconnected";
   }

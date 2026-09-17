@@ -11,10 +11,19 @@
  * No legacy {type: "..."} support.
  */
 
-import type { Transport } from "./transport.js";
+import type { Transport, TransportInvokeOptions } from "./transport.js";
+
+export interface WsTransportOptions {
+  baseUrl?: string;
+  profileId?: string;
+  authToken?: string | null;
+  generation?: number;
+  onDrop?: (transport: WsTransport) => void;
+}
 import {
   ApiRequestError,
   normalizeProjectTarget,
+  type BrowserDebugArtifactResponse,
   type ProjectTargetInput,
   type TerminalLifecycle,
   type TerminalLifecycleEvent,
@@ -1317,20 +1326,22 @@ function channelToEndpoint(
   }
 }
 
-const MAX_BACKOFF_MS = 30_000;
 const INITIAL_BACKOFF_MS = 1_000;
-// OPAQUE rounds involve Wasm crypto — longer timeout than FS ops to handle slow devices.
+const MAX_BACKOFF_MS = 30_000;
 const AUTH_TIMEOUT_MS = 30_000;
 
 export class WsTransport implements Transport {
   private ws: WebSocket | null = null;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private backoffMs = INITIAL_BACKOFF_MS;
   private closed = false;
   /** Aggregated message-kind counters for diagnostics (Phase 03). */
   private messageKindCounts = new Map<string, number>();
   /** Token bound to this transport's URL/profile for its entire lifetime. */
   private readonly authToken: string | null;
+  private readonly baseUrl: string;
+  private readonly profileId?: string;
+  public readonly generation: number;
+  private readonly onDrop?: (transport: WsTransport) => void;
+  private readonly activeAbortControllers = new Set<AbortController>();
 
   private wsStatus: WsStatus = "connecting";
   private statusListeners = new Set<(status: WsStatus) => void>();
@@ -1541,11 +1552,31 @@ export class WsTransport implements Transport {
   >();
 
   constructor(
-    private readonly baseUrl: string = getServerUrl(),
-    private readonly profileId: string | undefined = getActiveProfileId() ??
-      undefined,
+    baseUrlOrOptions: string | WsTransportOptions = getServerUrl(),
+    profileId?: string,
+    authToken?: string | null,
+    generation = 0,
+    onDrop?: (transport: WsTransport) => void,
   ) {
-    this.authToken = getAuthToken(this.profileId);
+    if (typeof baseUrlOrOptions === "object" && baseUrlOrOptions !== null) {
+      this.baseUrl = baseUrlOrOptions.baseUrl ?? getServerUrl();
+      this.profileId = baseUrlOrOptions.profileId;
+      this.authToken =
+        baseUrlOrOptions.authToken !== undefined
+          ? baseUrlOrOptions.authToken
+          : (this.profileId ? getAuthToken(this.profileId) : getAuthToken());
+      this.generation = baseUrlOrOptions.generation ?? 0;
+      this.onDrop = baseUrlOrOptions.onDrop;
+    } else {
+      this.baseUrl = baseUrlOrOptions;
+      this.profileId = profileId ?? getActiveProfileId() ?? undefined;
+      this.authToken =
+        authToken !== undefined
+          ? authToken
+          : (this.profileId ? getAuthToken(this.profileId) : getAuthToken());
+      this.generation = generation;
+      this.onDrop = onDrop;
+    }
     this.connect();
   }
 
@@ -1666,6 +1697,10 @@ export class WsTransport implements Transport {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    for (const controller of this.activeAbortControllers) {
+      controller.abort(new Error("transport destroyed"));
+    }
+    this.activeAbortControllers.clear();
     this.ws?.close();
     this.ws = null;
     this.statusListeners.clear();
@@ -1677,6 +1712,7 @@ export class WsTransport implements Transport {
     this.lifecycleListeners.clear();
     this.fsOverflowListeners.clear();
     this.fsEventListeners.clear();
+    this.bufferListeners.clear();
     this.failAllPending("transport destroyed");
   }
 
@@ -1689,11 +1725,16 @@ export class WsTransport implements Transport {
     let host: string;
     try {
       const parsed = new URL(this.baseUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error(`Unsupported protocol: ${parsed.protocol}`);
+      }
       wsProto = parsed.protocol === "https:" ? "wss:" : "ws:";
       host = parsed.host;
     } catch {
-      wsProto = location.protocol === "https:" ? "wss:" : "ws:";
-      host = location.host;
+      this.setStatus("error");
+      this.failAllPending(`Invalid server URL: ${this.baseUrl}`);
+      this.onDrop?.(this);
+      return;
     }
 
     const wsUrl = this.authToken
@@ -1702,14 +1743,20 @@ export class WsTransport implements Transport {
 
     const ws = new WebSocket(wsUrl);
     this.ws = ws;
+    const capturedWs = ws;
+    const capturedGeneration = this.generation;
 
     ws.onopen = () => {
-      logger.debug("WsTransport", "connected", { baseUrl: this.baseUrl });
-      this.backoffMs = INITIAL_BACKOFF_MS;
+      if (this.closed || this.ws !== capturedWs || this.generation !== capturedGeneration) return;
+      logger.debug("WsTransport", "connected", {
+        baseUrl: this.baseUrl,
+        generation: this.generation,
+      });
       this.setStatus("connected");
     };
 
     ws.onmessage = (event) => {
+      if (this.closed || this.ws !== capturedWs || this.generation !== capturedGeneration) return;
       let msg: {
         kind: string;
         id?: string;
@@ -2151,26 +2198,35 @@ export class WsTransport implements Transport {
     };
 
     ws.onclose = () => {
-      if (this.closed) return;
-      logger.debug("WsTransport", "disconnected; scheduling reconnect", {
-        backoffMs: this.backoffMs,
+      if (this.closed || this.ws !== capturedWs || this.generation !== capturedGeneration) return;
+      logger.debug("WsTransport", "disconnected", {
+        baseUrl: this.baseUrl,
+        generation: this.generation,
       });
-      // Reject all pending promises immediately on disconnect. Callers receive an error
-      // right away rather than waiting 15–60 s for timeouts. FS subscriptions (pendingFsReqs)
-      // are also rejected — callers must re-subscribe after reconnect via fsSubscribeTree().
       this.failAllPending("WebSocket disconnected");
       this.setStatus("disconnected");
-      this.scheduleReconnect();
+      if (this.onDrop) {
+        this.onDrop(this);
+      } else {
+        this.scheduleReconnect();
+      }
     };
 
     ws.onerror = () => {
+      if (this.closed || this.ws !== capturedWs || this.generation !== capturedGeneration) return;
       recordClientDiagnostic("transport", "ws-transport", "ws.error", {
         messageKindCounts: this.messageKindCountsSnapshot(),
       });
       this.setStatus("error");
-      ws.close();
+      try {
+        capturedWs.close();
+      } catch {}
+      this.onDrop?.(this);
     };
   }
+
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private backoffMs = INITIAL_BACKOFF_MS;
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
@@ -2187,8 +2243,23 @@ export class WsTransport implements Transport {
   async invoke<T>(
     channel: string,
     data?: unknown,
-    timeoutMs = 30000,
+    options?: TransportInvokeOptions | number,
   ): Promise<T> {
+    const timeoutMs =
+      typeof options === "number"
+        ? options
+        : options?.timeoutMs ?? 30000;
+    const externalSignal =
+      typeof options === "object" && options !== null
+        ? options.signal
+        : undefined;
+
+    if (externalSignal?.aborted) {
+      throw externalSignal.reason instanceof Error
+        ? externalSignal.reason
+        : new Error("Request aborted");
+    }
+
     const {
       method,
       url: relativeUrl,
@@ -2210,12 +2281,30 @@ export class WsTransport implements Transport {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    this.activeAbortControllers.add(controller);
+
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error(`Request timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    let onAbort: (() => void) | undefined;
+    if (externalSignal) {
+      onAbort = () => {
+        controller.abort(
+          externalSignal.reason instanceof Error
+            ? externalSignal.reason
+            : new Error("Request aborted"),
+        );
+      };
+      externalSignal.addEventListener("abort", onAbort, { once: true });
+    }
 
     const init: RequestInit = {
       method,
       headers,
-      credentials: "include",
+      credentials: "omit",
       signal: controller.signal,
     };
     if (body !== undefined) {
@@ -2246,46 +2335,64 @@ export class WsTransport implements Transport {
       }
       const ct = response.headers.get("content-type") ?? "";
       if (ct.includes("application/json")) {
-        return response.json() as Promise<T>;
+        return (await response.json()) as T;
       }
-      return response.text() as unknown as T;
+      return (await response.text()) as unknown as T;
     } catch (error) {
       clearTimeout(timeout);
-      if (error instanceof Error && error.name === "AbortError") {
+      if (timedOut) {
         throw new Error(`Request timeout after ${timeoutMs}ms`);
       }
+      if (externalSignal?.aborted) {
+        throw externalSignal.reason instanceof Error
+          ? externalSignal.reason
+          : new Error("Request aborted");
+      }
       throw error;
+    } finally {
+      clearTimeout(timeout);
+      if (externalSignal && onAbort) {
+        externalSignal.removeEventListener("abort", onAbort);
+      }
+      this.activeAbortControllers.delete(controller);
     }
   }
 
   async uploadBrowserDebugPng(
     artifactId: string,
     png: Blob,
-  ): Promise<import("./client.js").BrowserDebugArtifactResponse> {
+  ): Promise<BrowserDebugArtifactResponse> {
     if (png.type !== "image/png") {
       throw new Error("Browser screenshot upload must be a PNG");
     }
-    const response = await fetch(
-      `${this.baseUrl}/api/browser-debug/artifacts/${encodeURIComponent(artifactId)}/png`,
-      {
-        method: "PUT",
-        headers: {
-          ...this.buildAuthHeaders(),
-          "Content-Type": "image/png",
+    const controller = new AbortController();
+    this.activeAbortControllers.add(controller);
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/api/browser-debug/artifacts/${encodeURIComponent(artifactId)}/png`,
+        {
+          method: "PUT",
+          headers: {
+            ...this.buildAuthHeaders(),
+            "Content-Type": "image/png",
+          },
+          credentials: "omit",
+          body: png,
+          signal: controller.signal,
         },
-        credentials: "include",
-        body: png,
-      },
-    );
-    if (!response.ok) {
-      const error = (await response
-        .json()
-        .catch(() => ({ error: response.statusText }))) as {
-        error?: string;
-      };
-      throw new Error(error.error ?? `HTTP ${response.status}`);
+      );
+      if (!response.ok) {
+        const error = (await response
+          .json()
+          .catch(() => ({ error: response.statusText }))) as {
+          error?: string;
+        };
+        throw new Error(error.error ?? `HTTP ${response.status}`);
+      }
+      return (await response.json()) as BrowserDebugArtifactResponse;
+    } finally {
+      this.activeAbortControllers.delete(controller);
     }
-    return response.json();
   }
 
   onTerminalData(id: string, cb: (data: string) => void): () => void {
