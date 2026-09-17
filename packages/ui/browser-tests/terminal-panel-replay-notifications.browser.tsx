@@ -239,6 +239,9 @@ vi.mock("@/api/transport.js", () => ({
     return () => mocks.transportChangeListeners.delete(listener);
   },
   getTransport: () => mocks.transport,
+  reconfigureTransport: vi.fn(),
+  initTransport: vi.fn(),
+  resetTransport: vi.fn(),
 }));
 vi.mock("@/lib/terminal-registry.js", () => {
   const terminalRegistry = new Map();

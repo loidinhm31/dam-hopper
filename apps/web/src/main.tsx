@@ -13,6 +13,8 @@ import { connectProfile } from "@dam-hopper/ui/api/connections";
 import { fetchRuntimeConfig } from "@dam-hopper/ui/api/runtime-config";
 import { initializeClientDiagnostics } from "@dam-hopper/ui/diagnostics-client";
 import { performFreshStateReset } from "@dam-hopper/ui/lib/fresh-state-reset";
+import { initTransport } from "@dam-hopper/ui/api/transport";
+import { IdleTransport } from "@dam-hopper/ui/api/idle-transport";
 
 const viteEnv = (import.meta as ImportMeta & { env?: Partial<ImportMetaEnv> })
   .env;
@@ -28,6 +30,9 @@ initializeClientDiagnostics();
 async function bootstrap() {
   // Step 2.9: Idempotent fresh-state reset before restoring profiles/connections
   performFreshStateReset();
+
+  // Initialize fallback idle transport before React mounts
+  initTransport(new IdleTransport());
 
   migrateToProfiles();
 

@@ -9,6 +9,7 @@ import type {
   BrowserDebugArtifactResponse,
   TerminalLifecycleEvent,
 } from "./client.js";
+import { IdleTransport } from "./idle-transport.js";
 
 export interface TransportInvokeOptions {
   signal?: AbortSignal;
@@ -120,8 +121,9 @@ export function initTransport(transport: Transport): void {
 }
 
 export function getTransport(): Transport {
-  if (!_transport)
-    throw new Error("Transport not initialized. Call initTransport() first.");
+  if (!_transport) {
+    _transport = new IdleTransport();
+  }
   return _transport;
 }
 

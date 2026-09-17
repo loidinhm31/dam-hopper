@@ -2,7 +2,8 @@ import { useSyncExternalStore } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { ApiClient } from "./client.js";
 import { createApiClient } from "./client.js";
-import type { Transport } from "./transport.js";
+import { type Transport, reconfigureTransport } from "./transport.js";
+import { IdleTransport } from "./idle-transport.js";
 import { WsTransport } from "./ws-transport.js";
 import {
   type ConnectionRef,
@@ -14,10 +15,13 @@ import {
   getProfiles,
   getAuthToken,
   isSameOriginProfile,
+  getActiveProfileId,
 } from "./server-config.js";
 import {
   installTransportBridge,
   removeProfileListeners,
+  resetTransportListeners,
+  initTransportListeners,
 } from "../hooks/use-sse.js";
 
 let registryQueryClient: QueryClient | null = null;
@@ -444,6 +448,12 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
         status: "connected",
         error: null,
       });
+      const activeId = getActiveProfileId();
+      if (!activeId || activeId === profileId) {
+        reconfigureTransport(transport);
+        resetTransportListeners();
+        initTransportListeners();
+      }
       settle();
     } else if (wsStatus === "disconnected" || wsStatus === "error") {
       handleDrop(profileId, nextGen);
@@ -457,9 +467,14 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
       status: "connected",
       error: null,
     });
+    const activeId = getActiveProfileId();
+    if (!activeId || activeId === profileId) {
+      reconfigureTransport(transport);
+      resetTransportListeners();
+      initTransportListeners();
+    }
     settle();
   }
-
   await wsConnectedPromise;
 }
 
@@ -477,6 +492,11 @@ export function disconnectProfile(profileId: ProfileId): void {
   entry.generation += 1;
   entry.backoffMs = INITIAL_BACKOFF_MS;
 
+  const activeId = getActiveProfileId();
+  if (!activeId || activeId === profileId) {
+    reconfigureTransport(new IdleTransport());
+    resetTransportListeners();
+  }
   updateSnapshot(profileId, {
     status: "disconnected",
     intent: false,
