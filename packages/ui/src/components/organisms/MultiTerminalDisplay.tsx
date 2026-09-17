@@ -14,6 +14,7 @@ import { terminalRegistry } from "@/lib/terminal-registry.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
+import type { TerminalRef } from "@/api/ownership.js";
 
 export interface MountedSession {
   sessionId: string;
@@ -22,6 +23,8 @@ export interface MountedSession {
   command: string;
   cwd?: string;
   worktreePath?: string;
+  profileId?: string;
+  terminalRef?: TerminalRef;
 }
 
 interface Props {

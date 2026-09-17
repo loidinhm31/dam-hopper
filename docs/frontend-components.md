@@ -757,11 +757,12 @@ and terminal host attachment explicitly invalidates geometry after reparenting.
 shows full command text with accessible names, search, Copy, and Use actions. Use inserts the
 chosen one-line command without executing it; multi-line commands remain visible and copy-only.
 
-`command-history.ts` stores local v2 entries with exact command text kept apart from normalized
-Unicode search text. Ranking is shared by terminal and command-search consumers: exact raw
-prefixes outrank Unicode token-prefix matches, with recency and use count breaking the latter.
-Entries retain total and per-project usage without creating project-specific copies of the raw
-command. Browser storage errors and the local-history disabled preference prevent persistence.
+`command-history.ts` stores local v3 entries with exact command text kept apart from normalized
+Unicode search text. Entry IDs are salted with `profileId`, and reads are filtered by profile so
+identical commands never cross profile boundaries. Ranking is shared by terminal and
+command-search consumers: exact raw prefixes outrank Unicode token-prefix matches, with recency
+and use count breaking the latter. Browser storage errors and the local-history disabled
+preference prevent persistence.
 
 Codex OSC 9 notifications include `Project · Bash #N`, where `N` is the
 terminal's current 1-based position in the open list. Selecting the native
@@ -780,7 +781,16 @@ interface TerminalPanelProps {
   project: string;
   command: string;
   cwd?: string;
+  worktreePath?: string;
+  profileId?: string;
+  terminalRef?: { profileId: string; id: string };
   onExit?: (code: number | null) => void;
+  onNewTerminal?: () => void;
+  onTerminalReady?: (sessionId: string) => void;
+  suppressAutoFocus?: boolean;
+  suppressNativeKeyboard?: boolean;
+  terminalOrder?: number;
+  webglEnabled?: boolean;
   className?: string;
 }
 ```
@@ -827,8 +837,8 @@ interface TerminalPanelProps {
 - `TabBar` exposes insertion droppables before the first tab, between tabs, and after the last tab for reorder and cross-pane insertion.
 - `PaneContainer` renders labeled five-zone docking previews only while dragging, keeping pointer interference off the live terminal during normal input.
 - Re-dropping onto the same pane center only changes active tab focus; invalid self-edge splits are ignored.
-- Terminal pin/unpin is browser-tab state shared by the IDE tab bar and Runtime navigator. Pinned live sessions survive a page reload through versioned IDs-only `sessionStorage` (`dam-hopper:terminal-pins:v1`), but never leave the browser tab or reach the server. Unpinning and explicit terminal removal clear the stored ID; stale IDs are removed after a successful terminal-session refresh. Pinned sessions hide their close action and cannot be closed until unpinned. IDE and Runtime terminal output use the theme background, with Runtime output adding an inset border and focus ring for clearer contrast.
-- Terminal layout persistence uses project-scoped localStorage keys in the form `dam-hopper:terminal-layout:v2:<encoded-group-id>`. Traditional terminal projects intentionally do not migrate the legacy global layout tree; each project starts with its default pane on first visit.
+- Terminal pin/unpin is browser-tab state shared by the IDE tab bar and Runtime navigator. Pinned live sessions survive a page reload through profile-partitioned, IDs-only `sessionStorage` (`dam-hopper:terminal-pins:v2:<encoded-profileId>`; payload v2), but never leave the browser tab or reach the server. Unpinning and explicit terminal removal clear the stored ID; stale IDs are removed after a successful terminal-session refresh. Pinned sessions hide their close action and cannot be closed until unpinned. IDE and Runtime terminal output use the theme background, with Runtime output adding an inset border and focus ring for clearer contrast.
+- Terminal layout persistence uses owner/group-qualified localStorage keys in the form `dam-hopper:terminal-layout:v3:<encoded-[profileId,groupId]>` with payload version 2. Traditional terminal projects intentionally do not migrate the legacy global layout tree; each owner/group starts with its default pane on first visit.
 
 **Runtime verification notes:**
 

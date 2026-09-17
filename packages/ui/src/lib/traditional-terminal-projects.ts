@@ -56,8 +56,14 @@ export function firstRemainingTraditionalTerminalId<T extends TabEntry>(
     ?.sessionId;
 }
 
-export function traditionalTerminalLayoutStorageKey(groupId: string): string {
-  return `dam-hopper:terminal-layout:v2:${encodeURIComponent(groupId)}`;
+export function traditionalTerminalLayoutStorageKey(
+  groupId: string,
+  profileId?: string,
+): string {
+  const encoded = profileId
+    ? encodeURIComponent(JSON.stringify([profileId, groupId]))
+    : encodeURIComponent(groupId);
+  return `dam-hopper:terminal-layout:v3:${encoded}`;
 }
 
 export function traditionalTerminalProjectTabId(groupId: string): string {

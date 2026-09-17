@@ -239,8 +239,9 @@ export function EditorTabs({
     );
   };
   const activeKeyRef = useRef(activeTab?.key);
-  activeKeyRef.current = activeTab?.key;
-
+  useEffect(() => {
+    activeKeyRef.current = activeTab?.key;
+  }, [activeTab?.key]);
   // Auto-hydrate active tab if content is not loaded
   useEffect(() => {
     if (activeTab?.hydrated && !activeTab.loading) {

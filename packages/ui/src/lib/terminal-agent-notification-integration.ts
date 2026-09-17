@@ -1,3 +1,4 @@
+import type { TerminalRef } from "@/api/ownership.js";
 import type { Terminal } from "@xterm/xterm";
 import { BrowserNotificationService } from "@/lib/browser-notification-service.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
@@ -18,6 +19,8 @@ interface TerminalAgentNotificationIntegrationOptions {
   sessionId: string;
   project: string;
   getTerminalOrder?: () => number | undefined;
+  profileId?: string;
+  terminalRef?: TerminalRef;
 }
 
 export interface TerminalAgentNotificationIntegration {
@@ -35,6 +38,8 @@ export function attachTerminalAgentNotifications({
   sessionId,
   project,
   getTerminalOrder,
+  profileId,
+  terminalRef,
 }: TerminalAgentNotificationIntegrationOptions): TerminalAgentNotificationIntegration {
   let replayActive = false;
   let disposed = false;
@@ -66,7 +71,12 @@ export function attachTerminalAgentNotifications({
       rateLimitMs: CODEX_OSC9_RATE_LIMIT_MS,
       terminalOrder: getTerminalOrder?.(),
       onSelect: ({ sessionId: selectedSessionId }) =>
-        dispatchTerminalNotificationSelection(selectedSessionId),
+        dispatchTerminalNotificationSelection(
+          selectedSessionId,
+          window,
+          profileId,
+          terminalRef,
+        ),
     });
   };
 
@@ -74,6 +84,8 @@ export function attachTerminalAgentNotifications({
     sessionId,
     project,
     agent: "codex" as const,
+    profileId,
+    terminalRef,
   });
   const handleTerminalSignal = (
     parse: () => TerminalAgentNotification | null,

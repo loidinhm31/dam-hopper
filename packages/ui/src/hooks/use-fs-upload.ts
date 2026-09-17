@@ -138,7 +138,7 @@ export function useFsUpload(
         setProgress({ filename: file.name, pct: 0, done: true, error: msg });
       }
     },
-    [project, subscribedPath, targetKey, worktreePath, qc, profileId],
+    [project, subscribedPath, targetKey, worktreePath, qc, profileId, targetRef],
   );
 
   function clearProgress() {

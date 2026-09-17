@@ -158,9 +158,18 @@ describe("firstRemainingTraditionalTerminalId", () => {
 });
 
 describe("traditionalTerminalLayoutStorageKey", () => {
-  it("encodes the project group id in the v2 namespace", () => {
+  it("encodes the project group id in the v3 namespace", () => {
     expect(traditionalTerminalLayoutStorageKey("project:alpha/beta")).toBe(
-      "dam-hopper:terminal-layout:v2:project%3Aalpha%2Fbeta",
+      "dam-hopper:terminal-layout:v3:project%3Aalpha%2Fbeta",
+    );
+  });
+
+  it("encodes profileId tuple in the v3 namespace when provided", () => {
+    const expected = `dam-hopper:terminal-layout:v3:${encodeURIComponent(
+      JSON.stringify(["prof-1", "project:alpha"]),
+    )}`;
+    expect(traditionalTerminalLayoutStorageKey("project:alpha", "prof-1")).toBe(
+      expected,
     );
   });
 });

@@ -28,7 +28,7 @@ describe("terminal pin persistence", () => {
       new Set(["free:one", "run:web"]),
     );
     expect(JSON.parse(values.get(TERMINAL_PIN_STORAGE_KEY)!)).toEqual({
-      version: 1,
+      version: 2,
       sessionIds: ["free:one", "run:web"],
     });
   });
@@ -45,14 +45,26 @@ describe("terminal pin persistence", () => {
 
   it.each([
     "not json",
-    JSON.stringify({ version: 2, sessionIds: ["free:one"] }),
-    JSON.stringify({ version: 1, sessionIds: ["free:one", 1] }),
-    JSON.stringify({ version: 1, sessionIds: [""] }),
+    JSON.stringify({ version: 1, sessionIds: ["free:one"] }),
+    JSON.stringify({ version: 2, sessionIds: ["free:one", 1] }),
+    JSON.stringify({ version: 2, sessionIds: [""] }),
   ])("discards malformed stored data: %s", (payload) => {
     const { api, values } = storage({ [TERMINAL_PIN_STORAGE_KEY]: payload });
 
     expect(loadPinnedTerminalIds(api)).toEqual(new Set());
     expect(values.has(TERMINAL_PIN_STORAGE_KEY)).toBe(false);
+  });
+
+  it("discards legacy v1 pin storage key", () => {
+    const { api, values } = storage({
+      "dam-hopper:terminal-pins:v1": JSON.stringify({
+        version: 1,
+        sessionIds: ["legacy:1"],
+      }),
+    });
+
+    expect(loadPinnedTerminalIds(api)).toEqual(new Set());
+    expect(values.has("dam-hopper:terminal-pins:v1")).toBe(false);
   });
 
   it("fails open when browser storage throws", () => {
@@ -98,5 +110,15 @@ describe("terminal pin persistence", () => {
     expect(
       setPinnedTerminalId(new Set(["free:one"]), "free:one", false),
     ).toEqual(new Set());
+  });
+
+  it("partitions pinned terminals by profileId", () => {
+    const { api } = storage();
+
+    savePinnedTerminalIds(["term-a"], api, "profile-a");
+    savePinnedTerminalIds(["term-b"], api, "profile-b");
+
+    expect(loadPinnedTerminalIds(api, "profile-a")).toEqual(new Set(["term-a"]));
+    expect(loadPinnedTerminalIds(api, "profile-b")).toEqual(new Set(["term-b"]));
   });
 });

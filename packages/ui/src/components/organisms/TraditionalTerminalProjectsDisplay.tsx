@@ -37,6 +37,7 @@ export interface TraditionalTerminalProjectsDisplayProps {
   currentProjectRevision: number;
   layoutRevision?: number;
   renderTerminals?: boolean;
+  profileId?: string;
   onSessionExit?: (sessionId: string) => void;
   onNewProjectTerminal?: (projectName: string) => void;
   onNewFreeTerminal?: () => void;
@@ -59,6 +60,7 @@ export function TraditionalTerminalProjectsDisplay({
   currentProjectRevision,
   layoutRevision = 0,
   renderTerminals = false,
+  profileId,
   onSessionExit,
   onNewProjectTerminal,
   onNewFreeTerminal,
@@ -171,7 +173,7 @@ export function TraditionalTerminalProjectsDisplay({
         activeSessionId={activeSessionForGroup}
         mountedSessions={selectedGroup.mountedSessions}
         openTabs={selectedGroup.terminalTabs}
-        layoutStorageKey={traditionalTerminalLayoutStorageKey(selectedGroup.id)}
+        layoutStorageKey={traditionalTerminalLayoutStorageKey(selectedGroup.id, profileId)}
         terminalCommitStatusEnabled={false}
         layoutRevision={layoutRevision}
         renderTerminals={renderTerminals}

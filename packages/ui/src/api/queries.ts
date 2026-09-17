@@ -26,6 +26,7 @@ import {
 import type {
   DamHopperConfig,
   ProjectConfig,
+  ProjectWithStatus,
   AgentItemCategory,
   AgentType,
   DistributionMethod,
@@ -57,6 +58,10 @@ import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 import { rememberTerminalSessionIncarnations } from "@/lib/terminal-incarnation-state.js";
 
+import { getApi, getTransport as getBoundTransport } from "./connections.js";
+import { profileQueryKey } from "./query-client.js";
+import type { ConnectionRef, ProfileId } from "./ownership.js";
+import { resolveWorkflowOwner } from "./workflow-queries.js";
 export * from "./workflow-queries.js";
 type QueryInvalidator = Pick<
   ReturnType<typeof useQueryClient>,
@@ -390,10 +395,18 @@ export function useWorkspace() {
   });
 }
 
-export function useProjects() {
-  return useQuery({
-    queryKey: ["projects"],
-    queryFn: () => api.projects.list(),
+export function useProjects(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
+  const owner = resolveWorkflowOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "projects")
+    : (["projects"] as const);
+
+  return useQuery<ProjectWithStatus[]>({
+    queryKey,
+    queryFn: () => (owner ? getApi(owner).projects.list() : api.projects.list()),
     refetchInterval: 30_000,
   });
 }
@@ -665,14 +678,23 @@ export function useGlobalConfig() {
   });
 }
 
-export function useTerminalSessions() {
+export function useTerminalSessions(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
+  const owner = resolveWorkflowOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "terminal-sessions")
+    : (["terminal-sessions"] as const);
+
   return useQuery<SessionInfo[]>({
-    queryKey: ["terminal-sessions"],
+    queryKey,
     queryFn: async () => {
-      const sessions = await getTransport().invoke<SessionInfo[]>(
+      const transport = owner ? getBoundTransport(owner) : getTransport();
+      const sessions = await transport.invoke<SessionInfo[]>(
         "terminal:listDetailed",
       );
-      rememberTerminalSessionIncarnations(sessions);
+      rememberTerminalSessionIncarnations(sessions, owner?.profileId);
       return sessions;
     },
     staleTime: Infinity, // driven by terminal:changed push event invalidation

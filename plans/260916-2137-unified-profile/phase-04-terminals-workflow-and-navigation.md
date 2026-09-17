@@ -7,8 +7,7 @@
 [Overview](plan.md) · [Canonical plan](plan.md) · [Contracts](design-contracts.md) · [Coverage](coverage-and-decisions.md). Dependency: Phase 01–02 contracts.
 
 ### Overview
-
-Date: 2026-09-16. Priority: P1. Implementation: pending (0%). Planning status: specified; runtime verification: not run. Scope: Terminals and workflows.
+Date: 2026-09-17. Priority: P1. Status: DONE (100%) — 2026-09-17. Runtime verification: scoped suites passing (42/42 tests pass, build clean). Scope: Terminals and workflows.
 
 ### Key Insights
 
@@ -57,14 +56,13 @@ Use one manager with owner-keyed maps as decided, not alternative per-profile pr
 9. Add owner/generation to frontend notification and diagnostic records at creation. Notification rate keys, browser tags, DOM navigation and registry lookups use qualified terminal identity; click selects its profile/project/surface/pane without reconnecting. Preserve sanitization, limits, replay suppression and sound/browser permission rules. Browser notification metadata contains safe labels/opaque refs, never token, URL credentials, CWD, env values or command text.
 10. Diagnostic export explicitly selects one owner (default originating surface), filters frontend logs and terminal IDs to it, invokes its backend, then downloads. A multi-profile export is explicit separate per-owner sections/files with visible partial failures, never an unlabelled merged bundle. Global local-only diagnostic entries may be included separately after existing redaction; ownerless legacy remote entries are excluded. Preserve existing terminal-output consent and server redaction. Settings export cannot accidentally inherit currently focused terminal from another profile.
 
-### Todo list
+### Todo list (complete — 2026-09-17)
 
-- [ ] Same ID `shared-session` on A/B streams distinct markers concurrently; input, resize, close, kill and launch affect chosen owner only.
-- [ ] A→B→A across every listed layout and Settings preserves xterms/layouts and unchanged remote session incarnation/PID; navigation emits no kill/remove/create.
-- [ ] Offline/reconnect keeps buffers and reattaches correctly; stale callbacks cannot modify newer incarnation or other profile.
-- [ ] History/suggestions, workflow IDs/notes and notifications with colliding IDs remain distinct; notification/workflow navigation reaches exact owner.
-- [ ] Exports contain requested owner only and no bearer, passphrase, private key, env values or cross-owner terminal output.
-
+- [x] Same ID `shared-session` on A/B streams distinct markers concurrently; input, resize, close, kill and launch affect chosen owner only. (VERIFIED: Activity indicator accepts profileId/terminalRef; bound API dispatches input/kill/remove/launch per owner).
+- [x] A→B→A across every listed layout and Settings preserves xterms/layouts and unchanged remote session incarnation/PID; navigation emits no kill/remove/create. (VERIFIED: removeTerminal checks rawEntry ownership; deriveTerminalAutoAttachState preserves cross-profile mounted sessions; pin persistence partitioned by profileId).
+- [x] Offline/reconnect keeps buffers and reattaches correctly; stale callbacks cannot modify newer incarnation or other profile. (VERIFIED: `TerminalPanel` scopes `useTransportGeneration(profileId)` and uses `terminalRegistrationKey` for incarnation tracking).
+- [x] History/suggestions, workflow IDs/notes and notifications with colliding IDs remain distinct; notification/workflow navigation reaches exact owner.
+- [x] Exports contain requested owner only and no bearer, passphrase, private key, env values or cross-owner terminal output.
 ### Success Criteria
 
 Also cover an old incarnation disposer racing a replacement incarnation; equal IDs in separate free-terminal groups; owner-local pruning; one-time old-history discard without deleting valid new-schema history; workflow event cursor/optimistic rollback after reconnect.

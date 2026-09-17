@@ -17,7 +17,7 @@ Implement one shared workbench with simultaneous supported profile connections a
 
 Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.md). This package preserves its nine feature phases and thirteen scenarios, adds a contract-freeze phase and resolves execution dependencies. No backend workspace UUID/catalog redesign, cross-server filesystem move or distribution, global active-profile fallback, app-per-profile remount, or automatic mutation replay.
 
-**Status:** IN PROGRESS — Phases 00–03 complete; Phases 04–09 pending; 4/10 phases complete; 40%; updated 2026-09-17.
+**Status:** IN PROGRESS — Phases 00–04 complete; Phases 05–09 pending; 5/10 phases complete; 50%; updated 2026-09-17.
 
 ## Phases
 
@@ -27,7 +27,7 @@ Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.
 | [01 — Ownership and connections](phase-01-explicit-ownership-and-connections.md) | Runtime/API/transport/query/event cutover | G0; 02A auth contract | Completed — 2026-09-17 / 100% |
 | [02 — Shell and profiles](phase-02-unified-shell-and-profile-migration.md) | Independent auth/controls, grouped navigation, fresh resource reset, host bootstrap | G0; 01 interfaces | DONE — 2026-09-17 / 100% |
 | [03 — Files, editor, search and Git](phase-03-files-editor-search-and-git.md) | Qualified models/targets, exact async effects, federated partial results | G0; 01/02; 07 media interface | DONE — 2026-09-17 / 100% |
-| [04 — Terminals and workflow](phase-04-terminals-workflow-and-navigation.md) | Shared keep-alive, qualified layouts/history/links/notifications/diagnostics | G0; 01/02 | Pending / 0% |
+| [04 — Terminals and workflow](phase-04-terminals-workflow-and-navigation.md) | Shared keep-alive, qualified layouts/history/links/notifications/diagnostics | G0; 01/02 | DONE — 2026-09-17 / 100% |
 | [05 — Agents, ports and Browser](phase-05-agents-ports-and-browser.md) | Explicit catalogs/targets, safe capture and atomic incarnation handoff | G0; 01/02; 04/07 contracts | Pending / 0% |
 | [06 — Preferences, Settings and host](phase-06-preferences-settings-usage-and-host.md) | Independent sources/targets, usage/metrics and safe destructive intent | G0; 01/02 | Pending / 0% |
 | [07 — Media and encryption](phase-07-media-isolation-and-encryption.md) | Cookie namespace v2, original-owner cleanup, generation-bound secrets | G0; 01; 03 target contract | Pending / 0% |
@@ -40,7 +40,8 @@ Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.
 - **Phase 01:** DONE — explicit ownership and connection foundation complete (100%).
 - **Phase 02:** DONE — unified shell, independent connections and profile migration complete (2026-09-17; 100%).
 - **Phase 03:** DONE — files, editor, search and Git complete (2026-09-17; 100%).
-- **Next:** **Phase 04 — Terminals and workflow**.
+- **Phase 04:** DONE — terminal continuity, workflow and owner-directed navigation complete (2026-09-17; 100%).
+- **Next:** **Phase 05 — Agents, ports and Browser**.
 
 ## Read before implementation
 

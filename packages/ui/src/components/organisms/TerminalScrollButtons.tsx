@@ -6,7 +6,7 @@ import {
   ChevronsDown,
   ChevronsUp,
 } from "lucide-react";
-import { terminalRegistry } from "@/lib/terminal-registry.js";
+import { getTerminal } from "@/lib/terminal-registry.js";
 import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
 
@@ -161,7 +161,7 @@ export function TerminalScrollButtons({
             onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
-                terminalRegistry.get(sessionId)?.terminal.scrollToTop(),
+                getTerminal(sessionId)?.terminal.scrollToTop(),
               )
             }
             className={controlClassName}
@@ -176,8 +176,7 @@ export function TerminalScrollButtons({
             onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
-                terminalRegistry
-                  .get(sessionId)
+                getTerminal(sessionId)
                   ?.terminal.scrollLines(-terminalScrollStep),
               )
             }
@@ -193,8 +192,7 @@ export function TerminalScrollButtons({
             onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
-                terminalRegistry
-                  .get(sessionId)
+                getTerminal(sessionId)
                   ?.terminal.scrollLines(terminalScrollStep),
               )
             }
@@ -210,7 +208,7 @@ export function TerminalScrollButtons({
             onTouchStart={stopTouchPropagation}
             onClick={(event) =>
               handleTerminalAction(event, () =>
-                terminalRegistry.get(sessionId)?.terminal.scrollToBottom(),
+                getTerminal(sessionId)?.terminal.scrollToBottom(),
               )
             }
             className={controlClassName}

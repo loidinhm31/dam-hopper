@@ -5,6 +5,9 @@ import {
   useTerminalTree,
   FREE_TERMINAL_PREFIX,
 } from "@/hooks/use-terminal-tree.js";
+import { getConnectionSnapshot, getApi } from "@/api/connections.js";
+import { profileQueryKey } from "@/api/query-client.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 import { useTerminalSessions, useProjects } from "@/api/queries.js";
 import { api, isProjectTargetError } from "@/api/client.js";
 import {
@@ -158,9 +161,11 @@ export interface TerminalManagerActions {
   ) => void;
 }
 
-interface TerminalManagerOptions {
+export interface TerminalManagerOptions {
   terminalAutoSwitchProjectEnabled: boolean;
   setActiveProject: (project: string | null) => void;
+  profileId?: string;
+  connectionRef?: ConnectionRef;
 }
 export interface LocallyStoppedSessionMarker {
   incarnation?: number;
@@ -420,19 +425,83 @@ export function buildTerminalDisplayTabs(
 export function useTerminalManager(
   searchParams: URLSearchParams,
   setSearchParams: SetURLSearchParams,
-  {
+  options: TerminalManagerOptions,
+) {
+  const {
     terminalAutoSwitchProjectEnabled,
     setActiveProject,
-  }: TerminalManagerOptions,
-) {
+    profileId,
+  } = options;
   const qc = useQueryClient();
-  const { tree, freeTerminals, isLoading } = useTerminalTree();
+  const queryOptions = useMemo(
+    () => (profileId ? { profileId } : undefined),
+    [profileId],
+  );
+  const { tree, freeTerminals, isLoading } = useTerminalTree(queryOptions);
   const { data: sessions = [], isSuccess: hasTerminalSessionSnapshot } =
-    useTerminalSessions();
-  const { data: projects = [] } = useProjects();
+    useTerminalSessions(queryOptions);
+  const { data: projects = [] } = useProjects(queryOptions);
   const activeTargetByProject = useProjectTargetStore(
     (state) => state.activeTargetByProject,
   );
+
+  const getBoundApi = useCallback(
+    (targetProfileId?: string) => {
+      const effProfileId = targetProfileId ?? profileId;
+      if (effProfileId) {
+        const snap = getConnectionSnapshot(effProfileId);
+        if (snap) {
+          try {
+            return getApi(snap.owner);
+          } catch {
+            // fallback to active client
+          }
+        }
+      }
+      return api;
+    },
+    [profileId],
+  );
+
+  const invalidateTerminalQueries = useCallback(
+    async (targetProfileId?: string) => {
+      const effProfileId = targetProfileId ?? profileId;
+      if (effProfileId) {
+        const snap = getConnectionSnapshot(effProfileId);
+        if (snap) {
+          await qc
+            .invalidateQueries({
+              queryKey: profileQueryKey(snap.owner, "terminal-sessions"),
+            })
+            .catch(() => undefined);
+        }
+      }
+      await qc
+        .invalidateQueries({ queryKey: ["terminal-sessions"] })
+        .catch(() => undefined);
+    },
+    [profileId, qc],
+  );
+
+  const invalidateProjectConfig = useCallback(async () => {
+    if (profileId) {
+      const snap = getConnectionSnapshot(profileId);
+      if (snap) {
+        await Promise.all([
+          qc.invalidateQueries({
+            queryKey: profileQueryKey(snap.owner, "projects"),
+          }),
+          qc.invalidateQueries({
+            queryKey: profileQueryKey(snap.owner, "config"),
+          }),
+        ]);
+      }
+    }
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["projects"] }),
+      qc.invalidateQueries({ queryKey: ["config"] }),
+    ]);
+  }, [profileId, qc]);
 
   const [selection, setSelection] = useState<SelectionState>(null);
   const [openTabs, setOpenTabs] = useState<TabEntry[]>([]);
@@ -443,7 +512,9 @@ export function useTerminalManager(
   const [freeTerminalSavePrompt, setFreeTerminalSavePrompt] =
     useState<FreeTerminalSavePromptState | null>(null);
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
-  const [initialPinnedTerminalIds] = useState(() => loadPinnedTerminalIds());
+  const [initialPinnedTerminalIds] = useState(() =>
+    loadPinnedTerminalIds(undefined, profileId),
+  );
   const removingSessionIdsRef = useRef<Set<string>>(new Set());
   const suppressedAutoAttachIdsRef = useRef<Set<string>>(new Set());
   const pendingAutoAttachIdsRef = useRef<Set<string>>(new Set());
@@ -460,9 +531,10 @@ export function useTerminalManager(
         pinStateBySessionIdRef.current.delete(sessionId);
         changed = pinnedTerminalIdsRef.current.delete(sessionId) || changed;
       }
-      if (changed) savePinnedTerminalIds(pinnedTerminalIdsRef.current);
+      if (changed)
+        savePinnedTerminalIds(pinnedTerminalIdsRef.current, undefined, profileId);
     },
-    [],
+    [profileId],
   );
 
   const sessionMap = useMemo(
@@ -530,9 +602,19 @@ export function useTerminalManager(
       type !== "free" && currentSession?.type !== "free" && project
         ? { project }
         : {};
+    const terminalRef = profileId
+      ? { profileId, id: sessionId }
+      : undefined;
 
     setOpenTabs((prev) => {
-      if (prev.some((t) => t.sessionId === sessionId)) return prev;
+      if (
+        prev.some(
+          (t) =>
+            t.sessionId === sessionId &&
+            (profileId ? t.profileId === profileId : true),
+        )
+      )
+        return prev;
       pinStateBySessionIdRef.current.set(sessionId, false);
       return [
         ...prev,
@@ -544,6 +626,8 @@ export function useTerminalManager(
           ),
           session: currentSession,
           isSaveable: isAdHoc,
+          profileId,
+          terminalRef,
           ...projectMetadata,
         },
       ];
@@ -558,6 +642,8 @@ export function useTerminalManager(
           command,
           cwd,
           worktreePath: sessionTargetPath,
+          profileId,
+          terminalRef,
         }),
       );
     });
@@ -599,41 +685,24 @@ export function useTerminalManager(
   async function removeSessionDurably(sessionId: string): Promise<boolean> {
     if (removingSessionIdsRef.current.has(sessionId)) return false;
     removingSessionIdsRef.current.add(sessionId);
+    const tab = openTabs.find((t) => t.sessionId === sessionId);
+    const mounted = mountedSessions.find((m) => m.sessionId === sessionId);
+    const targetProfileId = tab?.profileId ?? mounted?.profileId ?? profileId;
     try {
-      await api.terminal.remove(sessionId);
+      await getBoundApi(targetProfileId).terminal.remove(sessionId);
     } catch (error) {
       logger.error("useTerminalManager", "failed to remove terminal session", {
         sessionId,
         error,
       });
-      await qc
-        .invalidateQueries({ queryKey: ["terminal-sessions"] })
-        .catch(() => undefined);
+      await invalidateTerminalQueries(targetProfileId);
       return false;
     } finally {
       removingSessionIdsRef.current.delete(sessionId);
     }
 
-    await qc
-      .invalidateQueries({ queryKey: ["terminal-sessions"] })
-      .catch((error: unknown) => {
-        logger.warn(
-          "useTerminalManager",
-          "failed to refresh terminal sessions",
-          {
-            sessionId,
-            error,
-          },
-        );
-      });
+    await invalidateTerminalQueries(targetProfileId);
     return true;
-  }
-
-  async function invalidateProjectConfig() {
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ["projects"] }),
-      qc.invalidateQueries({ queryKey: ["config"] }),
-    ]);
   }
 
   useEffect(() => {
@@ -696,6 +765,7 @@ export function useTerminalManager(
         ? pinnedTerminalIdsRef.current
         : new Set(),
       stoppedSessionIds,
+      profileId,
     });
     const attachedLiveSessionIds = new Set(
       next.openTabs.map((tab) => tab.sessionId),
@@ -747,7 +817,7 @@ export function useTerminalManager(
       );
       if (nextPinnedIds.size !== pinnedTerminalIdsRef.current.size) {
         pinnedTerminalIdsRef.current = nextPinnedIds;
-        savePinnedTerminalIds(nextPinnedIds);
+        savePinnedTerminalIds(nextPinnedIds, undefined, profileId);
       }
     }
   }, [
@@ -760,6 +830,7 @@ export function useTerminalManager(
     freeTerminalIndexMap,
     hasTerminalSessionSnapshot,
     forgetPinnedTerminalIds,
+    profileId,
   ]);
 
   function handleSelectProject(name: string) {
@@ -797,8 +868,8 @@ export function useTerminalManager(
 
   function handleLaunchTerminal(projectName: string, cmd: TreeCommand) {
     const launch = terminalLaunchForProject(projectName, cmd.cwd);
-    api.terminal
-      .create({
+    getBoundApi(profileId)
+      .terminal.create({
         id: cmd.sessionId,
         project: projectName,
         command: cmd.command,
@@ -811,7 +882,7 @@ export function useTerminalManager(
         if (session) {
           rememberTerminalSessionIncarnation(session.id, session.incarnation);
         }
-        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        void invalidateTerminalQueries(profileId);
         openTerminalTab(
           cmd.sessionId,
           projectName,
@@ -842,8 +913,8 @@ export function useTerminalManager(
       launch.worktreePath,
     );
 
-    api.terminal
-      .create({
+    getBoundApi(profileId)
+      .terminal.create({
         id: sessionId,
         project: projectName,
         command: cmd.command,
@@ -856,7 +927,7 @@ export function useTerminalManager(
         if (session) {
           rememberTerminalSessionIncarnation(session.id, session.incarnation);
         }
-        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        void invalidateTerminalQueries(profileId);
         openTerminalTab(
           sessionId,
           projectName,
@@ -897,8 +968,8 @@ export function useTerminalManager(
 
     setLaunchForm(null);
 
-    api.terminal
-      .create({
+    getBoundApi(profileId)
+      .terminal.create({
         id: sessionId,
         project: projectName,
         command: resolvedCommand,
@@ -911,7 +982,7 @@ export function useTerminalManager(
         if (session) {
           rememberTerminalSessionIncarnation(session.id, session.incarnation);
         }
-        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        void invalidateTerminalQueries(profileId);
         openTerminalTab(
           sessionId,
           projectName,
@@ -951,7 +1022,9 @@ export function useTerminalManager(
     const updated = (project.terminals ?? []).filter(
       (t) => t.name !== profileName,
     );
-    await api.config.updateProject(projectName, { terminals: updated });
+    await getBoundApi(profileId).config.updateProject(projectName, {
+      terminals: updated,
+    });
     await invalidateProjectConfig();
   }
 
@@ -1001,7 +1074,9 @@ export function useTerminalManager(
       }
     }
 
-    await api.config.updateProject(projectName, { terminals: updated });
+    await getBoundApi(profileId).config.updateProject(projectName, {
+      terminals: updated,
+    });
     await invalidateProjectConfig();
   }
 
@@ -1043,7 +1118,7 @@ export function useTerminalManager(
       }
     }
 
-    await api.config.updateProject(projectName, {
+    await getBoundApi(profileId).config.updateProject(projectName, {
       commands: Object.keys(updated).length > 0 ? updated : undefined,
     });
     await invalidateProjectConfig();
@@ -1080,17 +1155,14 @@ export function useTerminalManager(
 
     setSavePrompt(null);
 
-    void api.config
-      .updateProject(projectName, {
+    void getBoundApi(profileId)
+      .config.updateProject(projectName, {
         terminals: [
           ...(project.terminals ?? []),
           { name: name.trim(), command: command ?? "", cwd: cwd || "." },
         ],
       })
-      .then(() => {
-        void qc.invalidateQueries({ queryKey: ["projects"] });
-        void qc.invalidateQueries({ queryKey: ["config"] });
-      });
+      .then(() => invalidateProjectConfig());
   }
 
   function handleAddFreeTerminal(projectName?: string) {
@@ -1101,8 +1173,8 @@ export function useTerminalManager(
       launchContext.projectPath,
     );
     const sessionId = `${FREE_TERMINAL_PREFIX}${generateUUID()}`;
-    api.terminal
-      .create({
+    getBoundApi(profileId)
+      .terminal.create({
         id: sessionId,
         project: launchContext.projectName,
         command: "",
@@ -1115,7 +1187,7 @@ export function useTerminalManager(
         if (session) {
           rememberTerminalSessionIncarnation(session.id, session.incarnation);
         }
-        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        void invalidateTerminalQueries(profileId);
         openTerminalTab(
           sessionId,
           launchContext.projectName ?? "",
@@ -1147,8 +1219,8 @@ export function useTerminalManager(
       launchContext.projectPath,
     );
     const sessionId = `${FREE_TERMINAL_PREFIX}${generateUUID()}`;
-    api.terminal
-      .create({
+    getBoundApi(profileId)
+      .terminal.create({
         id: sessionId,
         project: launchContext.projectName,
         command,
@@ -1161,7 +1233,7 @@ export function useTerminalManager(
         if (session) {
           rememberTerminalSessionIncarnation(session.id, session.incarnation);
         }
-        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        void invalidateTerminalQueries(profileId);
         openTerminalTab(
           sessionId,
           launchContext.projectName ?? "",
@@ -1202,8 +1274,8 @@ export function useTerminalManager(
       "_",
       launch.worktreePath,
     );
-    api.terminal
-      .create({
+    getBoundApi(profileId)
+      .terminal.create({
         id: sessionId,
         project: projectName,
         command,
@@ -1216,7 +1288,7 @@ export function useTerminalManager(
         if (session) {
           rememberTerminalSessionIncarnation(session.id, session.incarnation);
         }
-        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        void invalidateTerminalQueries(profileId);
         openTerminalTab(
           sessionId,
           projectName,
@@ -1263,8 +1335,8 @@ export function useTerminalManager(
       "_",
       launch.worktreePath,
     );
-    api.terminal
-      .create({
+    getBoundApi(profileId)
+      .terminal.create({
         id: sessionId,
         project: projectName,
         command,
@@ -1277,7 +1349,7 @@ export function useTerminalManager(
         if (session) {
           rememberTerminalSessionIncarnation(session.id, session.incarnation);
         }
-        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        void invalidateTerminalQueries(profileId);
         openTerminalTab(
           sessionId,
           projectName,
@@ -1319,6 +1391,8 @@ export function useTerminalManager(
             command: meta.command,
             cwd: meta.cwd,
             worktreePath: meta.worktreePath,
+            profileId,
+            terminalRef: profileId ? { profileId, id: sessionId } : undefined,
           }),
         );
       }
@@ -1340,7 +1414,7 @@ export function useTerminalManager(
       nextIsPinned,
     );
     pinnedTerminalIdsRef.current = nextPinnedIds;
-    savePinnedTerminalIds(nextPinnedIds);
+    savePinnedTerminalIds(nextPinnedIds, undefined, profileId);
 
     setOpenTabs((prev) => {
       return prev.map((tab) =>
@@ -1373,10 +1447,12 @@ export function useTerminalManager(
   }
 
   function handleKillTerminal(sessionId: string) {
-    void api.terminal.kill(sessionId);
-    void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+    const tab = openTabs.find((t) => t.sessionId === sessionId);
+    const mounted = mountedSessions.find((m) => m.sessionId === sessionId);
+    const targetProfileId = tab?.profileId ?? mounted?.profileId ?? profileId;
+    void getBoundApi(targetProfileId).terminal.kill(sessionId);
+    void invalidateTerminalQueries(targetProfileId);
   }
-
   async function handleRemoveFreeTerminal(sessionId: string) {
     if (!(await removeSessionDurably(sessionId))) return;
     removeSessionsFromUi([sessionId]);
@@ -1422,17 +1498,14 @@ export function useTerminalManager(
 
     setFreeTerminalSavePrompt(null);
 
-    void api.config
-      .updateProject(projectName, {
+    void getBoundApi(profileId)
+      .config.updateProject(projectName, {
         terminals: [
           ...(project.terminals ?? []),
           { name: name.trim(), command, cwd: cwd || "." },
         ],
       })
-      .then(() => {
-        void qc.invalidateQueries({ queryKey: ["projects"] });
-        void qc.invalidateQueries({ queryKey: ["config"] });
-      });
+      .then(() => invalidateProjectConfig());
   }
 
   const handleSessionExit = useCallback(
@@ -1449,14 +1522,17 @@ export function useTerminalManager(
         locallyStoppedSessionMarkersRef.current.delete(sessionId);
       }
       forgetPinnedTerminalIds([sessionId]);
-      void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+      void invalidateTerminalQueries(profileId);
       setOpenTabs((prev) =>
         prev.map((t) =>
-          t.sessionId === sessionId ? { ...t, isPinned: false } : t,
+          t.sessionId === sessionId &&
+          (profileId ? t.profileId === profileId : true)
+            ? { ...t, isPinned: false }
+            : t,
         ),
       );
     },
-    [forgetPinnedTerminalIds, openTabs, qc, sessionMap],
+    [forgetPinnedTerminalIds, invalidateTerminalQueries, openTabs, profileId, sessionMap],
   );
 
   const terminalTabs = useMemo<DisplayTabEntry[]>(

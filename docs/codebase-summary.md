@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 1,993
-files, 4,416,048 tokens, 18,357,737 characters; five security-flagged files
+**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 1,999
+files, 4,444,500 tokens, 18,482,821 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -90,6 +90,34 @@ reload only clean open tabs.
 The focused contract coverage is in
 `packages/ui/src/api/phase-03-files-editor-search-git.test.ts`. The full source
 and behavior map is [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
+
+## Unified-profile terminal continuity and owner navigation (Phase 04)
+
+Phase 04 completes profile-qualified terminal continuity, workflow reveal, and
+owner-directed diagnostics in `packages/ui`. A terminal identity is
+`{ profileId, id }`; a live process adds `incarnation`. `ownership.ts` owns
+`terminalKey()` and `terminalInstanceKey()`, and the registry, mounted-session
+list, activity tracker, incarnation fence, and terminal layout tree consume
+those qualified keys. Raw session IDs remain compatibility aliases only when
+unambiguous.
+
+| Boundary | Source modules | Contract |
+| --- | --- | --- |
+| Registry and lifetime | `terminal-registry.ts`, `terminal-incarnation-state.ts`, `terminal-mounted-sessions.ts`, `TerminalKeepAliveHost.tsx` | Register, attach, remove, and preserve sessions by profile plus session ID; reject stale incarnations. |
+| Owner transport | `api/client.ts`, `api/queries.ts`, `hooks/use-terminal-manager.ts` | Capture profile/generation and route terminal operations through the owning API client/transport. |
+| Layout and pins | `terminal-layout-tree.ts`, `use-terminal-layout.ts`, `traditional-terminal-projects.ts`, `terminal-pin-persistence.ts` | `terminal-layout:v3` keys owner/group state with payload v2; `terminal-pins:v2` partitions IDs by profile. |
+| Local history | `command-history.ts` | Persist `{ version: 3, entries }`; salt IDs with profile where supplied and keep exact command text local. |
+| Workflow navigation | `workflow-queries.ts`, `workflow-workspace-integration.ts`, `terminal-notification-navigation.ts` | Qualify query keys and reveal targets; reject missing, cross-profile, or incarnation-mismatched links. |
+| Diagnostics and reset | `diagnostics-export.ts`, `diagnostics-client.ts`, `fresh-state-reset.ts` | Filter exports by profile/terminal IDs, bound terminal tails, and remove only unqualified legacy stores. |
+
+The focused contract suite is
+`packages/ui/src/lib/terminal-continuity-unified-profile.test.ts`; the full
+source map and compatibility cautions are in the dedicated
+[Phase 04 terminal continuity guide](./phase-04-terminal-continuity-workflow-navigation.md).
+
+These boundaries remain frontend ownership rules. PTYs, workflow persistence,
+terminal output, and remote project data remain server-authoritative; an
+unqualified browser link is not silently attributed to a profile.
 
 ## Backend boundaries
 

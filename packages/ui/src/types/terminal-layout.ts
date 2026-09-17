@@ -27,6 +27,6 @@ export type DockTarget =
   | { kind: "tab-index"; paneId: string; index: number };
 
 export interface PersistedLayout {
-  version: 1;
+  version: 1 | 2;
   root: LayoutNode;
 }

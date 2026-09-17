@@ -12,8 +12,8 @@ import {
   scheduleTerminalFit,
 } from "@/lib/terminal-fit-scheduler.js";
 import {
+  getTerminal,
   subscribeToRegistry,
-  terminalRegistry,
 } from "@/lib/terminal-registry.js";
 import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
@@ -78,7 +78,7 @@ export function TerminalRuntimeOutput({
 
     if (suppressTerminalNativeInput) {
       for (const session of mountedSessions) {
-        cancelScheduledTerminalFit(terminalRegistry.get(session.sessionId));
+        cancelScheduledTerminalFit(getTerminal(session.sessionId));
       }
     }
     attachTerminalsToHost({
@@ -89,7 +89,7 @@ export function TerminalRuntimeOutput({
     });
     for (const session of mountedSessions) {
       syncNativeKeyboardSuppression(
-        terminalRegistry.get(session.sessionId)?.terminal ?? null,
+        getTerminal(session.sessionId)?.terminal ?? null,
         suppressTerminalNativeInput,
       );
     }
@@ -98,8 +98,13 @@ export function TerminalRuntimeOutput({
   useEffect(() => {
     reparentActiveTerminal();
     const unsubscribe = subscribeToRegistry((registeredId) => {
+      const entry = getTerminal(registeredId);
+      const rawId = entry?.terminalRef?.id ?? registeredId;
       if (
-        mountedSessions.some((session) => session.sessionId === registeredId)
+        mountedSessions.some(
+          (session) =>
+            session.sessionId === registeredId || session.sessionId === rawId,
+        )
       ) {
         reparentActiveTerminal();
       }
@@ -109,7 +114,7 @@ export function TerminalRuntimeOutput({
 
   useEffect(() => {
     if (!activeSessionId) return;
-    scheduleTerminalFit(terminalRegistry.get(activeSessionId), {
+    scheduleTerminalFit(getTerminal(activeSessionId), {
       focus: !suppressTerminalNativeInput,
     });
   }, [activeSessionId, layoutRevision, suppressTerminalNativeInput]);
@@ -119,7 +124,7 @@ export function TerminalRuntimeOutput({
     if (!host) return;
     const observer = new ResizeObserver(() => {
       if (!activeSessionId) return;
-      scheduleTerminalFit(terminalRegistry.get(activeSessionId));
+      scheduleTerminalFit(getTerminal(activeSessionId));
     });
     observer.observe(host);
     return () => observer.disconnect();
@@ -150,7 +155,7 @@ export function TerminalRuntimeOutput({
           if (!activeSessionId) return;
           onSelectActive?.(activeSessionId);
           if (!suppressTerminalNativeInput) {
-            terminalRegistry.get(activeSessionId)?.terminal.focus();
+            getTerminal(activeSessionId)?.terminal.focus();
           }
         }}
       >

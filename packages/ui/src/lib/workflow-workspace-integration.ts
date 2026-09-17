@@ -79,18 +79,22 @@ export interface ResolveWorkflowTerminalRevealArgs {
   sessionId: string;
   activeProfileId?: string | null;
   currentProfileId?: string | null;
-  sessionMap?: ReadonlyMap<string, { alive?: boolean }> | null;
-  mountedSessions?: ReadonlyArray<{ sessionId: string }> | null;
+  sessionMap?: ReadonlyMap<string, { alive?: boolean; incarnation?: number }> | null;
+  mountedSessions?: ReadonlyArray<{ sessionId: string; incarnation?: number }> | null;
   isCompactWorkspace?: boolean;
+  expectedIncarnation?: number;
 }
 
 export interface WorkflowTerminalRevealOutcome {
   canReveal: boolean;
   sessionId?: string;
   requestedCompactSurface?: "terminal";
-  reason?: "missing_session_id" | "profile_mismatch" | "session_not_found";
+  reason?:
+    | "missing_session_id"
+    | "profile_mismatch"
+    | "session_not_found"
+    | "incarnation_mismatch";
 }
-
 /**
  * Pure decision helper for revealing a linked terminal.
  */
@@ -101,6 +105,7 @@ export function resolveWorkflowTerminalReveal({
   sessionMap,
   mountedSessions,
   isCompactWorkspace = false,
+  expectedIncarnation,
 }: ResolveWorkflowTerminalRevealArgs): WorkflowTerminalRevealOutcome {
   if (!sessionId || typeof sessionId !== "string" || sessionId.trim() === "") {
     return { canReveal: false, reason: "missing_session_id" };
@@ -109,10 +114,18 @@ export function resolveWorkflowTerminalReveal({
   if (activeProfileId && currentProfileId && activeProfileId !== currentProfileId) {
     return { canReveal: false, reason: "profile_mismatch" };
   }
-  const inSessionMap = Boolean(sessionMap?.has(trimmedId));
-  const inMountedSessions = Boolean(mountedSessions?.some((s) => s.sessionId === trimmedId));
-  if (!inSessionMap && !inMountedSessions) {
+  const sessionFromMap = sessionMap?.get(trimmedId);
+  const mountedSession = mountedSessions?.find((s) => s.sessionId === trimmedId);
+  if (!sessionFromMap && !mountedSession) {
     return { canReveal: false, reason: "session_not_found" };
+  }
+  const actualIncarnation = sessionFromMap?.incarnation ?? mountedSession?.incarnation;
+  if (
+    expectedIncarnation !== undefined &&
+    actualIncarnation !== undefined &&
+    actualIncarnation !== expectedIncarnation
+  ) {
+    return { canReveal: false, reason: "incarnation_mismatch" };
   }
   return {
     canReveal: true,

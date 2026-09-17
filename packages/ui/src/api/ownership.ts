@@ -133,6 +133,82 @@ export function terminalInstanceKey(ref: TerminalInstanceRef): string {
   return JSON.stringify([ref.profileId, ref.id, ref.incarnation]);
 }
 
+export function parseTerminalKey(key: string): TerminalRef | null {
+  try {
+    const parsed = JSON.parse(key);
+    if (
+      Array.isArray(parsed) &&
+      parsed.length >= 2 &&
+      typeof parsed[0] === "string" &&
+      typeof parsed[1] === "string"
+    ) {
+      return { profileId: parsed[0], id: parsed[1] };
+    }
+  } catch {
+    // Malformed terminal key
+  }
+  return null;
+}
+
+export function parseTerminalInstanceKey(
+  key: string,
+): TerminalInstanceRef | null {
+  try {
+    const parsed = JSON.parse(key);
+    if (
+      Array.isArray(parsed) &&
+      parsed.length >= 3 &&
+      typeof parsed[0] === "string" &&
+      typeof parsed[1] === "string" &&
+      typeof parsed[2] === "number"
+    ) {
+      return { profileId: parsed[0], id: parsed[1], incarnation: parsed[2] };
+    }
+  } catch {
+    // Malformed terminal instance key
+  }
+  return null;
+}
+
+export function toTerminalKey(
+  target: TerminalRef | string,
+  defaultProfileId?: ProfileId,
+): string {
+  if (typeof target === "string") {
+    if (target.startsWith("[")) {
+      const parsed = parseTerminalKey(target);
+      if (parsed) return target;
+    }
+    if (defaultProfileId) {
+      return terminalKey({ profileId: defaultProfileId, id: target });
+    }
+    return target;
+  }
+  return terminalKey(target);
+}
+
+export function toTerminalRef(
+  target: TerminalRef | string,
+  defaultProfileId?: ProfileId,
+): TerminalRef {
+  if (
+    typeof target === "object" &&
+    target !== null &&
+    "profileId" in target &&
+    "id" in target
+  ) {
+    return { profileId: target.profileId, id: target.id };
+  }
+  if (typeof target === "string" && target.startsWith("[")) {
+    const parsed = parseTerminalKey(target);
+    if (parsed) return parsed;
+  }
+  return {
+    profileId: defaultProfileId ?? "",
+    id: typeof target === "string" ? target : "",
+  };
+}
+
 /** Returns deterministic tuple string: JSON.stringify([profileId, generation]) */
 export function connectionKey(ref: ConnectionRef): string {
   return JSON.stringify([ref.profileId, ref.generation]);

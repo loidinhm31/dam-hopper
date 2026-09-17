@@ -1,3 +1,10 @@
+import {
+  toTerminalKey,
+  parseTerminalKey,
+  type TerminalRef,
+  type ProfileId,
+} from "@/api/ownership.js";
+
 /**
  * Latest concrete PTY identity observed by this browser session.
  * Public terminal IDs are reusable, so push events need this second value to
@@ -6,10 +13,28 @@
 const latestBySessionId = new Map<string, number>();
 const retiredPortIncarnations = new Map<string, number>();
 
-/** Start a fresh identity namespace when the active server/profile changes. */
-export function resetTerminalSessionIncarnations(): void {
-  latestBySessionId.clear();
-  retiredPortIncarnations.clear();
+/** Start a fresh identity namespace, optionally for one profile only. */
+export function resetTerminalSessionIncarnations(profileId?: ProfileId): void {
+  if (!profileId) {
+    latestBySessionId.clear();
+    retiredPortIncarnations.clear();
+    return;
+  }
+  for (const key of latestBySessionId.keys()) {
+    const parsed = parseTerminalKey(key);
+    if (parsed?.profileId === profileId) {
+      latestBySessionId.delete(key);
+    }
+  }
+  for (const key of retiredPortIncarnations.keys()) {
+    const [sessionKey] = key.split("\u0000");
+    if (sessionKey) {
+      const parsed = parseTerminalKey(sessionKey);
+      if (parsed?.profileId === profileId) {
+        retiredPortIncarnations.delete(key);
+      }
+    }
+  }
 }
 
 function isIncarnation(value: number | undefined): value is number {
@@ -17,39 +42,61 @@ function isIncarnation(value: number | undefined): value is number {
 }
 
 export function rememberTerminalSessionIncarnation(
-  sessionId: string,
+  target: TerminalRef | string,
   incarnation: number | undefined,
 ): void {
   if (!isIncarnation(incarnation)) return;
-  const current = latestBySessionId.get(sessionId);
+  const key = toTerminalKey(target);
+  const current = latestBySessionId.get(key);
   if (current === undefined || incarnation > current) {
-    latestBySessionId.set(sessionId, incarnation);
+    latestBySessionId.set(key, incarnation);
   }
 }
 
 export function rememberTerminalSessionIncarnations(
-  sessions: readonly { id: string; incarnation?: number }[],
+  sessions: readonly {
+    id: string;
+    incarnation?: number;
+    profileId?: ProfileId;
+    terminalRef?: TerminalRef;
+  }[],
+  defaultProfileId?: ProfileId,
 ): void {
   for (const session of sessions) {
-    rememberTerminalSessionIncarnation(session.id, session.incarnation);
+    const target =
+      session.terminalRef ??
+      (session.profileId || defaultProfileId
+        ? {
+            profileId: session.profileId ?? defaultProfileId ?? "",
+            id: session.id,
+          }
+        : session.id);
+    rememberTerminalSessionIncarnation(target, session.incarnation);
   }
 }
 
 export function latestTerminalSessionIncarnation(
-  sessionId: string,
+  target: TerminalRef | string,
 ): number | undefined {
-  return latestBySessionId.get(sessionId);
+  const key = toTerminalKey(target);
+  return (
+    latestBySessionId.get(key) ??
+    (typeof target === "string" ? latestBySessionId.get(target) : undefined)
+  );
 }
 
 /** Returns false for a target-loss event older than the current session. */
 export function acceptsTerminalSessionIncarnation(
-  sessionId: string,
+  target: TerminalRef | string,
   incarnation: number,
 ): boolean {
   if (!isIncarnation(incarnation)) return false;
-  const current = latestBySessionId.get(sessionId);
+  const key = toTerminalKey(target);
+  const current =
+    latestBySessionId.get(key) ??
+    (typeof target === "string" ? latestBySessionId.get(target) : undefined);
   if (current !== undefined && incarnation < current) return false;
-  rememberTerminalSessionIncarnation(sessionId, incarnation);
+  rememberTerminalSessionIncarnation(target, incarnation);
   return true;
 }
 
@@ -57,14 +104,13 @@ function portIdentity(sessionId: string, port: number): string {
   return `${sessionId}\u0000${port}`;
 }
 
-/** Retires a concrete port event until a fresh port:list snapshot confirms it. */
 export function retireTerminalPortIncarnation(
-  sessionId: string,
+  target: TerminalRef | string,
   port: number,
   incarnation: number,
 ): void {
   if (!isIncarnation(incarnation) || !Number.isSafeInteger(port)) return;
-  const key = portIdentity(sessionId, port);
+  const key = portIdentity(toTerminalKey(target), port);
   const current = retiredPortIncarnations.get(key);
   if (current === undefined || incarnation >= current) {
     retiredPortIncarnations.set(key, incarnation);
@@ -73,26 +119,27 @@ export function retireTerminalPortIncarnation(
 
 /** Accepts a discovery unless the same concrete port was just reported lost. */
 export function acceptsTerminalPortIncarnation(
-  sessionId: string,
+  target: TerminalRef | string,
   port: number,
   incarnation: number,
 ): boolean {
-  if (!acceptsTerminalSessionIncarnation(sessionId, incarnation)) return false;
-  const retired = retiredPortIncarnations.get(portIdentity(sessionId, port));
+  if (!acceptsTerminalSessionIncarnation(target, incarnation)) return false;
+  const key = portIdentity(toTerminalKey(target), port);
+  const retired = retiredPortIncarnations.get(key);
   return retired === undefined || incarnation > retired;
 }
 
 /** A fresh port:list response is authoritative and clears a retired key. */
 export function confirmTerminalPortIncarnation(
-  sessionId: string,
+  target: TerminalRef | string,
   port: number,
   incarnation: number,
 ): void {
   if (!isIncarnation(incarnation) || !Number.isSafeInteger(port)) return;
-  const key = portIdentity(sessionId, port);
+  const key = portIdentity(toTerminalKey(target), port);
   const retired = retiredPortIncarnations.get(key);
   if (retired !== undefined && incarnation >= retired) {
     retiredPortIncarnations.delete(key);
   }
-  rememberTerminalSessionIncarnation(sessionId, incarnation);
+  rememberTerminalSessionIncarnation(target, incarnation);
 }

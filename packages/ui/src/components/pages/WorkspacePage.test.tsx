@@ -404,6 +404,7 @@ describe("WorkspacePage", () => {
     expect(lastTerminalManagerOptions).toEqual({
       terminalAutoSwitchProjectEnabled: true,
       setActiveProject: mockSetActiveProject,
+      profileId: "profile-default",
     });
   });
 

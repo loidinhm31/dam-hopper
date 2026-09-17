@@ -1,3 +1,4 @@
+import type { TerminalRef } from "@/api/ownership.js";
 import { create } from "zustand";
 import type { TerminalAgentNotification } from "@/lib/terminal-notification-signal-parser.js";
 
@@ -8,6 +9,8 @@ export interface TerminalNotificationRecord {
   id: string;
   event: TerminalAgentNotification;
   read: boolean;
+  profileId?: string;
+  terminalRef?: TerminalRef;
 }
 
 export interface AddTerminalNotificationOptions {
@@ -40,8 +43,13 @@ export const useTerminalNotificationsStore = create<TerminalNotificationsState>(
     toasts: [],
     addNotification: (event, { showToast = true } = {}) => {
       const id = createNotificationId(event);
-      const record: TerminalNotificationRecord = { id, event, read: false };
-
+      const record: TerminalNotificationRecord = {
+        id,
+        event,
+        read: false,
+        profileId: event.profileId,
+        terminalRef: event.terminalRef,
+      };
       set((state) => {
         const notifications = [record, ...state.notifications].slice(
           0,
