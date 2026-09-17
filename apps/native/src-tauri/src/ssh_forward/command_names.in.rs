@@ -1,6 +1,8 @@
 &[
     "ssh_forward_open_client",
-    "ssh_forward_activate_scope",
+    "ssh_forward_open_scope",
+    "ssh_forward_close_scope",
+    "ssh_forward_reconcile_known_scopes",
     "ssh_forward_snapshot",
     "ssh_forward_create_connection",
     "ssh_forward_update_connection",

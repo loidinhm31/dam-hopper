@@ -1,5 +1,9 @@
 # 2026-09-17
 
+- **Unified multi-profile workbench — Phase 08 native scope concurrency and platform integration complete (100%; 2026-09-17).** Delivered concurrent admitted SSH scopes with scope-keyed runtime state, scoped teardown and secret cleanup, true client-epoch global teardown, atomic Tauri IPC/permission cutover, explicit per-scope TypeScript/UI adapters, and one Browser lease.
+- Phase 08 focused validation passed **135/135** on Linux: shared Vitest 15/15, native Vitest 48/48, UI focused Vitest 25/25, and native Cargo 47/47; scoped TypeScript checks passed. Post-fix code review approved **9.6/10**. Windows-only S13 live traffic, DPAPI and WebView2 proof remains unverified and is a Phase 09 native release gate.
+- See the [Phase 08 plan](../plans/260916-2137-unified-profile/phase-08-native-scope-concurrency.md), [tester report](../plans/reports/tester-260917-2012-phase-08-native-scope-concurrency.md), [post-fix code review](../plans/reports/code-review-260917-2014-phase-08-native-scope-concurrency.md), and [roadmap](./project-roadmap.md).
+
 - **Unified multi-profile workbench — Phase 07 media isolation and encryption complete (100%).** Added required UUIDv4 `mediaClientId` bindings, namespaced v2 media cookies, ticket-selected cookie authorization, fail-closed duplicate parsing, and actor/client-scoped logout and revocation.
 - Added bounded `RemoteCleanupHandle` lifecycle for native image/video capabilities and owner-qualified, memory-only encryption state with queued prompts, collision-resistant OPAQUE identifiers, zeroed stale keys, and single-transport encrypted writes without plaintext fallback.
 - See the [Phase 07 guide](./phase-07-media-isolation-and-encryption.md), [API Reference](./api-reference.md), [roadmap](./project-roadmap.md), and [Phase 07 plan](../plans/260916-2137-unified-profile/phase-07-media-isolation-and-encryption.md).

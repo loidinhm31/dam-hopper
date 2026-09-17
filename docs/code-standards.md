@@ -1591,6 +1591,65 @@ packages/ui/src/
 
 Native startup must not depend on a packaged-webview same-origin fallback or an idle transport. Use the shared profile flow; an unsupported non-Windows remote profile reports `unsupported` without auto-login or connection traffic, while the shell remains usable.
 
+### Native scope and Tauri IPC (Phase 08)
+
+Native SSH forwarding is Windows desktop-only. Keep it in
+`apps/native/src-tauri/src/ssh_forward`; do not add an Axum route, WebSocket
+authority, backend sidecar, browser fallback, or mobile command registration.
+`apps/native/src/native-ssh-forward-host.ts` is the only frontend module that
+imports the SSH-forward Tauri invoke/event APIs.
+
+Use the explicit lifecycle contract from
+`packages/ui/src/lib/ssh-forward-host.ts`:
+
+- `openClient(knownScopes)` issues the global client epoch and performs complete
+  live-resource teardown before returning `DesktopClientContext`.
+- `openScope(scopeId)` opens one UUIDv4 scope and returns `ScopeHandle`.
+- `closeScope(NativeScopeRef)` tears down only the referenced scope.
+- `reconcileKnownScopes(knownScopes)` updates retention metadata without an
+  epoch transition or scope open/close.
+
+Every snapshot and mutation takes the complete `NativeScopeRef`; never recover
+scope identity from a focused project, Settings target, route, or active-profile
+singleton. Rust manager state uses `HashMap<scopeId, ActiveScope>`. Runtime
+state uses `(scopeId, connectionProfileId)` keys, and child rule state remains
+under its owning connection. Equal IDs across scopes must remain independent.
+
+Teardown ordering is an invariant: remove the scope/token from admission first,
+abort scope-prefixed workers, cancel and close scoped registry entries, force
+close remaining children, clear scoped loaded keys/passwords, then clear scoped
+host-key challenges. A global `openClient` or shutdown performs the equivalent
+all-scope operation. Recheck context, scope, token, generation, and cancellation
+after every await before committing state, emitting a hint, or returning a
+snapshot. `activateScope` is not a production command; test-only compatibility
+helpers must not become a new active-scope shim.
+
+Counters and timestamps are wire values, not JSON numbers. Accept only canonical
+unsigned decimal `WireCounter` strings and strict UTC-millisecond timestamps;
+parse numerically (`u64`/`BigInt`), use checked increments, and reject overflow
+or lexical ordering. Keep persisted revisions separate from memory-only client,
+activation, scope, connection, and runtime generations.
+
+Known-scope input is explicit: available UUIDv4 IDs or `unavailable`. Never
+convert storage failure to an empty list, age orphan metadata, or purge on an
+unavailable read. Profile deletion may purge only after absence is observed and
+the known-scope list is available. Persisted stores remain per-scope,
+credential-free TOML documents under Tauri `app_config_dir`, with contained
+no-follow handles, atomic replacement, protected leases, and safe permissions.
+
+The ACL contract is exact: `permissions/ssh-forward.toml`,
+`command_names.in.rs`, and `commands.rs` must contain the same 21 command names,
+and `capabilities/ssh-forward.json` must grant them only to the `main` window
+on Windows. Every handler calls the main-window label guard. Do not add
+permission to the `browser-debug` child, secondary webviews, Android, or iOS.
+
+Global guards remain explicit and tested: 16 live connections, four concurrent
+handshakes, 64 enabled forwarding rules, 64 channels per connection, loopback
+bind/target addresses, and local-port conflict checks across scopes. Connection
+and rule lifecycle generations fence delayed workers; collection revisions fence
+persistent CAS updates. Events are bounded refetch hints and never snapshot
+patches.
+
 `packages/ui` owns components, hooks, stores, shared styling, assets, and tests.
 
 `packages/shared` owns dependency-free runtime utilities used across packages. Current rule: keep logger config, level resolution, and metadata redaction centralized in `src/logger.ts`, and prefer it over ad hoc `console` calls in transport, auth, terminal, dashboard, error boundary, and filesystem code.

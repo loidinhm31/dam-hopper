@@ -19,16 +19,6 @@ const scopeId = "33333333-3333-4333-8333-333333333333";
 const profileId = "44444444-4444-4444-8444-444444444444";
 const opened = {
   context,
-  activationTokenFloor: "9",
-  activeScopeId: scopeId,
-  scopeGeneration: "1",
-};
-const activation = {
-  context,
-  activationToken: "10",
-  scopeId,
-  scopeGeneration: "1",
-  snapshot: null,
 };
 const snapshot = {
   context,
@@ -47,6 +37,15 @@ const snapshot = {
   profiles: [],
   runtimes: [],
   hostKeyChallenges: [],
+};
+const scopeHandle = {
+  ref: {
+    context,
+    scopeId,
+    scopeGeneration: "1" as WireCounter,
+    activationToken: "10" as WireCounter,
+  },
+  snapshot,
 };
 const legacyProfile = {
   id: profileId,
@@ -75,10 +74,12 @@ describe("native ssh forwarding host", () => {
     listen.mockReset();
     listen.mockResolvedValue(vi.fn());
   });
-  it("maps exactly the eighteen Rust command names", () => {
+  it("maps exactly the twenty Rust command names", () => {
     expect(Object.values(NATIVE_SSH_FORWARD_COMMANDS)).toEqual([
       "ssh_forward_open_client",
-      "ssh_forward_activate_scope",
+      "ssh_forward_open_scope",
+      "ssh_forward_close_scope",
+      "ssh_forward_reconcile_known_scopes",
       "ssh_forward_snapshot",
       "ssh_forward_create_connection",
       "ssh_forward_update_connection",
@@ -96,7 +97,7 @@ describe("native ssh forwarding host", () => {
       "ssh_forward_approve_host",
       "ssh_forward_purge_scope",
     ]);
-    expect(Object.keys(NATIVE_SSH_FORWARD_COMMANDS)).toHaveLength(18);
+    expect(Object.keys(NATIVE_SSH_FORWARD_COMMANDS)).toHaveLength(20);
   });
   it("does zero Tauri calls unless the Windows capability is enabled", () => {
     for (const platform of ["android", "ios", "linux", "macos", "unknown"])
@@ -105,16 +106,17 @@ describe("native ssh forwarding host", () => {
     expect(invoke).not.toHaveBeenCalled();
     expect(listen).not.toHaveBeenCalled();
   });
-  it("installs listener before open and sends canonical incremented activation", async () => {
-    invoke.mockResolvedValueOnce(opened).mockResolvedValueOnce(activation);
+  it("installs listener before open and sends openScope", async () => {
+    invoke.mockResolvedValueOnce(opened).mockResolvedValueOnce(scopeHandle);
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await host.activateScope(scopeId);
+    const handle = await host.openScope(scopeId);
     expect(listen).toHaveBeenCalledBefore(invoke);
     expect(invoke.mock.calls[1]).toEqual([
-      "ssh_forward_activate_scope",
-      { input: { context, activationToken: "10", scopeId } },
+      "ssh_forward_open_scope",
+      { input: { context, scopeId } },
     ]);
+    expect(handle).toEqual(scopeHandle);
   });
   it("rejects malformed errors and mismatched activation responses", async () => {
     invoke.mockRejectedValueOnce({
@@ -132,17 +134,20 @@ describe("native ssh forwarding host", () => {
     invoke.mockReset();
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce({ ...activation, scopeGeneration: "wrong" })
-      .mockResolvedValueOnce({ ...activation, activationToken: "11" });
+      .mockResolvedValueOnce({
+        ...scopeHandle,
+        ref: { ...scopeHandle.ref, scopeGeneration: "wrong" },
+      })
+      .mockResolvedValueOnce(scopeHandle);
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await expect(host.activateScope(scopeId)).rejects.toMatchObject({
+    await expect(host.openScope(scopeId)).rejects.toMatchObject({
       code: "IPC_UNAVAILABLE",
     });
-    await host.activateScope(scopeId);
+    await host.openScope(scopeId);
     expect(invoke.mock.calls[2]).toEqual([
-      "ssh_forward_activate_scope",
-      { input: { context, activationToken: "11", scopeId } },
+      "ssh_forward_open_scope",
+      { input: { context, scopeId } },
     ]);
   });
   it("rejects non-UUID scope IDs before sending them to Rust", async () => {
@@ -151,40 +156,46 @@ describe("native ssh forwarding host", () => {
 
     await host.openClient({ status: "available", ids: [] });
     await expect(
-      host.activateScope("phase5-runtime-profile"),
+      host.openScope("phase5-runtime-profile"),
     ).rejects.toMatchObject({
       code: "IPC_UNAVAILABLE",
     });
     expect(invoke).toHaveBeenCalledTimes(1);
   });
-  it("rejects superseded A after B and C without publishing A's scope", async () => {
-    let resolveA!: (value: typeof activation) => void;
+  it("allows concurrent scopes A and B and isolates scope closure", async () => {
     const scopeB = "55555555-5555-4555-8555-555555555555";
+    const handleB = {
+      ref: {
+        context,
+        scopeId: scopeB,
+        scopeGeneration: "1" as WireCounter,
+        activationToken: "10" as WireCounter,
+      },
+      snapshot: { ...snapshot, scopeId: scopeB },
+    };
     invoke
       .mockResolvedValueOnce(opened)
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveA = resolve;
-          }),
-      )
-      .mockResolvedValueOnce({
-        ...activation,
-        activationToken: "11",
-        scopeId: scopeB,
-      })
-      .mockResolvedValueOnce({
-        ...activation,
-        activationToken: "12",
-        scopeId: null,
-      });
+      .mockResolvedValueOnce(scopeHandle)
+      .mockResolvedValueOnce(handleB)
+      .mockResolvedValueOnce(undefined);
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId, scopeB] });
-    const a = host.activateScope(scopeId);
-    await host.activateScope(scopeB);
-    await host.activateScope(null);
-    resolveA(activation);
-    await expect(a).rejects.toMatchObject({ code: "ACTIVATION_SUPERSEDED" });
+    const a = await host.openScope(scopeId);
+    const b = await host.openScope(scopeB);
+    expect(a.ref.scopeId).toBe(scopeId);
+    expect(b.ref.scopeId).toBe(scopeB);
+    await host.closeScope(a.ref);
+    expect(invoke.mock.calls[3]).toEqual([
+      "ssh_forward_close_scope",
+      {
+        input: {
+          context: a.ref.context,
+          activationToken: a.ref.activationToken,
+          scopeId: a.ref.scopeId,
+          scopeGeneration: a.ref.scopeGeneration,
+        },
+      },
+    ]);
   });
   it("rejects Rust-incompatible numeric shorthand hosts", async () => {
     const malformed = {
@@ -206,12 +217,12 @@ describe("native ssh forwarding host", () => {
     };
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce(activation)
+      .mockResolvedValueOnce(scopeHandle)
       .mockResolvedValueOnce(malformed);
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await host.activateScope(scopeId);
-    await expect(host.snapshot()).rejects.toMatchObject({
+    const handle = await host.openScope(scopeId);
+    await expect(host.snapshot(handle.ref)).rejects.toMatchObject({
       code: "IPC_UNAVAILABLE",
     });
   });
@@ -219,7 +230,7 @@ describe("native ssh forwarding host", () => {
     let resolveSnapshot!: (value: typeof snapshot) => void;
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce(activation)
+      .mockResolvedValueOnce(scopeHandle)
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
@@ -227,14 +238,12 @@ describe("native ssh forwarding host", () => {
           }),
       )
       .mockResolvedValueOnce({
-        ...opened,
-        context: { ...context, clientEpoch: "11" },
-        activationTokenFloor: "10",
+        context: { ...context, clientEpoch: "11" as WireCounter },
       });
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await host.activateScope(scopeId);
-    const stale = host.snapshot();
+    const handle = await host.openScope(scopeId);
+    const stale = host.snapshot(handle.ref);
     await host.openClient({ status: "available", ids: [scopeId] });
     resolveSnapshot(snapshot);
     await expect(stale).rejects.toMatchObject({ code: "IPC_UNAVAILABLE" });
@@ -245,7 +254,7 @@ describe("native ssh forwarding host", () => {
     const newer = { ...snapshot, connectionsRevision: "2" as const };
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce(activation)
+      .mockResolvedValueOnce(scopeHandle)
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
@@ -260,9 +269,9 @@ describe("native ssh forwarding host", () => {
       );
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await host.activateScope(scopeId);
-    const old = host.snapshot();
-    const current = host.snapshot();
+    const handle = await host.openScope(scopeId);
+    const old = host.snapshot(handle.ref);
+    const current = host.snapshot(handle.ref);
     await vi.waitFor(() => {
       expect(resolveOld).toEqual(expect.any(Function));
       expect(resolveNew).toEqual(expect.any(Function));
@@ -314,12 +323,12 @@ describe("native ssh forwarding host", () => {
     };
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce(activation)
+      .mockResolvedValueOnce(scopeHandle)
       .mockResolvedValueOnce(persisted);
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await host.activateScope(scopeId);
-    await expect(host.snapshot()).resolves.toEqual(persisted);
+    const handle = await host.openScope(scopeId);
+    await expect(host.snapshot(handle.ref)).resolves.toEqual(persisted);
   });
   it("accepts local and agent key sources from the native inventory", async () => {
     const keys = {
@@ -347,48 +356,22 @@ describe("native ssh forwarding host", () => {
     };
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce(activation)
+      .mockResolvedValueOnce(scopeHandle)
       .mockResolvedValueOnce(keys);
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await host.activateScope(scopeId);
-    await expect(host.listKeys()).resolves.toEqual(keys);
+    const handle = await host.openScope(scopeId);
+    await expect(host.listKeys(handle.ref)).resolves.toEqual(keys);
   });
   it("does not replay mutations after a manager restart", async () => {
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce(activation)
-      .mockRejectedValueOnce(restartError)
-      .mockResolvedValueOnce({
-        ...opened,
-        context: {
-          ...context,
-          managerSessionId: "55555555-5555-4555-8555-555555555555",
-        },
-        activationTokenFloor: "10",
-      })
-      .mockResolvedValueOnce({
-        context: {
-          ...context,
-          managerSessionId: "55555555-5555-4555-8555-555555555555",
-        },
-        activationToken: "11",
-        scopeId,
-        scopeGeneration: "1",
-        snapshot: null,
-      })
-      .mockResolvedValueOnce({
-        ...snapshot,
-        context: {
-          ...context,
-          managerSessionId: "55555555-5555-4555-8555-555555555555",
-        },
-        activationToken: "11",
-      });
+      .mockResolvedValueOnce(scopeHandle)
+      .mockRejectedValueOnce(restartError);
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await host.activateScope(scopeId);
-    await expect(host.start(profileId, "1")).rejects.toEqual(restartError);
+    const handle = await host.openScope(scopeId);
+    await expect(host.connect(handle.ref, profileId, "1" as WireCounter)).rejects.toEqual(restartError);
     expect(
       invoke.mock.calls.filter(
         ([command]) => command === NATIVE_SSH_FORWARD_COMMANDS.connect,
@@ -404,7 +387,7 @@ describe("native ssh forwarding host", () => {
     let resolveSnapshot!: (value: typeof snapshot) => void;
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce(activation)
+      .mockResolvedValueOnce(scopeHandle)
       .mockResolvedValueOnce(snapshot)
       .mockImplementationOnce(
         () =>
@@ -414,8 +397,8 @@ describe("native ssh forwarding host", () => {
       );
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await host.activateScope(scopeId);
-    await host.snapshot();
+    const handle = await host.openScope(scopeId);
+    await host.snapshot(handle.ref);
     const hint = {
       desktopInstanceId: context.desktopInstanceId,
       managerSessionId: context.managerSessionId,
@@ -474,13 +457,13 @@ describe("native ssh forwarding host", () => {
     };
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce(activation)
+      .mockResolvedValueOnce(scopeHandle)
       .mockResolvedValueOnce(snapshot)
       .mockResolvedValueOnce(runningSnapshot);
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await host.activateScope(scopeId);
-    await host.snapshot();
+    const handle = await host.openScope(scopeId);
+    await host.snapshot(handle.ref);
     handler!({
       payload: {
         desktopInstanceId: context.desktopInstanceId,
@@ -533,7 +516,7 @@ describe("native ssh forwarding host", () => {
     let resolveConnect!: (value: typeof failedSnapshot) => void;
     invoke
       .mockResolvedValueOnce(opened)
-      .mockResolvedValueOnce(activation)
+      .mockResolvedValueOnce(scopeHandle)
       .mockResolvedValueOnce(snapshot)
       .mockImplementationOnce(
         () =>
@@ -544,9 +527,9 @@ describe("native ssh forwarding host", () => {
       .mockResolvedValueOnce(failedSnapshot);
     const host = createNativeSshForwardHost("windows")!;
     await host.openClient({ status: "available", ids: [scopeId] });
-    await host.activateScope(scopeId);
-    await host.snapshot();
-    const connect = host.connect(profileId, "0");
+    const handle = await host.openScope(scopeId);
+    await host.snapshot(handle.ref);
+    const connect = host.connect(handle.ref, profileId, "0" as WireCounter);
     handler!({
       payload: {
         desktopInstanceId: context.desktopInstanceId,

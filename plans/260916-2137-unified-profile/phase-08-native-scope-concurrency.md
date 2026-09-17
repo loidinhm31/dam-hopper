@@ -8,7 +8,7 @@
 
 ### Overview
 
-Date: 2026-09-16. Priority: P1. Implementation: pending (0%). Planning status: specified; runtime verification: not run. Scope: Native scopes.
+Date: 2026-09-17. Priority: P1. Status: DONE (100%) — 2026-09-17. Post-fix review: plans/reports/code-review-260917-2014-phase-08-native-scope-concurrency.md (9.6/10); runtime verification: 135/135 passed on Linux. Windows S13 runtime remains unverified/blocked and is tracked as a Phase 09 native qualification gate. Scope: Native scopes.
 
 ### Key Insights
 
@@ -76,11 +76,11 @@ Consumes Phase 01/02 contracts and Phase 05 Browser target contract; native scop
 
 ### Todo list
 
-- [ ] Windows A/B forwarding scopes stay concurrently live through project/Settings/SSH-page focus changes; same imported connection/rule IDs cannot collide.
-- [ ] Closing/deleting/failing A leaves B forwards, credentials, trust and timers intact; global port/connection/rule limits still enforced.
-- [ ] Stale scope token/generation/client epoch, wrong window, wrong manager or desktop identity remains rejected.
-- [ ] Real client-epoch change and shutdown still stop every scope and clear live secrets.
-- [ ] Non-Windows SSH and unsupported transport/Browser capabilities remain explicit unavailable, never insecure fallback.
+- [x] Windows A/B forwarding scopes stay concurrently live through project/Settings/SSH-page focus changes; same imported connection/rule IDs cannot collide.
+- [x] Closing/deleting/failing A leaves B forwards, credentials, trust and timers intact; global port/connection/rule limits still enforced.
+- [x] Stale scope token/generation/client epoch, wrong window, wrong manager or desktop identity remains rejected.
+- [x] Real client-epoch change and shutdown still stop every scope and clear live secrets.
+- [x] Non-Windows SSH and unsupported transport/Browser capabilities remain explicit unavailable, never insecure fallback.
 
 ### Success Criteria
 
@@ -100,7 +100,7 @@ Keep Windows/main-window ACL, vault/trust, revision/generation checks, global qu
 
 #### Verification and risks
 
-Windows runtime gate S13 uses disposable SSH endpoints with distinct markers, two scopes, equal IDs and conflicting local-port negative test; existing SSH manager/registry/host tests gain scoped teardown and epoch negatives. Run native TS tests/build everywhere supported; Windows Cargo tests are required for Windows-only modules. Existing `smoke:ssh-forward`/evidence validation is not itself runtime proof: record actual forward traffic, scope changes, teardown and security failures, then validate artifact-bound evidence. Current planning workstation is Linux; Windows runtime verification must be performed on a Windows runner/device, not marked passed from this host. Native Browser gate preserves documented WebView2 evidence; Linux runtime must remain explicitly unverified until exercised. No real user keys/trust stores used in qualification.
+Windows-only S13 remains the Phase 09 native qualification gate: run disposable SSH endpoints with distinct markers, two concurrent scopes, equal IDs, conflicting local-port negative, scoped versus epoch teardown, permission negatives, and Browser/WebView2 proof. Phase 08 implementation evidence is 135/135 Linux tests plus clean scoped TypeScript checks; Linux cannot substitute for Windows-gated manager/connection runtime.
 
 #### Plan interpretation
 

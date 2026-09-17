@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
-  incrementWireCounter,
   parseSshForwardError,
   parseUtcTimestamp,
   parseWireCounter,
@@ -9,15 +8,15 @@ import {
   type DesktopClientContext,
   type KeyInventory,
   type KnownScopesInput,
+  type NativeScopeRef,
   type OpenClientResult,
-  type ScopeActivation,
+  type ScopeHandle,
   type SshConnectionProfile,
   type SshForwardRule,
   type SshForwardError,
   type SshForwardEventHint,
   type SshForwardHost,
   type SshForwardHostEvent,
-  type SshForwardProfile,
   type SshForwardSnapshot,
   type SshForwardTrustRepairMetadata,
   type WireCounter,
@@ -25,7 +24,9 @@ import {
 
 export const NATIVE_SSH_FORWARD_COMMANDS = {
   openClient: "ssh_forward_open_client",
-  activateScope: "ssh_forward_activate_scope",
+  openScope: "ssh_forward_open_scope",
+  closeScope: "ssh_forward_close_scope",
+  reconcileKnownScopes: "ssh_forward_reconcile_known_scopes",
   snapshot: "ssh_forward_snapshot",
   createConnection: "ssh_forward_create_connection",
   updateConnection: "ssh_forward_update_connection",
@@ -666,24 +667,20 @@ function validKeys(
 
 export class NativeSshForwardHost implements SshForwardHost {
   private context: DesktopClientContext | null = null;
-  private activationToken: WireCounter | null = null;
-  private pendingActivationToken: WireCounter | null = null;
-  private scopeId: string | null = null;
-  private scopeGeneration: WireCounter | null = null;
-  private snapshotState: SshForwardSnapshot | null = null;
-  private hintFreshness:
-    | [WireCounter, WireCounter, WireCounter, WireCounter, WireCounter]
-    | null = null;
+  private readonly scopes = new Map<string, ScopeHandle>();
+  private readonly hintFreshness = new Map<
+    string,
+    [WireCounter, WireCounter, WireCounter, WireCounter, WireCounter]
+  >();
   private knownScopes: KnownScopesInput = { status: "unavailable" };
   private operation = 0;
-  private mutationInFlight = 0;
-  private mutationWaiters: Array<() => void> = [];
-  private snapshotRequestSequence = 0;
-  private acceptedSnapshotRequest = 0;
-  private reopening = false;
-  private snapshotInFlight = false;
-  private snapshotTrailing = false;
-  private snapshotTrailingHint: SshForwardEventHint | null = null;
+  private readonly mutationInFlight = new Map<string, number>();
+  private readonly mutationWaiters = new Map<string, Array<() => void>>();
+  private readonly snapshotRequestSequence = new Map<string, number>();
+  private readonly acceptedSnapshotRequest = new Map<string, number>();
+  private readonly snapshotInFlight = new Map<string, boolean>();
+  private readonly snapshotTrailing = new Map<string, boolean>();
+  private readonly snapshotTrailingHint = new Map<string, SshForwardEventHint | null>();
   private readonly listeners = new Set<(event: SshForwardHostEvent) => void>();
   private unlisten: UnlistenFn | null = null;
   private listening: Promise<void> | null = null;
@@ -700,158 +697,169 @@ export class NativeSshForwardHost implements SshForwardHost {
     const raw = record(result);
     if (
       !raw ||
-      !exactKeys(raw, [
-        "context",
-        "activationTokenFloor",
-        "activeScopeId",
-        "scopeGeneration",
-      ]) ||
+      !exactKeys(raw, ["context"]) ||
       !validContext(raw.context) ||
-      !counter(raw.activationTokenFloor) ||
-      !counter(raw.scopeGeneration) ||
-      (raw.activeScopeId !== null && !uuid(raw.activeScopeId)) ||
       this.disposed ||
       operation !== this.operation
     )
       throw IPC_UNAVAILABLE;
     this.context = raw.context;
-    this.activationToken = raw.activationTokenFloor;
-    this.pendingActivationToken = null;
-    this.scopeId = raw.activeScopeId;
-    this.scopeGeneration = raw.scopeGeneration;
-    this.snapshotState = null;
-    this.hintFreshness = null;
+    this.scopes.clear();
+    this.hintFreshness.clear();
+    this.mutationInFlight.clear();
+    this.mutationWaiters.clear();
+    this.snapshotRequestSequence.clear();
+    this.acceptedSnapshotRequest.clear();
+    this.snapshotInFlight.clear();
+    this.snapshotTrailing.clear();
+    this.snapshotTrailingHint.clear();
     return result;
   }
-  async activateScope(scopeId: string | null): Promise<ScopeActivation> {
+
+  async openScope(scopeId: string): Promise<ScopeHandle> {
+    if (!this.context || !uuid(scopeId)) throw IPC_UNAVAILABLE;
+    const context = this.context;
+    const operation = this.operation;
+    const result = await this.invoke<ScopeHandle>(
+      NATIVE_SSH_FORWARD_COMMANDS.openScope,
+      { input: { context, scopeId } },
+    );
+    if (!this.validScopeHandle(result, context, scopeId)) throw IPC_UNAVAILABLE;
+    if (this.disposed || operation !== this.operation) {
+      throw {
+        ...IPC_UNAVAILABLE,
+        code: "ACTIVATION_SUPERSEDED" as const,
+        message: "Activation was superseded by a newer scope request.",
+        retryable: true,
+      };
+    }
+    const handle: ScopeHandle = {
+      ref: result.ref,
+      snapshot: this.normaliseSnapshot(result.snapshot),
+    };
+    this.scopes.set(scopeId, handle);
+    this.hintFreshness.set(scopeId, [
+      handle.snapshot.scopeGeneration,
+      handle.snapshot.connectionsRevision,
+      handle.snapshot.rulesRevision,
+      handle.snapshot.profilesRevision,
+      handle.snapshot.trustRevision,
+    ]);
+    return handle;
+  }
+
+  async closeScope(scope: NativeScopeRef): Promise<void> {
     if (
       !this.context ||
-      (!this.activationToken && !this.pendingActivationToken) ||
-      (scopeId !== null && !uuid(scopeId))
+      !sameContext(this.context, scope.context) ||
+      !uuid(scope.scopeId) ||
+      !counter(scope.scopeGeneration) ||
+      !counter(scope.activationToken)
     )
       throw IPC_UNAVAILABLE;
-    const token = incrementWireCounter(
-      this.pendingActivationToken ?? this.activationToken!,
-    );
-    if (!token)
-      throw { ...IPC_UNAVAILABLE, code: "COUNTER_EXHAUSTED" as const };
-    const operation = ++this.operation,
-      context = this.context;
-    this.pendingActivationToken = token;
-    this.snapshotState = null;
-    this.scopeGeneration = null;
-    this.hintFreshness = null;
-    try {
-      const result = await this.invoke<ScopeActivation>(
-        NATIVE_SSH_FORWARD_COMMANDS.activateScope,
-        { input: { context, activationToken: token, scopeId } },
-      );
-      if (!this.validActivation(result, context, token, scopeId))
-        throw IPC_UNAVAILABLE;
-      if (!this.isCurrentActivationAttempt(context, token, operation))
-        throw {
-          ...IPC_UNAVAILABLE,
-          code: "ACTIVATION_SUPERSEDED" as const,
-          message: "Activation was superseded by a newer scope request.",
-          retryable: true,
-        };
-      this.activationToken = token;
-      this.pendingActivationToken = null;
-      this.scopeId = scopeId;
-      this.scopeGeneration = result.scopeGeneration;
-      this.acceptSnapshot(result.snapshot);
-      return result.snapshot
-        ? { ...result, snapshot: this.snapshotState }
-        : result;
-    } catch (error) {
-      if (this.isCurrentActivationAttempt(context, token, operation)) {
-        const parsed = parseSshForwardError(error);
-        if (
-          parsed?.code === "CLIENT_EPOCH_STALE" ||
-          parsed?.code === "ACTIVATION_SUPERSEDED"
-        ) {
-          // These errors mean the manager rejected the activation before the
-          // client established a usable token floor. Re-open the client so a
-          // fresh epoch/session can be issued instead of retrying forever.
-          this.context = null;
-          this.activationToken = null;
-          this.pendingActivationToken = null;
-        } else {
-          // The manager may have admitted this token before it could publish
-          // a response, so retain the floor while quarantining the scope.
-          this.activationToken = token;
-          this.pendingActivationToken = null;
-        }
-        this.scopeId = null;
-        this.scopeGeneration = null;
-        this.snapshotState = null;
-        this.hintFreshness = null;
-      }
-      throw error;
-    }
+    const operation = this.operation;
+    this.scopes.delete(scope.scopeId);
+    this.hintFreshness.delete(scope.scopeId);
+    this.mutationInFlight.delete(scope.scopeId);
+    this.mutationWaiters.delete(scope.scopeId);
+    this.snapshotRequestSequence.delete(scope.scopeId);
+    this.acceptedSnapshotRequest.delete(scope.scopeId);
+    this.snapshotInFlight.delete(scope.scopeId);
+    this.snapshotTrailing.delete(scope.scopeId);
+    this.snapshotTrailingHint.delete(scope.scopeId);
+    await this.invoke<void>(NATIVE_SSH_FORWARD_COMMANDS.closeScope, {
+      input: {
+        context: scope.context,
+        activationToken: scope.activationToken,
+        scopeId: scope.scopeId,
+        scopeGeneration: scope.scopeGeneration,
+      },
+    });
+    if (this.disposed || operation !== this.operation) throw IPC_UNAVAILABLE;
   }
-  async snapshot(): Promise<SshForwardSnapshot> {
-    await this.waitForMutationsToSettle();
-    const snapshotRequest = ++this.snapshotRequestSequence;
+
+  async reconcileKnownScopes(knownScopes: KnownScopesInput): Promise<void> {
+    if (!this.context) throw IPC_UNAVAILABLE;
+    this.knownScopes = knownScopes;
+    await this.invoke<void>(NATIVE_SSH_FORWARD_COMMANDS.reconcileKnownScopes, {
+      input: { context: this.context, knownScopes },
+    });
+  }
+
+  async snapshot(scope: NativeScopeRef): Promise<SshForwardSnapshot> {
+    await this.waitForMutationsToSettle(scope.scopeId);
+    const nextSeq = (this.snapshotRequestSequence.get(scope.scopeId) ?? 0) + 1;
+    this.snapshotRequestSequence.set(scope.scopeId, nextSeq);
     return this.command(
+      scope,
       NATIVE_SSH_FORWARD_COMMANDS.snapshot,
       {},
       true,
       false,
-      snapshotRequest,
+      nextSeq,
     );
   }
+
   createConnection(
+    scope: NativeScopeRef,
     connection: SshConnectionProfile,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.createConnection, {
-      expectedConnectionsRevision: this.requireSnapshot().connectionsRevision,
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.createConnection, {
+      expectedConnectionsRevision: this.requireSnapshot(scope.scopeId).connectionsRevision,
       connection,
     });
   }
+
   updateConnection(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedGeneration: WireCounter,
     connection: SshConnectionProfile,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.updateConnection, {
-      expectedConnectionsRevision: this.requireSnapshot().connectionsRevision,
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.updateConnection, {
+      expectedConnectionsRevision: this.requireSnapshot(scope.scopeId).connectionsRevision,
       connectionProfileId,
       expectedGeneration,
       connection,
     });
   }
+
   deleteConnection(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedGeneration: WireCounter,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.deleteConnection, {
-      expectedConnectionsRevision: this.requireSnapshot().connectionsRevision,
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.deleteConnection, {
+      expectedConnectionsRevision: this.requireSnapshot(scope.scopeId).connectionsRevision,
       connectionProfileId,
       expectedGeneration,
     });
   }
+
   createRule(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedConnectionGeneration: WireCounter,
     rule: SshForwardRule,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.createRule, {
-      expectedRulesRevision: this.requireSnapshot().rulesRevision,
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.createRule, {
+      expectedRulesRevision: this.requireSnapshot(scope.scopeId).rulesRevision,
       connectionProfileId,
       expectedConnectionGeneration,
       rule,
     });
   }
+
   updateRule(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedConnectionGeneration: WireCounter,
     ruleId: string,
     expectedRuleGeneration: WireCounter,
     rule: SshForwardRule,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.updateRule, {
-      expectedRulesRevision: this.requireSnapshot().rulesRevision,
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.updateRule, {
+      expectedRulesRevision: this.requireSnapshot(scope.scopeId).rulesRevision,
       connectionProfileId,
       expectedConnectionGeneration,
       ruleId,
@@ -859,48 +867,56 @@ export class NativeSshForwardHost implements SshForwardHost {
       rule,
     });
   }
+
   deleteRule(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedConnectionGeneration: WireCounter,
     ruleId: string,
     expectedRuleGeneration: WireCounter,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.deleteRule, {
-      expectedRulesRevision: this.requireSnapshot().rulesRevision,
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.deleteRule, {
+      expectedRulesRevision: this.requireSnapshot(scope.scopeId).rulesRevision,
       connectionProfileId,
       expectedConnectionGeneration,
       ruleId,
       expectedRuleGeneration,
     });
   }
+
   connect(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedGeneration: WireCounter,
     credentialAttemptId?: string,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.connect, {
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.connect, {
       connectionProfileId,
       expectedGeneration,
       ...(credentialAttemptId ? { credentialAttemptId } : {}),
     });
   }
+
   disconnect(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedGeneration: WireCounter,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.disconnect, {
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.disconnect, {
       connectionProfileId,
       expectedGeneration,
     });
   }
+
   setRuleEnabled(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedConnectionGeneration: WireCounter,
     ruleId: string,
     expectedRuleGeneration: WireCounter,
     enabled: boolean,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.setRuleEnabled, {
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.setRuleEnabled, {
       connectionProfileId,
       expectedConnectionGeneration,
       ruleId,
@@ -908,144 +924,37 @@ export class NativeSshForwardHost implements SshForwardHost {
       enabled,
     });
   }
-  createProfile(profile: SshForwardProfile): Promise<SshForwardSnapshot> {
-    return this.createConnection({
-      id: profile.id,
-      scopeId: profile.scopeId,
-      name: profile.name,
-      sshHost: profile.sshHost,
-      sshPort: profile.sshPort,
-      sshUser: profile.sshUser,
-      auth: profile.auth,
-      createdAt: profile.createdAt,
-      updatedAt: profile.updatedAt,
-    }).then((snapshot) =>
-      this.createRule(
-        profile.id,
-        this.connectionGeneration(profile.id, snapshot),
-        {
-          id: profile.id,
-          scopeId: profile.scopeId,
-          connectionProfileId: profile.id,
-          name: profile.name,
-          localPort: profile.localPort,
-          targetHost: profile.targetHost,
-          targetPort: profile.targetPort,
-          desiredEnabled: profile.autoStart,
-          reconnect: profile.reconnect,
-          createdAt: profile.createdAt,
-          updatedAt: profile.updatedAt,
-        },
-      ),
+
+  listKeys(scope: NativeScopeRef): Promise<KeyInventory> {
+    return this.command(
+      scope,
+      NATIVE_SSH_FORWARD_COMMANDS.listKeys,
+      {},
+      false,
+      false,
     );
   }
-  updateProfile(
-    profileId: string,
-    expectedGeneration: WireCounter,
-    profile: SshForwardProfile,
-  ): Promise<SshForwardSnapshot> {
-    return this.updateConnection(profileId, expectedGeneration, {
-      id: profileId,
-      scopeId: profile.scopeId,
-      name: profile.name,
-      sshHost: profile.sshHost,
-      sshPort: profile.sshPort,
-      sshUser: profile.sshUser,
-      auth: profile.auth,
-      createdAt: profile.createdAt,
-      updatedAt: profile.updatedAt,
-    }).then((snapshot) =>
-      this.updateRule(
-        profileId,
-        this.connectionGeneration(profileId, snapshot),
-        profileId,
-        this.ruleGeneration(profileId, snapshot),
-        {
-          id: profileId,
-          scopeId: profile.scopeId,
-          connectionProfileId: profileId,
-          name: profile.name,
-          localPort: profile.localPort,
-          targetHost: profile.targetHost,
-          targetPort: profile.targetPort,
-          desiredEnabled: profile.autoStart,
-          reconnect: profile.reconnect,
-          createdAt: profile.createdAt,
-          updatedAt: profile.updatedAt,
-        },
-      ),
-    );
-  }
-  deleteProfile(
-    profileId: string,
-    expectedGeneration: WireCounter,
-  ): Promise<SshForwardSnapshot> {
-    const snapshot = this.requireSnapshot();
-    return this.deleteRule(
-      profileId,
-      expectedGeneration,
-      profileId,
-      this.ruleGeneration(profileId, snapshot),
-    ).then(() => this.deleteConnection(profileId, expectedGeneration));
-  }
-  start(
-    profileId: string,
-    expectedGeneration: WireCounter,
-    credentialAttemptId?: string,
-  ): Promise<SshForwardSnapshot> {
-    return this.connect(
-      profileId,
-      expectedGeneration,
-      credentialAttemptId,
-    ).then((snapshot) =>
-      this.setRuleEnabled(
-        profileId,
-        this.connectionGeneration(profileId, snapshot),
-        profileId,
-        this.ruleGeneration(profileId, snapshot),
-        true,
-      ),
-    );
-  }
-  stop(
-    profileId: string,
-    expectedGeneration: WireCounter,
-  ): Promise<SshForwardSnapshot> {
-    return this.disconnect(profileId, expectedGeneration);
-  }
-  restart(
-    profileId: string,
-    expectedGeneration: WireCounter,
-    credentialAttemptId?: string,
-  ): Promise<SshForwardSnapshot> {
-    return this.disconnect(profileId, expectedGeneration).then(() =>
-      this.start(
-        profileId,
-        this.connectionGeneration(profileId),
-        credentialAttemptId,
-      ),
-    );
-  }
-  listKeys(): Promise<KeyInventory> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.listKeys, {}, false, false);
-  }
+
   loadKey(
+    scope: NativeScopeRef,
     profileId: string,
     keyId: string,
     passphrase: string,
     expectedGeneration?: WireCounter,
     rememberForDays: 0 | 30 = 0,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.loadKey, {
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.loadKey, {
       connectionProfileId: profileId,
       expectedGeneration:
-        expectedGeneration ?? this.connectionGeneration(profileId),
+        expectedGeneration ?? this.connectionGeneration(scope.scopeId, profileId),
       rememberForDays,
       keyId,
       passphrase,
     });
   }
+
   loadPassword(
+    scope: NativeScopeRef,
     profileId: string,
     username: string,
     password: string,
@@ -1053,53 +962,56 @@ export class NativeSshForwardHost implements SshForwardHost {
     expectedGeneration?: WireCounter,
     rememberForDays: 0 | 30 = 0,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.loadPassword, {
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.loadPassword, {
       connectionProfileId: profileId,
       expectedGeneration:
-        expectedGeneration ?? this.connectionGeneration(profileId),
+        expectedGeneration ?? this.connectionGeneration(scope.scopeId, profileId),
       rememberForDays,
       username,
       password,
       credentialAttemptId,
     });
   }
+
   approveHost(
+    scope: NativeScopeRef,
     profileId: string,
     expectedGeneration: WireCounter,
     challengeId: string,
     algorithm: string,
     fingerprintValue: string,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.approveHost, {
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.approveHost, {
       connectionProfileId: profileId,
       expectedGeneration,
       challengeId,
       algorithm,
       fingerprint: fingerprintValue,
-      expectedTrustRevision: this.requireSnapshot().trustRevision,
+      expectedTrustRevision: this.requireSnapshot(scope.scopeId).trustRevision,
     });
   }
+
   forgetCredential(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedGeneration: WireCounter,
   ): Promise<SshForwardSnapshot> {
-    return this.command(NATIVE_SSH_FORWARD_COMMANDS.forgetCredential, {
+    return this.command(scope, NATIVE_SSH_FORWARD_COMMANDS.forgetCredential, {
       connectionProfileId,
       expectedGeneration,
     });
   }
+
   async purgeScope(
     scopeId: string,
     knownScopes: KnownScopesInput,
   ): Promise<{ scopeId: string; purged: boolean }> {
-    if (!this.context || !this.activationToken || !uuid(scopeId))
-      throw IPC_UNAVAILABLE;
+    if (!this.context || !uuid(scopeId)) throw IPC_UNAVAILABLE;
     const context = this.context,
-      token = this.activationToken,
       operation = ++this.operation;
     const result = await this.invoke<{ scopeId: string; purged: boolean }>(
       NATIVE_SSH_FORWARD_COMMANDS.purgeScope,
-      { input: { context, activationToken: token, scopeId, knownScopes } },
+      { input: { context, scopeId, knownScopes } },
     );
     const raw = record(result);
     if (
@@ -1110,28 +1022,32 @@ export class NativeSshForwardHost implements SshForwardHost {
       this.disposed ||
       operation !== this.operation ||
       !this.context ||
-      !sameContext(this.context, context) ||
-      this.activationToken !== token
+      !sameContext(this.context, context)
     )
       throw IPC_UNAVAILABLE;
     return result;
   }
+
   subscribe(listener: (event: SshForwardHostEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+
   dispose(): void {
     if (!this.disposed) {
       this.disposed = true;
       ++this.operation;
-      this.pendingActivationToken = null;
-      for (const resolve of this.mutationWaiters.splice(0)) resolve();
+      for (const waiters of this.mutationWaiters.values()) {
+        for (const resolve of waiters.splice(0)) resolve();
+      }
+      this.mutationWaiters.clear();
       this.unlisten?.();
       this.unlisten = null;
     }
   }
 
   private async command<T>(
+    scope: NativeScopeRef,
     command: string,
     extra: Record<string, unknown>,
     mayReplaySnapshot = false,
@@ -1140,17 +1056,23 @@ export class NativeSshForwardHost implements SshForwardHost {
   ): Promise<T> {
     if (
       !this.context ||
-      !this.activationToken ||
-      !this.scopeId ||
-      !this.scopeGeneration
+      !sameContext(this.context, scope.context) ||
+      !uuid(scope.scopeId) ||
+      !counter(scope.scopeGeneration) ||
+      !counter(scope.activationToken)
     )
       throw IPC_UNAVAILABLE;
-    const context = this.context,
-      token = this.activationToken,
-      scopeId = this.scopeId,
-      scopeGeneration = this.scopeGeneration,
+    const context = scope.context,
+      token = scope.activationToken,
+      scopeId = scope.scopeId,
+      scopeGeneration = scope.scopeGeneration,
       operation = mutating ? ++this.operation : this.operation;
-    if (mutating) this.mutationInFlight += 1;
+    if (mutating) {
+      this.mutationInFlight.set(
+        scopeId,
+        (this.mutationInFlight.get(scopeId) ?? 0) + 1,
+      );
+    }
     try {
       const result = await this.invoke<T>(command, {
         input: {
@@ -1167,26 +1089,22 @@ export class NativeSshForwardHost implements SshForwardHost {
       )
         throw IPC_UNAVAILABLE;
       if (this.isSnapshot(result)) {
-        this.acceptSnapshot(result, snapshotRequest);
-        if (!this.snapshotState) throw IPC_UNAVAILABLE;
-        return this.snapshotState as T;
+        this.acceptSnapshot(scopeId, result, snapshotRequest);
+        const handle = this.scopes.get(scopeId);
+        if (!handle) throw IPC_UNAVAILABLE;
+        return handle.snapshot as T;
       }
       return result;
     } catch (error) {
       const parsed = parseSshForwardError(error);
       if (
         parsed?.code !== "MANAGER_SESSION_MISMATCH" ||
-        this.reopening ||
         !this.isCurrent(context, token, scopeId, operation, scopeGeneration)
       )
         throw error;
-      try {
-        await this.rehydrateAfterRestart(scopeId);
-      } catch {
-        /* Preserve the original restart signal when rehydration is unavailable. */
-      }
       if (mayReplaySnapshot)
         return this.command<T>(
+          scope,
           command,
           extra,
           false,
@@ -1195,103 +1113,90 @@ export class NativeSshForwardHost implements SshForwardHost {
         );
       throw parsed;
     } finally {
-      if (mutating) this.finishMutation();
+      if (mutating) this.finishMutation(scopeId);
     }
   }
-  private waitForMutationsToSettle(): Promise<void> {
-    if (this.mutationInFlight === 0) return Promise.resolve();
-    return new Promise((resolve) => this.mutationWaiters.push(resolve));
+
+  private waitForMutationsToSettle(scopeId: string): Promise<void> {
+    if ((this.mutationInFlight.get(scopeId) ?? 0) === 0) return Promise.resolve();
+    let waiters = this.mutationWaiters.get(scopeId);
+    if (!waiters) {
+      waiters = [];
+      this.mutationWaiters.set(scopeId, waiters);
+    }
+    return new Promise((resolve) => waiters!.push(resolve));
   }
-  private finishMutation(): void {
-    this.mutationInFlight -= 1;
-    if (this.mutationInFlight > 0) return;
-    for (const resolve of this.mutationWaiters.splice(0)) resolve();
-    this.flushTrailingSnapshot();
-  }
-  private async rehydrateAfterRestart(scopeId: string): Promise<void> {
-    this.reopening = true;
-    try {
-      await this.openClient(this.knownScopes);
-      await this.activateScope(scopeId);
-      if (this.scopeId && this.scopeGeneration) {
-        try {
-          await this.command<SshForwardSnapshot>(
-            NATIVE_SSH_FORWARD_COMMANDS.snapshot,
-            {},
-            false,
-            false,
-          );
-        } catch {
-          /* State refresh is best-effort; the mutation still reports its original mismatch. */
-        }
+
+  private finishMutation(scopeId: string): void {
+    const count = (this.mutationInFlight.get(scopeId) ?? 1) - 1;
+    if (count <= 0) {
+      this.mutationInFlight.delete(scopeId);
+      const waiters = this.mutationWaiters.get(scopeId);
+      if (waiters) {
+        for (const resolve of waiters.splice(0)) resolve();
       }
-    } finally {
-      this.reopening = false;
+      const handle = this.scopes.get(scopeId);
+      if (handle) {
+        this.flushTrailingSnapshot(handle.ref);
+      }
+    } else {
+      this.mutationInFlight.set(scopeId, count);
     }
   }
+
   private isCurrent(
     context: DesktopClientContext,
     token: WireCounter,
-    scopeId: string | null,
+    scopeId: string,
     operation: number,
     scopeGeneration?: WireCounter,
   ): boolean {
+    const handle = this.scopes.get(scopeId);
     return (
       !this.disposed &&
       operation === this.operation &&
       this.context !== null &&
       sameContext(this.context, context) &&
-      this.activationToken === token &&
-      this.scopeId === scopeId &&
+      handle !== undefined &&
+      handle.ref.activationToken === token &&
+      handle.ref.scopeId === scopeId &&
       (scopeGeneration === undefined ||
-        this.scopeGeneration === scopeGeneration)
+        handle.ref.scopeGeneration === scopeGeneration)
     );
   }
-  private isCurrentActivationAttempt(
-    context: DesktopClientContext,
-    token: WireCounter,
-    operation: number,
-  ): boolean {
-    return (
-      !this.disposed &&
-      operation === this.operation &&
-      this.context !== null &&
-      sameContext(this.context, context) &&
-      this.pendingActivationToken === token
-    );
-  }
-  private validActivation(
+
+  private validScopeHandle(
     value: unknown,
     context: DesktopClientContext,
-    token: WireCounter,
-    scopeId: string | null,
-  ): value is ScopeActivation {
+    scopeId: string,
+  ): value is ScopeHandle {
     const raw = record(value);
-    return (
-      !!raw &&
-      exactKeys(raw, [
+    if (!raw || !exactKeys(raw, ["ref", "snapshot"])) return false;
+    const ref = record(raw.ref);
+    if (
+      !ref ||
+      !exactKeys(ref, [
         "context",
-        "activationToken",
         "scopeId",
         "scopeGeneration",
-        "snapshot",
-      ]) &&
-      validContext(raw.context) &&
-      sameContext(raw.context, context) &&
-      raw.activationToken === token &&
-      raw.scopeId === scopeId &&
-      counter(raw.scopeGeneration) &&
-      (raw.snapshot === null ||
-        (scopeId !== null &&
-          validSnapshot(
-            raw.snapshot,
-            context,
-            token,
-            scopeId,
-            raw.scopeGeneration,
-          )))
+        "activationToken",
+      ]) ||
+      !validContext(ref.context) ||
+      !sameContext(ref.context, context) ||
+      ref.scopeId !== scopeId ||
+      !counter(ref.scopeGeneration) ||
+      !counter(ref.activationToken)
+    )
+      return false;
+    return validSnapshot(
+      raw.snapshot,
+      context,
+      ref.activationToken as WireCounter,
+      scopeId,
+      ref.scopeGeneration as WireCounter,
     );
   }
+
   private validResult(
     value: unknown,
     context: DesktopClientContext,
@@ -1304,13 +1209,17 @@ export class NativeSshForwardHost implements SshForwardHost {
       validKeys(value, context, scopeId, scopeGeneration)
     );
   }
-  private requireSnapshot(): SshForwardSnapshot {
-    if (!this.snapshotState) throw IPC_UNAVAILABLE;
-    return this.snapshotState;
+
+  private requireSnapshot(scopeId: string): SshForwardSnapshot {
+    const handle = this.scopes.get(scopeId);
+    if (!handle) throw IPC_UNAVAILABLE;
+    return handle.snapshot;
   }
+
   private connectionGeneration(
+    scopeId: string,
     connectionProfileId: string,
-    snapshot = this.requireSnapshot(),
+    snapshot = this.requireSnapshot(scopeId),
   ): WireCounter {
     return (
       snapshot.connectionRuntimes.find(
@@ -1318,43 +1227,57 @@ export class NativeSshForwardHost implements SshForwardHost {
       )?.generation ?? ("0" as WireCounter)
     );
   }
+
   private ruleGeneration(
+    scopeId: string,
     ruleId: string,
-    snapshot = this.requireSnapshot(),
+    snapshot = this.requireSnapshot(scopeId),
   ): WireCounter {
     return (
       snapshot.ruleRuntimes.find((runtime) => runtime.ruleId === ruleId)
         ?.generation ?? ("0" as WireCounter)
     );
   }
+
   private isSnapshot(value: unknown): value is SshForwardSnapshot {
     const raw = record(value);
     return (
       raw !== null && "connectionsRevision" in raw && "rulesRevision" in raw
     );
   }
+
   private acceptSnapshot(
+    scopeId: string,
     snapshot: SshForwardSnapshot | null,
     snapshotRequest?: number,
   ): void {
+    if (!snapshot) {
+      this.scopes.delete(scopeId);
+      this.hintFreshness.delete(scopeId);
+      return;
+    }
+    const lastAccepted = this.acceptedSnapshotRequest.get(scopeId) ?? 0;
     if (
-      snapshot &&
       snapshotRequest !== undefined &&
-      snapshotRequest < this.acceptedSnapshotRequest
+      snapshotRequest < lastAccepted
     )
       return;
     if (snapshotRequest !== undefined)
-      this.acceptedSnapshotRequest = snapshotRequest;
-    this.snapshotState = snapshot ? this.normaliseSnapshot(snapshot) : snapshot;
-    if (snapshot)
-      this.hintFreshness = [
-        snapshot.scopeGeneration,
-        snapshot.connectionsRevision,
-        snapshot.rulesRevision,
-        snapshot.profilesRevision,
-        snapshot.trustRevision,
-      ];
+      this.acceptedSnapshotRequest.set(scopeId, snapshotRequest);
+    const normalised = this.normaliseSnapshot(snapshot);
+    const existing = this.scopes.get(scopeId);
+    if (existing) {
+      existing.snapshot = normalised;
+    }
+    this.hintFreshness.set(scopeId, [
+      normalised.scopeGeneration,
+      normalised.connectionsRevision,
+      normalised.rulesRevision,
+      normalised.profilesRevision,
+      normalised.trustRevision,
+    ]);
   }
+
   private normaliseSnapshot(snapshot: SshForwardSnapshot): SshForwardSnapshot {
     return {
       ...snapshot,
@@ -1364,6 +1287,7 @@ export class NativeSshForwardHost implements SshForwardHost {
       })),
     };
   }
+
   private async invoke<T>(
     command: string,
     input: Record<string, unknown>,
@@ -1374,6 +1298,7 @@ export class NativeSshForwardHost implements SshForwardHost {
       throw parseSshForwardError(error) ?? IPC_UNAVAILABLE;
     }
   }
+
   private async installListener(): Promise<void> {
     if (!this.listening)
       this.listening = listen<SshForwardEventHint>(
@@ -1385,13 +1310,12 @@ export class NativeSshForwardHost implements SshForwardHost {
       });
     return this.listening;
   }
+
   private handleHint(hint: SshForwardEventHint): void {
     const context = this.context,
-      snapshot = this.snapshotState,
       raw = record(hint);
     if (
       !context ||
-      !snapshot ||
       !raw ||
       !exactKeys(
         raw,
@@ -1412,16 +1336,16 @@ export class NativeSshForwardHost implements SshForwardHost {
           "profileId",
           "generation",
           "connectionProfileId",
-          "ruleId",
           "connectionGeneration",
+          "ruleId",
           "ruleGeneration",
         ],
       ) ||
       raw.desktopInstanceId !== context.desktopInstanceId ||
       raw.managerSessionId !== context.managerSessionId ||
       raw.clientEpoch !== context.clientEpoch ||
-      raw.activationToken !== this.activationToken ||
-      raw.scopeId !== this.scopeId ||
+      typeof raw.scopeId !== "string" ||
+      !counter(raw.activationToken) ||
       !counter(raw.scopeGeneration) ||
       !counter(raw.connectionsRevision) ||
       !counter(raw.rulesRevision) ||
@@ -1439,27 +1363,34 @@ export class NativeSshForwardHost implements SshForwardHost {
       !REASONS.has(raw.reason)
     )
       return;
-    const current: [
-        WireCounter,
-        WireCounter,
-        WireCounter,
-        WireCounter,
-        WireCounter,
-      ] = this.hintFreshness ?? [
-        snapshot.scopeGeneration,
-        snapshot.connectionsRevision,
-        snapshot.rulesRevision,
-        snapshot.profilesRevision,
-        snapshot.trustRevision,
-      ],
-      next: [WireCounter, WireCounter, WireCounter, WireCounter, WireCounter] =
-        [
-          raw.scopeGeneration,
-          raw.connectionsRevision,
-          raw.rulesRevision,
-          raw.profilesRevision,
-          raw.trustRevision,
-        ];
+    const handle = this.scopes.get(raw.scopeId);
+    if (!handle) return;
+    if (
+      handle.ref.activationToken !== raw.activationToken ||
+      handle.ref.scopeGeneration !== raw.scopeGeneration
+    )
+      return;
+
+    const current = this.hintFreshness.get(raw.scopeId) ?? [
+      handle.snapshot.scopeGeneration,
+      handle.snapshot.connectionsRevision,
+      handle.snapshot.rulesRevision,
+      handle.snapshot.profilesRevision,
+      handle.snapshot.trustRevision,
+    ];
+    const next: [
+      WireCounter,
+      WireCounter,
+      WireCounter,
+      WireCounter,
+      WireCounter,
+    ] = [
+      raw.scopeGeneration,
+      raw.connectionsRevision,
+      raw.rulesRevision,
+      raw.profilesRevision,
+      raw.trustRevision,
+    ];
     if (
       next.some(
         (value, index) =>
@@ -1472,56 +1403,72 @@ export class NativeSshForwardHost implements SshForwardHost {
         ))
     )
       return;
-    this.requestHintSnapshot(hint);
+    this.requestHintSnapshot(handle.ref, hint);
   }
-  private requestHintSnapshot(hint: SshForwardEventHint, retry = 0): void {
-    if (this.mutationInFlight > 0) {
-      this.snapshotTrailing = true;
-      this.snapshotTrailingHint = hint;
+
+  private requestHintSnapshot(
+    scope: NativeScopeRef,
+    hint: SshForwardEventHint,
+    retry = 0,
+  ): void {
+    const scopeId = scope.scopeId;
+    if ((this.mutationInFlight.get(scopeId) ?? 0) > 0) {
+      this.snapshotTrailing.set(scopeId, true);
+      this.snapshotTrailingHint.set(scopeId, hint);
       return;
     }
-    if (this.snapshotInFlight) {
-      this.snapshotTrailing = true;
-      this.snapshotTrailingHint = hint;
+    if (this.snapshotInFlight.get(scopeId)) {
+      this.snapshotTrailing.set(scopeId, true);
+      this.snapshotTrailingHint.set(scopeId, hint);
       return;
     }
-    this.snapshotInFlight = true;
-    void this.snapshot()
+    this.snapshotInFlight.set(scopeId, true);
+    void this.snapshot(scope)
       .then((snapshot) => {
         for (const listener of this.listeners)
           listener({ type: "changed", hint, snapshot });
       })
       .catch(() => {
-        if (!this.disposed && retry < 1 && !this.snapshotTrailing)
-          queueMicrotask(() => this.requestHintSnapshot(hint, retry + 1));
+        if (
+          !this.disposed &&
+          retry < 1 &&
+          !this.snapshotTrailing.get(scopeId)
+        )
+          queueMicrotask(() => this.requestHintSnapshot(scope, hint, retry + 1));
       })
       .finally(() => {
-        this.snapshotInFlight = false;
-        this.flushTrailingSnapshot(hint);
+        this.snapshotInFlight.set(scopeId, false);
+        this.flushTrailingSnapshot(scope, hint);
       });
   }
-  private flushTrailingSnapshot(fallbackHint?: SshForwardEventHint): void {
+
+  private flushTrailingSnapshot(
+    scope: NativeScopeRef,
+    fallbackHint?: SshForwardEventHint,
+  ): void {
+    const scopeId = scope.scopeId;
     if (
-      !this.snapshotTrailing ||
-      this.snapshotInFlight ||
-      this.mutationInFlight > 0
+      !this.snapshotTrailing.get(scopeId) ||
+      this.snapshotInFlight.get(scopeId) ||
+      (this.mutationInFlight.get(scopeId) ?? 0) > 0
     )
       return;
-    const nextHint = this.snapshotTrailingHint ?? fallbackHint;
-    this.snapshotTrailing = false;
-    this.snapshotTrailingHint = null;
-    if (nextHint && this.shouldRefreshHint(nextHint))
-      this.requestHintSnapshot(nextHint);
+    const nextHint = this.snapshotTrailingHint.get(scopeId) ?? fallbackHint;
+    this.snapshotTrailing.set(scopeId, false);
+    this.snapshotTrailingHint.set(scopeId, null);
+    if (nextHint && this.shouldRefreshHint(scopeId, nextHint))
+      this.requestHintSnapshot(scope, nextHint);
   }
-  private shouldRefreshHint(hint: SshForwardEventHint): boolean {
-    const snapshot = this.snapshotState;
-    if (!snapshot) return true;
-    const current = this.hintFreshness ?? [
-      snapshot.scopeGeneration,
-      snapshot.connectionsRevision,
-      snapshot.rulesRevision,
-      snapshot.profilesRevision,
-      snapshot.trustRevision,
+
+  private shouldRefreshHint(scopeId: string, hint: SshForwardEventHint): boolean {
+    const handle = this.scopes.get(scopeId);
+    if (!handle) return true;
+    const current = this.hintFreshness.get(scopeId) ?? [
+      handle.snapshot.scopeGeneration,
+      handle.snapshot.connectionsRevision,
+      handle.snapshot.rulesRevision,
+      handle.snapshot.profilesRevision,
+      handle.snapshot.trustRevision,
     ];
     const next = [
       hint.scopeGeneration,

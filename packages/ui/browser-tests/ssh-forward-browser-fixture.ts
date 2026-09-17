@@ -190,17 +190,18 @@ export function createSshForwardFixture(
   const host: SshForwardHost = {
     openClient: async () => ({
       context: current.context,
-      activationTokenFloor: "0" as WireCounter,
-      activeScopeId: scopeId,
-      scopeGeneration: generation,
     }),
-    activateScope: async () => ({
-      context: current.context,
-      activationToken: generation,
-      scopeId,
-      scopeGeneration: generation,
+    openScope: async (id) => ({
+      ref: {
+        context: current.context,
+        scopeId: id,
+        scopeGeneration: generation,
+        activationToken: generation,
+      },
       snapshot: current,
     }),
+    closeScope: async () => {},
+    reconcileKnownScopes: async () => {},
     snapshot: async () => current,
     connect: async (connectionProfileId) => {
       calls.connect.push({ connectionId: connectionProfileId });

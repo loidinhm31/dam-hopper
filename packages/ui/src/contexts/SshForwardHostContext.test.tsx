@@ -88,21 +88,85 @@ vi.mock("@/api/server-config.js", () => ({
 
 let root: Root | null = null;
 const host = (): SshForwardHost => ({
-  openClient: vi.fn().mockResolvedValue({}),
-  activateScope: vi
-    .fn()
-    .mockResolvedValue({ scopeId: "33333333-3333-4333-8333-333333333333" }),
-  snapshot: vi.fn(),
-  createProfile: vi.fn(),
-  updateProfile: vi.fn(),
-  deleteProfile: vi.fn(),
-  start: vi.fn(),
-  stop: vi.fn(),
-  restart: vi.fn(),
+  openClient: vi.fn().mockResolvedValue({
+    context: {
+      desktopInstanceId: "11111111-1111-4111-8111-111111111111",
+      managerSessionId: "22222222-2222-4222-8222-222222222222",
+      clientEpoch: "1" as WireCounter,
+    },
+  }),
+  openScope: vi.fn().mockResolvedValue({
+    ref: {
+      context: {
+        desktopInstanceId: "11111111-1111-4111-8111-111111111111",
+        managerSessionId: "22222222-2222-4222-8222-222222222222",
+        clientEpoch: "1" as WireCounter,
+      },
+      scopeId: "33333333-3333-4333-8333-333333333333",
+      scopeGeneration: "1" as WireCounter,
+      activationToken: "1" as WireCounter,
+    },
+    snapshot: {
+      context: {
+        desktopInstanceId: "11111111-1111-4111-8111-111111111111",
+        managerSessionId: "22222222-2222-4222-8222-222222222222",
+        clientEpoch: "1" as WireCounter,
+      },
+      activationToken: "1" as WireCounter,
+      scopeId: "33333333-3333-4333-8333-333333333333",
+      scopeGeneration: "1" as WireCounter,
+      connectionsRevision: "1" as WireCounter,
+      rulesRevision: "1" as WireCounter,
+      profilesRevision: "1" as WireCounter,
+      trustRevision: "1" as WireCounter,
+      connections: [],
+      rules: [],
+      connectionRuntimes: [],
+      ruleRuntimes: [],
+      credentialStates: [],
+      profiles: [],
+      runtimes: [],
+      hostKeyChallenges: [],
+    },
+  }),
+  closeScope: vi.fn().mockResolvedValue(undefined),
+  reconcileKnownScopes: vi.fn().mockResolvedValue(undefined),
+  snapshot: vi.fn().mockResolvedValue({
+    context: {
+      desktopInstanceId: "11111111-1111-4111-8111-111111111111",
+      managerSessionId: "22222222-2222-4222-8222-222222222222",
+      clientEpoch: "1" as WireCounter,
+    },
+    activationToken: "1" as WireCounter,
+    scopeId: "33333333-3333-4333-8333-333333333333",
+    scopeGeneration: "1" as WireCounter,
+    connectionsRevision: "1" as WireCounter,
+    rulesRevision: "1" as WireCounter,
+    profilesRevision: "1" as WireCounter,
+    trustRevision: "1" as WireCounter,
+    connections: [],
+    rules: [],
+    connectionRuntimes: [],
+    ruleRuntimes: [],
+    credentialStates: [],
+    profiles: [],
+    runtimes: [],
+    hostKeyChallenges: [],
+  }),
+  createConnection: vi.fn(),
+  updateConnection: vi.fn(),
+  deleteConnection: vi.fn(),
+  createRule: vi.fn(),
+  updateRule: vi.fn(),
+  deleteRule: vi.fn(),
+  connect: vi.fn(),
+  disconnect: vi.fn(),
+  setRuleEnabled: vi.fn(),
   listKeys: vi.fn(),
   loadKey: vi.fn(),
   loadPassword: vi.fn(),
   approveHost: vi.fn(),
+  forgetCredential: vi.fn(),
   purgeScope: vi.fn().mockResolvedValue({
     purged: true,
     scopeId: "33333333-3333-4333-8333-333333333333",
@@ -131,30 +195,15 @@ afterEach(() => {
 });
 
 describe("SshForwardScopeBridge", () => {
-  it("waits for client opening and scope activation before the first snapshot", async () => {
+  it("waits for client opening before readiness is ready", async () => {
     const value = host();
     const open = deferred<Awaited<ReturnType<SshForwardHost["openClient"]>>>();
-    const activation =
-      deferred<Awaited<ReturnType<SshForwardHost["activateScope"]>>>();
-    const snapshot = vi.mocked(value.snapshot).mockResolvedValue({} as never);
     vi.mocked(value.openClient).mockReturnValue(open.promise);
-    vi.mocked(value.activateScope).mockReturnValue(activation.promise);
     const container = document.createElement("div");
     root = createRoot(container);
-    const refreshRef: { current: (() => Promise<unknown>) | null } = {
-      current: null,
-    };
     function Harness() {
-      const forwarding = useSshForward();
       const { readiness } = useSshForwardHost();
-      React.useEffect(() => {
-        refreshRef.current = forwarding.refresh;
-      }, [forwarding.refresh]);
-      return (
-        <output>
-          {readiness}:{forwarding.snapshot ? "ready" : "waiting"}
-        </output>
-      );
+      return <output>{readiness}</output>;
     }
 
     await act(async () =>
@@ -169,28 +218,19 @@ describe("SshForwardScopeBridge", () => {
         </SshForwardHostProvider>,
       ),
     );
-    expect(value.activateScope).not.toHaveBeenCalled();
-    expect(snapshot).not.toHaveBeenCalled();
-    await act(async () => {
-      await refreshRef.current?.();
-    });
-    expect(snapshot).not.toHaveBeenCalled();
+    expect(container.textContent).toBe("initializing");
 
-    open.resolve({} as never);
     await act(async () => {
-      await Promise.resolve();
+      open.resolve({
+        context: {
+          desktopInstanceId: "11111111-1111-4111-8111-111111111111",
+          managerSessionId: "22222222-2222-4222-8222-222222222222",
+          clientEpoch: "1" as WireCounter,
+        },
+      });
     });
-    expect(value.activateScope).toHaveBeenCalledWith(
-      "33333333-3333-4333-8333-333333333333",
-    );
-    expect(snapshot).not.toHaveBeenCalled();
-
-    activation.resolve({} as never);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(snapshot).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toBe("ready:ready");
+    expect(value.openClient).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toBe("ready");
   });
 
   it("refreshes native known scopes when the profile list changes", async () => {
@@ -220,11 +260,11 @@ describe("SshForwardScopeBridge", () => {
     });
     await act(async () => {});
 
-    expect(value.openClient).toHaveBeenNthCalledWith(2, {
+    expect(value.reconcileKnownScopes).toHaveBeenCalledWith({
       status: "available",
       ids: [firstProfileId, secondProfileId],
     });
-    expect(value.activateScope).toHaveBeenLastCalledWith(firstProfileId);
+    expect(value.openClient).toHaveBeenCalledTimes(1);
   });
 
   it("does not reopen the native client for token/data changes", async () => {
@@ -266,8 +306,6 @@ describe("SshForwardScopeBridge", () => {
         retryable: true,
       })
       .mockResolvedValueOnce({} as never);
-    vi.mocked(value.activateScope).mockResolvedValue({} as never);
-    vi.mocked(value.snapshot).mockResolvedValue({} as never);
     function Harness() {
       const { readiness, retryInitialization } = useSshForwardHost();
       React.useEffect(() => {
@@ -298,7 +336,6 @@ describe("SshForwardScopeBridge", () => {
       await retryRef.current?.();
     });
     expect(value.openClient).toHaveBeenCalledTimes(2);
-    expect(value.activateScope).toHaveBeenCalledTimes(1);
     expect(container.textContent).toBe("ready");
   });
 
@@ -309,9 +346,6 @@ describe("SshForwardScopeBridge", () => {
     activeProfileId.value = legacyId;
     nativeScopeAliases.set(legacyId, nativeId);
     const value = host();
-    vi.mocked(value.activateScope).mockResolvedValue({
-      scopeId: nativeId,
-    } as never);
     const container = document.createElement("div");
     root = createRoot(container);
 
@@ -331,7 +365,6 @@ describe("SshForwardScopeBridge", () => {
       status: "available",
       ids: [nativeId],
     });
-    expect(value.activateScope).toHaveBeenCalledWith(nativeId);
 
     activeProfileId.value = null;
     profileIds.value = [];
@@ -361,9 +394,6 @@ describe("SshForwardScopeBridge", () => {
     activeProfileId.value = legacyId;
     nativeScopeAliases.set(legacyId, nativeId);
     const value = host();
-    vi.mocked(value.activateScope).mockResolvedValue({
-      scopeId: nativeId,
-    } as never);
     vi.mocked(value.purgeScope).mockResolvedValue({
       purged: false,
       scopeId: nativeId,
@@ -517,7 +547,6 @@ describe("SshForwardScopeBridge", () => {
           knownProfileIds: { status: "available", ids: [] },
         });
     });
-    expect(value.activateScope).toHaveBeenLastCalledWith(null);
     expect(value.purgeScope).toHaveBeenCalledWith(
       "33333333-3333-4333-8333-333333333333",
       { status: "available", ids: [] },

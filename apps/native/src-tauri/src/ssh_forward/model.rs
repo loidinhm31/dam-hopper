@@ -307,9 +307,29 @@ impl fmt::Display for WireScalarError {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct OpenClientResult {
     pub(crate) context: DesktopClientContext,
-    pub(crate) activation_token_floor: WireCounter,
-    pub(crate) active_scope_id: Option<String>,
-    pub(crate) scope_generation: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct OpenScopeInput {
+    pub(crate) context: DesktopClientContext,
+    #[serde(deserialize_with = "deserialize_uuid_v4")]
+    pub(crate) scope_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ScopeHandle {
+    #[serde(rename = "ref")]
+    pub(crate) r#ref: ScopeContextInput,
+    pub(crate) snapshot: SshForwardSnapshot,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReconcileKnownScopesInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) known_scopes: KnownScopesInput,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -318,7 +338,7 @@ pub(crate) struct OpenClientInput {
     pub(crate) known_scopes: KnownScopesInput,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ScopeContextInput {
     pub(crate) context: DesktopClientContext,

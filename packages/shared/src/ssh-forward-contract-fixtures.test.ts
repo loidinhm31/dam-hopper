@@ -127,10 +127,6 @@ describe("SSH-forward Rust/TypeScript DTO fixtures", () => {
   });
 
   it("distinguishes omitted optionals from explicit null fields", () => {
-    expect(fixtures.dtoSamples.openClientResult).toHaveProperty(
-      "activeScopeId",
-      null,
-    );
     expect(fixtures.dtoSamples.scopeActivation).toHaveProperty("scopeId", null);
     expect(fixtures.dtoSamples.scopeActivation).toHaveProperty(
       "snapshot",

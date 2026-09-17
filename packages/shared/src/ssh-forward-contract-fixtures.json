@@ -30,10 +30,7 @@
         "desktopInstanceId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
         "managerSessionId": "7f6b9e8e-5df2-4b1f-9de6-b2c2d2abf1cb",
         "clientEpoch": "10"
-      },
-      "activationTokenFloor": "99",
-      "activeScopeId": null,
-      "scopeGeneration": "100"
+      }
     },
     "sshForwardProfile": {
       "id": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",

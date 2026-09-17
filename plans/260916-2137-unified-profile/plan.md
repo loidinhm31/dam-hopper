@@ -17,7 +17,7 @@ Implement one shared workbench with simultaneous supported profile connections a
 
 Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.md). This package preserves its nine feature phases and thirteen scenarios, adds a contract-freeze phase and resolves execution dependencies. No backend workspace UUID/catalog redesign, cross-server filesystem move or distribution, global active-profile fallback, app-per-profile remount, or automatic mutation replay.
 
-**Status:** IN PROGRESS — Phases 00–07 complete; Phases 08–09 pending; 8/10 phases complete; 80%; updated 2026-09-17.
+**Status:** IN PROGRESS — Phases 00–08 complete; Phase 09 pending; 9/10 phases complete; 90%; updated 2026-09-17.
 
 ## Phases
 
@@ -31,7 +31,7 @@ Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.
 | [05 — Agents, ports and Browser](phase-05-agents-ports-and-browser.md) | Explicit catalogs/targets, safe capture and atomic incarnation handoff | G0; 01/02; 04/07 contracts | DONE — 2026-09-17 / 100% |
 | [06 — Preferences, Settings and host](phase-06-preferences-settings-usage-and-host.md) | Independent sources/targets, usage/metrics and safe destructive intent | G0; 01/02 | DONE — 2026-09-17 / 100% |
 | [07 — Media and encryption](phase-07-media-isolation-and-encryption.md) | Cookie namespace v2, original-owner cleanup, generation-bound secrets | G0; 01; 03 target contract | DONE — 2026-09-17 / 100% |
-| [08 — Native scopes](phase-08-native-scope-concurrency.md) | Concurrent admitted SSH scopes, atomic IPC, one Browser lease | G0; 01/02; 05 target contract | Pending / 0% |
+| [08 — Native scopes](phase-08-native-scope-concurrency.md) | Concurrent admitted SSH scopes, atomic IPC, one Browser lease | G0; 01/02; 05 target contract | DONE — 2026-09-17 / 100% |
 | [09 — Integration and qualification](phase-09-integration-and-qualification.md) | G1 caller cutover; S01–S13 real evidence; G2 release gate | Web 01–07; native adds 08 | Pending / 0% |
 
 ## Current status — 2026-09-17
@@ -44,7 +44,8 @@ Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.
 - **Phase 05:** DONE — agents, ports and Browser implementation, capability isolation and incarnation-safe handoff complete (2026-09-17; 100%).
 - **Phase 06:** DONE — preferences, Settings, usage and host implementation complete (2026-09-17; 100%).
 - **Phase 07:** DONE — media session isolation and encrypted-write ownership complete (2026-09-17; 100%).
-- **Next phase:** **Phase 08 — Native scope concurrency**.
+- **Phase 08:** DONE — native scope concurrency, atomic IPC, and one Browser lease implementation complete (2026-09-17; 100%). Linux focused verification passed 135/135; Windows S13 runtime proof remains a Phase 09 native qualification gate.
+- **Next phase:** **Phase 09 — Integration and qualification**.
 
 ## Read before implementation
 
@@ -74,8 +75,8 @@ Hard-planning command and planning skill loaded explicitly from installed OMP fi
 - User chose fresh browser resource state: no legacy archive/quarantine/restore.
 - User chose new contracts only: breaking frontend/backend upgrade, no old protocol branches.
 - User chose per-platform release: web can ship qualified; native awaits its own proof.
-- All affected phase/contracts/qualification sections revised; no implementation started.
+- All affected phase/contracts/qualification sections revised; implementation status and evidence are tracked in the phase plans and reports.
 
 ## Unresolved questions
 
-No product/design choice deferred. Execution prerequisites: disposable MongoDB/auth users, browser media/capture/cookie controls, Windows runner/device and disposable SSH endpoints. Availability is unverified. Validation complete; do not implement as part of this planning task.
+No product/design choice deferred. Execution prerequisites: disposable MongoDB/auth users, browser media/capture/cookie controls, Windows runner/device and disposable SSH endpoints. Availability remains unverified for Phase 09 native/browser qualification; Phase 08 Linux evidence does not substitute for Windows S13 runtime proof.

@@ -1,10 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { parseBrowserBridgeEvent } from "@dam-hopper/browser-bridge";
-import { getActiveProfileId } from "@dam-hopper/ui/api/server-config";
 import type {
   BrowserDebugHost,
-  BrowserDebugHostCapability,
   BrowserDebugHostCommand,
   BrowserDebugHostEvent,
   BrowserDebugHostEventPayload,
@@ -156,8 +154,7 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
     if (
       target &&
       this.target?.url === target.url &&
-      this.target.origin === target.origin &&
-      this.profileId === getActiveProfileId() &&
+      this.profileId === target.owner.profileId &&
       (this.state !== null || this.targetPending) &&
       !this.bridgeTimedOut
     ) {
@@ -168,7 +165,7 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
     this.bridgeTimedOut = false;
     const operation = ++this.operation;
     const generation = ++this.generation;
-    const profileId = target ? getActiveProfileId() : null;
+    const profileId = target?.owner.profileId ?? null;
     this.target = target;
     this.profileId = profileId;
     this.targetPending = target !== null;
