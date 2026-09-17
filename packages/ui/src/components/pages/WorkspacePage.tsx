@@ -21,7 +21,7 @@ import {
   Globe2,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
 import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShell.js";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
@@ -65,12 +65,12 @@ import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
-import { useExportDiagnostics } from "@/api/queries.js";
+import { useProjects, useExportDiagnostics } from "@/api/queries.js";
 import {
   addKeyboardShortcutListener,
   useDocumentKeyboardShortcut,
 } from "@/hooks/use-shortcuts.js";
-import { api, type ProjectTargetInput } from "@/api/client.js";
+import type { ProjectTargetInput } from "@/api/client.js";
 import {
   loadWorkspaceMode,
   saveWorkspaceMode,
@@ -472,9 +472,8 @@ export default function WorkspacePage() {
   const openFile = useEditorStore((s) => s.open);
   const openDiff = useEditorStore((s) => s.openDiff);
 
-  const { data: projects = [] } = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => api.projects.list(),
+  const { data: projects = [] } = useProjects({
+    profileId: activeProfileId ?? undefined,
   });
 
   // Validate persisted project still exists in the current workspace.
@@ -786,8 +785,12 @@ export default function WorkspacePage() {
     setTerminalRenameState((state) =>
       state ? { ...state, pending: true } : state,
     );
+    const owner = {
+      profileId: activeProfileId ?? "default",
+      generation: 0,
+    };
     try {
-      await api.terminal.rename(sessionId, value);
+      await getApi(owner).terminal.rename(sessionId, value);
       await queryClient.invalidateQueries({ queryKey: ["terminal-sessions"] });
       setTerminalRenameState(null);
     } catch (error) {
@@ -801,7 +804,7 @@ export default function WorkspacePage() {
           : state,
       );
     }
-  }, [queryClient, terminalRenameState]);
+  }, [queryClient, terminalRenameState, activeProfileId]);
 
   const handleExportTerminalDiagnostics = useCallback(async () => {
     const target = terminalDiagnosticsMenuTarget;

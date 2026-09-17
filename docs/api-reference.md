@@ -2030,6 +2030,13 @@ endpoint input for legacy helpers. It is not the owner of connection state.
 `disconnectProfile(profileId)`, and `removeProfileConnection(profileId)` for
 independent profile runtimes.
 
+`getMediaClientId(owner)` returns an in-memory UUIDv4 for the exact
+`{ profileId, generation }`. `getMediaClientIdForProfile(profileId)` uses the
+current snapshot when connected and creates a stable generation-1 fallback when
+the profile is disconnected, so profile removal/logout cleanup still addresses
+the original namespace. `removeProfileConnection` deletes all serialized owner
+tuple keys for that profile; malformed keys are ignored.
+
 ### Connection contract
 
 ```typescript
@@ -2326,6 +2333,25 @@ streams. Playback is inline; download uses a sanitized attachment filename.
 Media session and ticket state is process-local. Multi-instance deployments
 need sticky routing to the process holding the ticket/session until a shared
 store exists.
+
+#### Phase 09 integration qualification
+
+The Phase 09 live harness
+[`scripts/qualify-phase09-workbench.mjs`](../scripts/qualify-phase09-workbench.mjs)
+checks the v2 media contract in an isolated two-server fixture: Server A and
+Server B expose equal project/file names on `14801` and `14802`, A issues a
+`session-cookie-v2` ticket, B rejects that ticket, and A revokes the selected
+`mediaClientId`. The fixture uses `--no-auth` only for deterministic
+remote-effect checks; normal-auth tests remain required for actor and
+credential isolation.
+
+The reconciled Phase 09 ledger records 209 UI browser tests, 1,416 Rust server
+tests, 24 live harness assertions, and four embedded browser assertions within
+3,504 passing tests (nine skipped/ignored). G2-Web passed. G2-Native remains
+blocked pending real Windows S13 runtime, SSH, WebView2/DPAPI, and Browser relay
+evidence. Do not re-enable a v1 media path during version skew: deploy or roll
+back a matched frontend/backend pair with `workbenchProtocol: 2` and
+`session-cookie-v2`.
 
 **GET /api/fs/language-files?project=NAME[&worktreePath=PATH]**
 Scan the selected project target for supported language files. The endpoint is

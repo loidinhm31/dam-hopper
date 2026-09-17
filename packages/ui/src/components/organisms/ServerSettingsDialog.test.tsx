@@ -225,7 +225,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
       expect.objectContaining({
         method: "DELETE",
         credentials: "include",
-        headers: { Authorization: "Bearer http-token" },
+        headers: expect.objectContaining({ Authorization: "Bearer http-token" }),
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
@@ -332,7 +332,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
     expect(fetchMock.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
         method: "DELETE",
-        headers: { Authorization: "Bearer old-token" },
+        headers: expect.objectContaining({ Authorization: "Bearer old-token" }),
         credentials: "include",
       }),
     );

@@ -8,6 +8,7 @@ import { SettingsIdleSuspendTimingSection } from "@/components/organisms/Setting
 import { HostIdleSuspendStatus } from "@/components/organisms/HostIdleSuspendStatus.js";
 import { ForceSleepDialog } from "@/components/organisms/ForceSleepDialog.js";
 import "@/index.css";
+import type * as queriesModule from "@/api/queries.js";
 
 const mocks = vi.hoisted(() => ({
   status: undefined as IdleSuspendStatusV1 | undefined,
@@ -19,21 +20,25 @@ const mocks = vi.hoisted(() => ({
   forceMutateAsync: vi.fn(),
 }));
 
-vi.mock("@/api/queries.js", () => ({
-  useIdleSuspendStatus: () => ({
-    data: mocks.status,
-    isLoading: mocks.isLoading,
-    isError: mocks.isError,
-  }),
-  useUpdateIdleSuspendTiming: () => ({
-    isPending: mocks.isPending,
-    mutateAsync: mocks.mutateAsync,
-  }),
-  useForceSuspend: () => ({
-    isPending: mocks.forcePending,
-    mutateAsync: mocks.forceMutateAsync,
-  }),
-}));
+vi.mock("@/api/queries.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof queriesModule>();
+  return {
+    ...actual,
+    useIdleSuspendStatus: () => ({
+      data: mocks.status,
+      isLoading: mocks.isLoading,
+      isError: mocks.isError,
+    }),
+    useUpdateIdleSuspendTiming: () => ({
+      isPending: mocks.isPending,
+      mutateAsync: mocks.mutateAsync,
+    }),
+    useForceSuspend: () => ({
+      isPending: mocks.forcePending,
+      mutateAsync: mocks.forceMutateAsync,
+    }),
+  };
+});
 
 function mockStatus(
   overrides: Partial<IdleSuspendStatusV1> = {},

@@ -183,8 +183,27 @@ export function createSshForwardFixture(
     loadPassword: [],
     setRuleEnabled: [],
   };
+  const subscribers = new Set<(event: { hint: unknown; snapshot: SshForwardSnapshot }) => void>();
   const publish = (next: SshForwardSnapshot) => {
     current = next;
+    const event = {
+      hint: {
+        scopeId,
+        desktopInstanceId: current.context.desktopInstanceId,
+        managerSessionId: current.context.managerSessionId,
+        clientEpoch: current.context.clientEpoch,
+        activationToken: current.activationToken,
+        scopeGeneration: current.scopeGeneration,
+        connectionsRevision: current.connectionsRevision,
+        rulesRevision: current.rulesRevision,
+        profilesRevision: current.profilesRevision,
+        trustRevision: current.trustRevision,
+      },
+      snapshot: current,
+    };
+    for (const sub of subscribers) {
+      sub(event);
+    }
     return Promise.resolve(current);
   };
   const host: SshForwardHost = {
@@ -203,7 +222,9 @@ export function createSshForwardFixture(
     closeScope: async () => {},
     reconcileKnownScopes: async () => {},
     snapshot: async () => current,
-    connect: async (connectionProfileId) => {
+    connect: async (...args: unknown[]) => {
+      const connectionProfileId =
+        typeof args[0] === "string" ? args[0] : (args[1] as string);
       calls.connect.push({ connectionId: connectionProfileId });
       if (kind === "auth" && calls.connect.length === 1) {
         const challenge: HostKeyChallenge = {
@@ -306,14 +327,11 @@ export function createSshForwardFixture(
           current.credentialStates,
         ),
       ),
-    loadPassword: async (
-      connectionProfileId,
-      username,
-      _password,
-      _attemptId,
-      _expectedGeneration,
-      rememberForDays = 30,
-    ) => {
+    loadPassword: async (...args: unknown[]) => {
+      const offset = typeof args[0] === "object" ? 1 : 0;
+      const connectionProfileId = args[offset] as string;
+      const username = args[offset + 1] as string;
+      const rememberForDays = (args[offset + 5] as number | undefined) ?? 30;
       calls.loadPassword.push({
         connectionId: connectionProfileId,
         username,
@@ -339,13 +357,11 @@ export function createSshForwardFixture(
         ),
       );
     },
-    setRuleEnabled: async (
-      connectionProfileId,
-      _connectionGeneration,
-      ruleId,
-      _ruleGeneration,
-      enabled,
-    ) => {
+    setRuleEnabled: async (...args: unknown[]) => {
+      const offset = typeof args[0] === "object" ? 1 : 0;
+      const connectionProfileId = args[offset] as string;
+      const ruleId = args[offset + 2] as string;
+      const enabled = args[offset + 4] as boolean;
       calls.setRuleEnabled.push({
         connectionId: connectionProfileId,
         ruleId,
@@ -371,8 +387,10 @@ export function createSshForwardFixture(
         ),
       );
     },
-    disconnect: async (connectionProfileId) =>
-      publish(
+    disconnect: async (...args: unknown[]) => {
+      const connectionProfileId =
+        typeof args[0] === "string" ? args[0] : (args[1] as string);
+      return publish(
         snapshot(
           current.connections,
           current.rules,
@@ -383,8 +401,14 @@ export function createSshForwardFixture(
           ),
           current.ruleRuntimes,
         ),
-      ),
-    subscribe: () => () => {},
+      );
+    },
+    subscribe: (listener: (event: { hint: unknown; snapshot: SshForwardSnapshot }) => void) => {
+      subscribers.add(listener);
+      return () => {
+        subscribers.delete(listener);
+      };
+    },
     dispose: () => {},
   } as unknown as SshForwardHost;
   return { host, calls };

@@ -19,6 +19,9 @@ const SERVER_URL = (
   (import.meta.env.VITE_DAM_HOPPER_SERVER_URL as string | undefined) ??
   "http://127.0.0.1:4802"
 ).replace(/\/$/, "");
+const serverAvailable = await fetch(`${SERVER_URL}/api/health`)
+  .then((r) => r.ok)
+  .catch(() => false);
 
 let root: Root;
 let container: HTMLDivElement;
@@ -46,8 +49,7 @@ async function serverTarget() {
   expect(projects.length, "--no-auth server must expose a configured project").toBeGreaterThan(0);
   return { project: projects[0].name };
 }
-
-describe("workflow context surface against the no-auth server", () => {
+describe.skipIf(!serverAvailable)("workflow context surface against the no-auth server", () => {
   beforeEach(async () => {
     await page.viewport(1440, 900);
     for (const edge of ["--safe-area-top", "--safe-area-right", "--safe-area-bottom", "--safe-area-left"]) {

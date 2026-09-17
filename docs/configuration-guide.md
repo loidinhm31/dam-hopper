@@ -1055,27 +1055,36 @@ media and bearer credentials remain exposed to interception, replay, and modific
 use HTTPS, a VPN/Tailscale network, or another trusted encrypted network when that
 risk is unacceptable.
 
-### Media compatibility qualification status
+### Media compatibility and Phase 09 qualification
 
-The deterministic server matrix covers same-origin media sessions,
-cookie/ticket binding, generic denials, Range/HEAD, capacity, and lifecycle
-revocation. The repository Playwright/Vitest browser full suite passed 116/116
-tests on installed Chromium 151; its 11 media-specific tests cover native
-image decode, video metadata/seek, credentialed `HEAD` probes, direct anchor
-download, cleanup, and no Blob fallback. That browser fixture is same-origin and
-does not prove real cross-site partition behavior. Microsoft Edge was not
-installed and was not substituted; Tauri/WebView, Safari, and Firefox media
-support remain unqualified. Operators must not infer support from a user-agent
-string or Chromium emulation. The broader gate passed 1,018 UI tests and 691 Rust
-tests (one ignored performance test); `pnpm build` and `pnpm lint` were clean.
+The current media contract is v2 only: issue/revoke/logout require a UUIDv4
+`mediaClientId`, responses advertise `session-cookie-v2`, and the stream path
+never accepts a bearer token. The deterministic server/media tests and the
+browser suite cover namespaced cookies, ticket binding, exact-origin fallback,
+credentialed `HEAD`, Range/HEAD behavior, lifecycle cleanup, file-version
+revocation, and old/v1 rejection.
 
-Deploy the session-bound server and client together. During version skew, keep
-media unavailable rather than re-enabling capability-only URLs or a Bearer
-fallback. A rollback may restore only a previously qualified session-bound
-server/client pair; restarting the server intentionally revokes every in-memory
-media session and ticket. Session and ticket state is process-local. Multi-instance
-deployments require sticky routing to the issuing process until a shared store is
-designed.
+Phase 09 reconciled **3,504 passed / 9 skipped or ignored** across the release
+ledger, including 1,416 Rust server tests, 209 UI browser tests, 24 live
+two-server assertions, and four embedded browser assertions. The live harness
+(`scripts/qualify-phase09-workbench.mjs`) creates isolated roots and repositories
+for Server A (`127.0.0.1:14801`) and Server B (`127.0.0.1:14802`) and serves the
+browser fixture on `127.0.0.1:15173`. It checks equal project/file names,
+cross-server ticket rejection, selected-client revocation, and owner-specific
+remote effects. The harness uses `--no-auth` only for deterministic fixture
+checks; normal-auth suites remain required for actor isolation.
+
+`packages/ui/vitest.browser.config.ts` binds the fixture/API server to port
+`15173` with `strictPort: true` and accepts exactly one of `BROWSER_CHANNEL` or
+`BROWSER_EXECUTABLE_PATH`. Reserve all fixture ports before launch and never
+terminate an unrelated listener. Disable idle suspend and external telemetry in
+fixtures; retain only sanitized evidence and delete temporary credentials/roots.
+
+Deploy and roll back matching frontend/backend versions. A version-skewed
+client must fail closed rather than revive capability-only URLs or a v1 cookie.
+G2-Web is qualified; G2-Native remains blocked until real Windows S13 runtime,
+SSH, WebView2/DPAPI, and Browser relay evidence is recorded. Old browser
+layouts/history discarded by the fresh reset cannot be restored by rollback.
 
 ## SSH Key Management
 

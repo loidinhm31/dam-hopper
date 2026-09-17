@@ -15,7 +15,7 @@ interface Props {
   onClose: () => void;
 }
 export function ImportDialog({ owner, onClose }: Props) {
-  const boundOwnerRef = useRef<ConnectionRef | undefined>(owner);
+  const [boundOwner] = useState(owner);
   const scanRevisionRef = useRef(0);
   const [source, setSource] = useState<ImportSource>("repo");
   const [repoUrl, setRepoUrl] = useState("");
@@ -29,9 +29,9 @@ export function ImportDialog({ owner, onClose }: Props) {
     error?: string;
   }> | null>(null);
 
-  const scanRepo = useScanRepo({ owner: boundOwnerRef.current });
-  const scanLocalDir = useScanLocalDir({ owner: boundOwnerRef.current });
-  const importConfirm = useImportConfirm({ owner: boundOwnerRef.current });
+  const scanRepo = useScanRepo({ owner: boundOwner });
+  const scanLocalDir = useScanLocalDir({ owner: boundOwner });
+  const importConfirm = useImportConfirm({ owner: boundOwner });
   const activeScan = source === "repo" ? scanRepo : scanLocalDir;
 
   function itemKey(item: RepoScanItem) {

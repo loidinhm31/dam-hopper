@@ -2,8 +2,8 @@ import { Fragment, useRef, useState, useEffect } from "react";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { useCommandSearch } from "@/hooks/use-command-search.js";
-import type { CommandDefinition, CombinedSearchResult } from "@/api/client.js";
-import type { ProjectType } from "@/api/client.js";
+import type { CommandDefinition, CombinedSearchResult, ProjectType } from "@/api/client.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 
 interface Props {
   projectType?: ProjectType;
@@ -13,6 +13,7 @@ interface Props {
   placeholder?: string;
   autoFocus?: boolean;
   className?: string;
+  owner?: ConnectionRef;
 }
 
 function findFirstCatalogIndex(results: CombinedSearchResult[]): number {
@@ -79,10 +80,12 @@ export function CommandSuggestionInput({
   placeholder = "Type a command...",
   autoFocus,
   className,
+  owner,
 }: Props) {
   const { query, setQuery, results } = useCommandSearch(
     projectType,
     projectName,
+    owner,
   );
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [openState, setOpenState] = useState(false);

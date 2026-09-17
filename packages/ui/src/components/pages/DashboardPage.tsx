@@ -26,7 +26,6 @@ import { useIpcEvent } from "@/hooks/use-sse-events.js";
 import { useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { SessionInfo } from "@/api/client.js";
-import { api } from "@/api/client.js";
 import {
   getSessionStatus,
   getStatusDotColor,
@@ -208,14 +207,16 @@ export function DashboardPage() {
 
   function handleKillSession(sessionId: string, profileId?: string) {
     const snapshot = profileId ? getConnectionSnapshot(profileId) : null;
-    const client = snapshot ? getApi(snapshot.owner) : api;
-    client.terminal.kill(sessionId).catch((err: unknown) => {
-      logger.error("DashboardPage", "kill session failed", {
-        sessionId,
-        profileId,
-        error: err,
+    if (snapshot) {
+      const client = getApi(snapshot.owner);
+      client.terminal.kill(sessionId).catch((err: unknown) => {
+        logger.error("DashboardPage", "kill session failed", {
+          sessionId,
+          profileId,
+          error: err,
+        });
       });
-    });
+    }
     void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
   }
 

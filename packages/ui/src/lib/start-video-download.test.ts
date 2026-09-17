@@ -29,6 +29,8 @@ describe("startVideoDownload", () => {
       "project",
       "clip.webm",
       "download",
+      undefined,
+      undefined,
     );
     expect(click).toHaveBeenCalledOnce();
     expect(click.mock.instances[0]?.getAttribute("download")).toBeNull();
@@ -36,6 +38,30 @@ describe("startVideoDownload", () => {
     expect(document.querySelector("a")).toBeNull();
     click.mockRestore();
   });
+  it("forwards owner to issueVideoTicket when provided", async () => {
+    issueVideoTicket.mockResolvedValue({
+      purpose: "download",
+      url: "https://api.test/api/fs/video/stream/download-token",
+      expiresAt: 1,
+    });
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    const owner = { profileId: "p1", generation: 2 };
+
+    await startVideoDownload("project", "clip.webm", owner);
+
+    expect(issueVideoTicket).toHaveBeenCalledWith(
+      "project",
+      "clip.webm",
+      "download",
+      undefined,
+      owner,
+    );
+    expect(click).toHaveBeenCalledOnce();
+    click.mockRestore();
+  });
+
 
   it("removes the capability anchor when browser activation throws", async () => {
     issueVideoTicket.mockResolvedValue({

@@ -186,6 +186,51 @@ active SSH scope or by project focus.
 
 See [Phase 08 Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md)
 for the IPC, counter, persistence, and Windows qualification contract.
+## Phase 09: Integration and qualification
+
+Phase 09 is complete for the web workbench and Linux-hosted shared behavior
+(2026-09-17). The qualification cycle recorded a **9.8/10** review and
+**3,504 passed tests**, with 9 skipped/ignored cases across the executed suites.
+The 24 live assertions cover S01–S12; four embedded browser assertions exercise
+workflow context and terminal continuity.
+
+The repeatable live harness is
+[`scripts/qualify-phase09-workbench.mjs`](../scripts/qualify-phase09-workbench.mjs).
+After building `server/target/debug/dam-hopper-server`, it creates two disposable
+repositories and isolated configuration/data roots, starts Server A on
+`127.0.0.1:14801` and Server B on `127.0.0.1:14802`, and serves the browser
+fixture on `127.0.0.1:15173`. Equal `web` project names, marker files, Git
+state, `shared-session` PTYs, media tickets, workflow records, ports, host
+actions, lifecycle teardown, and diagnostics are checked against the owning
+server. The runner uses only fixture-owned processes and paths, disables idle
+suspend, and removes its temporary root during cleanup.
+
+The harness server segment uses isolated `--no-auth` fixtures for deterministic
+remote-effect checks; it is not authentication-actor isolation evidence. The
+normal-auth suites and the named scenario ledger remain authoritative for
+credential, cookie, and protocol boundaries. Never replace the disposable
+fixture with a developer `.env`, SSH/Codex configuration, persistent browser
+profile, or a real host power/process action.
+
+Release gates stay target-specific:
+
+- **G2-Web:** S01–S12, web/UI/browser/bridge/shared/server gates, and matched
+  frontend/backend protocol contracts passed. Web release is independent of
+  native packaging.
+- **G2-Native:** S13 requires real Windows runtime, SSH, WebView2/DPAPI, and
+  Browser relay evidence. It remains **blocked**; Linux/native unit evidence
+  does not qualify Windows.
+- Deploy protocol `workbenchProtocol: 2`, media `session-cookie-v2`, and the
+  required terminal-incarnation contract as one matched frontend/backend set.
+  The fresh browser-resource reset is allowlisted, idempotent, and deliberately
+  lossy; old layouts/history are not restored. Roll back only to a mutually
+  compatible pair and require fresh authentication when endpoint credentials
+  are no longer valid.
+
+See the [Phase 09 plan](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md)
+and [verification matrix](../plans/260916-2137-unified-profile/verification-matrix.md)
+for the scenario ledger, prerequisites, evidence rules, and Windows follow-up.
+
 
 ## Persistence and security
 
@@ -297,5 +342,6 @@ for implementation contracts.
 
 ## Unresolved questions
 
-None for the Phase 02 profile and unified-shell behavior. Later phase release
-gates remain tracked in the unified-profile plan rather than this user guide.
+No web product decision is deferred. Windows-native S13 remains blocked until
+real Windows runtime, SSH, WebView2/DPAPI, and Browser relay evidence is
+available; native release must not be inferred from the qualified web gate.

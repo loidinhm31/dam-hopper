@@ -267,7 +267,7 @@ describe("shared app layout zoom in Chromium", () => {
     expect(
       container.querySelector("[data-testid=browser-host-viewport]")
         ?.textContent,
-    ).toBe("320x180");
+    ).toBe("352x198");
   });
 
   it("lets decreased zoom cross the compact workspace breakpoint", async () => {

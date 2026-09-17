@@ -1,15 +1,16 @@
 # System Architecture
 
-## Unified-profile workbench (Phases 00–08; Phase 08 implemented 2026-09-17)
+## Unified-profile workbench (Phases 00–09; Phase 09 web qualification complete 2026-09-17)
 
 This is the frontend ownership cutover for the unified workbench. It is
 separate from the backend workspace-registry redesign later in this document.
-Phases 00–08 are implemented; Phase 09 native qualification remains
-plan-gated. The Phase 03 files/editor/search/Git contract, Phase 04
-terminal/workflow contract, Phase 05 agents/ports/Browser contract, Phase 06
+Phases 00–08 are implemented and the web/Linux shared behavior is qualified;
+Windows-native Phase 09 S13 remains explicitly blocked.
+The Phase 03 files/editor/search/Git contract, Phase 04 terminal/workflow
+contract, Phase 05 agents/ports/Browser contract, Phase 06
 preferences/settings/usage/host contract, Phase 07 media/encryption contract,
-and Phase 08 native scope contract are summarized in their dedicated
-workbench guides:
+Phase 08 native scope contract, and Phase 09 qualification/release contract
+are summarized in their dedicated workbench guides:
 
 - [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)
 - [Phase 04: Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)
@@ -17,6 +18,7 @@ workbench guides:
 - [Phase 06: Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)
 - [Phase 07: Media Isolation and Encryption](./phase-07-media-isolation-and-encryption.md)
 - [Phase 08: Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md)
+- [Phase 09: Integration and end-to-end qualification](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md)
 
 ### Phase 07 media and encryption ownership
 
@@ -379,6 +381,62 @@ profile ConnectionRef
 
 The complete source map and privacy/safety limits are in the
 [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md).
+
+### Phase 09 integration, qualification, and release cutover (2026-09-17)
+
+Phase 09 integrates the owner-qualified workbench across the shell, API clients,
+remote effects, media lifecycle, host safety, and native boundaries. The
+integration rule is unchanged: every asynchronous operation captures a
+`ConnectionRef { profileId, generation }`, resolves a bound API/transport, and
+rejects stale owner state rather than consulting an ambient active profile.
+
+The final integration fixes include:
+
+- `connections.ts` keeps one in-memory UUIDv4 `mediaClientId` per exact
+  connection owner, supplies a stable profile fallback while disconnected, and
+  removes all owner tuple keys when a profile connection is removed.
+- `media-session.ts` accepts an optional client ID and uses a bounded generated
+  fallback only at the legacy cleanup boundary. Settings/logout callers pass
+  the profile's client ID explicitly.
+- Project aggregation, command search, port/tunnel queries, Dashboard terminal
+  actions, Workspace Browser handoff, TopNav, and Settings dialogs resolve
+  owner-bound clients. `ImportDialog` captures its opening owner; idle-suspend
+  UI treats nullable fleet snapshots as unavailable/zero only for presentation.
+- Browser qualification uses the fixed Vite API server port `15173`, strict
+  port binding, and one configured Chromium channel or executable. The Linux
+  release runtime test seam names its fake descriptor range
+  `tests::FAKE_FD_BASE` so test cleanup cannot close a real descriptor.
+
+The live harness
+[`scripts/qualify-phase09-workbench.mjs`](../scripts/qualify-phase09-workbench.mjs)
+creates isolated Server A/B roots on ports `14801`/`14802`, equal `web` projects
+and `shared-session` PTYs with distinct markers, then checks S01–S12 remote
+effects and four embedded browser assertions. It owns temporary processes,
+configuration, repositories, media fixtures, and cleanup; idle suspend is
+disabled and no host power/process action is invoked. Its `--no-auth` fixture
+proves deterministic endpoint/resource isolation, not production actor
+isolation; normal-auth suites remain required for that boundary.
+
+The reconciled ledger is **3,504 passed / 9 skipped or ignored** across Rust
+server (1,416), UI unit (1,769), UI browser (209), shared (15), Browser bridge
+(19), native host (48), live harness (24), and embedded browser (4). This is
+execution evidence, not a line-coverage percentage. G2-Web is qualified;
+G2-Native remains blocked until real Windows S13 runtime, SSH, WebView2/DPAPI,
+and Browser relay evidence passes.
+
+Release cutover is atomic for protocol contracts: ship matching frontend and
+backend builds with `workbenchProtocol: 2`, media `session-cookie-v2`, and
+terminal-incarnation admission. The allowlisted browser-resource reset is
+idempotent and deliberately lossy; old layouts/history are not restored.
+Rollback uses a mutually compatible frontend/backend pair, with fresh login
+when endpoint-bound credentials are invalid. A qualified web release does not
+authorize an unqualified native package.
+
+See the [Phase 09 plan](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md),
+[verification matrix](../plans/260916-2137-unified-profile/verification-matrix.md),
+[multi-server user guide](./user-guide-multi-server-profiles.md),
+[API reference](./api-reference.md), and
+[configuration guide](./configuration-guide.md).
 
 ## Proposed concurrent runtime cutover (2026-09-16; not implemented)
 

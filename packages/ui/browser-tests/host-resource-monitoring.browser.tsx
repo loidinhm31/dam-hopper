@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import type { HostMetrics, HostResourceSnapshotV1 } from "@/api/client.js";
 import type { Transport } from "@/api/transport.js";
+import type * as queriesModule from "@/api/queries.js";
 
 const availability = { state: "available", sampledAt: 1 } as const;
 const snapshot: HostResourceSnapshotV1 = {
@@ -200,52 +201,41 @@ let snapshotResult: {
 };
 let legacyMetricsResult: { data?: HostMetrics };
 
-vi.mock("@/api/queries.js", () => ({
-  useGlobalConfig: () => ({ data: { ui: {} } }),
-  useHostResourceSnapshot: () => snapshotResult,
-  useHostResourceAlerts: () => ({ data: [] }),
-  useHostMetrics: () => legacyMetricsResult,
-  useUpdateUiConfig: () => ({
-    mutate: vi.fn(),
-    isPending: false,
-    error: null,
-  }),
-  useIdleSuspendStatus: () => ({
-    data: {
-      version: 1,
-      statusRevision: 1,
-      state: "watching",
-      enabled: true,
-      timingMutable: true,
-      timingMutableReason: null,
-      capabilityCode: "systemdLogindRtc",
-      currentEpoch: 1,
-      quietPeriodSeconds: 300,
-      wakeAfterSeconds: 600,
-      minQuietPeriodSeconds: 60,
-      maxQuietPeriodSeconds: 86400,
-      minWakeAfterSeconds: 60,
-      maxWakeAfterSeconds: 86400,
-      fleetSnapshot: {
-        generation: 1,
-        liveCount: 0,
-        creatingCount: 0,
-        restartPendingCount: 0,
-        quiescent: true,
-        disposing: false,
-        closing: false,
-        handoffActive: false,
+vi.mock("@/api/queries.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof queriesModule>();
+  return {
+    ...actual,
+    resolveTargetOwner: () => undefined,
+    useForceSuspend: () => ({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    }),
+    useGlobalConfig: () => ({ data: { ui: {} } }),
+    useHostResourceSnapshot: () => snapshotResult,
+    useHostResourceAlerts: () => ({ data: [] }),
+    useHostMetrics: () => legacyMetricsResult,
+    useUpdateUiConfig: () => ({
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    }),
+    useIdleSuspendStatus: () => ({
+      data: {
+        version: 1,
+        statusRevision: 1,
+        state: "watching",
+        enabled: true,
+        armed: false,
+        timing: {
+          wakeAfterSeconds: 300,
+          inactivityTimeoutSeconds: 900,
+          gracePeriodSeconds: 30,
+        },
       },
-      timestampMs: Date.now(),
-    },
-    isLoading: false,
-    isError: false,
-  }),
-  useForceSuspend: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
-}));
+      isLoading: false,
+    }),
+  };
+});
 import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.js";
 import { useHostResourceAlertPresentationStore } from "@/hooks/use-host-resource-alert-presentation.js";
 import { resetTransportListeners, useIpc } from "@/hooks/use-sse.js";

@@ -6,8 +6,9 @@ Debug target trust, terminal handoff, and owner-local availability.
 **Evidence:** 44/44 targeted tests, the UI TypeScript build, and `cargo check`
 passed. See the [QA report](../plans/reports/qa-260917-1517-phase-05-agents-ports-browser-validation.md)
 and [Cycle 2 review](../plans/reports/code-review-260917-1522-phase-05-cycle2.md).
-Live S06/S08/S11, live Browser/Playwright, and native qualification remain
-later release gates; this guide makes no such runtime claim.
+Phase 09 live S06/S08/S11 and Browser/Playwright evidence passed within the
+S01–S12 web gate. Windows-native S13 remains blocked; this guide does not make
+a native runtime claim.
 
 This is an implementation guide for the frontend ownership boundary and the
 server artifact/PTY admission boundary. Server catalogs, projects, tunnels,

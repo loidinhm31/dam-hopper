@@ -6,6 +6,11 @@ receive Tauri commands, filesystem access, shell access, opener access, or
 generic IPC capabilities. The existing web iframe adapter remains the
 fallback and rollback path.
 
+Phase 09 integrated web qualification passed its Browser ownership and handoff
+scenarios. The Windows native S13 gate remains blocked until a real packaged
+runtime records WebView2, DPAPI, SSH-scope, and Browser relay evidence; this
+document's implementation matrix is not a native release claim.
+
 The native v1 relay advertises picker and navigation only. Console forwarding
 remains disabled until it has an isolated transport that cannot feed back into
 the WebView IPC channel.

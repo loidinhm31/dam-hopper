@@ -111,7 +111,7 @@ describe("SSH forwarding explicit-connect flow in Chromium", () => {
   it("requires trust approval, a new Connect, and credentials before establishment", async () => {
     const fixture = createSshForwardFixture("auth");
     await render(fixture);
-    expect(switchNamed("Alpha metrics")).toBeDisabled();
+    expect(switchNamed("Alpha metrics")).toHaveAttribute("aria-checked", "false");
 
     await click(buttonNamed("Connect"));
     await vi.waitFor(() =>
@@ -230,18 +230,15 @@ describe("SSH forwarding explicit-connect flow in Chromium", () => {
     expect(container.textContent).not.toContain("Credentials for");
   });
 
-  it("keeps a disconnected rule disabled without opening credential UI", async () => {
+  it("keeps a disconnected rule configurable without opening credential UI", async () => {
     const fixture = createSshForwardFixture("gated");
     await render(fixture);
     const control = switchNamed("Blocked metrics");
-    expect(control).toBeDisabled();
-    expect(container.textContent).toContain(
-      "Establish the SSH connection before enabling this rule.",
-    );
+    expect(control).toHaveAttribute("aria-checked", "false");
     await click(control);
     expect(fixture.calls.connect).toHaveLength(0);
     expect(fixture.calls.listKeys).toBe(0);
-    expect(fixture.calls.setRuleEnabled).toHaveLength(0);
+    expect(fixture.calls.setRuleEnabled).toHaveLength(1);
     expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
 });

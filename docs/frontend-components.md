@@ -88,6 +88,33 @@ ambiguous requests are not retried.
 
 See the [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md) for the source map and full contract.
 
+## Unified-profile integration and qualification (Phase 09)
+
+The integrated shell keeps one explicit owner through project aggregation,
+commands, ports, media cleanup, host status, and Browser handoff:
+
+- `useAggregatedProjects` binds each connected profile's project query to its
+  `ConnectionRef`; disconnected rows use a non-dispatching fallback owner.
+- `useCommandSearch` accepts an owner and sends catalog queries through the
+  bound API. `usePorts` memoizes target profiles and owner-qualified port/tunnel
+  keys, so equal numeric ports remain separate.
+- `TopNav`, `DashboardPage`, and `WorkspacePage` use aggregated projects and
+  bound clients. Browser artifact creation rechecks owner, target revision, and
+  terminal incarnation after each await.
+- `ImportDialog` captures its opening owner in state; `HostIdleSuspendStatus`
+  and `getActiveSessionCount` handle nullable fleet snapshots without
+  fabricating remote state. Settings revocation passes the profile's
+  `mediaClientId`; media cleanup remains bounded and best effort.
+
+The browser qualification fixture uses strict port `15173` and one configured
+Chromium channel/executable. The live
+[`scripts/qualify-phase09-workbench.mjs`](../scripts/qualify-phase09-workbench.mjs)
+runner checks S01–S12 against isolated Server A/B roots (`14801`/`14802`) and
+four embedded workflow/terminal browser assertions. Phase 09 records 3,504
+passing tests (nine skipped/ignored); G2-Web passed. G2-Native remains blocked
+pending real Windows S13 runtime, SSH, WebView2/DPAPI, and Browser relay proof.
+See the [Phase 09 verification matrix](../plans/260916-2137-unified-profile/verification-matrix.md).
+
 ## Host-resource alert presentation
 
 **Locations:** `packages/ui/src/components/organisms/HostResourcePopover.tsx`,

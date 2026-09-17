@@ -19,6 +19,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Phase 06 Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)** — Separate preference source and Settings target, owner-qualified usage, host-resource alerts, and revision-fenced suspend actions
 - **[Phase 07 Media Isolation and Encryption](./phase-07-media-isolation-and-encryption.md)** — UUIDv4-namespaced media sessions, ticket-bound native streams, narrow remote cleanup, and owner-qualified encrypted writes
 - **[Phase 08 Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md)** — Concurrent Windows native SSH scopes, lifecycle fences, per-scope teardown, and explicit Browser target ownership
+- **[Phase 09 Integration and Qualification](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md)** — Dual-server harness, reconciled test ledger, web/native release gates, and rollback boundaries
 - **[Frontend Components](./frontend-components.md)** — Shared React component architecture and host lifecycle
 - **[Workflow Context Surface](./workflow-context-surface.md)** — Responsive Plan/item details, notes, and inline editing
 - **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries
@@ -51,8 +52,9 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
 - Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
 
-Historical implementation plans are not indexed here; verify that a plan path
-exists before linking it from a new document.
+Historical implementation plans are not generally indexed here; the active
+Phase 09 release-gate plan is linked above. Verify any new plan path exists
+before linking it from another document.
 
 ## Key Sections
 

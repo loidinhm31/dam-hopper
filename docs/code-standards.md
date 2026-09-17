@@ -1533,6 +1533,41 @@ sessions and prompt queues, a dropped owner zeroes its key, stale ticket
 cleanup uses its original endpoint, and an encrypted write reaches only the
 captured target/transport.
 
+### Integration and qualification boundaries (Unified workbench Phase 09)
+
+Treat Phase 09 as a release gate, not a second ownership model:
+
+- Capture an explicit `ConnectionRef { profileId, generation }` before every
+  async API, query, event, media, host, Browser, import, or cleanup operation.
+  Resolve the bound API/transport from that owner and reject stale generations;
+  never dispatch through the active profile.
+- Keep `getMediaClientId(owner)` keyed by the exact owner tuple. Profile-level
+  cleanup may use `getMediaClientIdForProfile`'s stable generation-1 fallback
+  only when disconnected, and `removeProfileConnection` must remove serialized
+  JSON tuple keys for every generation. A malformed key is ignored, not matched
+  by a textual prefix.
+- Keep nullable server snapshots explicit. A missing fleet snapshot may render
+  a safe presentation default for counts, but it must not rewrite or authorize
+  remote host state. Force-sleep confirmation remains owner/revision fenced and
+  fake-executor-only in tests.
+- Memoize profile target lists and include owner/generation query keys in
+  aggregate ports/projects/search. Equal project names, ports, terminal IDs,
+  and media paths remain distinct by owner.
+- Browser qualification configuration binds one strict fixture port and one
+  Chromium selection. The live harness owns disposable roots/processes and
+  must clean only those handles; it must never terminate unrelated listeners,
+  touch developer credentials/configuration, or invoke host power/process APIs.
+- Rust descriptor seams use a named test-only fake range (`FAKE_FD_BASE`) so
+  `Drop` cleanup cannot close an OS descriptor. Do not replace the guard with a
+  magic number or weaken the production descriptor path.
+
+The reconciled Phase 09 evidence is 3,504 passed tests and nine skipped/ignored
+cases, including 24 live S01–S12 harness assertions and four embedded browser
+assertions. G2-Web may release with matched frontend/backend
+`workbenchProtocol: 2`, media `session-cookie-v2`, and terminal-incarnation
+contracts. G2-Native remains blocked until real Windows S13 evidence; never
+report blocked native behavior as passed.
+
 ### Build & Type Checking
 
 ```bash

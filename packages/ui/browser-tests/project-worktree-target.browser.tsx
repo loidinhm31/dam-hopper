@@ -148,6 +148,7 @@ vi.mock("react-router-dom", () => ({
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: projectList, isLoading: false }),
+  useMutation: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
   useQueryClient: () => ({
     invalidateQueries: vi.fn().mockResolvedValue(undefined),
     refetchQueries: vi.fn().mockResolvedValue(undefined),
@@ -243,10 +244,24 @@ vi.mock("@/api/queries.js", () => ({
   useGitUndoLastCommit: () => ({ mutateAsync: vi.fn() }),
   invalidateGitFileOperation: vi.fn().mockResolvedValue(undefined),
   markTargetUnavailableIfNeeded: vi.fn(),
+  resolveTargetOwner: (options?: { owner?: { profileId: string; generation: number }; profileId?: string }) =>
+    options?.owner ?? (options?.profileId ? { profileId: options.profileId, generation: 1 } : undefined),
 }));
 
 vi.mock("@/api/client.js", () => ({
   api: testState.api,
+  createApiClient: () => testState.api,
+  ApiRequestError: class ApiRequestError extends Error {
+    constructor(
+      message: string,
+      public readonly status: number,
+      public readonly code?: string,
+      public readonly details?: unknown,
+    ) {
+      super(message);
+      this.name = "ApiRequestError";
+    }
+  },
   isGitUnavailableError: () => false,
   isProjectTargetError: () => false,
   normalizeProjectTarget: (target: {
@@ -261,6 +276,12 @@ vi.mock("@/api/client.js", () => ({
     worktreePath?: string;
   }) =>
     target.worktreePath == null ? "root" : `worktree:${target.worktreePath}`,
+  projectKey: (target: unknown) =>
+    typeof target === "string"
+      ? target
+      : target && typeof target === "object" && "project" in target && typeof target.project === "string"
+        ? target.project
+        : "project-1",
 }));
 
 vi.mock("@/hooks/use-project-target.js", () => ({
