@@ -177,10 +177,11 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 **Acceptance Criteria:**
 
-- ✓ Native image/video streams require an opaque ticket bound to an authenticated actor/session
-- ✓ Ticket clients require `session-cookie-v1` and a credentialed successful `HEAD` before native source/download exposure
-- ✓ Profile change/logout revokes the bounded media session before credential removal, including stale dialog profiles
-- ✓ Unknown, expired, revoked, or wrong-kind media tickets fail as non-disclosing `404` without bearer/blob fallback
+- ✓ Native image/video streams require an opaque ticket bound to an authenticated actor, profile, and UUIDv4 `mediaClientId`
+- ✓ Ticket clients require `session-cookie-v2`, a namespaced media cookie, and a credentialed successful `HEAD` before native source/download exposure
+- ✓ The stored ticket binding selects the cookie namespace; duplicate selected cookies fail closed, while ticket-only fallback is limited to the exact allowed origin
+- ✓ Profile change/logout revokes only the matching `(actor.subject, mediaClientId)` media session and tickets, including stale dialog profiles
+- ✓ Unknown, expired, revoked, stale-generation, or wrong-kind media tickets fail as non-disclosing `404` without bearer/blob fallback
 
 **Non-Functional Requirements:**
 
@@ -194,7 +195,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Historical qualification record (Chromium 151, 116 browser tests including 11 media tests; 1,018 UI and 691 Rust tests) is retained for provenance only, not a current release guarantee.
 - Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process
 
-### PR-007: Unified Multi-Server Workbench (Phase 02 complete — 2026-09-17)
+### PR-007: Unified Multi-Server Workbench (Phases 02–07 complete — 2026-09-17)
 
 **Functional Requirements:**
 
@@ -212,6 +213,8 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Reset legacy browser resource state once, without remote mutations or
   restoration, while preserving profiles, endpoint-bound auth, native state,
   and server-owned data.
+- Keep media-ticket cleanup scoped to the original profile/generation, endpoint, credentials, ticket, and client namespace; failed cleanup relies on bounded server TTLs.
+- Qualify encryption state, OPAQUE sessions, passphrase prompts, and encrypted writes by profile, connection generation, and project; never downgrade a stale operation to another owner or plaintext.
 
 **Acceptance Criteria:**
 
@@ -234,15 +237,23 @@ Target users: Developers managing monorepos or multi-project workspaces who want
   non-Windows profiles require exact same-origin support; unsupported profiles
   remain editable and make no fallback request.
 
+**Phase 07 acceptance criteria:**
+
+- ✓ `mediaClientId` is required and validated as UUIDv4 on image/video issue, ticket revoke, and media-session logout.
+- ✓ Native image/video preview and download use direct credentialed ticket URLs; no UI blob or plaintext fallback is introduced.
+- ✓ `RemoteCleanupHandle` is at-most-once, concurrent-call deduplicated, five-second bounded, and limited to its resource revoke callback.
+- ✓ Encryption prompts are queued and owner-labelled; exact owner/project duplicates join, and passphrases/session keys are not persisted.
+- ✓ OPAQUE authentication, WebCrypto, and the final encrypted filesystem write use one captured transport with freshness fences before and after asynchronous work.
+
 **Storage and security:**
 
-| Record | Location | Contract |
-| --- | --- | --- |
-| Profile list | `damhopper_server_profiles` | JSON `ServerProfile[]`, including `autoConnect` |
-| Legacy active ID | `damhopper_active_profile_id` | Migration input only; not a runtime owner |
-| Auth v2 | `damhopper_profile_auth_v2_<profileId>` | `{version: 2, serverUrl, authType, token}` |
-| Workspace selection | `dam-hopper:workspace-state` | Qualified project or `null` |
-| Workbench selections | `dam-hopper:preferences-source:v1` | Independent profile IDs and safe preference snapshot |
+| Record               | Location                                | Contract                                             |
+| -------------------- | --------------------------------------- | ---------------------------------------------------- |
+| Profile list         | `damhopper_server_profiles`             | JSON `ServerProfile[]`, including `autoConnect`      |
+| Legacy active ID     | `damhopper_active_profile_id`           | Migration input only; not a runtime owner            |
+| Auth v2              | `damhopper_profile_auth_v2_<profileId>` | `{version: 2, serverUrl, authType, token}`           |
+| Workspace selection  | `dam-hopper:workspace-state`            | Qualified project or `null`                          |
+| Workbench selections | `dam-hopper:preferences-source:v1`      | Independent profile IDs and safe preference snapshot |
 
 Passwords are never persisted. Tokens are JavaScript-readable local browser
 state and must be used only with HTTPS/trusted networks. Cleartext HTTP can
@@ -253,6 +264,7 @@ fallbacks.
 **Verification record:** The Phase 02 plan records 108 focused Vitest tests,
 1,766 full UI tests, and TypeScript/build checks across `packages/ui`,
 `apps/web`, and `apps/native`; those are phase evidence, not a release claim.
+
 ### PR-007A: Profile-qualified files, editor, search, and Git (Phase 03)
 
 **Status:** Implemented frontend contract on 2026-09-17. This slice extends
@@ -279,23 +291,22 @@ creating a second server workspace hierarchy.
 **Acceptance criteria:**
 
 - [x] Owner-bound clients project profile-qualified targets to server wire
-  `{ project, worktreePath? }` only after owner validation.
+      `{ project, worktreePath? }` only after owner validation.
 - [x] File events, upload completion, Git mutation invalidation, and editor
-  reloads affect only the matching profile/target scope.
+      reloads affect only the matching profile/target scope.
 - [x] Monaco and editor tab identity separates equal paths on different
-  profiles; large files use read-only 64 KiB range reads.
+      profiles; large files use read-only 64 KiB range reads.
 - [x] Federated search preserves originating profile/project metadata, exposes
-  per-profile status, and warns when the server or 500-result client cap
-  truncates results.
+      per-profile status, and warns when the server or 500-result client cap
+      truncates results.
 - [x] Replace operations re-read and mtime-check before writing and never
-  overwrite a dirty tab.
+      overwrite a dirty tab.
 - [x] SSH retry validates the owner generation, retains initial successes, and
-  retries only failed authentication targets.
+      retries only failed authentication targets.
 
 **Source and verification boundary:** The implementation map and focused
 contract coverage are maintained in
 [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
-
 
 ### PR-008: Shared Runtime Logging Utilities
 
@@ -351,8 +362,8 @@ See [Native Browser Debug Support](./native-browser-debug-support.md) for the pl
 - [x] Sustained alert classification, bounded mixed incident history, additive concurrent resource alerts, and compatible `host:alertChanged` delivery are implemented and tested.
 - [x] The client validates resource event shape/evidence before cache updates, retains active incidents when an older server omits `currentAlerts`, and removes only the recovered target from an explicit authoritative array.
 - [x] The top-nav diagnosis UI consumes cached snapshot/alert state and
-  exposes no generic resource-remediation control; any idle-suspend action is
-  the separate authenticated contract.
+      exposes no generic resource-remediation control; any idle-suspend action is
+      the separate authenticated contract.
 - [x] Phase 07 completed packaging, compatibility, graceful-degradation, platform/browser, soak-budget, and documentation validation; rollout follow-ups are explicitly deferred.
 
 Phase 07 evidence confirms the monitoring-only/read-only boundary, explicit
@@ -777,7 +788,7 @@ expose identical names, ports, or terminal IDs.
 - Aggregate ports by `(profileId, port, terminalId, incarnation)` and tunnels
   by `(profileId, tunnelId)`. Equal numeric ports remain independent rows.
 - Treat Browser target trust as `{ owner, url, origin, source, tunnelId?,
-  revision }`; allow only HTTP loopback or an exact ready owner-local tunnel
+revision }`; allow only HTTP loopback or an exact ready owner-local tunnel
   origin. Explicit target changes invalidate capture and bridge state.
 - Permit terminal handoff only to a same-profile mounted/live terminal. Capture
   owner/generation, Browser revision, and terminal incarnation and recheck them
@@ -1368,7 +1379,7 @@ opaque-origin sandbox.
   when storage is absent, invalid, or unavailable.
 - Render `HtmlPreview` from debounced `srcDoc` content (200 ms) in an iframe
   with `sandbox="allow-scripts allow-modals allow-forms allow-popups
-  allow-pointer-lock"`; omit `allow-same-origin` so content executes with a
+allow-pointer-lock"`; omit `allow-same-origin` so content executes with a
   `null` opaque origin and cannot access parent cookies or storage.
 - Inject only in-frame runtime shims for the opaque-origin `localStorage` /
   `sessionStorage` errors and suppressed `window.alert()` behavior; do not

@@ -21,7 +21,10 @@ import {
   getProfileChangeVersion,
   subscribeToProfileChanges,
 } from "@/api/server-config.js";
-
+import {
+  getConnectionSnapshot,
+  subscribeConnections,
+} from "@/api/connections.js";
 type ImageState = "loading" | "ready" | "error";
 type MediaTicketErrorCode = "MEDIA_SESSION_UNSUPPORTED";
 
@@ -124,13 +127,15 @@ export function ImagePreview({
     const controller = new AbortController();
     issueControllerRef.current = controller;
 
-    void issueImageTicket(
-      worktreePath == null
+    const projectTarget =
+      worktreePath == null && !target?.profileId
         ? targetProject
-        : { project: targetProject, worktreePath },
-      path,
-      controller.signal,
-    )
+        : {
+            project: targetProject,
+            ...(worktreePath != null ? { worktreePath } : {}),
+            ...(target?.profileId ? { profileId: target.profileId } : {}),
+          };
+    void issueImageTicket(projectTarget, path, controller.signal)
       .then((ticket) => {
         if (ticket.purpose !== "preview") {
           revokePreview(ticket);
@@ -206,7 +211,14 @@ export function ImagePreview({
       if (generationRef.current === generation) generationRef.current += 1;
       teardownPreview(cleanupImage);
     };
-  }, [path, retryToken, targetProject, teardownPreview, worktreePath]);
+  }, [
+    path,
+    retryToken,
+    target?.profileId,
+    targetProject,
+    teardownPreview,
+    worktreePath,
+  ]);
 
   useEffect(
     () =>
@@ -216,6 +228,17 @@ export function ImagePreview({
     [],
   );
 
+  useEffect(() => {
+    return subscribeConnections(() => {
+      if (target?.profileId) {
+        const snap = getConnectionSnapshot(target.profileId);
+        if (!snap || snap.status !== "connected") {
+          teardownPreview();
+          setImageState("error");
+        }
+      }
+    });
+  }, [target?.profileId, teardownPreview]);
   const acceptsImageEvent = useCallback(() => {
     const image = imageRef.current;
     const sourceUrl = sourceUrlRef.current;

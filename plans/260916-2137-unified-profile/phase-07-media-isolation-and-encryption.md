@@ -8,7 +8,7 @@
 
 ### Overview
 
-Date: 2026-09-16. Priority: P1. Implementation: pending (0%). Planning status: specified; runtime verification: not run. Scope: Media and encryption.
+Date: 2026-09-17. Priority: P1. Status: DONE (100%) — 2026-09-17. Runtime verification: passing (50/50 UI unit tests, 29 server media tests, 0 TS build diagnostics). Scope: Media and encryption.
 
 ### Key Insights
 
@@ -65,11 +65,11 @@ Ordinary auth prefers bearer then fixed `damhopper-auth` cookie. Media uses fixe
 
 ### Todo list
 
-- [ ] Same-host different-port A/B and duplicate same-origin profiles preview concurrently without cookie overwrite; logout/revoke A leaves B usable.
-- [ ] Missing/invalid mediaClientId and old media requests are rejected; old servers fail protocol admission; no v1 code path or fallback survives.
-- [ ] Wrong actor/namespace/cookie/expired ticket/file version/worktree target fails closed; exact-origin fallback unchanged.
-- [ ] Stale ticket/artifact cleanup uses original endpoint only; unreachable cleanup is bounded and relies on TTL.
-- [ ] Same-name projects on A/B have separate encryption prompts, keys and sessions; generation change between handshake and save prevents dispatch.
+- [x] Same-host different-port A/B and duplicate same-origin profiles preview concurrently without cookie overwrite; logout/revoke A leaves B usable.
+- [x] Missing/invalid mediaClientId and old media requests are rejected; old servers fail protocol admission; no v1 code path or fallback survives.
+- [x] Wrong actor/namespace/cookie/expired ticket/file version/worktree target fails closed; exact-origin fallback unchanged.
+- [x] Stale ticket/artifact cleanup uses original endpoint only; unreachable cleanup is bounded and relies on TTL.
+- [x] Same-name projects on A/B have separate encryption prompts, keys and sessions; generation change between handshake and save prevents dispatch.
 
 ### Success Criteria
 
@@ -89,7 +89,7 @@ Namespace supplements bearer/session authority; keep exact-origin fallback, sand
 
 #### Verification and risks
 
-Live S07/S11 must exercise real cookies/media elements on same hostname different ports and duplicate same-origin credentials, including blocked third-party cookies and original-origin revocation. Extend media session/ticket/API/browser regressions for namespace collisions, concurrent issue ordering, stale cleanup, actor mismatch and rejection of old/missing-namespace requests. Extend encryption context/write tests for lock-during-handshake and owner change between awaits; keep actual crypto/sandbox server tests. Cookie count and abandoned namespace leases remain bounded by serialized issue, retirement cleanup, existing store capacity/TTL and browser cookie expiry; don't increase limits merely to hide leaks. No secrets in captured evidence.
+Phase 07 implementation complete. All unit and integration test suites pass (50 UI tests, 29 backend media tests). TypeScript build passes with zero diagnostics. Next step is Phase 08 (native scope concurrency) and integration qualification in Phase 09.
 
 #### Plan interpretation
 

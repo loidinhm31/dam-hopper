@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::workspace_target::ResolvedProjectTarget;
 
 use super::{
-    media_session::MediaSessionToken,
+    media_session::{MediaClientId, MediaSessionToken},
     media_ticket::{
         MediaFileVersion, MediaTicketBoundIssue, MediaTicketKind, MediaTicketPurpose,
         MediaTicketRecord, MediaTicketStore,
@@ -86,12 +86,14 @@ impl ImageStreamTicketStore {
         &self,
         expected_generation: u64,
         actor_subject: &str,
+        client_id: &MediaClientId,
         existing: Option<MediaSessionToken>,
         record: ImageTicketRecord,
     ) -> Result<(ImageTicketLease, super::media_session::MediaSessionLease), ImageTicketIssue> {
         match self.media.issue_bound(
             expected_generation,
             actor_subject,
+            client_id,
             existing,
             record.into_media(),
         ) {
@@ -118,10 +120,10 @@ impl ImageStreamTicketStore {
         &self,
         ticket: &str,
         actor_subject: &str,
-        token: &MediaSessionToken,
+        client_id: &MediaClientId,
     ) {
         self.media
-            .revoke_bound(ticket, MediaTicketKind::Image, actor_subject, token);
+            .revoke_bound(ticket, MediaTicketKind::Image, actor_subject, client_id);
     }
 
     pub fn revoke(&self, ticket: &str) {

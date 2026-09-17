@@ -1,17 +1,61 @@
 # System Architecture
 
-## Unified-profile workbench (Phases 00–06; Phase 06 implemented 2026-09-17)
+## Unified-profile workbench (Phases 00–07; Phase 07 implemented 2026-09-17)
 
 This is the frontend ownership cutover for the unified workbench. It is
 separate from the backend workspace-registry redesign later in this document.
-Phases 00–06 are implemented; later phases remain plan-gated. The Phase 03
+Phases 00–07 are implemented; Phases 08–09 remain plan-gated. The Phase 03
 files/editor/search/Git contract, Phase 04 terminal/workflow contract, Phase 05
-agents/ports/Browser contract, and Phase 06 preferences/settings/usage/host
-contract are summarized in their dedicated workbench guides:
+agents/ports/Browser contract, Phase 06 preferences/settings/usage/host
+contract, and Phase 07 media/encryption contract are summarized in their
+dedicated workbench guides:
+
 - [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)
 - [Phase 04: Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)
 - [Phase 05: Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md)
 - [Phase 06: Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)
+- [Phase 07: Media Isolation and Encryption](./phase-07-media-isolation-and-encryption.md)
+
+### Phase 07 media and encryption ownership
+
+Phase 07 extends the profile/generation ownership boundary to capabilities
+that outlive a React render or cross asynchronous work:
+
+- `connections.ts` allocates an in-memory UUIDv4 `mediaClientId` per exact
+  profile generation. The identifier is sent on media issue, revoke, and
+  media-session logout; it is not persisted or reused by a new generation.
+- The server's `MediaTicketStore` is shared by image and video routes. Every
+  ticket stores the authenticated actor, client ID, session digest, target,
+  purpose/kind, file identity/version, and an incarnation. Workspace
+  replacement advances the generation and invalidates stale capabilities.
+- A media cookie is namespaced as
+  `damhopper-media-session-<canonical-uuidv4>`. During stream authorization,
+  the stored ticket binding chooses the cookie name; the caller cannot choose
+  another namespace. Duplicate selected cookies fail closed. Exact-origin
+  requests may use the opaque ticket without a cookie; untrusted origins may
+  not use that fallback.
+- Stream routes sit outside bearer middleware because native image/video
+  elements send credentialed cookies. Shared response handling authorizes
+  before opening the file, revalidates target/version and ticket incarnation
+  after asynchronous checks, then touches bounded idle deadlines. It serves
+  only the requested kind and purpose and returns non-disclosing `404` for
+  unknown, expired, revoked, wrong-kind, or stale capabilities.
+- The browser client probes each opaque URL with credentialed `HEAD` and then
+  assigns it directly to a native element. Image and video preview teardown
+  detaches the source before invoking a captured `RemoteCleanupHandle`.
+  Handles are owner-scoped, resource-scoped, five-second bounded, concurrent
+  call-deduplicated, and best effort; server TTLs cover unreachable cleanup.
+- `EncryptContext` keys passphrases and OPAQUE/AES session material by
+  `profileId@generation:project`, keeps prompts queued and explicitly
+  profile-labelled, and zeroes mutable key buffers on disable or retirement.
+  `use-encrypted-write` captures one owner and one `WsTransport`; OPAQUE
+  authentication, WebCrypto, and the final filesystem write all use that
+  transport, with freshness fences and no plaintext or alternate-owner
+  fallback.
+
+The full request/response examples and lifecycle rules are in the
+[Phase 07 guide](./phase-07-media-isolation-and-encryption.md). The
+backend endpoint summary is in the [API Reference](./api-reference.md).
 
 - `DamHopperApp` mounts one shell and route tree even when profiles are empty,
   offline, login-required, or unsupported. Startup reads profiles and launches
@@ -75,6 +119,7 @@ remain independent.
 ### Phase 01 ownership and connection foundation (2026-09-17)
 
 Phase 01 delivers the explicit ownership runtime and connection foundation:
+
 - `packages/ui/src/api/ownership.ts`: canonical identity types (`ProfileId`, `ConnectionRef`, `ProjectRef`, `ProjectTargetRef`, `TerminalRef`, `TerminalInstanceRef`, `ResourceBinding`, `Owned<T>`) and tuple key builders (`projectKey`, `projectTargetKey`, `terminalKey`, `terminalInstanceKey`, `connectionKey`). `normalizeProjectTargetRef` preserves profile identity; `toServerProjectTarget` projects server wire payloads without leaking `profileId`.
 - `packages/ui/src/api/connections.ts`: keyed external store with immutable `ConnectionSnapshot`, per-profile generation, intent tracking, exponential backoff reconnect (1s–30s cap), and `setConnectionRegistryQueryClient` for dependency injection. Validates server `workbenchProtocol: 2` in `GET /api/auth/status` before WS initialization.
 - `server/src/api/auth.rs`: `status()` route returns `workbenchProtocol: 2` in both dev and authenticated modes.
@@ -87,6 +132,7 @@ Phase 01 delivers the explicit ownership runtime and connection foundation:
 The backend workspace-registry redesign in the next section is a separate
 proposal; it is not part of this baseline and must not be treated as sharing
 its identity, migration or acceptance gate.
+
 ### Phase 03 files, editor, search, and Git ownership (2026-09-17)
 
 Phase 03 consumes the Phase 01 owner/generation runtime and extends it from
@@ -123,8 +169,7 @@ Ownership invariants:
 - Clean editor tabs reload after external/Git changes. Dirty tabs retain local
   bytes and become stale/conflicted; no remote event can overwrite edits.
 - Federated search issues independent owner-bound requests, preserves profile
-  and target metadata on each match, and caps the aggregate UI result set at
-  500. Replace operations resolve the target from the match and skip dirty
+  and target metadata on each match, and caps the aggregate UI result set at 500. Replace operations resolve the target from the match and skip dirty
   files.
 - Git fetch/pull preserve independent target results. SSH passphrase retry
   retains successful initial results, retries only authentication-failed
@@ -170,11 +215,11 @@ new owner-aware code must use the bound client rather than the active profile.
 
 Browser persistence is explicitly versioned and partitioned:
 
-| Store | Key/version | Boundary |
-| --- | --- | --- |
-| Terminal layout | `dam-hopper:terminal-layout:v3:<encoded-owner-group>`; payload v2 | `{ profileId, groupId }`; raw session IDs remain inside the owner partition |
-| Terminal pins | `dam-hopper:terminal-pins:v2:<encoded-profileId>`; payload v2 | Profile-specific IDs-only records; legacy v1 is removed |
-| Command history | `StoredHistory.version: 3` | Profile-salted IDs; owner-aware callers filter reads; exact command text stays local |
+| Store           | Key/version                                                       | Boundary                                                                             |
+| --------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Terminal layout | `dam-hopper:terminal-layout:v3:<encoded-owner-group>`; payload v2 | `{ profileId, groupId }`; raw session IDs remain inside the owner partition          |
+| Terminal pins   | `dam-hopper:terminal-pins:v2:<encoded-profileId>`; payload v2     | Profile-specific IDs-only records; legacy v1 is removed                              |
+| Command history | `StoredHistory.version: 3`                                        | Profile-salted IDs; owner-aware callers filter reads; exact command text stays local |
 
 `fresh-state-reset.ts` removes unqualified legacy terminal layout and pin
 records, while preserving valid v3 layout and v3 command-history records. It
@@ -198,7 +243,6 @@ remain available, but terminal output from another profile is excluded.
 The implementation map, persistence formats, compatibility notes, review
 warnings, and focused verification evidence are maintained in
 [Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md).
-
 
 ### Phase 05 agents, ports, Browser, and capability isolation (2026-09-17)
 
@@ -441,15 +485,15 @@ separate from this gate.
 
 Production state has one active authority:
 
-| Concern | Authority and mutation boundary |
-| --- | --- |
-| API startup configuration | `/var/lib/dam-hopper/dam-hopper.toml`, the sole systemd `--config` operand |
-| Server timing/manual audit | `/var/lib/dam-hopper/idle-suspend-audit.jsonl`, API-owned `0600` JSONL |
-| Initial state | The API runtime provisioner at the privileged pre-start; it seeds or performs the validated one-time legacy copy |
-| Normal config updates | Authenticated API, same-directory atomic replacement as the API identity |
-| Release preflight | Read-only SQLite discovery and holder checks before quiesce or service switch |
-| Bootstrap installer | Release staging only; no daemon TOML creation, copy, chmod, chown, or repair |
-| Emergency reset | Canonical config by default; explicit `--config` only for a controlled alternate layout |
+| Concern                    | Authority and mutation boundary                                                                                  |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| API startup configuration  | `/var/lib/dam-hopper/dam-hopper.toml`, the sole systemd `--config` operand                                       |
+| Server timing/manual audit | `/var/lib/dam-hopper/idle-suspend-audit.jsonl`, API-owned `0600` JSONL                                           |
+| Initial state              | The API runtime provisioner at the privileged pre-start; it seeds or performs the validated one-time legacy copy |
+| Normal config updates      | Authenticated API, same-directory atomic replacement as the API identity                                         |
+| Release preflight          | Read-only SQLite discovery and holder checks before quiesce or service switch                                    |
+| Bootstrap installer        | Release staging only; no daemon TOML creation, copy, chmod, chown, or repair                                     |
+| Emergency reset            | Canonical config by default; explicit `--config` only for a controlled alternate layout                          |
 
 For `server` and `both` candidates, preflight opens the canonical TOML first and
 an extant `/etc/dam-hopper/dam-hopper.toml` second with no-follow semantics,
@@ -998,22 +1042,22 @@ a sequence, so a subsequent record exposes an append failure as a gap.
 
 ##### Exhaustive 14-event matrix
 
-| Event Type | Scope | `correlationId` | `mode` | Exact Payload Fields | Allowed Payload Rules & Bounds |
-|---|---|---|---|---|---|
-| `coordinatorStarted` | Process-wide | `null` | `null` | `automaticPolicy`<br>`quietPeriodSeconds`<br>`wakeAfterSeconds`<br>`timingRevision`<br>`statusRevision` | `automaticPolicy`: `"emptyFleet" \| "agentActivity"`<br>`quietPeriodSeconds`: `60 ..= 86400`<br>`wakeAfterSeconds`: `0 \| 60 ..= 86400`<br>`timingRevision`: `u64`<br>`statusRevision`: `u64` |
-| `attemptStarted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration`<br>`activityRevision`<br>`timingRevision`<br>`statusRevision`<br>`wakeAfterSeconds` | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null` (must be `null` if `mode == "manual"` or `policy == "emptyFleet"`)<br>`timingRevision`: `u64`<br>`statusRevision`: `u64`<br>`wakeAfterSeconds`: `0 \| 60 ..= 86400` |
-| `armStarted` | Attempt | Required UUID v4 | `"automatic"` | `fleetGeneration`<br>`activityRevision`<br>`quietPeriodSeconds`<br>`deadlineAfterSeconds` | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null`<br>`quietPeriodSeconds`: `60 ..= 86400`<br>`deadlineAfterSeconds`: `1 ..= 86400` |
-| `armCancelled` | Attempt | Required UUID v4 | `"automatic"` | `reasonCode`<br>`fleetGeneration`<br>`activityRevision` | `reasonCode`: Subset **R_ARM**<br>`fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null` |
-| `measurementUnavailable` | Process-wide | `null` | `null` | `reasonCode` | `reasonCode`: strictly `"measurementUnavailable"` |
-| `measurementRecovered` | Process-wide | `null` | `null` | `activityRevision` | `activityRevision`: `u64` |
-| `finalCheckStarted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration`<br>`activityRevision`<br>`timingRevision` | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null`<br>`timingRevision`: `u64` |
-| `finalCheckCompleted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `accepted`<br>`reasonCode`<br>`fleetGeneration`<br>`activityRevision` | `accepted`: `boolean`<br>If `accepted == true`: `reasonCode` must be `null`<br>If `accepted == false`: `reasonCode` must be Subset **R_FINAL**<br>`fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null` |
-| `handoffClaimAccepted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration` | `fleetGeneration`: `u64` |
-| `handoffClaimRejected` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode`<br>`expectedFleetGeneration`<br>`actualFleetGeneration` | `reasonCode`: Subset **R_HANDOFF**<br>If `reasonCode == "staleFleetGeneration"`: `expectedFleetGeneration` and `actualFleetGeneration` must both be `u64`<br>For all other reasons: both must be `null` |
-| `helperRequestDispatched` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `wakeAfterSeconds` | `wakeAfterSeconds`: `0 \| 60 ..= 86400` |
-| `helperOutcomeReceived` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode` | `reasonCode`: Subset **R_OUTCOME** |
-| `reconciliationCompleted` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode` | `reasonCode`: Subset **R_OUTCOME** |
-| `terminalRejected` | Attempt | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode`<br>`fleetGeneration`<br>`activityRevision` | `reasonCode`: Subset **R_TERMINAL**<br>`fleetGeneration`: `u64 \| null`<br>`activityRevision`: `u64 \| null` |
+| Event Type                | Scope        | `correlationId`  | `mode`                    | Exact Payload Fields                                                                                    | Allowed Payload Rules & Bounds                                                                                                                                                                                                    |
+| ------------------------- | ------------ | ---------------- | ------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coordinatorStarted`      | Process-wide | `null`           | `null`                    | `automaticPolicy`<br>`quietPeriodSeconds`<br>`wakeAfterSeconds`<br>`timingRevision`<br>`statusRevision` | `automaticPolicy`: `"emptyFleet" \| "agentActivity"`<br>`quietPeriodSeconds`: `60 ..= 86400`<br>`wakeAfterSeconds`: `0 \| 60 ..= 86400`<br>`timingRevision`: `u64`<br>`statusRevision`: `u64`                                     |
+| `attemptStarted`          | Attempt      | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration`<br>`activityRevision`<br>`timingRevision`<br>`statusRevision`<br>`wakeAfterSeconds`   | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null` (must be `null` if `mode == "manual"` or `policy == "emptyFleet"`)<br>`timingRevision`: `u64`<br>`statusRevision`: `u64`<br>`wakeAfterSeconds`: `0 \| 60 ..= 86400` |
+| `armStarted`              | Attempt      | Required UUID v4 | `"automatic"`             | `fleetGeneration`<br>`activityRevision`<br>`quietPeriodSeconds`<br>`deadlineAfterSeconds`               | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null`<br>`quietPeriodSeconds`: `60 ..= 86400`<br>`deadlineAfterSeconds`: `1 ..= 86400`                                                                                    |
+| `armCancelled`            | Attempt      | Required UUID v4 | `"automatic"`             | `reasonCode`<br>`fleetGeneration`<br>`activityRevision`                                                 | `reasonCode`: Subset **R_ARM**<br>`fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null`                                                                                                                                   |
+| `measurementUnavailable`  | Process-wide | `null`           | `null`                    | `reasonCode`                                                                                            | `reasonCode`: strictly `"measurementUnavailable"`                                                                                                                                                                                 |
+| `measurementRecovered`    | Process-wide | `null`           | `null`                    | `activityRevision`                                                                                      | `activityRevision`: `u64`                                                                                                                                                                                                         |
+| `finalCheckStarted`       | Attempt      | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration`<br>`activityRevision`<br>`timingRevision`                                             | `fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null`<br>`timingRevision`: `u64`                                                                                                                                          |
+| `finalCheckCompleted`     | Attempt      | Required UUID v4 | `"automatic" \| "manual"` | `accepted`<br>`reasonCode`<br>`fleetGeneration`<br>`activityRevision`                                   | `accepted`: `boolean`<br>If `accepted == true`: `reasonCode` must be `null`<br>If `accepted == false`: `reasonCode` must be Subset **R_FINAL**<br>`fleetGeneration`: `u64`<br>`activityRevision`: `u64 \| null`                   |
+| `handoffClaimAccepted`    | Attempt      | Required UUID v4 | `"automatic" \| "manual"` | `fleetGeneration`                                                                                       | `fleetGeneration`: `u64`                                                                                                                                                                                                          |
+| `handoffClaimRejected`    | Attempt      | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode`<br>`expectedFleetGeneration`<br>`actualFleetGeneration`                                    | `reasonCode`: Subset **R_HANDOFF**<br>If `reasonCode == "staleFleetGeneration"`: `expectedFleetGeneration` and `actualFleetGeneration` must both be `u64`<br>For all other reasons: both must be `null`                           |
+| `helperRequestDispatched` | Attempt      | Required UUID v4 | `"automatic" \| "manual"` | `wakeAfterSeconds`                                                                                      | `wakeAfterSeconds`: `0 \| 60 ..= 86400`                                                                                                                                                                                           |
+| `helperOutcomeReceived`   | Attempt      | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode`                                                                                            | `reasonCode`: Subset **R_OUTCOME**                                                                                                                                                                                                |
+| `reconciliationCompleted` | Attempt      | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode`                                                                                            | `reasonCode`: Subset **R_OUTCOME**                                                                                                                                                                                                |
+| `terminalRejected`        | Attempt      | Required UUID v4 | `"automatic" \| "manual"` | `reasonCode`<br>`fleetGeneration`<br>`activityRevision`                                                 | `reasonCode`: Subset **R_TERMINAL**<br>`fleetGeneration`: `u64 \| null`<br>`activityRevision`: `u64 \| null`                                                                                                                      |
 
 ##### Closed reason code subsets (`ServerIdleSuspendReasonCodeV1`)
 
@@ -1085,18 +1129,18 @@ seeded from the validated, read-only `/etc/dam-hopper/dam-hopper.toml` exactly
 once. The helper systemd unit owns the root log through
 `LogsDirectory=dam-hopper`.
 
-| Source or output                                           | Fixed authority                                                                               | Historicity and applicability                                                                  |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Server events                                              | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`             | historical; required attempt for `Server`/`Both`                                               |
-| Server timing/manual audit                                 | `/var/lib/dam-hopper/idle-suspend-audit.jsonl`                          | historical; required attempt for `Server`/`Both`; prior `/etc` copy is untouched legacy state |
-| Backend diagnostics                                        | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/backend-log.jsonl`                        | historical; required attempt for `Server`/`Both`; terminal tails excluded                      |
-| Helper audit                                               | `/var/log/dam-hopper/idle-suspend-helper.jsonl`                                               | historical; required attempt for root `Server`/`Both`; non-root is `permissionDenied`          |
-| API/helper journal and lifecycle                           | fixed `dam-hopper-api.service` and `dam-hopper-idle-suspend-helper.service`                   | historical; required attempt for `Server`/`Both`; unreadable evidence makes the bundle partial |
-| Protected local idle status                                | fixed loopback API and token lookup                                                           | latest; best effort only                                                                       |
-| RTC, power-state, inhibitor, and enrolled PID/executable probes            | fixed read-only host adapters                                                                 | nonHistorical; best effort only                                                                |
-| Role                                                       | `/etc/dam-hopper/host.toml` via `Layout::host_config_path()`                                  | `Server`/`Both` apply idle sources; `Web` is `notApplicable`                                   |
-| Root bundle                                                | `/var/lib/dam-hopper-manager/diagnostics/dam-hopper-diagnose-<generatedAtMs>-<bundleId>.json` | trusted root output                                                                            |
-| Non-root bundle                                            | `$XDG_STATE_HOME/dam-hopper/diagnostics`, else `$HOME/.local/state/dam-hopper/diagnostics`    | valid partial output; no `/tmp` fallback                                                       |
+| Source or output                                                | Fixed authority                                                                               | Historicity and applicability                                                                  |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Server events                                                   | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`             | historical; required attempt for `Server`/`Both`                                               |
+| Server timing/manual audit                                      | `/var/lib/dam-hopper/idle-suspend-audit.jsonl`                                                | historical; required attempt for `Server`/`Both`; prior `/etc` copy is untouched legacy state  |
+| Backend diagnostics                                             | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/backend-log.jsonl`                        | historical; required attempt for `Server`/`Both`; terminal tails excluded                      |
+| Helper audit                                                    | `/var/log/dam-hopper/idle-suspend-helper.jsonl`                                               | historical; required attempt for root `Server`/`Both`; non-root is `permissionDenied`          |
+| API/helper journal and lifecycle                                | fixed `dam-hopper-api.service` and `dam-hopper-idle-suspend-helper.service`                   | historical; required attempt for `Server`/`Both`; unreadable evidence makes the bundle partial |
+| Protected local idle status                                     | fixed loopback API and token lookup                                                           | latest; best effort only                                                                       |
+| RTC, power-state, inhibitor, and enrolled PID/executable probes | fixed read-only host adapters                                                                 | nonHistorical; best effort only                                                                |
+| Role                                                            | `/etc/dam-hopper/host.toml` via `Layout::host_config_path()`                                  | `Server`/`Both` apply idle sources; `Web` is `notApplicable`                                   |
+| Root bundle                                                     | `/var/lib/dam-hopper-manager/diagnostics/dam-hopper-diagnose-<generatedAtMs>-<bundleId>.json` | trusted root output                                                                            |
+| Non-root bundle                                                 | `$XDG_STATE_HOME/dam-hopper/diagnostics`, else `$HOME/.local/state/dam-hopper/diagnostics`    | valid partial output; no `/tmp` fallback                                                       |
 
 Every file source begins from the trusted layout-root descriptor and opens only
 its fixed components with `openat2`
@@ -1111,17 +1155,17 @@ The collector uses the following exact metadata comparators for
 product-controlled **ancestor directories**. The final-file comparators remain
 in the source table above; no row repairs or normalizes an existing object.
 
-| Path | Type | UID | GID | Mode | Sole authority and mismatch result |
-| --- | --- | ---: | ---: | ---: | --- |
-| `/var` | directory | `0` | `0` | `0755` | API runtime provisioner; existing and newly created entries must match. |
-| `/var/lib` | directory | `0` | `0` | `0755` | API runtime provisioner; existing and newly created entries must match. |
-| `/var/lib/dam-hopper` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
-| `/var/lib/dam-hopper/.config` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
-| `/var/lib/dam-hopper/.config/dam-hopper` | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match. |
-| `/var/lib/dam-hopper/.config/dam-hopper/diagnostics` | directory | final API UID | final API GID | `0700` | API `DiagnosticStore` creates a missing parent while the final API unit has `UMask=0077`; collector only verifies an existing entry. Mismatch makes `serverEvents` and `diagnosticEvents` `unsupported` partial sources. |
-| `/etc` | directory | `0` | `0` | `0755` | Legacy migration traversal only; absent is allowed, present metadata must match, and the API gate never creates or repairs it. |
-| `/etc/dam-hopper` | directory | `0` | `0` | `0755` | Legacy migration traversal only; absent is allowed, present metadata must match, and the API gate never creates or repairs it. |
-| `/var/log/dam-hopper` | directory | `0` | final API GID | `0755` | Fixed helper unit: `User=root`, `Group=API_GROUP`, `LogsDirectory=dam-hopper`, and default `LogsDirectoryMode=0755`. Collector requires the effective fixed helper unit to retain these values; deviation makes only helper audit, journal, and lifecycle sources `unsupported` partial evidence. |
+| Path                                                 | Type      |           UID |           GID |   Mode | Sole authority and mismatch result                                                                                                                                                                                                                                                                |
+| ---------------------------------------------------- | --------- | ------------: | ------------: | -----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/var`                                               | directory |           `0` |           `0` | `0755` | API runtime provisioner; existing and newly created entries must match.                                                                                                                                                                                                                           |
+| `/var/lib`                                           | directory |           `0` |           `0` | `0755` | API runtime provisioner; existing and newly created entries must match.                                                                                                                                                                                                                           |
+| `/var/lib/dam-hopper`                                | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match.                                                                                                                                                                                                                           |
+| `/var/lib/dam-hopper/.config`                        | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match.                                                                                                                                                                                                                           |
+| `/var/lib/dam-hopper/.config/dam-hopper`             | directory | final API UID | final API GID | `0700` | API runtime provisioner; existing and newly created entries must match.                                                                                                                                                                                                                           |
+| `/var/lib/dam-hopper/.config/dam-hopper/diagnostics` | directory | final API UID | final API GID | `0700` | API `DiagnosticStore` creates a missing parent while the final API unit has `UMask=0077`; collector only verifies an existing entry. Mismatch makes `serverEvents` and `diagnosticEvents` `unsupported` partial sources.                                                                          |
+| `/etc`                                               | directory |           `0` |           `0` | `0755` | Legacy migration traversal only; absent is allowed, present metadata must match, and the API gate never creates or repairs it.                                                                                                                                                                    |
+| `/etc/dam-hopper`                                    | directory |           `0` |           `0` | `0755` | Legacy migration traversal only; absent is allowed, present metadata must match, and the API gate never creates or repairs it.                                                                                                                                                                    |
+| `/var/log/dam-hopper`                                | directory |           `0` | final API GID | `0755` | Fixed helper unit: `User=root`, `Group=API_GROUP`, `LogsDirectory=dam-hopper`, and default `LogsDirectoryMode=0755`. Collector requires the effective fixed helper unit to retain these values; deviation makes only helper audit, journal, and lifecycle sources `unsupported` partial evidence. |
 
 `/` and `/var/log` are host traversal anchors, not product metadata
 authorities. For them the collector requires only a directory descriptor,
@@ -1164,15 +1208,15 @@ only for the fixed API paths below. Phase 05 readers/projectors only inspect
 producer files and never provision, repair, or lazily create them; Phase 06
 implements the host/API/command/output adapters around this pure core.
 
-| Path class                                    | Required owner/group and creation rule                                                                                                                                                                 |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| API state                                     | Final rendered API `User:Group` (default `dam-hopper:dam-hopper`); `/var/lib/dam-hopper`, `.config`, and `.config/dam-hopper` are directories `0700` |
-| `/var/lib/dam-hopper/dam-hopper.toml`         | Final rendered API UID/GID; regular file `0600`; canonical config is seeded or copied once from validated legacy bytes, then exact-validated without rewrite |
-| `/var/lib/dam-hopper/idle-suspend-audit.jsonl` | Final rendered API UID/GID; regular file `0600`; created or exact-validated only after config publication |
-| `/etc/dam-hopper`                             | Legacy migration anchor `0:0`, directory `0755` when present; API runtime never creates, repairs, or mutates it |
-| `/etc/dam-hopper/dam-hopper.toml`             | Legacy migration source `0:0`, regular file `0644`; read-only, validated, and preserved byte-for-byte |
-| Phase 05 pure diagnostics files               | Not managed by `provision-api-runtime`; readers consume existing producer files and never provision or repair them |
-| Helper audit                                  | systemd `LogsDirectory=dam-hopper`; helper is `root:API_GROUP` and retains its existing runtime/log/protocol contract |
+| Path class                                     | Required owner/group and creation rule                                                                                                                       |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| API state                                      | Final rendered API `User:Group` (default `dam-hopper:dam-hopper`); `/var/lib/dam-hopper`, `.config`, and `.config/dam-hopper` are directories `0700`         |
+| `/var/lib/dam-hopper/dam-hopper.toml`          | Final rendered API UID/GID; regular file `0600`; canonical config is seeded or copied once from validated legacy bytes, then exact-validated without rewrite |
+| `/var/lib/dam-hopper/idle-suspend-audit.jsonl` | Final rendered API UID/GID; regular file `0600`; created or exact-validated only after config publication                                                    |
+| `/etc/dam-hopper`                              | Legacy migration anchor `0:0`, directory `0755` when present; API runtime never creates, repairs, or mutates it                                              |
+| `/etc/dam-hopper/dam-hopper.toml`              | Legacy migration source `0:0`, regular file `0644`; read-only, validated, and preserved byte-for-byte                                                        |
+| Phase 05 pure diagnostics files                | Not managed by `provision-api-runtime`; readers consume existing producer files and never provision or repair them                                           |
+| Helper audit                                   | systemd `LogsDirectory=dam-hopper`; helper is `root:API_GROUP` and retains its existing runtime/log/protocol contract                                        |
 
 The API unit has no `StateDirectory=` or `StateDirectoryMode=` directives. Its
 single privileged pre-start gate is exactly
@@ -2436,18 +2480,18 @@ the UI does not infer missing child items.
 
 **Component responsibilities:**
 
-| Component | Architectural role |
-| --- | --- |
-| `WorkflowContextRibbon` | `h-9` ambient `region`; target label, active item, status, elapsed duration, latest note/progress, loading/error/retry, and polite live text. |
-| `WorkflowContextDeck` | Open-only non-modal desktop `region`; `320px` minimum, `360px` base, `440px` maximum; two columns at `md`, and `220px / flexible / 300px` panes at `lg`. |
-| `WorkflowContextSheet` | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `35dvh` collapsed and `90dvh` expanded. |
-| `WorkflowProjectList` | Exact target selection plus plan, task, and running-session counts. |
-| `WorkflowItemList` / `WorkflowItemRow` | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy. |
-| `WorkflowSelectedItemBar` | Selected-item status/session/child actions, note drafting, ordered note display/deletion, item deletion, and edit entry point. |
-| `WorkflowSelectedItemEditForm` | Local title/summary drafts, normalization, keyboard shortcuts, and Save/Cancel presentation. |
-| `WorkflowSelectedItemNotesList` | Bounded independently scrollable note detail with semantic timestamps and note-scoped deletion. |
-| `WorkflowQuickCapture` | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request. |
-| `WorkflowExecutionList` / `WorkflowSessionCard` | Explicit start/end timestamps, Now actions, elapsed duration, abandon, observed links, and manual Agent Harness/Agent Run metadata. |
+| Component                                       | Architectural role                                                                                                                                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WorkflowContextRibbon`                         | `h-9` ambient `region`; target label, active item, status, elapsed duration, latest note/progress, loading/error/retry, and polite live text.                 |
+| `WorkflowContextDeck`                           | Open-only non-modal desktop `region`; `320px` minimum, `360px` base, `440px` maximum; two columns at `md`, and `220px / flexible / 300px` panes at `lg`.      |
+| `WorkflowContextSheet`                          | Bottom Dialog for compact layouts; Projects, Plans & Work, and Execution segments; safe-area padding; current heights `35dvh` collapsed and `90dvh` expanded. |
+| `WorkflowProjectList`                           | Exact target selection plus plan, task, and running-session counts.                                                                                           |
+| `WorkflowItemList` / `WorkflowItemRow`          | Plan-rooted recursive tree, standalone Tasks, selection, status presentation, active-session marker, and note/progress copy.                                  |
+| `WorkflowSelectedItemBar`                       | Selected-item status/session/child actions, note drafting, ordered note display/deletion, item deletion, and edit entry point.                                |
+| `WorkflowSelectedItemEditForm`                  | Local title/summary drafts, normalization, keyboard shortcuts, and Save/Cancel presentation.                                                                  |
+| `WorkflowSelectedItemNotesList`                 | Bounded independently scrollable note detail with semantic timestamps and note-scoped deletion.                                                               |
+| `WorkflowQuickCapture`                          | Required title with Plan default; optional Phase/Task parent, summary, status, and immediate-session request.                                                 |
+| `WorkflowExecutionList` / `WorkflowSessionCard` | Explicit start/end timestamps, Now actions, elapsed duration, abandon, observed links, and manual Agent Harness/Agent Run metadata.                           |
 
 The surface owns only presentation state: open state, selected target/item,
 quick-capture drafts, mobile segment, and a single one-second elapsed timer
@@ -2663,7 +2707,7 @@ flowchart LR
 ```
 
 `HtmlPreview` sends the latest editor buffer to one iframe after a 200 ms
- debounce and exposes a reload action. The iframe sandbox is exactly
+debounce and exposes a reload action. The iframe sandbox is exactly
 `sandbox="allow-scripts allow-modals allow-forms allow-popups allow-pointer-lock"`;
 `allow-same-origin` is intentionally absent, so workspace markup runs with an
 opaque `null` origin and cannot read parent cookies or storage. The transform
@@ -2679,32 +2723,25 @@ Directories, language-scan rows, non-HTML files, and oversized files do not ente
 this path. Relative multi-file asset resolution and backend static serving remain
 out of scope.
 
-### Explorer video playback and download (Phase 04 browser-host validation complete)
+### Explorer video playback and download (Unified workbench Phase 07)
 
-Phase 1 delivered the authenticated, purpose-bound ticket boundary. Phase 2
-ships session-bound media: an opaque ticket URL is paired with an HTTP-compatible,
-host-only `HttpOnly; SameSite=Lax; Path=/api/fs` media-session cookie without
-`Secure`, so the stream endpoint is no longer capability-only. Auth cookies remain
-`HttpOnly; SameSite=Strict`. Phase
-03 completes the browser-host `VideoPreview` integration. Phase 04 validates it
-with the repository Playwright/Vitest harness in installed Chromium 151 using a
-valid one-second VP8 WebM fixture, the real ticket client, and the native download
-helper. The 116-test full browser suite, including 11 media-specific tests,
-passed on Chromium 151. The broader gate also passed 1,018 UI tests and 691 Rust
-tests (one ignored performance test); `pnpm build` and `pnpm lint` were clean. Checks cover the
-versioned session-cookie contract, credentialed `HEAD` before source exposure,
-`crossOrigin="use-credentials"`, playback/seek, direct anchor download, rejected
-probe retry, cleanup, and absence of `Blob`/object-URL conversion. The fixture uses
-real same-origin HTTP cookie storage and native cookie sending, including cookie
-binding, DELETE clearing, and ticket-only cross-origin authorization; it does not
-expose the HttpOnly cookie to JavaScript. Separate browser frontends use an exact
-configured CORS allowlist. Media
-issuance requires authentication and stream URLs are actor/session-bound, short-lived
-capabilities; logout/session revocation still invalidates them. `SameSite=Lax` cookies
-are not sent cross-site, so cross-origin media uses the bound ticket capability.
-Cleartext HTTP still permits interception or modification of credentials, ticket URLs,
-actions, and media bytes. It is not evidence for real cross-site CHIPS partitioning.
-Edge, Tauri/WebView, Safari, and Firefox remain unqualified.
+Phase 07 delivers the authenticated, purpose-bound media-ticket boundary for
+the unified profile workbench. Each issue, revoke, and media-session logout
+request carries a required UUIDv4 `mediaClientId`. The server namespaces the
+HTTP-compatible `HttpOnly; SameSite=Lax; Path=/api/fs` cookie as
+`damhopper-media-session-<canonical-uuidv4>` without `Secure`; auth cookies
+remain `HttpOnly; SameSite=Strict`.
+
+The browser-host `VideoPreview` integration uses one direct native element,
+credentialed `HEAD` before source exposure, `crossOrigin="use-credentials"`,
+and a separate capability for playback or download. Media issue responses
+declare `authorizationMode: "session-cookie-v2"`. The client does not expose
+the HttpOnly cookie to JavaScript, does not read media into a Blob/object URL,
+and keeps exact-origin ticket-only fallback separate from same-origin cookie
+authorization. The old fixed v1 cookie name is ignored; duplicate selected
+cookies fail closed. Cleartext HTTP can still intercept credentials, ticket
+URLs, actions, and media bytes. Other browser engines and packaged
+Tauri/WebView behavior remain unqualified.
 Browser routing recognizes only the final, case-insensitive extensions `mp4`,
 `m4v`, `webm`, `ogv`, `ogg`, and `mov` (an extension/MIME hint, not codec proof);
 diff tabs retain their dedicated viewer.
@@ -2716,12 +2753,12 @@ sequenceDiagram
     participant E as Explorer and EditorTabs
     participant V as VideoPreview
     participant A as Authenticated ticket API
-    participant S as Session-bound stream API
+    participant S as Ticket-bound stream API
     participant F as ProjectSandbox and file
-    E->>A: POST project, path, and purpose with Bearer auth
+    E->>A: POST target, purpose, mediaClientId with Bearer auth
     A->>F: Resolve sandbox path and stat regular file
     F-->>A: Canonical resource metadata
-    A-->>E: Opaque URL plus HttpOnly media-session cookie
+    A-->>E: Opaque URL plus namespaced HttpOnly cookie
     alt Playback purpose
         E->>V: Open recognized video extension
         V->>S: GET playback URL with optional single Range/If-Range
@@ -2734,49 +2771,56 @@ sequenceDiagram
     F-->>S: Seekable bounded file reader
 ```
 
-`POST /api/fs/video/tickets` stays behind normal authentication. It accepts only
-a configured project, project-relative path, and closed `playback | download`
-purpose. It resolves through the existing `ProjectSandbox`, verifies a regular
-video candidate, and returns a random opaque ticket URL. `DELETE
-/api/fs/video/tickets` revokes a ticket idempotently. The in-memory ticket store
-prunes expired entries and binds each ticket to one canonical project resource,
-one immutable purpose, issuance
-metadata, and the authenticated actor's media session. Tickets are never
-persisted into editor state, browser storage, diagnostics, or logs. Ticket idle
-expiry is 15 minutes; media-session idle expiry is 30 minutes; both have an
-eight-hour absolute expiry. The stream
-must present the matching `damhopper-media-session` cookie (host-only, `HttpOnly`,
-`SameSite=Lax`, `Path=/api/fs`; no `Secure`); ticket-only, foreign-session,
-expired, and revoked requests return indistinguishable `404` responses. Idle TTL
-refreshes only after a fully validated stream response or ticket issuance, never
-past the absolute deadline. `DELETE /api/fs/media-session` requires Bearer
-authentication, clears the cookie, and—when a matching cookie is supplied—revokes
-every ticket in that authenticated actor's session; it returns `204` without
-disclosing absent or foreign session state. Ticket-specific image/video DELETEs
-also require Bearer authentication and remove a ticket only with its matching
-actor/session cookie.
+`POST /api/fs/video/tickets` stays behind normal authentication. It accepts a
+configured project, optional worktree path, closed `playback | download`
+purpose, and required UUIDv4 `mediaClientId`. It resolves through the existing
+`ProjectSandbox`, verifies a regular video candidate, and returns an opaque
+ticket plus `authorizationMode: "session-cookie-v2"`. `DELETE
+/api/fs/video/tickets` accepts the ticket and `mediaClientId` and revokes only a
+matching actor/client binding. The in-memory store prunes expired entries and
+binds each ticket to one resource, immutable purpose, issuance metadata,
+actor, client namespace, session digest, and incarnation. Tickets are never
+persisted into editor state, browser storage, diagnostics, or logs.
+
+Ticket idle expiry is 15 minutes; media-session idle expiry is 30 minutes; both
+have an eight-hour absolute expiry. Stream authorization derives the exact
+cookie name from the stored ticket binding:
+`damhopper-media-session-<canonical-uuidv4>`. A duplicate selected cookie fails
+closed. A missing cookie is accepted only for the exact configured origin's
+ticket-only fallback; absent/untrusted origins and foreign namespaces return
+indistinguishable `404` responses. Idle TTL refreshes only after a fully
+validated stream response or ticket issuance, never past the absolute deadline.
+`DELETE /api/fs/media-session` accepts `{ "mediaClientId": "..." }`, requires
+Bearer authentication, and clears/revokes only that actor/client namespace.
+Ticket-specific image/video DELETEs likewise require Bearer authentication and
+the matching client ID.
 Workspace reinitialization and configuration changes revoke all tickets and
 advance the generation, preventing issuance across a changed context. Session and
 ticket state is process-local; multi-instance deployments require sticky routing
 to the issuing process until a shared store exists. Restart revokes all media state.
 
-During server-profile credential replacement and logout, `ServerSettingsDialog`
-uses this session-revoke endpoint with a five-second bound. An unreachable old
-server falls back to the bounded server-side expiry. If remote revocation
-succeeds but subsequent local token persistence/removal fails, the remote session
-remains revoked intentionally rather than being recreated; a retained/restored
-local login must issue fresh media before it streams.
+During profile credential replacement, logout, removal, and stale preview
+teardown, the browser invokes a captured `RemoteCleanupHandle` with a
+five-second bound. The handle retains the original owner, endpoint,
+credentials, ticket, and `mediaClientId`; it cannot be retargeted by a profile
+switch. An unreachable server falls back to bounded server-side expiry. If
+remote revocation succeeds but local token persistence/removal fails, the
+remote session remains revoked intentionally; a retained/restored login must
+issue fresh media before streaming.
 
 `GET|HEAD /api/fs/video/stream/{ticket}` is authorized by the bound ticket and
-media-session cookie, not by a long-lived credential in the URL. Every request
-revalidates the sandbox path and file identity (size, mtime, and platform identity) before opening
-the file; drift revokes the ticket and returns `410 Gone`. `GET` supports no range
-(`200`) or exactly one checked byte range (`206`, exact `Content-Length` and
-`Content-Range`). Unsatisfiable, malformed, or multi-range requests return `416`
-with `Content-Range: bytes */size`. `HEAD` returns representation metadata without
-reading the body and ignores range selection. `If-Range` is honored only when its
-single ETag or HTTP-date validator matches; otherwise the request safely falls back
-to the full `200` representation.
+the cookie namespace selected from its stored `mediaClientId`, not by a
+long-lived credential or caller-selected namespace in the URL. A duplicate
+selected cookie fails closed. Every request revalidates the sandbox path and
+file identity (size, mtime, and platform identity) before opening the file;
+drift revokes the ticket and returns `410 Gone`. Exact-origin requests may use
+ticket-only fallback; absent or untrusted origins cannot. `GET` supports no
+range (`200`) or exactly one checked byte range (`206`, exact
+`Content-Length` and `Content-Range`). Unsatisfiable, malformed, or
+multi-range requests return `416` with `Content-Range: bytes */size`.
+`HEAD` returns representation metadata without reading the body and ignores
+range selection. `If-Range` is honored only when its single ETag or HTTP-date
+validator matches; otherwise the request safely falls back to full `200`.
 
 Responses set `Accept-Ranges: bytes`, the detected media `Content-Type`, `ETag`,
 `Last-Modified`, and `Cache-Control: private, no-store`. Disposition comes only
@@ -2786,25 +2830,26 @@ ticket. Bodies use an async reader bounded to 128 KiB with Hyper backpressure;
 client disconnect drops the body and file without a detached producer, and no
 filesystem or ticket-store lock is held while streaming.
 
-The backend emits credentialed CORS and preflight headers only for exact configured
-origins. Browser media playback requires an authenticated ticket; the ticket remains
-bound to the issuing actor/session and is revoked with that session. Cleartext
-interception or modification remains a deployment risk.
+The backend emits credentialed CORS and preflight headers only for exact
+configured origins. Browser media playback requires an authenticated ticket;
+the ticket remains bound to the issuing actor and client namespace and is
+revoked with that pair. Cleartext interception or modification remains a
+deployment risk.
 
 The browser host routes recognized video extensions to `VideoPreview` before
-generic binary or large-text tiering. The player requests a fresh playback
-ticket on mount, uses one
-native `<video controls preload="metadata" playsInline>` element, and clears its
-source on tab switch or unmount. Download actions request a separate download
-ticket, then activate a temporary anchor so browser download handling consumes the
-stream directly without `fetch().blob()`. Playback and download can run concurrently
-and expire or revoke independently. Extension and MIME are routing hints only;
-codec failure becomes an actionable unsupported-media state. This validation is
-browser-host-only. Microsoft Edge was not installed and was not substituted with
-Chromium. Packaged Tauri/WebView playback/download, Safari, Firefox, and real
-cross-site CHIPS partition behavior remain unqualified. V1 does
-not add thumbnails, custom controls, Media Source Extensions, HLS/DASH, codec probing,
-or transcoding.
+generic binary or large-text tiering. The player captures its profile
+generation and `mediaClientId`, requests a fresh playback ticket on mount, and
+uses one native `<video controls preload="metadata" playsInline>` element
+with `crossOrigin="use-credentials"`. Teardown pauses, removes `src`, calls
+`load()` to cancel the native request, and then invokes the captured cleanup
+handle. Download actions request a separate download ticket and activate a
+temporary anchor so browser download handling consumes the stream directly
+without `fetch().blob()`; the ticket is not revoked immediately after the
+click because the browser owns that download lifecycle. Playback and download
+can run concurrently and expire or revoke independently. Extension and MIME
+are routing hints only; codec failure becomes an actionable unsupported-media
+state. Other browser engines and packaged Tauri/WebView behavior remain
+unqualified.
 
 Key invariants:
 
@@ -2819,17 +2864,19 @@ Key invariants:
 - Unsupported containers/codecs fail visibly; media never falls back to Bearer URLs
   or a 1–3 GB Blob read.
 
-### Explorer native image preview (Phase 03 release gate complete)
+### Explorer native image preview (Unified workbench Phase 07)
 
-Image preview uses the same bounded, session-bound media-ticket core as video
-while keeping a separate public adapter and contract. The server exposes `POST|DELETE
-/api/fs/image/tickets` and `GET|HEAD /api/fs/image/stream/{ticket}`. Image
-issuance accepts only final, case-insensitive `png`, `jpg`, `jpeg`, `gif`, and
-`webp` extensions and always binds the capability to the fixed `preview`
-purpose. SVG, AVIF, BMP, TIFF, dotfiles, directories, symlink components, FIFOs,
-and traversal paths remain outside the preview surface.
+Image preview uses the same bounded, namespaced media-ticket core as video
+while keeping a separate public adapter and contract. The server exposes
+`POST|DELETE /api/fs/image/tickets` and
+`GET|HEAD /api/fs/image/stream/{ticket}`. Image issue/revoke bodies include the
+required `mediaClientId`; issuance accepts only final, case-insensitive `png`,
+`jpg`, `jpeg`, `gif`, and `webp` extensions and always binds the capability to
+the fixed `preview` purpose. SVG, AVIF, BMP, TIFF, dotfiles, directories,
+symlink components, FIFOs, and traversal paths remain outside the preview
+surface.
 
-The browser flow is session-bound:
+The browser flow is owner and cookie-namespace bound:
 
 ```mermaid
 sequenceDiagram
@@ -2838,22 +2885,23 @@ sequenceDiagram
     participant A as Authenticated image ticket API
     participant S as Ticketed image stream
     participant F as ProjectSandbox and file
-    E->>A: POST project and path with Bearer auth
+    E->>A: POST target, mediaClientId, and path with Bearer auth
     A->>F: Resolve, regular-file check, MIME and version bind
-    A-->>E: Opaque preview URL plus media-session cookie
-    E->>I: Mount one native <img>
-    I->>S: Native GET/HEAD with matching cookie
+    A-->>E: Opaque preview URL plus namespaced HttpOnly cookie
+    E->>I: Credentialed HEAD, then mount one native <img>
+    I->>S: Native GET/HEAD with binding-selected cookie
     S->>F: Revalidate sandbox path and file identity
     S-->>I: Inline image bytes/range response
-    I->>A: Authenticated best-effort DELETE on cleanup
+    I->>A: Captured RemoteCleanupHandle revoke
 ```
 
-`ImagePreview` assigns the opaque URL directly to one native `<img>` and relies
-on browser decoding. It never calls `fsRead`, buffers a response, creates a
-`Blob`, creates an object URL, uses a canvas transform, or exposes a download
-action. Loading, ready, generic error, retry, stale-generation, profile-change,
-and unmount cleanup are explicit lifecycle states; cleanup detaches `src` before
-revoking the capability. The `alt` contract is `Image preview: {fileName}`.
+`ImagePreview` assigns the opaque URL directly to one native `<img>` and
+relies on browser decoding. It never calls `fsRead`, buffers a response,
+creates a `Blob`, creates an object URL, uses a canvas transform, or exposes a
+download action. Loading, ready, generic error, retry, stale-generation,
+profile-change, and unmount cleanup are explicit lifecycle states; cleanup
+removes `src` before invoking the captured handle. The `alt` contract is
+`Image preview: {fileName}`.
 
 The editor assigns an `image` tier before binary/large classification, including
 large or binary-hinted allowlisted images. Open, hydration, save, force-overwrite,
@@ -4649,9 +4697,10 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 **Browser origin:** The backend is same-origin by default. Separate browser
 frontends require exact `DAM_HOPPER_CORS_ORIGINS` entries; wildcard CORS is forbidden.
 Authenticated HTTP binds, including non-loopback binds, are supported. Media ticket
-issuance requires authentication and stream URLs are short-lived actor/session-bound
-capabilities, with expiry, revocation, and file revalidation preserved. HTTP exposes
-Bearer/auth credentials, ticket URLs, API actions, and media bytes to interception or
+issuance requires authentication and stream URLs are short-lived capabilities
+bound to the actor and `mediaClientId`, with namespaced cookies, expiry,
+revocation, and file revalidation preserved. HTTP exposes Bearer/auth credentials,
+ticket URLs, API actions, and media bytes to interception or
 modification; use HTTPS or a trusted encrypted network when needed.
 
 ## Feature Gating: IDE Explorer

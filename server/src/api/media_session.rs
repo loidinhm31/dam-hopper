@@ -1,35 +1,38 @@
 use axum::{
     extract::State,
-    http::{header, HeaderMap, StatusCode},
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
-    Extension,
+    Extension, Json,
 };
+use serde::Deserialize;
 
 use crate::{
     api::auth::AuthenticatedActor,
-    fs::media_session::{clear_media_session_cookie, media_session_from_headers},
+    fs::media_session::{clear_media_session_cookie, MediaClientId},
     state::AppState,
 };
 
-/// Revoke the authenticated caller's current media session and clear its cookie.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RevokeMediaSessionRequest {
+    pub media_client_id: MediaClientId,
+}
+
+/// Revoke the authenticated caller's media session and tickets for the specified client ID.
 pub async fn revoke_current_session(
     State(state): State<AppState>,
     Extension(actor): Extension<AuthenticatedActor>,
-    headers: HeaderMap,
+    Json(request): Json<RevokeMediaSessionRequest>,
 ) -> Response {
-    if let Some(token) = media_session_from_headers(&headers) {
-        state
-            .media_tickets
-            .revoke_session_for_actor(&actor.subject, &token);
-    }
+    state
+        .media_tickets
+        .revoke_sessions_and_tickets_for_client(&actor.subject, &request.media_client_id);
     (
         StatusCode::NO_CONTENT,
-        [(header::SET_COOKIE, clear_media_session_cookie())],
+        [(
+            header::SET_COOKIE,
+            clear_media_session_cookie(&request.media_client_id),
+        )],
     )
         .into_response()
-}
-
-/// Clear the media cookie without inspecting untrusted cookie state.
-pub(crate) fn clear_cookie_header() -> axum::http::HeaderValue {
-    clear_media_session_cookie()
 }

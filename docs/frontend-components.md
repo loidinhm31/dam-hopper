@@ -88,7 +88,6 @@ ambiguous requests are not retried.
 
 See the [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md) for the source map and full contract.
 
-
 ## Host-resource alert presentation
 
 **Locations:** `packages/ui/src/components/organisms/HostResourcePopover.tsx`,
@@ -328,12 +327,41 @@ and `webp` files to the native image preview tier before generic binary or large
 file handling. SVG, AVIF, BMP, TIFF, dotfiles, diff tabs, and video tabs remain
 outside this route; the dedicated diff viewer and video preview keep precedence.
 
-`ImagePreview` issues a protected, preview-only capability and assigns its opaque
-stream URL directly to one native `<img>` with `alt="Image preview: {fileName}"`.
+`ImagePreview` issues a protected, preview-only capability using the captured
+profile/generation owner and its UUIDv4 media client namespace. It assigns the
+opaque stream URL directly to one native `<img>` with
+`alt="Image preview: {fileName}"` after a credentialed `HEAD` probe and
+`crossOrigin="use-credentials"`.
 It does not call `fsRead`, `Response.blob()`, `URL.createObjectURL`, canvas APIs,
 or a download action. Loading, ready, error, retry, stale-ticket, profile-change,
-and unmount cleanup are visible lifecycle states. Cleanup detaches the image
-source before best-effort authenticated ticket revocation.
+and unmount cleanup are visible lifecycle states. Cleanup removes the image
+source before best-effort `RemoteCleanupHandle` revocation; stale async results
+use the original owner/ticket handle rather than the current profile.
+
+### Explorer Video Preview and Direct Download
+
+**Locations:** `packages/ui/src/components/organisms/VideoPreview.tsx`,
+`packages/ui/src/api/video-tickets.ts`, and
+`packages/ui/src/lib/start-video-download.ts`
+
+`VideoPreview` issues a playback-only media ticket for the captured
+profile/generation owner and assigns its opaque URL directly to one native
+`<video>` after a credentialed `HEAD` probe. It sets
+`crossOrigin="use-credentials"` before assigning `src`; it does not read bytes
+through `fsRead`, `Blob`, or `URL.createObjectURL`.
+
+Playback and download are separate capabilities. The download action requests a
+fresh `purpose: "download"` ticket, clicks a temporary hidden anchor, and
+removes the anchor. It does not immediately revoke that ticket because the
+browser owns the download lifecycle; normal ticket/session TTL and explicit
+logout cleanup remain the safety boundary.
+
+On teardown or profile/connection replacement, playback pauses, removes `src`,
+calls `load()` to cancel the native request, and then invokes its captured
+`RemoteCleanupHandle`. Concurrent cleanup is bounded and deduplicated; stale
+async playback results are revoked through the owner that issued them. Browser
+coverage exercises profile isolation, mount/unmount, delayed stale streams, and
+direct playback/download behavior.
 
 Editor open, hydration, save, force-overwrite, reload, and Git reconciliation
 preserve image tabs as preview-only. Legacy persisted image tabs are normalized
@@ -1142,24 +1170,24 @@ Surface](./workflow-context-surface.md) for that contract.
 
 **Locations:**
 
-| Module | Responsibility |
-| --- | --- |
-| `packages/ui/src/lib/workflow-focus.ts` | Shortcut matching, editable/native/Monaco/xterm/dialog suppression, and safe focus restoration. |
-| `packages/ui/src/api/workflow-selectors.ts` | Target filtering, active-item selection, attention aggregation, tree flattening, and factual progress labels. |
-| `packages/ui/src/components/molecules/WorkflowQuickCapture.tsx` | Compact Plan-first item form with optional parent, summary, status, and immediate session start. |
-| `packages/ui/src/components/molecules/WorkflowItemRow.tsx` | Hierarchical row with depth, status icon/color, selection, active-session marker, note/progress copy, and child count. |
-| `packages/ui/src/components/molecules/WorkflowItemList.tsx` | Plan and standalone-Task trees plus selection and New Plan entry point. |
-| `packages/ui/src/components/molecules/WorkflowSelectedItemBar.tsx` | Selected item status/session/child actions, note drafting, note rendering/deletion, and edit entry point. |
-| `packages/ui/src/components/molecules/WorkflowSelectedItemEditForm.tsx` | Inline title/summary editor with trim, blank-title guard, Save/Cancel, and keyboard shortcuts. |
-| `packages/ui/src/components/molecules/WorkflowSelectedItemNotesList.tsx` | Ordered, independently scrollable note list with timestamps and note-scoped deletion. |
-| `packages/ui/src/components/molecules/WorkflowSessionCard.tsx` | Running/past session details, duration, manual end/abandon controls, links, and suggested end-time review. |
-| `packages/ui/src/components/molecules/WorkflowExecutionList.tsx` | Start/end session controls and manual Agent Harness/Agent Run linking. |
-| `packages/ui/src/components/molecules/WorkflowProjectList.tsx` | Project/worktree target switcher with plan, task, and running-session counts. |
-| `packages/ui/src/components/organisms/WorkflowContextRibbon.tsx` | Compact ambient summary with loading, retry, status, duration, progress, and live-region output. |
-| `packages/ui/src/components/organisms/WorkflowContextDeck.tsx` | Non-modal desktop context region with project, item, quick-capture, and execution panes. |
-| `packages/ui/src/components/organisms/WorkflowContextSheet.tsx` | Mobile bottom Dialog with Projects, Plans & Work, and Execution segments. |
-| `packages/ui/src/components/organisms/WorkflowContextSurface.tsx` | Top-level overview query, selectors, timer, keyboard handling, and deck/sheet orchestration. |
-| `packages/ui/src/hooks/use-workflow-surface-actions.ts` | Request-ID-bearing workflow mutation callbacks used by the surface. |
+| Module                                                                   | Responsibility                                                                                                         |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `packages/ui/src/lib/workflow-focus.ts`                                  | Shortcut matching, editable/native/Monaco/xterm/dialog suppression, and safe focus restoration.                        |
+| `packages/ui/src/api/workflow-selectors.ts`                              | Target filtering, active-item selection, attention aggregation, tree flattening, and factual progress labels.          |
+| `packages/ui/src/components/molecules/WorkflowQuickCapture.tsx`          | Compact Plan-first item form with optional parent, summary, status, and immediate session start.                       |
+| `packages/ui/src/components/molecules/WorkflowItemRow.tsx`               | Hierarchical row with depth, status icon/color, selection, active-session marker, note/progress copy, and child count. |
+| `packages/ui/src/components/molecules/WorkflowItemList.tsx`              | Plan and standalone-Task trees plus selection and New Plan entry point.                                                |
+| `packages/ui/src/components/molecules/WorkflowSelectedItemBar.tsx`       | Selected item status/session/child actions, note drafting, note rendering/deletion, and edit entry point.              |
+| `packages/ui/src/components/molecules/WorkflowSelectedItemEditForm.tsx`  | Inline title/summary editor with trim, blank-title guard, Save/Cancel, and keyboard shortcuts.                         |
+| `packages/ui/src/components/molecules/WorkflowSelectedItemNotesList.tsx` | Ordered, independently scrollable note list with timestamps and note-scoped deletion.                                  |
+| `packages/ui/src/components/molecules/WorkflowSessionCard.tsx`           | Running/past session details, duration, manual end/abandon controls, links, and suggested end-time review.             |
+| `packages/ui/src/components/molecules/WorkflowExecutionList.tsx`         | Start/end session controls and manual Agent Harness/Agent Run linking.                                                 |
+| `packages/ui/src/components/molecules/WorkflowProjectList.tsx`           | Project/worktree target switcher with plan, task, and running-session counts.                                          |
+| `packages/ui/src/components/organisms/WorkflowContextRibbon.tsx`         | Compact ambient summary with loading, retry, status, duration, progress, and live-region output.                       |
+| `packages/ui/src/components/organisms/WorkflowContextDeck.tsx`           | Non-modal desktop context region with project, item, quick-capture, and execution panes.                               |
+| `packages/ui/src/components/organisms/WorkflowContextSheet.tsx`          | Mobile bottom Dialog with Projects, Plans & Work, and Execution segments.                                              |
+| `packages/ui/src/components/organisms/WorkflowContextSurface.tsx`        | Top-level overview query, selectors, timer, keyboard handling, and deck/sheet orchestration.                           |
+| `packages/ui/src/hooks/use-workflow-surface-actions.ts`                  | Request-ID-bearing workflow mutation callbacks used by the surface.                                                    |
 
 ### WorkspacePage and shell integration (Phase 06)
 
@@ -1388,6 +1416,7 @@ policy, handshake/load-error UX, and CSP framing guidance.
 - [Configuration Guide](./configuration-guide.md)
 
 - [Native Browser Debug Support](./native-browser-debug-support.md)
+- [Phase 07 Media Isolation and Encryption](./phase-07-media-isolation-and-encryption.md)
 
 ## Shared design-system and embedding contract
 
@@ -1400,6 +1429,12 @@ and diagnostics.
 Use semantic dark tokens from `index.css`, JetBrains Mono, safe-area/layout
 utilities, and Radix wrappers for interactive primitives. Preserve keyboard
 focus rings, live-region announcements, and 44px compact controls. `Encrypt`
-is per-project, memory-only OPAQUE session material; never persist passphrases
-or content. Browser Debug keeps one host alive across shell changes; native
-geometry uses raw rendered bounds and mirrored app zoom.
+stores owner-qualified, memory-only OPAQUE session material under
+`profileId@generation:project`; same-named projects on two profiles never share
+passphrases or AES keys. Prompts are queued with explicit profile/project
+labels and exact-key duplicates join the existing request. Disabling encryption
+or retiring a connection clears passphrases and zeroes mutable key buffers.
+Encrypted writes use one captured `WsTransport` for OPAQUE, WebCrypto, and the
+final filesystem operation, with freshness fences and no plaintext fallback.
+Browser Debug keeps one host alive across shell changes; native geometry uses
+raw rendered bounds and mirrored app zoom.

@@ -20,6 +20,7 @@ vi.mock("@/api/connections.js", () => ({
   connectProfile: mockConnectProfile,
   disconnectProfile: mockDisconnectProfile,
   removeProfileConnection: mockRemoveProfileConnection,
+  getMediaClientIdForProfile: vi.fn(() => "test-media-client-id"),
   subscribeConnections: vi.fn(() => () => {}),
   getConnectionSnapshot: vi.fn((profileId: string) => {
     if (profileId === "profile-live") {
@@ -124,6 +125,7 @@ describe("ServerProfilesDialog", () => {
     expect(revokeCurrentMediaSession).toHaveBeenCalledWith(
       "https://deleted.test",
       "deleted-token",
+      expect.anything(),
     );
     expect(mockRemoveProfileConnection).toHaveBeenCalledWith("profile-b");
     expect(getProfiles().map((profile) => profile.id)).toEqual(["profile-a"]);
@@ -166,6 +168,7 @@ describe("ServerProfilesDialog", () => {
     expect(revokeCurrentMediaSession).toHaveBeenCalledWith(
       "https://logout.test",
       "logout-token",
+      expect.anything(),
     );
     expect(getAuthToken(profileA.id)).toBeNull();
     expect(mockDisconnectProfile).toHaveBeenCalledWith("profile-a");

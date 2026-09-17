@@ -4,7 +4,6 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
-use axum_extra::extract::CookieJar;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -12,7 +11,10 @@ use crate::{
     error::AppError,
     fs::{
         is_supported_video,
-        media_session::{media_session_cookie, MediaSessionToken, MEDIA_SESSION_COOKIE},
+        media_session::{
+            media_session_cookie, media_session_from_headers_for_client, HeaderCookieParseResult,
+            MediaClientId,
+        },
         MediaTicketKind, VideoTicketIssue, VideoTicketPurpose, VideoTicketRecord,
     },
     state::AppState,
@@ -29,12 +31,14 @@ pub struct IssueVideoTicketRequest {
     pub worktree_path: Option<String>,
     pub path: String,
     pub purpose: VideoTicketPurpose,
+    pub media_client_id: MediaClientId,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RevokeVideoTicketRequest {
     pub ticket: String,
+    pub media_client_id: MediaClientId,
 }
 
 #[derive(Serialize)]
@@ -50,7 +54,7 @@ pub struct IssueVideoTicketResponse {
 pub async fn issue_ticket(
     State(state): State<AppState>,
     Extension(actor): Extension<AuthenticatedActor>,
-    jar: CookieJar,
+    headers: HeaderMap,
     Json(request): Json<IssueVideoTicketRequest>,
 ) -> Result<Response, ApiError> {
     let _workspace_context = state.workspace_context_guard.read().await;
@@ -92,12 +96,19 @@ pub async fn issue_ticket(
             .to_owned(),
         filename,
     };
-    let existing = jar
-        .get(MEDIA_SESSION_COOKIE)
-        .and_then(|cookie| MediaSessionToken::from_cookie_value(cookie.value()));
+    let existing = match media_session_from_headers_for_client(&headers, &request.media_client_id) {
+        HeaderCookieParseResult::Found(token) => Some(token),
+        HeaderCookieParseResult::None => None,
+        HeaderCookieParseResult::Duplicate => {
+            return Err(ApiError::from(AppError::InvalidInput(
+                "duplicate media session cookie".into(),
+            )));
+        }
+    };
     let (lease, session) = match state.video_stream_tickets.issue_bound(
         expected_generation,
         &actor.subject,
+        &request.media_client_id,
         existing,
         record,
     ) {
@@ -122,7 +133,7 @@ pub async fn issue_ticket(
             ticket: lease.ticket,
             expires_at: lease.expires_at_epoch_ms,
             purpose: lease.purpose,
-            authorization_mode: "session-cookie-v1",
+            authorization_mode: "session-cookie-v2",
         }),
     )
         .into_response())
@@ -131,18 +142,12 @@ pub async fn issue_ticket(
 pub async fn revoke_ticket(
     State(state): State<AppState>,
     Extension(actor): Extension<AuthenticatedActor>,
-    jar: CookieJar,
     Json(request): Json<RevokeVideoTicketRequest>,
 ) -> StatusCode {
     let _workspace_context = state.workspace_context_guard.read().await;
-    if let Some(token) = jar
-        .get(MEDIA_SESSION_COOKIE)
-        .and_then(|cookie| MediaSessionToken::from_cookie_value(cookie.value()))
-    {
-        state
-            .video_stream_tickets
-            .revoke_bound(&request.ticket, &actor.subject, &token);
-    }
+    state
+        .video_stream_tickets
+        .revoke_bound(&request.ticket, &actor.subject, &request.media_client_id);
     StatusCode::NO_CONTENT
 }
 

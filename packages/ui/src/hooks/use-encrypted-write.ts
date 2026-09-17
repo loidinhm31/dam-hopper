@@ -18,21 +18,28 @@
  */
 import { useCallback, useRef, useState } from "react";
 import { getTransport } from "@/api/transport.js";
+import {
+  captureConnection,
+  getConnectionSnapshot,
+  getTransport as getConnectionsTransport,
+  isCurrentConnection,
+} from "@/api/connections.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import {
   opaqueRegisterAndLogin,
   type OpaqueSessionResult,
 } from "@/lib/opaque-session.js";
 import { encryptFile, encryptText } from "@/lib/crypto.js";
-import { useEncryptMode } from "@/contexts/EncryptContext.js";
+import { toEncryptKey, useEncryptMode } from "@/contexts/EncryptContext.js";
 import {
   isProjectTargetError,
   normalizeProjectTarget,
+  type ConnectionRef,
   type ProjectTargetInput,
+  type ProjectTargetRef,
 } from "@/api/client.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
-
 export type EncryptedWriteStatus =
   | "idle"
   | "authenticating"
@@ -55,6 +62,7 @@ export interface UseEncryptedWriteReturn {
     file: File,
     passphrase: string,
     onProgress?: (pct: number) => void,
+    explicitOwner?: ConnectionRef,
   ) => Promise<EncryptedUploadResult>;
 
   /** Save encrypted text content to the given path. */
@@ -63,6 +71,7 @@ export interface UseEncryptedWriteReturn {
     path: string,
     text: string,
     passphrase: string,
+    explicitOwner?: ConnectionRef,
   ) => Promise<EncryptedUploadResult>;
 
   status: EncryptedWriteStatus;
@@ -71,14 +80,13 @@ export interface UseEncryptedWriteReturn {
 }
 
 /**
- * Build a deterministic OPAQUE identifier scoped to this project.
- * Deterministic per project name — the in-memory ephemeral server model
- * re-registers each session, so no per-page-load uniqueness is needed.
+ * Build a collision-free OPAQUE identifier scoped to this project and handshake.
  */
-function buildIdentifier(project: string): string {
-  return `enc-${project.replace(/[^a-z0-9]/gi, "-").slice(0, 32)}`;
+function buildCollisionFreeIdentifier(project: string): string {
+  const sanitized = project.replace(/[^a-z0-9]/gi, "-").slice(0, 20);
+  const randomSuffix = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+  return `enc-${sanitized}-${randomSuffix}`;
 }
-
 function isTargetUnavailableError(error: unknown): boolean {
   const code =
     error && typeof error === "object" && "code" in error
@@ -93,45 +101,91 @@ function isTargetUnavailableError(error: unknown): boolean {
 export function useEncryptedWrite(): UseEncryptedWriteReturn {
   const [status, setStatus] = useState<EncryptedWriteStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const operationRevisionRef = useRef(0);
 
   // Session cache lives in EncryptContext so disable-Lock evicts it atomically
-  const { getSession, setSession, clearSession, clearPassphrase } =
-    useEncryptMode();
+  const {
+    getSession,
+    setSession,
+    clearSession,
+    clearPassphrase,
+    isEncryptEnabled,
+  } = useEncryptMode();
 
-  // In-flight dedup: if an OPAQUE handshake is already running for this project, join it
+  // In-flight dedup: if an OPAQUE handshake is already running for this owner+project, join it
   const sessionInflightRef = useRef<Map<string, Promise<OpaqueSessionResult>>>(
     new Map(),
   );
 
+  function resolveOwnerAndTransport(
+    targetRef: ProjectTargetRef,
+    explicitOwner?: ConnectionRef,
+  ): { owner?: ConnectionRef; transport: WsTransport } {
+    let owner: ConnectionRef | undefined = explicitOwner;
+    if (!owner && targetRef.profileId) {
+      try {
+        owner = captureConnection(targetRef.profileId);
+      } catch {
+        const snap = getConnectionSnapshot(targetRef.profileId);
+        owner = snap?.owner;
+      }
+    }
+    const transport = (
+      owner ? getConnectionsTransport(owner) : getTransport()
+    ) as WsTransport;
+    return { owner, transport };
+  }
+
   const getOrCreateSession = useCallback(
     async (
-      project: string,
+      transport: WsTransport,
+      owner: ConnectionRef | undefined,
+      targetRef: ProjectTargetRef,
       passphrase: string,
+      expectedRevision: number,
     ): Promise<OpaqueSessionResult> => {
-      const cached = getSession(project);
+      const project = targetRef.project;
+      const cached = getSession(project, owner);
       if (cached) return cached;
 
-      const inflight = sessionInflightRef.current.get(project);
+      const key = toEncryptKey(targetRef, owner);
+      const inflight = sessionInflightRef.current.get(key);
       if (inflight) return inflight;
 
       setStatus("authenticating");
-      const transport = getTransport() as WsTransport;
-      const identifier = buildIdentifier(project);
+      const identifier = buildCollisionFreeIdentifier(project);
 
       const promise = opaqueRegisterAndLogin(transport, identifier, passphrase)
         .then((session) => {
-          setSession(project, session);
-          clearPassphrase(project); // passphrase no longer needed — AES key cached in session
+          // Freshness checks: operation cancelled, connection changed, or lock disabled
+          if (
+            operationRevisionRef.current !== expectedRevision ||
+            (owner && !isCurrentConnection(owner)) ||
+            !isEncryptEnabled(project, owner)
+          ) {
+            if (session.aesKey && session.aesKey.buffer) {
+              try {
+                new Uint8Array(session.aesKey.buffer).fill(0);
+              } catch {
+                // Ignore buffer zero error
+              }
+            }
+            throw new Error(
+              "Encrypted write cancelled or connection changed during authentication",
+            );
+          }
+          setSession(project, session, owner);
+          clearPassphrase(project, owner);
           return session;
         })
         .finally(() => {
-          sessionInflightRef.current.delete(project);
+          sessionInflightRef.current.delete(key);
         });
 
-      sessionInflightRef.current.set(project, promise);
+      sessionInflightRef.current.set(key, promise);
       return promise;
     },
-    [getSession, setSession, clearPassphrase],
+    [getSession, setSession, clearPassphrase, isEncryptEnabled],
   );
 
   const uploadFile = useCallback(
@@ -141,25 +195,50 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
       file: File,
       passphrase: string,
       onProgress?: (pct: number) => void,
+      explicitOwner?: ConnectionRef,
     ): Promise<EncryptedUploadResult> => {
       const targetRef = normalizeProjectTarget(target);
       const project = targetRef.project;
       setError(null);
+      const { owner, transport } = resolveOwnerAndTransport(
+        targetRef,
+        explicitOwner,
+      );
+      const revision = ++operationRevisionRef.current;
+
       try {
-        const session = await getOrCreateSession(project, passphrase);
+        const session = await getOrCreateSession(
+          transport,
+          owner,
+          targetRef,
+          passphrase,
+          revision,
+        );
+
+        if (
+          operationRevisionRef.current !== revision ||
+          (owner && !isCurrentConnection(owner)) ||
+          !isEncryptEnabled(project, owner)
+        ) {
+          throw new Error("Encrypted upload cancelled or connection changed");
+        }
 
         setStatus("encrypting");
-        // encryptFile zeroes the exportKey — we must clone for each call
         const { blob } = await encryptFile(
           file,
           new Uint8Array(session.aesKey),
         );
 
-        setStatus("uploading");
-        const transport = getTransport() as WsTransport;
-        const uploadId = crypto.randomUUID();
+        if (
+          operationRevisionRef.current !== revision ||
+          (owner && !isCurrentConnection(owner)) ||
+          !isEncryptEnabled(project, owner)
+        ) {
+          throw new Error("Encrypted upload cancelled or connection changed");
+        }
 
-        // fsPutFile expects a File, but we have a Blob — wrap it
+        setStatus("uploading");
+        const uploadId = crypto.randomUUID();
         const encFile = new File([blob], file.name, {
           type: "application/octet-stream",
         });
@@ -193,11 +272,11 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         }
         setStatus("error");
         setError(msg);
-        clearSession(project);
+        clearSession(project, owner);
         return { ok: false, error: msg };
       }
     },
-    [getOrCreateSession, clearSession],
+    [getOrCreateSession, clearSession, isEncryptEnabled],
   );
 
   const saveText = useCallback(
@@ -206,24 +285,50 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
       path: string,
       text: string,
       passphrase: string,
+      explicitOwner?: ConnectionRef,
     ): Promise<EncryptedUploadResult> => {
       const targetRef = normalizeProjectTarget(target);
       const project = targetRef.project;
       setError(null);
+      const { owner, transport } = resolveOwnerAndTransport(
+        targetRef,
+        explicitOwner,
+      );
+      const revision = ++operationRevisionRef.current;
+
       try {
-        const session = await getOrCreateSession(project, passphrase);
+        const session = await getOrCreateSession(
+          transport,
+          owner,
+          targetRef,
+          passphrase,
+          revision,
+        );
+
+        if (
+          operationRevisionRef.current !== revision ||
+          (owner && !isCurrentConnection(owner)) ||
+          !isEncryptEnabled(project, owner)
+        ) {
+          throw new Error("Encrypted save cancelled or connection changed");
+        }
 
         setStatus("encrypting");
-        // encryptText zeroes the exportKey — clone for each call
         const { blob } = await encryptText(
           text,
           path,
           new Uint8Array(session.aesKey),
         );
 
-        setStatus("uploading");
-        const transport = getTransport() as WsTransport;
+        if (
+          operationRevisionRef.current !== revision ||
+          (owner && !isCurrentConnection(owner)) ||
+          !isEncryptEnabled(project, owner)
+        ) {
+          throw new Error("Encrypted save cancelled or connection changed");
+        }
 
+        setStatus("uploading");
         const result = await transport.fsPutSave(
           targetRef,
           path,
@@ -251,11 +356,11 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         }
         setStatus("error");
         setError(msg);
-        clearSession(project);
+        clearSession(project, owner);
         return { ok: false, error: msg };
       }
     },
-    [getOrCreateSession, clearSession],
+    [getOrCreateSession, clearSession, isEncryptEnabled],
   );
 
   const resetError = useCallback(() => {

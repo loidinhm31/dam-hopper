@@ -1,4 +1,6 @@
-export const MEDIA_SESSION_AUTHORIZATION_MODE = "session-cookie-v1";
+import type { ConnectionRef } from "./ownership.js";
+
+export const MEDIA_SESSION_AUTHORIZATION_MODE = "session-cookie-v2";
 
 export type MediaSessionErrorCode = string;
 
@@ -7,6 +9,47 @@ export class MediaSessionError extends Error {
     super(`Media session error: ${code}`);
     this.name = "MediaSessionError";
   }
+}
+
+export interface RemoteCleanupHandle {
+  readonly owner: ConnectionRef;
+  readonly resourceId: string;
+  readonly cleanup: () => Promise<void>;
+  readonly isRetired: () => boolean;
+}
+
+export function createRemoteCleanupHandle(
+  owner: ConnectionRef,
+  resourceId: string,
+  cleanupFn: (signal: AbortSignal) => Promise<void>,
+): RemoteCleanupHandle {
+  let retired = false;
+  let inFlight: Promise<void> | null = null;
+
+  return {
+    owner,
+    resourceId,
+    isRetired: () => retired,
+    cleanup: async () => {
+      if (retired) return;
+      if (inFlight) return inFlight;
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5_000);
+      inFlight = (async () => {
+        try {
+          await cleanupFn(controller.signal);
+        } catch {
+          // Bounded best-effort: server TTL provides ultimate safety
+        } finally {
+          clearTimeout(timeout);
+          retired = true;
+          inFlight = null;
+        }
+      })();
+      return inFlight;
+    },
+  };
 }
 
 function fail(code: MediaSessionErrorCode): never {
@@ -99,7 +142,9 @@ export async function probeMediaTicket(
 export async function revokeCurrentMediaSession(
   serverOrigin: string,
   authToken: string,
+  mediaClientId?: string | null,
 ): Promise<void> {
+  if (!mediaClientId) return;
   try {
     const protocol = new URL(serverOrigin).protocol;
     if (protocol !== "http:" && protocol !== "https:") return;
@@ -112,7 +157,11 @@ export async function revokeCurrentMediaSession(
     await fetch(`${serverOrigin}/api/fs/media-session`, {
       method: "DELETE",
       credentials: "include",
-      headers: { Authorization: `Bearer ${authToken}` },
+      headers: {
+        "Content-Type": "application/json",
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+      body: JSON.stringify({ mediaClientId }),
       signal: controller.signal,
     });
   } catch {

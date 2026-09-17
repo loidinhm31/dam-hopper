@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 2,008
-files, 4,478,624 tokens, 18,632,694 characters; five security-flagged files
+**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 2,013
+files, 4,499,104 tokens, 18,723,489 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -56,7 +56,6 @@ configuration, PTYs, workflow/usage history, and remote data remain
 server-authoritative. The unified-profile backend-workspace proposal below is
 not part of this implementation.
 
-
 ## Unified-profile files, editor, search, and Git (Phase 03)
 
 Phase 03 completes the profile-qualified IDE workbench. The browser target is
@@ -64,16 +63,16 @@ Phase 03 completes the profile-qualified IDE workbench. The browser target is
 the server wire target `{ project, worktreePath? }` only after checking the
 captured connection owner. Root and registered worktree targets remain distinct.
 
-| Area | Source boundary | Invariant |
-| --- | --- | --- |
-| Target selection | `stores/project-target.ts` | A missing or prunable worktree is unavailable; requests do not fall back silently. |
-| Editor models | `stores/editor.ts`, `components/organisms/MonacoHost.tsx` | Tab/model keys and in-memory Monaco URIs include profile and target scope. |
-| File tree/watchers | `stores/explorer-tree.ts`, `hooks/use-fs-subscription.ts` | Tree state, events, language scans, and invalidations are target-scoped. |
-| CRUD/upload | `hooks/use-fs-ops.ts`, `hooks/use-fs-upload.ts`, `api/ws-transport.ts` | CRUD, mtime-guarded writes, and acknowledged chunk uploads use the owning transport. |
-| Bounded previews | `components/organisms/LargeFileViewer.tsx`, image/video ticket clients | Large files use read-only 64 KiB range reads; media previews use scoped capabilities. |
-| Federated search | `hooks/use-file-search.ts`, `components/organisms/SearchPanel.tsx` | Project-target and all-connected-profile scopes preserve origin metadata and cap aggregate results at 500. |
-| Search replace | `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts` | Replacement captures the match target; dirty tabs are isolated by profile/project/worktree/path. |
-| Git retry | `hooks/use-git-with-ssh-retry.ts`, `api/queries.ts` | Authentication retry retains successful results and retries only failed targets after owner validation. |
+| Area               | Source boundary                                                        | Invariant                                                                                                  |
+| ------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Target selection   | `stores/project-target.ts`                                             | A missing or prunable worktree is unavailable; requests do not fall back silently.                         |
+| Editor models      | `stores/editor.ts`, `components/organisms/MonacoHost.tsx`              | Tab/model keys and in-memory Monaco URIs include profile and target scope.                                 |
+| File tree/watchers | `stores/explorer-tree.ts`, `hooks/use-fs-subscription.ts`              | Tree state, events, language scans, and invalidations are target-scoped.                                   |
+| CRUD/upload        | `hooks/use-fs-ops.ts`, `hooks/use-fs-upload.ts`, `api/ws-transport.ts` | CRUD, mtime-guarded writes, and acknowledged chunk uploads use the owning transport.                       |
+| Bounded previews   | `components/organisms/LargeFileViewer.tsx`, image/video ticket clients | Large files use read-only 64 KiB range reads; media previews use scoped capabilities.                      |
+| Federated search   | `hooks/use-file-search.ts`, `components/organisms/SearchPanel.tsx`     | Project-target and all-connected-profile scopes preserve origin metadata and cap aggregate results at 500. |
+| Search replace     | `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts`      | Replacement captures the match target; dirty tabs are isolated by profile/project/worktree/path.           |
+| Git retry          | `hooks/use-git-with-ssh-retry.ts`, `api/queries.ts`                    | Authentication retry retains successful results and retries only failed targets after owner validation.    |
 
 Filesystem `fs:event` handling updates or refetches only the matching target.
 Clean editor tabs reload after external/Git mutations; dirty tabs preserve local
@@ -101,14 +100,14 @@ list, activity tracker, incarnation fence, and terminal layout tree consume
 those qualified keys. Raw session IDs remain compatibility aliases only when
 unambiguous.
 
-| Boundary | Source modules | Contract |
-| --- | --- | --- |
-| Registry and lifetime | `terminal-registry.ts`, `terminal-incarnation-state.ts`, `terminal-mounted-sessions.ts`, `TerminalKeepAliveHost.tsx` | Register, attach, remove, and preserve sessions by profile plus session ID; reject stale incarnations. |
-| Owner transport | `api/client.ts`, `api/queries.ts`, `hooks/use-terminal-manager.ts` | Capture profile/generation and route terminal operations through the owning API client/transport. |
-| Layout and pins | `terminal-layout-tree.ts`, `use-terminal-layout.ts`, `traditional-terminal-projects.ts`, `terminal-pin-persistence.ts` | `terminal-layout:v3` keys owner/group state with payload v2; `terminal-pins:v2` partitions IDs by profile. |
-| Local history | `command-history.ts` | Persist `{ version: 3, entries }`; salt IDs with profile where supplied and keep exact command text local. |
-| Workflow navigation | `workflow-queries.ts`, `workflow-workspace-integration.ts`, `terminal-notification-navigation.ts` | Qualify query keys and reveal targets; reject missing, cross-profile, or incarnation-mismatched links. |
-| Diagnostics and reset | `diagnostics-export.ts`, `diagnostics-client.ts`, `fresh-state-reset.ts` | Filter exports by profile/terminal IDs, bound terminal tails, and remove only unqualified legacy stores. |
+| Boundary              | Source modules                                                                                                         | Contract                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Registry and lifetime | `terminal-registry.ts`, `terminal-incarnation-state.ts`, `terminal-mounted-sessions.ts`, `TerminalKeepAliveHost.tsx`   | Register, attach, remove, and preserve sessions by profile plus session ID; reject stale incarnations.     |
+| Owner transport       | `api/client.ts`, `api/queries.ts`, `hooks/use-terminal-manager.ts`                                                     | Capture profile/generation and route terminal operations through the owning API client/transport.          |
+| Layout and pins       | `terminal-layout-tree.ts`, `use-terminal-layout.ts`, `traditional-terminal-projects.ts`, `terminal-pin-persistence.ts` | `terminal-layout:v3` keys owner/group state with payload v2; `terminal-pins:v2` partitions IDs by profile. |
+| Local history         | `command-history.ts`                                                                                                   | Persist `{ version: 3, entries }`; salt IDs with profile where supplied and keep exact command text local. |
+| Workflow navigation   | `workflow-queries.ts`, `workflow-workspace-integration.ts`, `terminal-notification-navigation.ts`                      | Qualify query keys and reveal targets; reject missing, cross-profile, or incarnation-mismatched links.     |
+| Diagnostics and reset | `diagnostics-export.ts`, `diagnostics-client.ts`, `fresh-state-reset.ts`                                               | Filter exports by profile/terminal IDs, bound terminal tails, and remove only unqualified legacy stores.   |
 
 The focused contract suite is
 `packages/ui/src/lib/terminal-continuity-unified-profile.test.ts`; the full
@@ -127,17 +126,17 @@ catalogs, projects, PTYs, tunnels, and artifact files server-local; the
 frontend never merges same-named data or routes a delayed operation through the
 active profile.
 
-| Boundary | Source modules | Contract |
-| --- | --- | --- |
-| Agent Store owner | `components/pages/AgentStorePage.tsx`, `api/queries.ts`, `api/client.ts` | Explicit profile selector; owner/generation-qualified catalog, project, matrix, health, memory, and import operations. |
-| Memory draft | `components/organisms/MemoryEditor.tsx` | Draft identity `{ profileId, projectName, agent }`; clean-only refresh; dirty content cannot be replaced by another target. |
-| Import lifecycle | `components/organisms/ImportDialog.tsx` | Opening owner binds server `tmpDir`/local path; `scanRevision` rejects late results; profile change closes stale dialogs. |
-| Port aggregation | `hooks/use-ports.ts`, `hooks/use-tunnels.ts` | Detected identity `(profileId, port, terminalId, incarnation)`; tunnel identity `(profileId, tunnelId)`; equal numbers remain distinct. |
-| Browser target | `hooks/use-browser-debug.ts`, `lib/browser-debug-origin.ts` | Target carries owner, exact origin/source, optional tunnel, and revision; only loopback or ready owner-local tunnel origins are trusted. |
-| Handoff pipeline | `components/pages/WorkspacePage.tsx`, `lib/browser-terminal-handoff.ts` | Same-profile mounted/live terminal only; owner, target revision, and terminal incarnation rechecked after each await. |
-| Artifact admission | `server/src/api/browser_debug.rs`, `server/src/browser_debug/store.rs` | Required `terminalIncarnation`, private expiring metadata, one claim, structured mismatch conflict. |
-| PTY admission | `server/src/pty/manager.rs` | `write_if_incarnation` keeps lookup/check/input-revision/write under one lock and rolls back failed writes. |
-| Feature availability | `hooks/use-feature-flag.ts` | Owner-local `unknown`/`loading`/`available`/`unavailable` state derived from the selected connection snapshot. |
+| Boundary             | Source modules                                                           | Contract                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent Store owner    | `components/pages/AgentStorePage.tsx`, `api/queries.ts`, `api/client.ts` | Explicit profile selector; owner/generation-qualified catalog, project, matrix, health, memory, and import operations.                   |
+| Memory draft         | `components/organisms/MemoryEditor.tsx`                                  | Draft identity `{ profileId, projectName, agent }`; clean-only refresh; dirty content cannot be replaced by another target.              |
+| Import lifecycle     | `components/organisms/ImportDialog.tsx`                                  | Opening owner binds server `tmpDir`/local path; `scanRevision` rejects late results; profile change closes stale dialogs.                |
+| Port aggregation     | `hooks/use-ports.ts`, `hooks/use-tunnels.ts`                             | Detected identity `(profileId, port, terminalId, incarnation)`; tunnel identity `(profileId, tunnelId)`; equal numbers remain distinct.  |
+| Browser target       | `hooks/use-browser-debug.ts`, `lib/browser-debug-origin.ts`              | Target carries owner, exact origin/source, optional tunnel, and revision; only loopback or ready owner-local tunnel origins are trusted. |
+| Handoff pipeline     | `components/pages/WorkspacePage.tsx`, `lib/browser-terminal-handoff.ts`  | Same-profile mounted/live terminal only; owner, target revision, and terminal incarnation rechecked after each await.                    |
+| Artifact admission   | `server/src/api/browser_debug.rs`, `server/src/browser_debug/store.rs`   | Required `terminalIncarnation`, private expiring metadata, one claim, structured mismatch conflict.                                      |
+| PTY admission        | `server/src/pty/manager.rs`                                              | `write_if_incarnation` keeps lookup/check/input-revision/write under one lock and rolls back failed writes.                              |
+| Feature availability | `hooks/use-feature-flag.ts`                                              | Owner-local `unknown`/`loading`/`available`/`unavailable` state derived from the selected connection snapshot.                           |
 
 The Browser handoff sequence captures `{ profileId, generation }`, target
 revision, and `TerminalInstanceRef` before artifact creation. It rejects a
@@ -165,13 +164,13 @@ target and from project/Browser selection. Server configuration, Codex usage,
 host metrics, idle-suspend state, fleet counts, revisions, and resource IDs
 remain local to their owning profile.
 
-| Boundary | Source modules | Contract |
-| --- | --- | --- |
-| Preference source | `stores/settings.ts`, `stores/workbench-selections.ts` | Allowlisted UI state hydrates through captured `{ profileId, generation }`; debounced writes bind the original client/source/edit revision; unavailable or removed sources keep a safe snapshot. |
-| Settings target | `components/pages/SettingsPage.tsx`, `settings-page/*`, `GlobalConfigEditor.tsx`, `ConfigEditor.tsx` | Global/workspace config, maintenance, import/export, usage setup, and idle-suspend timing receive explicit target owner; import rejects target/generation drift before dispatch. |
-| Owner-qualified queries | `api/queries.ts`, `api/client.ts`, `hooks/use-sse.ts` | Usage, host metrics/snapshots/alerts, idle-suspend, config, and invalidation keys use `profileQueryKey(owner, ...)`; events patch only the event owner's cache. |
-| Usage surface | `components/pages/UsagePage.tsx`, `components/usage/*` | URL `profileId` selects the owner; summary/session/health/setup/delete operations remain profile-local; visible session views poll at 15 seconds. |
-| Host presentation | `HostResourcePopover.tsx`, `HostIdleSuspendStatus.tsx`, `ForceSleepDialog.tsx`, `use-host-resource-alert-presentation.ts` | Pinned mount is owner-local presentation state; incidents are keyed by `incidentId`; unread state is partitioned by profile; destructive host intent captures generation/revision and never replays ambiguity. |
+| Boundary                | Source modules                                                                                                            | Contract                                                                                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Preference source       | `stores/settings.ts`, `stores/workbench-selections.ts`                                                                    | Allowlisted UI state hydrates through captured `{ profileId, generation }`; debounced writes bind the original client/source/edit revision; unavailable or removed sources keep a safe snapshot.               |
+| Settings target         | `components/pages/SettingsPage.tsx`, `settings-page/*`, `GlobalConfigEditor.tsx`, `ConfigEditor.tsx`                      | Global/workspace config, maintenance, import/export, usage setup, and idle-suspend timing receive explicit target owner; import rejects target/generation drift before dispatch.                               |
+| Owner-qualified queries | `api/queries.ts`, `api/client.ts`, `hooks/use-sse.ts`                                                                     | Usage, host metrics/snapshots/alerts, idle-suspend, config, and invalidation keys use `profileQueryKey(owner, ...)`; events patch only the event owner's cache.                                                |
+| Usage surface           | `components/pages/UsagePage.tsx`, `components/usage/*`                                                                    | URL `profileId` selects the owner; summary/session/health/setup/delete operations remain profile-local; visible session views poll at 15 seconds.                                                              |
+| Host presentation       | `HostResourcePopover.tsx`, `HostIdleSuspendStatus.tsx`, `ForceSleepDialog.tsx`, `use-host-resource-alert-presentation.ts` | Pinned mount is owner-local presentation state; incidents are keyed by `incidentId`; unread state is partitioned by profile; destructive host intent captures generation/revision and never replays ambiguity. |
 
 The preference save chain coalesces only allowlisted fields and rolls back only
 when its captured source and edit revision still match. Host alert transport
@@ -183,6 +182,36 @@ The Phase 06 gate recorded 87/87 targeted tests, 1,760/1,760 full Vitest
 tests, clean TypeScript/modified-file ESLint checks, and a 9.5/10 code review.
 The maintained implementation guide is
 [Phase 06: Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md).
+
+## Unified-profile media isolation and encryption (Phase 07)
+
+Phase 07 extends unified profile ownership through native media capabilities,
+remote cleanup, and encrypted filesystem writes. The browser keeps media as
+opaque native streams and keeps encryption material in memory; neither path
+silently changes owner or falls back to a weaker capability.
+
+| Boundary              | Source modules                                                                                                                   | Contract                                                                                                                                                                                                                                                                       |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Media client identity | `api/connections.ts`, `api/media-session.ts`                                                                                     | One in-memory UUIDv4 `mediaClientId` per exact `{ profileId, generation }`; issue, revoke, and logout carry it explicitly.                                                                                                                                                     |
+| Session cookie        | `fs/media_session.rs`, `fs/media_ticket.rs`                                                                                      | Cookie name is `damhopper-media-session-<canonical-uuidv4>` with `HttpOnly`, `SameSite=Lax`, `/api/fs`, and an eight-hour maximum. The old fixed name is ignored; duplicate selected cookies fail closed.                                                                      |
+| Ticket authorization  | `api/fs_image.rs`, `api/fs_video.rs`, `api/media_stream_response.rs`                                                             | Tickets bind actor, client namespace, session digest, target, kind/purpose, file identity/version, and incarnation. Stream authorization selects the cookie namespace from the stored binding, then revalidates after asynchronous file checks.                                |
+| Session revocation    | `api/media_session.rs`, `fs/media_ticket.rs`                                                                                     | Logout/profile retirement removes only the matching `(actor.subject, mediaClientId)` sessions and tickets. Shared store generation changes invalidate stale capabilities.                                                                                                      |
+| Native lifecycle      | `api/image-tickets.ts`, `api/video-tickets.ts`, `components/organisms/ImagePreview.tsx`, `components/organisms/VideoPreview.tsx` | Credentialed `HEAD` probes precede direct native URLs. `RemoteCleanupHandle` captures the original owner/endpoint/credentials, detaches native sources before best-effort bounded revoke, and never provides general transport access.                                         |
+| Owned encryption      | `contexts/EncryptContext.tsx`, `hooks/use-encrypted-write.ts`, `lib/opaque-session.ts`                                           | State/session keys use `profileId@generation:project`; prompts queue with explicit owner labels; mutable keys are zeroed on disable/retirement; OPAQUE, WebCrypto, and the final filesystem write use one captured `WsTransport` with freshness fences and no plaintext retry. |
+
+Image and video ticket issue/revoke routes use camelCase request bodies and
+`authorizationMode: "session-cookie-v2"` responses. Stream routes sit outside
+bearer middleware so same-origin native requests can send credentials. An
+exact configured origin may use ticket-only fallback; an absent or untrusted
+origin cannot. Unknown, expired, revoked, wrong-kind, or stale capabilities
+remain non-disclosing `404` responses, while a changed file identity returns
+`410` and revokes the ticket.
+
+The maintained implementation guide is
+[Phase 07: Media Isolation and Encryption](./phase-07-media-isolation-and-encryption.md).
+The phase plan records 50 UI tests, 29 server media tests, and zero TypeScript
+diagnostics as phase runtime evidence; these are not a release-wide coverage
+claim.
 
 ## Backend boundaries
 
@@ -260,19 +289,19 @@ successful mutation.
 
 `server/src/idle_suspend/` is the server-authoritative suspend boundary:
 
-| Module | Responsibility |
-| --- | --- |
-| `policy.rs` | Startup-owned automatic policy and bounded timing configuration. |
-| `protocol.rs` | Version-1 helper frames, request IDs, wake validation, and REST DTOs. |
-| `coordinator.rs` | Single-flight automatic/manual state machine, semantic event emission, and reconciliation. |
-| `status.rs` | Private measurement/status DTOs and warning projection. |
-| `server_audit.rs` | Legacy untagged timing/manual audit JSONL. |
-| `audit.rs` | In-place helper audit v2 records, typed milestones/codes, producer identity/sequence, and legacy-compatible reader. |
-| `backend.rs`, `executor.rs` | RTC and fixed suspend execution seams. |
-| `preflight.rs`, `peer_auth.rs` | Inhibitor, capability, RTC, and peer checks. |
-| `helper_client.rs`, `helper_server.rs` | Unix-socket client and root helper service. |
-| `event.rs` | Canonical semantic event model, identity/correlation validation, and synchronized writer. |
-| `tests.rs` | Focused policy, protocol, audit, helper, event, and coordinator behavior tests. |
+| Module                                 | Responsibility                                                                                                      |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `policy.rs`                            | Startup-owned automatic policy and bounded timing configuration.                                                    |
+| `protocol.rs`                          | Version-1 helper frames, request IDs, wake validation, and REST DTOs.                                               |
+| `coordinator.rs`                       | Single-flight automatic/manual state machine, semantic event emission, and reconciliation.                          |
+| `status.rs`                            | Private measurement/status DTOs and warning projection.                                                             |
+| `server_audit.rs`                      | Legacy untagged timing/manual audit JSONL.                                                                          |
+| `audit.rs`                             | In-place helper audit v2 records, typed milestones/codes, producer identity/sequence, and legacy-compatible reader. |
+| `backend.rs`, `executor.rs`            | RTC and fixed suspend execution seams.                                                                              |
+| `preflight.rs`, `peer_auth.rs`         | Inhibitor, capability, RTC, and peer checks.                                                                        |
+| `helper_client.rs`, `helper_server.rs` | Unix-socket client and root helper service.                                                                         |
+| `event.rs`                             | Canonical semantic event model, identity/correlation validation, and synchronized writer.                           |
+| `tests.rs`                             | Focused policy, protocol, audit, helper, event, and coordinator behavior tests.                                     |
 
 The configured-agent policy consumes private PTY, bounded process-discovery,
 and owned TCP observation seams. Later sampler/admission and status/UI layers
@@ -491,15 +520,22 @@ state is scoped by server profile, project, and target where applicable.
 Terminal notification, touch scrolling, media, and workflow features remain
 separate from idle-suspend execution authority.
 
+Phase 07 media preview remains a native URL capability: the UI does not read
+image/video bytes into Blobs or object URLs. Encryption is profile/generation
+qualified and owner A cannot consume owner B's passphrase, session, or
+transport. Prompt and cleanup queues are bounded lifecycle mechanisms, not
+general-purpose request dispatch.
+
 ## Security and data handling
 
 Authentication, CSRF/same-origin checks, project sandbox containment, fixed
 allowlisted commands, no-follow filesystem operations, bounded request/output
 sizes, and sanitized error types are enforced at backend boundaries. Durable
 logs omit credentials, tokens, terminal content, commands, environment, and
-raw IPC. The Phase 05–07 diagnostics path keeps evidence local, applies
-explicit privacy projection before sizing, and never infers authority from
-latest probes or terminal text.
+raw IPC. Phase 05–06 diagnostics keep evidence local, apply explicit privacy
+projection before sizing, and never infer authority from latest probes or
+terminal text. Phase 07 media cookies, ticket URLs, and encryption session
+material remain bounded, non-persistent capabilities.
 
 ## Verification map
 
@@ -510,17 +546,24 @@ latest probes or terminal text.
   `packages/ui/browser-tests/` and exercise actual rendered behavior.
 - Linux release and target-host smoke scripts are under `server/tests/deploy/`
   and `deploy/`; real RTC/suspend canaries remain explicit host-owner gates.
-  Phase 02–07 diagnostics behavior is covered by schema/serde, validation,
+  Phase 02–06 diagnostics behavior is covered by schema/serde, validation,
   identity, path safety, bounded readers/adapters, malformed-line recovery,
   privacy projection, exact UUID correlation, sequence gaps/duplicates,
   restart boundaries, whole-record cap reduction, source immutability, role
   applicability, atomic output semantics, cross-layer chains, and the ignored
-  read-only Linux smoke.
+  read-only Linux smoke. Phase 07 media and encryption coverage includes
+  namespace isolation, duplicate-cookie rejection, binding-selected cookies,
+  owner-qualified prompt/session state, key zeroing, and single-transport
+  freshness fences.
 
 ## Documentation map
 
 - [System Architecture](./system-architecture.md) — live data flow and
-  security boundaries, including the completed Phase 07 diagnostics path.
+  security boundaries, including the completed Phase 07 media/encryption
+  ownership path.
+- [Phase 07 Media Isolation and Encryption](./phase-07-media-isolation-and-encryption.md) —
+  media v2 wire contract, cleanup handle lifecycle, and owner-qualified
+  encrypted-write invariants.
 - [Code Standards](./code-standards.md) — Rust/TypeScript patterns,
   canonical writer, diagnostics adapters, and coordinator lifecycle rules.
 - [Project Overview PDR](./project-overview-pdr.md) — product requirements and

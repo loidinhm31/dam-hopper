@@ -12,11 +12,14 @@ const serverConfig = vi.hoisted(() => ({
 }));
 
 vi.mock("@/api/server-config.js", () => ({
+  getActiveProfileId: () => "browser",
   getActiveProfile: serverConfig.getActiveProfile,
+  getProfiles: () => [serverConfig.getActiveProfile()],
   getAuthToken: serverConfig.getAuthToken,
   getServerUrl: () => window.location.origin,
   normalizeServerUrl: (url: string) => url.replace(/\/$/, ""),
   getProfileChangeVersion: () => serverConfig.profileVersion,
+  isSameOriginProfile: () => true,
   subscribeToProfileChanges: () => () => {},
 }));
 

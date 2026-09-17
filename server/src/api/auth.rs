@@ -356,25 +356,10 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
         .into_response()
 }
 
-/// POST /api/auth/logout — revokes the presented media session then clears credentials.
-pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Request) -> Response {
-    if let Some(claims) = if state.no_auth {
-        Some(Claims {
-            sub: "dev-user".into(),
-            exp: 0,
-        })
-    } else {
-        extract_token(&request, &jar).and_then(|token| validated_claims(&token, &state.jwt_secret))
-    } {
-        if let Some(token) = crate::fs::media_session::media_session_from_headers(request.headers())
-        {
-            state
-                .media_tickets
-                .revoke_session_for_actor(&claims.sub, &token);
-        }
-    }
+/// POST /api/auth/logout — clears auth credentials.
+pub async fn logout(State(_state): State<AppState>, _jar: CookieJar, _request: Request) -> Response {
     let clear = auth_cookie_header("", true);
-    let mut response = (
+    (
         StatusCode::OK,
         [(header::SET_COOKIE, clear)],
         Json(LoginResponse {
@@ -383,12 +368,7 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
             dev_mode: None,
         }),
     )
-        .into_response();
-    response.headers_mut().append(
-        header::SET_COOKIE,
-        crate::api::media_session::clear_cookie_header(),
-    );
-    response
+        .into_response()
 }
 
 /// GET /api/auth/status — returns 200 if authenticated, 401 otherwise.

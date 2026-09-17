@@ -107,6 +107,7 @@ busy alarms, audit-intent failures, RTC clear/readback/write failures,
 unsupported capabilities, and inhibitors produce no suspend call. Tests use
 `tempfile` RTC/audit paths and fake preflight/backends; never use real power
 management or host RTC state.
+
 ### Helper audit v2 patterns (Phase 04)
 
 Keep helper audit evolution in the existing
@@ -454,7 +455,7 @@ constraints before exposing data to React Query.
   or socket identities, bytes, tokens, counters, or raw diagnostics. Use
   accessible persistent text; do not make limitations hover-only or color-only.
 
-### Integrated qualification and test-surface ownership (Phase 07)
+### Integrated qualification and test-surface ownership (idle-suspend Phase 07)
 
 Keep integrated verification at the public boundary it protects:
 
@@ -476,9 +477,87 @@ Keep integrated verification at the public boundary it protects:
   invoke the helper, RTC, `systemctl suspend`, `sudo`, root installation, or
   external services.
 
-Record command-level results and the target-host context in the Phase 07 QA
-report. A passing fake or live observer test is not evidence of a real suspend
-canary; that decision belongs to Operations.
+Record command-level results and the target-host context in the idle-suspend
+Phase 07 QA report. A passing fake or live observer test is not evidence of
+real-host suspend; that decision belongs to Operations.
+
+### Media session v2 and ticket authorization (Unified workbench Phase 07)
+
+Keep native media capabilities opaque, actor-bound, client-namespaced, and
+short-lived. The media ticket store is the authority shared by image and video
+routes:
+
+- Require a canonical UUIDv4 `mediaClientId` on issue, ticket revoke, and
+  media-session logout. Bind every ticket to the authenticated actor, client
+  ID, session-token digest, media kind/purpose, target, file identity/version,
+  and store incarnation.
+- Generate the cookie name only from the canonical client ID:
+  `damhopper-media-session-<uuid>`. Keep `HttpOnly`, `SameSite=Lax`,
+  `Path=/api/fs`, and the eight-hour maximum. Ignore the legacy fixed cookie
+  name and never log token values.
+- Parse all `Cookie` headers but accept only the exact name selected by the
+  stored ticket binding. A duplicate selected name is a hard authorization
+  failure. Malformed token encoding/length is not a credential for another
+  namespace.
+- Authorize the ticket before opening a file. Revalidate target and exact
+  identity/version after asynchronous checks, then verify incarnation and
+  binding again before streaming. Touch idle deadlines only after all checks
+  pass. Keep ticket idle/absolute bounds at 15 minutes/8 hours and session
+  idle/absolute bounds at 30 minutes/8 hours.
+- Restrict revocation to `(actor.subject, mediaClientId)` and the expected
+  media kind. Profile retirement or workspace replacement must not leave a
+  stale generation usable, and must not revoke another client namespace.
+- Keep stream routes outside bearer middleware for native credentialed
+  requests. Ticket-only fallback is allowed only for the exact configured
+  origin; absent or untrusted origins must not gain fallback authorization.
+  Unknown, expired, revoked, wrong-kind, or stale capabilities remain
+  indistinguishable `404` responses.
+- Return `Cache-Control: no-store` and `authorizationMode:
+"session-cookie-v2"` on issue. Never put bearer credentials in a media URL.
+  The browser performs a credentialed `HEAD` before exposing a URL and does
+  not use a Blob, body fallback, or plaintext media path.
+
+Test the public router and store boundaries, not private map fields: duplicate
+selected cookies, old v1 cookie rejection, forged namespace selection,
+cross-client revocation isolation, file-version `410`, exact-origin fallback,
+and stale-generation rejection are the meaningful contracts.
+
+### Media capability cleanup and owned encryption (Unified workbench Phase 07)
+
+Remote cleanup is a narrow capability, not a general transport escape hatch:
+
+- `RemoteCleanupHandle` captures the original `ConnectionRef`, endpoint,
+  credentials, client ID, and resource ID. It may invoke only the supplied
+  resource revoke callback.
+- Detach an image/video native source before cleanup. Bound the first cleanup
+  attempt to five seconds with an `AbortController`, join concurrent calls to
+  one promise, swallow best-effort failures, clear the timer, and mark the
+  handle retired in `finally`. Do not retry or recapture the current profile.
+- Use the server ticket/session TTL as the safety net for unreachable cleanup.
+  Keep browser-managed download capabilities alive until the download has
+  had a chance to start rather than revoking immediately after a click.
+
+Encryption context follows the same owner boundary:
+
+- Key state, OPAQUE sessions, prompts, and operation revisions use
+  `profileId@generation:project`; use `ambient:<project>` only at an explicit
+  no-owner compatibility boundary. Never use a bare project as shared state.
+- Queue passphrase prompts with explicit project/profile labels. Exact
+  owner-qualified duplicates join the same promise; disabling encryption or
+  retiring a connection rejects stale prompts and zeroes mutable AES key
+  buffers. Never persist passphrases or session material.
+- Build each OPAQUE identifier from a bounded project slug plus random UUID
+  material. Capture one owner and one `WsTransport` before async work and use
+  that transport for OPAQUE, WebCrypto, and the final encrypted filesystem
+  write.
+- Fence every async boundary with operation revision, current owner, and
+  enabled state. Zero stale keys and reject on drift. Never recapture a
+  transport, replay automatically, cross profiles, or retry as plaintext.
+
+Test observable isolation: same-named projects on two owners keep separate
+state/session/prompt queues; a dropped connection zeroes its key; stale
+handshakes cannot write; and the final write observes the originally captured
+transport and target.
 
 ### Documentation, controlled rollout, and operational standards (Phase 08)
 
@@ -1167,9 +1246,9 @@ export interface ServerProfile {
   name: string;
   url: string;
   authType: "basic" | "none";
-  username?: string;       // display only; never a password
+  username?: string; // display only; never a password
   createdAt: number;
-  autoConnect: boolean;    // startup intent, not current status
+  autoConnect: boolean; // startup intent, not current status
 }
 
 export interface ProfileAuthV2 {
@@ -1251,6 +1330,7 @@ profile isolation, endpoint-bound token rejection, delayed login after edit or
 remove, tuple-key disambiguation, explicit selector independence, reset
 idempotence, storage failure, and legacy-link rejection. Do not retain tests
 that only pin old active-profile switch/reload wording.
+
 ### Profile-qualified files, editor, search, and Git (Phase 03)
 
 Treat `ProjectTargetRef` as a resource identity, not a display convenience:
@@ -1276,7 +1356,7 @@ Treat `ProjectTargetRef` as a resource identity, not a display convenience:
 - Keep Monaco model paths and tab keys qualified by profile/target. A path
   string alone is not a safe editor identity.
 - Use mtime-guarded writes and exact match validation for replacement. `Replace
-  Next` and `Replace All` must skip dirty tabs for the same target without
+Next` and `Replace All` must skip dirty tabs for the same target without
   blocking independent profiles or targets.
 - Federated search must preserve each match's profile/project/target metadata,
   expose partial profile failures, sort deterministically, and surface the
@@ -1328,7 +1408,6 @@ Focused behavior belongs in
 observable cross-profile isolation, stale-incarnation rejection, persistence
 partitioning, workflow reveal failures, notification routing, and export
 filtering rather than implementation details.
-
 
 ### Agents, ports, and Browser ownership (Phase 05)
 
@@ -1417,6 +1496,42 @@ the removed single-profile contract.
 
 See [Phase 06 Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)
 for the implementation source map and acceptance evidence.
+
+### Media capability cleanup and owned encryption (Unified workbench Phase 07)
+
+Apply the explicit owner/generation rule to every browser capability that
+crosses an asynchronous boundary:
+
+- `getMediaClientId(owner)` is in-memory and generation-qualified. Pass the
+  captured UUIDv4 on every media issue, revoke, and session-logout call; do
+  not persist it or regenerate it from the ambient profile during cleanup.
+- `RemoteCleanupHandle` captures the original `ConnectionRef`, endpoint,
+  credentials, client ID, and resource ID. It exposes only its supplied
+  revoke callback. Native image/video teardown detaches `src` before the
+  first bounded (five-second) cleanup; concurrent calls join one promise,
+  failures are best effort, and retired handles do not retry.
+- Probe opaque media URLs with credentialed `HEAD` and require
+  `authorizationMode: "session-cookie-v2"`. Keep playback and download
+  capabilities separate; do not materialize native media into Blobs or object
+  URLs. Browser-managed downloads intentionally retain their ticket until
+  server TTL or explicit lifecycle cleanup.
+- Use `toEncryptKey` with `profileId@generation:project` for state, session,
+  and prompt maps. Queue prompts with explicit profile/project labels; exact
+  owner-qualified duplicates join the same promise. Disabling encryption or
+  connection retirement rejects stale prompts, clears passphrases, and
+  zeroes mutable key buffers. Never write these values to browser storage.
+- Generate OPAQUE registration IDs from a bounded project slug and random
+  UUID material. Capture one `ConnectionRef` and one `WsTransport` before
+  OPAQUE, WebCrypto, and `fsPutFile`/`fsPutSave`; never recapture, cross
+  owners, replay automatically, or retry as plaintext.
+- Fence before and after every async boundary with operation revision, current
+  owner, and enabled state. Zero stale encryption results and reject rather
+  than allowing an old handshake to write to a replacement connection.
+
+Test observable boundaries: equal project names on two owners keep separate
+sessions and prompt queues, a dropped owner zeroes its key, stale ticket
+cleanup uses its original endpoint, and an encrypted write reaches only the
+captured target/transport.
 
 ### Build & Type Checking
 
