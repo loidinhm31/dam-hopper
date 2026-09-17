@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getActiveProfileId, getExistingNativeScopeId } from "@/api/server-config.js";
 import {
   useSshForwardHost,
   type SshForwardHostReadiness,
 } from "@/contexts/SshForwardHostContext.js";
 import {
   wireCounterToBigInt,
+  type NativeScopeRef,
   type SshConnectionProfile,
   type SshForwardError,
   type SshForwardHost,
@@ -86,10 +88,27 @@ function snapshotMatchesMutationIdentity(
     snapshot.scopeGeneration === identity.scopeGeneration
   );
 }
+function extractScopeRef(
+  snapshot: SshForwardSnapshot | null,
+): NativeScopeRef | null {
+  if (!snapshot) return null;
+  return {
+    context: snapshot.context,
+    activationToken: snapshot.activationToken,
+    scopeId: snapshot.scopeId,
+    scopeGeneration: snapshot.scopeGeneration,
+  };
+}
 
-export function useSshForward() {
+
+export function useSshForward(scopeInput?: NativeScopeRef | string | null) {
   const { host, readiness, readinessError, retryInitialization } =
     useSshForwardHost();
+  const [scopeRef, setScopeRef] = useState<NativeScopeRef | null>(
+    typeof scopeInput === "object" && scopeInput ? scopeInput : null,
+  );
+  const scopeRefRef = useRef<NativeScopeRef | null>(scopeRef);
+  scopeRefRef.current = scopeRef;
   const [snapshot, setSnapshot] = useState<SshForwardSnapshot | null>(null);
   const [error, setError] = useState<SshForwardError | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -114,6 +133,37 @@ export function useSshForward() {
   }
   hostRef.current = host;
   readinessRef.current = readiness;
+
+  const targetScopeId = useMemo(() => {
+    if (typeof scopeInput === "string") return scopeInput;
+    if (typeof scopeInput === "object" && scopeInput) return scopeInput.scopeId;
+    if (scopeInput === null) return null;
+    const active = getActiveProfileId();
+    return active ? (getExistingNativeScopeId(active) ?? active) : null;
+  }, [scopeInput]);
+  const getEffectiveScopeRef = useCallback((): NativeScopeRef => {
+    const current = scopeRefRef.current;
+    if (current) return current;
+    const snap = snapshotRef.current;
+    if (snap) {
+      return {
+        context: snap.context,
+        activationToken: snap.activationToken,
+        scopeId: snap.scopeId,
+        scopeGeneration: snap.scopeGeneration,
+      };
+    }
+    return {
+      context: {
+        desktopInstanceId: "",
+        managerSessionId: "",
+        clientEpoch: "0" as WireCounter,
+      },
+      scopeId: "",
+      scopeGeneration: "0" as WireCounter,
+      activationToken: "0" as WireCounter,
+    };
+  }, []);
 
   const captureMutationIdentity = useCallback(
     (
@@ -159,6 +209,37 @@ export function useSshForward() {
     },
     [],
   );
+  useEffect(() => {
+    if (typeof scopeInput === "object" && scopeInput) {
+      setScopeRef(scopeInput);
+      return;
+    }
+    if (
+      !host ||
+      typeof host.openScope !== "function" ||
+      readiness !== "ready" ||
+      !targetScopeId
+    ) {
+      return;
+    }
+    let cancelled = false;
+    host
+      .openScope(targetScopeId)
+      .then((handle) => {
+        if (!cancelled) {
+          setScopeRef(handle.ref);
+          commitSnapshot(handle.snapshot, true);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(toSshForwardError(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [host, readiness, targetScopeId, scopeInput, commitSnapshot]);
 
   const refresh = useCallback(async (): Promise<SshForwardSnapshot | null> => {
     const currentHost = hostRef.current;
@@ -200,7 +281,7 @@ export function useSshForward() {
     pendingIdentityRef.current = refreshIdentity;
     setPendingAction("snapshot");
     try {
-      const next = await currentHost.snapshot();
+      const next = await currentHost.snapshot(getEffectiveScopeRef());
       if (!isMutationIdentityCurrent(refreshIdentity)) return null;
       const current = snapshotRef.current;
       if (
@@ -210,7 +291,10 @@ export function useSshForward() {
       )
         return null;
       const committed = commitSnapshot(next, true);
-      if (committed && !preserveConnectTimeoutRef.current) setError(null);
+      if (committed) {
+        setScopeRef(extractScopeRef(next));
+        if (!preserveConnectTimeoutRef.current) setError(null);
+      }
       return committed ? next : null;
     } catch (nextError) {
       const parsed = toSshForwardError(nextError);
@@ -234,6 +318,7 @@ export function useSshForward() {
   }, [
     captureMutationIdentity,
     commitSnapshot,
+    getEffectiveScopeRef,
     isMutationIdentityCurrent,
     retryInitialization,
   ]);
@@ -336,9 +421,9 @@ export function useSshForward() {
   const createConnection = useCallback(
     (connection: SshConnectionProfile) =>
       mutate("createConnection", (nativeHost) =>
-        nativeHost.createConnection(connection),
+        nativeHost.createConnection(getEffectiveScopeRef(), connection),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const updateConnection = useCallback(
     (
@@ -348,19 +433,24 @@ export function useSshForward() {
     ) =>
       mutate("updateConnection", (nativeHost) =>
         nativeHost.updateConnection(
+          getEffectiveScopeRef(),
           connectionProfileId,
           expectedGeneration,
           connection,
         ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const deleteConnection = useCallback(
     (connectionProfileId: string, expectedGeneration: WireCounter) =>
       mutate("deleteConnection", (nativeHost) =>
-        nativeHost.deleteConnection(connectionProfileId, expectedGeneration),
+        nativeHost.deleteConnection(
+          getEffectiveScopeRef(),
+          connectionProfileId,
+          expectedGeneration,
+        ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const createRule = useCallback(
     (
@@ -370,12 +460,13 @@ export function useSshForward() {
     ) =>
       mutate("createRule", (nativeHost) =>
         nativeHost.createRule(
+          getEffectiveScopeRef(),
           connectionProfileId,
           expectedConnectionGeneration,
           rule,
         ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const updateRule = useCallback(
     (
@@ -387,6 +478,7 @@ export function useSshForward() {
     ) =>
       mutate("updateRule", (nativeHost) =>
         nativeHost.updateRule(
+          getEffectiveScopeRef(),
           connectionProfileId,
           expectedConnectionGeneration,
           ruleId,
@@ -394,7 +486,7 @@ export function useSshForward() {
           rule,
         ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const deleteRule = useCallback(
     (
@@ -405,13 +497,14 @@ export function useSshForward() {
     ) =>
       mutate("deleteRule", (nativeHost) =>
         nativeHost.deleteRule(
+          getEffectiveScopeRef(),
           connectionProfileId,
           expectedConnectionGeneration,
           ruleId,
           expectedRuleGeneration,
         ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const connect = useCallback(
     (
@@ -421,19 +514,24 @@ export function useSshForward() {
     ) =>
       mutate("connect", (nativeHost) =>
         nativeHost.connect(
+          getEffectiveScopeRef(),
           connectionProfileId,
           expectedGeneration,
           credentialAttemptId,
         ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const disconnect = useCallback(
     (connectionProfileId: string, expectedGeneration: WireCounter) =>
       mutate("disconnect", (nativeHost) =>
-        nativeHost.disconnect(connectionProfileId, expectedGeneration),
+        nativeHost.disconnect(
+          getEffectiveScopeRef(),
+          connectionProfileId,
+          expectedGeneration,
+        ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const setRuleEnabled = useCallback(
     (
@@ -445,6 +543,7 @@ export function useSshForward() {
     ) =>
       mutate("setRuleEnabled", (nativeHost) =>
         nativeHost.setRuleEnabled(
+          getEffectiveScopeRef(),
           connectionProfileId,
           expectedConnectionGeneration,
           ruleId,
@@ -452,27 +551,28 @@ export function useSshForward() {
           enabled,
         ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const listKeys = useCallback(
     () =>
       mutate(
         "listKeys",
-        (nativeHost) => nativeHost.listKeys(),
+        (nativeHost) => nativeHost.listKeys(getEffectiveScopeRef()),
         () => null,
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const loadKey = useCallback(
     (
       connectionProfileId: string,
       keyId: string,
       passphrase: string,
-      expectedGeneration: WireCounter,
-      rememberForDays: 0 | 30,
+      expectedGeneration?: WireCounter,
+      rememberForDays: 0 | 30 = 0,
     ) =>
       mutate("loadKey", (nativeHost) =>
         nativeHost.loadKey(
+          getEffectiveScopeRef(),
           connectionProfileId,
           keyId,
           passphrase,
@@ -480,7 +580,7 @@ export function useSshForward() {
           rememberForDays,
         ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const loadPassword = useCallback(
     (
@@ -488,11 +588,12 @@ export function useSshForward() {
       username: string,
       password: string,
       credentialAttemptId: string,
-      expectedGeneration: WireCounter,
-      rememberForDays: 0 | 30,
+      expectedGeneration?: WireCounter,
+      rememberForDays: 0 | 30 = 0,
     ) =>
       mutate("loadPassword", (nativeHost) =>
         nativeHost.loadPassword(
+          getEffectiveScopeRef(),
           connectionProfileId,
           username,
           password,
@@ -501,7 +602,7 @@ export function useSshForward() {
           rememberForDays,
         ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const approveHost = useCallback(
     (
@@ -513,6 +614,7 @@ export function useSshForward() {
     ) =>
       mutate("approveHost", (nativeHost) =>
         nativeHost.approveHost(
+          getEffectiveScopeRef(),
           connectionProfileId,
           expectedGeneration,
           challengeId,
@@ -520,14 +622,18 @@ export function useSshForward() {
           fingerprint,
         ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
   const forgetCredential = useCallback(
     (connectionProfileId: string, expectedGeneration: WireCounter) =>
       mutate("forgetCredential", (nativeHost) =>
-        nativeHost.forgetCredential(connectionProfileId, expectedGeneration),
+        nativeHost.forgetCredential(
+          getEffectiveScopeRef(),
+          connectionProfileId,
+          expectedGeneration,
+        ),
       ),
-    [mutate],
+    [mutate, getEffectiveScopeRef],
   );
 
   useEffect(() => {
@@ -569,11 +675,11 @@ export function useSshForward() {
         return;
       const hint = event.hint;
       if (
+        hint.scopeId !== current.scopeId ||
         hint.desktopInstanceId !== current.context.desktopInstanceId ||
         hint.managerSessionId !== current.context.managerSessionId ||
         hint.clientEpoch !== current.context.clientEpoch ||
         hint.activationToken !== current.activationToken ||
-        hint.scopeId !== current.scopeId ||
         wireCounterToBigInt(hint.scopeGeneration) <
           wireCounterToBigInt(current.scopeGeneration) ||
         wireCounterToBigInt(hint.connectionsRevision) <
@@ -615,6 +721,7 @@ export function useSshForward() {
   }, [commitSnapshot, host, readiness, refresh]);
 
   return {
+    scopeRef,
     snapshot,
     error,
     pending: pendingAction !== null,

@@ -349,6 +349,12 @@ impl HostKeyChallengeBook {
                 || record.challenge.connection_profile_id != profile_id
         });
     }
+    pub(crate) fn clear_scope(&mut self, scope_id: &str) {
+        self.challenges.retain(|_, record| {
+            record.challenge.scope_id != scope_id
+        });
+    }
+
 
     pub(crate) fn has_profile_generation(
         &mut self,

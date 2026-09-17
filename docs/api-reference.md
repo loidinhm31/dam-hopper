@@ -212,7 +212,67 @@ generation, nonce, request ID, bounded schema, and message size. Native profile
 storage is isolated below application data using a hash of the opaque server
 profile ID; URLs, credentials, tokens, and workspace paths are not used as
 storage identifiers. The native path does not require `chrome://extensions`
-setup.
+
+## Native SSH forwarding IPC (Phase 08)
+
+Native SSH forwarding is a Windows desktop Tauri capability, not a REST or
+WebSocket API. The shared UI calls the `SshForwardHost` interface; the Axum
+server exposes no forwarding CRUD route or forwarding event authority.
+
+The client opens one desktop context and then addresses each server profile
+through an independent scope:
+
+| Operation | Input / result boundary |
+| --- | --- |
+| `openClient(knownScopes)` | Starts a new client epoch and returns `DesktopClientContext`; globally tears down prior live scopes/resources. |
+| `openScope(scopeId)` | Opens or reuses one UUIDv4 scope; returns `ScopeHandle { ref, snapshot }`. |
+| `closeScope(scope)` | Accepts the complete `NativeScopeRef`; closes only that scope's live resources. |
+| `reconcileKnownScopes(knownScopes)` | Updates retention metadata; does not open/close scopes or advance the epoch. |
+| `snapshot(scope)` and mutations | Carry the explicit scope reference and return an authoritative scoped snapshot. |
+| `purgeScope(scopeId, knownScopes)` | Purges only an inactive, confirmed-absent scope when known-scope storage is available. |
+
+`NativeScopeRef` binds `DesktopClientContext` (`desktopInstanceId`,
+`managerSessionId`, `clientEpoch`) to `scopeId`, `scopeGeneration`, and
+`activationToken`. Revisions and generations are canonical unsigned decimal
+strings; clients and Rust compare their numeric values, reject non-canonical
+forms, and fail on overflow. A stale context, token, generation, window, or
+scope is rejected rather than routed through an active-profile fallback.
+
+The Windows command surface is exactly:
+
+```text
+ssh_forward_open_client
+ssh_forward_open_scope
+ssh_forward_close_scope
+ssh_forward_reconcile_known_scopes
+ssh_forward_snapshot
+ssh_forward_create_connection
+ssh_forward_update_connection
+ssh_forward_delete_connection
+ssh_forward_create_rule
+ssh_forward_update_rule
+ssh_forward_delete_rule
+ssh_forward_connect
+ssh_forward_disconnect
+ssh_forward_set_rule_enabled
+ssh_forward_list_keys
+ssh_forward_load_key
+ssh_forward_load_password
+ssh_forward_forget_credential
+ssh_forward_approve_host
+ssh_forward_purge_scope
+```
+
+All 21 handlers require the `main` webview label. The `ssh-forward-main`
+capability grants the permission only to `main` on Windows; browser, mobile,
+and the native `browser-debug` child receive no SSH-forward command. The old
+`activateScope` command is not part of this shipping surface.
+
+Snapshots are scoped to one profile and include connection/rule data, runtime
+state, revisions, credential status, trust challenges, and the scope identity.
+`ssh-forward:changed` events are bounded refetch hints, not patches. The full
+native lifecycle, persistence, limits, and security contract is in the
+[Phase 08 guide](./phase-08-native-scope-concurrency.md).
 
 Screen capture is optional and remains browser-local until handoff. It requires
 an explicit user gesture, accepts only a browser-tab surface, and stops tracks

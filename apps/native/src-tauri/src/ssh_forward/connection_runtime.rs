@@ -29,12 +29,13 @@ pub(crate) const MAX_LIVE_CONNECTIONS: usize = 16;
 pub(crate) const MAX_ENABLED_RULES: usize = 64;
 
 pub(crate) fn runtime_task_key(
+    scope_id: &str,
     connection_id: &str,
     rule_id: &str,
     generation: WireCounter,
     cancellation: &ConnectionCancellation,
 ) -> String {
-    format!("{connection_id}:{rule_id}:{generation}:{:p}", cancellation)
+    format!("{scope_id}:{connection_id}:{rule_id}:{generation}:{:p}", cancellation)
 }
 
 pub(crate) struct ConnectionCancellation {
@@ -350,9 +351,8 @@ pub(crate) struct RuleDisablePlan {
     pub(crate) generation: WireCounter,
     pub(crate) child: ChildShutdown,
 }
-
 pub(crate) struct ConnectionRegistry {
-    entries: HashMap<String, ConnectionEntry>,
+    entries: HashMap<(String, String), ConnectionEntry>,
 }
 
 impl ConnectionRegistry {
@@ -360,6 +360,24 @@ impl ConnectionRegistry {
         Self {
             entries: HashMap::new(),
         }
+    }
+
+    fn get_entry(&self, scope_id: &str, connection_id: &str) -> Option<&ConnectionEntry> {
+        self.entries.get(&(scope_id.to_string(), connection_id.to_string()))
+    }
+
+    fn get_entry_mut(&mut self, scope_id: &str, connection_id: &str) -> Option<&mut ConnectionEntry> {
+        self.entries.get_mut(&(scope_id.to_string(), connection_id.to_string()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_entry(&self, id: &str) -> Option<&ConnectionEntry> {
+        self.entries.iter().find(|((_, cid), _)| cid == id).map(|(_, e)| e)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_entry_mut(&mut self, id: &str) -> Option<&mut ConnectionEntry> {
+        self.entries.iter_mut().find(|((_, cid), _)| cid == id).map(|(_, e)| e)
     }
 
     pub(crate) fn reserve_connection(
@@ -370,7 +388,8 @@ impl ConnectionRegistry {
         profile
             .validate()
             .map_err(|_| RuntimeError::InvalidArgument)?;
-        if let Some(entry) = self.entries.get(&profile.id) {
+        let key = (profile.scope_id.clone(), profile.id.clone());
+        if let Some(entry) = self.entries.get(&key) {
             if entry.generation != expected_generation {
                 return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
             }
@@ -394,12 +413,12 @@ impl ConnectionRegistry {
         }
         let generation = next_counter(expected_generation)?;
         self.entries.insert(
-            profile.id.clone(),
+            key.clone(),
             ConnectionEntry::new(profile.clone(), generation),
         );
         let cancellation = self
             .entries
-            .get(&profile.id)
+            .get(&key)
             .expect("reserved connection was inserted")
             .cancellation
             .clone();
@@ -411,14 +430,14 @@ impl ConnectionRegistry {
 
     pub(crate) fn commit_established(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         session: Arc<SshSession>,
         credential_lease: Option<Arc<CredentialLease>>,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -442,16 +461,15 @@ impl ConnectionRegistry {
         entry.error_code = None;
         Ok(())
     }
-
     pub(crate) fn set_established_error(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         error_code: SshForwardErrorCode,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -466,13 +484,13 @@ impl ConnectionRegistry {
 
     pub(crate) fn fail_connection(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         error_code: SshForwardErrorCode,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -491,13 +509,13 @@ impl ConnectionRegistry {
 
     pub(crate) fn begin_reconnect(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         owner: &str,
     ) -> Result<Option<ConnectionReconnectContext>, RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -548,13 +566,13 @@ impl ConnectionRegistry {
 
     pub(crate) fn set_reconnect_attempt(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         attempt: u8,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -569,14 +587,14 @@ impl ConnectionRegistry {
 
     pub(crate) fn finish_reconnect(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         session: Arc<SshSession>,
         credential_lease: Option<Arc<CredentialLease>>,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -604,13 +622,13 @@ impl ConnectionRegistry {
 
     pub(crate) fn fail_reconnect(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         error_code: SshForwardErrorCode,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -644,13 +662,13 @@ impl ConnectionRegistry {
 
     pub(crate) fn abandon_reconnect(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         owner: &str,
     ) -> Result<bool, RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation
             || entry.state != SshConnectionState::Reconnecting
@@ -666,13 +684,13 @@ impl ConnectionRegistry {
 
     pub(crate) fn is_reconnect_owner(
         &self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         owner: &str,
     ) -> Result<bool, RuntimeError> {
         let entry = self
-            .entries
-            .get(connection_id)
+            .get_entry(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -683,13 +701,13 @@ impl ConnectionRegistry {
 
     pub(crate) fn has_reconnectable_rules(
         &self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         excluded_rule_id: &str,
     ) -> Result<bool, RuntimeError> {
         let entry = self
-            .entries
-            .get(connection_id)
+            .get_entry(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -703,13 +721,13 @@ impl ConnectionRegistry {
 
     pub(crate) fn retain_authenticating_session(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         session: Arc<SshSession>,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -722,16 +740,15 @@ impl ConnectionRegistry {
         entry.session_slot.replace(Some(session));
         Ok(())
     }
-
     pub(crate) fn begin_disconnect(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         expected_generation: WireCounter,
     ) -> Result<Option<DisconnectPlan>, RuntimeError> {
-        let entry = self
-            .entries
-            .get_mut(connection_id)
-            .ok_or(RuntimeError::ConnectionNotFound)?;
+        let Some(entry) = self.get_entry(scope_id, connection_id) else {
+            return Ok(None);
+        };
         if entry.generation != expected_generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
         }
@@ -746,6 +763,9 @@ impl ConnectionRegistry {
                 next_counter(child.generation).map(|generation| (rule_id.clone(), generation))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let entry = self
+            .get_entry_mut(scope_id, connection_id)
+            .expect("checked above");
         entry.cancellation.cancel();
         let mut children = Vec::with_capacity(entry.children.len());
         for (rule_id, child_generation) in child_generations {
@@ -777,11 +797,12 @@ impl ConnectionRegistry {
 
     pub(crate) fn begin_disconnect_if_matches(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         expected_generation: WireCounter,
         cancellation: &Arc<ConnectionCancellation>,
     ) -> Result<Option<DisconnectPlan>, RuntimeError> {
-        let Some(entry) = self.entries.get(connection_id) else {
+        let Some(entry) = self.get_entry(scope_id, connection_id) else {
             return Ok(None);
         };
         if entry.generation != expected_generation
@@ -789,17 +810,17 @@ impl ConnectionRegistry {
         {
             return Ok(None);
         }
-        self.begin_disconnect(connection_id, expected_generation)
+        self.begin_disconnect(scope_id, connection_id, expected_generation)
     }
 
     pub(crate) fn finish_disconnect(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -822,13 +843,13 @@ impl ConnectionRegistry {
 
     pub(crate) fn retain_disconnect_session(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         session: Arc<SshSession>,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -843,36 +864,37 @@ impl ConnectionRegistry {
 
     pub(crate) fn discard_connection(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
     ) -> Result<(), RuntimeError> {
-        let entry = self
-            .entries
-            .get(connection_id)
-            .ok_or(RuntimeError::ConnectionNotFound)?;
-        if entry.generation != generation {
-            return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+        if let Some(entry) = self.get_entry(scope_id, connection_id) {
+            if entry.generation != generation {
+                return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
+            }
         }
-        self.entries.remove(connection_id);
+        self.entries.remove(&(scope_id.to_string(), connection_id.to_string()));
         Ok(())
     }
 
     pub(crate) fn remove_if_disconnected(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         expected_generation: WireCounter,
     ) -> Result<(), RuntimeError> {
-        self.ensure_disconnected(connection_id, expected_generation)?;
-        self.entries.remove(connection_id);
+        self.ensure_disconnected(scope_id, connection_id, expected_generation)?;
+        self.entries.remove(&(scope_id.to_string(), connection_id.to_string()));
         Ok(())
     }
 
     pub(crate) fn ensure_disconnected(
         &self,
+        scope_id: &str,
         connection_id: &str,
         expected_generation: WireCounter,
     ) -> Result<(), RuntimeError> {
-        let Some(entry) = self.entries.get(connection_id) else {
+        let Some(entry) = self.get_entry(scope_id, connection_id) else {
             return Ok(());
         };
         if entry.generation != expected_generation {
@@ -886,11 +908,12 @@ impl ConnectionRegistry {
 
     pub(crate) fn discard_connection_if_matches(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
         cancellation: &Arc<ConnectionCancellation>,
     ) -> Result<(), RuntimeError> {
-        let Some(entry) = self.entries.get(connection_id) else {
+        let Some(entry) = self.get_entry(scope_id, connection_id) else {
             return Ok(());
         };
         if entry.generation != generation {
@@ -899,7 +922,7 @@ impl ConnectionRegistry {
         if !Arc::ptr_eq(&entry.cancellation, cancellation) {
             return Ok(());
         }
-        self.entries.remove(connection_id);
+        self.entries.remove(&(scope_id.to_string(), connection_id.to_string()));
         Ok(())
     }
 
@@ -920,8 +943,7 @@ impl ConnectionRegistry {
             current_child_state_changed,
         ) = {
             let entry = self
-                .entries
-                .get(&rule.connection_profile_id)
+                .get_entry(&rule.scope_id, &rule.connection_profile_id)
                 .ok_or(RuntimeError::ConnectionNotFound)?;
             let child = entry.children.get(&rule.id);
             (
@@ -941,16 +963,14 @@ impl ConnectionRegistry {
             return Err(RuntimeError::StaleConnectionGeneration(current_generation));
         }
         if self
-            .entries
-            .get(&rule.connection_profile_id)
+            .get_entry(&rule.scope_id, &rule.connection_profile_id)
             .is_some_and(|entry| entry.cancellation.is_cancelled())
         {
             return Err(RuntimeError::ConnectionCancelled);
         }
         if current_state != SshConnectionState::Established
             || self
-                .entries
-                .get(&rule.connection_profile_id)
+                .get_entry(&rule.scope_id, &rule.connection_profile_id)
                 .and_then(|entry| entry.session.as_ref())
                 .is_none()
         {
@@ -998,8 +1018,7 @@ impl ConnectionRegistry {
         let generation = next_counter(expected_rule_generation)?;
         let active_channels = Arc::new(AtomicU16::new(0));
         let entry = self
-            .entries
-            .get_mut(&rule.connection_profile_id)
+            .get_entry_mut(&rule.scope_id, &rule.connection_profile_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         entry.children.insert(
             rule.id.clone(),
@@ -1025,6 +1044,7 @@ impl ConnectionRegistry {
     )]
     pub(crate) fn commit_rule(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         connection_generation: WireCounter,
         rule_id: &str,
@@ -1033,7 +1053,7 @@ impl ConnectionRegistry {
         start_tx: oneshot::Sender<()>,
         worker: JoinHandle<()>,
     ) -> Result<(), (RuntimeError, JoinHandle<()>)> {
-        let Some(entry) = self.entries.get_mut(connection_id) else {
+        let Some(entry) = self.get_entry_mut(scope_id, connection_id) else {
             worker.abort();
             drop(stop_tx);
             drop(start_tx);
@@ -1081,6 +1101,7 @@ impl ConnectionRegistry {
         child.stop_tx = Some(stop_tx);
         child.worker = Some(worker);
         child.task_key = Some(runtime_task_key(
+            scope_id,
             connection_id,
             rule_id,
             generation,
@@ -1097,6 +1118,7 @@ impl ConnectionRegistry {
 
     pub(crate) fn fail_rule(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         connection_generation: WireCounter,
         rule_id: &str,
@@ -1104,8 +1126,7 @@ impl ConnectionRegistry {
         error_code: SshForwardErrorCode,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != connection_generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -1127,14 +1148,14 @@ impl ConnectionRegistry {
 
     pub(crate) fn begin_disable_rule(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         connection_generation: WireCounter,
         rule_id: &str,
         expected_rule_generation: WireCounter,
     ) -> Result<Option<RuleDisablePlan>, RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != connection_generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -1168,14 +1189,14 @@ impl ConnectionRegistry {
 
     pub(crate) fn finish_disable_rule(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         connection_generation: WireCounter,
         rule_id: &str,
         generation: WireCounter,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != connection_generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -1197,19 +1218,20 @@ impl ConnectionRegistry {
 
     pub(crate) fn remove_rule(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         connection_generation: WireCounter,
         rule_id: &str,
         expected_rule_generation: WireCounter,
     ) -> Result<(), RuntimeError> {
         self.ensure_rule_removable(
+            scope_id,
             connection_id,
             connection_generation,
             rule_id,
             expected_rule_generation,
         )?;
-        self.entries
-            .get_mut(connection_id)
+        self.get_entry_mut(scope_id, connection_id)
             .expect("validated connection remains present")
             .children
             .remove(rule_id);
@@ -1218,15 +1240,15 @@ impl ConnectionRegistry {
 
     pub(crate) fn ensure_rule_removable(
         &self,
+        scope_id: &str,
         connection_id: &str,
         connection_generation: WireCounter,
         rule_id: &str,
         expected_rule_generation: WireCounter,
     ) -> Result<(), RuntimeError> {
-        let entry = self
-            .entries
-            .get(connection_id)
-            .ok_or(RuntimeError::ConnectionNotFound)?;
+        let Some(entry) = self.get_entry(scope_id, connection_id) else {
+            return Ok(());
+        };
         if entry.generation != connection_generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
         }
@@ -1246,21 +1268,20 @@ impl ConnectionRegistry {
         Ok(())
     }
 
-    pub(crate) fn lifecycle(&self, connection_id: &str) -> Result<Arc<Mutex<()>>, RuntimeError> {
-        self.entries
-            .get(connection_id)
+    pub(crate) fn lifecycle(&self, scope_id: &str, connection_id: &str) -> Result<Arc<Mutex<()>>, RuntimeError> {
+        self.get_entry(scope_id, connection_id)
             .map(|entry| Arc::clone(&entry.lifecycle))
             .ok_or(RuntimeError::ConnectionNotFound)
     }
 
     pub(crate) fn cancel_connection(
         &self,
+        scope_id: &str,
         connection_id: &str,
         expected_generation: WireCounter,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get(connection_id)
+            .get_entry(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != expected_generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -1271,6 +1292,7 @@ impl ConnectionRegistry {
 
     pub(crate) fn worker_exited(
         &mut self,
+        scope_id: &str,
         connection_id: &str,
         connection_generation: WireCounter,
         rule_id: &str,
@@ -1279,8 +1301,7 @@ impl ConnectionRegistry {
         error_code: SshForwardErrorCode,
     ) -> Result<bool, RuntimeError> {
         let entry = self
-            .entries
-            .get_mut(connection_id)
+            .get_entry_mut(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != connection_generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -1308,28 +1329,28 @@ impl ConnectionRegistry {
 
     pub(crate) fn rule_generation(
         &self,
+        scope_id: &str,
         connection_id: &str,
         rule_id: &str,
     ) -> Result<Option<WireCounter>, RuntimeError> {
         let entry = self
-            .entries
-            .get(connection_id)
+            .get_entry(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         Ok(entry.children.get(rule_id).map(|child| child.generation))
     }
 
     pub(crate) fn rule_definitions(
         &self,
+        scope_id: &str,
         connection_id: &str,
     ) -> Result<Vec<(String, WireCounter, SshForwardRule)>, RuntimeError> {
         let entry = self
-            .entries
-            .get(connection_id)
+            .get_entry(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         let mut values = entry
             .children
-            .iter()
-            .map(|(rule_id, child)| (rule_id.clone(), child.generation, child.rule.clone()))
+            .values()
+            .map(|child| (child.rule.id.clone(), child.generation, child.rule.clone()))
             .collect::<Vec<_>>();
         values.sort_by(|left, right| left.0.cmp(&right.0));
         Ok(values)
@@ -1337,13 +1358,13 @@ impl ConnectionRegistry {
 
     pub(crate) fn rule_is_in_progress(
         &self,
+        scope_id: &str,
         connection_id: &str,
         rule_id: &str,
         expected_generation: WireCounter,
     ) -> Result<bool, RuntimeError> {
         let entry = self
-            .entries
-            .get(connection_id)
+            .get_entry(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         Ok(entry.children.get(rule_id).is_some_and(|child| {
             child.generation == expected_generation
@@ -1354,11 +1375,22 @@ impl ConnectionRegistry {
         }))
     }
 
-    pub(crate) fn connection_keys(&self) -> Vec<(String, WireCounter, Arc<Mutex<()>>)> {
+    pub(crate) fn connection_keys(&self) -> Vec<(String, String, WireCounter, Arc<Mutex<()>>)> {
         let mut keys = self
             .entries
             .iter()
-            .map(|(id, entry)| (id.clone(), entry.generation, Arc::clone(&entry.lifecycle)))
+            .map(|((scope_id, id), entry)| (scope_id.clone(), id.clone(), entry.generation, Arc::clone(&entry.lifecycle)))
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        keys
+    }
+
+    pub(crate) fn connection_keys_for_scope(&self, scope_id: &str) -> Vec<(String, WireCounter, Arc<Mutex<()>>)> {
+        let mut keys = self
+            .entries
+            .iter()
+            .filter(|((sid, _), _)| sid == scope_id)
+            .map(|((_, id), entry)| (id.clone(), entry.generation, Arc::clone(&entry.lifecycle)))
             .collect::<Vec<_>>();
         keys.sort_by(|left, right| left.0.cmp(&right.0));
         keys
@@ -1366,9 +1398,10 @@ impl ConnectionRegistry {
 
     pub(crate) fn connection_handle(
         &self,
+        scope_id: &str,
         connection_id: &str,
     ) -> Option<(WireCounter, Arc<Mutex<()>>, Arc<ConnectionCancellation>)> {
-        self.entries.get(connection_id).map(|entry| {
+        self.get_entry(scope_id, connection_id).map(|entry| {
             (
                 entry.generation,
                 Arc::clone(&entry.lifecycle),
@@ -1387,11 +1420,40 @@ impl ConnectionRegistry {
         }
     }
 
+    pub(crate) fn force_close_scope(&mut self, scope_id: &str) {
+        let matching_keys: Vec<(String, String)> = self
+            .entries
+            .keys()
+            .filter(|(sid, _)| sid == scope_id)
+            .cloned()
+            .collect();
+        for key in matching_keys {
+            if let Some(mut entry) = self.entries.remove(&key) {
+                for child in entry.children.values_mut() {
+                    child.task_key.take();
+                    child.stop_tx.take();
+                    child.state = SshForwardRuleState::Off;
+                    child.active_channels.store(0, Ordering::Release);
+                    if let Some(worker) = child.worker.take() {
+                        worker.abort();
+                    }
+                }
+                entry.cancellation.cancel();
+                entry.session.take();
+                entry.session_slot.replace(None);
+                entry.reconnect_owner = None;
+                entry.credential_lease.take();
+            }
+        }
+    }
+
     pub(crate) fn force_close(&mut self) {
         for entry in self.entries.values_mut() {
             for child in entry.children.values_mut() {
                 child.task_key.take();
                 child.stop_tx.take();
+                child.state = SshForwardRuleState::Off;
+                child.active_channels.store(0, Ordering::Release);
                 if let Some(worker) = child.worker.take() {
                     worker.abort();
                 }
@@ -1454,12 +1516,12 @@ impl ConnectionRegistry {
 
     pub(crate) fn ensure_established(
         &self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
     ) -> Result<(), RuntimeError> {
         let entry = self
-            .entries
-            .get(connection_id)
+            .get_entry(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -1475,12 +1537,12 @@ impl ConnectionRegistry {
 
     pub(crate) fn is_reconnecting(
         &self,
+        scope_id: &str,
         connection_id: &str,
         generation: WireCounter,
     ) -> Result<bool, RuntimeError> {
         let entry = self
-            .entries
-            .get(connection_id)
+            .get_entry(scope_id, connection_id)
             .ok_or(RuntimeError::ConnectionNotFound)?;
         if entry.generation != generation {
             return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
@@ -1520,9 +1582,16 @@ impl ConnectionRegistry {
 
     #[cfg(test)]
     pub(crate) fn state(&self, connection_id: &str) -> Option<SshConnectionState> {
-        self.entries.get(connection_id).map(|entry| entry.state)
+        self.entries
+            .iter()
+            .find(|((_, cid), _)| cid == connection_id)
+            .map(|(_, entry)| entry.state)
     }
-}
+
+    #[cfg(test)]
+    pub(crate) fn state_for_scope(&self, scope_id: &str, connection_id: &str) -> Option<SshConnectionState> {
+        self.get_entry(scope_id, connection_id).map(|entry| entry.state)
+    }
 
 // Keep the legacy runtime types referenced while the command facade is being
 // migrated in Phase 04. This prevents accidental reuse of their semantics in
@@ -1591,7 +1660,7 @@ mod tests {
             registry.reserve_connection(connection(id), WireCounter::ZERO),
             Err(RuntimeError::StaleConnectionGeneration(_))
         ));
-        registry.entries.get_mut(id).unwrap().state = SshConnectionState::Established;
+        registry.test_entry_mut(id).unwrap().state = SshConnectionState::Established;
         assert!(matches!(
             registry.reserve_connection(connection(id), reservation.generation),
             Ok(ConnectionAdmission::AlreadyCurrent(_))
@@ -1608,19 +1677,19 @@ mod tests {
         else {
             panic!("first connect must reserve");
         };
-        registry.entries.get_mut(id).unwrap().state = SshConnectionState::Established;
+        registry.test_entry_mut(id).unwrap().state = SshConnectionState::Established;
         registry
             .set_established_error(
+                SCOPE,
                 id,
                 reservation.generation,
                 SshForwardErrorCode::CredentialNotSaved,
             )
             .unwrap();
         assert_eq!(
-            registry.entries.get(id).unwrap().error_code,
+            registry.test_entry(id).unwrap().error_code,
             Some(SshForwardErrorCode::CredentialNotSaved)
         );
-    }
 
     #[test]
     fn connection_admission_rejects_an_inflight_authentication() {
@@ -1656,15 +1725,15 @@ mod tests {
             ssh_user: "operator".into(),
             auth: VaultAuthIdentity::Password,
         };
-        registry.entries.get_mut(id).unwrap().credential_lease = Some(Arc::new(
+        registry.test_entry_mut(id).unwrap().credential_lease = Some(Arc::new(
             CredentialLease::new_password(identity, "attempt", "operator", "secret"),
         ));
-        assert!(registry.entries.get(id).unwrap().credential_lease.is_some());
+        assert!(registry.test_entry(id).unwrap().credential_lease.is_some());
         let plan = registry
-            .begin_disconnect(id, reservation.generation)
+            .begin_disconnect(SCOPE, id, reservation.generation)
             .unwrap()
             .unwrap();
-        assert!(registry.entries.get(id).unwrap().credential_lease.is_none());
+        assert!(registry.test_entry(id).unwrap().credential_lease.is_none());
         assert!(plan.session.is_none());
     }
 
@@ -1679,7 +1748,7 @@ mod tests {
             panic!("first connect must reserve");
         };
         registry
-            .fail_connection(id, old.generation, SshForwardErrorCode::SshConnectFailed)
+            .fail_connection(SCOPE, id, old.generation, SshForwardErrorCode::SshConnectFailed)
             .unwrap();
         registry.clear_if_disconnected();
         let ConnectionAdmission::Reserved(current) = registry
@@ -1689,9 +1758,8 @@ mod tests {
             panic!("reused connection must reserve");
         };
         registry
-            .discard_connection_if_matches(id, current.generation, &old.cancellation)
+            .discard_connection_if_matches(SCOPE, id, current.generation, &old.cancellation)
             .unwrap();
-        assert_eq!(registry.state(id), Some(SshConnectionState::Authenticating));
         assert!(!Arc::ptr_eq(&old.cancellation, &current.cancellation));
     }
 
@@ -1786,8 +1854,7 @@ mod tests {
             panic!("first connect must reserve");
         };
         registry
-            .entries
-            .get_mut(connection_id)
+            .test_entry_mut(connection_id)
             .unwrap()
             .children
             .insert(
@@ -1799,7 +1866,7 @@ mod tests {
             );
 
         let plan = registry
-            .begin_disconnect(connection_id, reservation.generation)
+            .begin_disconnect(SCOPE, connection_id, reservation.generation)
             .unwrap()
             .unwrap();
         assert_eq!(plan.generation.to_string(), "2");
@@ -1817,12 +1884,12 @@ mod tests {
         );
         assert_eq!(
             registry
-                .rule_generation(connection_id, "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0")
+                .rule_generation(SCOPE, connection_id, "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0")
                 .unwrap(),
             Some(WireCounter::parse("2").unwrap())
         );
         registry
-            .finish_disconnect(connection_id, plan.generation)
+            .finish_disconnect(SCOPE, connection_id, plan.generation)
             .unwrap();
         assert_eq!(
             registry.state(connection_id),
@@ -1854,8 +1921,7 @@ mod tests {
             .unwrap();
         let max = WireCounter::parse(&u64::MAX.to_string()).unwrap();
         registry
-            .entries
-            .get_mut(connection_id)
+            .test_entry_mut(connection_id)
             .unwrap()
             .children
             .insert(
@@ -1866,7 +1932,7 @@ mod tests {
                 ),
             );
         assert!(matches!(
-            registry.begin_disconnect(connection_id, WireCounter::parse("1").unwrap()),
+            registry.begin_disconnect(SCOPE, connection_id, WireCounter::parse("1").unwrap()),
             Err(RuntimeError::CounterExhausted)
         ));
         assert_eq!(
@@ -1875,7 +1941,7 @@ mod tests {
         );
         assert_eq!(
             registry
-                .rule_generation(connection_id, "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0")
+                .rule_generation(SCOPE, connection_id, "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0")
                 .unwrap(),
             Some(max)
         );
@@ -1889,8 +1955,7 @@ mod tests {
             .reserve_connection(connection(connection_id), WireCounter::ZERO)
             .unwrap();
         registry
-            .entries
-            .get_mut(connection_id)
+            .test_entry_mut(connection_id)
             .unwrap()
             .children
             .insert(
@@ -1919,7 +1984,7 @@ mod tests {
         else {
             panic!("first connect must reserve");
         };
-        let entry = registry.entries.get_mut(connection_id).unwrap();
+        let entry = registry.test_entry_mut(connection_id).unwrap();
         entry.state = SshConnectionState::Established;
         entry.children.insert(
             rule_id.into(),
@@ -1933,6 +1998,7 @@ mod tests {
         );
         assert!(registry
             .worker_exited(
+                SCOPE,
                 connection_id,
                 reservation.generation,
                 rule_id,
@@ -1951,6 +2017,7 @@ mod tests {
         );
         assert!(matches!(
             registry.worker_exited(
+                SCOPE,
                 connection_id,
                 reservation.generation,
                 rule_id,
@@ -1975,7 +2042,7 @@ mod tests {
         };
         let old_cancellation = Arc::clone(&old.cancellation);
         {
-            let entry = registry.entries.get_mut(connection_id).unwrap();
+            let entry = registry.test_entry_mut(connection_id).unwrap();
             entry.state = SshConnectionState::Established;
             entry.children.insert(
                 rule_id.into(),
@@ -1989,11 +2056,11 @@ mod tests {
             );
         }
         let plan = registry
-            .begin_disconnect(connection_id, old.generation)
+            .begin_disconnect(SCOPE, connection_id, old.generation)
             .unwrap()
             .expect("established connection must disconnect");
         registry
-            .finish_disconnect(connection_id, plan.generation)
+            .finish_disconnect(SCOPE, connection_id, plan.generation)
             .unwrap();
         registry.clear_if_disconnected();
 
@@ -2003,7 +2070,7 @@ mod tests {
         else {
             panic!("reused connection must reserve");
         };
-        let entry = registry.entries.get_mut(connection_id).unwrap();
+        let entry = registry.test_entry_mut(connection_id).unwrap();
         entry.state = SshConnectionState::Established;
         entry.children.insert(
             rule_id.into(),
@@ -2018,6 +2085,7 @@ mod tests {
 
         assert!(!registry
             .worker_exited(
+                SCOPE,
                 connection_id,
                 current.generation,
                 rule_id,
@@ -2048,6 +2116,7 @@ mod tests {
         };
         assert!(registry
             .begin_disable_rule(
+                SCOPE,
                 connection_id,
                 reservation.generation,
                 "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0",
@@ -2057,8 +2126,8 @@ mod tests {
             .is_none());
         assert!(matches!(
             registry.begin_disable_rule(
+                SCOPE,
                 connection_id,
-                reservation.generation,
                 "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0",
                 WireCounter::parse("1").unwrap(),
             ),
@@ -2079,8 +2148,7 @@ mod tests {
             };
             let rule_id = "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0";
             registry
-                .entries
-                .get_mut(connection_id)
+                .test_entry_mut(connection_id)
                 .unwrap()
                 .children
                 .insert(
@@ -2095,8 +2163,8 @@ mod tests {
                 );
             registry
                 .remove_rule(
+                    SCOPE,
                     connection_id,
-                    reservation.generation,
                     rule_id,
                     WireCounter::parse("2").unwrap(),
                 )
@@ -2118,6 +2186,7 @@ mod tests {
         };
         registry
             .fail_connection(
+                SCOPE,
                 deleted_id,
                 deleted.generation,
                 SshForwardErrorCode::SshConnectFailed,
@@ -2131,7 +2200,7 @@ mod tests {
         };
 
         registry
-            .remove_if_disconnected(deleted_id, deleted.generation)
+            .remove_if_disconnected(SCOPE, deleted_id, deleted.generation)
             .unwrap();
         assert!(registry
             .connection_snapshots_for_scope(SCOPE)
@@ -2197,7 +2266,7 @@ mod tests {
                 panic!("reconnect test connection must reserve");
             };
             generation = reservation.generation;
-            let entry = registry.entries.get_mut(connection_id).unwrap();
+            let entry = registry.test_entry_mut(connection_id).unwrap();
             entry.state = SshConnectionState::Reconnecting;
             entry.reconnect_owner = Some("owner-a".into());
             entry.children.insert(
@@ -2221,7 +2290,7 @@ mod tests {
             waiter_registry
                 .lock()
                 .await
-                .begin_reconnect(connection_id, generation, "owner-b")
+                .begin_reconnect(SCOPE, connection_id, generation, "owner-b")
                 .unwrap()
                 .is_some()
         });
@@ -2230,7 +2299,7 @@ mod tests {
         assert!(registry
             .lock()
             .await
-            .abandon_reconnect(connection_id, generation, "owner-a")
+            .abandon_reconnect(SCOPE, connection_id, generation, "owner-a")
             .unwrap());
 
         assert!(
@@ -2245,5 +2314,39 @@ mod tests {
     fn counter_exhaustion_is_reported_instead_of_wrapping() {
         let max = WireCounter::parse(&u64::MAX.to_string()).unwrap();
         assert_eq!(next_counter(max), Err(RuntimeError::CounterExhausted));
+    }
+    #[test]
+    fn concurrent_scopes_can_have_identical_connection_and_rule_ids() {
+        let mut registry = ConnectionRegistry::new();
+        let conn_id = "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96";
+        let mut conn_a = connection(conn_id);
+        conn_a.scope_id = SCOPE.into();
+        let mut conn_b = connection(conn_id);
+        conn_b.scope_id = SCOPE_2.into();
+
+        let _res_a = registry.reserve_connection(conn_a, WireCounter::ZERO).unwrap();
+        let _res_b = registry.reserve_connection(conn_b, WireCounter::ZERO).unwrap();
+
+        assert_eq!(registry.connection_snapshots_for_scope(SCOPE).len(), 1);
+        assert_eq!(registry.connection_snapshots_for_scope(SCOPE_2).len(), 1);
+
+        registry.force_close_scope(SCOPE);
+        assert_eq!(registry.connection_snapshots_for_scope(SCOPE).len(), 0);
+        assert_eq!(registry.connection_snapshots_for_scope(SCOPE_2).len(), 1);
+    }
+
+    #[test]
+    fn active_rule_count_and_port_conflict_detection() {
+        let mut registry = ConnectionRegistry::new();
+        let conn = connection("c1");
+        let _ = registry.reserve_connection(conn, WireCounter::ZERO).unwrap();
+
+        let r1 = rule("r1", "c1", 8080);
+        let _ = registry.reserve_rule(r1, WireCounter::ZERO, WireCounter::ONE).unwrap();
+
+        assert_eq!(registry.active_rule_count(), 1);
+        assert!(registry.port_conflict(8080, "other-rule"));
+        assert!(!registry.port_conflict(8080, "r1"));
+        assert!(!registry.port_conflict(8081, "other-rule"));
     }
 }

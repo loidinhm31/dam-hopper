@@ -152,6 +152,41 @@ authentication failures. After the key loads, only failed targets are retried;
 successful targets are retained and are not replayed. A changed connection
 generation cancels the retry.
 
+## Phase 08: Native forwarding scopes
+
+On Windows desktop, each saved server profile has an independent native SSH
+forwarding scope. Two connected profiles can keep forwarding concurrently, even
+when they contain equal imported connection or rule IDs. Project selection,
+route changes, Settings focus, and SSH-page focus do not switch or restart a
+scope.
+
+The native lifecycle is:
+
+1. The desktop host opens one client epoch.
+2. Each profile that needs forwarding opens its own scope and receives a
+   `NativeScopeRef`.
+3. Profile/rule/connection, credential, and trust actions use that scope
+   reference.
+4. Disconnect, profile removal, or explicit scope close tears down only that
+   profile's live workers, connections, listeners, challenges, and session
+   credentials.
+5. A profile deletion can purge retained native data only after the profile list
+   is confirmed absent and browser storage is available.
+
+Network loss enters bounded reconnect handling; it does not delete the profile
+or close its scope. A new client epoch, native app shutdown, or Windows process
+exit is the global teardown boundary. Native SSH forwards bind local
+`127.0.0.1` ports, and a port already used by another active scope is rejected.
+
+Native SSH forwarding is unavailable in browser, Android, iOS, Linux, and macOS
+hosts; none receives a fallback Tauri call or alternate transport. Native
+Browser Debug is separate and keeps the explicit Browser target owner from
+[Phase 05](./phase-05-agents-ports-and-browser.md). It is not selected by the
+active SSH scope or by project focus.
+
+See [Phase 08 Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md)
+for the IPC, counter, persistence, and Windows qualification contract.
+
 ## Persistence and security
 
 | Record                                  | Storage and scope                      | Behavior                                                                         |

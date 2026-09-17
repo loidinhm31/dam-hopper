@@ -8,9 +8,6 @@ const { invoke, listen } = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
-vi.mock("@dam-hopper/ui/api/server-config", () => ({
-  getActiveProfileId: () => "profile-1",
-}));
 
 import {
   bridgeEventToHostEvent,
@@ -22,9 +19,11 @@ import {
 } from "./native-browser-debug-host";
 
 const target = {
+  owner: { profileId: "profile-1", connectionId: "conn-1" },
   url: "http://localhost:3000/",
   origin: "http://localhost:3000",
   source: "loopback" as const,
+  revision: 1,
 };
 const profileId = "profile-1";
 const sessionId = "session-1";

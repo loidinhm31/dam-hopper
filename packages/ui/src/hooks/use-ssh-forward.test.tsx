@@ -292,6 +292,7 @@ describe("useSshForward", () => {
       ),
     );
     expect(setRuleEnabled).toHaveBeenCalledWith(
+      expect.objectContaining({ scopeId: snapshot.scopeId }),
       "connection",
       counter("3"),
       "rule",

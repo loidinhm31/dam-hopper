@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 2,013
-files, 4,499,104 tokens, 18,723,489 characters; five security-flagged files
+**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 2,020
+files, 4,521,635 tokens, 18,834,182 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -212,6 +212,40 @@ The maintained implementation guide is
 The phase plan records 50 UI tests, 29 server media tests, and zero TypeScript
 diagnostics as phase runtime evidence; these are not a release-wide coverage
 claim.
+
+## Unified-profile native scope concurrency and platform integration (Phase 08)
+
+Phase 08 gives Windows desktop native SSH forwarding an explicit concurrent
+scope lifecycle. `openClient` establishes a global client epoch and performs
+true all-scope teardown; `openScope` loads or reuses one scope; `closeScope`
+tears down one scope; `reconcileKnownScopes` updates retention metadata without
+changing the epoch or opening/closing scopes.
+
+| Boundary | Source modules | Contract |
+| --- | --- | --- |
+| Rust lifecycle | `apps/native/src-tauri/src/ssh_forward/manager.rs`, `model.rs` | `HashMap<scopeId, ActiveScope>`; every scoped command carries context, token, scope ID, and scope generation. |
+| Runtime isolation | `apps/native/src-tauri/src/ssh_forward/connection_runtime.rs` | Registry keys are `(scopeId, connectionProfileId)`; child rules remain under their parent connection; equal IDs across scopes cannot collide. |
+| IPC and ACL | `commands.rs`, `command_names.in.rs`, `permissions/ssh-forward.toml`, `capabilities/ssh-forward.json`, `src/lib.rs` | Exactly 21 Windows commands; every handler requires the `main` webview. |
+| Frontend adapter | `apps/native/src/native-ssh-forward-host.ts` | One client context, `Map<scopeId, ScopeHandle>`, per-scope mutation queues, strict DTO/counter/identity checks, refetch-only event hints. |
+| React lifecycle | `packages/ui/src/contexts/SshForwardHostContext.tsx`, `hooks/use-ssh-forward.ts` | Profile list drives known-scope reconciliation; explicit `NativeScopeRef` reaches every snapshot/mutation; focus does not switch scope. |
+| Browser owner | `packages/ui/src/lib/browser-debug-origin.ts`, `apps/native/src/native-browser-debug-host.ts` | Native child receives Phase 05 `BrowserDebugTarget.owner`; one child lease, stale relay rejection, no SSH-scope inference. |
+| Persistence and trust | `scope_retention.rs`, `store.rs`, `known_hosts.rs` | Per-scope hashed store, unavailable-vs-empty retention distinction, endpoint-first trust, scoped secret/challenge cleanup. |
+
+Scope teardown removes live admission before aborting workers, canceling and
+closing registry entries, clearing scope-keyed credentials, and clearing host
+challenges. Global limits remain 16 live connections, four concurrent
+handshakes, 64 enabled rules, and 64 channels per connection. Loopback ports
+remain exclusive across scopes. Non-Windows/native mobile/browser hosts receive
+no SSH-forward host or alternate transport.
+
+Linux Phase 08 evidence is 135/135 focused tests: shared 15/15, native 48/48,
+UI 25/25, and Cargo 47/47. Windows S13 remains unverified and must cover
+Windows-gated runtime/DPAPI/WebView2 behavior, two concurrent scopes, equal IDs,
+global port/limit enforcement, scoped and epoch teardown, stale/permission
+negatives, and Browser target/relay behavior.
+
+The maintained guide is
+[Phase 08: Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md).
 
 ## Backend boundaries
 
@@ -559,11 +593,10 @@ material remain bounded, non-persistent capabilities.
 ## Documentation map
 
 - [System Architecture](./system-architecture.md) — live data flow and
-  security boundaries, including the completed Phase 07 media/encryption
-  ownership path.
-- [Phase 07 Media Isolation and Encryption](./phase-07-media-isolation-and-encryption.md) —
-  media v2 wire contract, cleanup handle lifecycle, and owner-qualified
-  encrypted-write invariants.
+  security boundaries, including completed Phase 07 media/encryption and
+  Phase 08 native-scope ownership paths.
+- [Phase 08 Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md) —
+  lifecycle, scope isolation, IPC/ACL, platform gate, and Browser owner contract.
 - [Code Standards](./code-standards.md) — Rust/TypeScript patterns,
   canonical writer, diagnostics adapters, and coordinator lifecycle rules.
 - [Project Overview PDR](./project-overview-pdr.md) — product requirements and

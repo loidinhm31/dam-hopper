@@ -14,11 +14,11 @@ use super::{
     error::SshForwardCommandError,
     manager::SshForwardManager,
     model::{
-        ActivateScopeInput, ApproveConnectionHostInput, ConnectionLifecycleInput,
-        CreateConnectionInput, CreateRuleInput, DeleteConnectionInput, DeleteRuleInput,
-        ForgetCredentialInput, LoadConnectionKeyInput, LoadConnectionPasswordInput,
-        OpenClientInput, OpenClientResult, PurgeScopeInput, PurgeScopeResult, ScopeContextInput,
-        SetRuleEnabledInput, SshForwardScopeActivation, SshForwardSnapshot, SshKeyInventory,
+        ApproveConnectionHostInput, ConnectionLifecycleInput, CreateConnectionInput,
+        CreateRuleInput, DeleteConnectionInput, DeleteRuleInput, ForgetCredentialInput,
+        LoadConnectionKeyInput, LoadConnectionPasswordInput, OpenClientInput, OpenClientResult,
+        OpenScopeInput, PurgeScopeInput, PurgeScopeResult, ReconcileKnownScopesInput,
+        ScopeContextInput, ScopeHandle, SetRuleEnabledInput, SshForwardSnapshot, SshKeyInventory,
         UpdateConnectionInput, UpdateRuleInput,
     },
 };
@@ -39,14 +39,34 @@ pub(crate) async fn ssh_forward_open_client(
 }
 
 #[command]
-pub(crate) async fn ssh_forward_activate_scope(
+pub(crate) async fn ssh_forward_open_scope(
     webview: Webview,
     state: State<'_, Arc<SshForwardManager>>,
-    input: ActivateScopeInput,
-) -> Result<SshForwardScopeActivation, SshForwardCommandError> {
+    input: OpenScopeInput,
+) -> Result<ScopeHandle, SshForwardCommandError> {
+    ensure_desktop_main(&webview)?;
+    state.open_scope(&input.context, &input.scope_id).await
+}
+
+#[command]
+pub(crate) async fn ssh_forward_close_scope(
+    webview: Webview,
+    state: State<'_, Arc<SshForwardManager>>,
+    input: ScopeContextInput,
+) -> Result<(), SshForwardCommandError> {
+    ensure_desktop_main(&webview)?;
+    state.close_scope(&input).await
+}
+
+#[command]
+pub(crate) async fn ssh_forward_reconcile_known_scopes(
+    webview: Webview,
+    state: State<'_, Arc<SshForwardManager>>,
+    input: ReconcileKnownScopesInput,
+) -> Result<(), SshForwardCommandError> {
     ensure_desktop_main(&webview)?;
     state
-        .activate_scope(&input.context, input.activation_token, input.scope_id)
+        .reconcile_known_scopes(&input.context, &input.known_scopes)
         .await
 }
 
@@ -223,7 +243,9 @@ mod tests {
 
     const EXPECTED_COMMANDS: &[&str] = &[
         "ssh_forward_open_client",
-        "ssh_forward_activate_scope",
+        "ssh_forward_open_scope",
+        "ssh_forward_close_scope",
+        "ssh_forward_reconcile_known_scopes",
         "ssh_forward_snapshot",
         "ssh_forward_create_connection",
         "ssh_forward_update_connection",

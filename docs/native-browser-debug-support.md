@@ -24,6 +24,27 @@ implementation and keeps viewport rendering/resizing available even if the
 relay cannot be installed, but a successful compile or package does not imply
 runtime verification on every desktop distribution.
 
+## Phase 08 owner integration
+
+The native Browser host consumes the complete Phase 05
+`BrowserDebugTarget`, whose owner is `ConnectionRef { profileId, generation }`.
+`apps/native/src/native-browser-debug-host.ts` does not infer an owner from the
+most recently focused project, Settings target, terminal, or SSH scope.
+
+`setTarget` creates one labeled `browser-debug` child for the captured target
+and binds relay acceptance to its owner profile, session identity, committed
+origin, URL, navigation generation, nonce, request ID, and bounded schema.
+Replacing or clearing the target destroys that child; navigation invalidates
+selection and picker state. Relay events for a stale owner, origin, generation,
+or child label are discarded. A tunnel target is admitted only with its exact
+ready origin; loopback remains restricted to the established Browser target
+policy.
+
+This is a separate lease from native SSH `NativeScopeRef`. Opening or closing
+an SSH scope must not retarget Browser Debug, and Browser target changes must
+not open or close an SSH scope. Native relay v1 supports picker/navigation
+only; console messages remain rejected.
+
 Viewport controls are available in both native app shells and ordinary web
 hosting. Android uses the stable iframe adapter inside the native shell because
 Tauri's child-WebView commands are desktop-only, so the same persisted

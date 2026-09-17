@@ -106,6 +106,12 @@ bridge status. Tunnel loss or revalidation failure invalidates only a target
 owned by that profile. Selecting a project or changing terminal focus alone
 does not replace the Browser target or its owner.
 
+Phase 08's native Browser adapter consumes this exact `BrowserDebugTarget` as a
+lease input. It does not infer an owner from the current SSH scope, project
+focus, or active-profile compatibility state. Replacing the target destroys
+only the child WebView bound to the captured owner; SSH scope lifecycle remains
+independent. See [Phase 08 Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md).
+
 ## 4. Same-profile terminal handoff
 
 Workspace capture/handoff uses one owner and one physical Browser surface:

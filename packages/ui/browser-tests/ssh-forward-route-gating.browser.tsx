@@ -100,17 +100,18 @@ const desktopSnapshot = {
 const desktopHostMock = {
   openClient: vi.fn(async () => ({
     context: desktopSnapshot.context,
-    activationTokenFloor: "0",
-    activeScopeId: desktopSnapshot.scopeId,
-    scopeGeneration: desktopSnapshot.scopeGeneration,
   })),
-  activateScope: vi.fn(async () => ({
-    context: desktopSnapshot.context,
-    activationToken: desktopSnapshot.activationToken,
-    scopeId: desktopSnapshot.scopeId,
-    scopeGeneration: desktopSnapshot.scopeGeneration,
+  openScope: vi.fn(async (id: string) => ({
+    ref: {
+      context: desktopSnapshot.context,
+      scopeId: id,
+      scopeGeneration: desktopSnapshot.scopeGeneration,
+      activationToken: desktopSnapshot.activationToken,
+    },
     snapshot: desktopSnapshot,
   })),
+  closeScope: vi.fn(async () => {}),
+  reconcileKnownScopes: vi.fn(async () => {}),
   snapshot: vi.fn(async () => desktopSnapshot),
   subscribe: vi.fn(() => () => {}),
 };

@@ -195,7 +195,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Historical qualification record (Chromium 151, 116 browser tests including 11 media tests; 1,018 UI and 691 Rust tests) is retained for provenance only, not a current release guarantee.
 - Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process
 
-### PR-007: Unified Multi-Server Workbench (Phases 02–07 complete — 2026-09-17)
+### PR-007: Unified Multi-Server Workbench (Phases 02–08 complete — 2026-09-17)
 
 **Functional Requirements:**
 
@@ -264,6 +264,76 @@ fallbacks.
 **Verification record:** The Phase 02 plan records 108 focused Vitest tests,
 1,766 full UI tests, and TypeScript/build checks across `packages/ui`,
 `apps/web`, and `apps/native`; those are phase evidence, not a release claim.
+
+### PR-007B: Native scope concurrency and platform integration (Phase 08)
+
+**Status:** Source and contract implementation complete 2026-09-17. Linux
+focused evidence passed 135/135. Windows S13 runtime qualification remains a
+release gate; no Windows runtime pass is claimed.
+
+**Product intent:** Keep native SSH forwarding profile-qualified and concurrent.
+Each saved server profile owns one independent native scope. A scope can be
+opened, inspected, mutated, and closed without changing a sibling scope or
+depending on the currently focused project, route, Settings target, or SSH
+page.
+
+**Functional requirements:**
+
+- Issue one global `DesktopClientContext` per native client epoch.
+- Address every native forwarding snapshot and mutation with
+  `NativeScopeRef { context, scopeId, scopeGeneration, activationToken }`.
+- Provide explicit `openClient`, `openScope`, `closeScope`, and
+  `reconcileKnownScopes` lifecycle operations.
+- Keep same IDs independent across scopes by keying runtime ownership with
+  `(scopeId, connectionProfileId)`.
+- Close only the selected scope's workers, connections, listeners, live
+  credentials, and trust challenges; reserve global teardown for a new epoch,
+  shutdown, or process exit.
+- Treat known-scope storage failure as `unavailable`, never as an empty list
+  that can age or purge data.
+- Keep Browser Debug target ownership from Phase 05 explicit and separate from
+  SSH scope selection; project or terminal focus must not retarget the Browser
+  child.
+- Register the forwarding IPC only on the Windows desktop `main` webview.
+  Browser, mobile, and non-Windows native hosts must not receive a fallback.
+
+**Acceptance criteria:**
+
+- [x] `openClient` advances the client epoch, tears down every prior live
+      scope/resource, and rejects delayed prior-epoch work.
+- [x] Repeated or concurrent `openScope` calls for one active scope return the
+      same scope generation; independent scopes remain live concurrently.
+- [x] `closeScope` removes admission before scoped teardown and leaves sibling
+      scope runtime, credentials, trust, and timers intact.
+- [x] `reconcileKnownScopes` updates retention only; it does not advance epoch,
+      open/close a scope, or purge when storage is unavailable.
+- [x] Decimal-string counters/timestamps, desktop/manager/client identity,
+      scope token, scope generation, revisions, and lifecycle state are
+      strictly validated at the Rust and TypeScript boundaries.
+- [x] The 21-command Tauri surface and permission manifest match exactly, with
+      every handler restricted to the `main` window on Windows.
+- [x] Native Browser Debug consumes Phase 05's explicit
+      `BrowserDebugTarget.owner`, keeps one child lease, rejects stale relay
+      identity, and does not consume the current SSH scope as an owner.
+- [x] Linux focused validation records shared 15/15, native 48/48, UI 25/25,
+      and Cargo 47/47 (135/135 aggregate); this evidence is not Windows proof.
+
+**Non-functional constraints:** Global limits remain bounded at 16 live
+connections, four concurrent handshakes, 64 enabled rules, and 64 channels per
+connection. SSH and remote targets stay loopback-only where required by the
+forwarding contract. Secrets remain memory-cleared at scoped/global teardown;
+snapshots, events, diagnostics, and logs contain metadata/redacted errors only.
+
+**Changed implementation boundaries:** `apps/native/src-tauri/src/ssh_forward`
+manager, runtime, commands, models, known-hosts, store/retention, and ACL;
+`apps/native/src/native-ssh-forward-host.ts` and
+`native-browser-debug-host.ts`; `packages/ui` SSH host, context bridge, and
+scope hook; shared SSH contract fixtures.
+
+See the [Phase 08 native scope guide](./phase-08-native-scope-concurrency.md),
+[post-fix review](../plans/reports/code-review-260917-2014-phase-08-native-scope-concurrency.md),
+and [Linux verification report](../plans/reports/tester-260917-2012-phase-08-native-scope-concurrency.md).
+
 
 ### PR-007A: Profile-qualified files, editor, search, and Git (Phase 03)
 

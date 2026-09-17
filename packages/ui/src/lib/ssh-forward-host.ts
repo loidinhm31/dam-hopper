@@ -208,18 +208,18 @@ export interface SshForwardSnapshot {
   hostKeyChallenges: HostKeyChallenge[];
   trustRepair?: SshForwardTrustRepairMetadata;
 }
-export interface ScopeActivation {
+export interface NativeScopeRef {
   context: DesktopClientContext;
-  activationToken: WireCounter;
-  scopeId: string | null;
+  scopeId: string;
   scopeGeneration: WireCounter;
-  snapshot: SshForwardSnapshot | null;
+  activationToken: WireCounter;
 }
 export interface OpenClientResult {
   context: DesktopClientContext;
-  activationTokenFloor: WireCounter;
-  activeScopeId: string | null;
-  scopeGeneration: WireCounter;
+}
+export interface ScopeHandle {
+  ref: NativeScopeRef;
+  snapshot: SshForwardSnapshot;
 }
 export interface KeyInventory {
   context: DesktopClientContext;
@@ -492,26 +492,33 @@ export type SshForwardHostEvent = {
 
 export interface SshForwardHost {
   openClient(knownScopes: KnownScopesInput): Promise<OpenClientResult>;
-  activateScope(scopeId: string | null): Promise<ScopeActivation>;
-  snapshot(): Promise<SshForwardSnapshot>;
+  openScope(scopeId: string): Promise<ScopeHandle>;
+  closeScope(scope: NativeScopeRef): Promise<void>;
+  reconcileKnownScopes(knownScopes: KnownScopesInput): Promise<void>;
+  snapshot(scope: NativeScopeRef): Promise<SshForwardSnapshot>;
   createConnection(
+    scope: NativeScopeRef,
     connection: SshConnectionProfile,
   ): Promise<SshForwardSnapshot>;
   updateConnection(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedGeneration: WireCounter,
     connection: SshConnectionProfile,
   ): Promise<SshForwardSnapshot>;
   deleteConnection(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedGeneration: WireCounter,
   ): Promise<SshForwardSnapshot>;
   createRule(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedConnectionGeneration: WireCounter,
     rule: SshForwardRule,
   ): Promise<SshForwardSnapshot>;
   updateRule(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedConnectionGeneration: WireCounter,
     ruleId: string,
@@ -519,53 +526,34 @@ export interface SshForwardHost {
     rule: SshForwardRule,
   ): Promise<SshForwardSnapshot>;
   deleteRule(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedConnectionGeneration: WireCounter,
     ruleId: string,
     expectedRuleGeneration: WireCounter,
   ): Promise<SshForwardSnapshot>;
   connect(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedGeneration: WireCounter,
     credentialAttemptId?: string,
   ): Promise<SshForwardSnapshot>;
   disconnect(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedGeneration: WireCounter,
   ): Promise<SshForwardSnapshot>;
   setRuleEnabled(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedConnectionGeneration: WireCounter,
     ruleId: string,
     expectedRuleGeneration: WireCounter,
     enabled: boolean,
   ): Promise<SshForwardSnapshot>;
-  createProfile(profile: SshForwardProfile): Promise<SshForwardSnapshot>;
-  updateProfile(
-    profileId: string,
-    expectedGeneration: WireCounter,
-    profile: SshForwardProfile,
-  ): Promise<SshForwardSnapshot>;
-  deleteProfile(
-    profileId: string,
-    expectedGeneration: WireCounter,
-  ): Promise<SshForwardSnapshot>;
-  start(
-    profileId: string,
-    expectedGeneration: WireCounter,
-    credentialAttemptId?: string,
-  ): Promise<SshForwardSnapshot>;
-  stop(
-    profileId: string,
-    expectedGeneration: WireCounter,
-  ): Promise<SshForwardSnapshot>;
-  restart(
-    profileId: string,
-    expectedGeneration: WireCounter,
-    credentialAttemptId?: string,
-  ): Promise<SshForwardSnapshot>;
-  listKeys(): Promise<KeyInventory>;
+  listKeys(scope: NativeScopeRef): Promise<KeyInventory>;
   loadKey(
+    scope: NativeScopeRef,
     profileId: string,
     keyId: string,
     passphrase: string,
@@ -573,6 +561,7 @@ export interface SshForwardHost {
     rememberForDays?: 0 | 30,
   ): Promise<SshForwardSnapshot>;
   loadPassword(
+    scope: NativeScopeRef,
     profileId: string,
     username: string,
     password: string,
@@ -581,6 +570,7 @@ export interface SshForwardHost {
     rememberForDays?: 0 | 30,
   ): Promise<SshForwardSnapshot>;
   approveHost(
+    scope: NativeScopeRef,
     profileId: string,
     expectedGeneration: WireCounter,
     challengeId: string,
@@ -588,6 +578,7 @@ export interface SshForwardHost {
     fingerprint: string,
   ): Promise<SshForwardSnapshot>;
   forgetCredential(
+    scope: NativeScopeRef,
     connectionProfileId: string,
     expectedGeneration: WireCounter,
   ): Promise<SshForwardSnapshot>;

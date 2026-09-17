@@ -621,6 +621,40 @@ The iframe still must be embeddable: target `X-Frame-Options` or restrictive
 `Content-Security-Policy: frame-ancestors` can reject the preview before the
 extension runs.
 
+### Native SSH forwarding host (Phase 08)
+
+**Locations:** `apps/native/src/native-ssh-forward-host.ts`,
+`packages/ui/src/lib/ssh-forward-host.ts`,
+`packages/ui/src/contexts/SshForwardHostContext.tsx`,
+`packages/ui/src/hooks/use-ssh-forward.ts`
+
+The native host is constructed only for enabled Windows desktop support. It
+opens one client context, stores a `ScopeHandle` per server-profile scope, and
+passes an explicit `NativeScopeRef` with every snapshot, connection, rule,
+credential, and trust operation. Mutations serialize per scope; equal IDs in
+different scopes remain independent. The host validates exact DTO keys, UUIDs,
+counters, timestamps, identity, scope generation, and revisions before state
+enters React.
+
+`SshForwardScopeBridge` derives native scope IDs from the saved profile list,
+calls `reconcileKnownScopes` when that list changes, and purges a deleted scope
+only after profile absence and available storage are confirmed. `useSshForward`
+can consume an explicit scope reference or open the requested scope through the
+host. Project focus, route changes, Settings focus, and SSH-page focus do not
+switch native scope. Browser and mobile hosts render the shared UI without an
+SSH-forward host.
+
+`ssh-forward:changed` is a bounded refetch hint. It must match the current
+desktop/manager/client context, activation token, scope, generation, and
+numeric revisions before a scoped snapshot is requested; events never patch
+React state directly.
+
+Native Browser Debug is independent: `NativeBrowserDebugHost.setTarget` receives
+the Phase 05 `BrowserDebugTarget` with explicit `owner`, creates one
+`browser-debug` child, and rejects stale owner/origin/session/generation relay
+messages. It must not infer Browser ownership from the most recently opened SSH
+scope or active project.
+
 ### Multi Terminal Display
 
 **Location:** `packages/ui/src/components/organisms/MultiTerminalDisplay.tsx`
