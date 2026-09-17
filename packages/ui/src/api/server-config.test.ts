@@ -689,4 +689,21 @@ describe("managed runtime profile reconciliation", () => {
     expect(getAuthToken(undefined)).toBeNull();
     expect(getAuthToken("")).toBeNull();
   });
+
+  it("returns referentially identical array when localStorage has not changed", () => {
+    const first = getProfiles();
+    const second = getProfiles();
+    expect(first).toBe(second);
+
+    createProfile({
+      name: "New Profile",
+      url: "http://localhost:4890",
+      authType: "none",
+    });
+
+    const third = getProfiles();
+    expect(third).not.toBe(first);
+    const fourth = getProfiles();
+    expect(fourth).toBe(third);
+  });
 });
