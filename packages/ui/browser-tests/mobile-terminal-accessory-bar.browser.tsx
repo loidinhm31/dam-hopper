@@ -42,6 +42,9 @@ vi.mock("@/api/transport.js", () => ({
   getTransportGeneration: () => 0,
   subscribeTransportChanges: () => () => {},
   getTransport: () => ({ terminalWrite: mockTerminalWrite }),
+  reconfigureTransport: vi.fn(),
+  initTransport: vi.fn(),
+  resetTransport: vi.fn(),
 }));
 
 (

@@ -415,18 +415,21 @@ const unsubscribers: Array<() => void> = [];
 
 export function initTransportListeners(): void {
   if (initialized) return;
-  initialized = true;
-
-  const transport = getTransport();
-  for (const channel of PUSH_EVENT_CHANNELS) {
-    const unsub = transport.onEvent(channel, (data) => dispatch(channel, data));
-    unsubscribers.push(unsub);
-  }
-  if (hasWsStatus(transport)) {
-    unsubscribers.push(
-      transport.onStatusChange((status) => publishTransportStatus(status)),
-    );
-    publishTransportStatus(transport.getStatus());
+  try {
+    const transport = getTransport();
+    initialized = true;
+    for (const channel of PUSH_EVENT_CHANNELS) {
+      const unsub = transport.onEvent(channel, (data) => dispatch(channel, data));
+      unsubscribers.push(unsub);
+    }
+    if (hasWsStatus(transport)) {
+      unsubscribers.push(
+        transport.onStatusChange((status) => publishTransportStatus(status)),
+      );
+      publishTransportStatus(transport.getStatus());
+    }
+  } catch {
+    // Transport not yet ready; allow subsequent attempts
   }
 }
 export function installTransportBridge(
