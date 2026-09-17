@@ -4,8 +4,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Unified multi-profile workbench (2026-09-17)
 
-- **Plan status: IN PROGRESS (3/10 phases; 30%).** Phases 00–02 are complete; Phases 03–09 remain pending. Phase 02 closed on 2026-09-17.
+- **Plan status: IN PROGRESS (4/10 phases; 40%).** Phases 00–03 are complete; Phases 04–09 remain pending. Phase 03 closed on 2026-09-17.
 - **Phase 02 — Unified shell and profile migration — DONE (2026-09-17; 100%):** Delivered independent profile connections and controls, grouped `Profile → Project` navigation, fresh browser-resource reset, and explicit host bootstrap. Unsupported native remote profiles remain editable/listed but produce no fallback traffic. See the [parent plan](../plans/260916-2137-unified-profile/plan.md), [Phase 02 plan](../plans/260916-2137-unified-profile/phase-02-unified-shell-and-profile-migration.md), [QA report](../plans/reports/qa-260917-0808-phase-02-unified-shell-test-suite.md), and [final code review](../plans/reports/code-review-260917-0847-phase-02-unified-shell-cycle-3.md).
+- **Phase 03 — Files, editor, federated search and Git — DONE (2026-09-17; 100%):** Delivered qualified editor/tree/file/Git ownership, federated partial search, owner-bound asynchronous file/media operations, stale-generation and cross-owner protections, and selective SSH retry. Focused validation passed **21 test files / 172 tests**; complete UI validation passed **1,727/1,727** tests; UI and web builds passed; Cycle 3 review approved **10/10**. See the [Phase 03 plan](../plans/260916-2137-unified-profile/phase-03-files-editor-search-and-git.md), [QA report](../plans/reports/qa-260917-0928-phase-03-files-editor-search-git-test-suite.md), and [final code review](../plans/reports/code-review-260917-1057-phase-03-cycle-3.md).
 - **Validation:** Final review reports UI, native, and web builds passing; focused UI/native checks passing; full Vitest suite passed **1,766/1,766**. Coverage percentages remain unreported because the optional `@vitest/coverage-v8` provider is not installed.
 
 
@@ -295,7 +296,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 00:** DONE — contract freeze and caller inventory approved/frozen (100%).
 - **Phase 01:** DONE — explicit ownership and connection foundation complete (100%).
 - **Phase 02:** DONE — unified shell and profile migration complete (100%).
-- **Plan progress:** 3/10 phases complete (30%); next **Phase 03 — Files, editor, search and Git**.
+- **Phase 03:** DONE — files, editor, search and Git complete (2026-09-17; 100%).
+- **Plan progress:** 4/10 phases complete (40%); next **Phase 04 — Terminals and workflow**.
 
 ### Browser Debug and Native Child WebView (current status, 2026-08-30)
 

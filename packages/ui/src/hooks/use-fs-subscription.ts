@@ -1,14 +1,19 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
+import {
+  captureConnection,
+  getTransport as getConnectionsTransport,
+} from "@/api/connections.js";
+import { toServerProjectTarget } from "@/api/ownership.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import type {
   FsArborNode,
+  FsListResponse,
   ServerTreeNode,
   FsEventDto,
   FsTreeData,
 } from "@/api/fs-types.js";
-import { api } from "@/api/client.js";
 import {
   normalizeProjectTarget,
   projectTargetCacheKey,
@@ -83,30 +88,43 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
   const targetRef = normalizeProjectTarget(target);
   const project = targetRef.project;
   const worktreePath = targetRef.worktreePath;
+  const profileId = targetRef.profileId;
   const targetKey = projectTargetCacheKey(targetRef);
   const requestTarget =
     worktreePath == null ? project : { project, worktreePath };
   const transportGeneration = useTransportGeneration();
   const boundTransportGenerationRef = useRef(transportGeneration);
+  const originatingTransportRef = useRef<WsTransport | null>(null);
 
+  const treeQueryKey = profileId
+    ? ["fs-tree", profileId, project, targetKey, path]
+    : ["fs-tree", project, targetKey, path];
   const query = useQuery<FsTreeData>({
-    queryKey: ["fs-tree", project, targetKey, path],
+    queryKey: treeQueryKey,
     queryFn: async ({ signal }) => {
-      // Re-resolve transport each time to handle reconfigureTransport() calls.
-      const t = getTransport() as WsTransport;
+      let t: WsTransport;
+      if (targetRef.profileId) {
+        try {
+          const conn = captureConnection(targetRef.profileId);
+          t = getConnectionsTransport(conn) as WsTransport;
+        } catch {
+          t = getTransport() as WsTransport;
+        }
+      } else {
+        t = getTransport() as WsTransport;
+      }
+      originatingTransportRef.current = t;
+
       let sub_id: number | undefined;
       try {
         const result = await t.fsSubscribeTree(requestTarget, path);
         sub_id = result.sub_id;
-        // If TanStack Query cancelled this queryFn (component unmounted while in-flight),
-        // immediately release the subscription the server has already created.
         if (signal.aborted) {
           t.fsUnsubscribeTree(sub_id);
           throw new DOMException("Subscription cancelled", "AbortError");
         }
         return { sub_id, nodes: result.nodes.map(serverNodeToArbor) };
       } catch (e) {
-        // Clean up server-side subscription on any failure after subscribe succeeded.
         if (
           sub_id !== undefined &&
           !(e instanceof DOMException && e.name === "AbortError")
@@ -118,7 +136,6 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
     },
     staleTime: Infinity,
   });
-
   // Set up fs event listener once we have a sub_id.
   // Cleanup runs on sub_id change (re-subscription) or unmount.
   const subId = query.data?.sub_id;
@@ -127,47 +144,58 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
     if (boundTransportGenerationRef.current !== transportGeneration) {
       boundTransportGenerationRef.current = transportGeneration;
       void qc.resetQueries({
-        queryKey: ["fs-tree", project, targetKey, path],
+        queryKey: treeQueryKey,
         exact: true,
       });
       return;
     }
-    const t = getTransport() as WsTransport;
-    const workspaceEpoch = explorerLanguageScanWorkspaceEpoch(qc);
+    const t =
+      originatingTransportRef.current ?? (getTransport() as WsTransport);
+    const workspaceEpoch = explorerLanguageScanWorkspaceEpoch(qc, targetRef);
     const off = t.onFsEvent(subId, (ev: FsEventDto) => {
-      if (explorerLanguageScanWorkspaceEpoch(qc) !== workspaceEpoch) {
+      if (
+        explorerLanguageScanWorkspaceEpoch(qc, targetRef) !== workspaceEpoch
+      ) {
         return;
       }
-      markExplorerLanguageScanStale(qc, project, workspaceEpoch, targetKey);
-      qc.setQueryData<FsTreeData>(
-        ["fs-tree", project, targetKey, path],
-        (prev) => {
-          if (!prev) return prev;
-          const next = applyFsDelta(prev, ev);
-          if (next === null) {
-            void qc.invalidateQueries({
-              queryKey: ["fs-tree", project, targetKey, path],
-            });
-            return prev;
-          }
-          return next;
-        },
-      );
-      scheduleGitFsInvalidation(
-        qc,
-        worktreePath == null ? project : { project, worktreePath },
-      );
+      markExplorerLanguageScanStale(qc, targetRef, workspaceEpoch, targetKey);
+      qc.setQueryData<FsTreeData>(treeQueryKey, (prev) => {
+        if (!prev) return prev;
+        const next = applyFsDelta(prev, ev);
+        if (next === null) {
+          void qc.invalidateQueries({
+            queryKey: treeQueryKey,
+          });
+          return prev;
+        }
+        return next;
+      });
+      scheduleGitFsInvalidation(qc, targetRef);
     });
 
     return () => {
       off();
       t.fsUnsubscribeTree(subId);
     };
-  }, [subId, project, worktreePath, targetKey, path, qc, transportGeneration]);
-
+  }, [
+    subId,
+    project,
+    worktreePath,
+    targetKey,
+    path,
+    qc,
+    transportGeneration,
+    profileId,
+  ]);
   /** Load children for a dir node and splice them into the cached tree. */
   async function loadChildren(nodeId: string) {
-    const resp = await api.fs.list(requestTarget, nodeId);
+    const t =
+      originatingTransportRef.current ?? (getTransport() as WsTransport);
+    const wire = toServerProjectTarget(targetRef);
+    const resp = await t.invoke<FsListResponse>("fs:list", {
+      ...wire,
+      path: nodeId,
+    });
     const children = resp.entries.map(
       (e) =>
         ({
@@ -181,13 +209,23 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
         }) as FsArborNode,
     );
 
-    qc.setQueryData<FsTreeData>(
-      ["fs-tree", project, targetKey, path],
-      (prev) => {
-        if (!prev) return prev;
-        return { ...prev, nodes: spliceChildren(prev.nodes, nodeId, children) };
-      },
-    );
+    qc.setQueryData<FsTreeData>(treeQueryKey, (prev) => {
+      if (!prev) return prev;
+      return { ...prev, nodes: spliceChildren(prev.nodes, nodeId, children) };
+    });
+
+    if (targetRef.profileId) {
+      qc.setQueryData<FsTreeData>(
+        ["fs-tree", project, targetKey, path],
+        (prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            nodes: spliceChildren(prev.nodes, nodeId, children),
+          };
+        },
+      );
+    }
 
     return children;
   }

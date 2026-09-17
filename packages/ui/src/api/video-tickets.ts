@@ -8,11 +8,16 @@ import {
 } from "./media-session.js";
 import {
   getActiveProfile,
+  getProfiles,
   getAuthToken,
   getServerUrl,
   normalizeServerUrl,
 } from "./server-config.js";
-import { normalizeProjectTarget, type ProjectTargetInput } from "./client.js";
+import {
+  normalizeProjectTarget,
+  toServerProjectTarget,
+  type ProjectTargetInput,
+} from "./client.js";
 
 const VIDEO_TICKET_TIMEOUT_MS = 15_000;
 const STREAM_PATH = /^\/api\/fs\/video\/stream\/[A-Za-z0-9_-]+$/;
@@ -59,8 +64,10 @@ function ticketError(code: string): VideoTicketError {
   return new VideoTicketError(code);
 }
 
-function requestSnapshot(): RequestSnapshot {
-  const profile = getActiveProfile();
+function requestSnapshot(profileId?: string | null): RequestSnapshot {
+  const profile = profileId
+    ? getProfiles().find((p) => p.id === profileId)
+    : getActiveProfile();
   const configuredUrl = normalizeServerUrl(profile?.url ?? getServerUrl());
   try {
     const serverUrl = new URL(configuredUrl);
@@ -151,7 +158,8 @@ export async function issueVideoTicket(
   purpose: VideoTicketPurpose,
   signal?: AbortSignal,
 ): Promise<VideoTicket> {
-  const snapshot = requestSnapshot();
+  const normalizedTarget = normalizeProjectTarget(target);
+  const snapshot = requestSnapshot(normalizedTarget.profileId);
   const timeout = createTimeoutSignal(signal);
   let issuedTicket: string | null = null;
   try {
@@ -163,7 +171,7 @@ export async function issueVideoTicket(
         headers: requestHeaders(snapshot.authToken),
         signal: timeout.signal,
         body: JSON.stringify({
-          ...normalizeProjectTarget(target),
+          ...toServerProjectTarget(normalizedTarget),
           path,
           purpose,
         }),

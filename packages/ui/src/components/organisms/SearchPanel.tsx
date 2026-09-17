@@ -64,9 +64,16 @@ export function SearchPanel({
     consumeSelectOnOpen,
   } = useSearchUiStore();
   const query = queries[mode];
-  const { caseSensitive, setCaseSensitive, data, isLoading, isError, refetch } =
-    useFileSearch(requestTarget, scope, mode, query);
-
+  const {
+    caseSensitive,
+    setCaseSensitive,
+    data,
+    profileStatuses,
+    truncated,
+    isLoading,
+    isError,
+    refetch,
+  } = useFileSearch(requestTarget, scope, mode, query);
   const contentMatches = useMemo(
     () =>
       mode === "content"
@@ -129,6 +136,7 @@ export function SearchPanel({
     replaceDisabled,
     selectMatch,
     replaceNext,
+    replaceAll,
   } = useSearchPanelReplace({
     target: requestTarget,
     scope,
@@ -188,13 +196,15 @@ export function SearchPanel({
               key={nextScope}
               onClick={() => setScope(nextScope)}
               className={cn(
-                "px-3 py-1 transition-colors capitalize",
+                "px-3 py-1 transition-colors",
                 scope === nextScope
                   ? "bg-[var(--color-primary)] text-white"
                   : "bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
               )}
             >
-              {nextScope}
+              {nextScope === "project"
+                ? "Project target"
+                : "All connected profiles"}
             </button>
           ))}
         </div>
@@ -209,13 +219,12 @@ export function SearchPanel({
             placeholder={
               mode === "filename"
                 ? scope === "workspace"
-                  ? "Find files in all projects…"
-                  : "Find files…"
+                  ? "Find files across all connected profiles…"
+                  : "Find files in project target…"
                 : scope === "workspace"
-                  ? "Search all projects…"
-                  : "Search file contents…"
+                  ? "Search across all connected profiles…"
+                  : "Search project target contents…"
             }
-            value={query}
             onChange={(event) => setQuery(mode, event.target.value)}
             className="flex-1 text-xs px-2 py-1.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)] transition-colors"
           />
@@ -259,6 +268,19 @@ export function SearchPanel({
                 <Replace className="h-3.5 w-3.5" />
               )}
               Replace Next
+            </button>
+            <button
+              type="button"
+              onClick={() => void replaceAll()}
+              disabled={replaceDisabled}
+              className={cn(
+                "shrink-0 inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                replaceDisabled
+                  ? "cursor-not-allowed bg-[var(--color-surface-2)] text-[var(--color-text-muted)]"
+                  : "bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-surface-3)]",
+              )}
+            >
+              Replace All
             </button>
           </div>
         )}
@@ -305,13 +327,42 @@ export function SearchPanel({
             <span>{error}</span>
           </div>
         )}
+        {truncated && (
+          <div className="flex items-center gap-1.5 text-[10px] text-amber-400">
+            <AlertTriangle className="h-3 w-3 shrink-0" />
+            <span>Results capped at 500 matches. Search may be truncated.</span>
+          </div>
+        )}
+        {scope === "workspace" && profileStatuses && profileStatuses.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1 pt-0.5">
+            {profileStatuses.map((st) => (
+              <span
+                key={st.profileId}
+                className={cn(
+                  "inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-mono",
+                  st.status === "connected"
+                    ? "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)]"
+                    : st.status === "error" || st.status === "offline"
+                      ? "border-red-400/30 bg-red-400/10 text-red-300"
+                      : "border-zinc-500/30 bg-zinc-500/10 text-zinc-400",
+                )}
+              >
+                <span className="font-semibold">{st.profileName}</span>
+                <span>
+                  {st.status === "connected"
+                    ? `${st.matchCount}${st.truncated ? "+" : ""}`
+                    : st.status}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
         {query.length > 0 && query.length < 2 && (
           <p className="text-[10px] text-[var(--color-text-muted)]">
             Type at least 2 characters
           </p>
         )}
       </div>
-
       <div className="flex-1 overflow-auto min-h-0">
         <SearchPanelResults
           mode={mode}

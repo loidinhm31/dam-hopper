@@ -8,7 +8,7 @@
 
 ### Overview
 
-Date: 2026-09-16. Priority: P1. Implementation: pending (0%). Planning status: specified; runtime verification: not run. Scope: Files and Git.
+Date: 2026-09-17. Priority: P1. Status: DONE (100%) — 2026-09-17. Runtime verification: passed. Scope: Files and Git.
 
 ### Key Insights
 
@@ -65,12 +65,12 @@ Search and Git work can proceed after 03A without waiting for media implementati
 
 ### Todo list
 
-- [ ] A/B `web/src/marker.txt` opens as distinct models; editing/saving A while B is selected changes A only.
-- [ ] Same worktree/submodule names and paths do not share target availability, Git state or watcher invalidation across owners.
-- [ ] Search succeeds partially with B offline, labels ownership/truncation, cancels stale queries, and result navigation opens the originating project.
-- [ ] Replace shows exact affected owners and does not touch B's dirty tab or undisplayed/truncated results; partial success is honest.
-- [ ] Upload/download/preview completion after focus change stays on origin; URL/root change detaches rather than retargets.
-- [ ] Authentication retry never repeats successful bulk targets or dispatches to a new generation.
+- [x] A/B `web/src/marker.txt` opens as distinct models; editing/saving A while B is selected changes A only.
+- [x] Same worktree/submodule names and paths do not share target availability, Git state or watcher invalidation across owners.
+- [x] Search succeeds partially with B offline, labels ownership/truncation, cancels stale queries, and result navigation opens the originating project.
+- [x] Replace shows exact affected owners and does not touch B's dirty tab or undisplayed/truncated results; partial success is honest.
+- [x] Upload/download/preview completion after focus change stays on origin; URL/root change detaches rather than retargets.
+- [x] Authentication retry never repeats successful bulk targets or dispatches to a new generation.
 
 ### Success Criteria
 
@@ -91,6 +91,11 @@ Keep filesystem sandbox/worktree/mtime checks and original-owner SSH credentials
 #### Verification and risks
 
 Use existing editor, project-target, file-search, search-panel-replace, fs-upload, Git retry and preview tests; add regression only for collision, stale-save, partial search, partial bulk retry and cancellation boundaries. Live scenarios S03/S04/S07 exercise real files/Git/worktrees on both servers. Backend sandbox/search/worktree tests remain unchanged unless a contract change requires adjustment. Main risk is partial ownership migration in indirect helpers; foundation owner inventories every old `ProjectTargetInput`, ambient API/transport use and broad invalidation before enabling concurrency. No backend search protocol expansion required.
+
+#### Implementation status & review verification
+- Review Cycle 1: Identified warning items around transport capturing and query key qualification in `use-fs-subscription.ts` and `use-fs-upload.ts`. Remediated.
+- Review Cycle 2: Score 9.7/10. All Cycle 1 warnings verified fixed. Two minor cleanups suggested (capture local closure transport in unsubscribe, extract primitive `profileId` outside `useCallback`).
+- Review Cycle 3: Score 10/10. Cycle 2 suggestions verified in `use-fs-subscription.ts` and `use-fs-upload.ts`. All 21 test files (172 tests) passing; typecheck clean. Phase 03 deliverable fully verified and complete. Ready for Phase 04 integration.
 
 #### Plan interpretation
 

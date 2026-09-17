@@ -1,6 +1,16 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { logger } from "@dam-hopper/shared/logger";
 import { getTransport } from "@/api/transport.js";
+import {
+  captureConnection,
+  getConnectionSnapshot,
+  getTransport as getConnectionsTransport,
+  isCurrentConnection,
+} from "@/api/connections.js";
+import {
+  toServerProjectTarget,
+  type ConnectionRef,
+} from "@/api/ownership.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import type { FsOpResult } from "@/api/fs-types.js";
 import {
@@ -9,7 +19,7 @@ import {
   type ProjectTargetInput,
 } from "@/api/client.js";
 import {
-  getActiveProfile,
+  getProfiles,
   getAuthToken,
   getServerUrl,
 } from "@/api/server-config.js";
@@ -35,6 +45,17 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
   const targetKey = projectTargetCacheKey(targetRef);
 
   function invalidateTree() {
+    if (targetRef.profileId) {
+      void qc.invalidateQueries({
+        queryKey: [
+          "fs-tree",
+          targetRef.profileId,
+          project,
+          targetKey,
+          subscribedPath,
+        ],
+      });
+    }
     void qc.invalidateQueries({
       queryKey: ["fs-tree", project, targetKey, subscribedPath],
     });
@@ -44,22 +65,43 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
     void invalidateGitFileOperation(qc, targetRef, path);
   }
 
-  function transport(): WsTransport {
-    return getTransport() as WsTransport;
+  function getBoundTransport(): {
+    transport: WsTransport;
+    connectionRef?: ConnectionRef;
+  } {
+    const profileId = targetRef.profileId;
+    if (profileId) {
+      try {
+        const conn = captureConnection(profileId);
+        const t = getConnectionsTransport(conn) as WsTransport;
+        return { transport: t, connectionRef: conn };
+      } catch {
+        // Disconnected or offline
+      }
+    }
+    return { transport: getTransport() as WsTransport };
   }
 
   async function runFsOp(
     op: "create_file" | "create_dir" | "rename" | "delete" | "move",
     params: { path: string; newPath?: string; forceGit?: boolean },
   ): Promise<FsOpResult> {
+    const { transport: t, connectionRef } = getBoundTransport();
     try {
-      const result = await transport().fsOp(op, {
-        ...targetRef,
+      const wire = toServerProjectTarget(targetRef);
+      const result = await t.fsOp(op, {
+        ...wire,
         ...params,
       });
+      if (connectionRef && !isCurrentConnection(connectionRef)) {
+        return { ok: false, error: "Connection changed during operation" };
+      }
       markTargetUnavailableIfNeeded(targetRef, result);
       return result;
     } catch (error) {
+      if (connectionRef && !isCurrentConnection(connectionRef)) {
+        return { ok: false, error: "Connection changed during operation" };
+      }
       markTargetUnavailableIfNeeded(targetRef, error);
       throw error;
     }
@@ -137,14 +179,21 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
     if (targetRef.worktreePath != null) {
       params.set("worktreePath", targetRef.worktreePath);
     }
-    const profile = getActiveProfile();
-    const serverUrl = profile?.url ?? getServerUrl();
-    const token = getAuthToken(profile?.id);
+    const profileId = targetRef.profileId;
+    let serverUrl = getServerUrl();
+    let token: string | null = null;
+    if (profileId) {
+      const snapshot = getConnectionSnapshot(profileId);
+      const profile = getProfiles().find((p) => p.id === profileId);
+      serverUrl = snapshot?.serverUrl ?? profile?.url ?? getServerUrl();
+      token = getAuthToken(profileId);
+    } else {
+      token = getAuthToken();
+    }
     const headers: HeadersInit = {};
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
-
     try {
       const response = await fetch(`${serverUrl}/api/fs/download?${params}`, {
         headers,

@@ -7,6 +7,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileText, Loader2 } from "lucide-react";
 import { getTransport } from "@/api/transport.js";
+import {
+  captureConnection,
+  getTransport as getConnectionsTransport,
+  isCurrentConnection,
+} from "@/api/connections.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import {
   isProjectTargetError,
@@ -72,12 +78,24 @@ export function LargeFileViewer({
       fetchingRef.current = true;
       setLoading(true);
       try {
-        const t = getTransport() as WsTransport;
+        let t: WsTransport;
+        let connectionRef: ConnectionRef | undefined;
+        if (targetRef.profileId) {
+          try {
+            connectionRef = captureConnection(targetRef.profileId);
+            t = getConnectionsTransport(connectionRef) as WsTransport;
+          } catch {
+            t = getTransport() as WsTransport;
+          }
+        } else {
+          t = getTransport() as WsTransport;
+        }
         const result = await t.fsRead(targetRef, path, {
           offset,
           len: CHUNK_BYTES,
         });
         if (generation !== generationRef.current) return;
+        if (connectionRef && !isCurrentConnection(connectionRef)) return;
         if (!result.ok) {
           if (
             isProjectTargetError(

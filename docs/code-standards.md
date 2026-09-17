@@ -1251,6 +1251,46 @@ profile isolation, endpoint-bound token rejection, delayed login after edit or
 remove, tuple-key disambiguation, explicit selector independence, reset
 idempotence, storage failure, and legacy-link rejection. Do not retain tests
 that only pin old active-profile switch/reload wording.
+### Profile-qualified files, editor, search, and Git (Phase 03)
+
+Treat `ProjectTargetRef` as a resource identity, not a display convenience:
+
+```ts
+{ profileId: string; project: string; worktreePath?: string | null }
+```
+
+- Capture `{ profileId, generation }` before every asynchronous filesystem,
+  editor, search, media, or Git operation. Verify the generation before
+  publishing results or committing a mutation.
+- Keep `profileId` in browser keys and owner checks. Project the server payload
+  through `toServerProjectTarget()`; never spread `profileId` into a server
+  wire target and never resolve a request through a global active profile.
+- Include the normalized worktree discriminator in editor, explorer-tree,
+  language-scan, search, and Git cache keys. Root and worktree scopes are not
+  interchangeable.
+- Mark a missing/prunable worktree unavailable and fail closed. Do not silently
+  redirect to the configured root or another profile.
+- File events and Git invalidation must update only the matching target. Clean
+  tabs may reload; dirty tabs retain local content and transition to stale or
+  conflict state.
+- Keep Monaco model paths and tab keys qualified by profile/target. A path
+  string alone is not a safe editor identity.
+- Use mtime-guarded writes and exact match validation for replacement. `Replace
+  Next` and `Replace All` must skip dirty tabs for the same target without
+  blocking independent profiles or targets.
+- Federated search must preserve each match's profile/project/target metadata,
+  expose partial profile failures, sort deterministically, and surface the
+  500-result aggregate cap/truncation warning.
+- Bulk Git results remain per-target. SSH retry may handle recognized
+  authentication failures only; retain successful initial results, retry only
+  failed targets after key load, and cancel when the owner generation changes.
+- Large-file viewers must use bounded range reads and stay read-only. Image and
+  video previews use scoped ticket capabilities; never put bearer credentials
+  in media URLs or load an entire large media file into a Blob.
+
+The implementation map and focused contract test are maintained in
+[Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
+
 
 ### Build & Type Checking
 

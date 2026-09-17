@@ -37,16 +37,25 @@ export function SearchPanelResults({
     return (
       <div>
         {pathMatches.map((match) => {
-          const key = `${match.project ?? ""}:${match.path}`;
+          const key = `${match.profileId ? `${match.profileId}:` : ""}${match.project ?? ""}:${match.path}`;
           return (
             <button
               key={key}
               onClick={() => onResultClick(match)}
               className="w-full text-left flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-surface-2)] transition-colors"
             >
-              {match.project && scope === "workspace" && (
-                <span className="shrink-0 px-1.5 py-0.5 rounded-sm bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-mono text-[9px]">
-                  {match.project}
+              {scope === "workspace" && (match.profileName || match.project) && (
+                <span className="shrink-0 flex items-center gap-1 font-mono text-[9px]">
+                  {match.profileName && (
+                    <span className="px-1.5 py-0.5 rounded-sm bg-zinc-500/15 text-[var(--color-text-muted)]">
+                      {match.profileName}
+                    </span>
+                  )}
+                  {match.project && (
+                    <span className="px-1.5 py-0.5 rounded-sm bg-[var(--color-primary)]/15 text-[var(--color-primary)]">
+                      {match.project}
+                    </span>
+                  )}
                 </span>
               )}
               <FileDecorationIcon
@@ -76,9 +85,18 @@ export function SearchPanelResults({
               title={group.path}
               onClick={() => onContentMatchClick(group.matches[0]!)}
             >
-              {group.project && scope === "workspace" && (
-                <span className="shrink-0 px-1.5 py-0.5 rounded-sm bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-mono text-[9px] tracking-normal">
-                  {group.project}
+              {scope === "workspace" && (group.profileName || group.project) && (
+                <span className="shrink-0 flex items-center gap-1 font-mono text-[9px] tracking-normal">
+                  {group.profileName && (
+                    <span className="px-1.5 py-0.5 rounded-sm bg-zinc-500/15 text-[var(--color-text-muted)]">
+                      {group.profileName}
+                    </span>
+                  )}
+                  {group.project && (
+                    <span className="px-1.5 py-0.5 rounded-sm bg-[var(--color-primary)]/15 text-[var(--color-primary)]">
+                      {group.project}
+                    </span>
+                  )}
                 </span>
               )}
               <FileDecorationIcon

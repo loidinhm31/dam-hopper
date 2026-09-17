@@ -13,6 +13,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Feature Guides
 
 - **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage profile-scoped server connections and storage
+- **[Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)** — Profile-qualified IDE resources, federated search/replace, previews, and target-aware Git
 - **[Frontend Components](./frontend-components.md)** — Shared React component architecture and host lifecycle
 - **[Workflow Context Surface](./workflow-context-surface.md)** — Responsive Plan/item details, notes, and inline editing
 - **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries
@@ -77,12 +78,20 @@ exists before linking it from a new document.
 
 ### Features
 
-**IDE File Explorer (Phase 01)** — Feature-gated file listing, reading, and metadata.
+**IDE Files, Editor, Search, and Git (Phase 03)** — Profile-qualified file
+explorer and editor resources, target-aware previews and Git, and federated
+search/replace.
 
-- Endpoints: GET /api/fs/list, /api/fs/read, /api/fs/stat
-- Sandbox: Path validation prevents escape attempts
-- Frontend: shared file decoration registry powers icon, badge, display-language, and Monaco-language lookup
-
+- Target: `{ profileId, project, worktreePath? }`; root/worktree disappearance
+  fails closed instead of falling back silently.
+- Editor tabs and Monaco models are qualified per profile/target; dirty tabs
+  remain isolated and are not overwritten by watcher or Git reloads.
+- Search scopes are Project target and All connected profiles, with a
+  500-result aggregate cap and truncation warning.
+- Replace Next/All captures the match target and skips dirty files.
+- Fetch/pull/push retain independent target results; SSH retry does not replay
+  successful targets.
+- See [Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
 **Project Registry Management** — TOML-based registry, project discovery, hot-reload.
 
 - Config: `~/.config/dam-hopper/dam-hopper.toml` by default, or any file passed via `--config`

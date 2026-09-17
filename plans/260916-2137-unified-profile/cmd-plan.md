@@ -27,7 +27,7 @@ Write plan.md, cmd-plan.md, phase documents, shared contracts, coverage, executi
 | 00 | [Contract freeze](phase-00-contract-freeze.md) | Completed (G0 frozen) | 100% |
 | 01 | [Ownership/connections](phase-01-explicit-ownership-and-connections.md) | DONE — 2026-09-17 | 100% |
 | 02 | [Shell/profiles](phase-02-unified-shell-and-profile-migration.md) | DONE — 2026-09-17 | 100% |
-| 03 | [Files/editor/search/Git](phase-03-files-editor-search-and-git.md) | Pending | 0% |
+| 03 | [Files/editor/search/Git](phase-03-files-editor-search-and-git.md) | DONE — 2026-09-17 | 100% |
 | 04 | [Terminals/workflow](phase-04-terminals-workflow-and-navigation.md) | Pending | 0% |
 | 05 | [Agents/ports/Browser](phase-05-agents-ports-and-browser.md) | Pending | 0% |
 | 06 | [Preferences/Settings/host](phase-06-preferences-settings-usage-and-host.md) | Pending | 0% |
@@ -41,7 +41,7 @@ The interview is complete; [validation-decisions.md](validation-decisions.md) re
 
 ## Resume
 
-Use the explicit plan directory above. The active-plan helper reported no `EVCRATE_SESSION_ID`, so automatic session activation was not persisted. No artificial session identity was created. Phase 00's documentation-only G0 freeze, Phase 01 ownership/connections, and Phase 02 unified shell/profile migration are complete as of 2026-09-17. The parent plan remains in progress at 3/10 phases (30%); Phase 03 is next.
+Use the explicit plan directory above. The active-plan helper reported no `EVCRATE_SESSION_ID`, so automatic session activation was not persisted. No artificial session identity was created. Phase 00's documentation-only G0 freeze, Phase 01 ownership/connections, Phase 02 unified shell/profile migration, and Phase 03 files/editor/search/Git are complete as of 2026-09-17. The parent plan remains in progress at 4/10 phases (40%); Phase 04 is next.
 
 ## Unresolved questions
 

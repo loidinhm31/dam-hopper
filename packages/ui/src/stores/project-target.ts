@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import {
   normalizeProjectTarget,
+  projectKey,
+  type ProjectRef,
   type ProjectTargetRef,
   type ProjectTargetInput,
   type Worktree,
@@ -19,6 +21,18 @@ export interface ProjectTargetSnapshot {
   worktree?: Worktree;
 }
 
+export function projectScopeKey(project: string | ProjectRef): string {
+  if (
+    typeof project === "object" &&
+    project !== null &&
+    "profileId" in project &&
+    Boolean(project.profileId)
+  ) {
+    return projectKey(project);
+  }
+  return typeof project === "string" ? project : project.project;
+}
+
 interface ProjectTargetState {
   /** Only non-root worktree paths are stored; absence means configured root. */
   activeTargetByProject: Record<string, string>;
@@ -26,10 +40,19 @@ interface ProjectTargetState {
   unavailableTargetByProject: Record<string, string>;
   /** All unavailable targets retained for orphan-session reconciliation. */
   unavailableTargetsByProject: Record<string, string[]>;
-  selectTarget: (project: string, worktreePath: string | null) => void;
-  resetTarget: (project: string) => void;
-  markTargetUnavailable: (project: string, worktreePath: string) => void;
-  clearUnavailableTarget: (project: string, worktreePath?: string) => void;
+  selectTarget: (
+    project: string | ProjectRef,
+    worktreePath: string | null,
+  ) => void;
+  resetTarget: (project: string | ProjectRef) => void;
+  markTargetUnavailable: (
+    project: string | ProjectRef,
+    worktreePath: string,
+  ) => void;
+  clearUnavailableTarget: (
+    project: string | ProjectRef,
+    worktreePath?: string,
+  ) => void;
 }
 
 export function worktreeTargetKey(_project: string, worktreePath: string) {
@@ -60,20 +83,33 @@ export function worktreeStatusLabel(worktree: Worktree) {
 }
 
 export function createProjectTargetSnapshot(
-  project: string,
+  project: string | ProjectRef,
   worktreePath: string | null | undefined,
   worktree?: Worktree,
 ): ProjectTargetSnapshot {
+  const profileId =
+    typeof project === "object" && project !== null && "profileId" in project
+      ? project.profileId
+      : undefined;
+  const projectName = typeof project === "string" ? project : project.project;
   const target = normalizeProjectTarget(
-    worktreePath == null ? { project } : { project, worktreePath },
+    worktreePath == null
+      ? (profileId
+          ? { profileId, project: projectName }
+          : { project: projectName })
+      : (profileId
+          ? { profileId, project: projectName, worktreePath }
+          : { project: projectName, worktreePath }),
   );
   const targetPath = target.worktreePath;
   const isRoot = targetPath == null;
 
   if (targetPath == null) {
     return {
-      project,
-      target: { project },
+      project: projectName,
+      target: profileId
+        ? { profileId, project: projectName }
+        : { project: projectName },
       targetKey: ROOT_TARGET_KEY,
       label: "Project root",
       isRoot: true,
@@ -83,9 +119,9 @@ export function createProjectTargetSnapshot(
   }
 
   return {
-    project,
+    project: projectName,
     target,
-    targetKey: worktreeTargetKey(project, targetPath),
+    targetKey: worktreeTargetKey(projectName, targetPath),
     label: worktree?.branch || targetPath,
     isRoot,
     available: worktree != null && isSelectableWorktree(worktree),
@@ -99,9 +135,10 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
   unavailableTargetsByProject: {},
   selectTarget: (project, worktreePath) =>
     set((state) => {
+      const key = projectScopeKey(project);
       if (worktreePath == null) {
         const next = { ...state.activeTargetByProject };
-        delete next[project];
+        delete next[key];
         return {
           activeTargetByProject: next,
         };
@@ -109,18 +146,19 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
       return {
         activeTargetByProject: {
           ...state.activeTargetByProject,
-          [project]: worktreePath,
+          [key]: worktreePath,
         },
       };
     }),
   resetTarget: (project) =>
     set((state) => {
+      const key = projectScopeKey(project);
       const next = { ...state.activeTargetByProject };
-      delete next[project];
+      delete next[key];
       const nextUnavailable = { ...state.unavailableTargetByProject };
-      delete nextUnavailable[project];
+      delete nextUnavailable[key];
       const nextUnavailableTargets = { ...state.unavailableTargetsByProject };
-      delete nextUnavailableTargets[project];
+      delete nextUnavailableTargets[key];
       return {
         activeTargetByProject: next,
         unavailableTargetByProject: nextUnavailable,
@@ -129,11 +167,12 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
     }),
   markTargetUnavailable: (project, worktreePath) =>
     set((state) => {
+      const key = projectScopeKey(project);
       const next = { ...state.activeTargetByProject };
-      if (next[project] && sameWorktreePath(next[project], worktreePath)) {
-        delete next[project];
+      if (next[key] && sameWorktreePath(next[key], worktreePath)) {
+        delete next[key];
       }
-      const existing = state.unavailableTargetsByProject[project] ?? [];
+      const existing = state.unavailableTargetsByProject[key] ?? [];
       const targets = existing.some((path) =>
         sameWorktreePath(path, worktreePath),
       )
@@ -143,22 +182,23 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
         activeTargetByProject: next,
         unavailableTargetByProject: {
           ...state.unavailableTargetByProject,
-          [project]: worktreePath,
+          [key]: worktreePath,
         },
         unavailableTargetsByProject: {
           ...state.unavailableTargetsByProject,
-          [project]: targets,
+          [key]: targets,
         },
       };
     }),
   clearUnavailableTarget: (project, worktreePath) =>
     set((state) => {
-      if (!(project in state.unavailableTargetByProject)) return state;
+      const key = projectScopeKey(project);
+      if (!(key in state.unavailableTargetByProject)) return state;
       if (worktreePath == null) {
         const next = { ...state.unavailableTargetByProject };
         const nextTargets = { ...state.unavailableTargetsByProject };
-        delete next[project];
-        delete nextTargets[project];
+        delete next[key];
+        delete nextTargets[key];
         return {
           unavailableTargetByProject: next,
           unavailableTargetsByProject: nextTargets,
@@ -166,17 +206,17 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
       }
 
       const remaining = (
-        state.unavailableTargetsByProject[project] ?? []
+        state.unavailableTargetsByProject[key] ?? []
       ).filter((path) => !sameWorktreePath(path, worktreePath));
       const next = { ...state.unavailableTargetByProject };
       const nextTargets = { ...state.unavailableTargetsByProject };
       if (remaining.length === 0) {
-        delete next[project];
-        delete nextTargets[project];
+        delete next[key];
+        delete nextTargets[key];
       } else {
-        nextTargets[project] = remaining;
-        if (next[project] && sameWorktreePath(next[project], worktreePath)) {
-          next[project] = remaining[remaining.length - 1]!;
+        nextTargets[key] = remaining;
+        if (next[key] && sameWorktreePath(next[key], worktreePath)) {
+          next[key] = remaining[remaining.length - 1]!;
         }
       }
       return {
@@ -190,7 +230,10 @@ export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
 export function markProjectTargetUnavailable(target: ProjectTargetInput): void {
   const normalized = normalizeProjectTarget(target);
   if (normalized.worktreePath == null) return;
+  const projectInput = normalized.profileId
+    ? { profileId: normalized.profileId, project: normalized.project }
+    : normalized.project;
   useProjectTargetStore
     .getState()
-    .markTargetUnavailable(normalized.project, normalized.worktreePath);
+    .markTargetUnavailable(projectInput, normalized.worktreePath);
 }

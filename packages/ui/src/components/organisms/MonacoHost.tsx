@@ -291,6 +291,7 @@ export function MonacoHost({
 
   return (
     <Editor
+      path={`inmemory://dam-hopper/${encodeURIComponent(tabKey)}`}
       value={content}
       language={language}
       theme="vs-dark"

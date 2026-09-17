@@ -6,6 +6,8 @@ export interface GroupedContentSearchMatches {
   key: string;
   path: string;
   project?: string;
+  profileId?: string;
+  profileName?: string;
   matches: SearchMatch[];
 }
 
@@ -29,6 +31,7 @@ export function compareContentSearchMatches(
   b: SearchMatch,
 ): number {
   return (
+    compareOptionalText(a.profileId, b.profileId) ||
     compareOptionalText(a.project, b.project) ||
     a.path.localeCompare(b.path) ||
     a.line - b.line ||
@@ -41,7 +44,9 @@ export function comparePathSearchMatches(
   b: PathSearchMatch,
 ): number {
   return (
-    compareOptionalText(a.project, b.project) || a.path.localeCompare(b.path)
+    compareOptionalText(a.profileId, b.profileId) ||
+    compareOptionalText(a.project, b.project) ||
+    a.path.localeCompare(b.path)
   );
 }
 
@@ -63,7 +68,7 @@ export function groupContentSearchMatches(
   const groups = new Map<string, GroupedContentSearchMatches>();
 
   for (const match of matches) {
-    const key = `${match.project ?? ""}:${match.path}`;
+    const key = `${match.profileId ? `${match.profileId}:` : ""}${match.project ?? ""}:${match.path}`;
     const existing = groups.get(key);
     if (existing) {
       existing.matches.push(match);
@@ -74,6 +79,8 @@ export function groupContentSearchMatches(
       key,
       path: match.path,
       project: match.project,
+      profileId: match.profileId,
+      profileName: match.profileName,
       matches: [match],
     });
   }
@@ -82,7 +89,7 @@ export function groupContentSearchMatches(
 }
 
 export function buildContentSearchMatchKey(match: SearchMatch): string {
-  return `${match.project ?? ""}:${match.path}:${match.line}:${match.col}`;
+  return `${match.profileId ? `${match.profileId}:` : ""}${match.project ?? ""}:${match.path}:${match.line}:${match.col}`;
 }
 
 export function findNextContentSearchMatch(
