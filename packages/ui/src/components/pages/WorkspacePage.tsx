@@ -352,7 +352,7 @@ export function resolveOpenTunnelInBrowserReveal(
 
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { activeProject, activeProjectRevision, setActiveProject } =
+  const { activeProject, activeProjectRevision, setActiveProject, selectedProject } =
     useWorkspaceStore();
   const [workspaceMode, setWorkspaceModeState] =
     useState<WorkspaceMode>(loadWorkspaceMode);
@@ -391,7 +391,8 @@ export default function WorkspacePage() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
   const browserDebugHost = useBrowserDebugHost();
-  const activeProfileId = useServerProfile()?.id ?? null;
+  const activeProfile = useServerProfile();
+  const activeProfileId = selectedProject?.profileId ?? activeProfile?.id ?? null;
   const { level: appZoomLevel } = useAppZoom();
   const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
@@ -472,18 +473,37 @@ export default function WorkspacePage() {
   const openFile = useEditorStore((s) => s.open);
   const openDiff = useEditorStore((s) => s.openDiff);
 
-  const { data: projects = [] } = useProjects({
+  const {
+    data: projects = [],
+    isSuccess: isProjectsSuccess,
+    isFetching: isProjectsFetching,
+  } = useProjects({
     profileId: activeProfileId ?? undefined,
   });
 
   // Validate persisted project still exists in the current workspace.
   useEffect(() => {
-    if (projects.length > 0 && activeProject) {
+    if (isProjectsSuccess && !isProjectsFetching && projects.length > 0 && activeProject) {
+      if (
+        selectedProject?.profileId &&
+        activeProfileId &&
+        selectedProject.profileId !== activeProfileId
+      ) {
+        return;
+      }
       if (!projects.some((p) => p.name === activeProject)) {
         setActiveProject(null);
       }
     }
-  }, [projects, activeProject, setActiveProject]);
+  }, [
+    projects,
+    activeProject,
+    setActiveProject,
+    isProjectsSuccess,
+    isProjectsFetching,
+    selectedProject?.profileId,
+    activeProfileId,
+  ]);
 
   const queryClient = useQueryClient();
   const { state, derived, actions } = useTerminalManager(

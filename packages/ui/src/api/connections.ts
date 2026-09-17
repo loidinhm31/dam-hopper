@@ -639,3 +639,23 @@ export function useConnectionSnapshot(
     () => null,
   );
 }
+
+export function syncActiveProfileConnection(
+  activeProfileId: ProfileId | null,
+): void {
+  if (activeProfileId) {
+    const entry = entries.get(activeProfileId);
+    if (entry?.transport && entry.status === "connected") {
+      reconfigureTransport(entry.transport);
+      resetTransportListeners();
+      initTransportListeners();
+    } else {
+      reconfigureTransport(new IdleTransport());
+      resetTransportListeners();
+      void connectProfile(activeProfileId).catch(() => {});
+    }
+  } else {
+    reconfigureTransport(new IdleTransport());
+    resetTransportListeners();
+  }
+}
