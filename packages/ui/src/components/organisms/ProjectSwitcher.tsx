@@ -12,6 +12,7 @@ import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import { projectKey, parseProjectKey } from "@/api/ownership.js";
 import { cn } from "@/lib/utils.js";
+import { getActiveProfileId, setActiveProfile } from "@/api/server-config.js";
 
 interface ProjectSwitcherProps {
   className?: string;
@@ -46,6 +47,9 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
         value={currentTupleKey}
         onValueChange={(val) => {
           const parsed = parseProjectKey(val);
+          if (parsed?.profileId && parsed.profileId !== getActiveProfileId()) {
+            setActiveProfile(parsed.profileId);
+          }
           setSelectedProject(parsed);
         }}
       >

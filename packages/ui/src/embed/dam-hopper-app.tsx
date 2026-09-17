@@ -10,7 +10,7 @@ import {
 } from "react-router-dom";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
-import { connectProfile } from "@/api/connections.js";
+import { connectProfile, syncActiveProfileConnection } from "@/api/connections.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import {
   getServerUrl,
@@ -22,6 +22,7 @@ import {
   setAuthToken,
   readServerProfiles,
   isSameOriginProfile,
+  subscribeToProfileChanges,
 } from "@/api/server-config.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { TerminalNotificationToastViewport } from "@/components/organisms/TerminalNotificationToastViewport.js";
@@ -269,6 +270,14 @@ export function DamHopperApp() {
     migrateToProfiles();
 
     return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    return subscribeToProfileChanges((event) => {
+      if (event.type === "activeChanged") {
+        syncActiveProfileConnection(event.activeProfileId);
+      }
+    });
   }, []);
 
   useEffect(() => {

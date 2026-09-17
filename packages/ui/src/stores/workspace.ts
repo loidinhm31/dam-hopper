@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { ProjectRef } from "@/api/ownership.js";
+import { getActiveProfileId, setActiveProfile } from "@/api/server-config.js";
 
 export interface WorkspaceStore {
   selectedProject: ProjectRef | null;
@@ -26,6 +27,9 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
               state.selectedProject.profileId === project.profileId &&
               state.selectedProject.project === project.project);
           if (isSame) return state;
+          if (project?.profileId && project.profileId !== getActiveProfileId()) {
+            setActiveProfile(project.profileId);
+          }
           return {
             selectedProject: project,
             navigationRevision: state.navigationRevision + 1,
@@ -42,7 +46,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
           return;
         }
         const currentRef = get().selectedProject;
-        const targetProfileId = profileId ?? currentRef?.profileId ?? "";
+        const targetProfileId = profileId ?? currentRef?.profileId ?? getActiveProfileId() ?? "";
         get().setSelectedProject({
           profileId: targetProfileId,
           project: projectName,
@@ -55,12 +59,18 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       partialize: (state) => ({
         selectedProject: state.selectedProject,
       }),
-      onRehydrateStorage: () => {
+      onRehydrateStorage: () => (state) => {
         // Drop legacy unowned active-project key per G0/Phase 02 contract
         try {
           localStorage.removeItem("dam-hopper:active-project");
         } catch {
           // ignore
+        }
+        if (state?.selectedProject) {
+          state.activeProject = state.selectedProject.project;
+          if (state.selectedProject.profileId && state.selectedProject.profileId !== getActiveProfileId()) {
+            setActiveProfile(state.selectedProject.profileId);
+          }
         }
       },
     },
