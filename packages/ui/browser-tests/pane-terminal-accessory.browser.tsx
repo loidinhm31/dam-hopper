@@ -81,6 +81,11 @@ vi.mock("@/lib/terminal-registry.js", () => ({
       findController: {},
     }),
   },
+  getTerminal: () => ({
+    terminal: mockTerminal,
+    fitAddon: {},
+    findController: {},
+  }),
   subscribeToRegistry: () => () => {},
 }));
 

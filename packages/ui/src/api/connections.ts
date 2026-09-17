@@ -546,13 +546,13 @@ export function getMediaClientId(owner: ConnectionRef): string {
   return created;
 }
 
-/** Returns the active mediaClientId for a connected profile, if available. */
+/** Returns the active mediaClientId for a profile, generating a stable one if disconnected. */
 export function getMediaClientIdForProfile(
   profileId: ProfileId,
-): string | null {
+): string {
   const snap = getConnectionSnapshot(profileId);
-  if (!snap) return null;
-  return getMediaClientId(snap.owner);
+  const owner: ConnectionRef = snap?.owner ?? { profileId, generation: 1 };
+  return getMediaClientId(owner);
 }
 export function subscribeConnections(listener: () => void): () => void {
   listeners.add(listener);
@@ -572,6 +572,16 @@ export function removeProfileConnection(profileId: ProfileId): void {
     entry.transport = null;
     entry.api = null;
     entries.delete(profileId);
+  }
+  for (const [key] of mediaClientIdsByOwner) {
+    try {
+      const parsed = JSON.parse(key);
+      if (Array.isArray(parsed) && parsed[0] === profileId) {
+        mediaClientIdsByOwner.delete(key);
+      }
+    } catch {
+      // ignore malformed keys
+    }
   }
   removeProfileListeners(profileId);
   inFlightConnects.delete(profileId);

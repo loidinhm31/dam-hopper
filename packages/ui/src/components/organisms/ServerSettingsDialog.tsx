@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { X, Server, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { revokeCurrentMediaSession } from "@/api/media-session.js";
+import { getMediaClientIdForProfile } from "@/api/connections.js";
 import type { ServerProfile } from "@/api/server-config.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
@@ -263,7 +264,11 @@ export function ServerSettingsDialog({
         if (shouldRevokePreviousProfileSession) {
           // Persist profile changes first: local persistence failure must not
           // revoke a still-active remote media session.
-          await revokeCurrentMediaSession(profile!.url, previousProfileToken!);
+          await revokeCurrentMediaSession(
+            profile!.url,
+            previousProfileToken!,
+            getMediaClientIdForProfile(profile!.id),
+          );
         }
         if (!clearAuthToken(profile!.id)) {
           restoreProfileState(profile!.id);
@@ -324,7 +329,11 @@ export function ServerSettingsDialog({
       }
       if (!tokenClearedForUrlChange && (tokenMustBeCleared || !t)) {
         if (shouldRevokePreviousProfileSession) {
-          await revokeCurrentMediaSession(profile!.url, previousProfileToken!);
+          await revokeCurrentMediaSession(
+            profile!.url,
+            previousProfileToken!,
+            getMediaClientIdForProfile(profile!.id),
+          );
         }
         if (!clearAuthToken(savedProfile.id)) {
           const restored = restoreProfileState(savedProfile.id);
@@ -338,7 +347,11 @@ export function ServerSettingsDialog({
         }
       }
       if (t && !tokenMustBeCleared && shouldRevokePreviousProfileSession) {
-        await revokeCurrentMediaSession(profile!.url, previousProfileToken!);
+        await revokeCurrentMediaSession(
+          profile!.url,
+          previousProfileToken!,
+          getMediaClientIdForProfile(profile!.id),
+        );
       }
       if (t && !tokenMustBeCleared && !setAuthToken(t, savedProfile.id)) {
         const restored = restoreProfileState(savedProfile.id);
@@ -391,6 +404,7 @@ export function ServerSettingsDialog({
           await revokeCurrentMediaSession(
             initialUrl || getServerUrl(),
             previousLegacyToken!,
+            activeProfileId ? getMediaClientIdForProfile(activeProfileId) : null,
           );
         }
         if (!clearAuthToken(activeProfileId)) {
@@ -438,6 +452,7 @@ export function ServerSettingsDialog({
         await revokeCurrentMediaSession(
           initialUrl || getServerUrl(),
           previousLegacyToken!,
+          activeProfileId ? getMediaClientIdForProfile(activeProfileId) : null,
         );
       }
       if (t && !tokenMustBeCleared && !setAuthToken(t, activeProfileId)) {
@@ -489,7 +504,11 @@ export function ServerSettingsDialog({
     if (targetToken) {
       // Local logout must complete even when the old server is unreachable; its
       // bounded media-session TTL remains the cleanup fallback.
-      await revokeCurrentMediaSession(targetServerUrl, targetToken);
+      await revokeCurrentMediaSession(
+        targetServerUrl,
+        targetToken,
+        targetProfileId ? getMediaClientIdForProfile(targetProfileId) : null,
+      );
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);

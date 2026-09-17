@@ -90,6 +90,10 @@ struct DirFd(RawFd);
 
 impl Drop for DirFd {
     fn drop(&mut self) {
+        #[cfg(test)]
+        if self.0 >= tests::FAKE_FD_BASE {
+            return;
+        }
         // Closing a descriptor during error cleanup is best effort; the primary
         // operation error is more useful than a close error.
         unsafe {
@@ -1091,7 +1095,8 @@ mod tests {
     };
     use tempfile::tempdir;
 
-    const ROOT_FD: RawFd = 10_000;
+    pub(crate) const FAKE_FD_BASE: RawFd = 10_000;
+    const ROOT_FD: RawFd = FAKE_FD_BASE;
     const MANAGED_PATHS: [&str; 7] = [
         VAR_PATH,
         VAR_LIB_PATH,

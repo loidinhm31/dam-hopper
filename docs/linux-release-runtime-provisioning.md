@@ -162,6 +162,11 @@ publication, race, and cleanup contract:
 cargo test -p dam-hopper-server linux_release::api_runtime::tests
 ```
 
+The unit fake syscall implementation reserves `tests::FAKE_FD_BASE` for
+injected descriptors. `DirFd` skips OS close for that range, so test cleanup
+cannot close a real process descriptor; production descriptors continue through
+the normal `close(2)` path.
+
 ### Read-only diagnostics smoke
 
 The Linux production diagnostics smoke is intentionally ignored and must be

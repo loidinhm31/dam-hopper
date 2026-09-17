@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 2,020
-files, 4,521,635 tokens, 18,834,182 characters; five security-flagged files
+**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 2,025
+files, 4,538,673 tokens, 18,898,951 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -148,8 +148,9 @@ manager input revision remains unchanged. Artifact claim release permits a
 retry after a write failure.
 
 The Phase 05 focused gate recorded 44/44 targeted tests, a successful UI
-TypeScript build, and `cargo check`. Live Browser/native qualification remains
-outside this evidence. The maintained implementation guide is
+TypeScript build, and `cargo check`. Phase 09 subsequently qualified the
+integrated web S01–S12 and live Browser boundaries; Windows-native S13 remains
+blocked. The maintained implementation guide is
 [Phase 05: Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md).
 
 These are ownership and admission boundaries, not a new server workspace
@@ -246,6 +247,38 @@ negatives, and Browser target/relay behavior.
 
 The maintained guide is
 [Phase 08: Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md).
+
+## Unified-profile integration and qualification (Phase 09)
+
+Phase 09 is complete for the qualified web/Linux cutover and keeps native
+release status explicit. Integration removed remaining ambient callers and
+preserved one ordinary host `QueryClient`; feature state is keyed by
+`ConnectionRef { profileId, generation }`, while server identifiers remain
+server-local.
+
+| Boundary | Current implementation and invariant |
+| --- | --- |
+| Media lifecycle | `api/connections.ts` stores one in-memory UUIDv4 `mediaClientId` per owner tuple, supplies a stable disconnected-profile fallback, and removes serialized `[profileId, generation]` keys on profile retirement. `api/media-session.ts` bounds a generated ID to the legacy cleanup boundary. |
+| Owner-bound shell | `TopNav`, `DashboardPage`, `WorkspacePage`, `use-aggregated-projects`, `use-command-search`, and `use-ports` bind API/transport work to an explicit owner; import dialogs capture their opening owner; idle-suspend fleet reads remain nullable-safe. |
+| Browser gate | `vitest.browser.config.ts` defines the strict API/fixture port `15173`, defaults the live server URL to A `14801`, and accepts one Chromium channel or executable path. |
+| Linux release tests | `server/src/linux_release/api_runtime.rs` uses `tests::FAKE_FD_BASE` to distinguish injected fake descriptors from real descriptors during `Drop`. |
+| Live qualification | `scripts/qualify-phase09-workbench.mjs` creates isolated A/B roots, repositories, markers, PTYs, media fixtures, and configs; checks S01–S12 on ports `14801`/`14802`; runs four embedded browser assertions; and tears down only owned processes and temporary paths. |
+
+The reconciled execution ledger is **3,504 passed / 9 skipped or ignored**:
+Rust server 1,416, UI unit 1,769, UI browser 209, shared 15, Browser bridge
+19, native host 48, live harness 24, and embedded browser 4. The harness uses
+isolated `--no-auth` fixtures for deterministic remote-effect checks; it does
+not replace normal-auth actor-isolation evidence. G2-Web passed. G2-Native
+remains blocked until real Windows S13 runtime, SSH, WebView2/DPAPI, and Browser
+relay evidence is recorded.
+
+Release cutover ships matching frontend/backend builds with
+`workbenchProtocol: 2`, media `session-cookie-v2`, and terminal-incarnation
+admission. The allowlisted fresh browser-resource reset is idempotent and
+deliberately lossy; rollback uses a mutually compatible pair and may require
+fresh login. See the [Phase 09 plan](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md),
+[verification matrix](../plans/260916-2137-unified-profile/verification-matrix.md),
+and [multi-server guide](./user-guide-multi-server-profiles.md).
 
 ## Backend boundaries
 

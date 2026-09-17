@@ -24,6 +24,10 @@ const SERVER_URL = (
   (import.meta.env.VITE_DAM_HOPPER_SERVER_URL as string | undefined) ??
   "http://127.0.0.1:4802"
 ).replace(/\/$/, "");
+const serverAvailable = await fetch(`${SERVER_URL}/api/health`)
+  .then((r) => r.ok)
+  .catch(() => false);
+
 
 let root: Root;
 let container: HTMLDivElement;
@@ -45,7 +49,7 @@ async function waitForBuffer(id: string, text: string) {
   }, { timeout: 10_000, interval: 100 }).toContain(text);
 }
 
-describe("WorkspacePage workflow terminal continuity against the no-auth server", () => {
+describe.skipIf(!serverAvailable)("WorkspacePage workflow terminal continuity against the no-auth server", () => {
   beforeEach(async () => {
     await page.viewport(1440, 900);
     localStorage.setItem("dam-hopper:ide-left-bottom", "terminal");

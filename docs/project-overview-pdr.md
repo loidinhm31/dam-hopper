@@ -195,7 +195,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Historical qualification record (Chromium 151, 116 browser tests including 11 media tests; 1,018 UI and 691 Rust tests) is retained for provenance only, not a current release guarantee.
 - Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process
 
-### PR-007: Unified Multi-Server Workbench (Phases 02–08 complete — 2026-09-17)
+### PR-007: Unified Multi-Server Workbench (Phases 02–09; web qualified, native S13 blocked — 2026-09-17)
 
 **Functional Requirements:**
 
@@ -333,6 +333,50 @@ scope hook; shared SSH contract fixtures.
 See the [Phase 08 native scope guide](./phase-08-native-scope-concurrency.md),
 [post-fix review](../plans/reports/code-review-260917-2014-phase-08-native-scope-concurrency.md),
 and [Linux verification report](../plans/reports/tester-260917-2012-phase-08-native-scope-concurrency.md).
+
+### PR-007C: Integration and end-to-end qualification (Phase 09)
+
+**Status:** Web/Linux shared behavior qualified 2026-09-17. Review score:
+9.8/10. The reconciled ledger records 3,504 passed tests and nine
+skipped/ignored cases. Windows-native S13 remains blocked; no native release
+claim is inferred from web or Linux evidence.
+
+**Functional and non-functional requirements:**
+
+- Integrate all feature phases through explicit `ConnectionRef` ownership;
+  no ambient active-profile API, query, event, media, or cleanup dispatch.
+- Qualify equal project names, paths, terminal IDs, media tickets, workflow
+  records, ports, diagnostics, and host safety on two isolated live servers.
+- Keep media v2 mandatory (`mediaClientId`, namespaced session cookie,
+  `session-cookie-v2`) and require `workbenchProtocol: 2` before WS/features.
+- Use an allowlisted, idempotent, deliberately lossy fresh browser-resource
+  reset; preserve profiles/auth/native/server resources and never restore old
+  layouts/history.
+- Invoke no real host power/process action, developer credential, SSH/Codex
+  configuration, or persistent browser profile during qualification.
+- Release web only with matched frontend/backend contracts. Native release
+  additionally requires real Windows S13 runtime, SSH, WebView2/DPAPI, and
+  Browser relay evidence.
+
+**Acceptance criteria:**
+
+- [x] `scripts/qualify-phase09-workbench.mjs` checks S01–S12 on isolated
+      Server A/B roots (`14801`/`14802`) and runs four embedded browser
+      assertions; cleanup removes only owned processes and temporary paths.
+- [x] Rust server (1,416), UI unit (1,769), UI browser (209), shared (15),
+      Browser bridge (19), native host (48), live harness (24), and embedded
+      browser (4) suites reconcile to 3,504 passes.
+- [x] Integration fixes preserve owner-bound API clients, media namespace
+      cleanup, nullable host fleet handling, and test-only fake descriptor
+      guards; no permanent compatibility shim remains.
+- [x] G2-Web passed; G2-Native is recorded as blocked rather than passed.
+- [ ] S13 Windows runtime and packaged evidence is still required before a
+      native release.
+
+See the [Phase 09 plan](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md),
+[verification matrix](../plans/260916-2137-unified-profile/verification-matrix.md),
+[multi-server guide](./user-guide-multi-server-profiles.md), and
+[system architecture](./system-architecture.md).
 
 
 ### PR-007A: Profile-qualified files, editor, search, and Git (Phase 03)
@@ -836,11 +880,11 @@ unqualified terminal or infer ownership from the current active profile.
 ### PR-020: Unified-Profile Agents, Ports, and Browser (Phase 05)
 
 **Status:** Complete / DONE on 2026-09-17. The Phase 05 gate recorded 44/44
-targeted tests, a successful UI TypeScript build, and `cargo check`. Live
-Browser/native qualification remains a later release gate. See the
-[Phase 05 implementation guide](./phase-05-agents-ports-and-browser.md), the
-[QA report](../plans/reports/qa-260917-1517-phase-05-agents-ports-browser-validation.md),
-and [Cycle 2 review](../plans/reports/code-review-260917-1522-phase-05-cycle2.md).
+targeted tests, a successful UI TypeScript build, and `cargo check`. Phase 09
+qualified the integrated S01–S12 web/Browser boundaries; Windows-native S13
+remains blocked. See the [Phase 05 implementation guide](./phase-05-agents-ports-and-browser.md),
+[Phase 09 plan](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md),
+and [verification matrix](../plans/260916-2137-unified-profile/verification-matrix.md).
 
 **Product goal:** Agent Store actions, port/tunnel operations, Browser targets,
 and terminal artifact handoff remain isolated when several server profiles

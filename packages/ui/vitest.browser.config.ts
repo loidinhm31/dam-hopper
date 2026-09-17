@@ -398,6 +398,15 @@ export default defineConfig({
     },
     dedupe: ["@tanstack/react-query", "react", "react-dom"],
   },
+  define: {
+    "import.meta.env.VITE_DAM_HOPPER_SERVER_URL": JSON.stringify(
+      process.env.VITE_DAM_HOPPER_SERVER_URL || "http://127.0.0.1:14801",
+    ),
+  },
+  server: {
+    port: 15173,
+    strictPort: true,
+  },
   test: {
     // Browser suites share the Vite media fixture server and Chromium has a
     // finite resource budget. Serial files keep native media readiness checks
@@ -406,6 +415,7 @@ export default defineConfig({
     include: ["browser-tests/**/*.browser.{ts,tsx}"],
     browser: {
       enabled: true,
+      api: { port: 15173 },
       provider: playwright({ launchOptions: browserLaunchOptions }),
       instances: [{ browser: "chromium" }],
       headless: true,

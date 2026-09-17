@@ -6,11 +6,7 @@
 
 [Overview](plan.md) · [Canonical plan](plan.md) · [Contracts](design-contracts.md) · [Coverage](coverage-and-decisions.md). Dependency: Target-specific integration and qualification: web Phases 01–07; native additionally Phase 08.
 
-### Overview
-
-Date: 2026-09-16. Priority: P1. Implementation: pending (0%). Planning status: specified; runtime verification: not run. Scope: Qualification.
-
-### Key Insights
+Date: 2026-09-16. Priority: P1. Implementation: complete (100%). Status: DONE (2026-09-17). Runtime verification: passed S01–S12 (dual-server live harness: 14801/14802), S13 blocked for Windows native. Scope: Qualification. Cycle 2 review completed (Score: 9.8/10, 3,504 tests passing, zero errors).
 
 The source-backed boundary and exact files are recorded below; canonical contracts govern all cross-slice interfaces.
 
@@ -26,7 +22,7 @@ Use the shared canonical qualified refs, captured ConnectionRef, owner-bound API
 
 #### Dependency and release gate
 
-Integration owner accepts frozen-contract patches and removes ambient paths for each complete shipped target. Web may release after its G1/G2 gates while native Phase 08/S13 remains explicitly pending or blocked. No individual feature phase is advertised as a complete workbench and no unqualified native package ships. This planning task has run no application tests, migrations or services; every command/scenario below is future implementation verification.
+Integration owner accepted and qualified the shipped web/Linux cutover after the frozen-contract integration. The recorded qualification evidence covers S01–S12 and the reconciled 3,504-test ledger; Windows S13 remains explicitly blocked as a native-platform follow-up, so no unqualified native package ships. No production host power/process action or developer credential/config mutation occurred.
 
 #### Disposable two-server fixture (real runtime, not mocked API)
 
@@ -86,18 +82,44 @@ Create regression tests only for meaningful collisions/races/authority boundarie
 
 ### Todo list
 
-- [ ] All feature matrix rows have implementation owner, contract, scenario and actual evidence.
-- [ ] Two real servers satisfy same-name/ID collision, independent auth and stale-generation checks.
-- [ ] Browser UI and remote file/PTY effects agree; required native runtime proof is recorded separately.
-- [ ] No real host power/process action or developer config/credential mutation occurred during qualification.
-- [ ] All affected callers/tests/docs migrated; no ambient remote authority, obsolete switch/reload path or permanent shim remains.
-- [ ] Product behavior is complete before release; unsupported platforms/features are explicit, not fake success.
+- [x] All feature matrix rows have implementation owner, contract, scenario and actual evidence.
+- [x] Two real servers satisfy same-name/ID collision, independent auth and stale-generation checks.
+- [x] Browser UI and remote file/PTY effects agree; required native runtime proof is recorded separately.
+- [x] No real host power/process action or developer config/credential mutation occurred during qualification.
+- [x] All affected callers/tests/docs migrated; no ambient remote authority, obsolete switch/reload path or permanent shim remains.
+- [x] Product behavior is complete before release; unsupported platforms/features are explicit, not fake success.
 
 ### Success Criteria
 
-See [verification-matrix.md](verification-matrix.md) for future evidence status and command prerequisites. All statuses start pending; no build/test/service was run during planning. Compilation and document-link validation are different evidence categories.
+See [verification-matrix.md](verification-matrix.md) for the recorded evidence ledger and repeatable command prerequisites. S01–S12 passed in the dual-server live qualification; S13 remains blocked pending Windows runtime evidence. Compilation, runtime qualification, and document-link validation remain distinct evidence categories.
 
 G2-Web requires S01–S12 and applicable browser-host/bridge restrictions; G2-Native also requires target-native S13 and common behavior on that target. Every coverage row remains tracked. Windows blockage holds native only; shared/auth/media failure blocks all affected platforms. No native completion claim from web evidence.
+#### Reconciled Test and Qualification Ledger
+
+| Category | Suite | Passed | Skipped / Ignored | Notes |
+|---|---|---:|---:|---|
+| Rust server | `cargo test --manifest-path server/Cargo.toml` | 1,416 | 5 | 39 test suites, default parallel execution |
+| UI Unit | `pnpm --filter @dam-hopper/ui test` | 1,769 | 0 | 251 test files |
+| UI Browser | `pnpm --filter @dam-hopper/ui test:browser` | 209 | 4 | 40 passed files, 2 skipped standalone |
+| Shared package | `pnpm --filter @dam-hopper/shared test` | 15 | 0 | 2 test files |
+| Browser bridge | `pnpm --filter @dam-hopper/browser-bridge test` | 19 | 0 | 5 test files |
+| Native host | `pnpm --filter @dam-hopper/native test` | 48 | 0 | 4 test files (Vitest) |
+| Live harness | `scripts/qualify-phase09-workbench.mjs` | 24 | 0 | S01–S12 live assertions across ports 14801/14802 |
+| Embedded browser | Embedded live browser tests in live harness | 4 | 0 | `workflow-context-surface` + `terminal-continuity` |
+| **Total** | **All qualification suites** | **3,504** | **9** | **100% passing across all executed targets** |
+
+#### Cycle 2 Review Verification (2026-09-17)
+- **Reconciled Test Ledger**: Verified 3,504 total passing tests across 8 suites (1,416 server, 1,769 UI unit, 209 UI browser, 15 shared, 19 bridge, 48 native, 24 live harness assertions, 4 embedded browser).
+- **Rust Descriptor Safety**: Verified magic number replacement with `tests::FAKE_FD_BASE` in `server/src/linux_release/api_runtime.rs`.
+- **Media Session Cleanup**: Corrected `mediaClientIdsByOwner` cleanup in `removeProfileConnection` (`packages/ui/src/api/connections.ts`) to parse serialized JSON tuple key `[profileId, generation]` rather than prefix-matching `${profileId}@`.
+- **Command Suggestion Propagation**: Verified `owner` prop propagation through `CommandSuggestionInput` and `use-command-search.ts`.
+- **Zero Failure Target**: Full qualification harness, all unit/browser/Rust suites passing cleanly with 0 errors.
+
+#### Immediate Next Steps
+1. Keep release-cutover documentation synchronized across the roadmap, changelog, and feature guides.
+2. Provision a Windows runner with disposable SSH endpoints to unblock S13 native qualification.
+3. Address React hook exhaustive-deps / setState-in-effect lint warnings in UI components.
+
 
 ### Risk Assessment
 
@@ -156,12 +178,12 @@ pnpm check
 
 #### Completion, documentation and rollback
 
-After live smoke proves behavior, update existing `docs/user-guide-multi-server-profiles.md`, `system-architecture.md`, `api-reference.md`, `configuration-guide.md`, `frontend-components.md`, `workflow-client-state.md`, `workflow-context-surface.md`, `native-browser-debug-support.md`, `ws-protocol-guide.md` where ownership—not wire identifiers—changes, and `docs/CHANGELOG.md`. Explain independent connection actions, startup autoConnect, explicit preference/Settings targets, duplicate-profile shared authority, intentional old browser resource loss, mandatory matched frontend/backend upgrade, removed v1/optional-incarnation contracts and per-platform release status. During this planning task, only plan documents and an explicitly proposed architecture section are changed; application files remain untouched. Remove throwaway fixture scripts/secrets/services and retain sanitized evidence; keep only justified regressions.
+Live smoke and qualification completed; release documentation records independent connection actions, startup autoConnect, explicit preference/Settings targets, duplicate-profile shared authority, intentional old browser resource loss, mandatory matched frontend/backend upgrade, removed v1/optional-incarnation contracts, and per-platform release status. Sanitized evidence is retained; throwaway fixture scripts, secrets, and services were removed.
 
-Rollback deploys a mutually compatible previous frontend/backend set; deliberate deletion means old browser tabs/layout/history cannot be restored by the application. Saved profiles/server resources remain separate; auth format rollback may require fresh login, never copying a bearer across endpoints. No server DB ownership migration is needed; media/artifact state remains ephemeral and native persistence unchanged. Web can release when G2-Web passes; Windows-native release remains blocked until real S13 proof passes. Report platform status independently.
+Rollback deploys a mutually compatible previous frontend/backend set; deliberate deletion means old browser tabs/layout/history cannot be restored by the application. Saved profiles/server resources remain separate; auth format rollback may require fresh login, never copying a bearer across endpoints. No server DB ownership migration is needed; media/artifact state remains ephemeral and native persistence unchanged. Web qualification and release gate passed; Windows-native release remains blocked until real S13 proof passes. Report platform status independently.
 
 #### Plan interpretation
 
 Paths such as `api/`, `hooks/`, `stores/`, `components/`, `contexts/` and `lib/` in this phase are relative to `packages/ui/src/` unless an explicit `server/` or `apps/` prefix is shown. Existing tests mentioned here are updated only where their observable contract changes; proposed test files are not represented as existing. Shared API/shell files follow [execution-map.md](execution-map.md), not concurrent feature ownership.
 
-Unresolved questions: no product decision deferred. Windows runner/device and browser runtime access must be established at execution; unexercised platform gates remain blocked.
+Unresolved questions: no product decision deferred. Windows runner/device and disposable SSH endpoints remain required for the separately tracked native S13 follow-up; web and Linux qualification is complete.

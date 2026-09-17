@@ -29,6 +29,7 @@ vi.mock("react-router-dom", () => ({
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: [{ name: "demo-project" }] }),
+  useQueries: () => [{ data: [{ name: "demo-project" }], isLoading: false }],
 }));
 
 vi.mock("@/hooks/use-sse.js", () => ({

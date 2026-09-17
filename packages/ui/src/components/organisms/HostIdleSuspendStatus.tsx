@@ -170,7 +170,11 @@ export function HostIdleSuspendStatus({
       "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
   };
 
-  const fleet = status.fleetSnapshot;
+  const fleet = status.fleetSnapshot ?? {
+    liveCount: 0,
+    creatingCount: 0,
+    restartPendingCount: 0,
+  };
   const sampleTime = new Date(status.timestampMs).toLocaleTimeString();
   const isAgentMode = status.automaticPolicy === "agent-activity";
   const policyLabel = isAgentMode ? "Agent Activity" : "Legacy empty-fleet";

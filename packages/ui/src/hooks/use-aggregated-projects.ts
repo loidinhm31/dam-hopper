@@ -56,16 +56,17 @@ export function useAggregatedProjects(): {
       const snapshot = getConnectionSnapshot(profile.id);
       const isConnected = snapshot?.status === "connected";
 
+      const owner = snapshot?.owner ?? { profileId: profile.id, generation: 0 };
       return {
-        queryKey: isConnected && snapshot
-          ? profileQueryKey(snapshot.owner, "projects")
+        queryKey: isConnected
+          ? profileQueryKey(owner, "projects")
           : ["profile", profile.id, "disconnected", "projects"],
         queryFn: async (): Promise<ProjectConfig[]> => {
-          if (!isConnected || !snapshot) return [];
-          const client = getApi(snapshot.owner);
+          if (!isConnected) return [];
+          const client = getApi(owner);
           return client.projects.list();
         },
-        enabled: isConnected && Boolean(snapshot),
+        enabled: isConnected,
         staleTime: 30_000,
       };
     });

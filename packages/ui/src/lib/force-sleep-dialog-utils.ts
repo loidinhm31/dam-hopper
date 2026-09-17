@@ -13,7 +13,10 @@ export function formatDurationText(seconds: number): string {
   return `${m} minute${m === 1 ? "" : "s"} ${s} second${s === 1 ? "" : "s"}`;
 }
 
-export function getActiveSessionCount(fleet: IdleSuspendFleetSnapshot): number {
+export function getActiveSessionCount(
+  fleet?: IdleSuspendFleetSnapshot | null,
+): number {
+  if (!fleet) return 0;
   return (
     (fleet.liveCount ?? 0) +
     (fleet.creatingCount ?? 0) +

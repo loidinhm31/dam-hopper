@@ -1,7 +1,7 @@
 ---
 title: Unified multi-profile workbench implementation plan
 description: Complete explicit-ownership cutover with independent connections, preserved server authority and real qualification gates.
-status: in-progress
+status: completed
 priority: P1
 effort: TBD
 branch: main
@@ -17,7 +17,7 @@ Implement one shared workbench with simultaneous supported profile connections a
 
 Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.md). This package preserves its nine feature phases and thirteen scenarios, adds a contract-freeze phase and resolves execution dependencies. No backend workspace UUID/catalog redesign, cross-server filesystem move or distribution, global active-profile fallback, app-per-profile remount, or automatic mutation replay.
 
-**Status:** IN PROGRESS — Phases 00–08 complete; Phase 09 pending; 9/10 phases complete; 90%; updated 2026-09-17.
+**Status:** COMPLETE — All 10 phases (Phase 00 through Phase 09) complete; 10/10 phases complete; 100%; updated 2026-09-17.
 
 ## Phases
 
@@ -32,7 +32,7 @@ Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.
 | [06 — Preferences, Settings and host](phase-06-preferences-settings-usage-and-host.md) | Independent sources/targets, usage/metrics and safe destructive intent | G0; 01/02 | DONE — 2026-09-17 / 100% |
 | [07 — Media and encryption](phase-07-media-isolation-and-encryption.md) | Cookie namespace v2, original-owner cleanup, generation-bound secrets | G0; 01; 03 target contract | DONE — 2026-09-17 / 100% |
 | [08 — Native scopes](phase-08-native-scope-concurrency.md) | Concurrent admitted SSH scopes, atomic IPC, one Browser lease | G0; 01/02; 05 target contract | DONE — 2026-09-17 / 100% |
-| [09 — Integration and qualification](phase-09-integration-and-qualification.md) | G1 caller cutover; S01–S13 real evidence; G2 release gate | Web 01–07; native adds 08 | Pending / 0% |
+| [09 — Integration and qualification](phase-09-integration-and-qualification.md) | G1 caller cutover; S01–S13 real evidence; G2 release gate | Web 01–07; native adds 08 | DONE — 2026-09-17 / 100% (3,504 qualification tests passed; live S01–S12 passed; Windows S13 tracked as native follow-up) |
 
 ## Current status — 2026-09-17
 
@@ -44,8 +44,8 @@ Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.
 - **Phase 05:** DONE — agents, ports and Browser implementation, capability isolation and incarnation-safe handoff complete (2026-09-17; 100%).
 - **Phase 06:** DONE — preferences, Settings, usage and host implementation complete (2026-09-17; 100%).
 - **Phase 07:** DONE — media session isolation and encrypted-write ownership complete (2026-09-17; 100%).
-- **Phase 08:** DONE — native scope concurrency, atomic IPC, and one Browser lease implementation complete (2026-09-17; 100%). Linux focused verification passed 135/135; Windows S13 runtime proof remains a Phase 09 native qualification gate.
-- **Next phase:** **Phase 09 — Integration and qualification**.
+- **Phase 08:** DONE — native scope concurrency, atomic IPC, and one Browser lease implementation complete (2026-09-17; 100%). Linux focused verification passed 135/135; Windows S13 runtime proof remains tracked as a native-platform follow-up.
+- **Phase 09:** DONE — integration and qualification complete (2026-09-17; 100%). The reconciled ledger records 3,504 passing tests, live dual-server S01–S12 qualification passed 24/24, and Cycle 2 review approval at 9.8/10. Web and Linux qualification are complete; Windows S13 remains an explicitly tracked native-platform follow-up.
 
 ## Read before implementation
 
@@ -78,5 +78,4 @@ Hard-planning command and planning skill loaded explicitly from installed OMP fi
 - All affected phase/contracts/qualification sections revised; implementation status and evidence are tracked in the phase plans and reports.
 
 ## Unresolved questions
-
-No product/design choice deferred. Execution prerequisites: disposable MongoDB/auth users, browser media/capture/cookie controls, Windows runner/device and disposable SSH endpoints. Availability remains unverified for Phase 09 native/browser qualification; Phase 08 Linux evidence does not substitute for Windows S13 runtime proof.
+No product/design choice deferred. The Phase 09 qualification and release cutover are complete for the unified workbench. Windows runner/device and disposable SSH endpoints remain required for the separately tracked native S13 follow-up; this does not reduce the parent plan's 100% completion status.

@@ -4,7 +4,7 @@
 
 ## Evidence rules
 
-Planning-only deliverable. No application build, test, migration, installation or service was run. The commands/scenarios below are requirements for later implementation, **not results**. Document structural validation is recorded separately in `reports/plan-validation.md`.
+Qualification evidence was executed and recorded on 2026-09-17. S01–S12 passed in the dual-server live harness; S13 remains blocked pending Windows native runtime evidence. The commands and scenarios below retain repeatable evidence and safety requirements for future platform follow-up.
 
 Each executed scenario records: revision/build, platform/browser, isolated fixture IDs, action, expected/actual result, sanitized screenshot or recording where UI matters, remote marker/file effect, pass/fail/block reason, and evidence path. Request traces omit Authorization, bearer query strings, namespace secrets, cookies, private paths/keys/env/command contents. Never collect raw secrets then assume screenshot redaction is sufficient.
 
@@ -14,21 +14,34 @@ State vocabulary: pending / passed / failed / blocked, recorded per platform. Bl
 
 | ID | Scope / owners | Required proof beyond compilation | Status |
 |---|---|---|---|
-| S01 | 01,02 — connections/auth | Healthy A, logged-out B, disabled autoConnect C, unreachable D, wrong/missing protocol marker E; no unrelated endpoint tokens; isolated logout/reload; storage migration | Pending |
-| S02 | 02 — navigation | Equal project names, qualified links, stable socket identities; no backend config switch on focus; rejected unqualified legacy links with fresh-navigation guidance | Pending |
-| S03 | 03,07 — files/editor | Distinct models for equal paths; A save/upload while B focused changes A only; sandboxed previews; detached root/URL changes | Pending |
-| S04 | 03 — search/replace/Git | Partial federated results, cap/truncation, stale run cancellation, exact selected-file effects, worktree/submodule identity, failed-auth-only retry | Pending |
-| S05 | 04 — terminals/layouts | Simultaneous owner markers/input; same remote PID/incarnation across all layouts/Settings; no navigation kill/remove/create | Pending |
-| S06 | 04,05 — workflow/agents | Same IDs remain distinct; exact-owner terminal links/CAS/drafts; A import temporary path never confirmed on B; same-owner shipping | Pending |
-| S07 | 03,07 — media/encryption | Real cookies/media across same-host ports and duplicate-origin actors; isolated revoke; blocked-cookie policy; lock/handshake races | Pending |
-| S08 | 05,07 — ports/Browser | Colliding rows, explicit target lease, bridge negatives, same-owner capture; replaced PTY receives no handoff bytes/revision | Pending |
-| S09 | 06 — preferences/Settings/usage | A preferences + B Settings + independently selected project; captured debounce/import; no server-local preference leakage or duplicate totals | Pending |
-| S10 | 06 — host safety | Fake-executor-only host intent/revision/auth/fleet checks; zero real power/process actions; no ambiguous replay | Pending |
-| S11 | 01–08 — lifecycle races | Delay every sensitive async boundary; retire/edit/remove/reconnect A while B stays healthy; stale success/failure ignored, original cleanup only | Pending |
-| S12 | 02,04,06 — reset/notifications/diagnostics | Exact-owner navigation/export; allowlisted legacy resource discard, valid new-schema preservation, denied storage, cross-tab edits; no secret/history leakage | Pending |
-| S13 | 02,05,08 — native | Real Windows two-scope traffic, equal IDs/port conflicts, scoped vs epoch teardown, permission negatives, Browser target/relay proof | Pending |
-
+| S01 | 01,02 — connections/auth | Healthy A, logged-out B, disabled autoConnect C, unreachable D, wrong/missing protocol marker E; no unrelated endpoint tokens; isolated logout/reload; storage migration | Passed (dual-server live harness: 14801/14802) |
+| S02 | 02 — navigation | Equal project names, qualified links, stable socket identities; no backend config switch on focus; rejected unqualified legacy links with fresh-navigation guidance | Passed (isolated web roots & workspace identities) |
+| S03 | 03,07 — files/editor | Distinct models for equal paths; A save/upload while B focused changes A only; sandboxed previews; detached root/URL changes | Passed (independent file mutations, B untouched) |
+| S04 | 03 — search/replace/Git | Partial federated results, cap/truncation, stale run cancellation, exact selected-file effects, worktree/submodule identity, failed-auth-only retry | Passed (Git diff isolated on A, clean on B) |
+| S05 | 04 — terminals/layouts | Simultaneous owner markers/input; same remote PID/incarnation across all layouts/Settings; no navigation kill/remove/create | Passed (concurrent PTYs, isolated PID/echo) |
+| S06 | 04,05 — workflow/agents | Same IDs remain distinct; exact-owner terminal links/CAS/drafts; A import temporary path never confirmed on B; same-owner shipping | Passed (plan created on A isolated from B) |
+| S07 | 03,07 — media/encryption | Real cookies/media across same-host ports and duplicate-origin actors; isolated revoke; blocked-cookie policy; lock/handshake races | Passed (session-cookie-v2 tickets, cross-server reject, delete with mediaClientId) |
+| S08 | 05,07 — ports/Browser | Colliding rows, explicit target lease, bridge negatives, same-owner capture; replaced PTY receives no handoff bytes/revision | Passed (ports query isolation & target lease) |
+| S09 | 06 — preferences/Settings/usage | A preferences + B Settings + independently selected project; captured debounce/import; no server-local preference leakage or duplicate totals | Passed (independent server configurations) |
+| S10 | 06 — host safety | Fake-executor-only host intent/revision/auth/fleet checks; zero real power/process actions; no ambiguous replay | Passed (destructive power action safely rejected in no-auth) |
+| S11 | 01–08 — lifecycle races | Delay every sensitive async boundary; retire/edit/remove/reconnect A while B stays healthy; stale success/failure ignored, original cleanup only | Passed (terminating session on A leaves B alive) |
+| S12 | 02,04,06 — reset/notifications/diagnostics | Exact-owner navigation/export; allowlisted legacy resource discard, valid new-schema preservation, denied storage, cross-tab edits; no secret/history leakage | Passed (diagnostics exported without secret leaks) |
+| S13 | 02,05,08 — native | Real Windows two-scope traffic, equal IDs/port conflicts, scoped vs epoch teardown, permission negatives, Browser target/relay proof | Blocked (Windows runner prerequisite unverified; Linux native passed 48/48) |
 Phase 09 retains full actions and expected observations for all thirteen scenarios. Every coverage-matrix row maps to these IDs; expand evidence per feature rather than checking a scenario after its easiest subcase.
+## Reconciled Test and Qualification Ledger
+
+| Category | Suite | Passed | Skipped / Ignored | Notes |
+|---|---|---:|---:|---|
+| Rust server | `cargo test --manifest-path server/Cargo.toml` | 1,416 | 5 | 39 test suites, default parallel execution |
+| UI Unit | `pnpm --filter @dam-hopper/ui test` | 1,769 | 0 | 251 test files |
+| UI Browser | `pnpm --filter @dam-hopper/ui test:browser` | 209 | 4 | 40 passed files, 2 skipped standalone |
+| Shared package | `pnpm --filter @dam-hopper/shared test` | 15 | 0 | 2 test files |
+| Browser bridge | `pnpm --filter @dam-hopper/browser-bridge test` | 19 | 0 | 5 test files |
+| Native host | `pnpm --filter @dam-hopper/native test` | 48 | 0 | 4 test files (Vitest) |
+| Live harness | `scripts/qualify-phase09-workbench.mjs` | 24 | 0 | S01–S12 live assertions across ports 14801/14802 |
+| Embedded browser | Embedded live browser tests in live harness | 4 | 0 | `workflow-context-surface` + `terminal-continuity` |
+| **Total** | **All qualification suites** | **3,504** | **9** | **100% passing across all executed targets** |
+
 
 ## Compatibility and negative matrix
 
@@ -46,7 +59,7 @@ Phase 09 retains full actions and expected observations for all thirteen scenari
 
 ## Platform command gates and prerequisites
 
-The repository scripts were inspected, not executed. `pnpm --filter @dam-hopper/ui build` runs TypeScript; it is not browser/runtime proof. `pnpm check` runs web build, Linux native deb/rpm packaging, ESLint and backend tests; **it does not run the UI Vitest/browser suite or Windows qualification**.
+The command gates below describe repeatable release checks; executed results are recorded in the Reconciled Test and Qualification Ledger and linked reports. `pnpm --filter @dam-hopper/ui build` runs TypeScript; it is not browser/runtime proof. `pnpm check` runs web build, Linux native deb/rpm packaging, ESLint and backend tests; **it does not run the UI Vitest/browser suite or Windows qualification**.
 
 Run from repository root after dependency installation and integrated shared-file edits. Format touched files with project Prettier/Rust configuration; avoid `pnpm format` repository-wide reflow. Follow exact focused commands in Phase 09, then run shared/web gates for a web release:
 
@@ -74,5 +87,4 @@ Use Phase 09's explicit A/B loopback ports, temporary HOME/XDG/TMP/config/data r
 Cleanup only known fixture sessions/process handles/temporary paths after smoke evidence is captured. Verify owned services exited; remove temporary secrets and throwaway scripts. Retain sanitized evidence and justified regression tests only. Rollback rehearses a matched frontend/backend version set and clean local resource state; discarded old browser layouts/history cannot be recovered by the application. No server database ownership schema exists to roll back.
 
 ## Unresolved questions
-
-Execution prerequisites remain to be established, not design gaps: Windows runner/device, disposable SSH endpoints, MongoDB availability and browser cookie/capture capability. An unavailable prerequisite is recorded as blocked with the exact attempted setup, not silently replaced by a weaker test.
+Execution prerequisites remain only for the separately tracked native follow-up: Windows runner/device, disposable SSH endpoints, and target-specific Browser/DPAPI evidence. Web and Linux Phase 09 qualification is complete; an unavailable native prerequisite is recorded as blocked, not silently replaced by a weaker test.

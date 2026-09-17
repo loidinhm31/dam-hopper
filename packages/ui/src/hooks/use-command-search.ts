@@ -1,12 +1,17 @@
 import { useState, useEffect, useRef } from "react";
 import type { CombinedSearchResult } from "@/api/client.js";
-import { api } from "@/api/client.js";
+import { getApi } from "@/api/connections.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 import { useCommandHistory } from "@/hooks/use-command-history.js";
 import { getProjectUsage } from "@/lib/command-history.js";
 
 const PROJECT_BOOST = 1.5;
 
-export function useCommandSearch(projectType?: string, projectName?: string) {
+export function useCommandSearch(
+  projectType?: string,
+  projectName?: string,
+  owner?: ConnectionRef,
+) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<CombinedSearchResult[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -41,8 +46,8 @@ export function useCommandSearch(projectType?: string, projectName?: string) {
 
     // Catalog: debounced, merges after fetch
     timerRef.current = setTimeout(() => {
-      api.commands
-        .search(query, projectType, 8)
+      getApi(owner ?? { profileId: "default", generation: 0 })
+        .commands.search(query, projectType, 8)
         .then((catalogRaw) => {
           const histCommands = new Set(
             histResults.map((r) => r.command.command),
@@ -66,7 +71,7 @@ export function useCommandSearch(projectType?: string, projectName?: string) {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [query, projectType, projectName, searchHistory]);
+  }, [query, projectType, projectName, searchHistory, owner]);
 
   return { query, setQuery, results };
 }

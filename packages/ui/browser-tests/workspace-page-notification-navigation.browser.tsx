@@ -84,6 +84,10 @@ vi.mock("@/api/queries.js", () => ({
     mutateAsync: vi.fn(),
     isPending: false,
   }),
+  useProjects: () => ({
+    data: [{ name: "web" }],
+    isLoading: false,
+  }),
 }));
 
 vi.mock("@/components/templates/IdeShell.js", () => ({
@@ -237,6 +241,22 @@ vi.mock("@/api/client.js", () => ({
       list: async () => [{ name: "web" }],
     },
   },
+  createApiClient: () => ({
+    projects: {
+      list: async () => [{ name: "web" }],
+    },
+  }),
+  ApiRequestError: class ApiRequestError extends Error {
+    constructor(
+      message: string,
+      public readonly status: number,
+      public readonly code?: string,
+      public readonly details?: unknown,
+    ) {
+      super(message);
+      this.name = "ApiRequestError";
+    }
+  },
   normalizeProjectTarget: (
     target: string | { project: string; worktreePath?: string | null },
   ) =>
@@ -251,6 +271,12 @@ vi.mock("@/api/client.js", () => ({
     typeof target === "string" || target.worktreePath == null
       ? "root"
       : `worktree:${target.worktreePath}`,
+  projectKey: (target: unknown) =>
+    typeof target === "string"
+      ? target
+      : target && typeof target === "object" && "project" in target && typeof target.project === "string"
+        ? target.project
+        : "web",
 }));
 
 vi.mock("@/lib/workspace-mode.js", () => ({

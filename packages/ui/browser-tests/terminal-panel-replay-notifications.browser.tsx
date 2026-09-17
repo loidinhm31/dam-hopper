@@ -205,6 +205,32 @@ vi.mock("@dam-hopper/shared/logger", () => ({
 }));
 vi.mock("@/api/client.js", () => ({
   api: { workspace: { status: vi.fn().mockResolvedValue({}) } },
+  createApiClient: () => ({ workspace: { status: vi.fn().mockResolvedValue({}) } }),
+  projectTargetCacheKey: (target: unknown) => "root",
+  isProjectTargetError: () => false,
+  ApiRequestError: class ApiRequestError extends Error {
+    constructor(
+      message: string,
+      public readonly status: number,
+      public readonly code?: string,
+      public readonly details?: unknown,
+    ) {
+      super(message);
+      this.name = "ApiRequestError";
+    }
+  },
+  normalizeProjectTarget: (t: unknown) =>
+    typeof t === "string"
+      ? { project: t }
+      : t && typeof t === "object" && "project" in t && typeof t.project === "string"
+        ? t
+        : { project: "web" },
+  projectKey: (target: unknown) =>
+    typeof target === "string"
+      ? target
+      : target && typeof target === "object" && "project" in target && typeof target.project === "string"
+        ? target.project
+        : "web",
 }));
 vi.mock("@/api/transport.js", () => ({
   getTransportGeneration: () => mocks.transportGeneration,
@@ -242,6 +268,7 @@ vi.mock("@/lib/terminal-registry.js", () => {
     },
     removeTerminal: vi.fn(),
     terminalRegistry,
+    getTerminal: (id: string) => terminalRegistry.get(id),
   };
 });
 vi.mock("@/contexts/AppZoomContext.js", () => ({
@@ -561,7 +588,13 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
 
     await act(async () => mocks.onData?.("live"));
     expect(getTerminalOutputActivitySnapshot("term-1").recentOutput).toBe(true);
-    await act(async () => mocks.onExit?.(0));
+    await act(async () => {
+      if (mocks.onExitEnhanced) {
+        mocks.onExitEnhanced({ exitCode: 0, willRestart: false });
+      } else {
+        mocks.onExit?.(0);
+      }
+    });
     expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
       recentOutput: false,
       streamReady: false,

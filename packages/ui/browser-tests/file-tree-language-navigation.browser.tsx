@@ -79,6 +79,12 @@ vi.mock("@/hooks/use-fs-upload.js", () => ({
 }));
 vi.mock("@/contexts/EncryptContext.js", () => ({
   useEncryptMode: () => ({ isEncryptEnabled: () => false }),
+  toEncryptKey: (t: unknown) =>
+    typeof t === "string"
+      ? t
+      : t && typeof t === "object" && "project" in t && typeof t.project === "string"
+        ? t.project
+        : "test",
 }));
 vi.mock("@/stores/settings.js", () => ({
   useSettingsStore: () => ({

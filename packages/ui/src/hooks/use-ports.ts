@@ -107,19 +107,23 @@ export function usePorts(options?: {
     () => [],
   );
 
+  const ownerProfileId = options?.owner?.profileId;
+  const explicitProfileId = options?.profileId;
+  const aggregate = options?.aggregate;
+
   const targetProfiles = useMemo(() => {
-    if (options?.owner) {
-      return [{ id: options.owner.profileId }];
+    if (ownerProfileId) {
+      return [{ id: ownerProfileId }];
     }
-    if (options?.profileId && !options?.aggregate) {
-      return [{ id: options.profileId }];
+    if (explicitProfileId && !aggregate) {
+      return [{ id: explicitProfileId }];
     }
     if (profiles.length > 0) {
       return profiles;
     }
     const active = getActiveProfileId();
     return [{ id: active || "default" }];
-  }, [options?.owner, options?.profileId, options?.aggregate, profiles]);
+  }, [ownerProfileId, explicitProfileId, aggregate, profiles]);
 
   const portQueries = useQueries({
     queries: targetProfiles.map((p) => {

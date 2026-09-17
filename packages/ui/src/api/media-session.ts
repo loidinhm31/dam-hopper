@@ -144,7 +144,11 @@ export async function revokeCurrentMediaSession(
   authToken: string,
   mediaClientId?: string | null,
 ): Promise<void> {
-  if (!mediaClientId) return;
+  const clientId =
+    mediaClientId ||
+    (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : "00000000-0000-4000-8000-000000000000");
   try {
     const protocol = new URL(serverOrigin).protocol;
     if (protocol !== "http:" && protocol !== "https:") return;
@@ -161,7 +165,7 @@ export async function revokeCurrentMediaSession(
         "Content-Type": "application/json",
         ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
       },
-      body: JSON.stringify({ mediaClientId }),
+      body: JSON.stringify({ mediaClientId: clientId }),
       signal: controller.signal,
     });
   } catch {

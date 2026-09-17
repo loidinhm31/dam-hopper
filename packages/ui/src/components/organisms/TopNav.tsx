@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { cn } from "@/lib/utils.js";
 import { useIpc } from "@/hooks/use-sse.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
@@ -13,8 +13,7 @@ import { TopNavUtilityStrip } from "@/components/organisms/TopNavUtilityStrip.js
 import { TopNavProjectToolbar } from "@/components/organisms/TopNavProjectToolbar.js";
 import { TerminalNotificationCenter } from "@/components/organisms/TerminalNotificationCenter.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/api/client.js";
+import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
 import {
   getProfileChangeVersion,
@@ -45,10 +44,11 @@ export function TopNav({
   const { status } = useIpc();
   const { activeProject } = useWorkspaceStore();
   const isCompactWorkspace = useCompactWorkspace();
-  const { data: projects = [] } = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => api.projects.list(),
-  });
+  const { allProjects } = useAggregatedProjects();
+  const projects = useMemo(
+    () => allProjects.map((item) => item.project),
+    [allProjects],
+  );
 
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [profilesDialogOpen, setProfilesDialogOpen] = useState(false);
