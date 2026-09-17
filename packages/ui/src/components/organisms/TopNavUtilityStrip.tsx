@@ -1,7 +1,6 @@
 import { ServerCog } from "lucide-react";
 import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.js";
 import { TerminalNotificationCenter } from "@/components/organisms/TerminalNotificationCenter.js";
-import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ProjectSwitcher } from "@/components/organisms/ProjectSwitcher.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { TopNavWorkspaceModeSwitch } from "@/components/molecules/TopNavWorkspaceModeSwitch.js";
@@ -54,15 +53,6 @@ export function TopNavUtilityStrip({
           : "flex justify-end gap-3",
       )}
     >
-      <div
-        className={cn(
-          "min-w-0 shrink-0",
-          !isCompactWorkspace && "max-w-none",
-          isCompactWorkspace && "flex-1 sm:max-w-[9.5rem] sm:flex-none",
-        )}
-      >
-        <WorkspaceSwitcher variant="compact" />
-      </div>
 
       {workspaceMode && onWorkspaceModeChange && (
         <>

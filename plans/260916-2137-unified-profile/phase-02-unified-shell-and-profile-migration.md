@@ -1,4 +1,4 @@
-# Phase 02 — Independent connections and unified navigation
+# Phase 02 — Unified shell and profile migration
 
 ### Context links
 
@@ -8,7 +8,7 @@
 
 ### Overview
 
-Date: 2026-09-16. Priority: P1. Implementation: pending (0%). Planning status: specified; runtime verification: not run. Scope: Shell and connections.
+Date: 2026-09-17. Priority: P1. Implementation: DONE (100%; completed 2026-09-17). Planning status: verified; runtime verification: vitest passing (108 focused, 1766 full suite), tsc/build passing across packages/ui, apps/native, and apps/web. Scope: Shell and connections.
 
 ### Key Insights
 
@@ -56,14 +56,17 @@ Depends on Phase 01 contracts. Integration owner owns shell, bootstrap and profi
 8. Update `apps/web/src/main.tsx` and `apps/native/src/main.tsx`: perform profile migration (and web managed runtime reconciliation), create ordinary QueryClient and shared connection orchestration, then render once. No profile-specific root key. Keep web runtime-config validation/bounds and native Browser/SSH provider/platform detection. Convert `native-server-url.ts` to explicit per-profile support check or remove its now-obsolete active-profile accessor. Browser/Windows allow current HTTP(S) remote transport; non-Windows native stays exact same-origin-only. Unsupported profiles remain editable/listed and produce no fallback traffic.
 9. Implement the validated fresh-state reset: discard enumerated legacy selected-project/editor/tree/target/search/layout/pin/history/Browser-history records and associated old quarantine backups. Start empty new-version stores; no backup, archive, owner assignment or restore UI. Preserve saved profiles/auth conversion, native aliases/vault/trust, presentation-only settings and all server data. Never localStorage.clear(). Verify per-store reset, retain already-valid new-version entries across retries, ignore old records in memory if storage fails and report failure. Show an informational fresh-start/data-loss notice. Reject unqualified legacy links with fresh-navigation guidance; new links require profileId. No reset-triggered remote writes or PTY creation/deletion.
 
-### Todo list
+### Todo list — DONE (2026-09-17; 100%)
 
-- [ ] A/B/C boot independently with A healthy, B login-required, C unsupported/offline; Connections/Settings remain accessible.
-- [ ] Existing profiles migrate autoConnect=true; explicit false remains false, including managed-profile reconciliation.
-- [ ] A project selection never changes socket count, credentials, server config, Browser target or preference source.
-- [ ] Equal project names have distinct grouped rows, URL/path disambiguation and qualified deep links.
-- [ ] Profile edit/removal/cross-tab credential changes cannot dispatch old token to new endpoint.
-- [ ] Legacy browser resources are dropped once without touching saved profiles/server resources; valid new-schema records survive retries and reloads.
+- [x] A/B/C boot independently with A healthy, B login-required, C unsupported/offline; Connections/Settings remain accessible.
+- [x] Existing profiles migrate autoConnect=true; explicit false remains false, including managed-profile reconciliation.
+- [x] A project selection never changes socket count, credentials, server config, Browser target or preference source.
+- [x] Equal project names have distinct grouped rows, URL/path disambiguation and qualified deep links.
+- [x] Profile edit/removal/cross-tab credential changes cannot dispatch old token to new endpoint.
+- [x] Legacy browser resources are dropped once without touching saved profiles/server resources; valid new-schema records survive retries and reloads.
+- [x] [REMEDIATION] Fix `DashboardPage.tsx` runtime ReferenceError (`aliveSessions`, `projects` references) and typecheck errors.
+- [x] [REMEDIATION] Restore missing `initializeClientDiagnostics` import in `apps/native/src/main.tsx` to fix native build.
+- [x] [REMEDIATION] Enforce `isSameOriginProfile` in `DamHopperApp` auto-login and `connections.ts` to prevent unsupported remote profile traffic on non-Windows native.
 
 ### Success Criteria
 

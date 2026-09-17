@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { X, Server, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { revokeCurrentMediaSession } from "@/api/media-session.js";
 import type { ServerProfile } from "@/api/server-config.js";
+import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import {
   getServerUrl,
   haveServerUrlsChanged,
@@ -26,6 +28,10 @@ import {
   updateProfile,
   setActiveProfile,
 } from "@/api/server-config.js";
+import {
+  connectProfile,
+  disconnectProfile,
+} from "@/api/connections.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface Props {
@@ -72,6 +78,7 @@ export function ServerSettingsDialog({
   const [testState, setTestState] = useState<TestState>("idle");
   const [testError, setTestError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [autoConnect, setAutoConnect] = useState(true);
   const latestUrlRef = useRef("");
   const latestProfileIdRef = useRef<string | undefined>(profile?.id);
   const testRequestIdRef = useRef(0);
@@ -92,6 +99,7 @@ export function ServerSettingsDialog({
         setAuthType(profile.authType);
         setUsername(profile.username || "");
         setPassword("");
+        setAutoConnect(profile.autoConnect);
       } else if (isEditMode) {
         // New profile (profile = null)
         setName("");
@@ -99,6 +107,7 @@ export function ServerSettingsDialog({
         setAuthType("basic");
         setUsername("");
         setPassword("");
+        setAutoConnect(true);
       } else {
         // Legacy mode (profile = undefined)
         setName("");
@@ -106,6 +115,7 @@ export function ServerSettingsDialog({
         setAuthType("basic");
         setUsername(getAuthUsername());
         setPassword("");
+        setAutoConnect(true);
       }
       const tokenProfileId =
         profile?.id ??
@@ -245,6 +255,7 @@ export function ServerSettingsDialog({
         authType,
         username:
           authType === "basic" ? username.trim() || undefined : undefined,
+        autoConnect,
       };
 
       let tokenClearedForUrlChange = false;
@@ -345,10 +356,12 @@ export function ServerSettingsDialog({
       // Notify parent and close
       onSaved?.(savedProfile);
 
-      // Reload only when the live connection changed. Editing an inactive
-      // profile must not interrupt the active server session.
-      if (savedProfile.id === getActiveProfileId()) {
-        setTimeout(() => window.location.reload(), 800);
+      // Invalidate the runtime connection for this profile so changes take effect without reloading
+      if (urlChanged || tokenMustBeCleared || t) {
+        disconnectProfile(savedProfile.id);
+        if (savedProfile.autoConnect && (savedProfile.authType === "none" || getAuthToken(savedProfile.id))) {
+          void connectProfile(savedProfile.id);
+        }
       }
     } else {
       // Legacy mode: direct URL/token storage
@@ -648,6 +661,17 @@ export function ServerSettingsDialog({
               </div>
             </div>
           )}
+          {isEditMode && (
+            <label className="flex items-center gap-2 text-sm text-[var(--color-text)] cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoConnect}
+                onChange={(e) => setAutoConnect(e.target.checked)}
+                className="cursor-pointer rounded border-[var(--color-border)] text-[var(--color-primary)] focus:ring-0"
+              />
+              Auto-connect on startup
+            </label>
+          )}
 
           {authType === "basic" && (
             <>
@@ -740,6 +764,17 @@ export function ServerSettingsDialog({
               </span>
             )}
           </div>
+
+          {profile && (
+            <div className="pt-3 border-t border-[var(--color-border)]">
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                Server configuration
+              </label>
+              <ErrorBoundary fallback={null}>
+                <WorkspaceSwitcher variant="compact" />
+              </ErrorBoundary>
+            </div>
+          )}
         </div>
 
         {/* Footer */}

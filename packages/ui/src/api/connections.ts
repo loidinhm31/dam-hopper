@@ -9,7 +9,7 @@ import {
   type ProfileId,
   ConnectionOwnerError,
 } from "./ownership.js";
-import { getProfiles, getAuthToken } from "./server-config.js";
+import { getProfiles, getAuthToken, isSameOriginProfile } from "./server-config.js";
 import { installTransportBridge, removeProfileListeners } from "../hooks/use-sse.js";
 
 let registryQueryClient: QueryClient | null = null;
@@ -245,6 +245,18 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
     const parsed = new URL(cleanUrl);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       throw new Error(`Unsupported protocol: ${parsed.protocol}`);
+    }
+    if (!isSameOriginProfile(profile)) {
+      const entry = getOrCreateEntry(profileId, cleanUrl);
+      clearReconnectTimer(entry);
+      entry.generation += 1;
+      updateSnapshot(profileId, {
+        status: "unsupported",
+        intent: false,
+        serverUrl: profile.url,
+        error: "Remote connections are supported only on Browser and Windows desktop.",
+      });
+      return;
     }
   } catch {
     const entry = getOrCreateEntry(profileId, cleanUrl);

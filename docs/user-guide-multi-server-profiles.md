@@ -2,240 +2,211 @@
 
 ## Overview
 
-The **Multi-Server Profiles** feature stores server profiles locally. Browser API/media access is same-origin by default; a separate browser frontend must be added to the server's exact `DAM_HOPPER_CORS_ORIGINS` allowlist. Ticket issuance requires authentication, and media URLs remain short-lived actor/session-bound capabilities. Windows native transport supports cross-origin profiles under the approved origin policy; non-Windows native transport requires same-origin targets.
+Phase 02 turns the app into a unified workbench: the shell and navigation stay
+available while each saved server profile owns an independent connection
+runtime. Profiles can be connected, disconnected, logged in, or logged out
+without switching the whole app or reloading the page.
 
-HTTP profiles are supported, but cleartext exposes Bearer tokens, cookies, ticket URLs, API actions, and media bytes to interception or modification; use HTTPS or a trusted encrypted network when needed.
+Browser hosts and Windows desktop native hosts may connect to approved HTTP(S)
+origins. Non-Windows native hosts accept only a profile whose origin exactly
+matches the native webview origin. An unsupported remote profile is reported as
+`Unsupported`; it is not silently routed through a fallback transport.
 
-## Creating Your First Profile
+The server must advertise `workbenchProtocol: 2` from `GET /api/auth/status`.
+Older or incomplete servers remain visible in the shell but cannot become a
+connected profile.
 
-### Option A: Automatic Migration
+## Create or migrate a profile
 
-On first app load, if you had a previously configured server URL, it's automatically migrated:
+### Automatic migration
 
-1. Legacy single-server config: `damhopper_server_url` in localStorage
-2. Converted to profile: **"Default Server"** with your existing URL
-3. Profile automatically set as active
+On first startup, `migrateToProfiles()` converts a valid legacy
+`damhopper_server_url` configuration into a **Default Server** profile. A legacy
+token is copied only when its URL matches the destination profile; an
+unrelated token is discarded rather than bound to a different endpoint.
 
-You can then edit this profile or create new ones.
+Existing profiles without `autoConnect` are migrated with `autoConnect: true`.
+An explicit `autoConnect: false` value is preserved. Migration also retains an
+existing profile selection as compatibility state, but that selection is not a
+global connection switch.
 
-### Option B: Manual Creation
+### Manual creation
 
-1. **Open the Profile Manager**
-   - Click the **"Change Server"** button in the left sidebar (or current server profile name)
-   - Opens the **Server Connections** dialog
+1. Open **Server Connections** from the top-nav connection button.
+2. Select **Add Server Connection**.
+3. Enter a display name, normalized HTTP(S) URL, and authentication type.
+4. For Basic authentication, enter the username and login credentials when
+   prompted. Passwords are never stored.
+5. Choose **Auto-connect** if this profile should connect during startup.
+6. Save the profile, then select **Connect** or **Login** as needed.
 
-2. **Create New Profile**
-   - Click the **"+ New"** button at the bottom of the dialog
-   - Opens **Profile Settings** form
+Each profile receives a stable ID. Profile names are labels only; two profiles
+with the same name remain distinct when their IDs or endpoints differ.
 
-3. **Fill in Profile Details**
-   - **Profile Name**: `Local Dev`, `Production`, etc. (user-friendly display name)
-   - **Server URL**: `http://localhost:4800` (auto-corrects format: strips trailing slash, adds `http://` if missing)
-   - **Auth Type**: Select `Basic` (requires token) or `None` (open server)
-   - **Username** (optional): Your display name for basic auth (password never stored locally)
+## Connect profiles
 
-4. **Save Profile**
-   - Saved to browser localStorage immediately
-   - Available for switching across all browser tabs
+The **Server Connections** dialog shows one row per saved profile with its URL,
+authentication type, auto-connect setting, and current status:
 
-## Switching Between Profiles
+| Status | Meaning |
+| --- | --- |
+| `Disconnected` | No runtime is currently attempting this profile. |
+| `Connecting` | The profile runtime is checking the endpoint or opening its WebSocket. |
+| `Connected` | Auth status and workbench protocol checks passed. |
+| `Login required` | Basic authentication needs a token or fresh login. |
+| `Offline` | The endpoint could not be reached after a bounded retry cycle. |
+| `Unsupported` | Native platform/origin or `workbenchProtocol` rules reject the endpoint. |
 
-1. **Click Profile Selector**: In the sidebar, click the active profile name or "Change Server"
-2. **Choose Profile**: Select from the list in **Server Connections** dialog
-3. **Confirm**: Profile becomes active immediately
-   - Switching rebinds the transport without requiring a full browser reload; queries and push listeners are refreshed for the new profile.
+Actions are profile-scoped:
 
-### Host-resource status after a profile switch
+- **Connect** starts only that profile's runtime.
+- **Disconnect** stops that runtime but keeps the saved profile and token.
+- **Login** opens the credentials flow for that profile.
+- **Logout** attempts media-session revocation, clears that profile's token,
+  and disconnects it.
+- **Edit** updates metadata, URL, authentication, or auto-connect. A changed
+  endpoint or authentication type invalidates the old endpoint-bound token.
+- **Remove** revokes media when possible, removes the local profile and
+  connection state, and does not delete data from the remote server.
 
-The browser discards push listeners from the old server and attaches one set to
-the replacement transport. Host-resource snapshots and alert history are then
-refetched through REST, so a missed disconnect event cannot be treated as
-that limitation and keeps compatible CPU/disk data when available. The popover
-displays host status and resource metrics; switching profiles never authorizes a
-host operation. Actionable operations (such as Force Machine to Sleep) require
-explicit authentication and confirmation on the active profile.
+The top-nav connection button summarizes all profile runtimes. It shows
+`No connections` when none are configured, the profile name when exactly one
+profile is configured, and a connected/total count when multiple profiles are
+present. Focus, route changes, and project selection do not reconnect or
+disconnect profiles.
 
-### Force-sleep actions use the active profile
+## Navigate from profile to project
 
-Force Machine to Sleep is a host-wide operation, not a profile-local read. The
-browser sends it only through the currently active profile's transport and
-requires an enabled, database-backed actor on that server. Cookie sessions must
-pass the server's exact same-origin policy; Bearer sessions must authenticate
-the enabled actor. A server running `--no-auth` rejects the action.
+The **Project Switcher** groups discovered projects as:
 
-Switching profiles rebinds transport, push listeners, and query cache; it does
-not authorize the replacement host or replay an ambiguous POST from the old
-host. Submit at most one request. If the host suspends before the response is
-observed, reconnect the active profile and refetch status/revision instead of
-retrying. Active-session confirmation belongs to the selected server's current
-fleet (`live + creating + restartPending`), so review the warning again after
-any profile switch.
-
-## Working in a Git worktree
-
-The Project panel's **Active target** selector lets you choose the configured
-project root or one of its registered Git worktrees. The project name and
-configuration stay unchanged; Explorer, search, replace, Git, editor/diff,
-media, and new terminals use the selected target together.
-
-Before removing a worktree, the app refreshes its Git registration and checks
-for dirty editor tabs or live terminal sessions owned by that exact target.
-Save or close those resources before retrying. Git also protects dirty or
-untracked files, so the app never force-removes a worktree.
-
-If a worktree disappears outside the app, its row remains visible as
-unavailable and new operations return to the project root. Existing editor
-tabs are kept, and live terminals are labelled **orphaned** while their
-original working directory remains unavailable. Use **Refresh worktrees** or
-**Reconnect unavailable worktrees** after restoring the directory.
-
-## Managing Profiles
-
-### Edit a Profile
-
-1. Open **Server Connections** dialog
-2. Click the **Edit** (pencil) icon on the profile
-3. **Profile Settings** form opens
-4. Update name, URL, or auth type
-5. Click **Save** — changes persist instantly
-
-### Delete a Profile
-
-1. Open **Server Connections** dialog
-2. Click the **Delete** (trash) icon on the profile
-3. Confirm deletion
-4. If you delete the active profile, the first available profile becomes active (or none if all deleted)
-
-### View Profile Details
-
-In the **Server Connections** dialog, each profile shows:
-
-- Profile name
-- Server URL
-- Auth type (Basic/None)
-- Created date
-- Active indicator (✓ checkmark if current)
-
-## Storage & Data Persistence
-
-**All profiles are saved in browser localStorage:**
-
-| Item                 | Storage      | Persistence                                        |
-| -------------------- | ------------ | -------------------------------------------------- |
-| All profiles (JSON)  | localStorage | Survives browser close, shared across tabs         |
-| Active profile ID    | localStorage | Survives browser close, shared across tabs         |
-| Auth token           | localStorage | Per-profile, survives browser close                |
-| Workflow query cache | Memory only  | Profile-hashed; cleared with the page/query client |
-
-**Browser Tabs:** All tabs in the same browser share the profiles list. Switching profiles in one tab shows the new active profile in all open tabs.
-
-Workflow results are intentionally not persisted with profile metadata. The
-shared UI prefixes TanStack Query cache hashes with the active profile ID, and
-replacing a profile transport advances a transport generation used by overview
-queries. This keeps cached workflow data tied to the selected server while
-allowing profile switching without a page reload.
-
-Media issue/revoke calls use Bearer credentials and `credentials: include`; native stream GET/HEAD uses only the host-only media cookie and opaque ticket. Profile switch, delete, and logout attempt bounded session revocation before local token removal.
-
-Profile selection and profile tokens are therefore shared by tabs in the same browser storage area. Use separate browser profiles or containers when you need independent simultaneous server sessions.
-
-**Browser Close:** Profiles persist indefinitely until manually deleted.
-
-**Private Browsing:** Depending on browser, localStorage may be unavailable or cleared on session end.
-
-## Security Notes
-
-- **Passwords are never stored** locally. Only the username for display purposes.
-- **Auth tokens** (Bearer tokens) are stored in localStorage under a profile-specific key so Android/browser recreation does not discard the login. Tokens are readable by JavaScript; use trusted HTTPS deployments and do not store passwords.
-- **Server URL or token changes** attempt remote media-session revocation during the credential transition; logout does so before normal logout. The request is bounded to five seconds, so local cleanup proceeds if the server is unreachable and its old matching cookie/tickets can remain usable until the 30-minute idle timeout (eight-hour absolute maximum). If remote revocation succeeds but local token persistence or removal fails, the remote session remains revoked intentionally; restore or retain the local login if needed, then reissue media before streaming.
-- **Server URL changes** clear the profile token and require login again. Equivalent formatting changes, such as trailing slashes, do not clear it.
-- **URLs are stored in plain text** in localStorage. Keep your browser secure.
-- **No data sent to server** for profile management — entirely client-side.
-
-## Using Profiles in Development
-
-### Common Workflow
-
-```
-1. Create profiles:
-   - "Local Dev" → http://localhost:4800
-   - "Staging" → https://staging.damhopper.example.com
-   - "Production" → https://damhopper.example.com
-
-2. During development:
-   - Work locally with "Local Dev"
-   - Test changes on "Staging" by switching profile
-   - Deploy and verify on "Production"
-
-3. All without app restart!
+```text
+Profile name — server URL
+  project path/name
 ```
 
-### Multi-Tab Setup
+Navigation uses the qualified tuple `{ profileId, project }`. Identical project
+names on different profiles are therefore separate targets. If the selected
+project disappears, the switcher marks it **(unavailable)** rather than
+silently selecting a project from another profile.
 
-For simultaneous independent sessions, open separate browser profiles or containers:
+Settings are also profile-qualified:
 
-- Container 1: "Local Dev" (localhost:4800)
-- Container 2: "Staging" (staging server)
-- Container 3: "Production" (prod server)
+- Preferences retain their source profile and snapshot. Removing that profile
+  marks the source `source-removed` until a replacement is selected.
+- Server settings target one profile at a time.
+- Browser Debug target selection is independent of preferences and settings.
+- The **Server configuration** section inside Settings uses the same
+  profile/project switcher; it is not a second project hierarchy.
 
-Ordinary tabs share the active profile and profile-scoped token storage.
+## Persistence and security
+
+| Record | Storage and scope | Behavior |
+| --- | --- | --- |
+| `damhopper_server_profiles` | `localStorage`, shared by browser tabs | Saved profile metadata and `autoConnect`. |
+| `damhopper_profile_auth_v2_<profileId>` | `localStorage`, per profile | Version 2 token record bound to normalized URL and auth type. |
+| `damhopper_active_profile_id` | `localStorage`, compatibility state | Used by legacy/default endpoint helpers; not a runtime-wide connection selector. |
+| `dam-hopper:workspace-state` | Zustand persistence | Qualified `selectedProject` only. |
+| `dam-hopper:preferences-source:v1` | Zustand persistence | Independent preference, settings, and Browser Debug profile IDs. |
+| Query and connection runtime state | Memory only | Owner/generation-qualified; not persisted as a cache. |
+
+Tokens are readable by JavaScript. Use trusted HTTPS frontend assets and do not
+store passwords. HTTP can expose credentials, cookies, ticket URLs, API
+requests, and media bytes to interception or modification.
+
+Profile token records are endpoint-bound. Changing a normalized URL or auth type
+requires fresh authentication; a trailing-slash-only normalization does not
+create a different endpoint. Storage-unavailable is distinct from an empty
+profile list, so the app must not treat a persistence failure as permission to
+overwrite profiles.
+
+### Fresh browser-resource reset
+
+Phase 02 performs an idempotent reset of legacy browser resource records, such
+as unqualified active-project state, old terminal layouts, editor/tree state,
+Browser Debug address history, command history, pins, and quarantine records.
+It preserves saved profiles, endpoint-bound auth records, native scope aliases,
+presentation-only settings, and server data.
+
+The reset never calls `localStorage.clear()`. When records are removed, the
+shell displays an informational notice. Deep links that include `project` or
+`session` without `profileId` are rejected as unqualified legacy links; select
+the target through unified navigation or add the profile-qualified fields.
+
+## Native platform rules
+
+- Browser and Windows desktop native hosts may use approved cross-origin
+  profiles, subject to server CORS and authentication policy.
+- Non-Windows native hosts require exact same-origin profiles.
+- A rejected remote profile remains editable and visible. It receives no
+  auto-login or connection traffic until its origin/platform is supported.
 
 ## Troubleshooting
 
-### Profile Not Saving?
+### The profile list is empty
 
-- localStorage might be disabled in your browser
-- Try: Settings → Privacy → Allow localStorage (varies by browser)
-- Check available storage space (localStorage has ~5-10MB limit)
-- Try private browsing mode (may not persist)
+Check whether browser storage is unavailable before recreating profiles.
+Private browsing, disabled storage, quota errors, or a browser policy can
+prevent reads and writes. Storage failure is not the same as a genuinely empty
+list.
 
-### Can't Switch to a Profile?
+### The row says `Login required`
 
-- Verify the server URL is reachable
-- Check your auth token is still valid
-- Try closing and reopening the profile dialog
-- Verify browser has active internet connection
+Log in for that profile. Confirm its URL and auth type, then retry. A token
+from another profile or endpoint is not accepted.
 
-### Profile List Empty After Browser Restart?
+### The row says `Unsupported`
 
-- localStorage was cleared by browser settings or privacy mode
-- Recreate profiles manually or restore from backup (if saved elsewhere)
+On non-Windows native, make the profile URL match the native origin exactly.
+On any host, verify the server returns `workbenchProtocol: 2` from
+`GET /api/auth/status`. Do not work around the status by forcing a fallback
+transport.
 
-### Legacy "Single Server" Profile Doesn't Exist?
+### The row says `Offline`
 
-- Automatic migration only runs once on app load
-- If you deleted all profiles, you can manually recreate the default by setting URL via the create profile form
+Check the URL, server availability, HTTPS/CORS policy, and credentials. The
+runtime uses bounded retries; use **Connect** after restoring the endpoint.
 
-## API Reference (For Developers)
+### A project or deep link is unavailable
 
-All functions in `packages/ui/src/api/server-config.ts` (return values may be boolean for mutation success/failure):
+Confirm that the profile is connected and that the project still exists on that
+profile. An unqualified legacy `project` or `session` URL must be reopened
+through the Project Switcher with its `profileId`.
+
+## Developer reference
+
+The verified client boundary is in
+[`packages/ui/src/api/server-config.ts`](../packages/ui/src/api/server-config.ts)
+and [`packages/ui/src/api/connections.ts`](../packages/ui/src/api/connections.ts).
+The public concepts are:
 
 ```typescript
-// Get all profiles
-const profiles = getProfiles(): ServerProfile[]
+interface ServerProfile {
+  id: string;
+  name: string;
+  url: string;
+  authType: "basic" | "none";
+  username?: string;
+  createdAt: number;
+  autoConnect: boolean;
+}
 
-// Get currently active profile
-const profile = getActiveProfile(): ServerProfile | null
-
-// Create new profile
-const newProfile = createProfile({
-  name: "My Server",
-  url: "http://example.com",
-  authType: "basic",
-  username: "myuser"
-})
-
-// Update existing profile
-updateProfile(profileId, { name: "Updated Name" })
-
-// Delete profile
-deleteProfile(profileId)
-
-// Switch active profile
-setActiveProfile(profileId)
-
-// Auto-migrate legacy config on first load
-migrateToProfiles()
+getProfiles(): ServerProfile[];
+createProfile(data): ServerProfile;
+updateProfile(id, data): boolean;
+deleteProfile(id): boolean;
+migrateToProfiles(): void;
+getAuthToken(profileId): string | null;
+setAuthToken(token, profileId): boolean;
+clearAuthToken(profileId): boolean;
 ```
 
-See [API Reference](./api-reference.md#client-side-profile-management-phase-2) for complete details.
+Use `connectProfile(profileId)`, `disconnectProfile(profileId)`, and
+`removeProfileConnection(profileId)` from `connections.ts`; do not reintroduce a
+singleton transport or a focus-triggered profile switch. See the
+[API reference](./api-reference.md) and [system architecture](./system-architecture.md)
+for implementation contracts.
+
+## Unresolved questions
+
+None for the Phase 02 profile and unified-shell behavior. Later phase release
+gates remain tracked in the unified-profile plan rather than this user guide.

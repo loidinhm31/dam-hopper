@@ -96,6 +96,23 @@ export function projectKey(ref: ProjectRef): string {
   return JSON.stringify([ref.profileId, ref.project]);
 }
 
+export function parseProjectKey(key: string): ProjectRef | null {
+  try {
+    const parsed = JSON.parse(key);
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === "string" &&
+      typeof parsed[1] === "string"
+    ) {
+      return { profileId: parsed[0], project: parsed[1] };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** Returns deterministic tuple string: JSON.stringify([profileId, project, worktreePath | null]) */
 export function projectTargetKey(ref: ProjectTargetRef): string {
   const normalized = normalizeProjectTargetRef(ref);

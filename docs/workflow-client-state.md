@@ -122,29 +122,28 @@ REST calls even when the class is named `WsTransport`.
 
 ## Profile and transport-safe query state
 
-Both `apps/web` and `apps/native` configure their `QueryClient` with
-`profileScopedQueryKeyHash` from `query-client.ts`. The hash is the JSON
-serialization of `[activeProfileId, queryKey]` (or `no-active-profile`), so
-identical workflow keys for two server profiles occupy different cache entries.
+Both hosts create an ordinary `QueryClient`; they do not configure a global
+`profileScopedQueryKeyHash`. Owner-aware workflow hooks use
+`profileQueryKey(owner, ...)` and `profileWorkflowOverviewQueryKey(owner)` so
+the profile ID and connection generation are part of the query identity.
 Workflow data is not persisted to localStorage or another browser store.
 
-The transport singleton increments a monotonic generation whenever
-`initTransport`, `reconfigureTransport`, or `resetTransport` replaces its
-instance. `useWorkflowOverview` subscribes with `useSyncExternalStore` and puts
-the current generation in its key:
-
 ```text
-['workflow', 'overview', transportGeneration]
+['profile', profileId, generation, 'workflow', 'overview']
+['profile', profileId, generation, 'workflow', 'events', { cursor, limit }]
 ```
 
-This makes a profile/workspace transport replacement produce a fresh overview
-key. Destroying the old `WsTransport` closes its WebSocket and rejects pending
-requests; an old response can only settle the old query entry, never the new
-generation key. `useWorkflowEvents` uses a cursor/limit key under the same root:
+`useWorkflowOverview` subscribes to the compatibility transport-generation
+store only when called without an explicit owner. Owner-aware calls use the
+captured `ConnectionRef`; replacing one profile runtime advances only that
+owner's generation. Destroying the old `WsTransport` closes its WebSocket and
+rejects pending requests, while owner checks prevent stale results from
+publishing into a replacement profile.
 
-```text
-['workflow', 'events', { cursor: cursor ?? null, limit: limit ?? null }]
-```
+Mutation invalidation is likewise owner-qualified when a hook receives an
+owner; the unqualified root remains for compatibility callers. Overview/events
+hooks preserve prior observer data while refetching, use no polling interval,
+and support explicit `enabled` control.
 
 Overview and events are enabled by default (or explicitly disabled), use zero
 stale time, preserve their prior observer data while refetching, and do not set
@@ -152,8 +151,9 @@ a polling interval. Host QueryClient defaults drive focus/reconnect refetches.
 
 ## Hooks and mutation policy
 
-`workflowQueryKeys.all` is `['workflow']`; `invalidateWorkflowQueries` invalidates
-that root. `workflow-queries.ts` exposes `useWorkflowOverview` and
+`workflowQueryKeys.all` is `['workflow']` for compatibility callers;
+owner-aware callers use the profile-qualified workflow root.
+`workflow-queries.ts` exposes `useWorkflowOverview` and
 `useWorkflowEvents`, plus mutation hooks for item create/patch/delete, session
 create/end/abandon, resource link/unlink, note create/delete, and history purge.
 `queries.ts` re-exports `workflow-queries.ts` so the shared query API entry
@@ -161,12 +161,13 @@ point exposes workflow hooks without moving their implementation into the
 broad module.
 
 Each mutation passes the typed request to the corresponding `api.workflow`
-method. A successful mutation invalidates the workflow root so the authoritative
-overview/history is fetched again. A failed mutation does not invalidate or
-optimistically rewrite cached data; React Query retains the typed error for the
-caller to present and retry with the same request ID. `generateWorkflowRequestId`
-uses `crypto.randomUUID()` and has an RFC 4122 v4 fallback for environments
-without that API.
+method. A successful mutation invalidates the owner-qualified workflow root
+when an owner is supplied, or the compatibility root otherwise, so the
+authoritative overview/history is fetched again. A failed mutation does not
+invalidate or optimistically rewrite cached data; React Query retains the typed
+error for the caller to present and retry with the same request ID.
+`generateWorkflowRequestId` uses `crypto.randomUUID()` and has an RFC 4122 v4
+fallback for environments without that API.
 
 React Query owns remote workflow state. Component-local state owns deck/surface
 selection, filters, drafts, focus, pending action presentation, and elapsed

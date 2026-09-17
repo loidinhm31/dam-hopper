@@ -18,7 +18,10 @@ import { Button } from "@/components/atoms/Button.js";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { OverviewCard } from "@/components/molecules/OverviewCard.js";
 import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
-import { useProjects, useTerminalSessions } from "@/api/queries.js";
+import { useTerminalSessions } from "@/api/queries.js";
+import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
+import { getProfiles } from "@/api/server-config.js";
+import { getConnectionSnapshot, getApi } from "@/api/connections.js";
 import { useIpcEvent } from "@/hooks/use-sse-events.js";
 import { useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
@@ -59,9 +62,9 @@ function SessionRow({
   onNavigate,
   onKill,
 }: {
-  session: SessionInfo;
-  onNavigate: (id: string) => void;
-  onKill: (id: string) => void;
+  session: SessionInfo & { profileId?: string; profileName?: string };
+  onNavigate: (id: string, profileId?: string) => void;
+  onKill: (id: string, profileId?: string) => void;
 }) {
   const Icon = TYPE_ICON[session.type] ?? Terminal;
   const status = getSessionStatus(session);
@@ -96,6 +99,11 @@ function SessionRow({
       }}
     >
       <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]/60" />
+      {session.profileName && (
+        <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-[var(--color-surface)] text-[var(--color-text-muted)] truncate max-w-[20%]">
+          {session.profileName}
+        </span>
+      )}
       <span className="text-xs font-medium text-[var(--color-text)] truncate shrink-0 max-w-[25%]">
         {session.project}
       </span>
@@ -122,7 +130,7 @@ function SessionRow({
         className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-danger)]/60 hover:text-[var(--color-danger)]"
         onClick={(e) => {
           e.stopPropagation();
-          onKill(session.id);
+          onKill(session.id, session.profileId);
         }}
         title="Kill session"
       >
@@ -133,15 +141,24 @@ function SessionRow({
 }
 
 export function DashboardPage() {
-  const { data: projects = [] } = useProjects();
+  const { allProjects } = useAggregatedProjects();
   const { data: sessions = [] } = useTerminalSessions();
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const nextIdRef = useRef(1);
   const navigate = useNavigate();
   const qc = useQueryClient();
-
-  const clean = projects.filter((p) => p.status?.isClean === true).length;
-  const dirty = projects.filter((p) => p.status?.isClean === false).length;
+  const projects = allProjects.map((p) => p.project);
+  const clean = allProjects.filter(
+    (p) =>
+      (p.project as unknown as { status?: { isClean?: boolean } }).status
+        ?.isClean === true,
+  ).length;
+  const dirty = allProjects.filter(
+    (p) =>
+      (p.project as unknown as { status?: { isClean?: boolean } }).status
+        ?.isClean === false,
+  ).length;
+  const totalProjects = allProjects.length;
   const aliveSessions = sessions.filter((s) => s.alive);
   const aliveTerminalOptions = useMemo(
     () =>
@@ -165,29 +182,43 @@ export function DashboardPage() {
           e.type)
         : String(e.data ?? e.type);
 
+    const profiles = getProfiles();
+    const profileName = e.profileId
+      ? (profiles.find((p) => p.id === e.profileId)?.name ?? e.profileId)
+      : null;
+    const label = profileName ? `[${profileName}] [${e.type}]` : `[${e.type}]`;
+
     setActivity((prev) => [
       {
         id: nextIdRef.current++,
-        message: `[${e.type}] ${msg}`,
+        message: `${label} ${msg}`,
         time: new Date(e.timestamp),
       },
       ...prev.slice(0, 19),
     ]);
   });
 
-  function handleNavigateToSession(sessionId: string) {
-    navigate(`/terminals?session=${sessionId}`);
+  function handleNavigateToSession(sessionId: string, profileId?: string) {
+    navigate(
+      profileId
+        ? `/terminals?profileId=${encodeURIComponent(profileId)}&session=${encodeURIComponent(sessionId)}`
+        : `/terminals?session=${encodeURIComponent(sessionId)}`,
+    );
   }
 
-  function handleKillSession(sessionId: string) {
-    api.terminal.kill(sessionId).catch((err: unknown) => {
+  function handleKillSession(sessionId: string, profileId?: string) {
+    const snapshot = profileId ? getConnectionSnapshot(profileId) : null;
+    const client = snapshot ? getApi(snapshot.owner) : api;
+    client.terminal.kill(sessionId).catch((err: unknown) => {
       logger.error("DashboardPage", "kill session failed", {
         sessionId,
+        profileId,
         error: err,
       });
     });
     void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
   }
+
 
   return (
     <AppLayout
@@ -216,7 +247,7 @@ export function DashboardPage() {
           <OverviewCard
             icon={FolderGit2}
             label="Total Projects"
-            value={projects.length}
+            value={totalProjects}
             color="var(--color-primary)"
           />
         </Link>

@@ -10,16 +10,14 @@ import {
 } from "@dam-hopper/ui";
 import "@dam-hopper/ui/styles";
 
-import { initTransport } from "@dam-hopper/ui/api/transport";
-import { WsTransport } from "@dam-hopper/ui/api/ws-transport";
-import { profileScopedQueryKeyHash } from "@dam-hopper/ui/api/query-client";
 import {
-  initializeClientDiagnostics,
-  setClientTransportStatus,
-} from "@dam-hopper/ui/diagnostics-client";
-import { IdleTransport } from "./idle-transport";
-import { getNativeServerUrl } from "./native-server-url";
-import { getActiveProfile } from "@dam-hopper/ui/api/server-config";
+  getProfiles,
+  migrateToProfiles,
+} from "@dam-hopper/ui/api/server-config";
+import { connectProfile } from "@dam-hopper/ui/api/connections";
+import { performFreshStateReset } from "@dam-hopper/ui/lib/fresh-state-reset";
+import { isProfileSupportedOnNative } from "./native-server-url";
+import { initializeClientDiagnostics } from "@dam-hopper/ui/diagnostics-client";
 import { createNativeSshForwardHost } from "./native-ssh-forward-host";
 import {
   getNativeBrowserDebugEnvironment,
@@ -99,22 +97,15 @@ initializeClientDiagnostics();
 syncNativePlatform();
 const disposeNativeDebugConsoleShortcut = installNativeDebugConsoleShortcut();
 
-const serverUrl = getNativeServerUrl();
-if (serverUrl) {
-  const transport = new WsTransport(serverUrl, getActiveProfile()?.id);
-  setClientTransportStatus(transport.getStatus());
-  transport.onStatusChange(setClientTransportStatus);
-  initTransport(transport);
-} else {
-  initTransport(new IdleTransport());
-}
+performFreshStateReset();
+migrateToProfiles();
+
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 10_000,
       retry: 1,
-      queryKeyHashFn: profileScopedQueryKeyHash,
     },
   },
 });

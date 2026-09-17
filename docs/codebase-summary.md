@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 1,969
-files, 4,360,120 tokens, 18,120,461 characters; five security-flagged files
+**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 1,987
+files, 4,397,521 tokens, 18,277,206 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -25,14 +25,36 @@ security scanning are not represented in full.
 - `docs/` — operator, API, architecture, standards, and product-requirement
   documentation.
 
-## Phase 00 G0 planning baseline
+## Unified-profile workbench frontend (Phases 00–02)
 
-The unified multi-profile workbench is a proposed frontend ownership cutover.
-Phase 00 froze its caller inventory and cross-profile contracts without changing
-runtime source. The separate backend workspace-registry redesign in
-`docs/system-architecture.md` remains out of scope. Runtime implementation and
-qualification are tracked in `plans/260916-2137-unified-profile/`; no shipped
-behavior should be inferred from these planning records.
+Phase 00 froze the profile/generation ownership contract. Phase 01 implements
+qualified refs, keyed `connections.ts` runtimes, owner-bound API clients,
+generation-aware query/event boundaries, and protocol-2 status gating. Phase
+02 completes the shell/profile migration:
+
+- `packages/ui/src/embed/dam-hopper-app.tsx` mounts routes independently of any
+  one profile and starts supported `autoConnect` profiles independently.
+- `packages/ui/src/api/server-config.ts` migrates `autoConnect`, endpoint-bound
+  `ProfileAuthV2` records, and legacy single-server credentials without
+  sending an unbound bearer to a new URL. `isSameOriginProfile` enforces
+  non-Windows native same-origin support.
+- `ServerProfilesDialog` owns per-profile Connect/Disconnect/Login/Logout/Edit/
+  Remove/Auto-connect actions. `ServerSettingsDialog` edits one profile and
+  nests backend `WorkspaceSwitcher` under Server configuration.
+- `workspace.ts` persists qualified `ProjectRef | null`; `ProjectSwitcher`
+  aggregates successful per-profile project queries into Profile → Project
+  groups and uses JSON tuple keys. `workbench-selections.ts` keeps preference,
+  Settings, and Browser target profile IDs independent.
+- `fresh-state-reset.ts` drops enumerated old resource stores idempotently,
+  preserves profiles/auth/native/server state, and rejects unqualified links.
+- Web/native entrypoints each create one ordinary `QueryClient` and render
+  once. Native profile support is explicit; unsupported rows remain editable
+  and produce no fallback request.
+
+These are frontend ownership boundaries only. Server project names, workspace
+configuration, PTYs, workflow/usage history, and remote data remain
+server-authoritative. The unified-profile backend-workspace proposal below is
+not part of this implementation.
 
 
 ## Backend boundaries

@@ -60,7 +60,8 @@ Response (authenticated):
 {
   "authenticated": true,
   "user": "username",
-  "dev_mode": false
+  "dev_mode": false,
+  "workbenchProtocol": 2
 }
 ```
 
@@ -70,7 +71,8 @@ Response (--no-auth mode):
 {
   "authenticated": true,
   "user": "dev-user",
-  "dev_mode": true
+  "dev_mode": true,
+  "workbenchProtocol": 2
 }
 ```
 
@@ -1873,62 +1875,107 @@ Create a commit from staged files.
 
 Body: `{ message: string, amend?: bool, root?: string }`
 
-## Client-Side Profile Management (Phase 2)
+## Client-Side Profile Management (Phase 02)
 
-Profile management lives entirely in the browser via **localStorage** — no server endpoints required.
+Profile metadata and endpoint-bound credentials live in the browser. The
+profile runtime is client-side; the server participates through its normal
+authentication and WebSocket endpoints. The shared shell does not require a
+profile connection to mount.
 
-### Data Model
+### Data model
 
 ```typescript
 export interface ServerProfile {
   id: string; // UUID v4
-  name: string; // "Local Dev", "Production", etc.
-  url: string; // "http://localhost:4800"
-  authType: "basic" | "none"; // Authentication method
-  username?: string; // For basic auth display (password never stored)
+  name: string;
+  url: string; // normalized HTTP(S) URL
+  authType: "basic" | "none";
+  username?: string; // display value; password is never stored
   createdAt: number; // Unix timestamp
+  autoConnect: boolean;
+}
+
+export interface ProfileAuthV2 {
+  version: 2;
+  serverUrl: string;
+  authType: "basic" | "none";
+  token: string;
 }
 ```
 
-### API Functions
+`ProfileAuthV2` is stored under
+`damhopper_profile_auth_v2_<profileId>`. Reads require a profile ID and verify
+the saved URL and auth type against the current profile. A legacy
+`damhopper_auth_token_<profileId>` record is migrated only when its profile
+still exists; an unbound legacy single-server token is not copied to an
+unrelated endpoint.
 
-All functions in `packages/ui/src/api/server-config.ts`.
+### Profile configuration functions
 
-**Profile Getters:**
+All functions are in `packages/ui/src/api/server-config.ts`:
 
-- `getProfiles(): ServerProfile[]` — fetch all profiles
-- `getActiveProfileId(): string | null` — currently selected profile ID
-- `getActiveProfile(): ServerProfile | null` — currently selected profile object
+- `readServerProfiles(): KnownServerProfiles` distinguishes available storage
+  from an unavailable storage backend.
+- `getProfiles(): ServerProfile[]` reads available profiles.
+- `createProfile(data): ServerProfile` defaults `autoConnect` to `true`.
+- `updateProfile(id, data): boolean` updates metadata, including `autoConnect`.
+- `deleteProfile(id): boolean` clears credentials and removes local profile
+  state; it does not delete remote server data.
+- `migrateToProfiles(): void` converts the legacy URL/token configuration and
+  preserves explicit profile choices.
+- `getAuthToken(profileId?): string | null`,
+  `setAuthToken(token, profileId?): boolean`, and
+  `clearAuthToken(profileId?): boolean` are profile-explicit at runtime;
+  missing IDs do not fall back to a global token.
+- `isSameOriginProfile(profile): boolean` applies the native platform origin
+  restriction before auto-login or connection traffic.
 
-**Profile Management:**
+The `damhopper_active_profile_id` record remains a compatibility/default
+endpoint input for legacy helpers. It is not the owner of connection state.
+`connections.ts` exposes `connectProfile(profileId)`,
+`disconnectProfile(profileId)`, and `removeProfileConnection(profileId)` for
+independent profile runtimes.
 
-- `createProfile(data: Omit<ServerProfile, "id" | "createdAt">): ServerProfile` — add new profile, auto-generates UUID and timestamp
-- `updateProfile(id: string, data: Partial<...>): void` — modify profile fields
-- `deleteProfile(id: string): void` — remove profile (clears active if deleted)
-- `setActiveProfile(id: string): void` — switch active profile
+### Connection contract
 
-**Persistence:**
+```typescript
+export type ConnectionStatus =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "login-required"
+  | "offline"
+  | "unsupported";
 
-- `getProfiles() / saveProfiles(profiles: ServerProfile[]): void` — localStorage key: `damhopper_server_profiles`
-- Active profile ID stored in `damhopper_active_profile_id`
+export interface ConnectionSnapshot {
+  owner: { profileId: string; generation: number };
+  status: ConnectionStatus;
+  intent: boolean;
+  serverUrl: string;
+  error?: string;
+}
+```
 
-**Migration:**
+`connectProfile` first checks URL validity, native origin support, and
+`GET /api/auth/status`. The response must include `workbenchProtocol: 2`.
+Generation and owner checks prevent a previous profile runtime from publishing
+results after edit, removal, logout, or replacement.
 
-- `migrateToProfiles(): void` — (called in `App.tsx`) converts legacy single-server config to profile system on first app load
-  - restores a valid active profile when the stored selection is missing
-  - migrates the legacy URL, username, and token only when the legacy URL matches the destination profile
+### Persistence breakdown
 
-### Storage Breakdown
+| Key | Storage | Scope |
+| --- | --- | --- |
+| `damhopper_server_profiles` | `localStorage` | All profile metadata; shared by tabs |
+| `damhopper_profile_auth_v2_<id>` | `localStorage` | Endpoint-bound auth per profile |
+| `damhopper_active_profile_id` | `localStorage` | Compatibility/default endpoint input |
+| `dam-hopper:workspace-state` | Zustand persistence | Qualified `selectedProject` |
+| `dam-hopper:preferences-source:v1` | Zustand persistence | Independent preference/settings/browser IDs |
+| TanStack Query and connection state | Memory only | Owner/generation-qualified |
 
-| Key                           | Storage        | Scope             | Persistence            |
-| ----------------------------- | -------------- | ----------------- | ---------------------- |
-| `damhopper_server_profiles`   | localStorage   | Shared (all tabs) | Survives browser close |
-| `damhopper_active_profile_id` | localStorage   | Shared (all tabs) | Survives browser close |
-| `damhopper_auth_token_<id>`   | localStorage   | Per-profile       | Survives browser close |
-| `damhopper_auth_username`     | sessionStorage | Per-tab           | Cleared on tab close   |
-
-Bearer tokens are persisted locally per profile to support Android/browser recreation. They are readable by JavaScript; deploy trusted HTTPS frontend assets and never store passwords.
-Changing a normalized profile URL clears its token and requires login again; trailing-slash-only formatting changes preserve it.
+No client query cache is persisted to localStorage. The fresh-state reset
+removes allowlisted legacy browser-resource records, never calls
+`localStorage.clear()`, preserves profiles/auth/server data, and rejects
+unqualified `project`/`session` links that lack `profileId`.
 
 **POST /api/git/:project/stage**
 Stage files for commit.

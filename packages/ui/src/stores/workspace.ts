@@ -1,37 +1,68 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { ProjectRef } from "@/api/ownership.js";
 
-interface WorkspaceStore {
+export interface WorkspaceStore {
+  selectedProject: ProjectRef | null;
+  navigationRevision: number;
+  setSelectedProject: (project: ProjectRef | null) => void;
+  // Compatibility fields for existing callers
   activeProject: string | null;
   activeProjectRevision: number;
-  setActiveProject: (project: string | null) => void;
+  setActiveProject: (project: string | null, profileId?: string) => void;
 }
-
-const ACTIVE_PROJECT_KEY = "dam-hopper:active-project";
 
 export const useWorkspaceStore = create<WorkspaceStore>()(
   persist(
-    (set) => ({
-      activeProject: localStorage.getItem(ACTIVE_PROJECT_KEY),
+    (set, get) => ({
+      selectedProject: null,
+      navigationRevision: 0,
+      setSelectedProject: (project) => {
+        set((state) => {
+          const isSame =
+            (state.selectedProject === null && project === null) ||
+            (state.selectedProject !== null &&
+              project !== null &&
+              state.selectedProject.profileId === project.profileId &&
+              state.selectedProject.project === project.project);
+          if (isSame) return state;
+          return {
+            selectedProject: project,
+            navigationRevision: state.navigationRevision + 1,
+            activeProject: project?.project ?? null,
+            activeProjectRevision: state.activeProjectRevision + 1,
+          };
+        });
+      },
+      activeProject: null,
       activeProjectRevision: 0,
-      setActiveProject: (project) => {
-        set((state) =>
-          state.activeProject === project
-            ? state
-            : {
-                activeProject: project,
-                activeProjectRevision: state.activeProjectRevision + 1,
-              },
-        );
-        if (project) {
-          localStorage.setItem(ACTIVE_PROJECT_KEY, project);
-        } else {
-          localStorage.removeItem(ACTIVE_PROJECT_KEY);
+      setActiveProject: (projectName, profileId) => {
+        if (!projectName) {
+          get().setSelectedProject(null);
+          return;
         }
+        const currentRef = get().selectedProject;
+        const targetProfileId = profileId ?? currentRef?.profileId ?? "";
+        get().setSelectedProject({
+          profileId: targetProfileId,
+          project: projectName,
+        });
       },
     }),
     {
       name: "dam-hopper:workspace-state",
+      version: 1,
+      partialize: (state) => ({
+        selectedProject: state.selectedProject,
+      }),
+      onRehydrateStorage: () => {
+        // Drop legacy unowned active-project key per G0/Phase 02 contract
+        try {
+          localStorage.removeItem("dam-hopper:active-project");
+        } catch {
+          // ignore
+        }
+      },
     },
   ),
 );
