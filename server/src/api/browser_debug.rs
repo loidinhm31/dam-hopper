@@ -22,6 +22,7 @@ use super::error::ApiError;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateBrowserDebugArtifactRequest {
     pub terminal_id: String,
+    pub terminal_incarnation: u64,
     pub selection: BrowserSelectionV1,
 }
 
@@ -30,14 +31,20 @@ pub async fn create(
     payload: Result<Json<CreateBrowserDebugArtifactRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<BrowserDebugArtifactResponse>), ApiError> {
     let Json(body) = payload.map_err(json_rejection)?;
-    if !state.pty_manager.is_alive(&body.terminal_id) {
+    let live_incarnation = state
+        .pty_manager
+        .live_incarnation(&body.terminal_id)
+        .ok_or_else(|| {
+            ApiError::from_app(AppError::BrowserDebug(BrowserDebugError::NotFound))
+        })?;
+    if live_incarnation != body.terminal_incarnation {
         return Err(ApiError::from_app(AppError::BrowserDebug(
-            BrowserDebugError::NotFound,
+            BrowserDebugError::IncarnationMismatch,
         )));
     }
     let response = state
         .browser_debug_artifacts
-        .create(body.terminal_id, body.selection)
+        .create(body.terminal_id, body.terminal_incarnation, body.selection)
         .await
         .map_err(browser_debug_error)?;
     Ok((StatusCode::CREATED, Json(response)))
@@ -95,12 +102,6 @@ pub async fn handoff(
         .claim_handoff(id)
         .await
         .map_err(browser_debug_error)?;
-    if !state.pty_manager.is_alive(&artifact.terminal_id) {
-        state.browser_debug_artifacts.release_handoff(id).await;
-        return Err(ApiError::from_app(AppError::BrowserDebug(
-            BrowserDebugError::NotFound,
-        )));
-    }
     let reference = match terminal_reference(&artifact) {
         Ok(reference) => reference,
         Err(error) => {
@@ -108,10 +109,11 @@ pub async fn handoff(
             return Err(browser_debug_error(error));
         }
     };
-    if let Err(error) = state
-        .pty_manager
-        .write(&artifact.terminal_id, reference.as_bytes())
-    {
+    if let Err(error) = state.pty_manager.write_if_incarnation(
+        &artifact.terminal_id,
+        artifact.terminal_incarnation,
+        reference.as_bytes(),
+    ) {
         state.browser_debug_artifacts.release_handoff(id).await;
         return Err(ApiError::from_app(error));
     }

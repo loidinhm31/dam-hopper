@@ -7,6 +7,8 @@ import {
 
 const target = {
   sessionId: "shell:demo",
+  profileId: "profile-a",
+  incarnation: 1,
   label: "Demo shell",
   mounted: true,
   registered: true,
@@ -32,6 +34,7 @@ describe("browser terminal handoff", () => {
     const reference = buildBrowserTerminalReference({
       artifactId: "artifact-1",
       terminalId: "shell:demo",
+      terminalIncarnation: 1,
       expiresAt: Date.now() + 60_000,
       jsonPath: "/tmp/selection\n\u001b[31m.json",
       jsonSize: 1,
@@ -52,11 +55,25 @@ describe("browser terminal handoff", () => {
       buildBrowserTerminalReference({
         artifactId: "artifact-1",
         terminalId: "shell:demo",
+        terminalIncarnation: 1,
         expiresAt: Date.now() + 60_000,
         jsonPath: `/${"a".repeat(1_100)}.json`,
         jsonSize: 1,
         jsonSha256: "hash",
       }),
     ).toThrow("invalid");
+  });
+
+  it("rejects cross-owner terminal handoff before create", () => {
+    const browserTargetA = { owner: { profileId: "profile-a", generation: 0 } };
+    const browserTargetB = { owner: { profileId: "profile-b", generation: 0 } };
+
+    // Same profile is ready
+    expect(isBrowserTerminalTargetReady(target, browserTargetA)).toBe(true);
+    expect(browserTerminalTargetReason(target, browserTargetA)).toBeNull();
+
+    // Different profile is rejected
+    expect(isBrowserTerminalTargetReady(target, browserTargetB)).toBe(false);
+    expect(browserTerminalTargetReason(target, browserTargetB)).toBe("Different profile");
   });
 });

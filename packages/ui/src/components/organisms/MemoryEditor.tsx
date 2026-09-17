@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
   useMemoryFile,
@@ -7,15 +7,20 @@ import {
   useApplyMemoryTemplate,
 } from "@/api/queries.js";
 import type { AgentType } from "@/api/client.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 
 interface Props {
   projects: Array<{ name: string }>;
+  owner?: ConnectionRef;
+  profileId?: string;
 }
 
-export function MemoryEditor({ projects }: Props) {
+export function MemoryEditor({ projects, owner, profileId }: Props) {
   const [projectName, setProjectName] = useState(projects[0]?.name ?? "");
   const [agent, setAgent] = useState<AgentType>("claude");
   const [content, setContent] = useState("");
+  const [isDirty, setIsDirty] = useState(false);
+  const draftTargetRef = useRef({ profileId, projectName, agent });
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
   const [initialPreview, setInitialPreview] = useState<string | null>(null);
@@ -27,22 +32,33 @@ export function MemoryEditor({ projects }: Props) {
     data: memoryContent,
     isLoading,
     isFetching,
-  } = useMemoryFile(projectName, agent);
-  const { data: templates = [] } = useMemoryTemplates();
-  const updateMemory = useUpdateMemoryFile();
-  const applyTemplate = useApplyMemoryTemplate();
-
-  // Reset editor when project/agent changes or fresh data arrives
+  } = useMemoryFile(projectName, agent, { owner });
+  const { data: templates = [] } = useMemoryTemplates({ owner });
+  const updateMemory = useUpdateMemoryFile({ owner });
+  const applyTemplate = useApplyMemoryTemplate({ owner });
+  // Reset editor when project/agent/profile changes or fresh data arrives for current clean target
   useEffect(() => {
-    const timer = setTimeout(() => {
+    const target = draftTargetRef.current;
+    if (
+      target.profileId === profileId &&
+      target.projectName === projectName &&
+      target.agent === agent
+    ) {
+      if (!isDirty) {
+        setContent(memoryContent ?? "");
+        setPreview(null);
+        setInitialPreview(null);
+        setSaveStatus("idle");
+      }
+    } else {
+      draftTargetRef.current = { profileId, projectName, agent };
+      setIsDirty(false);
       setContent(memoryContent ?? "");
       setPreview(null);
       setInitialPreview(null);
       setSaveStatus("idle");
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [memoryContent, projectName, agent]);
-
+    }
+  }, [memoryContent, projectName, agent, profileId, isDirty]);
   async function handleApply() {
     if (!selectedTemplate || !projectName) return;
     const result = await applyTemplate.mutateAsync({
@@ -63,9 +79,9 @@ export function MemoryEditor({ projects }: Props) {
         content: contentToSave,
       });
       setSaveStatus("saved");
+      setIsDirty(false);
       setPreview(null);
       setInitialPreview(null);
-      setTimeout(() => setSaveStatus("idle"), 2000);
     } catch {
       setSaveStatus("error");
     }
@@ -81,6 +97,8 @@ export function MemoryEditor({ projects }: Props) {
   }
 
   function handleSwitchProject(name: string) {
+    if (isDirty && !window.confirm("Switch project? Your unsaved draft will be lost."))
+      return;
     if (preview !== null && preview !== initialPreview) {
       if (!window.confirm("Switch project? Your preview edits will be lost."))
         return;
@@ -89,6 +107,8 @@ export function MemoryEditor({ projects }: Props) {
   }
 
   function handleSwitchAgent(a: AgentType) {
+    if (isDirty && !window.confirm("Switch agent? Your unsaved draft will be lost."))
+      return;
     if (preview !== null && preview !== initialPreview) {
       if (!window.confirm("Switch agent? Your preview edits will be lost."))
         return;
@@ -166,9 +186,6 @@ export function MemoryEditor({ projects }: Props) {
             </Button>
           </>
         )}
-
-        <div className="flex-1" />
-
         {saveStatus === "saved" && (
           <span className="text-xs text-[var(--color-success)]">Saved</span>
         )}
@@ -217,7 +234,10 @@ export function MemoryEditor({ projects }: Props) {
             value={preview ?? content}
             onChange={(e) => {
               if (preview !== null) setPreview(e.target.value);
-              else setContent(e.target.value);
+              else {
+                setContent(e.target.value);
+                setIsDirty(true);
+              }
             }}
             disabled={isTransitioning}
             placeholder={`No ${agent === "claude" ? "CLAUDE.md" : "GEMINI.md"} found. Start typing or apply a template.`}

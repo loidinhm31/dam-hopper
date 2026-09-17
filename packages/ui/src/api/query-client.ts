@@ -58,6 +58,28 @@ export function profileUsageQueryKey(
   return profileQueryKey(owner, "usage", ...parts);
 }
 
+export function profileAgentStoreQueryKey(
+  owner: ConnectionRef,
+  ...parts: unknown[]
+): QueryKey {
+  return profileQueryKey(owner, "agent-store", ...parts);
+}
+
+export function profileAgentMemoryQueryKey(
+  owner: ConnectionRef,
+  ...parts: unknown[]
+): QueryKey {
+  return profileQueryKey(owner, "agent-memory", ...parts);
+}
+
+export function profilePortsQueryKey(owner: ConnectionRef): QueryKey {
+  return profileQueryKey(owner, "ports");
+}
+
+export function profileTunnelsQueryKey(owner: ConnectionRef): QueryKey {
+  return profileQueryKey(owner, "tunnels");
+}
+
 /**
  * Deterministic key hash.
  * Canonical queries include owner in profileQueryKey.

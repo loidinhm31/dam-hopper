@@ -1,4 +1,5 @@
 import { useShipItem, useUnshipItem } from "@/api/queries.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 import type {
   AgentStoreItem,
   AgentType,
@@ -10,6 +11,7 @@ interface Props {
   items: AgentStoreItem[];
   projects: ProjectConfig[];
   matrix: MatrixData;
+  owner?: ConnectionRef;
 }
 
 const AGENTS: AgentType[] = ["claude", "gemini"];
@@ -62,9 +64,9 @@ function CellStatus({
   );
 }
 
-export function DistributionMatrix({ items, projects, matrix }: Props) {
-  const ship = useShipItem();
-  const unship = useUnshipItem();
+export function DistributionMatrix({ items, projects, matrix, owner }: Props) {
+  const ship = useShipItem({ owner });
+  const unship = useUnshipItem({ owner });
 
   if (items.length === 0 || projects.length === 0) {
     return (

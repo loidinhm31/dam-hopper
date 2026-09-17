@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState, useSyncExternalStore } from "react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
 import { StoreInventory } from "@/components/organisms/StoreInventory.js";
@@ -12,8 +12,14 @@ import {
   useAgentStoreMatrix,
   useProjects,
 } from "@/api/queries.js";
+import {
+  getProfiles,
+  getActiveProfileId,
+  subscribeToProfileChanges,
+} from "@/api/server-config.js";
+import { getConnectionSnapshot } from "@/api/connections.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 import type { AgentStoreItem } from "@/api/client.js";
-
 type Tab = "store" | "memory" | "import";
 
 const MemoryEditor = lazy(() =>
@@ -35,13 +41,45 @@ const AGENT_STORE_FALLBACK = (
 );
 
 export function AgentStorePage() {
+  const profiles = useSyncExternalStore(
+    subscribeToProfileChanges,
+    getProfiles,
+    () => [],
+  );
+  const [selectedProfileId, setSelectedProfileId] = useState<string>(() => {
+    return getActiveProfileId() || getProfiles()[0]?.id || "";
+  });
+
+  const effectiveProfileId = useMemo(() => {
+    if (profiles.some((p) => p.id === selectedProfileId)) return selectedProfileId;
+    return profiles[0]?.id ?? selectedProfileId;
+  }, [profiles, selectedProfileId]);
+
+  const owner = useMemo<ConnectionRef>(() => {
+    const snap = getConnectionSnapshot(effectiveProfileId);
+    return (
+      snap?.owner ?? {
+        profileId: effectiveProfileId,
+        generation: 0,
+      }
+    );
+  }, [effectiveProfileId]);
+
+  const handleProfileChange = (newProfileId: string) => {
+    if (newProfileId === selectedProfileId) return;
+    setShowImportDialog(false);
+    setShowShipDialog(false);
+    setSelectedItem(null);
+    setSelectedProfileId(newProfileId);
+  };
+
   const {
     data: items = [],
     isLoading,
     isError: itemsError,
-  } = useAgentStoreItems();
-  const { data: matrix = {}, isError: matrixError } = useAgentStoreMatrix();
-  const { data: projects = [], isError: projectsError } = useProjects();
+  } = useAgentStoreItems(undefined, { owner });
+  const { data: matrix = {}, isError: matrixError } = useAgentStoreMatrix({ owner });
+  const { data: projects = [], isError: projectsError } = useProjects({ owner });
   const [activeTab, setActiveTab] = useState<Tab>("store");
   const [selectedItem, setSelectedItem] = useState<AgentStoreItem | null>(null);
   const [showShipDialog, setShowShipDialog] = useState(false);
@@ -76,8 +114,8 @@ export function AgentStorePage() {
       }
     >
       <div className="flex flex-col gap-4">
-        {/* Tab bar + action */}
-        <div className="flex items-center gap-4">
+        {/* Tab bar + profile selector + action */}
+        <div className="flex items-center gap-4 flex-wrap">
           <div className="flex rounded border border-[var(--color-border)] overflow-hidden">
             {(["store", "memory", "import"] as Tab[]).map((tab) => (
               <button
@@ -99,8 +137,31 @@ export function AgentStorePage() {
             ))}
           </div>
 
-          <div className="flex-1">
-            {activeTab === "store" && <HealthStatus />}
+          {profiles.length > 1 && (
+            <div className="flex items-center gap-1.5">
+              <label
+                htmlFor="agent-store-profile-select"
+                className="text-xs text-[var(--color-text-muted)] font-medium"
+              >
+                Profile:
+              </label>
+              <select
+                id="agent-store-profile-select"
+                value={effectiveProfileId}
+                onChange={(e) => handleProfileChange(e.target.value)}
+                className="text-xs bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-2 py-1 text-[var(--color-text)] outline-none"
+              >
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name || p.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="flex-1 min-w-[200px]">
+            {activeTab === "store" && <HealthStatus owner={owner} />}
           </div>
 
           {activeTab === "import" && (
@@ -113,7 +174,6 @@ export function AgentStorePage() {
             </Button>
           )}
         </div>
-
         {hasError && activeTab === "store" && (
           <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-4 py-3 text-xs text-[var(--color-danger)]">
             Failed to load agent store data. Check that the workspace has a
@@ -174,6 +234,7 @@ export function AgentStorePage() {
                 items={items}
                 projects={projects}
                 matrix={matrix}
+                owner={owner}
               />
             </div>
           </>
@@ -189,7 +250,7 @@ export function AgentStorePage() {
             }}
           >
             <Suspense fallback={AGENT_STORE_FALLBACK}>
-              <MemoryEditor projects={projects} />
+              <MemoryEditor projects={projects} owner={owner} profileId={effectiveProfileId} />
             </Suspense>
           </div>
         )}
@@ -214,6 +275,7 @@ export function AgentStorePage() {
       {showShipDialog && selectedItem && (
         <ShipDialog
           item={selectedItem}
+          owner={owner}
           projects={projects}
           onClose={() => setShowShipDialog(false)}
         />
@@ -221,7 +283,7 @@ export function AgentStorePage() {
 
       {showImportDialog && (
         <Suspense fallback={AGENT_STORE_FALLBACK}>
-          <ImportDialog onClose={() => setShowImportDialog(false)} />
+          <ImportDialog owner={owner} onClose={() => setShowImportDialog(false)} />
         </Suspense>
       )}
     </AppLayout>

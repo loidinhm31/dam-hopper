@@ -2,6 +2,10 @@ import type { BrowserDebugArtifactResponse } from "@/api/client.js";
 import type { OpenTerminalTitle } from "@/lib/terminal-title.js";
 export interface BrowserTerminalTarget {
   sessionId: string;
+  profileId?: string | null;
+  incarnation?: number;
+  project?: string | null;
+  worktreePath?: string | null;
   label: string;
   openTitle?: OpenTerminalTitle;
   mounted: boolean;
@@ -22,7 +26,15 @@ const MAX_REFERENCE_LENGTH = 1024;
 
 export function browserTerminalTargetReason(
   target: BrowserTerminalTarget,
+  browserTarget?: { owner?: { profileId?: string } } | null,
 ): string | null {
+  if (
+    browserTarget?.owner?.profileId &&
+    target.profileId &&
+    target.profileId !== browserTarget.owner.profileId
+  ) {
+    return "Different profile";
+  }
   if (!target.mounted) return "Not mounted";
   if (!target.registered) return "Not mounted";
   if (target.alive === undefined) return "Checking terminal status…";
@@ -32,8 +44,9 @@ export function browserTerminalTargetReason(
 
 export function isBrowserTerminalTargetReady(
   target: BrowserTerminalTarget | undefined,
+  browserTarget?: { owner?: { profileId?: string } } | null,
 ): target is BrowserTerminalTarget {
-  return Boolean(target && browserTerminalTargetReason(target) === null);
+  return Boolean(target && browserTerminalTargetReason(target, browserTarget) === null);
 }
 
 /**

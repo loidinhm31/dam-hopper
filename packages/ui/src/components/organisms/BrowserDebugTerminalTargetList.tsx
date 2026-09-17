@@ -8,6 +8,7 @@ interface BrowserDebugTerminalTargetListProps {
   disabled: boolean;
   selectedId: string | null;
   targets: BrowserTerminalTarget[];
+  browserTarget?: { owner?: { profileId?: string } } | null;
   onSelect: (sessionId: string) => void;
 }
 
@@ -15,6 +16,7 @@ export function BrowserDebugTerminalTargetList({
   disabled,
   selectedId,
   targets,
+  browserTarget,
   onSelect,
 }: BrowserDebugTerminalTargetListProps) {
   return (
@@ -29,7 +31,7 @@ export function BrowserDebugTerminalTargetList({
           </p>
         )}
         {targets.map((candidate) => {
-          const reason = browserTerminalTargetReason(candidate);
+          const reason = browserTerminalTargetReason(candidate, browserTarget);
           const id = `browser-terminal-${candidate.sessionId}`;
           return (
             <label
@@ -67,9 +69,11 @@ export function BrowserDebugTerminalTargetList({
                 </span>
                 <span
                   id={`${id}-status`}
-                  className="block truncate font-mono text-[10px] text-[var(--color-text-muted)]"
                 >
-                  {reason ?? "Ready"}
+                  {reason ??
+                    (candidate.incarnation !== undefined
+                      ? `Ready · inc ${candidate.incarnation}`
+                      : "Ready")}
                 </span>
               </span>
             </label>

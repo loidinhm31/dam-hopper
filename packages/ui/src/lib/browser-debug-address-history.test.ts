@@ -39,4 +39,16 @@ describe("browser debug address history", () => {
 
     expect(loadBrowserDebugAddressHistory()).toEqual(["https://ok.test/path"]);
   });
+
+  it("partitions address history by profileId without cross-profile leakage", () => {
+    recordBrowserDebugAddress("http://localhost:3000/profile-a", "profile-a");
+    recordBrowserDebugAddress("http://localhost:4000/profile-b", "profile-b");
+
+    expect(loadBrowserDebugAddressHistory("profile-a")).toEqual([
+      "http://localhost:3000/profile-a",
+    ]);
+    expect(loadBrowserDebugAddressHistory("profile-b")).toEqual([
+      "http://localhost:4000/profile-b",
+    ]);
+  });
 });

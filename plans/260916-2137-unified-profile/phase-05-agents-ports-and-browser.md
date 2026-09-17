@@ -7,8 +7,7 @@
 [Overview](plan.md) · [Canonical plan](plan.md) · [Contracts](design-contracts.md) · [Coverage](coverage-and-decisions.md). Dependency: Phase 01–02 and TerminalInstanceRef contract.
 
 ### Overview
-
-Date: 2026-09-16. Priority: P1. Implementation: pending (0%). Planning status: specified; runtime verification: not run. Scope: Agents and Browser.
+Date: 2026-09-17. Priority: P1. Status: DONE (100%) — 2026-09-17. Runtime verification: focused gates passing (44/44 tests; UI build and Rust cargo check clean). Scope: Agents, ports, Browser and capability isolation.
 
 ### Key Insights
 
@@ -59,11 +58,11 @@ Observed: agent item/matrix/project and import temporary paths are unqualified; 
 
 ### Todo list
 
-- [ ] Equal agent item/project names and temporary scan paths never cross servers; owner switch cannot save/import a stale draft into B.
-- [ ] A/B identical port numbers and terminal IDs remain distinct; tunnel operations and Browser target resolution stay owner-bound.
-- [ ] Project selection leaves Browser target unchanged; explicit target change invalidates capture/bridge state safely.
-- [ ] Same-owner-only handoff and server-side incarnation check reject a reused terminal ID race without writing to replacement PTY.
-- [ ] Offline/unsupported Browser/workflow/usage/host feature on A does not disable B or display B's cached data as A's.
+- [x] Equal agent item/project names and temporary scan paths never cross servers; owner switch cannot save/import a stale draft into B.
+- [x] A/B identical port numbers and terminal IDs remain distinct; tunnel operations and Browser target resolution stay owner-bound.
+- [x] Project selection leaves Browser target unchanged; explicit target change invalidates capture/bridge state safely.
+- [x] Same-owner-only handoff and server-side incarnation check reject a reused terminal ID race without writing to replacement PTY.
+- [x] Offline/unsupported Browser/workflow/usage/host feature on A does not disable B or display B's cached data as A's.
 
 ### Success Criteria
 
@@ -79,11 +78,11 @@ DOM or delayed capture must not select routing; old raw terminal ID can refer to
 
 Preserve bridge origin/source/nonce checks, PNG bounds and server authorization; atomic incarnation write required.
 
-### Next steps
+### Completion evidence
 
-#### Verification and risks
+Focused Phase 05 validation passed on 2026-09-17: 44/44 targeted tests, UI TypeScript build, and Rust cargo check. See the [QA report](../reports/qa-260917-1517-phase-05-agents-ports-browser-validation.md) and [Cycle 2 review](../reports/code-review-260917-1522-phase-05-cycle2.md).
 
-Live S06/S08 plus existing agent/ports/Browser/handoff/capture/origin tests. Extend `server/tests/browser_debug_artifacts.rs` with create on incarnation N, replace same ID with N+1, handoff denied and N+1 input unchanged; include a race at write admission, not merely two separate is_alive calls. Run bridge/extension security regressions unchanged where possible. No expansion of pre-existing tunnel-port safety policy or cross-actor tenancy in this refactor; document duplicate-profile shared authority and preserve current server permission checks.
+Live S06/S08/S11 and native qualification remain Phase 08/09 release gates; no live-browser or Windows runtime proof is claimed by this phase.
 
 #### Plan interpretation
 

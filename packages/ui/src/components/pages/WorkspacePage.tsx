@@ -51,6 +51,8 @@ import {
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useProjectTargetStore } from "@/stores/project-target.js";
+import type { TerminalInstanceRef } from "@/api/ownership.js";
+import { getApi } from "@/api/connections.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
@@ -555,12 +557,17 @@ export default function WorkspacePage() {
     return [...sessionIds].map((sessionId) => {
       const mounted = mountedById.get(sessionId);
       const tab = tabsById.get(sessionId);
+      const session = sessionMap.get(sessionId);
       return {
         sessionId,
+        profileId: activeProfileId,
+        incarnation: session?.incarnation,
+        project: session?.project ?? mounted?.project ?? null,
+        worktreePath: session?.worktreePath ?? mounted?.worktreePath ?? null,
         label:
           tab?.title?.fullText ??
           terminalBaseLabel(
-            sessionMap.get(sessionId)?.name ?? mounted?.name,
+            session?.name ?? mounted?.name,
             tab?.label ??
               (mounted
                 ? `${mounted.project} · ${mounted.command}`
@@ -569,7 +576,7 @@ export default function WorkspacePage() {
         ...(tab?.title ? { openTitle: tab.title } : {}),
         mounted: Boolean(mounted),
         registered: registeredTerminalIds.has(sessionId),
-        alive: sessionMap.get(sessionId)?.alive,
+        alive: session?.alive,
         current: activeTab === sessionId,
       };
     });
@@ -593,38 +600,98 @@ export default function WorkspacePage() {
       const target = browserTerminalTargets.find(
         (candidate) => candidate.sessionId === sessionId,
       );
-      if (!browserDebug.selection || !isBrowserTerminalTargetReady(target)) {
+      if (
+        !browserDebug.selection ||
+        !isBrowserTerminalTargetReady(target, browserDebug.target)
+      ) {
         throw new Error("terminal unavailable");
       }
 
-      let artifact = await api.browserDebug.createArtifact(
-        sessionId,
+      // Snapshot owner, target revision, and TerminalInstanceRef
+      const snapshotOwner = browserDebug.target?.owner ?? {
+        profileId: target.profileId ?? activeProfileId ?? "default",
+        generation: 0,
+      };
+      const snapshotRevision = browserDebug.target?.revision ?? 0;
+      const snapshotTerminalInstanceRef: TerminalInstanceRef = {
+        profileId: target.profileId ?? activeProfileId ?? "default",
+        id: target.sessionId,
+        incarnation: target.incarnation ?? 0,
+      };
+
+      // Cross-owner handoff is rejected before create
+      if (
+        browserDebug.target?.owner?.profileId &&
+        target.profileId &&
+        browserDebug.target.owner.profileId !== target.profileId
+      ) {
+        throw new Error("cross-owner terminal handoff rejected");
+      }
+
+      const boundApi = getApi(snapshotOwner);
+
+      let artifact = await boundApi.browserDebug.createArtifact(
+        snapshotTerminalInstanceRef.id,
+        snapshotTerminalInstanceRef.incarnation,
         browserDebug.selection,
       );
+
+      // Check owner, target revision, and terminal incarnation after await 1 (create)
+      const freshTarget = browserTerminalTargets.find(
+        (candidate) => candidate.sessionId === sessionId,
+      );
+      if (
+        browserDebug.target?.owner.profileId !== snapshotOwner.profileId ||
+        browserDebug.target?.owner.generation !== snapshotOwner.generation ||
+        browserDebug.target?.revision !== snapshotRevision ||
+        freshTarget?.incarnation !== snapshotTerminalInstanceRef.incarnation
+      ) {
+        await boundApi.browserDebug.deleteArtifact(artifact.artifactId).catch(() => {});
+        throw new Error("Browser target or terminal candidate changed during artifact creation");
+      }
+
       try {
         if (browserDebug.captureImage) {
-          artifact = await api.browserDebug.uploadPng(
+          artifact = await boundApi.browserDebug.uploadPng(
             artifact.artifactId,
             browserDebug.captureImage,
           );
         }
+
+        // Check owner, target revision, and terminal incarnation after await 2 (upload)
+        const latestTarget = browserTerminalTargets.find(
+          (candidate) => candidate.sessionId === sessionId,
+        );
+        if (
+          browserDebug.target?.owner.profileId !== snapshotOwner.profileId ||
+          browserDebug.target?.owner.generation !== snapshotOwner.generation ||
+          browserDebug.target?.revision !== snapshotRevision ||
+          latestTarget?.incarnation !== snapshotTerminalInstanceRef.incarnation
+        ) {
+          throw new Error("Browser target or terminal candidate changed during upload");
+        }
+
         browserDebug.stopCapture();
         return createPreparedBrowserTerminalArtifact(artifact);
       } catch (error) {
-        await api.browserDebug
+        await boundApi.browserDebug
           .deleteArtifact(artifact.artifactId)
           .catch(() => {});
         throw error;
       }
     },
-    [browserDebug, browserTerminalTargets],
+    [activeProfileId, browserDebug, browserTerminalTargets],
   );
 
   const discardBrowserTerminalArtifact = useCallback(
     async (artifactId: string) => {
-      await api.browserDebug.deleteArtifact(artifactId).catch(() => {});
+      const owner = browserDebug.target?.owner ?? {
+        profileId: activeProfileId ?? "default",
+        generation: 0,
+      };
+      await getApi(owner).browserDebug.deleteArtifact(artifactId).catch(() => {});
     },
-    [],
+    [activeProfileId, browserDebug.target?.owner],
   );
 
   const insertBrowserTerminalReference = useCallback(
@@ -636,18 +703,24 @@ export default function WorkspacePage() {
         (candidate) => candidate.sessionId === target.sessionId,
       );
       if (
-        !isBrowserTerminalTargetReady(currentTarget) ||
-        artifact.artifact.terminalId !== target.sessionId
+        !isBrowserTerminalTargetReady(currentTarget, browserDebug.target) ||
+        artifact.artifact.terminalId !== target.sessionId ||
+        (currentTarget.incarnation !== undefined &&
+          artifact.artifact.terminalIncarnation !== currentTarget.incarnation)
       ) {
         throw new Error("terminal unavailable");
       }
-      const result = await api.browserDebug.handoff(
+      const owner = browserDebug.target?.owner ?? {
+        profileId: target.profileId ?? activeProfileId ?? "default",
+        generation: 0,
+      };
+      const result = await getApi(owner).browserDebug.handoff(
         artifact.artifact.artifactId,
       );
       if (!result.inserted)
         throw new Error("terminal insertion was not confirmed");
     },
-    [browserTerminalTargets],
+    [activeProfileId, browserDebug.target, browserTerminalTargets],
   );
 
   const handleVisibleSplitSessionsChange = useCallback(
@@ -1170,7 +1243,7 @@ export default function WorkspacePage() {
             (session) => session.sessionId,
           ),
           alive: sessionMap.get(sessionId)?.alive,
-          registered: terminalRegistry.has(sessionId),
+          registered: registeredTerminalIds.has(sessionId),
           focusWindow: () => window.focus(),
           revealTerminal: () => {
             if (isCompactWorkspace) {
@@ -1287,6 +1360,7 @@ export default function WorkspacePage() {
           target:
             handoffMode === "active" ? activeBrowserTerminalTarget : undefined,
           targets: browserTerminalTargets,
+          browserTarget: browserDebug.target,
           onPrepare: prepareBrowserTerminalArtifact,
           onDiscard: discardBrowserTerminalArtifact,
           onInsert: insertBrowserTerminalReference,

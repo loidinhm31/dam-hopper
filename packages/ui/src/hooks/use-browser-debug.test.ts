@@ -243,4 +243,27 @@ describe("useBrowserDebug tunnel lifecycle", () => {
     expect(latestRef.current?.target).toBeNull();
     expect(latestRef.current?.error).toContain("ready tunnel");
   });
+
+  it("assigns owner and increments target revision on navigation", async () => {
+    await act(async () => {
+      root.render(createElement(Harness));
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      latestRef.current?.navigateTo("http://localhost:8080/first");
+    });
+    const target1 = latestRef.current?.target;
+    expect(target1).not.toBeNull();
+    expect(target1?.revision).toBe(1);
+    expect(target1?.owner.profileId).toBeDefined();
+
+    await act(async () => {
+      latestRef.current?.navigateTo("http://localhost:8080/second");
+    });
+    const target2 = latestRef.current?.target;
+    expect(target2).not.toBeNull();
+    expect(target2?.revision).toBe(2);
+    expect(latestRef.current?.bridgeStatus).toBe("loading");
+  });
 });

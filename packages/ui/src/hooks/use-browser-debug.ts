@@ -6,6 +6,9 @@ import {
 } from "@/hooks/use-browser-capture.js";
 import { api, type TunnelInfo } from "@/api/client.js";
 import { getTransport, getTransportGeneration } from "@/api/transport.js";
+import { getActiveProfileId } from "@/api/server-config.js";
+import { getApi, getConnectionSnapshot, isCurrentConnection } from "@/api/connections.js";
+import type { ConnectionRef, ProfileId } from "@/api/ownership.js";
 import {
   resolveBrowserDebugTarget,
   type BrowserDebugTarget,
@@ -71,14 +74,29 @@ export interface BrowserDebugController {
 }
 
 /** Owns Browser tool state while its iframe is kept alive outside tool shells. */
-export function useBrowserDebug(): BrowserDebugController {
+export function useBrowserDebug(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}): BrowserDebugController {
   const transportGeneration = useTransportGeneration();
   const extensionPresence = useBrowserExtensionPresence();
   const parentOrigin =
     typeof window === "undefined" ? undefined : window.location?.origin;
+  const profileId =
+    options?.owner?.profileId ??
+    options?.profileId ??
+    getActiveProfileId() ??
+    "default";
+  const snap = getConnectionSnapshot(profileId);
+  const owner: ConnectionRef = options?.owner ?? snap?.owner ?? {
+    profileId,
+    generation: 0,
+  };
+  const boundApi = isCurrentConnection(owner) ? getApi(owner) : api;
+  const targetRevisionRef = useRef(0);
   const [inputUrl, setInputUrl] = useState("");
-  const [addressHistory, setAddressHistory] = useState(
-    loadBrowserDebugAddressHistory,
+  const [addressHistory, setAddressHistory] = useState(() =>
+    loadBrowserDebugAddressHistory(owner.profileId),
   );
   const [tunnels, setTunnels] = useState<TunnelInfo[]>([]);
   const [target, setTarget] = useState<BrowserDebugTarget | null>(null);
@@ -115,30 +133,35 @@ export function useBrowserDebug(): BrowserDebugController {
   const refreshTunnels = useCallback(
     async (expectedGeneration = transportGeneration) => {
       try {
-        const nextTunnels = await api.tunnels.list();
+        const nextTunnels = await boundApi.tunnels.list();
         if (getTransportGeneration() !== expectedGeneration) return;
         setTunnels(nextTunnels);
         const currentTarget = targetRef.current;
         if (
           currentTarget &&
+          currentTarget.owner.profileId === owner.profileId &&
           !resolveBrowserDebugTarget(
             currentTarget.url,
             nextTunnels,
+            currentTarget.owner,
             parentOrigin,
+            currentTarget.revision,
           )
         ) {
           invalidateTarget("The selected tunnel is no longer ready.");
         }
       } catch {
         if (getTransportGeneration() !== expectedGeneration) return;
-        // Loopback targets remain usable when the tunnel query is unavailable.
         setTunnels([]);
-        if (targetRef.current?.source === "tunnel") {
+        if (
+          targetRef.current?.source === "tunnel" &&
+          targetRef.current.owner.profileId === owner.profileId
+        ) {
           invalidateTarget("The selected tunnel could no longer be verified.");
         }
       }
     },
-    [invalidateTarget, parentOrigin, transportGeneration],
+    [boundApi.tunnels, invalidateTarget, owner.profileId, parentOrigin, transportGeneration],
   );
 
   useEffect(() => {
@@ -160,10 +183,20 @@ export function useBrowserDebug(): BrowserDebugController {
 
   const applyNavigationTarget = useCallback(
     (nextTarget: BrowserDebugTarget) => {
-      setInputUrl(nextTarget.url);
-      setAddressHistory(recordBrowserDebugAddress(nextTarget.url));
-      targetRef.current = nextTarget;
-      setTarget(nextTarget);
+      targetRevisionRef.current += 1;
+      const revisionedTarget: BrowserDebugTarget = {
+        ...nextTarget,
+        revision: targetRevisionRef.current,
+      };
+      setInputUrl(revisionedTarget.url);
+      setAddressHistory(
+        recordBrowserDebugAddress(
+          revisionedTarget.url,
+          revisionedTarget.owner.profileId,
+        ),
+      );
+      targetRef.current = revisionedTarget;
+      setTarget(revisionedTarget);
       setSelection(null);
       setPickerActive(false);
       stopCapture();
@@ -191,7 +224,9 @@ export function useBrowserDebug(): BrowserDebugController {
       const nextTarget = resolveBrowserDebugTarget(
         value,
         [...extraTunnels, ...tunnels],
+        owner,
         parentOrigin,
+        targetRevisionRef.current + 1,
       );
       if (!nextTarget) {
         rejectNavigationTarget();
@@ -200,14 +235,16 @@ export function useBrowserDebug(): BrowserDebugController {
       applyNavigationTarget(nextTarget);
       return true;
     },
-    [applyNavigationTarget, parentOrigin, rejectNavigationTarget, tunnels],
+    [applyNavigationTarget, owner, parentOrigin, rejectNavigationTarget, tunnels],
   );
 
   const navigate = useCallback(() => {
     const nextTarget = resolveBrowserDebugTarget(
       inputUrl,
       tunnels,
+      owner,
       parentOrigin,
+      targetRevisionRef.current + 1,
     );
     if (!nextTarget) {
       rejectNavigationTarget();
@@ -217,6 +254,7 @@ export function useBrowserDebug(): BrowserDebugController {
   }, [
     applyNavigationTarget,
     inputUrl,
+    owner,
     parentOrigin,
     rejectNavigationTarget,
     tunnels,

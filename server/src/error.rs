@@ -127,6 +127,9 @@ impl AppError {
                 WorkspaceTargetError::UnavailableTarget => "WORKSPACE_TARGET_UNAVAILABLE",
                 WorkspaceTargetError::InvalidPath => "WORKSPACE_TARGET_INVALID_PATH",
             }),
+            AppError::BrowserDebug(BrowserDebugError::IncarnationMismatch) => {
+                Some("TERMINAL_INCARNATION_MISMATCH")
+            }
             _ => None,
         }
     }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/atoms/Button.js";
 import { useBulkShip } from "@/api/queries.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 import type {
   AgentStoreItem,
   AgentType,
@@ -11,18 +12,20 @@ import type {
 interface Props {
   item: AgentStoreItem;
   projects: ProjectConfig[];
+  owner?: ConnectionRef;
   onClose: () => void;
 }
 
 type AgentTarget = { projectName: string; agent: AgentType };
 
-export function ShipDialog({ item, projects, onClose }: Props) {
+export function ShipDialog({ item, projects, owner, onClose }: Props) {
   const [targets, setTargets] = useState<AgentTarget[]>([]);
   const [method, setMethod] = useState<DistributionMethod>("symlink");
   const [error, setError] = useState<string | null>(null);
-  const bulkShip = useBulkShip();
+  const bulkShip = useBulkShip({ owner });
 
   function toggleTarget(projectName: string, agent: AgentType) {
+    if (error) setError(null);
     setTargets((prev) => {
       const exists = prev.some(
         (t) => t.projectName === projectName && t.agent === agent,

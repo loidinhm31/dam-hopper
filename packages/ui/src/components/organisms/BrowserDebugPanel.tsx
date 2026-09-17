@@ -85,6 +85,7 @@ interface BrowserDebugPanelProps {
     mode?: "active" | "select";
     target?: BrowserTerminalTarget;
     targets?: BrowserTerminalTarget[];
+    browserTarget?: { owner?: { profileId?: string } } | null;
     onPrepare: (sessionId: string) => Promise<PreparedBrowserTerminalArtifact>;
     onDiscard: (artifactId: string) => Promise<void>;
     onInsert: (
@@ -512,6 +513,7 @@ export function BrowserDebugPanel({
           mode={terminalHandoff.mode}
           target={terminalHandoff.target}
           targets={terminalHandoff.targets}
+          browserTarget={terminalHandoff.browserTarget}
           onPrepare={terminalHandoff.onPrepare}
           onDiscard={terminalHandoff.onDiscard}
           onInsert={terminalHandoff.onInsert}

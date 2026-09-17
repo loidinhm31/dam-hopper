@@ -1330,6 +1330,49 @@ partitioning, workflow reveal failures, notification routing, and export
 filtering rather than implementation details.
 
 
+### Agents, ports, and Browser ownership (Phase 05)
+
+Apply the same explicit-owner rule to every Phase 05 operation:
+
+- Capture `ConnectionRef { profileId, generation }` before async work and use
+  the owner-bound API client. Query keys and event cache patches include the
+  owner; never resolve a mutation from the ambient active profile.
+- Keep Agent Store catalogs, projects, memory files, imports, health, and
+  distribution server-local. `MemoryEditor` draft identity is
+  `{ profileId, projectName, agent }`; only clean drafts may accept fresh data.
+  Import scan paths are server-owned and must remain paired with the initiating
+  owner and `scanRevision`.
+- Model detected ports as
+  `(profileId, port, terminalId, incarnation)` and tunnels as
+  `(profileId, tunnelId)`. Equal numeric ports are not a deduplication key.
+  `port:lost` must match session and incarnation before removing a row.
+  Create/stop/kill/install callbacks require an explicit target owner.
+- Model Browser trust as a target snapshot containing owner, exact origin,
+  source, optional tunnel ID, and revision. Explicit navigation invalidates
+  selection, capture, bridge capabilities, and pending commands; project focus
+  alone must not retarget Browser.
+- Capture owner/generation, target revision, and `TerminalInstanceRef` before
+  every handoff await. Recheck after create and upload, delete stale artifacts,
+  and reject cross-owner candidates before create. Do not add raw-ID or
+  active-profile fallback.
+- Require `terminalIncarnation` in new browser artifact requests. Persist the
+  authoritative incarnation and use `write_if_incarnation` to hold liveness
+  lookup, comparison, input-revision admission, and PTY write under one
+  manager lock. Preserve handoff/closing/disposing guards and rollback
+  revision/timestamp state on failed writes.
+- Derive feature availability from the selected connection snapshot and expose
+  `unknown`, `loading`, `available`, or `unavailable` with a reason. A profile's
+  unsupported/offline state must not disable another profile.
+
+Test observable contracts: dirty drafts survive unrelated owner responses,
+equal ports stay separate, stale port events do not evict replacements,
+Browser revision/owner drift cleans artifacts, and a reused terminal ID leaves
+replacement bytes and input revision unchanged. Keep page/bridge messages free
+of profile IDs, endpoint URLs, tokens, and routing decisions.
+
+See [Phase 05 Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md)
+for the source map and handoff sequence.
+
 ### Build & Type Checking
 
 ```bash

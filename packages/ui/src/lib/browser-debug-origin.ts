@@ -1,9 +1,13 @@
+import type { ConnectionRef } from "@/api/ownership.js";
 import type { TunnelInfo } from "@/api/client.js";
-
+import { getActiveProfileId } from "@/api/server-config.js";
 export interface BrowserDebugTarget {
+  owner: ConnectionRef;
   url: string;
   origin: string;
   source: "loopback" | "tunnel";
+  tunnelId?: string;
+  revision: number;
 }
 
 function parseTargetUrl(value: string): URL | null {
@@ -47,14 +51,41 @@ export function isAllowedBrowserDebugNavigationOrigin(
 export function resolveBrowserDebugTarget(
   value: string,
   tunnels: readonly TunnelInfo[],
+  ownerOrParentOrigin?: ConnectionRef | string,
   parentOrigin?: string,
+  revision = 0,
 ): BrowserDebugTarget | null {
   const input = parseTargetUrl(value);
   if (!input) return null;
-  if (parentOrigin === input.origin) return null;
+
+  let effectiveOwner: ConnectionRef;
+  let effectiveParentOrigin: string | undefined;
+
+  if (typeof ownerOrParentOrigin === "string") {
+    effectiveParentOrigin = ownerOrParentOrigin;
+    effectiveOwner = {
+      profileId: getActiveProfileId() ?? "default",
+      generation: 0,
+    };
+  } else {
+    effectiveOwner =
+      ownerOrParentOrigin ?? {
+        profileId: getActiveProfileId() ?? "default",
+        generation: 0,
+      };
+    effectiveParentOrigin = parentOrigin;
+  }
+
+  if (effectiveParentOrigin === input.origin) return null;
 
   if (input.protocol === "http:" && isLoopbackHost(input.hostname)) {
-    return { url: input.href, origin: input.origin, source: "loopback" };
+    return {
+      owner: effectiveOwner,
+      url: input.href,
+      origin: input.origin,
+      source: "loopback",
+      revision,
+    };
   }
 
   const matchingTunnel = tunnels.find((tunnel) => {
@@ -64,6 +95,13 @@ export function resolveBrowserDebugTarget(
   });
 
   return matchingTunnel
-    ? { url: input.href, origin: input.origin, source: "tunnel" }
+    ? {
+        owner: effectiveOwner,
+        url: input.href,
+        origin: input.origin,
+        source: "tunnel",
+        tunnelId: matchingTunnel.id,
+        revision,
+      }
     : null;
 }

@@ -15,6 +15,7 @@ interface BrowserDebugTerminalHandoffProps {
   mode?: "active" | "select";
   target: BrowserTerminalTarget | undefined;
   targets?: BrowserTerminalTarget[];
+  browserTarget?: { owner?: { profileId?: string } } | null;
   onPrepare: (sessionId: string) => Promise<PreparedBrowserTerminalArtifact>;
   onDiscard: (artifactId: string) => Promise<void>;
   onInsert: (
@@ -33,6 +34,7 @@ export function BrowserDebugTerminalHandoff({
   mode = "active",
   target,
   targets = target ? [target] : [],
+  browserTarget,
   onPrepare,
   onDiscard,
   onInsert,
@@ -101,12 +103,12 @@ export function BrowserDebugTerminalHandoff({
       )
     : null;
   const canPrepare = Boolean(
-    selection && isBrowserTerminalTargetReady(preparationTarget),
+    selection && isBrowserTerminalTargetReady(preparationTarget, browserTarget),
   );
   const visibleTarget =
     currentArtifactTarget ?? artifactTarget ?? preparationTarget;
   const visibleTargetReason = visibleTarget
-    ? browserTerminalTargetReason(visibleTarget)
+    ? browserTerminalTargetReason(visibleTarget, browserTarget)
     : null;
 
   const discardArtifact = () => {
@@ -210,6 +212,7 @@ export function BrowserDebugTerminalHandoff({
           disabled={!selection || pending}
           selectedId={selectedId}
           targets={targets}
+          browserTarget={browserTarget}
           onSelect={selectTarget}
         />
       )}

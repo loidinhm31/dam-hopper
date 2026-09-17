@@ -7,7 +7,7 @@ use dam_hopper_server::linux_release::layout::Layout;
 use dam_hopper_server::linux_release::process_holders::verify_no_foreign_sqlite_holders_in;
 use std::fs;
 use std::os::unix::fs::symlink;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn setup_layout(temp: &TempDir) -> Layout {

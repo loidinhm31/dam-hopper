@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 1,999
-files, 4,444,500 tokens, 18,482,821 characters; five security-flagged files
+**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 2,006
+files, 4,465,686 tokens, 18,575,137 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -118,6 +118,44 @@ source map and compatibility cautions are in the dedicated
 These boundaries remain frontend ownership rules. PTYs, workflow persistence,
 terminal output, and remote project data remain server-authoritative; an
 unqualified browser link is not silently attributed to a profile.
+
+## Unified-profile agents, ports, and Browser (Phase 05)
+
+Phase 05 completes the owner boundary for Agent Store operations, detected
+ports/tunnels, Browser Debug targets, and terminal handoff. It keeps server
+catalogs, projects, PTYs, tunnels, and artifact files server-local; the
+frontend never merges same-named data or routes a delayed operation through the
+active profile.
+
+| Boundary | Source modules | Contract |
+| --- | --- | --- |
+| Agent Store owner | `components/pages/AgentStorePage.tsx`, `api/queries.ts`, `api/client.ts` | Explicit profile selector; owner/generation-qualified catalog, project, matrix, health, memory, and import operations. |
+| Memory draft | `components/organisms/MemoryEditor.tsx` | Draft identity `{ profileId, projectName, agent }`; clean-only refresh; dirty content cannot be replaced by another target. |
+| Import lifecycle | `components/organisms/ImportDialog.tsx` | Opening owner binds server `tmpDir`/local path; `scanRevision` rejects late results; profile change closes stale dialogs. |
+| Port aggregation | `hooks/use-ports.ts`, `hooks/use-tunnels.ts` | Detected identity `(profileId, port, terminalId, incarnation)`; tunnel identity `(profileId, tunnelId)`; equal numbers remain distinct. |
+| Browser target | `hooks/use-browser-debug.ts`, `lib/browser-debug-origin.ts` | Target carries owner, exact origin/source, optional tunnel, and revision; only loopback or ready owner-local tunnel origins are trusted. |
+| Handoff pipeline | `components/pages/WorkspacePage.tsx`, `lib/browser-terminal-handoff.ts` | Same-profile mounted/live terminal only; owner, target revision, and terminal incarnation rechecked after each await. |
+| Artifact admission | `server/src/api/browser_debug.rs`, `server/src/browser_debug/store.rs` | Required `terminalIncarnation`, private expiring metadata, one claim, structured mismatch conflict. |
+| PTY admission | `server/src/pty/manager.rs` | `write_if_incarnation` keeps lookup/check/input-revision/write under one lock and rolls back failed writes. |
+| Feature availability | `hooks/use-feature-flag.ts` | Owner-local `unknown`/`loading`/`available`/`unavailable` state derived from the selected connection snapshot. |
+
+The Browser handoff sequence captures `{ profileId, generation }`, target
+revision, and `TerminalInstanceRef` before artifact creation. It rejects a
+cross-profile target before create, deletes artifacts after owner/revision/
+incarnation drift, and requires `inserted: true` from the handoff response.
+On the server, a reused public terminal ID returns
+`TERMINAL_INCARNATION_MISMATCH`; the replacement PTY receives no bytes and the
+manager input revision remains unchanged. Artifact claim release permits a
+retry after a write failure.
+
+The Phase 05 focused gate recorded 44/44 targeted tests, a successful UI
+TypeScript build, and `cargo check`. Live Browser/native qualification remains
+outside this evidence. The maintained implementation guide is
+[Phase 05: Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md).
+
+These are ownership and admission boundaries, not a new server workspace
+model. `ConnectionRef` generation fences asynchronous UI work; server
+identifiers remain valid only on their captured connection.
 
 ## Backend boundaries
 

@@ -25,6 +25,7 @@ import {
 import { cn } from "@/lib/utils.js";
 import {
   usePorts,
+  portEntryKey,
   type PortEntry,
   type InstallState,
 } from "@/hooks/use-ports.js";
@@ -602,10 +603,14 @@ export function PortsPanel({
     setWarned(true);
   }
 
-  async function handleStartTunnel(port: number, label: string) {
+  async function handleStartTunnel(
+    port: number,
+    label: string,
+    targetProfileId?: string,
+  ) {
     setBinaryMissing(false);
     try {
-      await createTunnel(port, label);
+      await createTunnel(port, label, targetProfileId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
       if (msg.toLowerCase().includes("binary not found")) {
@@ -643,13 +648,17 @@ export function PortsPanel({
           <ul className="flex flex-col">
             {ports.map((entry) => (
               <PortRow
-                key={entry.port}
+                key={portEntryKey(entry)}
                 entry={entry}
-                isLocal={localServer}
-                onStartTunnel={handleStartTunnel}
-                onStopTunnel={stopTunnel}
+                isLocal={isLocalServer(entry.profileId)}
+                onStartTunnel={(port, label) =>
+                  handleStartTunnel(port, label, entry.profileId)
+                }
+                onStopTunnel={(id) => stopTunnel(id, entry.profileId)}
                 onOpenTunnelInBrowser={onOpenTunnelInBrowser}
-                onKillSession={killPortSession}
+                onKillSession={(sessionId) =>
+                  killPortSession(sessionId, entry.profileId)
+                }
               />
             ))}
             {ports.length === 0 && (

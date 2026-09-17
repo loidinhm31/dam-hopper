@@ -275,6 +275,7 @@ export interface BrowserSelectionV1 {
 export interface BrowserDebugArtifactResponse {
   artifactId: string;
   terminalId: string;
+  terminalIncarnation: number;
   expiresAt: number;
   jsonPath: string;
   jsonSize: number;
@@ -2545,10 +2546,14 @@ export function createApiClient(
     stop: (id: string) => transport.invoke<void>("tunnel:stop", { id }),
   },
   browserDebug: {
-    createArtifact: (terminalId: string, selection: BrowserSelectionV1) =>
+    createArtifact: (
+      terminalId: string,
+      terminalIncarnation: number,
+      selection: BrowserSelectionV1,
+    ) =>
       transport.invoke<BrowserDebugArtifactResponse>(
         "browser-debug:create",
-        { terminalId, selection },
+        { terminalId, terminalIncarnation, selection },
       ),
     deleteArtifact: (artifactId: string) =>
       transport.invoke<void>("browser-debug:delete", { artifactId }),
@@ -2781,7 +2786,7 @@ export interface ApiClient {
     stop: (id: string) => Promise<void>;
   };
   browserDebug: {
-    createArtifact: (terminalId: string, selection: BrowserSelectionV1) => Promise<BrowserDebugArtifactResponse>;
+    createArtifact: (terminalId: string, terminalIncarnation: number, selection: BrowserSelectionV1) => Promise<BrowserDebugArtifactResponse>;
     deleteArtifact: (artifactId: string) => Promise<void>;
     handoff: (artifactId: string) => Promise<BrowserDebugHandoffResponse>;
     uploadPng: (artifactId: string, png: Blob) => Promise<BrowserDebugArtifactResponse>;
