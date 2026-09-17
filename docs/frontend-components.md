@@ -7,11 +7,13 @@ browser host and Tauri native host.
 
 The frontend is split into thin hosts plus a shared React 19 UI package:
 
-- `apps/web` mounts the browser host and initializes `WsTransport(getServerUrl())`.
-- `apps/native` mounts the Tauri v2 host and uses `IdleTransport` until a server
-  profile is configured.
-- `packages/ui` owns the shared components, hooks, stores, API clients, styles,
-  and tests consumed by both hosts.
+- `apps/web` performs fresh browser-state reset and profile migration, reconciles
+  runtime configuration, creates an ordinary `QueryClient`, and renders the
+  shared shell once.
+- `apps/native` performs the same reset/migration, creates an ordinary
+  `QueryClient`, mounts native providers, and renders the shared shell once.
+- `packages/ui` owns the shared shell, keyed profile runtimes, components,
+  hooks, stores, API clients, styles, and tests consumed by both hosts.
 
 Shared runtime libraries:
 
@@ -20,6 +22,40 @@ Shared runtime libraries:
 - **TanStack Query** for server state
 - **Tailwind CSS v4** for styling
 - **xterm.js** for terminal rendering
+
+## Unified shell and profile navigation (Phase 02)
+
+Phase 02 removes the old single-transport/profile-guard boundary. The shared
+`DamHopperApp` mounts routes and shell UI even when no profile is connected.
+Connection attempts are independent per profile:
+
+- `server-config.ts` persists normalized `ServerProfile` records, including
+  `autoConnect`, and endpoint-bound `ProfileAuthV2` token records.
+- `connections.ts` owns one runtime per profile. Every snapshot carries the
+  profile ID and generation, with `disconnected`, `connecting`, `connected`,
+  `login-required`, `offline`, and `unsupported` statuses.
+- `ServerProfilesDialog` exposes Connect, Disconnect, Login, Logout, Edit,
+  Remove, and Auto-connect actions without changing another profile's runtime.
+- `ProjectSwitcher` displays qualified `Profile → Project` targets, and
+  `workspace.ts` persists `{ profileId, project }` rather than an unowned
+  project name.
+- `workbench-selections.ts` keeps preferences, server settings, and Browser
+  Debug targets independent; a removed preference source retains its snapshot
+  with `source-removed` status.
+- `fresh-state-reset.ts` removes only allowlisted legacy browser-resource
+  records, preserves profiles/auth/server data, is idempotent, and rejects
+  unqualified `project`/`session` deep links.
+
+The top-nav connection button summarizes all profile runtimes. Server
+configuration inside Settings reuses the profile/project switcher and is not a
+second hierarchy. Browser and Windows native hosts may use approved
+cross-origin profiles; non-Windows native hosts require exact same-origin
+profiles and do not send traffic for unsupported remotes.
+
+Query state remains memory-only. Host `QueryClient` instances use ordinary
+defaults; profile and generation ownership is encoded by
+`profileQueryKey(owner, ...)` instead of a global active-profile hash.
+
 
 ## Host-resource alert presentation
 

@@ -194,38 +194,65 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Historical qualification record (Chromium 151, 116 browser tests including 11 media tests; 1,018 UI and 691 Rust tests) is retained for provenance only, not a current release guarantee.
 - Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process
 
-### PR-007: Multi-Server Profile Management (Phase 2)
+### PR-007: Unified Multi-Server Workbench (Phase 02 complete — 2026-09-17)
 
 **Functional Requirements:**
 
-- Manage multiple server connection profiles in browser (no backend involvement)
-- Switch between servers without page reload
-- Store profile metadata: name, URL, auth type, username
-- Automatically migrate legacy single-server config to profile system
-- Display active profile in UI sidebar
+- Store multiple browser/native server profiles locally; each profile owns an
+  independent connection runtime and reconnect intent.
+- Keep one always-mounted shell and one ordinary QueryClient per host. A profile
+  that is offline, login-required, unsupported, or empty must not block other
+  profiles.
+- Support profile-scoped Connect, Disconnect, Login, Logout, Edit, Remove, and
+  Auto-connect controls without page reloads or focus-triggered reconnects.
+- Navigate through qualified `Profile → Project` references. Equal project
+  names on different profiles remain distinct; selection is navigation only.
+- Keep server registry/workspace selection as backend configuration under the
+  selected profile's Settings section, not as a new workbench hierarchy.
+- Reset legacy browser resource state once, without remote mutations or
+  restoration, while preserving profiles, endpoint-bound auth, native state,
+  and server-owned data.
 
 **Acceptance Criteria:**
 
-- ✓ Create/read/update/delete profiles via localStorage
-- ✓ `ServerProfile` model: { id (UUID v4), name, url, authType ("basic"|"none"), username?, createdAt (timestamp) }
-- ✓ Server profiles list via `ServerProfilesDialog.tsx` component
-- ✓ Profile editor via `ServerSettingsDialog.tsx` component
-- ✓ Active profile indicator in `Sidebar.tsx`
-- ✓ `migrateToProfiles()` called in `App.tsx` startup — converts legacy `damhopper_server_url` + `damhopper_auth_username` to "Default Server" profile
-- ✓ Profile switching without browser reload
-- ✓ Delete active profile selects the first remaining profile; active ID is cleared only when no profiles remain
+- ✓ `ServerProfile.autoConnect` defaults to true for new/migrated records and
+  preserves explicit false.
+- ✓ `ProfileAuthV2` binds a token to normalized `serverUrl` and `authType`;
+  mismatches return no token, and legacy raw tokens migrate only to a matching
+  profile.
+- ✓ `DamHopperApp` mounts routes before profile health settles and bootstraps
+  each supported auto-connect profile independently.
+- ✓ `ServerProfilesDialog` exposes per-profile actions and removes only local
+  connection/profile state; remote PTYs and server data are never deleted.
+- ✓ `workspace.selectedProject` is `ProjectRef | null`; grouped selector values
+  use JSON tuple keys and preserve unavailable selections explicitly.
+- ✓ `preferencesProfileId`, `settingsProfileId`, and
+  `browserTargetProfileId` are independent and start unset after reset.
+- ✓ `performFreshStateReset()` is idempotent, never calls `localStorage.clear()`,
+  preserves valid new-schema records, and rejects unqualified deep links.
+- ✓ Web/native entrypoints use one ordinary QueryClient and one render. Native
+  non-Windows profiles require exact same-origin support; unsupported profiles
+  remain editable and make no fallback request.
 
-**Storage:**
+**Storage and security:**
 
-- Profiles JSON: localStorage key `damhopper_server_profiles`
-- Active profile ID: localStorage key `damhopper_active_profile_id`
+| Record | Location | Contract |
+| --- | --- | --- |
+| Profile list | `damhopper_server_profiles` | JSON `ServerProfile[]`, including `autoConnect` |
+| Legacy active ID | `damhopper_active_profile_id` | Migration input only; not a runtime owner |
+| Auth v2 | `damhopper_profile_auth_v2_<profileId>` | `{version: 2, serverUrl, authType, token}` |
+| Workspace selection | `dam-hopper:workspace-state` | Qualified project or `null` |
+| Workbench selections | `dam-hopper:preferences-source:v1` | Independent profile IDs and safe preference snapshot |
 
-**Non-Functional Requirements:**
+Passwords are never persisted. Tokens are JavaScript-readable local browser
+state and must be used only with HTTPS/trusted networks. Cleartext HTTP can
+expose tokens, cookies, tickets, actions, and media bytes. Storage-unavailable
+is distinct from an empty profile list and must not trigger destructive
+fallbacks.
 
-- Password never stored (only display username)
-- UUID v4 for profile IDs (browser crypto.randomUUID())
-- Storage quota: typical localStorage limit (5-10MB)
-- Profile switching instant (no network latency)
+**Verification record:** The Phase 02 plan records 108 focused Vitest tests,
+1,766 full UI tests, and TypeScript/build checks across `packages/ui`,
+`apps/web`, and `apps/native`; those are phase evidence, not a release claim.
 
 ### PR-008: Shared Runtime Logging Utilities
 
@@ -575,8 +602,8 @@ and [code review](../plans/reports/code-reviewer-260902-1144-phase-04-client-typ
   session lifecycle, resource links, notes, and history purge.
 - Map all 13 workflow channels to protected REST methods with encoded dynamic
   path/query values and unchanged request bodies.
-- Isolate React Query cache by active profile and transport generation; use
-  success-only root invalidation and one caller-owned replay request ID.
+- Isolate React Query cache by profile owner and connection generation; use
+  success-only owner-qualified invalidation and one caller-owned replay request ID.
 
 **Architecture:**
 
@@ -587,18 +614,19 @@ and [code review](../plans/reports/code-reviewer-260902-1144-phase-04-client-typ
 - `workflow-queries.ts` owns query keys, generation subscription, overview/
   event hooks, and mutation wrappers; `queries.ts` re-exports the focused
   module for the shared query API.
-- Host `QueryClient` instances use `profileScopedQueryKeyHash`; workflow data
-  is memory-only and presentation state remains component-local.
+- Owner-aware query keys include the profile ID and connection generation;
+  workflow data is memory-only and presentation state remains component-local.
 
 **Acceptance Criteria:**
 
 - [x] DTOs and request payloads retain server enum/optional-field semantics.
 - [x] Plan-only, nested, standalone, and direct-Plan ownership states remain
       representable without fabricated progress percentages.
-- [x] Profile/transport replacement cannot reuse the prior profile's query
-      hash or overview generation key.
+- [x] Profile/runtime replacement cannot publish into the prior owner's
+      query-generation key.
 - [x] Failed mutations preserve cached authority and typed errors; successful
-      mutations invalidate the `['workflow']` root.
+      mutations invalidate the owner-qualified workflow root (or compatibility
+      root for unqualified callers).
 - [x] Workflow hooks do not read/write URL search params, localStorage,
       terminal registries, editor state, or a workflow Zustand store.
 

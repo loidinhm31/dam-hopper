@@ -10,10 +10,8 @@ import {
 } from "react-router-dom";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
-import { getTransport } from "@/api/transport.js";
-import { reinitializeTransport } from "@/api/transport-utils.js";
+import { connectProfile } from "@/api/connections.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useWorkspaceStatus } from "@/api/queries.js";
 import {
   getServerUrl,
   buildAuthHeaders,
@@ -22,11 +20,10 @@ import {
   normalizeServerUrl,
   getAuthToken,
   setAuthToken,
-  getProfiles,
+  readServerProfiles,
+  isSameOriginProfile,
 } from "@/api/server-config.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
-import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
-import { WorkspaceSetupWizard } from "@/components/organisms/WorkspaceSetupWizard.js";
 import { TerminalNotificationToastViewport } from "@/components/organisms/TerminalNotificationToastViewport.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { AppZoomProvider } from "@/contexts/AppZoomContext.js";
@@ -42,6 +39,11 @@ import { handleTerminalFontSizeShortcut } from "@/lib/terminal-keyboard-shortcut
 import { isTerminalSurfaceTarget } from "@/lib/browser-shortcut-guard.js";
 import { normalizeRouterBasename } from "@/lib/router-basename.js";
 import { recordClientRoute } from "@/lib/diagnostics-client.js";
+import {
+  shouldShowFreshResetNotice,
+  dismissFreshResetNotice,
+  checkLegacyDeepLink,
+} from "@/lib/fresh-state-reset.js";
 export {
   SshForwardHostProvider,
   SshForwardScopeBridge,
@@ -190,192 +192,50 @@ function RouteDiagnostics() {
   return null;
 }
 
-function ServerProfileGuard({ children }: { children: React.ReactNode }) {
-  const profiles = getProfiles();
-  const activeProfile = useServerProfile();
-  const needsSetup = profiles.length === 0 || !activeProfile;
-
-  if (needsSetup) {
-    return (
-      <div className="app-screen-height w-full bg-[var(--color-surface)] relative">
-        <ServerSettingsDialog
-          open={true}
-          onClose={() => {}}
-          closable={false}
-          profile={null}
-          onSaved={() => {
-            // Page will reload automatically via ServerSettingsDialog
-          }}
-        />
-      </div>
-    );
-  }
-
-  return <>{children}</>;
-}
-
-function AuthGuard({ children }: { children: React.ReactNode }) {
-  const [autoLoginAttempted, setAutoLoginAttempted] = useState(false);
-  const profile = useServerProfile();
-  const profileId = profile?.id;
-  const profileAuthType = profile?.authType;
-  const profileServerUrl = profile?.url ?? getServerUrl();
-  const profileRevision = JSON.stringify([
-    profileId ?? "",
-    profile ? normalizeServerUrl(profile.url) : "",
-    profileAuthType ?? "",
-    profileId ? (getAuthToken(profileId) ?? "") : "",
-  ]);
+function FreshResetBanner() {
+  const [show, setShow] = useState(false);
 
   useEffect(() => {
-    setAutoLoginAttempted(false);
-  }, [profileId]);
+    setShow(shouldShowFreshResetNotice());
+  }, []);
 
-  // Auto-login for "none" auth profiles if no token exists
-  useEffect(() => {
-    let cancelled = false;
+  if (!show) return null;
 
-    const attemptAutoLogin = async () => {
-      if (autoLoginAttempted) return;
-      if (!profileId || profileAuthType !== "none") return;
-      if (getAuthToken(profileId)) {
-        if (!cancelled) setAutoLoginAttempted(true);
-        return;
-      }
-
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        const res = await fetch(`${profileServerUrl}/api/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-        const data = await res.json();
-        const currentProfile = getActiveProfile();
-        const profileStillMatches =
-          currentProfile?.id === profileId &&
-          normalizeServerUrl(currentProfile.url) ===
-            normalizeServerUrl(profileServerUrl);
-        if (!cancelled && profileStillMatches && data.token) {
-          if (!setAuthToken(data.token, profileId)) {
-            logger.warn("AuthGuard", "auto-login token was not persisted", {
-              profileId,
-            });
-          }
-        }
-      } catch (err) {
-        if (!cancelled) {
-          logger.error("AuthGuard", "auto-login failed", { error: err });
-        }
-      }
-      if (!cancelled) setAutoLoginAttempted(true);
-    };
-
-    void attemptAutoLogin();
-    return () => {
-      cancelled = true;
-    };
-  }, [autoLoginAttempted, profileAuthType, profileId, profileServerUrl]);
-
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["auth-status", profileId, profileRevision],
-    queryFn: async () => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-      try {
-        const res = await fetch(`${profileServerUrl}/api/auth/status`, {
-          headers: buildAuthHeaders(profileId),
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-        if (!res.ok) throw new Error("Not authenticated");
-        return res.json();
-      } catch (err) {
-        clearTimeout(timeout);
-        if (err instanceof Error && err.name === "AbortError") {
-          throw new Error("Server connection timeout");
-        }
-        throw err;
-      }
-    },
-    retry: false,
-    // Wait for auto-login attempt if needed
-    enabled: !profile || profileAuthType !== "none" || autoLoginAttempted,
-  });
-
-  if (isLoading || (profileAuthType === "none" && !autoLoginAttempted)) {
-    return <>{LOADING_FALLBACK}</>;
-  }
-
-  if (isError || !data?.authenticated) {
-    return (
-      <div className="app-screen-height w-full bg-[var(--color-surface)] relative">
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-2 text-xs text-red-400">
-          {error instanceof Error ? error.message : "Connection failed"}
-        </div>
-        <ServerSettingsDialog
-          open={true}
-          onClose={() => {}}
-          closable={false}
-          profile={profile}
-        />
-      </div>
-    );
-  }
-
-  return <>{children}</>;
-}
-
-function WorkspaceGuard({ children }: { children: React.ReactNode }) {
-  const {
-    data: status,
-    isLoading,
-    isError,
-    error,
-    refetch,
-  } = useWorkspaceStatus();
-  const [setupComplete, setSetupComplete] = useState(false);
-
-  if (isLoading) {
-    return <>{LOADING_FALLBACK}</>;
-  }
-
-  // Show error if workspace status check failed
-  if (isError) {
-    return (
-      <div className="app-screen-height flex flex-col items-center justify-center gap-4">
-        <div className="text-sm text-red-400">
-          {error instanceof Error
-            ? error.message
-            : "Failed to check workspace status"}
-        </div>
-        <button
-          onClick={() => void refetch()}
-          className="px-4 py-2 rounded-lg text-xs font-semibold"
-          style={{ background: "var(--color-primary)", color: "white" }}
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
-
-  // If workspace is not ready and setup hasn't been completed, show setup wizard
-  if (!status?.ready && !setupComplete) {
-    return (
-      <WorkspaceSetupWizard
-        onComplete={() => {
-          setSetupComplete(true);
-          void refetch();
+  return (
+    <div
+      role="status"
+      className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 flex items-center justify-between text-xs text-amber-300"
+    >
+      <span>
+        Unified multi-profile workbench upgrade: legacy browser-local resource state was reset. Server configuration and saved profiles are preserved.
+      </span>
+      <button
+        onClick={() => {
+          dismissFreshResetNotice();
+          setShow(false);
         }}
-      />
-    );
-  }
+        className="ml-4 font-semibold hover:underline text-amber-200"
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
 
-  return <>{children}</>;
+function LegacyDeepLinkNotice() {
+  const location = useLocation();
+  const check = checkLegacyDeepLink(location);
+
+  if (!check.isLegacy) return null;
+
+  return (
+    <div
+      role="alert"
+      className="bg-red-500/10 border-b border-red-500/30 px-4 py-2 text-xs text-red-400"
+    >
+      {check.guidance}
+    </div>
+  );
 }
 
 export function DamHopperApp() {
@@ -412,16 +272,59 @@ export function DamHopperApp() {
   }, []);
 
   useEffect(() => {
-    reinitializeTransport(activeProfileUrl, activeProfileId);
-    // Cancel old-server work before resetting shared query keys. This keeps
-    // late responses from an old profile from repopulating current views.
-    void qc.cancelQueries().then(() => qc.resetQueries());
+    let cancelled = false;
 
-    const transport = getTransport();
-    return transport.onEvent("workspace:changed", () => {
-      void qc.invalidateQueries({ queryKey: ["workspace-status"] });
-    });
-  }, [activeProfileConnectionKey, activeProfileId, activeProfileUrl, qc]);
+    const bootstrapProfiles = async () => {
+      const profilesResult = readServerProfiles();
+      if (profilesResult.status !== "available") return;
+
+      for (const profile of profilesResult.profiles) {
+        if (profile.autoConnect === false) continue;
+        if (!isSameOriginProfile(profile)) {
+          void connectProfile(profile.id);
+          continue;
+        }
+
+        // Auto-login for "none" auth profiles if no token exists
+        if (profile.authType === "none" && !getAuthToken(profile.id)) {
+          try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 10000);
+            const res = await fetch(`${profile.url}/api/auth/login`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({}),
+              signal: controller.signal,
+            });
+            clearTimeout(timeout);
+            if (res.ok) {
+              const data = await res.json();
+              if (!cancelled && data.token) {
+                setAuthToken(data.token, profile.id);
+              }
+            }
+          } catch (err) {
+            if (!cancelled) {
+              logger.error("DamHopperApp", "no-auth auto-login failed", {
+                profileId: profile.id,
+                error: err,
+              });
+            }
+          }
+        }
+
+        if (!cancelled) {
+          void connectProfile(profile.id);
+        }
+      }
+    };
+
+    void bootstrapProfiles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <AppZoomProvider>
@@ -434,9 +337,8 @@ export function DamHopperApp() {
             <TerminalNotificationToastViewport />
             <RouteDiagnostics />
             <PassphrasePrompt />
-            <ServerProfileGuard>
-              <AuthGuard>
-                <WorkspaceGuard>
+            <FreshResetBanner />
+            <LegacyDeepLinkNotice />
                   <Routes>
                     <Route
                       path="/"
@@ -520,9 +422,6 @@ export function DamHopperApp() {
                       />
                     ) : null}
                   </Routes>
-                </WorkspaceGuard>
-              </AuthGuard>
-            </ServerProfileGuard>
           </BrowserRouter>
         </AndroidChromeInputPolicyProvider>
       </EncryptProvider>

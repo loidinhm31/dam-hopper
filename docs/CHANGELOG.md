@@ -1,3 +1,20 @@
+# 2026-09-17
+
+- **Unified multi-profile workbench — Phase 02 complete (100%).** Delivered
+  independent profile connections and controls, endpoint-bound credentials,
+  grouped `Profile → Project` navigation, fresh browser-resource reset,
+  independent selectors, and explicit host bootstrap without page reloads or
+  focus-triggered reconnects.
+- Non-Windows native now rejects unsupported cross-origin profiles before
+  auto-login or connection traffic; profile edits, removals, and cross-tab
+  credential changes remain generation/endpoint fenced.
+- Final UI/native/web builds passed and the full Vitest suite passed
+  **1,766/1,766**. Coverage percentages remain unreported because the optional
+  `@vitest/coverage-v8` provider is not installed.
+- [Phase 02 plan](../plans/260916-2137-unified-profile/phase-02-unified-shell-and-profile-migration.md) ·
+  [Parent plan](../plans/260916-2137-unified-profile/plan.md) ·
+  [Final code review](../plans/reports/code-review-260917-0847-phase-02-unified-shell-cycle-3.md).
+
 # 2026-09-16
 
 - **Settings Page workspace TOML import & export restored.** Fixed the

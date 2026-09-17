@@ -44,11 +44,25 @@ vi.mock("@/stores/workspace.js", () => ({
 }));
 
 vi.mock("@/api/server-config.js", () => ({
-  getActiveProfile: () => ({ name: "Local" }),
+  getActiveProfile: () => ({ id: "p1", name: "Local" }),
+  getProfiles: () => [
+    {
+      id: "p1",
+      name: "Local",
+      url: "http://127.0.0.1:4800",
+      authType: "basic",
+      createdAt: 1,
+      autoConnect: true,
+    },
+  ],
   getProfileChangeVersion: () => 0,
   subscribeToProfileChanges: () => () => {},
   getServerUrl: () => "http://127.0.0.1:4800",
   buildAuthHeaders: () => ({}),
+}));
+vi.mock("@/api/connections.js", () => ({
+  getConnectionSnapshot: () => ({ status: "connected" }),
+  subscribeConnections: () => () => {},
 }));
 
 vi.mock("@/components/organisms/GitBranchControl.js", () => ({

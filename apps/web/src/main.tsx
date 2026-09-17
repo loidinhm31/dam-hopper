@@ -4,20 +4,15 @@ import { configureLogger, resolveLogLevel } from "@dam-hopper/shared/logger";
 import { DamHopperApp } from "@dam-hopper/ui";
 import "@dam-hopper/ui/styles";
 
-import { initTransport } from "@dam-hopper/ui/api/transport";
-import { WsTransport } from "@dam-hopper/ui/api/ws-transport";
-import { IdleTransport } from "@dam-hopper/ui/api/idle-transport";
-import { profileScopedQueryKeyHash } from "@dam-hopper/ui/api/query-client";
 import {
-  getActiveProfile,
+  getProfiles,
   migrateToProfiles,
   reconcileManagedProfile,
 } from "@dam-hopper/ui/api/server-config";
+import { connectProfile } from "@dam-hopper/ui/api/connections";
 import { fetchRuntimeConfig } from "@dam-hopper/ui/api/runtime-config";
-import {
-  initializeClientDiagnostics,
-  setClientTransportStatus,
-} from "@dam-hopper/ui/diagnostics-client";
+import { initializeClientDiagnostics } from "@dam-hopper/ui/diagnostics-client";
+import { performFreshStateReset } from "@dam-hopper/ui/lib/fresh-state-reset";
 
 const viteEnv = (import.meta as ImportMeta & { env?: Partial<ImportMetaEnv> })
   .env;
@@ -31,6 +26,9 @@ configureLogger({
 initializeClientDiagnostics();
 
 async function bootstrap() {
+  // Step 2.9: Idempotent fresh-state reset before restoring profiles/connections
+  performFreshStateReset();
+
   migrateToProfiles();
 
   const runtimeConfig = await fetchRuntimeConfig();
@@ -38,20 +36,13 @@ async function bootstrap() {
     reconcileManagedProfile(runtimeConfig);
   }
 
-  const activeProfile = getActiveProfile();
-  const transport = activeProfile
-    ? new WsTransport(activeProfile.url, activeProfile.id)
-    : new IdleTransport();
-  setClientTransportStatus(transport.getStatus());
-  transport.onStatusChange((status) => setClientTransportStatus(status));
-  initTransport(transport);
 
+  // Standard ordinary QueryClient (no profileScopedQueryKeyHash)
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
         staleTime: 10_000,
         retry: 1,
-        queryKeyHashFn: profileScopedQueryKeyHash,
       },
     },
   });

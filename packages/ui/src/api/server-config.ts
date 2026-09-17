@@ -45,6 +45,20 @@ export interface ServerProfile {
   authType: "basic" | "none"; // Authentication method
   username?: string; // For basic auth display (password never stored)
   createdAt: number; // Unix timestamp
+  autoConnect: boolean; // Auto-connect on startup
+}
+
+export const KEY_PROFILE_AUTH_V2_PREFIX = "damhopper_profile_auth_v2_";
+
+export function profileAuthV2Key(profileId: string): string {
+  return `${KEY_PROFILE_AUTH_V2_PREFIX}${profileId}`;
+}
+
+export interface ProfileAuthV2 {
+  version: 2;
+  serverUrl: string;
+  authType: "basic" | "none";
+  token: string;
 }
 
 function hasUnsupportedUrlScheme(url: string): boolean {
@@ -183,9 +197,25 @@ export function hasServerUrl(): boolean {
   }
 }
 
-/** Get token storage key. Undefined is reserved for legacy single-server mode. */
-function tokenKey(profileId?: string): string {
+/** Get legacy token storage key. Undefined is reserved for legacy single-server mode. */
+function legacyTokenKey(profileId?: string): string {
   return profileId ? `damhopper_auth_token_${profileId}` : KEY_TOKEN;
+}
+
+function readLegacySingleServerToken(): string | null {
+  const persistent = readLocalStorage(KEY_TOKEN);
+  if (persistent) return persistent;
+  const session = readSessionStorage(KEY_TOKEN);
+  if (session && writeLocalStorage(KEY_TOKEN, session)) {
+    removeSessionStorage(KEY_TOKEN);
+  }
+  return session;
+}
+
+function clearLegacySingleServerToken(): boolean {
+  const p = removeLocalStorage(KEY_TOKEN);
+  const s = removeSessionStorage(KEY_TOKEN);
+  return p && s;
 }
 
 function readLocalStorage(key: string): string | null {
@@ -231,38 +261,109 @@ function removeSessionStorage(key: string): boolean {
   }
 }
 
-/** Returns the profile-scoped auth token, migrating old session storage when found. */
+/** Returns the profile-scoped auth token, requiring profileId and verifying endpoint binding. */
 export function getAuthToken(profileId?: string): string | null {
-  const key = tokenKey(profileId);
-  const persistent = readLocalStorage(key);
-  if (persistent) return persistent;
-
-  const legacySessionToken = readSessionStorage(key);
-  if (legacySessionToken && writeLocalStorage(key, legacySessionToken)) {
-    removeSessionStorage(key);
+  if (!profileId) {
+    return null;
   }
-  return legacySessionToken;
+  const v2Key = profileAuthV2Key(profileId);
+  const v2Raw = readLocalStorage(v2Key);
+  const profilesResult = readServerProfiles();
+  const currentProfile =
+    profilesResult.status === "available"
+      ? profilesResult.profiles.find((p) => p.id === profileId)
+      : null;
+
+  if (v2Raw) {
+    try {
+      const parsed = JSON.parse(v2Raw) as Partial<ProfileAuthV2>;
+      if (
+        parsed &&
+        parsed.version === 2 &&
+        typeof parsed.token === "string" &&
+        typeof parsed.serverUrl === "string" &&
+        typeof parsed.authType === "string"
+      ) {
+        if (
+          currentProfile &&
+          parsed.serverUrl &&
+          (normalizeServerUrl(currentProfile.url) !==
+            normalizeServerUrl(parsed.serverUrl) ||
+            currentProfile.authType !== parsed.authType)
+        ) {
+          return null;
+        }
+        return parsed.token;
+      }
+    } catch {
+      // malformed JSON: ignore and fall through
+    }
+  }
+
+  // Check legacy key damhopper_auth_token_${profileId}
+  const legKey = legacyTokenKey(profileId);
+  const legacyPersistent = readLocalStorage(legKey);
+  const legacySession = readSessionStorage(legKey);
+  const legacyToken = legacyPersistent || legacySession;
+
+  if (legacyToken && currentProfile) {
+    const record: ProfileAuthV2 = {
+      version: 2,
+      serverUrl: normalizeServerUrl(currentProfile.url),
+      authType: currentProfile.authType,
+      token: legacyToken,
+    };
+    const serialized = JSON.stringify(record);
+    if (writeLocalStorage(v2Key, serialized)) {
+      removeLocalStorage(legKey);
+      removeSessionStorage(legKey);
+      return legacyToken;
+    }
+  }
+
+  return null;
 }
 
-/** Persist auth token in profile-scoped localStorage. */
+/** Persist auth token in profile-scoped localStorage as endpoint-bound v2 record. */
 export function setAuthToken(token: string, profileId?: string): boolean {
-  const key = tokenKey(profileId);
-  if (writeLocalStorage(key, token)) {
-    removeSessionStorage(key);
-    notifyProfileChange();
+  if (!profileId) return false;
+  const profilesResult = readServerProfiles();
+  const currentProfile =
+    profilesResult.status === "available"
+      ? profilesResult.profiles.find((p) => p.id === profileId)
+      : null;
+
+  const v2Key = profileAuthV2Key(profileId);
+  const record: ProfileAuthV2 = {
+    version: 2,
+    serverUrl: currentProfile ? normalizeServerUrl(currentProfile.url) : "",
+    authType: currentProfile ? currentProfile.authType : "basic",
+    token,
+  };
+  const serialized = JSON.stringify(record);
+  if (writeLocalStorage(v2Key, serialized)) {
+    removeLocalStorage(legacyTokenKey(profileId));
+    removeSessionStorage(legacyTokenKey(profileId));
+    notifyProfileChange({ type: "dataChanged" });
     return true;
   }
   return false;
 }
 
-/** Remove stored auth token from both current and legacy storage. */
+/** Remove stored auth token from both v2 and legacy storage for the given profile. */
 export function clearAuthToken(profileId?: string): boolean {
-  const key = tokenKey(profileId);
-  const localStorageCleared = removeLocalStorage(key);
-  const sessionStorageCleared = removeSessionStorage(key);
-  notifyProfileChange();
-  return localStorageCleared && sessionStorageCleared;
+  if (!profileId) return false;
+  const v2Key = profileAuthV2Key(profileId);
+  const v2Cleared = removeLocalStorage(v2Key);
+  const legKey = legacyTokenKey(profileId);
+  const legCleared = removeLocalStorage(legKey);
+  const sessCleared = removeSessionStorage(legKey);
+  notifyProfileChange({ type: "dataChanged" });
+  return (v2Cleared || legCleared) && sessCleared;
 }
+
+export { clearLegacySingleServerToken };
+
 
 /** Returns the auth username stored in sessionStorage, or empty string if not set. */
 export function getAuthUsername(): string {
@@ -540,13 +641,32 @@ export function readServerProfiles(): KnownServerProfiles {
     const parsed: unknown = JSON.parse(stored);
     if (!Array.isArray(parsed)) return { status: "available", profiles: [] };
     const seenIds = new Set<string>();
+    let needsMigration = false;
     const profiles = parsed
       .filter(isServerProfile)
-      .map((profile) => ({ ...profile, url: normalizeServerUrl(profile.url) }))
+      .map((profile) => {
+        const hasAutoConnect = typeof profile.autoConnect === "boolean";
+        if (!hasAutoConnect) needsMigration = true;
+        return {
+          ...profile,
+          url: normalizeServerUrl(profile.url),
+          autoConnect: hasAutoConnect ? profile.autoConnect : true,
+        };
+      })
       .filter(
         (profile) =>
           !seenIds.has(profile.id) && Boolean(seenIds.add(profile.id)),
       );
+
+    if (needsMigration) {
+      try {
+        const serialized = JSON.stringify(profiles);
+        localStorage.setItem(KEY_PROFILES, serialized);
+      } catch {
+        // storage validation / write error
+      }
+    }
+
     return { status: "available", profiles };
   } catch {
     return { status: "unavailable" };
@@ -574,7 +694,8 @@ function isServerProfile(value: unknown): value is ServerProfile {
     (profile.authType === "basic" || profile.authType === "none") &&
     (profile.username === undefined || typeof profile.username === "string") &&
     typeof profile.createdAt === "number" &&
-    Number.isFinite(profile.createdAt)
+    Number.isFinite(profile.createdAt) &&
+    (profile.autoConnect === undefined || typeof profile.autoConnect === "boolean")
   );
 }
 
@@ -625,7 +746,7 @@ export function isNativeWindowsHost(): boolean {
   );
 }
 
-function isSameOriginProfile(profile: ServerProfile): boolean {
+export function isSameOriginProfile(profile: ServerProfile): boolean {
   if (!isNativeBrowserHost() || isNativeWindowsHost()) return true;
   if (typeof window === "undefined") return true;
 
@@ -674,10 +795,11 @@ export function clearActiveProfile(): boolean {
 
 /** Create a new server profile */
 export function createProfile(
-  data: Omit<ServerProfile, "id" | "createdAt">,
+  data: Omit<ServerProfile, "id" | "createdAt"> & { autoConnect?: boolean },
 ): ServerProfile {
   const profile: ServerProfile = {
     ...data,
+    autoConnect: data.autoConnect ?? true,
     id: uuid(),
     createdAt: Date.now(),
   };
@@ -773,20 +895,20 @@ export function migrateToProfiles(): void {
     } catch {
       // ignore
     }
-    const existingToken = getAuthToken();
+    const existingToken = readLegacySingleServerToken();
     const legacyMatchesTarget =
       legacyUrl !== null &&
       !haveServerUrlsChanged(legacyUrl, targetProfile.url);
     if (existingToken) {
       if (!legacyMatchesTarget) {
         // An unbound legacy token must not be copied to an unrelated profile.
-        clearAuthToken();
+        clearLegacySingleServerToken();
         return;
       }
       if (!getAuthToken(targetProfile.id)) {
         setAuthToken(existingToken, targetProfile.id);
       }
-      if (getAuthToken(targetProfile.id)) clearAuthToken();
+      if (getAuthToken(targetProfile.id)) clearLegacySingleServerToken();
     }
     return;
   }
@@ -798,7 +920,7 @@ export function migrateToProfiles(): void {
     persistedUrl = null;
   }
   const existingUsername = getAuthUsername();
-  const existingToken = getAuthToken();
+  const existingToken = readLegacySingleServerToken();
   const existingUrl = persistedUrl ?? getConfiguredServerUrl();
 
   if (existingUrl && isHttpServerUrl(normalizeServerUrl(existingUrl))) {
@@ -807,18 +929,19 @@ export function migrateToProfiles(): void {
       url: normalizeServerUrl(existingUrl),
       authType: "basic",
       username: existingUsername || undefined,
+      autoConnect: true,
     });
     setActiveProfile(profile.id);
     if (existingToken && persistedUrl) {
       setAuthToken(existingToken, profile.id);
-      if (getAuthToken(profile.id)) clearAuthToken();
+      if (getAuthToken(profile.id)) clearLegacySingleServerToken();
     } else if (existingToken) {
       // Environment configuration does not bind an old legacy token safely.
-      clearAuthToken();
+      clearLegacySingleServerToken();
     }
   } else if (existingToken) {
     // Without a URL there is no safe backend binding for a legacy token.
-    clearAuthToken();
+    clearLegacySingleServerToken();
   }
 }
 
@@ -847,9 +970,17 @@ export function reconcileManagedProfile(config: {
 
   if (existingIdx >= 0) {
     const existing = profiles[existingIdx];
-    if (haveServerUrlsChanged(existing.url, normalizedUrl)) {
-      clearAuthToken(config.profileId);
-      profiles[existingIdx] = { ...existing, url: normalizedUrl };
+    const urlChanged = haveServerUrlsChanged(existing.url, normalizedUrl);
+    const hasAutoConnect = typeof existing.autoConnect === "boolean";
+    if (urlChanged || !hasAutoConnect) {
+      if (urlChanged) {
+        clearAuthToken(config.profileId);
+      }
+      profiles[existingIdx] = {
+        ...existing,
+        url: normalizedUrl,
+        autoConnect: hasAutoConnect ? existing.autoConnect : true,
+      };
       saveProfiles(profiles);
     }
     managedProfile = profiles[existingIdx];
@@ -860,6 +991,7 @@ export function reconcileManagedProfile(config: {
       url: normalizedUrl,
       authType: "basic",
       createdAt: Date.now(),
+      autoConnect: true,
     };
     profiles.push(managedProfile);
     saveProfiles(profiles);

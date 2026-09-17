@@ -180,14 +180,15 @@ transport channels, profile-safe React Query state, and mutation wrappers.
   and terminal/agent link lifecycle
 - Shared UI contract: closed workflow unions/interfaces, Plan-first helper
   predicates, explicit manual timestamp handling, and deterministic ordering
-- Transport: `api.workflow` delegates named operations through the active
-  transport; `WsTransport` maps 13 workflow channels to protected REST paths
-  and URL-encodes cursors and resource IDs
-- Query state: profile-scoped key hashing plus transport-generation overview
-  keys prevent stale server data from crossing profile/transport boundaries
+- Transport: `api.workflow` delegates named operations through the owner-bound
+  API/transport; `WsTransport` maps 13 workflow channels to protected REST
+  paths and URL-encodes cursors and resource IDs
+- Query state: owner/generation-qualified key builders keep equal workflow keys
+  for different profile runtimes distinct; hosts use ordinary `QueryClient`
+  defaults rather than a global active-profile hash
 - Mutation policy: one caller-owned request UUID, no optimistic snapshot
-  writes, root `['workflow']` invalidation only after success, typed errors on
-  failure
+  writes, owner-qualified workflow-root invalidation only after success, typed
+  errors on failure
 - Ownership: React Query stores server state; workflow presentation state
   remains component-local and is not written to localStorage or URL search
   params

@@ -80,6 +80,7 @@ describe("server profile migration", () => {
         authType: "basic",
         username: undefined,
         createdAt: expect.any(Number),
+        autoConnect: true,
       },
     ]);
     expect(getActiveProfile()?.id).toBe("11111111-1111-4111-8111-111111111111");
@@ -597,5 +598,95 @@ describe("managed runtime profile reconciliation", () => {
         apiUrl: "   ",
       }),
     ).toBeNull();
+  });
+
+  it("migrates legacy profile records missing autoConnect to autoConnect=true idempotently", () => {
+    const legacyRecord = [
+      {
+        id: "legacy-p1",
+        name: "Legacy Profile",
+        url: "http://localhost:4800",
+        authType: "basic",
+        createdAt: 1000,
+      },
+    ];
+    localStorage.setItem("damhopper_server_profiles", JSON.stringify(legacyRecord));
+
+    const profiles = getProfiles();
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0].autoConnect).toBe(true);
+
+    // Storage was updated with autoConnect: true
+    const persisted = JSON.parse(localStorage.getItem("damhopper_server_profiles")!);
+    expect(persisted[0].autoConnect).toBe(true);
+  });
+
+  it("preserves an explicit autoConnect=false in createProfile and reconcileManagedProfile", () => {
+    const p = createProfile({
+      name: "Manual Server",
+      url: "http://localhost:4805",
+      authType: "none",
+      autoConnect: false,
+    });
+    expect(p.autoConnect).toBe(false);
+    expect(getProfiles().find((candidate) => candidate.id === p.id)?.autoConnect).toBe(false);
+
+    const reconciled = reconcileManagedProfile({
+      profileId: p.id,
+      apiUrl: "http://localhost:4805",
+    });
+    expect(reconciled?.autoConnect).toBe(false);
+  });
+
+  it("binds credentials to endpoint and authType via ProfileAuthV2 record, returning null if URL changes", () => {
+    const p = createProfile({
+      name: "Endpoint Bound",
+      url: "http://localhost:4810",
+      authType: "basic",
+      autoConnect: true,
+    });
+
+    setAuthToken("secret-token-v2", p.id);
+    expect(getAuthToken(p.id)).toBe("secret-token-v2");
+
+    // Inspect raw storage key damhopper_profile_auth_v2_<profileId>
+    const rawV2 = JSON.parse(localStorage.getItem(`damhopper_profile_auth_v2_${p.id}`)!);
+    expect(rawV2).toEqual({
+      version: 2,
+      serverUrl: "http://localhost:4810",
+      authType: "basic",
+      token: "secret-token-v2",
+    });
+
+    // If profile URL changes, old bearer is not transmitted
+    const all = getProfiles();
+    const idx = all.findIndex((candidate) => candidate.id === p.id);
+    all[idx].url = "http://localhost:4899";
+    saveProfiles(all);
+
+    expect(getAuthToken(p.id)).toBeNull();
+  });
+
+  it("migrates legacy raw token to ProfileAuthV2 when profile exists", () => {
+    const p = createProfile({
+      name: "Migrate Me",
+      url: "http://localhost:4811",
+      authType: "basic",
+    });
+
+    // Set legacy raw token key
+    localStorage.setItem(`damhopper_auth_token_${p.id}`, "legacy-secret");
+    localStorage.removeItem(`damhopper_profile_auth_v2_${p.id}`);
+
+    expect(getAuthToken(p.id)).toBe("legacy-secret");
+    // Legacy key removed, v2 key created
+    expect(localStorage.getItem(`damhopper_auth_token_${p.id}`)).toBeNull();
+    expect(localStorage.getItem(`damhopper_profile_auth_v2_${p.id}`)).not.toBeNull();
+  });
+
+  it("public getAuthToken requires profileId and returns null when omitted", () => {
+    expect(getAuthToken()).toBeNull();
+    expect(getAuthToken(undefined)).toBeNull();
+    expect(getAuthToken("")).toBeNull();
   });
 });

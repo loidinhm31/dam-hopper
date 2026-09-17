@@ -1,41 +1,56 @@
 # System Architecture
 
-## Proposed unified-profile workbench (2026-09-16; not implemented)
+## Unified-profile workbench (Phases 00–02; Phase 02 implemented 2026-09-17)
 
-Design authority for the unified-profile request:
-[implementation plan](../plans/260916-2137-unified-profile/plan.md), based on
-[the unified-profile preplan](../plans/reports/preplan-260916-2135-unified-profile.md).
-This is a frontend ownership cutover, not the backend workspace-registry redesign
-described in the separate proposal below. Do not combine their identities,
-migrations, or acceptance gates. Existing runtime sections remain descriptions of
-shipped code; neither proposal is implemented by this documentation change.
+This is the frontend ownership cutover for the unified workbench. It is
+separate from the backend workspace-registry redesign later in this document.
+Phases 00–02 are implemented; Phases 03–09 remain plan-gated. The phase record
+and focused verification evidence live in
+`plans/260916-2137-unified-profile/phase-02-unified-shell-and-profile-migration.md`.
 
-- One shared shell, QueryClient, terminal manager and keep-alive host. Each saved
-  profile owns an independent endpoint-bound authenticated connection runtime.
-- Durable project/terminal/editor references include profile identity; in-flight
-  work additionally captures connection generation. Focus is navigation only.
-  Server project names, terminal incarnations, configuration, PTY persistence and
-  workflow history remain authoritative; no backend workspace UUID/catalog is added.
-- Profile credentials are persisted with endpoint/auth binding. Ordinary HTTP
-  omits cookies and authenticated WS uses its captured token. Reconnect rejects
-  stale work; unknown mutation outcomes are reconciled, never automatically replayed.
-- Queries/events, resource bindings, drafts, encryption and delayed actions retain
-  their originating owner. User-validated cutover drops old browser resource
-  state with no archive or restore UI; saved profiles, native and server data remain.
-- Preferences source, Settings target, selected project and Browser target are
-  independent. Duplicate endpoint profiles are separate clients, not remote tenants.
-- Mandatory new protocol: authenticated status acknowledges `workbenchProtocol: 2`
-  before WS/features; media requires namespaced v2 sessions and Browser artifacts
-  require terminal incarnation checked at atomic write admission. Old protocol
-  branches are removed; deploy matching frontend/backend builds. Native SSH uses
-  independently admitted scopes while preserving global quotas, epoch teardown
-  and existing platform permissions.
-- Contract freeze precedes feature work; each target's complete caller migration
-  precedes simultaneous startup. Qualified web may release independently; native
-  packages await their own runtime/security evidence, including Windows gates.
-  [Validated decisions](../plans/260916-2137-unified-profile/validation-decisions.md)
-  supersede the preplan's resource-restoration and additive-compatibility choices.
-  No application verification is claimed here.
+- `DamHopperApp` mounts one shell and route tree even when profiles are empty,
+  offline, login-required, or unsupported. Startup reads profiles and launches
+  independent per-profile auto-connect tasks; one failed profile never gates a
+  healthy profile or the shell.
+- `packages/ui/src/api/connections.ts` owns one keyed runtime per profile.
+  Each runtime has a captured `ConnectionRef` generation, status/intent/error
+  snapshot, bounded reconnect, owner-bound API client, and event bridge.
+  Focus/navigation does not create, destroy, or reconfigure a connection.
+- `ServerProfile.autoConnect` controls startup intent. Existing records missing
+  the field migrate to `true`; explicit `false` is preserved. `ProfileAuthV2`
+  stores `{version, serverUrl, authType, token}` under
+  `damhopper_profile_auth_v2_<profileId>`. Public token reads require a profile
+  ID and return no token when URL or auth type does not match.
+- Profile rows expose Connect, Disconnect, Login, Logout, Edit, Remove, and
+  Auto-connect. Disconnect retires only the profile runtime and keeps
+  credentials; Logout revokes that profile's media session and clears its
+  credentials; Remove performs local profile/native cleanup and never deletes
+  remote PTYs or server data.
+- `workspace.selectedProject` is a qualified `{profileId, project}` reference.
+  `ProjectSwitcher` groups results as `Profile → Project`, displays URL/path
+  disambiguation, and serializes selection as a JSON tuple key. Selecting a
+  project is navigation only: it does not change connection intent, auth,
+  settings, Browser target, or preferences source.
+- Preferences, Settings, project, and Browser target ownership are separate
+  persisted selections. `preferencesProfileId`, `settingsProfileId`, and
+  `browserTargetProfileId` start unset after the fresh-state cutover; removing
+  a preference source keeps its last safe snapshot with `source-removed`.
+- `performFreshStateReset()` removes only enumerated legacy resource records
+  and old quarantine backups. It is idempotent, never calls
+  `localStorage.clear()`, preserves profiles/auth/native/server data, and
+  rejects unqualified legacy links that lack `profileId`.
+- Web and native hosts create one ordinary TanStack `QueryClient` and render
+  once. Query ownership is carried by profile/generation key builders, not a
+  profile-specific QueryClient hash or legacy transport singleton. Native
+  support is explicit: Browser/Windows accepts HTTP(S) remote profiles;
+  non-Windows native accepts exact same-origin profiles and leaves unsupported
+  rows editable without fallback traffic.
+
+The top navigation identifies the shared **DAM-HOPPER WORKBENCH** and summarizes
+all profile connection states. Server registry selection remains backend
+configuration: `ServerSettingsDialog` presents `WorkspaceSwitcher` under
+**Server configuration** for the selected profile; it is not another level in
+the Profile → Project hierarchy.
 
 ### G0 contract-freeze status (2026-09-17)
 
@@ -1811,9 +1826,15 @@ granted to the `browser-debug-main` capability on the main window.
 
 **Frontend host:**
 
-- `apps/native/src/main.tsx` mirrors `apps/web/src/main.tsx`: configures the shared logger, initializes `WsTransport(getNativeServerUrl(), activeProfile.id)` when an active profile exists, otherwise installs an idle transport for the setup screen, creates the TanStack Query client, and mounts `DamHopperApp`.
+- `apps/native/src/main.tsx` mirrors the web host's explicit bootstrap: it
+  performs fresh browser-resource reset and profile migration, creates an
+  ordinary `QueryClient`, mounts native SSH/Browser Debug providers, and renders
+  `DamHopperApp` once. Keyed connection startup remains in `packages/ui`.
 - `apps/native/vite.config.ts` uses Tauri's fixed dev port `1420`, strict port mode, `TAURI_DEV_HOST` HMR support on port `1421`, and ignores `src-tauri` in Vite file watching.
-- The shared `ServerProfileGuard` still controls startup. If no server profile exists, the native host installs an idle transport and opens the server setup dialog instead of relying on the packaged webview's same-origin URL.
+- The shell is not gated by a `ServerProfileGuard` or `IdleTransport`. Supported
+  `autoConnect` profiles start independently after the shell mounts; an
+  unsupported non-Windows remote remains editable and receives no auto-login or
+  connection traffic.
 
 **Tauri shell:**
 
@@ -2076,9 +2097,9 @@ validation, workspace scope, timestamps, and mutation replay.
 
 ```mermaid
 flowchart LR
-    Profile["Active server profile"] --> Hash["profileScopedQueryKeyHash"]
-    Hash --> Cache["TanStack Query cache"]
-    Replace["Transport init/reconfigure/reset"] --> Generation["Transport generation"]
+    Owner["ConnectionRef: profileId + generation"] --> Key["profileQueryKey(owner, ...)"]
+    Key --> Cache["TanStack Query cache"]
+    Replace["Per-profile runtime replacement"] --> Generation["Owner generation"]
     Generation --> Overview["useWorkflowOverview key"]
     Cache --> Overview
     Overview --> Facade["api.workflow"]
@@ -2106,13 +2127,13 @@ auth through the normal `invoke` path, and converts non-2xx responses to
 `ApiRequestError`. Workflow calls use REST; the same class's persistent
 WebSocket remains the terminal and push-event channel.
 
-The host `QueryClient` uses `profileScopedQueryKeyHash`, hashing
-`[activeProfileId, queryKey]` so equal workflow keys from different server
-profiles cannot collide. The transport singleton increments a generation when
-its instance changes. `useWorkflowOverview` subscribes to that generation and
-uses `['workflow', 'overview', transportGeneration]`; an old response settles
-only its old query entry. Events use
-`['workflow', 'events', { cursor, limit }]` under the same root.
+Profile-qualified query keys use the owner/generation builders in
+`packages/ui/src/api/query-client.ts`; the host `QueryClient` does not install a
+profile-dependent global hash. `useWorkflowOverview` includes the owning
+profile generation in its key, so equal workflow keys from different profiles
+cannot collide. Replacing one profile runtime advances only that owner's
+generation; an old response can settle only its old owner key. Events use the
+same owner-qualified root with normalized cursor/limit values.
 
 Overview/events hooks preserve prior observer data while refetching, use no
 polling interval, and support explicit `enabled` control. Mutation wrappers
@@ -2737,36 +2758,55 @@ Key invariants:
 - Missing binaries and unsupported capabilities produce explicit setup/degraded
   states; the server never downloads or executes a project-supplied language tool.
 
-### Multi-Server Profile Management (Phase 2)
+### Multi-Server Profile Management (Phase 02)
 
-**Client-side only** — no backend involvement. React component integration:
+Profile metadata and endpoint-bound credentials remain client-side, while
+connections are keyed runtime state:
 
-**File:** `packages/ui/src/api/server-config.ts`
+- `packages/ui/src/api/server-config.ts` defines `ServerProfile` with `id`,
+  `name`, normalized `url`, `authType`, optional `username`, `createdAt`, and
+  `autoConnect`.
+- `ProfileAuthV2` stores `{version: 2, serverUrl, authType, token}` under
+  `damhopper_profile_auth_v2_<profileId>`. Reads require a profile ID and
+  reject URL/auth-type mismatches.
+- `readServerProfiles()` distinguishes unavailable storage from an empty list.
+  Legacy records without `autoConnect` migrate to `true`; explicit `false`
+  survives.
+- `connections.ts` owns `connectProfile`, `disconnectProfile`, and
+  `removeProfileConnection`. Each snapshot has an owner
+  `{ profileId, generation }`, intent, endpoint, status, and redacted error.
+  Statuses are `disconnected`, `connecting`, `connected`, `login-required`,
+  `offline`, and `unsupported`.
 
-- `ServerProfile` interface: { id (UUID), name, url, authType, username?, createdAt (timestamp) }
-- Functions: `getProfiles()`, `saveProfiles()`, `createProfile()`, `updateProfile()`, `deleteProfile()`, `setActiveProfile()`, `getActiveProfile()`, `migrateToProfiles()`
-- Storage: localStorage with keys `damhopper_server_profiles` (all profiles) + `damhopper_active_profile_id` (current)
+**Shared UI:**
 
-**Components:**
+- `ServerProfilesDialog.tsx` subscribes to profile and connection changes and
+  exposes Connect, Disconnect, Login, Logout, Edit, Remove, and Auto-connect
+  per row.
+- `ServerSettingsDialog.tsx` edits one profile, revokes/clears old endpoint
+  credentials during endpoint transitions, and embeds `WorkspaceSwitcher`
+  under Server configuration.
+- `ProjectSwitcher.tsx` aggregates successful per-profile project queries,
+  groups them as `Profile → Project`, and uses JSON tuple keys.
+- `TopNavConnectionButton.tsx` summarizes all runtimes; it does not select a
+  singleton transport.
+- `workspace.ts` persists qualified `selectedProject`; `workbench-selections.ts`
+  keeps preferences, Settings, and Browser Debug profile IDs independent.
+- `fresh-state-reset.ts` removes allowlisted legacy resource state once,
+  preserves profiles/auth/native/server data, and rejects unqualified links.
 
-- `ServerSettingsDialog.tsx` (organisms/) — create/edit profile form with URL + auth type selector
-- `ServerProfilesDialog.tsx` (organisms/) — list profiles, switch active, delete, edit (calls callbacks to parent)
-- `Sidebar.tsx` — displays active profile name; "Change Server" button opens `ServerProfilesDialog`
+**Host integration and persistence:**
 
-**Integration in shared UI and host bootstraps:**
-
-- `DamHopperApp` calls `migrateToProfiles()` at startup to convert legacy config
-- Browser host initializes `WsTransport(activeProfile.url, activeProfile.id)` when a valid active profile exists; a packaged same-origin build uses `WsTransport(getServerUrl())` when migration leaves no profile.
-- Native host initializes `WsTransport(getNativeServerUrl(), activeProfile.id)` when an active profile exists, otherwise installs `IdleTransport`
-- Packaged same-origin builds ignore stale cross-origin profile/localStorage URLs and fall back to the serving origin; profile selection remains available when an explicit profile is needed.
-- Sidebar triggers profile switcher dialog and the setup flow remains profile-driven in both hosts
-
-**Data Persistence:**
-
-- Profiles: localStorage (survives browser close, shared across tabs)
-- Active profile ID: localStorage (survives browser close, shared across tabs)
-- Auth token: localStorage, keyed by profile ID (survives browser close; bearer token is readable by JavaScript) — password never stored
-- Profile changes emit a reactive revision so tabs rebind auth state and transport; changing a normalized backend URL clears that profile token and requires login again
+- `DamHopperApp` mounts the shell before profile health settles and starts each
+  supported auto-connect profile independently. Focus/navigation does not
+  mutate connection intent.
+- Web and native entrypoints each create one ordinary `QueryClient` and render
+  once. Browser and Windows native hosts may use approved cross-origin
+  profiles; non-Windows native hosts require exact same-origin profiles.
+- `damhopper_server_profiles` stores profile metadata; the legacy
+  `damhopper_active_profile_id` is compatibility/default endpoint input, not a
+  runtime owner. Auth v2 records are per profile. Query and connection state
+  remains memory-only and owner/generation-qualified.
 
 ### SSH Credential Persistence (Phase 02)
 

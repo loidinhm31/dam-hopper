@@ -2,6 +2,13 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Unified multi-profile workbench (2026-09-17)
+
+- **Plan status: IN PROGRESS (3/10 phases; 30%).** Phases 00–02 are complete; Phases 03–09 remain pending. Phase 02 closed on 2026-09-17.
+- **Phase 02 — Unified shell and profile migration — DONE (2026-09-17; 100%):** Delivered independent profile connections and controls, grouped `Profile → Project` navigation, fresh browser-resource reset, and explicit host bootstrap. Unsupported native remote profiles remain editable/listed but produce no fallback traffic. See the [parent plan](../plans/260916-2137-unified-profile/plan.md), [Phase 02 plan](../plans/260916-2137-unified-profile/phase-02-unified-shell-and-profile-migration.md), [QA report](../plans/reports/qa-260917-0808-phase-02-unified-shell-test-suite.md), and [final code review](../plans/reports/code-review-260917-0847-phase-02-unified-shell-cycle-3.md).
+- **Validation:** Final review reports UI, native, and web builds passing; focused UI/native checks passing; full Vitest suite passed **1,766/1,766**. Coverage percentages remain unreported because the optional `@vitest/coverage-v8` provider is not installed.
+
+
 ### System daemon state configuration migration (2026-09-14)
 
 - **Plan status: COMPLETE (4/4 phases; 44/44h).** Phases 00–03 are complete as of 2026-09-14; the daemon-state cutover is ready for controlled rollout.
@@ -282,6 +289,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 03 — [COMPLETED 2026-08-10]**: shared-store/API regression coverage, authenticated Chromium lifecycle coverage, checked-in raster fixture, API/architecture/frontend documentation, and release gates completed. The browser harness validates client capability behavior; the Rust suite remains authoritative for backend security and stream semantics. Release caveat: `pnpm check` reached web/native builds and bundling but remains blocked because `TAURI_SIGNING_PRIVATE_KEY` is unset while a public key is configured; signing configuration was not changed.
 
 ## Status Overview
+
+### Unified multi-profile workbench (current status, 2026-09-17)
+
+- **Phase 00:** DONE — contract freeze and caller inventory approved/frozen (100%).
+- **Phase 01:** DONE — explicit ownership and connection foundation complete (100%).
+- **Phase 02:** DONE — unified shell and profile migration complete (100%).
+- **Plan progress:** 3/10 phases complete (30%); next **Phase 03 — Files, editor, search and Git**.
 
 ### Browser Debug and Native Child WebView (current status, 2026-08-30)
 

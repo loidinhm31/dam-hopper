@@ -1153,106 +1153,104 @@ concurrency.
 
 ## TypeScript Frontend (`apps/web`, `apps/native`, `packages/ui`)
 
-### Profile Management Pattern
+### Profile and connection ownership (Phase 02)
 
-Multi-server profile management lives in `packages/ui/src/api/server-config.ts` with a client-side-only architecture.
+`packages/ui/src/api/server-config.ts` owns profile metadata and endpoint-bound
+credential persistence. `packages/ui/src/api/connections.ts` owns live runtime
+state. Never resolve a public API call from a global active profile.
 
-**Data Model:**
+**Profile data model:**
 
 ```typescript
 export interface ServerProfile {
-  id: string; // UUID v4 via crypto.randomUUID()
-  name: string; // User-friendly name
-  url: string; // Server endpoint (auto-normalized: strip trailing slash, prepend http:// if no scheme)
-  authType: "basic" | "none"; // Authentication type
-  username?: string; // Display name (password never stored)
-  createdAt: number; // Unix timestamp from Date.now()
+  id: string;
+  name: string;
+  url: string;
+  authType: "basic" | "none";
+  username?: string;       // display only; never a password
+  createdAt: number;
+  autoConnect: boolean;    // startup intent, not current status
+}
+
+export interface ProfileAuthV2 {
+  version: 2;
+  serverUrl: string;
+  authType: "basic" | "none";
+  token: string;
 }
 ```
 
-**CRUD Functions:**
+Persist profiles under `damhopper_server_profiles`; the legacy
+`damhopper_active_profile_id` is migration input only. Persist each auth record
+as one JSON value under `damhopper_profile_auth_v2_<profileId>`. `getAuthToken`
+and `setAuthToken` require a profile ID and must compare normalized URL and
+`authType` before returning or using a token. A legacy per-profile token may be
+migrated only after matching the current profile; an unbound legacy single-
+server token must not reach an unrelated endpoint.
 
-```typescript
-// Retrieval
-export function getProfiles(): ServerProfile[] {
-  /* parse localStorage */
-}
-export function getActiveProfileId(): string | null {
-  /* from localStorage */
-}
-export function getActiveProfile(): ServerProfile | null {
-  /* find active */
-}
+`readServerProfiles()` distinguishes unavailable storage from an empty list.
+Missing `autoConnect` reads/migrates as `true`; explicit `false` survives
+`createProfile`, profile editing, and managed runtime reconciliation. Wrap all
+storage reads/writes in failure handling and verify writes before treating
+profile/auth changes as committed.
 
-// Mutation
-export function createProfile(
-  data: Omit<ServerProfile, "id" | "createdAt">,
-): ServerProfile {
-  // auto-generate id + timestamp, append to profiles list, persist
-}
+**Connection lifecycle:**
 
-export function updateProfile(
-  id: string,
-  data: Partial<Omit<ServerProfile, "id" | "createdAt">>,
-): void {
-  // merge fields, persist
-}
+- Use `connectProfile(profileId)`, `disconnectProfile(profileId)`, and
+  `removeProfileConnection(profileId)`; each operation is profile-explicit.
+- `ConnectionSnapshot` includes owner `{ profileId, generation }`, status,
+  intent, endpoint, and redacted error. Status is `disconnected`,
+  `connecting`, `connected`, `login-required`, `offline`, or `unsupported`.
+- Capture an owner before async work. Reject stale generations and abort/destroy
+  old transports before endpoint/token replacement. Never replay a mutation
+  whose delivery outcome is unknown.
+- Disconnect preserves credentials and auto-connect preference. Logout revokes
+  only the profile's bounded media session, then clears its auth record.
+  Remove performs local cleanup only; it never kills remote terminals or
+  deletes server data.
+- Native support is explicit. Browser and Windows desktop can use HTTP(S)
+  remote profiles; non-Windows native accepts only exact same-origin profiles.
+  Unsupported rows remain editable and do not fall back to another endpoint.
 
-export function deleteProfile(id: string): void {
-  // remove from list, clear active if deleted profile is active, persist
-}
+**Shell and navigation:**
 
-export function setActiveProfile(id: string): boolean {
-  /* returns whether the profile-scoped localStorage write succeeded */
-}
+- `DamHopperApp` is always mounted. Profile startup tasks settle independently;
+  empty/login-required/offline/unsupported profiles render an accessible shell.
+- `workspace.selectedProject` is `ProjectRef | null`, not a bare project name.
+  Use `projectKey(ref) = JSON.stringify([profileId, project])` for selectors,
+  maps, and deep links; never delimiter-concatenate owner keys.
+- `ProjectSwitcher` groups successful project queries as Profile → Project and
+  displays sanitized server URL/configured path for disambiguation. Selection
+  must not alter connection intent, server settings, Browser target, or
+  preference source.
+- `ServerSettingsDialog` may embed `WorkspaceSwitcher` under **Server
+  configuration**. Backend workspace terminology and endpoint behavior stay
+  unchanged; it is not a third workbench hierarchy level.
+- `TopNavBrand` names the unified workbench. `TopNavConnectionButton` summarizes
+  all profile snapshots; it must not present one profile as the only runtime.
 
-// Persistence
-export function saveProfiles(profiles: ServerProfile[]): boolean {
-  // Wrapper around JSON.stringify + localStorage.setItem; failures are reported
-}
+**Independent selectors and reset:**
 
-// Backward Compatibility
-export function migrateToProfiles(): void {
-  // Repair the active profile and safely migrate a matching legacy token
-  // If legacy damhopper_server_url exists → create "Default Server" profile
-  // Called in DamHopperApp at startup
-}
-```
+`useWorkbenchSelectionsStore` persists
+`preferencesProfileId`, `settingsProfileId`, and `browserTargetProfileId`
+separately. They start `null`; removal clears Settings/Browser targets and
+retains a removed preference source's safe snapshot with `source-removed` until
+explicit replacement.
 
-**localStorage Keys:**
+`performFreshStateReset()` removes only enumerated old resource keys (legacy
+project, editor/tree/target/search, terminal layout/pins, command history, and
+Browser history plus old quarantine backups). It is per-store idempotent,
+never calls `localStorage.clear()`, preserves profiles/auth/native/server data,
+and rejects project/session links missing `profileId`. A reset never performs a
+remote write, terminal create/kill, or resource migration.
 
-- `damhopper_server_profiles` — JSON stringified array of `ServerProfile[]`
-- `damhopper_active_profile_id` — active profile UUID
-- `damhopper_server_url` — _(legacy, migrated away)_ single server URL
-- `damhopper_auth_token_<profileId>` — _(localStorage)_ profile-scoped Bearer token (survives browser close; readable by JavaScript)
-- `damhopper_auth_username` — _(sessionStorage, not localStorage)_ username (cleared on tab close)
+**Testing notes:**
 
-**Error Handling:**
-
-All localStorage operations are wrapped in `try/catch`. Reads return safe defaults; token writes return failure so login is not reported as saved when persistence is unavailable. Legacy tokens are migrated only when their URL matches the destination profile; otherwise they are discarded rather than sent to an unrelated server.
-
-**Component Integration:**
-
-- `ServerProfilesDialog.tsx` — modal list for switching/deleting profiles
-  - calls `getProfiles()` + `getActiveProfileId()` on open
-  - calls `setActiveProfile(id)` on switch
-  - calls `deleteProfile(id)` on delete (with confirmation)
-  - exports profile to parent via `onEditProfile`, `onSwitchProfile` callbacks (for page reload if needed)
-
-- `ServerSettingsDialog.tsx` — form for creating/editing profile
-  - calls `createProfile(data)` or `updateProfile(id, data)`
-  - accepts profile object (or null for new)
-  - auto-normalizes URL (strips trailing slash, prepends http:// if no scheme)
-  - clears the profile token when the normalized backend URL changes
-
-- `Sidebar.tsx` — active profile pill + "Change Server" button
-  - displays `getActiveProfile()?.name` or "Not Connected"
-  - opens `ServerProfilesDialog` on click
-
-**Testing Notes:**
-
-- localStorage is mocked in test environments (jsdom default). Manually mock localStorage if testing profile persistence.
-- No server call involved — all operations are synchronous (except JSON parse/stringify).
+Test observable ownership behavior: independent profile startup, blocked
+profile isolation, endpoint-bound token rejection, delayed login after edit or
+remove, tuple-key disambiguation, explicit selector independence, reset
+idempotence, storage failure, and legacy-link rejection. Do not retain tests
+that only pin old active-profile switch/reload wording.
 
 ### Build & Type Checking
 
@@ -1285,9 +1283,9 @@ packages/ui/src/
 ├── api/
 │   ├── client.ts          # Typed API facade and shared client types
 │   ├── fs-types.ts        # Filesystem-specific types
-│   ├── query-client.ts    # Profile-scoped TanStack Query key hashing
+│   ├── query-client.ts    # Owner/generation-qualified TanStack Query key builders
 │   ├── queries.ts         # Shared TanStack Query barrel
-│   ├── transport.ts       # Transport interface and singleton lifecycle
+│   ├── transport.ts       # Transport interface used by keyed connection runtimes
 │   ├── workflow-domain-helpers.ts # Pure workflow domain helpers
 │   ├── workflow-dto-types.ts      # Workflow wire DTOs and requests
 │   ├── workflow-queries.ts        # Workflow TanStack Query hooks
@@ -1306,11 +1304,11 @@ packages/ui/src/
 └── types/                 # Shared TypeScript type declarations
 ```
 
-`apps/web` owns browser bootstrapping only: `QueryClientProvider`, `initTransport(new WsTransport(getServerUrl()))`, DOM mount, and host Vite config.
+`apps/web` owns browser bootstrapping only: it performs the fresh browser-resource reset, migrates legacy profiles, reconciles runtime configuration, creates an ordinary `QueryClient`, and renders `DamHopperApp` once. Profile connection lifecycle belongs to `packages/ui`.
 
-`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. Native Browser Debug is Windows v1 after the WebView2 gate; Linux is runtime-unverified and macOS deferred. Android uses the iframe adapter. Windows supports approved cross-origin profiles; non-Windows native targets require same-origin profiles. Do not add backend sidecars, filesystem permissions, shell permissions, or opener/http plugins without a phase plan.
+`apps/native` owns Tauri bootstrapping only: it performs the same reset/profile migration, creates an ordinary `QueryClient`, mounts the SSH and Browser Debug providers, and renders `DamHopperApp` once. Native Browser Debug is Windows v1 after the WebView2 gate; Linux is runtime-unverified and macOS deferred. Windows supports approved cross-origin profiles; non-Windows native targets require same-origin profiles. Do not add backend sidecars, filesystem permissions, shell permissions, or opener/http plugins without a phase plan.
 
-Native startup must not depend on packaged webview same-origin fallback. Use the shared server profile flow, and keep the no-profile transport idle until the shared `ServerProfileGuard` prompts for an explicit profile.
+Native startup must not depend on a packaged-webview same-origin fallback or an idle transport. Use the shared profile flow; an unsupported non-Windows remote profile reports `unsupported` without auto-login or connection traffic, while the shell remains usable.
 
 `packages/ui` owns components, hooks, stores, shared styling, assets, and tests.
 
@@ -1422,11 +1420,12 @@ defaults.
 The shared `queries.ts` entry point re-exports `workflow-queries.ts` for
 consumers that use the common query API barrel.
 
-Both host bootstraps configure `profileScopedQueryKeyHash`, which hashes
-`[activeProfileId, queryKey]`. The transport singleton increments its generation
-on `initTransport`, `reconfigureTransport`, and `resetTransport`; profile
-replacement destroys the old transport before installing the new one. Workflow
-data is memory-only, never a localStorage cache.
+Profile-qualified query state uses the owner/generation builders in
+`packages/ui/src/api/query-client.ts`, especially `profileQueryKey(owner, ...)`;
+the host `QueryClient` does not install a profile-dependent global hash
+function. Keyed connections own transport lifecycle per profile, and a
+replacement advances that profile's generation before stale results can update
+state. Workflow data remains memory-only, never a localStorage cache.
 
 Mutation hooks invalidate the `['workflow']` root only from `onSuccess`.
 Do not perform optimistic snapshot writes in this layer. A failure must retain
