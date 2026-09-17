@@ -676,10 +676,28 @@ export function readServerProfiles(): KnownServerProfiles {
   }
 }
 
+let cachedProfilesRaw: string | null | undefined = undefined;
+let cachedProfiles: ServerProfile[] = [];
+
 /** Get all server profiles from localStorage, preserving legacy empty fallback. */
 export function getProfiles(): ServerProfile[] {
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(KEY_PROFILES);
+  } catch {
+    return [];
+  }
+  if (stored === cachedProfilesRaw) {
+    return cachedProfiles;
+  }
   const result = readServerProfiles();
-  return result.status === "available" ? result.profiles : [];
+  try {
+    cachedProfilesRaw = localStorage.getItem(KEY_PROFILES);
+  } catch {
+    cachedProfilesRaw = stored;
+  }
+  cachedProfiles = result.status === "available" ? result.profiles : [];
+  return cachedProfiles;
 }
 
 function isServerProfile(value: unknown): value is ServerProfile {

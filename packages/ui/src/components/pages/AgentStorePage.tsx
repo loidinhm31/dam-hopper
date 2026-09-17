@@ -39,12 +39,15 @@ const AGENT_STORE_FALLBACK = (
     <span className="ml-2">Loading agent store…</span>
   </div>
 );
+const EMPTY_PROFILES: ServerProfile[] = [];
+const getEmptyProfiles = () => EMPTY_PROFILES;
+
 
 export function AgentStorePage() {
   const profiles = useSyncExternalStore(
     subscribeToProfileChanges,
     getProfiles,
-    () => [],
+    getEmptyProfiles,
   );
   const [selectedProfileId, setSelectedProfileId] = useState<string>(() => {
     return getActiveProfileId() || getProfiles()[0]?.id || "";

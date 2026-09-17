@@ -33,6 +33,9 @@ const IDLE_INSTALL_STATE: InstallState = {
   downloaded: 0,
   total: 0,
 };
+const EMPTY_PROFILES: ServerProfile[] = [];
+const getEmptyProfiles = () => EMPTY_PROFILES;
+
 
 export interface PortEntry {
   profileId: string;
@@ -104,7 +107,7 @@ export function usePorts(options?: {
   const profiles = useSyncExternalStore(
     subscribeToProfileChanges,
     getProfiles,
-    () => [],
+    getEmptyProfiles,
   );
 
   const ownerProfileId = options?.owner?.profileId;
