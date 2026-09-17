@@ -747,6 +747,62 @@ not PTY bytes, credentials, or workflow notes. Compatibility raw-ID lookup is
 fail-closed when ownership is ambiguous. The frontend does not migrate an
 unqualified terminal or infer ownership from the current active profile.
 
+### PR-020: Unified-Profile Agents, Ports, and Browser (Phase 05)
+
+**Status:** Complete / DONE on 2026-09-17. The Phase 05 gate recorded 44/44
+targeted tests, a successful UI TypeScript build, and `cargo check`. Live
+Browser/native qualification remains a later release gate. See the
+[Phase 05 implementation guide](./phase-05-agents-ports-and-browser.md), the
+[QA report](../plans/reports/qa-260917-1517-phase-05-agents-ports-browser-validation.md),
+and [Cycle 2 review](../plans/reports/code-review-260917-1522-phase-05-cycle2.md).
+
+**Product goal:** Agent Store actions, port/tunnel operations, Browser targets,
+and terminal artifact handoff remain isolated when several server profiles
+expose identical names, ports, or terminal IDs.
+
+**Functional requirements:**
+
+- Require an explicit profile owner for Agent Store catalogs, project targets,
+  memory files, imports, health, and distribution mutations. Keep catalogs and
+  projects server-local; do not merge equal names or distribute across servers.
+- Bind a memory draft to `{ profileId, projectName, agent }`. Do not replace a
+  dirty draft with arriving data for another owner or target.
+- Bind import `tmpDir`/local paths and `scanRevision` to the owner that started
+  the scan; reject late results and close stale dialogs on owner change.
+- Aggregate ports by `(profileId, port, terminalId, incarnation)` and tunnels
+  by `(profileId, tunnelId)`. Equal numeric ports remain independent rows.
+- Treat Browser target trust as `{ owner, url, origin, source, tunnelId?,
+  revision }`; allow only HTTP loopback or an exact ready owner-local tunnel
+  origin. Explicit target changes invalidate capture and bridge state.
+- Permit terminal handoff only to a same-profile mounted/live terminal. Capture
+  owner/generation, Browser revision, and terminal incarnation and recheck them
+  after artifact creation and PNG upload.
+- Require `terminalIncarnation` on artifact create. Persist authoritative
+  terminal identity and atomically admit handoff input only when the live PTY
+  incarnation still matches.
+- Derive feature availability from each profile's connection status with
+  explicit unknown/loading/available/unavailable states; never use another
+  profile or a version string as support evidence.
+
+**Acceptance criteria:**
+
+- [x] Agent Store profile selection and owner-qualified query/mutation keys
+      prevent cross-server catalog, project, import, and draft writes.
+- [x] Equal profile ports/terminal IDs and delayed port events remain distinct;
+      tunnel create/stop/kill/install operations use the requested owner.
+- [x] Browser target revision and owner checks invalidate stale capture before
+      handoff; project focus alone does not replace Browser target.
+- [x] Reused terminal IDs return `TERMINAL_INCARNATION_MISMATCH` without
+      changing replacement PTY bytes or the manager input revision.
+- [x] Offline/unsupported/login-required state in profile A does not disable
+      profile B.
+
+**Security and boundaries:** Browser page selection data is never written
+directly to terminal input. Handoff formats only server-generated private
+artifact paths after control-byte stripping and bounded length checks. Artifact
+claim, PNG limits, authorization, bridge origin/source/nonce checks, PTY
+handoff/closing/disposing guards, and failed-write rollback remain mandatory.
+
 ### Workflow selected-item surface extension (2026-09-07)
 
 The responsive workflow context surface renders authoritative item notes and

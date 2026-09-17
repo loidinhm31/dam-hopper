@@ -21,6 +21,7 @@ use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
 use crate::{
+    browser_debug::BrowserDebugError,
     config::schema::RestartPolicy,
     diagnostics::{redact_diagnostic_text, DiagnosticStore, TerminalTail},
     error::AppError,
@@ -1778,6 +1779,64 @@ impl PtySessionManager {
                 Err(AppError::PtyError(e.to_string()))
             }
         }
+    }
+    pub fn write_if_incarnation(&self, id: &str, incarnation: u64, data: &[u8]) -> Result<(), AppError> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let mut inner = self.inner.lock().unwrap();
+        if inner.fleet.is_handoff_active() {
+            return Err(AppError::IdleSuspendHandoffInProgress(
+                "Cannot send terminal input while host suspend handoff is in progress".into(),
+            ));
+        }
+        if inner.closing {
+            return Err(AppError::Unavailable(
+                "PTY manager is shutting down".into(),
+            ));
+        }
+        if inner.fleet.is_disposing() {
+            return Err(AppError::Unavailable(
+                "PTY manager is disposing sessions".into(),
+            ));
+        }
+
+        let session = match inner.live.get(id) {
+            Some(s) => s,
+            None => return Err(AppError::SessionNotFound(id.to_string())),
+        };
+
+        if session.incarnation != incarnation {
+            return Err(AppError::BrowserDebug(BrowserDebugError::IncarnationMismatch));
+        }
+
+        if inner.input_revision == u64::MAX {
+            return Err(AppError::Unavailable(
+                "Terminal input revision saturated".into(),
+            ));
+        }
+
+        let prev_revision = inner.input_revision;
+        let prev_last_input_at = inner.last_input_at;
+
+        inner.input_revision = inner.input_revision.saturating_add(1);
+        inner.last_input_at = Some(std::time::Instant::now());
+        inner.publish_activity_invalidation();
+
+        let write_res = inner.live.get(id).unwrap().write(data);
+        match write_res {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                inner.input_revision = prev_revision;
+                inner.last_input_at = prev_last_input_at;
+                Err(AppError::PtyError(e.to_string()))
+            }
+        }
+    }
+
+    pub fn live_incarnation(&self, id: &str) -> Option<u64> {
+        self.inner.lock().unwrap().live.get(id).map(|s| s.incarnation)
     }
 
     /// Capture replay bytes and lifecycle state at one PTY boundary.

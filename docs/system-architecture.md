@@ -1,14 +1,16 @@
 # System Architecture
 
-## Unified-profile workbench (Phases 00–04; Phase 04 implemented 2026-09-17)
+## Unified-profile workbench (Phases 00–05; Phase 05 implemented 2026-09-17)
 
 This is the frontend ownership cutover for the unified workbench. It is
 separate from the backend workspace-registry redesign later in this document.
-Phases 00–04 are implemented; later phases remain plan-gated. The Phase 03
-files/editor/search/Git contract and Phase 04 terminal/workflow contract are
-summarized in their dedicated workbench guides:
+Phases 00–05 are implemented; later phases remain plan-gated. The Phase 03
+files/editor/search/Git contract, Phase 04 terminal/workflow contract, and
+Phase 05 agents/ports/Browser contract are summarized in their dedicated
+workbench guides:
 - [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)
 - [Phase 04: Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)
+- [Phase 05: Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md)
 
 - `DamHopperApp` mounts one shell and route tree even when profiles are empty,
   offline, login-required, or unsupported. Startup reads profiles and launches
@@ -196,6 +198,72 @@ The implementation map, persistence formats, compatibility notes, review
 warnings, and focused verification evidence are maintained in
 [Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md).
 
+
+### Phase 05 agents, ports, Browser, and capability isolation (2026-09-17)
+
+Phase 05 extends the unified-profile ownership boundary to the Agent Store,
+detected ports, tunnels, Browser Debug, and terminal handoff. The implementation
+does not create a backend workspace hierarchy: every catalog, project, tunnel,
+PTY, and artifact remains local to its server connection.
+
+**Agent Store.** `AgentStorePage` selects a concrete profile and captures its
+`ConnectionRef { profileId, generation }`. Agent item/content/scan/matrix/
+health queries and project queries use owner-qualified React Query keys. Ship,
+unship, absorb, bulk ship, import, memory, and health mutations stay on that
+owner and invalidate only its cache. `MemoryEditor` keeps a draft identity of
+`{ profileId, projectName, agent }`; fresh data for another identity cannot
+replace a dirty draft. `ImportDialog` binds its server-generated `tmpDir` or
+local `dirPath` to the opening owner and fences late scan results with a
+`scanRevision`. A profile change closes pending dialogs rather than sending
+server-local paths to a new profile.
+
+**Ports and tunnels.** Aggregate port queries run independently per profile.
+The detected-port identity is the tuple
+`(profileId, port, terminalId, incarnation)`; tunnel identity is
+`(profileId, tunnelId)`. Equal numeric ports or raw terminal IDs therefore
+remain separate rows. Port and tunnel events patch only the event owner's
+generation-qualified query cache. Incarnation fences reject delayed
+observations and a loss event removes only the matching terminal/port/
+incarnation. Create, stop, install, and kill callbacks capture an explicit
+owner; ownerless tunnel mutations are not valid.
+
+**Browser target trust.** `BrowserDebugTarget` carries the owner, URL/origin,
+source, optional tunnel ID, and a monotonic revision. The resolver accepts
+HTTP loopback or an exact origin of a ready owner-local tunnel and rejects
+credentials, parent-origin targets, stale/unready tunnels, and arbitrary
+external URLs. Address history is profile-partitioned. Explicit navigation
+increments the revision and clears selection, picker, capture, bridge
+capabilities, console state, and pending capture; project focus alone does not
+replace the target. Tunnel loss invalidates only the owning target.
+
+**Same-profile handoff pipeline.** Workspace capture snapshots the Browser
+owner/generation, target revision, and `TerminalInstanceRef` before creating
+an artifact. Cross-profile candidates are rejected before create. The client
+rechecks all three fences after artifact creation and after optional PNG
+upload, deletes stale artifacts, and builds terminal input only from sanitized
+server-generated artifact paths. Handoff requires a mounted, registered, live
+same-profile terminal and an acknowledged `{ inserted: true }` response.
+
+**Artifact incarnation and PTY admission.** `browser-debug:create` requires
+`terminalIncarnation`, verifies the live PTY incarnation before persistence, and
+stores the authoritative terminal ID/incarnation in private expiring metadata.
+`claim_handoff` reserves one write and releases the claim on a failed write.
+`PtySessionManager::write_if_incarnation` holds the manager lock through live
+lookup, incarnation comparison, input-revision admission, and PTY write. It
+retains handoff/closing/disposing guards and rolls back activity revision state
+on write failure. A reused public ID therefore returns
+`TERMINAL_INCARNATION_MISMATCH` without writing to the replacement PTY or
+advancing its input revision.
+
+**Availability.** `useFeatureAvailability` subscribes to the selected profile's
+connection snapshot and reports `unknown`, `loading`, `available`, or
+`unavailable` with a reason. Offline, login-required, unsupported, or
+disconnected state in one profile never disables another profile. The boolean
+`useFeatureFlag` result is only the owner-local projection; it is not inferred
+from another profile or a version string.
+
+The detailed source map and maintenance invariants are in the
+[Phase 05 Agents, Ports, and Browser guide](./phase-05-agents-ports-and-browser.md).
 
 ## Proposed concurrent runtime cutover (2026-09-16; not implemented)
 

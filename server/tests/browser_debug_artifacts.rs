@@ -102,12 +102,25 @@ async fn request(
         .unwrap()
 }
 
-fn selection(terminal_id: &str) -> serde_json::Value {
-    serde_json::json!({ "terminalId": terminal_id, "selection": { "version": 1, "tag": "button", "role": "button", "accessibleName": "Save", "text": "Save changes", "attributes": {"data-testid": "save"}, "locator": "main > button", "bounds": {"x": 1, "y": 2, "width": 80, "height": 32} } })
+fn selection(terminal_id: &str, incarnation: u64) -> serde_json::Value {
+    serde_json::json!({
+        "terminalId": terminal_id,
+        "terminalIncarnation": incarnation,
+        "selection": {
+            "version": 1,
+            "tag": "button",
+            "role": "button",
+            "accessibleName": "Save",
+            "text": "Save changes",
+            "attributes": {"data-testid": "save"},
+            "locator": "main > button",
+            "bounds": {"x": 1, "y": 2, "width": 80, "height": 32}
+        }
+    })
 }
 
-fn create_terminal(state: &AppState, root: &std::path::Path) {
-    state
+fn create_terminal(state: &AppState, root: &std::path::Path) -> u64 {
+    let session = state
         .pty_manager
         .create(PtyCreateOpts {
             id: "shell:browser-debug".into(),
@@ -123,6 +136,7 @@ fn create_terminal(state: &AppState, root: &std::path::Path) {
             restart_max_retries: 0,
         })
         .unwrap();
+    session.incarnation
 }
 
 #[tokio::test]
@@ -134,7 +148,7 @@ async fn artifact_routes_require_auth_and_validate_terminal_and_selection() {
         "POST",
         "/api/browser-debug/artifacts",
         Some("application/json"),
-        Body::from(selection("shell:missing").to_string()),
+        Body::from(selection("shell:missing", 1).to_string()),
         false,
     )
     .await;
@@ -144,15 +158,60 @@ async fn artifact_routes_require_auth_and_validate_terminal_and_selection() {
         "POST",
         "/api/browser-debug/artifacts",
         Some("application/json"),
-        Body::from(selection("shell:missing").to_string()),
+        Body::from(selection("shell:missing", 1).to_string()),
         true,
     )
     .await;
     assert_eq!(dead_terminal.status(), StatusCode::NOT_FOUND);
+    // Missing terminalIncarnation fails validation with 400 Bad Request before persistence
+    let missing_incarnation = serde_json::json!({
+        "terminalId": "shell:missing",
+        "selection": {
+            "version": 1,
+            "tag": "button",
+            "role": "button",
+            "accessibleName": "Save",
+            "text": "Save changes",
+            "attributes": {"data-testid": "save"},
+            "locator": "main > button",
+            "bounds": {"x": 1, "y": 2, "width": 80, "height": 32}
+        }
+    });
+    let missing_incarnation_res = request(
+        state.clone(),
+        "POST",
+        "/api/browser-debug/artifacts",
+        Some("application/json"),
+        Body::from(missing_incarnation.to_string()),
+        true,
+    )
+    .await;
+    assert_eq!(missing_incarnation_res.status(), StatusCode::BAD_REQUEST);
+
+    // Live terminal with mismatched terminalIncarnation fails with 409 Conflict
+    let inc = create_terminal(&state, temp.path());
+    let mismatched = request(
+        state.clone(),
+        "POST",
+        "/api/browser-debug/artifacts",
+        Some("application/json"),
+        Body::from(selection("shell:browser-debug", inc + 999).to_string()),
+        true,
+    )
+    .await;
+    assert_eq!(mismatched.status(), StatusCode::CONFLICT);
+    let mismatched_body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(mismatched.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(mismatched_body["code"], "TERMINAL_INCARNATION_MISMATCH");
+
     let invalid =
-        serde_json::json!({"terminalId":"shell:missing", "selection":{"unexpected":true}});
+        serde_json::json!({"terminalId":"shell:browser-debug", "terminalIncarnation": inc, "selection":{"unexpected":true}});
     let invalid_selection = request(
-        state,
+        state.clone(),
         "POST",
         "/api/browser-debug/artifacts",
         Some("application/json"),
@@ -171,7 +230,7 @@ async fn artifact_routes_require_auth_and_validate_terminal_and_selection() {
     )
     .await;
     assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
-    let too_large = format!("{}{}", selection("shell:missing"), " ".repeat(64 * 1024));
+    let too_large = format!("{}{}", selection("shell:browser-debug", inc), " ".repeat(64 * 1024));
     let oversized_json = request(
         make_state(&temp),
         "POST",
@@ -188,13 +247,13 @@ async fn artifact_routes_require_auth_and_validate_terminal_and_selection() {
 async fn artifact_routes_write_private_files_and_delete_them() {
     let temp = tempfile::tempdir().unwrap();
     let state = make_state(&temp);
-    create_terminal(&state, temp.path());
+    let inc = create_terminal(&state, temp.path());
     let created = request(
         state.clone(),
         "POST",
         "/api/browser-debug/artifacts",
         Some("application/json"),
-        Body::from(selection("shell:browser-debug").to_string()),
+        Body::from(selection("shell:browser-debug", inc).to_string()),
         true,
     )
     .await;
@@ -206,6 +265,7 @@ async fn artifact_routes_write_private_files_and_delete_them() {
     )
     .unwrap();
     let id = value["artifactId"].as_str().unwrap();
+    assert_eq!(value["terminalIncarnation"], inc);
     let json_path = std::path::PathBuf::from(value["jsonPath"].as_str().unwrap());
     assert!(json_path.is_file() && !json_path.starts_with(temp.path()));
     let read_attempt = request(
@@ -317,13 +377,13 @@ async fn artifact_routes_write_private_files_and_delete_them() {
 async fn png_upload_enforces_the_four_megabyte_cap() {
     let temp = tempfile::tempdir().unwrap();
     let state = make_state(&temp);
-    create_terminal(&state, temp.path());
+    let inc = create_terminal(&state, temp.path());
     let created = request(
         state.clone(),
         "POST",
         "/api/browser-debug/artifacts",
         Some("application/json"),
-        Body::from(selection("shell:browser-debug").to_string()),
+        Body::from(selection("shell:browser-debug", inc).to_string()),
         true,
     )
     .await;
@@ -351,13 +411,13 @@ async fn png_upload_enforces_the_four_megabyte_cap() {
 async fn artifact_handoff_writes_once_and_requires_acknowledgement() {
     let temp = tempfile::tempdir().unwrap();
     let state = make_state(&temp);
-    create_terminal(&state, temp.path());
+    let inc = create_terminal(&state, temp.path());
     let created = request(
         state.clone(),
         "POST",
         "/api/browser-debug/artifacts",
         Some("application/json"),
-        Body::from(selection("shell:browser-debug").to_string()),
+        Body::from(selection("shell:browser-debug", inc).to_string()),
         true,
     )
     .await;
@@ -369,6 +429,7 @@ async fn artifact_handoff_writes_once_and_requires_acknowledgement() {
     )
     .unwrap();
     let id = value["artifactId"].as_str().unwrap();
+    assert_eq!(value["terminalIncarnation"], inc);
     let json_path = value["jsonPath"].as_str().unwrap();
 
     let handoff_path = format!("/api/browser-debug/artifacts/{id}/handoff");
@@ -423,6 +484,85 @@ async fn artifact_handoff_writes_once_and_requires_acknowledgement() {
         .get_buffer("shell:browser-debug")
         .unwrap()
         .contains(&reference));
+}
+
+#[tokio::test]
+async fn replaced_terminal_incarnation_rejects_handoff_without_writing_to_replacement_pty() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = make_state(&temp);
+    let inc1 = create_terminal(&state, temp.path());
+    let created = request(
+        state.clone(),
+        "POST",
+        "/api/browser-debug/artifacts",
+        Some("application/json"),
+        Body::from(selection("shell:browser-debug", inc1).to_string()),
+        true,
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let value: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = value["artifactId"].as_str().unwrap();
+    assert_eq!(value["terminalIncarnation"], inc1);
+
+    // Replace session with same ID "shell:browser-debug" -> incarnation inc2
+    state.pty_manager.remove("shell:browser-debug").unwrap();
+    let inc2 = create_terminal(&state, temp.path());
+    assert_ne!(inc1, inc2);
+
+    let initial_input_revision = state.pty_manager.input_revision();
+    let initial_buffer = state.pty_manager.get_buffer("shell:browser-debug").unwrap();
+
+    // Handoff on artifact for inc1 must be rejected with 409 CONFLICT
+    let handoff_path = format!("/api/browser-debug/artifacts/{id}/handoff");
+    let handoff_res = request(
+        state.clone(),
+        "POST",
+        &handoff_path,
+        None,
+        Body::empty(),
+        true,
+    )
+    .await;
+    assert_eq!(handoff_res.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(handoff_res.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body["code"], "TERMINAL_INCARNATION_MISMATCH");
+
+    // SUCCESS CRITERIA: replacement PTY input bytes AND input revision remain UNCHANGED!
+    assert_eq!(state.pty_manager.input_revision(), initial_input_revision);
+    assert_eq!(
+        state.pty_manager.get_buffer("shell:browser-debug").unwrap(),
+        initial_buffer
+    );
+
+    // Verify handoff claim was released on failure so it doesn't get stuck in claimed state
+    let second_attempt = request(
+        state.clone(),
+        "POST",
+        &handoff_path,
+        None,
+        Body::empty(),
+        true,
+    )
+    .await;
+    assert_eq!(second_attempt.status(), StatusCode::CONFLICT);
+    let second_body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(second_attempt.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(second_body["code"], "TERMINAL_INCARNATION_MISMATCH");
 }
 
 fn png() -> axum::body::Bytes {

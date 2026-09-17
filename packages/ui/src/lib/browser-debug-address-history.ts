@@ -1,4 +1,8 @@
-const STORAGE_KEY = "dam-hopper:browser-debug-address-history";
+function storageKey(profileId?: string): string {
+  return profileId
+    ? `dam-hopper:browser-debug-address-history:${profileId}`
+    : "dam-hopper:browser-debug-address-history";
+}
 const MAX_ENTRIES = 12;
 
 type StoredHistory = { version: 1; entries: unknown[] };
@@ -34,9 +38,9 @@ function uniqueRecent(entries: unknown[]): string[] {
 }
 
 /** Returns browser-local recent addresses. Entries are revalidated before loading. */
-export function loadBrowserDebugAddressHistory(): string[] {
+export function loadBrowserDebugAddressHistory(profileId?: string): string[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(profileId));
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     const entries = Array.isArray(parsed)
@@ -51,13 +55,13 @@ export function loadBrowserDebugAddressHistory(): string[] {
 }
 
 /** Records an address as most-recently used without sharing it outside this browser. */
-export function recordBrowserDebugAddress(address: string): string[] {
+export function recordBrowserDebugAddress(address: string, profileId?: string): string[] {
   const normalized = normalizeAddress(address);
   const entries = normalized
-    ? uniqueRecent([normalized, ...loadBrowserDebugAddressHistory()])
-    : loadBrowserDebugAddressHistory();
+    ? uniqueRecent([normalized, ...loadBrowserDebugAddressHistory(profileId)])
+    : loadBrowserDebugAddressHistory(profileId);
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, entries }));
+    localStorage.setItem(storageKey(profileId), JSON.stringify({ version: 1, entries }));
   } catch {
     // Private browsing and quota failures leave the in-memory suggestions usable.
   }

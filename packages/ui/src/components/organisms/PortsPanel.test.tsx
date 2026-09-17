@@ -7,6 +7,8 @@ import type { PortEntry } from "@/hooks/use-ports.js";
 let mockPorts: PortEntry[] = [];
 
 vi.mock("@/hooks/use-ports.js", () => ({
+  portEntryKey: (entry: PortEntry) =>
+    `${entry.profileId ?? "default"}:${entry.port}:${entry.sessionId ?? ""}:${entry.incarnation ?? 0}`,
   usePorts: () => ({
     ports: mockPorts,
     isLoading: false,
@@ -33,6 +35,7 @@ describe("PortsPanel", () => {
     mockPorts = [
       {
         port: 3000,
+        profileId: "default",
         project: "web",
         state: "listening",
         sessionId: "session-1",

@@ -17,7 +17,7 @@ Implement one shared workbench with simultaneous supported profile connections a
 
 Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.md). This package preserves its nine feature phases and thirteen scenarios, adds a contract-freeze phase and resolves execution dependencies. No backend workspace UUID/catalog redesign, cross-server filesystem move or distribution, global active-profile fallback, app-per-profile remount, or automatic mutation replay.
 
-**Status:** IN PROGRESS — Phases 00–04 complete; Phases 05–09 pending; 5/10 phases complete; 50%; updated 2026-09-17.
+**Status:** IN PROGRESS — Phases 00–05 complete; Phases 06–09 pending; 6/10 phases complete; 60%; updated 2026-09-17.
 
 ## Phases
 
@@ -28,7 +28,7 @@ Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.
 | [02 — Shell and profiles](phase-02-unified-shell-and-profile-migration.md) | Independent auth/controls, grouped navigation, fresh resource reset, host bootstrap | G0; 01 interfaces | DONE — 2026-09-17 / 100% |
 | [03 — Files, editor, search and Git](phase-03-files-editor-search-and-git.md) | Qualified models/targets, exact async effects, federated partial results | G0; 01/02; 07 media interface | DONE — 2026-09-17 / 100% |
 | [04 — Terminals and workflow](phase-04-terminals-workflow-and-navigation.md) | Shared keep-alive, qualified layouts/history/links/notifications/diagnostics | G0; 01/02 | DONE — 2026-09-17 / 100% |
-| [05 — Agents, ports and Browser](phase-05-agents-ports-and-browser.md) | Explicit catalogs/targets, safe capture and atomic incarnation handoff | G0; 01/02; 04/07 contracts | Pending / 0% |
+| [05 — Agents, ports and Browser](phase-05-agents-ports-and-browser.md) | Explicit catalogs/targets, safe capture and atomic incarnation handoff | G0; 01/02; 04/07 contracts | DONE — 2026-09-17 / 100% |
 | [06 — Preferences, Settings and host](phase-06-preferences-settings-usage-and-host.md) | Independent sources/targets, usage/metrics and safe destructive intent | G0; 01/02 | Pending / 0% |
 | [07 — Media and encryption](phase-07-media-isolation-and-encryption.md) | Cookie namespace v2, original-owner cleanup, generation-bound secrets | G0; 01; 03 target contract | Pending / 0% |
 | [08 — Native scopes](phase-08-native-scope-concurrency.md) | Concurrent admitted SSH scopes, atomic IPC, one Browser lease | G0; 01/02; 05 target contract | Pending / 0% |
@@ -41,7 +41,8 @@ Based on [the requested preplan](../reports/preplan-260916-2135-unified-profile.
 - **Phase 02:** DONE — unified shell, independent connections and profile migration complete (2026-09-17; 100%).
 - **Phase 03:** DONE — files, editor, search and Git complete (2026-09-17; 100%).
 - **Phase 04:** DONE — terminal continuity, workflow and owner-directed navigation complete (2026-09-17; 100%).
-- **Next:** **Phase 05 — Agents, ports and Browser**.
+- **Phase 05:** DONE — agents, ports and Browser implementation, capability isolation and incarnation-safe handoff complete (2026-09-17; 100%).
+- **Next phase:** **Phase 06 — Preferences, Settings and host**.
 
 ## Read before implementation
 

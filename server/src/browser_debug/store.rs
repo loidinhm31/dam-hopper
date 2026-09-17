@@ -26,6 +26,7 @@ pub struct BrowserDebugArtifactManager {
 #[derive(Clone)]
 pub(super) struct ArtifactMetadata {
     terminal_id: String,
+    terminal_incarnation: u64,
     pub(super) expires_at: i64,
     json: ArtifactFile,
     png: Option<ArtifactFile>,
@@ -55,6 +56,7 @@ impl BrowserDebugArtifactManager {
     pub async fn create(
         &self,
         terminal_id: String,
+        terminal_incarnation: u64,
         selection: BrowserSelectionV1,
     ) -> Result<BrowserDebugArtifactResponse, BrowserDebugError> {
         if !selection.is_valid() {
@@ -70,6 +72,7 @@ impl BrowserDebugArtifactManager {
         let json_file = write_file(json_path, Bytes::from(json)).await?;
         let metadata = ArtifactMetadata {
             terminal_id,
+            terminal_incarnation,
             expires_at: Utc::now().timestamp_millis() + ARTIFACT_TTL_MS,
             json: json_file,
             png: None,
@@ -286,6 +289,7 @@ fn response_for(id: Uuid, metadata: &ArtifactMetadata) -> BrowserDebugArtifactRe
     BrowserDebugArtifactResponse {
         artifact_id: id.to_string(),
         terminal_id: metadata.terminal_id.clone(),
+        terminal_incarnation: metadata.terminal_incarnation,
         expires_at: metadata.expires_at,
         json_path: metadata.json.path.display().to_string(),
         json_size: metadata.json.size,

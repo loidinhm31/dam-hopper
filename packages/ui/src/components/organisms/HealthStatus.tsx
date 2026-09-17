@@ -1,9 +1,14 @@
 import { useState } from "react";
 import { Badge } from "@/components/atoms/Badge.js";
 import { useAgentStoreHealth } from "@/api/queries.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 
-export function HealthStatus() {
-  const { data: health, isLoading, refetch } = useAgentStoreHealth();
+interface Props {
+  owner?: ConnectionRef;
+}
+
+export function HealthStatus({ owner }: Props = {}) {
+  const { data: health, isLoading, refetch } = useAgentStoreHealth({ owner });
   const [expanded, setExpanded] = useState(false);
 
   const brokenCount = health?.brokenSymlinks?.length ?? 0;

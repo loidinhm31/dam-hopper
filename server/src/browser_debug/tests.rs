@@ -22,7 +22,7 @@ fn selection() -> BrowserSelectionV1 {
 async fn sweep_removes_expired_artifact_files() {
     let manager = BrowserDebugArtifactManager::new().unwrap();
     let response = manager
-        .create("shell:test".into(), selection())
+        .create("shell:test".into(), 1, selection())
         .await
         .unwrap();
     let id = uuid::Uuid::parse_str(&response.artifact_id).unwrap();
@@ -45,7 +45,7 @@ async fn sweep_removes_expired_artifact_files() {
 async fn upload_delete_race_leaves_no_orphan_files() {
     let manager = BrowserDebugArtifactManager::new().unwrap();
     let response = manager
-        .create("shell:test".into(), selection())
+        .create("shell:test".into(), 1, selection())
         .await
         .unwrap();
     let id = uuid::Uuid::parse_str(&response.artifact_id).unwrap();
@@ -60,7 +60,7 @@ async fn upload_delete_race_leaves_no_orphan_files() {
 async fn disposal_removes_the_private_root() {
     let manager = BrowserDebugArtifactManager::new().unwrap();
     let response = manager
-        .create("shell:test".into(), selection())
+        .create("shell:test".into(), 1, selection())
         .await
         .unwrap();
     let root = std::path::Path::new(&response.json_path)
@@ -81,7 +81,7 @@ async fn rejects_semantically_invalid_png_variants() {
     ] {
         let manager = BrowserDebugArtifactManager::new().unwrap();
         let response = manager
-            .create("shell:test".into(), selection())
+            .create("shell:test".into(), 1, selection())
             .await
             .unwrap();
         let id = uuid::Uuid::parse_str(&response.artifact_id).unwrap();
@@ -97,6 +97,7 @@ fn terminal_reference_strips_controls_and_enforces_its_byte_limit() {
     let artifact = BrowserDebugArtifactResponse {
         artifact_id: "artifact-1".into(),
         terminal_id: "shell:test".into(),
+        terminal_incarnation: 1,
         expires_at: 1,
         json_path: "\u{1b}[31m/tmp/selection\n.json\u{1b}[0m".into(),
         json_size: 1,

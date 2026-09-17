@@ -1536,18 +1536,35 @@ export function useExportDiagnostics() {
 
 // ── Agent Store ────────────────────────────────────────────────────────────────
 
-export function useAgentStoreItems(category?: AgentItemCategory) {
+export function useAgentStoreItems(
+  category?: AgentItemCategory,
+  options?: { owner?: ConnectionRef; profileId?: ProfileId },
+) {
+  const owner = resolveWorkflowOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "agent-store", "items", category ?? "all")
+    : (["agent-store", "items", category ?? "all"] as const);
   return useQuery({
-    queryKey: ["agent-store", "items", category ?? "all"],
-    queryFn: () => api.agentStore.list(category),
+    queryKey,
+    queryFn: () =>
+      owner ? getApi(owner).agentStore.list(category) : api.agentStore.list(category),
     staleTime: 30_000,
   });
 }
 
-export function useAgentStoreItem(name: string, category: AgentItemCategory) {
+export function useAgentStoreItem(
+  name: string,
+  category: AgentItemCategory,
+  options?: { owner?: ConnectionRef; profileId?: ProfileId },
+) {
+  const owner = resolveWorkflowOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "agent-store", "item", name, category)
+    : (["agent-store", "item", name, category] as const);
   return useQuery({
-    queryKey: ["agent-store", "item", name, category],
-    queryFn: () => api.agentStore.get(name, category),
+    queryKey,
+    queryFn: () =>
+      owner ? getApi(owner).agentStore.get(name, category) : api.agentStore.get(name, category),
     enabled: !!name,
     staleTime: 30_000,
   });
@@ -1556,52 +1573,96 @@ export function useAgentStoreItem(name: string, category: AgentItemCategory) {
 export function useAgentStoreContent(
   name: string,
   category: AgentItemCategory,
+  options?: { owner?: ConnectionRef; profileId?: ProfileId },
 ) {
+  const owner = resolveWorkflowOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "agent-store", "content", name, category)
+    : (["agent-store", "content", name, category] as const);
   return useQuery({
-    queryKey: ["agent-store", "content", name, category],
-    queryFn: () => api.agentStore.getContent(name, category),
+    queryKey,
+    queryFn: () =>
+      owner
+        ? getApi(owner).agentStore.getContent(name, category)
+        : api.agentStore.getContent(name, category),
     enabled: !!name,
-    staleTime: Infinity, // file content is immutable until the item is replaced
+    staleTime: Infinity,
   });
 }
 
-export function useAgentStoreScan() {
+export function useAgentStoreScan(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
+  const owner = resolveWorkflowOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "agent-store", "scan")
+    : (["agent-store", "scan"] as const);
   return useQuery({
-    queryKey: ["agent-store", "scan"],
-    queryFn: () => api.agentStore.scan(),
+    queryKey,
+    queryFn: () =>
+      owner ? getApi(owner).agentStore.scan() : api.agentStore.scan(),
     staleTime: 30_000,
   });
 }
 
-export function useAgentStoreMatrix() {
+export function useAgentStoreMatrix(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
+  const owner = resolveWorkflowOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "agent-store", "matrix")
+    : (["agent-store", "matrix"] as const);
   return useQuery({
-    queryKey: ["agent-store", "matrix"],
-    queryFn: () => api.agentStore.matrix(),
+    queryKey,
+    queryFn: () =>
+      owner ? getApi(owner).agentStore.matrix() : api.agentStore.matrix(),
     staleTime: 30_000,
   });
 }
 
-export function useAgentStoreHealth() {
+export function useAgentStoreHealth(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
+  const owner = resolveWorkflowOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "agent-store", "health")
+    : (["agent-store", "health"] as const);
   return useQuery({
-    queryKey: ["agent-store", "health"],
-    queryFn: () => api.agentStore.health(),
+    queryKey,
+    queryFn: () =>
+      owner ? getApi(owner).agentStore.health() : api.agentStore.health(),
     staleTime: 30_000,
   });
 }
 
-export function useRemoveFromStore() {
+export function useRemoveFromStore(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const qc = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (opts: { name: string; category: AgentItemCategory }) =>
-      api.agentStore.remove(opts.name, opts.category),
+      owner
+        ? getApi(owner).agentStore.remove(opts.name, opts.category)
+        : api.agentStore.remove(opts.name, opts.category),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["agent-store"] });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "agent-store") : ["agent-store"],
+      });
     },
   });
 }
 
-export function useShipItem() {
+export function useShipItem(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const qc = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (opts: {
       itemName: string;
@@ -1610,22 +1671,42 @@ export function useShipItem() {
       agent: AgentType;
       method?: DistributionMethod;
     }) =>
-      api.agentStore.ship(
-        opts.itemName,
-        opts.category,
-        opts.projectName,
-        opts.agent,
-        opts.method,
-      ),
+      owner
+        ? getApi(owner).agentStore.ship(
+            opts.itemName,
+            opts.category,
+            opts.projectName,
+            opts.agent,
+            opts.method,
+          )
+        : api.agentStore.ship(
+            opts.itemName,
+            opts.category,
+            opts.projectName,
+            opts.agent,
+            opts.method,
+          ),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["agent-store", "matrix"] });
-      void qc.invalidateQueries({ queryKey: ["agent-store", "scan"] });
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-store", "matrix")
+          : ["agent-store", "matrix"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-store", "scan")
+          : ["agent-store", "scan"],
+      });
     },
   });
 }
 
-export function useUnshipItem() {
+export function useUnshipItem(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const qc = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (opts: {
       itemName: string;
@@ -1633,21 +1714,40 @@ export function useUnshipItem() {
       projectName: string;
       agent: AgentType;
     }) =>
-      api.agentStore.unship(
-        opts.itemName,
-        opts.category,
-        opts.projectName,
-        opts.agent,
-      ),
+      owner
+        ? getApi(owner).agentStore.unship(
+            opts.itemName,
+            opts.category,
+            opts.projectName,
+            opts.agent,
+          )
+        : api.agentStore.unship(
+            opts.itemName,
+            opts.category,
+            opts.projectName,
+            opts.agent,
+          ),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["agent-store", "matrix"] });
-      void qc.invalidateQueries({ queryKey: ["agent-store", "scan"] });
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-store", "matrix")
+          : ["agent-store", "matrix"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-store", "scan")
+          : ["agent-store", "scan"],
+      });
     },
   });
 }
 
-export function useAbsorbItem() {
+export function useAbsorbItem(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const qc = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (opts: {
       itemName: string;
@@ -1655,94 +1755,162 @@ export function useAbsorbItem() {
       projectName: string;
       agent: AgentType;
     }) =>
-      api.agentStore.absorb(
-        opts.itemName,
-        opts.category,
-        opts.projectName,
-        opts.agent,
-      ),
+      owner
+        ? getApi(owner).agentStore.absorb(
+            opts.itemName,
+            opts.category,
+            opts.projectName,
+            opts.agent,
+          )
+        : api.agentStore.absorb(
+            opts.itemName,
+            opts.category,
+            opts.projectName,
+            opts.agent,
+          ),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["agent-store"] });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "agent-store") : ["agent-store"],
+      });
     },
   });
 }
 
-export function useBulkShip() {
+export function useBulkShip(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const qc = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (opts: {
       items: Array<{ name: string; category: AgentItemCategory }>;
       targets: Array<{ projectName: string; agent: AgentType }>;
       method?: DistributionMethod;
-    }) => api.agentStore.bulkShip(opts.items, opts.targets, opts.method),
+    }) =>
+      owner
+        ? getApi(owner).agentStore.bulkShip(opts.items, opts.targets, opts.method)
+        : api.agentStore.bulkShip(opts.items, opts.targets, opts.method),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["agent-store"] });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "agent-store") : ["agent-store"],
+      });
     },
   });
 }
 
 // ── Memory ────────────────────────────────────────────────────────────────────
 
-export function useMemoryTemplates() {
+export function useMemoryTemplates(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
+  const owner = resolveWorkflowOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "agent-memory", "templates")
+    : (["agent-memory", "templates"] as const);
   return useQuery({
-    queryKey: ["agent-memory", "templates"],
-    queryFn: () => api.agentMemory.templates(),
+    queryKey,
+    queryFn: () =>
+      owner
+        ? getApi(owner).agentMemory.templates()
+        : api.agentMemory.templates(),
     staleTime: 30_000,
   });
 }
 
-export function useMemoryFile(projectName: string, agent: AgentType) {
+export function useMemoryFile(
+  projectName: string,
+  agent: AgentType,
+  options?: { owner?: ConnectionRef; profileId?: ProfileId },
+) {
+  const owner = resolveWorkflowOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "agent-memory", "file", projectName, agent)
+    : (["agent-memory", "file", projectName, agent] as const);
   return useQuery({
-    queryKey: ["agent-memory", "file", projectName, agent],
-    queryFn: () => api.agentMemory.get(projectName, agent),
+    queryKey,
+    queryFn: () =>
+      owner
+        ? getApi(owner).agentMemory.get(projectName, agent)
+        : api.agentMemory.get(projectName, agent),
     enabled: !!projectName,
     staleTime: 30_000,
   });
 }
 
-export function useUpdateMemoryFile() {
+export function useUpdateMemoryFile(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const qc = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (opts: {
       projectName: string;
       agent: AgentType;
       content: string;
-    }) => api.agentMemory.update(opts.projectName, opts.agent, opts.content),
+    }) =>
+      owner
+        ? getApi(owner).agentMemory.update(opts.projectName, opts.agent, opts.content)
+        : api.agentMemory.update(opts.projectName, opts.agent, opts.content),
     onSuccess: (_data, vars) => {
       void qc.invalidateQueries({
-        queryKey: ["agent-memory", "file", vars.projectName, vars.agent],
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-memory", "file", vars.projectName, vars.agent)
+          : ["agent-memory", "file", vars.projectName, vars.agent],
       });
     },
   });
 }
 
-export function useApplyMemoryTemplate() {
+export function useApplyMemoryTemplate(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (opts: {
       templateName: string;
       projectName: string;
       agent: AgentType;
     }) =>
-      api.agentMemory.apply(opts.templateName, opts.projectName, opts.agent),
+      owner
+        ? getApi(owner).agentMemory.apply(opts.templateName, opts.projectName, opts.agent)
+        : api.agentMemory.apply(opts.templateName, opts.projectName, opts.agent),
   });
 }
 
 // ── Import from repo ──────────────────────────────────────────────────────────
 
-export function useScanRepo() {
+export function useScanRepo(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
-    mutationFn: (repoUrl: string) => api.agentImport.scan(repoUrl),
+    mutationFn: (repoUrl: string) =>
+      owner ? getApi(owner).agentImport.scan(repoUrl) : api.agentImport.scan(repoUrl),
   });
 }
 
-export function useScanLocalDir() {
+export function useScanLocalDir(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
-    mutationFn: (dirPath: string) => api.agentImport.scanLocal(dirPath),
+    mutationFn: (dirPath: string) =>
+      owner ? getApi(owner).agentImport.scanLocal(dirPath) : api.agentImport.scanLocal(dirPath),
   });
 }
 
-export function useImportConfirm() {
+export function useImportConfirm(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const qc = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (opts: {
       tmpDir: string;
@@ -1753,13 +1921,21 @@ export function useImportConfirm() {
       }>;
       skipCleanup?: boolean;
     }) =>
-      api.agentImport.confirm(
-        opts.tmpDir,
-        opts.selectedItems,
-        opts.skipCleanup,
-      ),
+      owner
+        ? getApi(owner).agentImport.confirm(
+            opts.tmpDir,
+            opts.selectedItems,
+            opts.skipCleanup,
+          )
+        : api.agentImport.confirm(
+            opts.tmpDir,
+            opts.selectedItems,
+            opts.skipCleanup,
+          ),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["agent-store"] });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "agent-store") : ["agent-store"],
+      });
     },
   });
 }

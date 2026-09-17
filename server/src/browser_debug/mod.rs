@@ -99,6 +99,7 @@ fn valid_text(value: &str, max: usize) -> bool {
 pub struct BrowserDebugArtifactResponse {
     pub artifact_id: String,
     pub terminal_id: String,
+    pub terminal_incarnation: u64,
     pub expires_at: i64,
     pub json_path: String,
     pub json_size: u64,

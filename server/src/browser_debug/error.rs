@@ -18,6 +18,8 @@ pub enum BrowserDebugError {
     TooLarge,
     #[error("browser debug upload must be a PNG")]
     InvalidPng,
+    #[error("browser debug terminal incarnation mismatch")]
+    IncarnationMismatch,
     #[error("browser debug artifact I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("browser debug artifact task failed: {0}")]
@@ -29,7 +31,10 @@ impl BrowserDebugError {
         match self {
             Self::InvalidSelection | Self::InvalidPng | Self::InvalidTerminalReference => 400,
             Self::NotFound => 404,
-            Self::PngAlreadyUploaded | Self::AlreadyHandedOff | Self::ArtifactBusy => 409,
+            Self::PngAlreadyUploaded
+            | Self::AlreadyHandedOff
+            | Self::ArtifactBusy
+            | Self::IncarnationMismatch => 409,
             Self::TooLarge => 413,
             Self::Io(_) | Self::Task(_) => 500,
         }

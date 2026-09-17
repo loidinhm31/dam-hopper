@@ -420,9 +420,12 @@ function isLoopback(hostname: string): boolean {
  * Whether the configured server is running on the same host as the browser.
  * When true, "Open localhost" shortcuts are shown in the Ports panel.
  */
-export function isLocalServer(): boolean {
+export function isLocalServer(profileId?: string): boolean {
   try {
-    const serverUrl = getServerUrl();
+    const profile = profileId
+      ? getProfiles().find((p) => p.id === profileId)
+      : getActiveProfile();
+    const serverUrl = profile?.url ?? getServerUrl();
     const serverHostname = new URL(serverUrl).hostname;
     // Both page and backend must be on loopback for it to be considered local
     return isLoopback(location.hostname) && isLoopback(serverHostname);

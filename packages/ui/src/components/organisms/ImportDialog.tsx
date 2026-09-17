@@ -1,19 +1,22 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
   useScanRepo,
   useScanLocalDir,
   useImportConfirm,
 } from "@/api/queries.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 import type { RepoScanItem, AgentItemCategory } from "@/api/client.js";
 
 type ImportSource = "repo" | "local";
 
 interface Props {
+  owner?: ConnectionRef;
   onClose: () => void;
 }
-
-export function ImportDialog({ onClose }: Props) {
+export function ImportDialog({ owner, onClose }: Props) {
+  const boundOwnerRef = useRef<ConnectionRef | undefined>(owner);
+  const scanRevisionRef = useRef(0);
   const [source, setSource] = useState<ImportSource>("repo");
   const [repoUrl, setRepoUrl] = useState("");
   const [dirPath, setDirPath] = useState("");
@@ -26,10 +29,9 @@ export function ImportDialog({ onClose }: Props) {
     error?: string;
   }> | null>(null);
 
-  const scanRepo = useScanRepo();
-  const scanLocalDir = useScanLocalDir();
-  const importConfirm = useImportConfirm();
-
+  const scanRepo = useScanRepo({ owner: boundOwnerRef.current });
+  const scanLocalDir = useScanLocalDir({ owner: boundOwnerRef.current });
+  const importConfirm = useImportConfirm({ owner: boundOwnerRef.current });
   const activeScan = source === "repo" ? scanRepo : scanLocalDir;
 
   function itemKey(item: RepoScanItem) {
@@ -53,15 +55,19 @@ export function ImportDialog({ onClose }: Props) {
   async function handleScan() {
     const input = source === "repo" ? repoUrl.trim() : dirPath.trim();
     if (!input) return;
+    scanRevisionRef.current += 1;
+    const rev = scanRevisionRef.current;
     resetScanState();
 
     if (source === "repo") {
       const result = await scanRepo.mutateAsync(input);
+      if (scanRevisionRef.current !== rev) return;
       setFoundItems(result.items);
       setTmpDir(result.tmpDir);
       setSelected(new Set(result.items.map(itemKey)));
     } else {
       const result = await scanLocalDir.mutateAsync(input);
+      if (scanRevisionRef.current !== rev) return;
       setFoundItems(result.items);
       setTmpDir(result.dirPath);
       setSelected(new Set(result.items.map(itemKey)));
