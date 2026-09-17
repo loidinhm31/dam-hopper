@@ -13,6 +13,7 @@ interface SettingsImportExportPanelProps {
   importPending: boolean;
   importMsg: string | null;
   importErr: string | null;
+  targetServerLabel?: string;
 }
 
 export function SettingsImportExportPanel({
@@ -24,6 +25,7 @@ export function SettingsImportExportPanel({
   importPending,
   importMsg,
   importErr,
+  targetServerLabel,
 }: SettingsImportExportPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -39,7 +41,13 @@ export function SettingsImportExportPanel({
     }
   }
   return (
-    <div className="divide-y divide-[var(--color-border)]">
+    <div className="space-y-2">
+      {targetServerLabel && (
+        <p className="text-xs text-[var(--color-text-muted)] font-mono pb-1">
+          Target server: {targetServerLabel}
+        </p>
+      )}
+      <div className="divide-y divide-[var(--color-border)]">
       <SettingsActionRow
         title="Export Settings"
         description={
@@ -120,6 +128,7 @@ export function SettingsImportExportPanel({
           </>
         }
       />
+      </div>
     </div>
   );
 }

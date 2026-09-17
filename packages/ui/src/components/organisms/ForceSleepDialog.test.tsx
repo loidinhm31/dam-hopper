@@ -9,13 +9,22 @@ import { ForceSleepDialog } from "./ForceSleepDialog.js";
 const mocks = vi.hoisted(() => ({
   isPending: false,
   mutateAsync: vi.fn(),
+  connectionSnapshot: vi.fn(),
 }));
 
 vi.mock("@/api/queries.js", () => ({
+  resolveTargetOwner: (owner?: unknown) =>
+    owner && typeof owner === "object" && "generation" in owner
+      ? (owner as { profileId: string; generation: number })
+      : undefined,
   useForceSuspend: () => ({
     isPending: mocks.isPending,
     mutateAsync: mocks.mutateAsync,
   }),
+}));
+
+vi.mock("@/api/connections.js", () => ({
+  getConnectionSnapshot: (id: string) => mocks.connectionSnapshot(id),
 }));
 
 let root: Root | null = null;
@@ -130,5 +139,50 @@ describe("ForceSleepDialog", () => {
     expect(bodyText).toContain("6 active managed sessions");
     expect(bodyText).toContain("3 live, 1 creating, 2 restarting");
     expect(bodyText).toContain("Confirm pausing active managed sessions");
+  });
+
+  it("renders target host label and revision in dialog description", async () => {
+    const status = mockStatus({ statusRevision: 7 });
+    await act(async () => {
+      root?.render(
+        <ForceSleepDialog
+          open={true}
+          onOpenChange={vi.fn()}
+          initialStatus={status}
+          endpointLabel="prod-host-1 (https://prod.internal:4800)"
+        />,
+      );
+    });
+
+    const bodyText = document.body.textContent ?? "";
+    expect(bodyText).toContain("Target host: prod-host-1 (https://prod.internal:4800) (rev 7)");
+  });
+
+  it("detects stale connection generation and disables force sleep execution", async () => {
+    const owner = { profileId: "profile-1", generation: 1 };
+    mocks.connectionSnapshot.mockReturnValue({
+      owner: { profileId: "profile-1", generation: 2 }, // generation bumped from 1 to 2
+      status: "connected",
+      serverUrl: "https://prod.internal:4800",
+    });
+
+    await act(async () => {
+      root?.render(
+        <ForceSleepDialog
+          open={true}
+          onOpenChange={vi.fn()}
+          initialStatus={mockStatus()}
+          owner={owner}
+        />,
+      );
+    });
+
+    const bodyText = document.body.textContent ?? "";
+    expect(bodyText).toContain("Server connection or generation changed while reviewing");
+
+    const submitBtn = Array.from(document.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.includes("Force Machine to Sleep"),
+    );
+    expect(submitBtn?.hasAttribute("disabled")).toBe(true);
   });
 });

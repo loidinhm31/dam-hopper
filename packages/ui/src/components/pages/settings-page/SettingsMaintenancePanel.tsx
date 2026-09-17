@@ -15,6 +15,7 @@ interface SettingsMaintenancePanelProps {
   onResetWorkspace: () => void;
   resetPending: boolean;
   resetErr: string | null;
+  targetServerLabel?: string;
 }
 
 export function SettingsMaintenancePanel({
@@ -26,9 +27,16 @@ export function SettingsMaintenancePanel({
   onResetWorkspace,
   resetPending,
   resetErr,
+  targetServerLabel,
 }: SettingsMaintenancePanelProps) {
   return (
-    <div className="divide-y divide-[var(--color-border)]">
+    <div className="space-y-2">
+      {targetServerLabel && (
+        <p className="text-xs text-[var(--color-text-muted)] font-mono pb-1">
+          Target server: {targetServerLabel}
+        </p>
+      )}
+      <div className="divide-y divide-[var(--color-border)]">
       <SettingsActionRow
         title="Revalidate Cache"
         description="Clear all cached query data so every panel refetches fresh data from disk. Useful after external changes."
@@ -93,6 +101,7 @@ export function SettingsMaintenancePanel({
           </button>
         }
       />
+      </div>
     </div>
   );
 }

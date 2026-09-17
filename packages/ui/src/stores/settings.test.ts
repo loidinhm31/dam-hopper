@@ -22,6 +22,7 @@ vi.mock("@/lib/diagnostics-client.js", () => ({
 }));
 
 import { __resetSettingsStoreTestState, useSettingsStore } from "./settings.js";
+import { useWorkbenchSelectionsStore } from "./workbench-selections.js";
 
 async function flushMicrotasks() {
   await Promise.resolve();
@@ -31,6 +32,7 @@ async function flushMicrotasks() {
 
 function resetSettingsStore() {
   __resetSettingsStoreTestState();
+  useWorkbenchSelectionsStore.getState().setPreferencesProfileId("test-profile");
   useSettingsStore.setState({
     systemFontSize: 14,
     editorFontSize: 14,
@@ -437,5 +439,77 @@ describe("settings store terminal agent notification fields", () => {
 
     expect(useSettingsStore.getState().systemFontSize).toBe(14);
     expect(useSettingsStore.getState().editorFontSize).toBe(16);
+  });
+
+  it("leaves source-unset status and disables remote saving when preference source is unset", async () => {
+    useWorkbenchSelectionsStore.getState().setPreferencesProfileId(null);
+    await useSettingsStore.getState().hydrate();
+
+    expect(getGlobalConfig).not.toHaveBeenCalled();
+    expect(useSettingsStore.getState().hydrated).toBe(true);
+    expect(useSettingsStore.getState().sourceUnset).toBe(true);
+
+    useSettingsStore.getState().saveDebounced({ systemFontSize: 18 });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(updateUi).not.toHaveBeenCalled();
+    expect(useSettingsStore.getState().systemFontSize).toBe(18);
+    expect(
+      useWorkbenchSelectionsStore.getState().preferencesSnapshot?.systemFontSize,
+    ).toBe(18);
+  });
+
+  it("clears undispatched debounce and prevents routing patches to new source on switchPreferenceSource", async () => {
+    useWorkbenchSelectionsStore.getState().setPreferencesProfileId("profile-A");
+
+    useSettingsStore.getState().saveDebounced({ systemFontSize: 20 });
+
+    // Before 500ms debounce fires, switch to profile-B
+    getGlobalConfig.mockResolvedValueOnce({
+      ui: { systemFontSize: 12 },
+    });
+    await useSettingsStore.getState().switchPreferenceSource("profile-B");
+    await vi.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+
+    // updateUi should NOT have been called with systemFontSize: 20
+    expect(updateUi).not.toHaveBeenCalled();
+    expect(useSettingsStore.getState().systemFontSize).toBe(12);
+  });
+
+  it("does not roll back new source if previous source in-flight save rejects", async () => {
+    useWorkbenchSelectionsStore.getState().setPreferencesProfileId("profile-A");
+    const { promise, reject } = Promise.withResolvers<unknown>();
+    updateUi.mockReturnValueOnce(promise);
+
+    useSettingsStore.getState().saveDebounced({ systemFontSize: 18 });
+    await vi.advanceTimersByTimeAsync(500);
+
+    // Now save was dispatched for profile-A. Switch to profile-B
+    getGlobalConfig.mockResolvedValueOnce({
+      ui: { systemFontSize: 14 },
+    });
+    await useSettingsStore.getState().switchPreferenceSource("profile-B");
+
+    // Reject profile-A's save
+    reject(new Error("profile-A server error"));
+    await flushMicrotasks();
+
+    // profile-B should remain intact at 14, not rolled back
+    expect(useSettingsStore.getState().systemFontSize).toBe(14);
+  });
+
+  it("hydrates from offline snapshot when remote source is unavailable", async () => {
+    useWorkbenchSelectionsStore.getState().setPreferencesProfileId(null);
+    useWorkbenchSelectionsStore.getState().updatePreferencesSnapshot({
+      systemFontSize: 22,
+      editorFontSize: 18,
+    });
+
+    await useSettingsStore.getState().hydrate();
+
+    expect(getGlobalConfig).not.toHaveBeenCalled();
+    expect(useSettingsStore.getState().systemFontSize).toBe(22);
+    expect(useSettingsStore.getState().editorFontSize).toBe(18);
   });
 });

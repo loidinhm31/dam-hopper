@@ -468,6 +468,48 @@ export function installTransportBridge(
               queryKey: profileQueryKey(owner, "projects"),
             });
           }
+        } else if (channel === "host:alertChanged") {
+          const alertEvent = asHostResourceAlertChangedEvent({
+            type: "host:alertChanged",
+            data,
+            timestamp: Date.now(),
+          });
+          if (alertEvent) {
+            qc.setQueryData<HostResourceSnapshotV1>(
+              profileQueryKey(owner, "system", "resource-snapshot"),
+              (snapshot) => applyHostResourceAlert(snapshot, alertEvent.data),
+            );
+            void qc.invalidateQueries({
+              queryKey: profileQueryKey(owner, "system", "resource-snapshot"),
+            });
+            void qc.invalidateQueries({
+              queryKey: profileQueryKey(owner, "system", "resource-alerts"),
+            });
+          }
+        } else if (channel === "host:alertsInvalidated") {
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(owner, "system", "resource-snapshot"),
+          });
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(owner, "system", "resource-alerts"),
+          });
+        } else if (channel === "host:idleSuspendChanged") {
+          const changeEvent = asHostIdleSuspendChangedEvent({
+            type: "host:idleSuspendChanged",
+            data,
+            timestamp: Date.now(),
+          });
+          if (changeEvent) {
+            void qc.invalidateQueries({
+              queryKey: profileQueryKey(
+                owner,
+                "system",
+                "idle-suspend",
+                "v1",
+                "status",
+              ),
+            });
+          }
         }
       }
     });

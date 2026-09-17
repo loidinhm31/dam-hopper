@@ -5,6 +5,7 @@ import { Button } from "@/components/atoms/Button.js";
 import {
   useConfigureUsageInsights,
   useUsageSetupStatus,
+  type OwnerInput,
 } from "@/api/queries.js";
 import { SettingsActionRow } from "@/components/pages/settings-page/SettingsActionRow.js";
 import { SettingsUsageInsightsCodexRow } from "./SettingsUsageInsightsCodexRow.js";
@@ -21,9 +22,13 @@ function sanitizeErrorDetail(detail: string) {
     );
 }
 
-export function SettingsUsageInsightsSection() {
-  const { data: settings, isLoading, error } = useUsageSetupStatus();
-  const configure = useConfigureUsageInsights();
+export function SettingsUsageInsightsSection({
+  owner,
+}: {
+  owner?: OwnerInput;
+} = {}) {
+  const { data: settings, isLoading, error } = useUsageSetupStatus(owner);
+  const configure = useConfigureUsageInsights(owner);
   const [message, setMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 

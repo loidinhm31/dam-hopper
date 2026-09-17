@@ -554,9 +554,18 @@ interface Props {
   onSave: (config: DamHopperConfig) => Promise<unknown>;
   isSaving?: boolean;
   saveError?: string | null;
+  serverUrl?: string;
+  serverName?: string;
 }
 
-export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
+export function ConfigEditor({
+  config,
+  onSave,
+  isSaving,
+  saveError,
+  serverUrl,
+  serverName,
+}: Props) {
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
   const [draft, setDraft] = useState<DamHopperConfig>(() =>
@@ -744,7 +753,13 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
       </section>
 
       {/* Save bar */}
-      <div className="flex items-center gap-3 pt-2 border-t border-[var(--color-border)]">
+      {/* Save bar */}
+      <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[var(--color-border)]">
+        {serverUrl && (
+          <span className="w-full text-xs text-[var(--color-text-muted)] font-mono">
+            Target server: {serverName ? `${serverName} (${serverUrl})` : serverUrl}
+          </span>
+        )}
         <Button
           variant="primary"
           onClick={() => void handleSave()}

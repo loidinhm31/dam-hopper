@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useIdleSuspendStatus } from "@/api/queries.js";
+import { useIdleSuspendStatus, type OwnerInput } from "@/api/queries.js";
 import type {
   IdleSuspendActivityMeasurementState,
   IdleSuspendActivityReasonCode,
@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils.js";
 export interface HostIdleSuspendStatusProps {
   onForceSleep?: (status: IdleSuspendStatusV1) => void;
   isForceSleepPending?: boolean;
+  owner?: OwnerInput;
 }
 
 const STATE_BADGES: Record<
@@ -120,8 +121,9 @@ const WARNING_REASON_LABELS: Record<
 export function HostIdleSuspendStatus({
   onForceSleep,
   isForceSleepPending,
+  owner,
 }: HostIdleSuspendStatusProps = {}) {
-  const { data: status, isLoading, isError } = useIdleSuspendStatus();
+  const { data: status, isLoading, isError } = useIdleSuspendStatus(true, owner);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const hasArmDeadline =

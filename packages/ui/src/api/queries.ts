@@ -51,18 +51,57 @@ import type {
   Worktree,
   IdleSuspendStatusV1,
   IdleSuspendTimingPatchRequest,
+  IdleSuspendTimingPatchResponse,
   ForceSuspendRequest,
+  ForceSuspendAcceptedResponse,
+  DiagnosticExportResponse,
+  SettingsImportResponse,
+  KnownWorkspacesResponse,
+  DiscoverResponse,
+  ApiClient,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 import { rememberTerminalSessionIncarnations } from "@/lib/terminal-incarnation-state.js";
 
-import { getApi, getTransport as getBoundTransport } from "./connections.js";
-import { profileQueryKey } from "./query-client.js";
+import {
+  getApi,
+  getTransport as getBoundTransport,
+  getConnectionSnapshot,
+} from "./connections.js";
+import { profileQueryKey, profileQueryPrefix } from "./query-client.js";
 import type { ConnectionRef, ProfileId } from "./ownership.js";
 import { resolveWorkflowOwner } from "./workflow-queries.js";
 export * from "./workflow-queries.js";
+
+export type OwnerInput =
+  | ConnectionRef
+  | ProfileId
+  | { owner?: ConnectionRef; profileId?: ProfileId };
+
+export function resolveTargetOwner(
+  options?: OwnerInput,
+): ConnectionRef | undefined {
+  if (!options) return undefined;
+  if (typeof options === "string") {
+    const snap = getConnectionSnapshot(options);
+    return snap ? snap.owner : { profileId: options, generation: 1 };
+  }
+  if ("generation" in options) {
+    return options;
+  }
+  return resolveWorkflowOwner(options);
+}
+
+export function getBoundApiClient(owner?: ConnectionRef): ApiClient {
+  if (!owner) return api;
+  try {
+    return getApi(owner);
+  } catch {
+    return api;
+  }
+}
 type QueryInvalidator = Pick<
   ReturnType<typeof useQueryClient>,
   "invalidateQueries"
@@ -359,28 +398,39 @@ function invalidateGitProjectQueries(
   }
 }
 
-export function useWorkspaceStatus() {
+export function useWorkspaceStatus(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "workspace-status")
+    : (["workspace-status"] as const);
   return useQuery({
-    queryKey: ["workspace-status"],
-    queryFn: () => api.workspace.status(),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).workspace.status(),
     staleTime: Infinity, // driven by workspace:changed event invalidation
   });
 }
 
-export function useInitWorkspace() {
+export function useInitWorkspace(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
-    mutationFn: (path: string) => api.workspace.init(path),
+    mutationFn: (path: string) => getBoundApiClient(owner).workspace.init(path),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["workspace-status"] });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "workspace-status") : ["workspace-status"],
+      });
     },
   });
 }
 
-export function useDiscoverProjects(path: string | null) {
-  return useQuery({
-    queryKey: ["workspace-discover", path],
-    queryFn: () => api.workspace.discover(path!),
+export function useDiscoverProjects(path: string | null, options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "workspace-discover", path)
+    : (["workspace-discover", path] as const);
+  return useQuery<DiscoverResponse>({
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).workspace.discover(path!),
     enabled: !!path,
     staleTime: 30_000,
   });
@@ -388,10 +438,14 @@ export function useDiscoverProjects(path: string | null) {
 
 // ── Queries ─────────────────────────────────────────────────────────────────
 
-export function useWorkspace() {
+export function useWorkspace(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "workspace")
+    : (["workspace"] as const);
   return useQuery({
-    queryKey: ["workspace"],
-    queryFn: () => api.workspace.get(),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).workspace.get(),
   });
 }
 
@@ -432,28 +486,44 @@ export function useProjectStatus(target: ProjectTargetInput, enabled = true) {
   });
 }
 
-export function useHostMetrics(enabled: boolean) {
+export function useHostMetrics(enabled: boolean, options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "system", "metrics")
+    : (["system", "metrics"] as const);
   return useQuery<HostMetrics>({
-    queryKey: ["system", "metrics"],
-    queryFn: () => api.system.metrics(),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).system.metrics(),
     enabled,
     refetchInterval: enabled ? 1_000 : false,
   });
 }
 
-export function useHostResourceSnapshot(enabled = true) {
+export function useHostResourceSnapshot(enabled = true, options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "system", "resource-snapshot")
+    : (["system", "resource-snapshot"] as const);
   return useQuery<HostResourceSnapshotV1>({
-    queryKey: ["system", "resource-snapshot"],
-    queryFn: () => api.system.resourceSnapshot(),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).system.resourceSnapshot(),
     enabled,
     refetchInterval: enabled ? 15_000 : false,
   });
 }
 
-export function useHostResourceAlerts(enabled: boolean, limit = 20) {
+export function useHostResourceAlerts(
+  enabled: boolean,
+  limit = 20,
+  options?: OwnerInput,
+) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "system", "resource-alerts", limit)
+    : (["system", "resource-alerts", limit] as const);
   return useQuery<HostResourceAlertIncident[]>({
-    queryKey: ["system", "resource-alerts", limit],
-    queryFn: () => api.system.resourceAlerts(limit),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).system.resourceAlerts(limit),
     enabled,
     refetchInterval: enabled ? 30_000 : false,
   });
@@ -463,37 +533,55 @@ export const IDLE_SUSPEND_STATUS_QUERY_KEY = [
   "idle-suspend",
   "v1",
   "status",
-] as const;
+  ];
 
-export function useIdleSuspendStatus(enabled = true) {
+export function useIdleSuspendStatus(enabled = true, options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "system", "idle-suspend", "v1", "status")
+    : IDLE_SUSPEND_STATUS_QUERY_KEY;
   return useQuery<IdleSuspendStatusV1>({
-    queryKey: IDLE_SUSPEND_STATUS_QUERY_KEY,
-    queryFn: () => api.system.idleSuspendStatus(),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).system.idleSuspendStatus(),
     enabled,
     staleTime: 5_000,
   });
 }
 
-export function useUpdateIdleSuspendTiming() {
+export function useUpdateIdleSuspendTiming(options?: OwnerInput) {
   const qc = useQueryClient();
-  return useMutation({
+  const owner = resolveTargetOwner(options);
+  return useMutation<
+    IdleSuspendTimingPatchResponse,
+    Error,
+    IdleSuspendTimingPatchRequest
+  >({
     mutationFn: (timing: IdleSuspendTimingPatchRequest) =>
-      api.system.updateIdleSuspendTiming(timing),
+      getBoundApiClient(owner).system.updateIdleSuspendTiming(timing),
     retry: false,
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: IDLE_SUSPEND_STATUS_QUERY_KEY });
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "system", "idle-suspend", "v1", "status")
+          : IDLE_SUSPEND_STATUS_QUERY_KEY,
+      });
     },
   });
 }
 
-export function useForceSuspend() {
+export function useForceSuspend(options?: OwnerInput) {
   const qc = useQueryClient();
-  return useMutation({
+  const owner = resolveTargetOwner(options);
+  return useMutation<ForceSuspendAcceptedResponse, Error, ForceSuspendRequest>({
     mutationFn: (request: ForceSuspendRequest) =>
-      api.system.forceSuspend(request),
+      getBoundApiClient(owner).system.forceSuspend(request),
     retry: false,
     onSettled: () => {
-      void qc.invalidateQueries({ queryKey: IDLE_SUSPEND_STATUS_QUERY_KEY });
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "system", "idle-suspend", "v1", "status")
+          : IDLE_SUSPEND_STATUS_QUERY_KEY,
+      });
     },
   });
 }
@@ -565,18 +653,26 @@ export function useGitLog(
   });
 }
 
-export function useConfig() {
+export function useConfig(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "config")
+    : (["config"] as const);
   return useQuery({
-    queryKey: ["config"],
-    queryFn: () => api.config.get(),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).config.get(),
     staleTime: Infinity, // IPC config:changed events drive invalidation
   });
 }
 
-export function useKnownWorkspaces() {
-  return useQuery({
-    queryKey: ["known-workspaces"],
-    queryFn: () => api.workspace.known(),
+export function useKnownWorkspaces(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "known-workspaces")
+    : (["known-workspaces"] as const);
+  return useQuery<KnownWorkspacesResponse>({
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).workspace.known(),
     staleTime: 30_000,
   });
 }
@@ -671,10 +767,14 @@ export function useExplorerLanguageScan(target: ProjectTargetInput) {
   return { ...query, scan, cache };
 }
 
-export function useGlobalConfig() {
+export function useGlobalConfig(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "global-config")
+    : (["global-config"] as const);
   return useQuery({
-    queryKey: ["global-config"],
-    queryFn: () => api.globalConfig.get(),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).globalConfig.get(),
   });
 }
 
@@ -703,62 +803,97 @@ export function useTerminalSessions(options?: {
 
 // ── Mutations ────────────────────────────────────────────────────────────────
 
-export function useSwitchWorkspace() {
+export function useSwitchWorkspace(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
   return useMutation({
-    mutationFn: (path: string) => api.workspace.switch(path),
+    mutationFn: (path: string) => getBoundApiClient(owner).workspace.switch(path),
     // No onSuccess invalidation — SSE workspace:changed handles nuclear cache flush
   });
 }
 
-export function useAddKnownWorkspace() {
+export function useAddKnownWorkspace(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
-    mutationFn: (path: string) => api.workspace.addKnown(path),
+    mutationFn: (path: string) =>
+      getBoundApiClient(owner).workspace.addKnown(path),
     onSuccess: () =>
-      void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "known-workspaces")
+          : ["known-workspaces"],
+      }),
   });
 }
 
-export function useRemoveKnownWorkspace() {
+export function useRemoveKnownWorkspace(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
-    mutationFn: (path: string) => api.workspace.removeKnown(path),
+    mutationFn: (path: string) =>
+      getBoundApiClient(owner).workspace.removeKnown(path),
     onSuccess: () =>
-      void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "known-workspaces")
+          : ["known-workspaces"],
+      }),
   });
 }
 
-export function useUpdateGlobalDefaults() {
+export function useUpdateGlobalDefaults(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
     mutationFn: (defaults: { workspace?: string }) =>
-      api.globalConfig.updateDefaults(defaults),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["global-config"] }),
+      getBoundApiClient(owner).globalConfig.updateDefaults(defaults),
+    onSuccess: () =>
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "global-config")
+          : ["global-config"],
+      }),
   });
 }
 
-export function useUpdateUiConfig() {
+export function useUpdateUiConfig(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
-    mutationFn: (ui: Partial<UiConfig>) => api.globalConfig.updateUi(ui),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["global-config"] }),
+    mutationFn: (ui: Partial<UiConfig>) =>
+      getBoundApiClient(owner).globalConfig.updateUi(ui),
+    onSuccess: () =>
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "global-config")
+          : ["global-config"],
+      }),
   });
 }
 
-export function useUpdateConfig() {
+export function useUpdateConfig(options?: OwnerInput) {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (config: DamHopperConfig) => api.config.update(config),
+  const owner = resolveTargetOwner(options);
+  return useMutation<DamHopperConfig, Error, DamHopperConfig>({
+    mutationFn: (config: DamHopperConfig) =>
+      getBoundApiClient(owner).config.update(config),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["config"] });
-      void qc.invalidateQueries({ queryKey: ["workspace"] });
-      void qc.invalidateQueries({ queryKey: ["projects"] });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "config") : ["config"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "workspace") : ["workspace"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "projects") : ["projects"],
+      });
     },
   });
 }
 
-export function useUpdateProject() {
+export function useUpdateProject(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
     mutationFn: ({
       name,
@@ -766,10 +901,14 @@ export function useUpdateProject() {
     }: {
       name: string;
       data: Partial<ProjectConfig>;
-    }) => api.config.updateProject(name, data),
+    }) => getBoundApiClient(owner).config.updateProject(name, data),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["config"] });
-      void qc.invalidateQueries({ queryKey: ["projects"] });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "config") : ["config"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "projects") : ["projects"],
+      });
     },
   });
 }
@@ -1397,48 +1536,78 @@ export function useRemoveWorktree(project: string) {
 
 // ── Settings & Maintenance ────────────────────────────────────────────────────
 
-export function useClearCache() {
+export function useClearCache(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
-    mutationFn: () => api.settings.clearCache(),
+    mutationFn: () => getBoundApiClient(owner).settings.clearCache(),
     onSuccess: () => {
-      qc.clear(); // Drop all cached query data — forces fresh fetches
-    },
-  });
-}
-
-export function useResetWorkspace() {
-  // No onSuccess needed — workspace:changed(null) SSE event triggers
-  // nuclear cache invalidation in useIpc hook
-  return useMutation({
-    mutationFn: () => api.settings.reset(),
-  });
-}
-
-export function useExportSettings() {
-  return useMutation({
-    mutationFn: () => api.settings.exportConfig(),
-  });
-}
-
-export function useImportSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (tomlContent: string) => api.settings.importConfig(tomlContent),
-    onSuccess: (result) => {
-      if (result?.imported) {
-        void qc.invalidateQueries({ queryKey: ["config"] });
-        void qc.invalidateQueries({ queryKey: ["projects"] });
-        void qc.invalidateQueries({ queryKey: ["workspace"] });
+      if (owner) {
+        void qc.invalidateQueries({
+          queryKey: profileQueryPrefix(owner.profileId),
+        });
+      } else {
+        qc.clear();
       }
     },
   });
 }
 
-export function useUsageSummary(query: UsageSummaryQuery = {}) {
+export function useResetWorkspace(options?: OwnerInput) {
+  const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
+  return useMutation({
+    mutationFn: () => getBoundApiClient(owner).settings.reset(),
+    onSuccess: () => {
+      if (owner) {
+        void qc.invalidateQueries({
+          queryKey: profileQueryPrefix(owner.profileId),
+        });
+      }
+    },
+  });
+}
+
+export function useExportSettings(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  return useMutation<string, Error, void>({
+    mutationFn: () => getBoundApiClient(owner).settings.exportConfig(),
+  });
+}
+
+export function useImportSettings(options?: OwnerInput) {
+  const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
+  return useMutation<SettingsImportResponse, Error, string>({
+    mutationFn: (tomlContent: string) =>
+      getBoundApiClient(owner).settings.importConfig(tomlContent),
+    onSuccess: (result) => {
+      if (result?.imported) {
+        if (owner) {
+          void qc.invalidateQueries({ queryKey: profileQueryKey(owner, "config") });
+          void qc.invalidateQueries({ queryKey: profileQueryKey(owner, "projects") });
+          void qc.invalidateQueries({ queryKey: profileQueryKey(owner, "workspace") });
+        } else {
+          void qc.invalidateQueries({ queryKey: ["config"] });
+          void qc.invalidateQueries({ queryKey: ["projects"] });
+          void qc.invalidateQueries({ queryKey: ["workspace"] });
+        }
+      }
+    },
+  });
+}
+
+export function useUsageSummary(
+  query: UsageSummaryQuery = {},
+  options?: OwnerInput,
+) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "usage", "summary", query)
+    : (["usage", "summary", query] as const);
   return useQuery({
-    queryKey: ["usage", "summary", query],
-    queryFn: () => api.usage.summary(query),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).usage.summary(query),
   });
 }
 
@@ -1450,87 +1619,136 @@ export const usageSessionPollInterval = () =>
 export function useUsageSessions(
   query: UsageSessionQuery = {},
   enabled = true,
+  options?: OwnerInput,
 ) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "usage", "sessions", query)
+    : (["usage", "sessions", query] as const);
   return useQuery({
-    queryKey: ["usage", "sessions", query],
-    queryFn: () => api.usage.sessions(query),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).usage.sessions(query),
     enabled,
     refetchInterval: usageSessionPollInterval,
   });
 }
 
-export function useUsageSession(id: string | null, enabled = true) {
+export function useUsageSession(
+  id: string | null,
+  enabled = true,
+  options?: OwnerInput,
+) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "usage", "session", id)
+    : (["usage", "session", id] as const);
   return useQuery({
-    queryKey: ["usage", "session", id],
-    queryFn: () => api.usage.session(id!),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).usage.session(id!),
     enabled: enabled && id !== null,
     refetchInterval: usageSessionPollInterval,
   });
 }
 
-export function useUsageHealth() {
+export function useUsageHealth(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "usage", "health")
+    : (["usage", "health"] as const);
   return useQuery({
-    queryKey: ["usage", "health"],
-    queryFn: () => api.usage.health(),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).usage.health(),
     refetchInterval: 30_000,
   });
 }
 
-export function useUsageSettings() {
+export function useUsageSettings(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "usage", "settings")
+    : (["usage", "settings"] as const);
   return useQuery({
-    queryKey: ["usage", "settings"],
-    queryFn: () => api.usage.settings(),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).usage.settings(),
   });
 }
 
-export function useUsageSetupStatus() {
+export function useUsageSetupStatus(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "usage", "setup")
+    : (["usage", "setup"] as const);
   return useQuery<UsageSetupStatus>({
-    queryKey: ["usage", "setup"],
-    queryFn: () => api.usage.setupStatus(),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).usage.setupStatus(),
     refetchInterval: 10_000,
   });
 }
 
-export function useConfigureUsageInsights() {
+export function useConfigureUsageInsights(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
-    mutationFn: (patch: UsageSettingsPatch) => api.usage.configure(patch),
+    mutationFn: (patch: UsageSettingsPatch) =>
+      getBoundApiClient(owner).usage.configure(patch),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["usage"] });
-      void qc.invalidateQueries({ queryKey: ["config"] });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "usage") : ["usage"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "config") : ["config"],
+      });
     },
   });
 }
 
-export function useUpdateUsageSettings() {
+export function useUpdateUsageSettings(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
-    mutationFn: (patch: UsageSettingsPatch) => api.usage.updateSettings(patch),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["usage"] }),
+    mutationFn: (patch: UsageSettingsPatch) =>
+      getBoundApiClient(owner).usage.updateSettings(patch),
+    onSuccess: () =>
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "usage") : ["usage"],
+      }),
   });
 }
 
-export function useDeleteUsageData() {
+export function useDeleteUsageData(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
-    mutationFn: () => api.usage.deleteAll(),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["usage"] }),
+    mutationFn: () => getBoundApiClient(owner).usage.deleteAll(),
+    onSuccess: () =>
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "usage") : ["usage"],
+      }),
   });
 }
 
-export function useDeleteUsageRange() {
+export function useDeleteUsageRange(options?: OwnerInput) {
   const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
   return useMutation({
     mutationFn: ({ from, to }: { from: number; to: number }) =>
-      api.usage.deleteRange(from, to),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["usage"] }),
+      getBoundApiClient(owner).usage.deleteRange(from, to),
+    onSuccess: () =>
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "usage") : ["usage"],
+      }),
   });
 }
 
-export function useExportDiagnostics() {
-  return useMutation({
+export function useExportDiagnostics(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  return useMutation<
+    DiagnosticExportResponse,
+    Error,
+    Parameters<typeof api.diagnostics.export>[0]
+  >({
     mutationFn: (request: Parameters<typeof api.diagnostics.export>[0]) =>
-      api.diagnostics.export(request),
+      getBoundApiClient(owner).diagnostics.export(request),
   });
 }
 

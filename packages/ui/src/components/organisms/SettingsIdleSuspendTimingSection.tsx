@@ -1,15 +1,23 @@
 import { useState } from "react";
 import { Button } from "@/components/atoms/Button.js";
-import { useIdleSuspendStatus, useUpdateIdleSuspendTiming } from "@/api/queries.js";
+import {
+  useIdleSuspendStatus,
+  useUpdateIdleSuspendTiming,
+  type OwnerInput,
+} from "@/api/queries.js";
 import {
   SettingsActionRow,
   SettingsStatusMessage,
 } from "@/components/pages/settings-page/SettingsActionRow.js";
 import { ApiRequestError } from "@/api/client.js";
 
-export function SettingsIdleSuspendTimingSection() {
-  const { data: status, isLoading, isError } = useIdleSuspendStatus();
-  const updateTiming = useUpdateIdleSuspendTiming();
+export function SettingsIdleSuspendTimingSection({
+  owner,
+}: {
+  owner?: OwnerInput;
+} = {}) {
+  const { data: status, isLoading, isError } = useIdleSuspendStatus(true, owner);
+  const updateTiming = useUpdateIdleSuspendTiming(owner);
 
   const [quietInput, setQuietInput] = useState<string | null>(null);
   const [wakeInput, setWakeInput] = useState<string | null>(null);

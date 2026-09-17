@@ -37,6 +37,10 @@ const snapshot = {
 } as HostResourceSnapshotV1;
 
 vi.mock("@/api/queries.js", () => ({
+  resolveTargetOwner: (owner?: unknown) =>
+    owner && typeof owner === "object" && "generation" in owner
+      ? (owner as { profileId: string; generation: number })
+      : undefined,
   useGlobalConfig: () => ({ data: { ui: {} } }),
   useHostMetrics: () => ({ data: undefined }),
   useHostResourceAlerts: () => ({ data: [] }),

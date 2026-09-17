@@ -3,6 +3,9 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Pause, Play, RotateCcw, Trash2 } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
+import { readServerProfiles, type ServerProfile } from "@/api/server-config.js";
+import { getConnectionSnapshot } from "@/api/connections.js";
+import { useWorkbenchSelectionsStore } from "@/stores/workbench-selections.js";
 import {
   UsageFilters,
   UsageOverview,
@@ -85,6 +88,25 @@ function parseUtcDateInput(value: string): number | undefined {
 
 export function UsagePage() {
   const [params, setParams] = useSearchParams();
+  const profilesResult = readServerProfiles();
+  const profiles: ServerProfile[] =
+    profilesResult.status === "available" ? profilesResult.profiles : [];
+
+  const profileIdParam = params.get("profileId");
+  const selectedProfileId =
+    profileIdParam ||
+    useWorkbenchSelectionsStore.getState().settingsProfileId ||
+    profiles[0]?.id ||
+    null;
+  const selectedProfile =
+    profiles.find((p) => p.id === selectedProfileId) ?? null;
+  const usageSnapshot = selectedProfileId
+    ? getConnectionSnapshot(selectedProfileId)
+    : null;
+  const usageOwner = selectedProfileId
+    ? usageSnapshot?.owner ?? { profileId: selectedProfileId, generation: 1 }
+    : undefined;
+
   const tabRefs = useRef<Record<UsageView, HTMLButtonElement | null>>({
     overview: null,
     sessions: null,
@@ -104,8 +126,11 @@ export function UsagePage() {
       ? selected
       : { ...DEFAULT_QUERY, ...selected };
   }, [params]);
-  const { data: summary, isLoading, error } = useUsageSummary(query);
-  const { data: settings } = useUsageSettings();
+  const { data: summary, isLoading, error } = useUsageSummary(
+    query,
+    usageOwner,
+  );
+  const { data: settings } = useUsageSettings(usageOwner);
   const sessionQuery = useMemo<UsageSessionQuery>(
     () => ({
       from: summary?.range.from,
@@ -119,15 +144,16 @@ export function UsagePage() {
   const sessions = useUsageSessions(
     sessionQuery,
     view === "sessions" && settings?.enabled !== false,
+    usageOwner,
   );
   const sessionDetail = useUsageSession(
     selectedSessionId,
     view === "sessions" && settings?.enabled !== false,
+    usageOwner,
   );
-  const updateSettings = useUpdateUsageSettings();
-  const deleteAll = useDeleteUsageData();
-  const deleteRange = useDeleteUsageRange();
-
+  const updateSettings = useUpdateUsageSettings(usageOwner);
+  const deleteAll = useDeleteUsageData(usageOwner);
+  const deleteRange = useDeleteUsageRange(usageOwner);
   const updateQuery = (next: UsageSummaryQuery) => {
     const applyViewState = (nextParams: URLSearchParams) => {
       if (view === "sessions") nextParams.set("view", "sessions");
@@ -154,12 +180,26 @@ export function UsagePage() {
     updateQuery({ ...query, from, to, window: undefined, bucket: "day" });
   };
   const confirmDelete = (rangeOnly: boolean) => {
-    const message = rangeOnly
-      ? "Delete the selected UTC date range? This cannot be undone."
-      : "Delete all Codex usage aggregates? This cannot be undone.";
+    const targetOwnerSnapshot = usageOwner;
+    const targetRange =
+      rangeOnly && query.from !== undefined && query.to !== undefined
+        ? { from: query.from, to: query.to }
+        : null;
+    const serverLabel = selectedProfile
+      ? ` from server "${selectedProfile.name}"`
+      : "";
+    const message = targetRange
+      ? `Delete the selected UTC date range${serverLabel}? This cannot be undone.`
+      : `Delete all Codex usage aggregates${serverLabel}? This cannot be undone.`;
     if (!window.confirm(message)) return;
-    if (rangeOnly && query.from !== undefined && query.to !== undefined) {
-      deleteRange.mutate({ from: query.from, to: query.to });
+    if (
+      targetOwnerSnapshot?.profileId !== usageOwner?.profileId ||
+      targetOwnerSnapshot?.generation !== usageOwner?.generation
+    ) {
+      return;
+    }
+    if (targetRange) {
+      deleteRange.mutate(targetRange);
     } else {
       deleteAll.mutate();
     }
@@ -220,7 +260,7 @@ export function UsagePage() {
     new Set(
       [
         query.model,
-        ...(sessions.data?.sessions.map((session) => session.model) ?? []),
+        ...(sessions.data?.sessions.map((session: { model?: string | null }) => session.model) ?? []),
       ].filter((model): model is string => Boolean(model)),
     ),
   ).sort();
@@ -250,12 +290,42 @@ export function UsagePage() {
   return (
     <AppLayout title="Usage">
       <div className="mx-auto max-w-7xl space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] pb-3">
+          <div className="flex flex-wrap items-center gap-3">
             <p className="text-xs text-[var(--color-text-muted)]">
               Privacy-safe Codex response aggregates. No prompts, responses, or
               raw telemetry payloads are shown.
             </p>
+            {profiles.length > 0 && (
+              <div className="flex items-center gap-2">
+                <label
+                  htmlFor="usage-server-select"
+                  className="text-xs font-medium text-[var(--color-text-muted)]"
+                >
+                  Server:
+                </label>
+                <select
+                  id="usage-server-select"
+                  className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1 text-xs text-[var(--color-text)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+                  value={selectedProfileId ?? ""}
+                  onChange={(e) => {
+                    const nextParams = new URLSearchParams(params);
+                    if (e.target.value) {
+                      nextParams.set("profileId", e.target.value);
+                    } else {
+                      nextParams.delete("profileId");
+                    }
+                    setParams(nextParams);
+                  }}
+                >
+                  {profiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.url})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <Button variant="ghost" size="sm" onClick={reset}>

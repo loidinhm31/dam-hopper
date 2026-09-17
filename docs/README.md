@@ -16,6 +16,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)** — Profile-qualified IDE resources, federated search/replace, previews, and target-aware Git
 - **[Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)** — Owner-qualified terminal identity, persistence, workflow reveal, notifications, and diagnostics
 - **[Phase 05 Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md)** — Owner-bound Agent Store, multi-profile ports/tunnels, Browser target trust, and incarnation-safe terminal handoff
+- **[Phase 06 Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)** — Separate preference source and Settings target, owner-qualified usage, host-resource alerts, and revision-fenced suspend actions
 - **[Frontend Components](./frontend-components.md)** — Shared React component architecture and host lifecycle
 - **[Workflow Context Surface](./workflow-context-surface.md)** — Responsive Plan/item details, notes, and inline editing
 - **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries

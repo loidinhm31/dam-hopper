@@ -1,16 +1,17 @@
 # System Architecture
 
-## Unified-profile workbench (Phases 00–05; Phase 05 implemented 2026-09-17)
+## Unified-profile workbench (Phases 00–06; Phase 06 implemented 2026-09-17)
 
 This is the frontend ownership cutover for the unified workbench. It is
 separate from the backend workspace-registry redesign later in this document.
-Phases 00–05 are implemented; later phases remain plan-gated. The Phase 03
-files/editor/search/Git contract, Phase 04 terminal/workflow contract, and
-Phase 05 agents/ports/Browser contract are summarized in their dedicated
-workbench guides:
+Phases 00–06 are implemented; later phases remain plan-gated. The Phase 03
+files/editor/search/Git contract, Phase 04 terminal/workflow contract, Phase 05
+agents/ports/Browser contract, and Phase 06 preferences/settings/usage/host
+contract are summarized in their dedicated workbench guides:
 - [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)
 - [Phase 04: Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)
 - [Phase 05: Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md)
+- [Phase 06: Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)
 
 - `DamHopperApp` mounts one shell and route tree even when profiles are empty,
   offline, login-required, or unsupported. Startup reads profiles and launches
@@ -264,6 +265,74 @@ from another profile or a version string.
 
 The detailed source map and maintenance invariants are in the
 [Phase 05 Agents, Ports, and Browser guide](./phase-05-agents-ports-and-browser.md).
+
+### Phase 06 preferences, Settings, usage, and host resources (2026-09-17)
+
+Phase 06 closes the unified-profile ownership boundary for the remaining
+browser-facing settings and host surfaces. It does not create a multi-workspace
+server model: each profile still owns its configuration, usage store, host
+monitor, idle-suspend coordinator, fleet, and revisions.
+
+**Independent selectors.** `useWorkbenchSelectionsStore` persists
+`preferencesProfileId`, `settingsProfileId`, and `browserTargetProfileId`
+independently under the existing preferences-source record plus the explicit
+Settings target key. The preference source supplies only the allowlisted
+workbench UI state. The Settings target supplies global/workspace configuration,
+maintenance, usage setup, and host policy. Project navigation changes neither.
+Removing a preference source retains its last safe snapshot with
+`source-removed`; removing a Settings target clears that selection. Profile
+deletion also drops that profile's host-alert presentation state.
+
+**Captured preference writes.** `stores/settings.ts` captures
+`ConnectionRef { profileId, generation }`, the bound global-config client, and
+an edit revision when a debounced allowlisted patch is scheduled. The 500 ms
+timer coalesces local edits; a serialized save chain never reroutes a pending
+or already-dispatched write through a later profile. Source changes cancel only
+undispatched work. Late success and rollback apply only to the captured source
+and current edit revision; an unavailable source keeps the last safe snapshot
+and disables remote writes.
+
+**Settings and config.** `SettingsPage` labels both selectors with the profile
+name and endpoint. `GlobalConfigEditor`, `ConfigEditor`, maintenance actions,
+workspace TOML import/export, usage setup, and idle-suspend timing receive the
+selected `OwnerInput`. Import captures the target and connection generation
+before confirmation and file reading, keeps the 1 MiB browser limit, and
+rejects a changed target before dispatch. Target-local query invalidation
+prevents config, project, workspace, and cache data from crossing profiles.
+
+**Usage.** `UsagePage` resolves `profileId` from the URL (then Settings target
+and configured fallback), and retains it in deep links with `view`, `session`,
+and `cursor`. Summary, session, health, setup, settings, mutation, and delete
+hooks use `profileQueryKey(owner, ...)`. Session list/detail polling runs only
+for visible documents, and destructive confirmation retains the captured owner
+and range.
+
+**Host and suspend.** `HostResourcePopover` resolves an explicit owner before
+the Settings target and active profile. Snapshot, alert history, compatibility
+metrics, idle-suspend status, and `UiConfig.hostResourcePinnedMount` updates
+remain owner-local. The host bridge validates resource evidence and patches
+only the event owner's query keys. `use-host-resource-alert-presentation.ts`
+maintains unread incident versions globally and per profile, keyed by
+`incidentId`, with bounded presentation state.
+
+`HostIdleSuspendStatus` presents server-authoritative fleet/timing/measurement
+state without turning unknown values into quiet or zero. `ForceSleepDialog`
+captures owner, endpoint label, generation, fleet snapshot, status revision,
+and request ID before confirmation. Stale connection/revision conflicts require
+fresh review; active managed sessions require explicit confirmation; ambiguous
+force-suspend POSTs are not retried. Existing actor, origin, no-auth, helper,
+inhibitor, and backend revision guards remain unchanged.
+
+```text
+profile ConnectionRef
+  -> owner-qualified React Query key + bound API client
+  -> Settings / Usage / Host read or mutation
+  -> owner-scoped cache patch and invalidation
+  -> REST snapshot remains reconciliation authority
+```
+
+The complete source map and privacy/safety limits are in the
+[Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md).
 
 ## Proposed concurrent runtime cutover (2026-09-16; not implemented)
 
@@ -3933,19 +4002,25 @@ prove Tailscale reachability or firewall/ACL isolation for the current unit.
   method is optional and remains a separate administrator decision after confirming
   a single process owns the port and live SQLite files.
 
-## Host resource monitoring (current delivery; remediation deferred)
+## Host resource monitoring (current delivery; generic remediation deferred)
 
-The current delivery boundary is monitoring-only. Phase 03 implements one
-shared cached monitor, the compatible legacy metrics projection, versioned
-read-only snapshot and alert APIs, and bounded alert events. Phase 06 implements
-the in-app diagnosis UI. Phase 07 packages, validates, and rolls out only those
-observation surfaces. It must not enable, package, exercise, or claim support
-for host mutation.
+The generic host-resource delivery boundary is monitoring-only. Phase 03
+implements one shared cached monitor, the compatible legacy metrics projection,
+versioned read-only snapshot and alert APIs, and bounded alert events. Phase 06
+implements the in-app diagnosis UI and integrates the separate existing
+idle-suspend status/manual force-suspend action. That action remains governed
+by the idle-suspend actor, origin, fleet, and revision contract; it does not
+enable generic host mutation. Phase 07 packages, validates, and rolls out only
+these observation surfaces and must not enable, package, exercise, or claim
+support for generic host mutation.
 
 The top-nav host-resource popover presents the cached snapshot, bounded mixed
-alert history, and diagnostic evidence, with no remediation controls. The
-legacy memory `alert` remains stable; the snapshot's additive `currentAlerts`
-array carries concurrent active thermal/disk incidents. A valid
+alert history, and diagnostic evidence, with no generic resource-remediation
+controls. It may also display the separate authenticated idle-suspend status
+and existing manual force-suspend action; that action remains governed by the
+idle-suspend actor/origin/fleet/revision contract. The legacy memory `alert`
+remains stable; the snapshot's additive `currentAlerts` array carries
+concurrent active thermal/disk incidents. A valid
 `host:alertChanged` event updates only its matching cached incident and
 invalidates the read-only queries; recovery (`resolvedAt`, including zero)
 removes only that incident. The browser rejects malformed or unexpected nested
