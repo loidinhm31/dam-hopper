@@ -51,10 +51,21 @@ makes no runtime-qualification claim; Phases 01–08 and S01–S13 remain future
 implementation and qualification work. Qualified web and native release gates
 remain independent.
 
-The backend workspace-registry redesign in the next section is a separate
-proposal; it is not part of this G0 baseline and must not be treated as sharing
-its identity, migration or acceptance gate.
+### Phase 01 ownership and connection foundation (2026-09-17)
 
+Phase 01 delivers the explicit ownership runtime and connection foundation:
+- `packages/ui/src/api/ownership.ts`: canonical identity types (`ProfileId`, `ConnectionRef`, `ProjectRef`, `ProjectTargetRef`, `TerminalRef`, `TerminalInstanceRef`, `ResourceBinding`, `Owned<T>`) and tuple key builders (`projectKey`, `projectTargetKey`, `terminalKey`, `terminalInstanceKey`, `connectionKey`). `normalizeProjectTargetRef` preserves profile identity; `toServerProjectTarget` projects server wire payloads without leaking `profileId`.
+- `packages/ui/src/api/connections.ts`: keyed external store with immutable `ConnectionSnapshot`, per-profile generation, intent tracking, exponential backoff reconnect (1s–30s cap), and `setConnectionRegistryQueryClient` for dependency injection. Validates server `workbenchProtocol: 2` in `GET /api/auth/status` before WS initialization.
+- `server/src/api/auth.rs`: `status()` route returns `workbenchProtocol: 2` in both dev and authenticated modes.
+- `packages/ui/src/api/ws-transport.ts`: per-instance generation, external cancellation via `TransportInvokeOptions`, active `AbortController` tracking, credentials `"omit"` for REST invoke and PNG upload, and listener cleanup on `destroy()`.
+- `packages/ui/src/api/client.ts`: `createApiClient(owner, transport)` factory and concrete `ApiClient` interface. Methods project wire targets and assert owner matches.
+- `packages/ui/src/api/query-client.ts` & `workflow-queries.ts`: canonical query key factories (`profileQueryKey`, `profileProjectsQueryKey`, etc.) and owner-aware query/mutation hooks.
+- `packages/ui/src/hooks/use-sse.ts` & `use-sse-events.ts`: `IpcEvent` envelopes with profile and generation context; scoped cache invalidation per profile; `installTransportBridge` and `removeProfileListeners`.
+- Tests: 78/78 focused UI unit tests, 200/200 UI API tests, 1699/1699 full UI suite tests, and 5/5 backend auth status tests pass cleanly with zero TypeScript errors. Code review cycle 2 approved at 9/10 with 0 critical issues.
+
+The backend workspace-registry redesign in the next section is a separate
+proposal; it is not part of this baseline and must not be treated as sharing
+its identity, migration or acceptance gate.
 
 ## Proposed concurrent runtime cutover (2026-09-16; not implemented)
 

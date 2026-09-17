@@ -3,6 +3,7 @@
  */
 
 import { getTransport, reconfigureTransport } from "./transport.js";
+import { connectProfile } from "./connections.js";
 import { IdleTransport } from "./idle-transport.js";
 import { WsTransport } from "./ws-transport.js";
 import {
@@ -10,7 +11,6 @@ import {
   resetTransportListeners,
 } from "@/hooks/use-sse.js";
 import { isNativeWindowsHost } from "./server-config.js";
-
 /**
  * Reinitialize the transport with a new server URL.
  * Destroys the old WebSocket connection, creates a new one, and resets event listeners.
@@ -21,6 +21,9 @@ export function reinitializeTransport(
   newServerUrl?: string,
   profileId?: string,
 ): void {
+  if (profileId) {
+    void connectProfile(profileId).catch(() => {});
+  }
   const transportUrl = resolveTransportUrl(newServerUrl);
 
   // 1. Get the current transport and destroy it (closes WebSocket, cleans up listeners)

@@ -8,6 +8,7 @@ import {
   getTransport,
   getTransportGeneration,
   subscribeTransportChanges,
+  type Transport,
 } from "../api/transport.js";
 import type {
   AlertSeverity,
@@ -23,12 +24,16 @@ import {
   resetTerminalSessionIncarnations,
 } from "@/lib/terminal-incarnation-state.js";
 import { useEditorStore } from "@/stores/editor.js";
+import type { ConnectionRef, ProfileId } from "../api/ownership.js";
+import { profileQueryKey, profileQueryPrefix } from "../api/query-client.js";
 
 export type IpcStatus = ConnectionStatus;
 
-export interface IpcEvent {
+export interface IpcEvent<T = unknown> {
+  profileId?: ProfileId;
+  generation?: number;
   type: string;
-  data: unknown;
+  data: T;
   timestamp: number;
 }
 
@@ -109,24 +114,70 @@ const IPC_STATUSES = new Set<IpcStatus>([
 
 type Listener = (event: IpcEvent) => void;
 
-const listeners = new Map<string, Set<Listener>>();
+const globalListeners = new Map<string, Set<Listener>>();
+const profileListeners = new Map<ProfileId, Map<string, Set<Listener>>>();
 
-export function subscribeIpc(type: string, cb: Listener): () => void {
-  if (!listeners.has(type)) listeners.set(type, new Set());
-  listeners.get(type)!.add(cb);
-  return () => listeners.get(type)?.delete(cb);
+export function subscribeIpc(type: string, cb: Listener): () => void;
+export function subscribeIpc(
+  profileId: ProfileId,
+  type: string,
+  cb: Listener,
+): () => void;
+export function subscribeIpc(
+  profileIdOrType: ProfileId | string,
+  typeOrCb: string | Listener,
+  maybeCb?: Listener,
+): () => void {
+  if (typeof typeOrCb === "function") {
+    const type = profileIdOrType;
+    const cb = typeOrCb;
+    if (!globalListeners.has(type)) globalListeners.set(type, new Set());
+    globalListeners.get(type)!.add(cb);
+    return () => globalListeners.get(type)?.delete(cb);
+  } else {
+    const profileId = profileIdOrType;
+    const type = typeOrCb;
+    const cb = maybeCb!;
+    if (!profileListeners.has(profileId)) {
+      profileListeners.set(profileId, new Map());
+    }
+    const typeMap = profileListeners.get(profileId)!;
+    if (!typeMap.has(type)) typeMap.set(type, new Set());
+    typeMap.get(type)!.add(cb);
+    return () => typeMap.get(type)?.delete(cb);
+  }
+}
+export function subscribeAllIpc(type: string, cb: Listener): () => void {
+  return subscribeIpc(type, cb);
 }
 
-function dispatch(type: string, data: unknown) {
-  const event: IpcEvent = { type, data, timestamp: Date.now() };
-  listeners.get(type)?.forEach((cb) => cb(event));
-  listeners.get("*")?.forEach((cb) => cb(event));
+export function removeProfileListeners(profileId: ProfileId): void {
+  profileListeners.delete(profileId);
+}
+
+function dispatch(type: string, data: unknown, owner?: ConnectionRef) {
+  const event: IpcEvent = {
+    profileId: owner?.profileId,
+    generation: owner?.generation,
+    type,
+    data,
+    timestamp: Date.now(),
+  };
+  if (owner?.profileId) {
+    const typeMap = profileListeners.get(owner.profileId);
+    if (typeMap) {
+      typeMap.get(type)?.forEach((cb) => cb(event));
+      typeMap.get("*")?.forEach((cb) => cb(event));
+    }
+  }
+  globalListeners.get(type)?.forEach((cb) => cb(event));
+  globalListeners.get("*")?.forEach((cb) => cb(event));
 }
 
 /** Relay the active WebSocket status through the stable listener bus. */
-export function publishTransportStatus(status: unknown): void {
+export function publishTransportStatus(status: unknown, owner?: ConnectionRef): void {
   if (typeof status === "string" && IPC_STATUSES.has(status as IpcStatus)) {
-    dispatch("transport:status", status);
+    dispatch("transport:status", status, owner);
   }
 }
 
@@ -378,6 +429,64 @@ export function initTransportListeners(): void {
     publishTransportStatus(transport.getStatus());
   }
 }
+export function installTransportBridge(
+  owner: ConnectionRef,
+  transport: Transport,
+  qc?: QueryClient,
+): () => void {
+  const bridgeUnsubs: Array<() => void> = [];
+
+  for (const channel of PUSH_EVENT_CHANNELS) {
+    const unsub = transport.onEvent(channel, (data: unknown) => {
+      dispatch(channel, data, owner);
+
+      if (qc) {
+        if (channel === "workspace:changed") {
+          void handleWorkspaceChanged(qc, owner);
+        } else if (channel === "config:changed") {
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(owner, "config"),
+          });
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(owner, "projects"),
+          });
+        } else if (channel === "terminal:changed") {
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(owner, "terminal-sessions"),
+          });
+        } else if (channel === "status:changed") {
+          try {
+            const { projectName } = data as { projectName: string };
+            void qc.invalidateQueries({
+              queryKey: profileQueryKey(owner, "git", projectName, null),
+            });
+            void qc.invalidateQueries({
+              queryKey: profileQueryKey(owner, "projects"),
+            });
+          } catch {
+            void qc.invalidateQueries({
+              queryKey: profileQueryKey(owner, "projects"),
+            });
+          }
+        }
+      }
+    });
+    bridgeUnsubs.push(unsub);
+  }
+
+  if (hasWsStatus(transport)) {
+    bridgeUnsubs.push(
+      transport.onStatusChange((status) => {
+        publishTransportStatus(status, owner);
+      }),
+    );
+  }
+
+  return () => {
+    bridgeUnsubs.forEach((fn) => fn());
+    bridgeUnsubs.length = 0;
+  };
+}
 
 /**
  * Reset transport listeners — call before reconfigureTransport() so the new
@@ -421,9 +530,16 @@ export function handleWorkspaceChanged(
     QueryClient,
     "invalidateQueries" | "removeQueries" | "resetQueries" | "setQueriesData"
   >,
+  owner?: ConnectionRef,
 ): Promise<void> {
   return removeExplorerLanguageScanCaches(queryClient).then(() => {
-    void queryClient.invalidateQueries();
+    if (owner) {
+      void queryClient.invalidateQueries({
+        queryKey: profileQueryPrefix(owner.profileId),
+      });
+    } else {
+      void queryClient.invalidateQueries();
+    }
     void queryClient.invalidateQueries({ queryKey: ["known-workspaces"] });
   });
 }
