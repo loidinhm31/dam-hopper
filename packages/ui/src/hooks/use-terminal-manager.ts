@@ -9,6 +9,7 @@ import { getConnectionSnapshot, getApi } from "@/api/connections.js";
 import { profileQueryKey } from "@/api/query-client.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { useTerminalSessions, useProjects } from "@/api/queries.js";
+import { useAggregatedTerminalSessions } from "@/hooks/use-aggregated-terminal-sessions.js";
 import { api, isProjectTargetError } from "@/api/client.js";
 import {
   markProjectTargetUnavailable,
@@ -438,8 +439,16 @@ export function useTerminalManager(
     [profileId],
   );
   const { tree, freeTerminals, isLoading } = useTerminalTree(queryOptions);
-  const { data: sessions = [], isSuccess: hasTerminalSessionSnapshot } =
+  const { data: profileSessions = [], isSuccess: hasProfileSessionSnapshot } =
     useTerminalSessions(queryOptions);
+  const {
+    sessions: aggregatedSessions,
+    isSuccess: hasAggregatedSnapshot,
+  } = useAggregatedTerminalSessions();
+  const sessions =
+    aggregatedSessions.length > 0 ? aggregatedSessions : profileSessions;
+  const hasTerminalSessionSnapshot =
+    hasAggregatedSnapshot || hasProfileSessionSnapshot;
   const { data: projects = [] } = useProjects(queryOptions);
   const activeTargetByProject = useProjectTargetStore(
     (state) => state.activeTargetByProject,
@@ -1380,6 +1389,11 @@ export function useTerminalManager(
     setActiveTab(sessionId);
     setSelection({ type: "terminal", sessionId });
 
+    const tabProfileId =
+      openTabs.find((t) => t.sessionId === sessionId)?.profileId ??
+      sessionMap.get(sessionId)?.profileId ??
+      profileId;
+
     setMountedSessions((prev) => {
       const meta = findSessionMeta(sessionId, tree, sessionMap);
       if (meta) {
@@ -1391,8 +1405,10 @@ export function useTerminalManager(
             command: meta.command,
             cwd: meta.cwd,
             worktreePath: meta.worktreePath,
-            profileId,
-            terminalRef: profileId ? { profileId, id: sessionId } : undefined,
+            profileId: tabProfileId,
+            terminalRef: tabProfileId
+              ? { profileId: tabProfileId, id: sessionId }
+              : undefined,
           }),
         );
       }

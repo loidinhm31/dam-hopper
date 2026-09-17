@@ -564,4 +564,32 @@ describe("deriveTerminalAutoAttachState", () => {
 
     expect(result.activeTab).toBe("free:new");
   });
+
+  it("auto-attaches sessions from multiple profiles and preserves their respective profileIds", () => {
+    const sessionA = {
+      ...session("terminal:project-a:_:1", { project: "project-a", command: "bash", startedAt: 1 }),
+      profileId: "profile-a",
+    };
+    const sessionB = {
+      ...session("terminal:project-b:_:2", { project: "project-b", command: "bash", startedAt: 2 }),
+      profileId: "profile-b",
+    };
+
+    const result = derive({
+      sessions: [sessionA, sessionB],
+      openTabs: [],
+      mountedSessions: [],
+      profileId: "profile-a",
+    });
+
+    expect(result.openTabs).toHaveLength(2);
+    expect(result.openTabs[0].sessionId).toBe("terminal:project-a:_:1");
+    expect(result.openTabs[0].profileId).toBe("profile-a");
+    expect(result.openTabs[1].sessionId).toBe("terminal:project-b:_:2");
+    expect(result.openTabs[1].profileId).toBe("profile-b");
+
+    expect(result.mountedSessions).toHaveLength(2);
+    expect(result.mountedSessions[0].profileId).toBe("profile-a");
+    expect(result.mountedSessions[1].profileId).toBe("profile-b");
+  });
 });
