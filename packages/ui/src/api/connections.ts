@@ -8,9 +8,17 @@ import {
   type ConnectionRef,
   type ProfileId,
   ConnectionOwnerError,
+  connectionKey,
 } from "./ownership.js";
-import { getProfiles, getAuthToken, isSameOriginProfile } from "./server-config.js";
-import { installTransportBridge, removeProfileListeners } from "../hooks/use-sse.js";
+import {
+  getProfiles,
+  getAuthToken,
+  isSameOriginProfile,
+} from "./server-config.js";
+import {
+  installTransportBridge,
+  removeProfileListeners,
+} from "../hooks/use-sse.js";
 
 let registryQueryClient: QueryClient | null = null;
 
@@ -72,13 +80,16 @@ const entries = new Map<ProfileId, ConnectionEntry>();
 const tombstones = new Set<ProfileId>();
 const inFlightConnects = new Map<ProfileId, Promise<void>>();
 const listeners = new Set<() => void>();
+const mediaClientIdsByOwner = new Map<string, string>();
 function notifyListeners(): void {
   for (const listener of listeners) {
     listener();
   }
 }
 
-function freezeSnapshot(entry: Omit<ConnectionEntry, "snapshot">): ConnectionSnapshot {
+function freezeSnapshot(
+  entry: Omit<ConnectionEntry, "snapshot">,
+): ConnectionSnapshot {
   return Object.freeze({
     owner: Object.freeze({
       profileId: entry.profileId,
@@ -91,7 +102,10 @@ function freezeSnapshot(entry: Omit<ConnectionEntry, "snapshot">): ConnectionSna
   });
 }
 
-function getOrCreateEntry(profileId: ProfileId, serverUrl = ""): ConnectionEntry {
+function getOrCreateEntry(
+  profileId: ProfileId,
+  serverUrl = "",
+): ConnectionEntry {
   let entry = entries.get(profileId);
   if (!entry) {
     const base = {
@@ -117,7 +131,9 @@ function getOrCreateEntry(profileId: ProfileId, serverUrl = ""): ConnectionEntry
 
 function updateSnapshot(
   profileId: ProfileId,
-  patch: Partial<Pick<ConnectionEntry, "status" | "intent" | "serverUrl" | "error">>,
+  patch: Partial<
+    Pick<ConnectionEntry, "status" | "intent" | "serverUrl" | "error">
+  >,
 ): void {
   const entry = entries.get(profileId);
   if (!entry) return;
@@ -146,7 +162,12 @@ function isStale(profileId: ProfileId, generation: number): boolean {
 
 function scheduleReconnect(profileId: ProfileId): void {
   const entry = entries.get(profileId);
-  if (!entry || !entry.intent || entry.reconnectTimer || tombstones.has(profileId)) {
+  if (
+    !entry ||
+    !entry.intent ||
+    entry.reconnectTimer ||
+    tombstones.has(profileId)
+  ) {
     return;
   }
   const delay = entry.backoffMs;
@@ -185,7 +206,9 @@ function handleDrop(profileId: ProfileId, generation: number): void {
   }
 }
 
-export function getConnectionSnapshot(profileId: ProfileId): ConnectionSnapshot | null {
+export function getConnectionSnapshot(
+  profileId: ProfileId,
+): ConnectionSnapshot | null {
   if (tombstones.has(profileId)) return null;
   const entry = entries.get(profileId);
   return entry ? entry.snapshot : null;
@@ -212,7 +235,11 @@ export function connectProfile(profileId: ProfileId): Promise<void> {
   }
 
   const existing = entries.get(profileId);
-  if (existing?.status === "connected" && existing.intent && existing.transport) {
+  if (
+    existing?.status === "connected" &&
+    existing.intent &&
+    existing.transport
+  ) {
     return Promise.resolve();
   }
 
@@ -254,7 +281,8 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
         status: "unsupported",
         intent: false,
         serverUrl: profile.url,
-        error: "Remote connections are supported only on Browser and Windows desktop.",
+        error:
+          "Remote connections are supported only on Browser and Windows desktop.",
       });
       return;
     }
@@ -328,7 +356,10 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
       return;
     }
 
-    const data = (await res.json()) as { authenticated?: boolean; workbenchProtocol?: unknown };
+    const data = (await res.json()) as {
+      authenticated?: boolean;
+      workbenchProtocol?: unknown;
+    };
     if (isStale(profileId, nextGen)) return;
 
     if (data.workbenchProtocol !== 2) {
@@ -344,7 +375,8 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
     if (isStale(profileId, nextGen)) return;
     updateSnapshot(profileId, {
       status: "offline",
-      error: fetchErr instanceof Error ? fetchErr.message : "Server unreachable",
+      error:
+        fetchErr instanceof Error ? fetchErr.message : "Server unreachable",
     });
     scheduleReconnect(profileId);
     return;
@@ -352,7 +384,10 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
 
   if (isStale(profileId, nextGen)) return;
 
-  const owner: ConnectionRef = Object.freeze({ profileId, generation: nextGen });
+  const owner: ConnectionRef = Object.freeze({
+    profileId,
+    generation: nextGen,
+  });
   const transport = new WsTransport({
     baseUrl: cleanUrl,
     profileId,
@@ -501,6 +536,24 @@ export function getApi(owner: ConnectionRef): ApiClient {
   return entry.api;
 }
 
+/** Returns the in-memory random UUIDv4 mediaClientId bound to this ConnectionRef. */
+export function getMediaClientId(owner: ConnectionRef): string {
+  const key = connectionKey(owner);
+  const existing = mediaClientIdsByOwner.get(key);
+  if (existing) return existing;
+  const created = crypto.randomUUID();
+  mediaClientIdsByOwner.set(key, created);
+  return created;
+}
+
+/** Returns the active mediaClientId for a connected profile, if available. */
+export function getMediaClientIdForProfile(
+  profileId: ProfileId,
+): string | null {
+  const snap = getConnectionSnapshot(profileId);
+  if (!snap) return null;
+  return getMediaClientId(snap.owner);
+}
 export function subscribeConnections(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
@@ -544,9 +597,12 @@ export function resetConnections(): void {
   tombstones.clear();
   inFlightConnects.clear();
   listeners.clear();
+  mediaClientIdsByOwner.clear();
 }
 
-export function useConnectionSnapshot(profileId: ProfileId): ConnectionSnapshot | null {
+export function useConnectionSnapshot(
+  profileId: ProfileId,
+): ConnectionSnapshot | null {
   return useSyncExternalStore(
     subscribeConnections,
     () => getConnectionSnapshot(profileId),

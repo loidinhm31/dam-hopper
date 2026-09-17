@@ -1,10 +1,12 @@
 import {
   assertMediaSessionAuthorizationMode,
   assertMediaTransport,
+  createRemoteCleanupHandle,
   MediaSessionError,
   mediaTicketUrl,
   probeMediaTicket,
   readMediaErrorCode,
+  type RemoteCleanupHandle,
 } from "./media-session.js";
 import {
   getActiveProfile,
@@ -12,8 +14,17 @@ import {
   getServerUrl,
   normalizeServerUrl,
 } from "./server-config.js";
-import { normalizeProjectTarget, type ProjectTargetInput } from "./client.js";
-
+import {
+  normalizeProjectTarget,
+  toServerProjectTarget,
+  type ConnectionRef,
+  type ProjectTargetInput,
+} from "./client.js";
+import {
+  captureConnection,
+  getConnectionSnapshot,
+  getMediaClientId,
+} from "./connections.js";
 const IMAGE_TICKET_TIMEOUT_MS = 15_000;
 const STREAM_PATH = /^\/api\/fs\/image\/stream\/[A-Za-z0-9_-]+$/;
 
@@ -21,6 +32,7 @@ export interface ImagePreviewTicket {
   purpose: "preview";
   url: string;
   expiresAt: number;
+  cleanupHandle: RemoteCleanupHandle;
   revoke: () => Promise<void>;
 }
 
@@ -36,12 +48,13 @@ interface TicketResponse {
   streamPath: string;
   expiresAt: number;
   purpose: "preview";
-  authorizationMode: "session-cookie-v1";
+  authorizationMode: "session-cookie-v2";
 }
 
 interface RequestSnapshot {
   authToken: string | null;
-  profileId: string | null;
+  owner: ConnectionRef;
+  mediaClientId: string;
   serverOrigin: string;
 }
 
@@ -57,16 +70,41 @@ function throwIfAborted(
   throw ticketError(callerSignal?.aborted ? "ABORTED" : "TIMEOUT");
 }
 
-function requestSnapshot(): RequestSnapshot {
-  const profile = getActiveProfile();
-  const configuredUrl = normalizeServerUrl(profile?.url ?? getServerUrl());
+function resolveOwnerAndSnapshot(
+  target: ProjectTargetInput,
+  explicitOwner?: ConnectionRef,
+): RequestSnapshot {
+  const targetRef = normalizeProjectTarget(target);
+  let owner: ConnectionRef | undefined = explicitOwner;
+  if (!owner && targetRef.profileId) {
+    try {
+      owner = captureConnection(targetRef.profileId);
+    } catch {
+      const snap = getConnectionSnapshot(targetRef.profileId);
+      owner = snap?.owner;
+    }
+  }
+  if (!owner) {
+    const profile = getActiveProfile();
+    if (profile?.id) {
+      const snap = getConnectionSnapshot(profile.id);
+      owner = snap?.owner ?? { profileId: profile.id, generation: 1 };
+    } else {
+      owner = { profileId: "default", generation: 1 };
+    }
+  }
+  const snap = getConnectionSnapshot(owner.profileId);
+  const configuredUrl = normalizeServerUrl(
+    snap?.serverUrl ?? getActiveProfile()?.url ?? getServerUrl(),
+  );
   try {
     const serverUrl = new URL(configuredUrl);
     assertMediaTransport(serverUrl.origin);
     return {
       serverOrigin: serverUrl.origin,
-      authToken: getAuthToken(profile?.id),
-      profileId: profile?.id ?? null,
+      authToken: getAuthToken(owner.profileId),
+      owner,
+      mediaClientId: getMediaClientId(owner),
     };
   } catch (error) {
     if (error instanceof MediaSessionError) throw ticketError(error.code);
@@ -136,7 +174,10 @@ async function revokeTicket(
       credentials: "include",
       keepalive: true,
       headers: requestHeaders(snapshot.authToken),
-      body: JSON.stringify({ ticket }),
+      body: JSON.stringify({
+        ticket,
+        mediaClientId: snapshot.mediaClientId,
+      }),
     });
   } catch {
     // Cleanup is best effort; the ticket still expires server-side.
@@ -148,8 +189,10 @@ export async function issueImageTicket(
   target: ProjectTargetInput,
   path: string,
   signal?: AbortSignal,
+  owner?: ConnectionRef,
 ): Promise<ImagePreviewTicket> {
-  const snapshot = requestSnapshot();
+  const snapshot = resolveOwnerAndSnapshot(target, owner);
+  const targetRef = normalizeProjectTarget(target);
   const timeout = createTimeoutSignal(signal);
   let issuedTicket: string | null = null;
   try {
@@ -160,7 +203,11 @@ export async function issueImageTicket(
         credentials: "include",
         headers: requestHeaders(snapshot.authToken),
         signal: timeout.signal,
-        body: JSON.stringify({ ...normalizeProjectTarget(target), path }),
+        body: JSON.stringify({
+          ...toServerProjectTarget(targetRef),
+          path,
+          mediaClientId: snapshot.mediaClientId,
+        }),
       },
     );
     throwIfAborted(timeout.signal, signal);
@@ -183,11 +230,31 @@ export async function issueImageTicket(
     const url = mediaTicketUrl(issued.streamPath, snapshot.serverOrigin);
     await probeMediaTicket(url, timeout.signal);
     throwIfAborted(timeout.signal, signal);
+
+    const cleanupHandle = createRemoteCleanupHandle(
+      snapshot.owner,
+      issued.ticket,
+      async (cleanupSignal) => {
+        await fetch(`${snapshot.serverOrigin}/api/fs/image/tickets`, {
+          method: "DELETE",
+          credentials: "include",
+          keepalive: true,
+          headers: requestHeaders(snapshot.authToken),
+          body: JSON.stringify({
+            ticket: issued.ticket,
+            mediaClientId: snapshot.mediaClientId,
+          }),
+          signal: cleanupSignal,
+        });
+      },
+    );
+
     return {
       purpose: "preview",
       url,
       expiresAt: issued.expiresAt,
-      revoke: () => revokeTicket(snapshot, issued.ticket),
+      cleanupHandle,
+      revoke: () => cleanupHandle.cleanup(),
     };
   } catch (error) {
     if (issuedTicket) void revokeTicket(snapshot, issuedTicket);

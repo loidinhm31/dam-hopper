@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertMediaSessionAuthorizationMode,
   assertMediaTransport,
+  createRemoteCleanupHandle,
   MediaSessionError,
   mediaTicketUrl,
   probeMediaTicket,
@@ -24,14 +25,17 @@ describe("media session contract", () => {
     );
   });
 
-  it("rejects absent and unknown authorization modes", () => {
-    for (const mode of [undefined, "capability-v1", "session-cookie-v2"]) {
+  it("rejects absent and unknown authorization modes, accepting only session-cookie-v2", () => {
+    for (const mode of [undefined, "capability-v1", "session-cookie-v1"]) {
       expect(() => assertMediaSessionAuthorizationMode(mode)).toThrow(
         expect.objectContaining<Partial<MediaSessionError>>({
           code: "MEDIA_SESSION_UNSUPPORTED",
         }),
       );
     }
+    expect(() =>
+      assertMediaSessionAuthorizationMode("session-cookie-v2"),
+    ).not.toThrow();
   });
 
   it("only resolves an opaque, same-origin stream path", () => {
@@ -72,14 +76,22 @@ describe("media session contract", () => {
       .mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await revokeCurrentMediaSession("https://api.test", "secret-token");
+    await revokeCurrentMediaSession(
+      "https://api.test",
+      "secret-token",
+      "client-uuid-1",
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.test/api/fs/media-session",
       expect.objectContaining({
         method: "DELETE",
         credentials: "include",
-        headers: { Authorization: "Bearer secret-token" },
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ mediaClientId: "client-uuid-1" }),
       }),
     );
   });
@@ -90,16 +102,44 @@ describe("media session contract", () => {
       .mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await revokeCurrentMediaSession("http://api.test", "secret-token");
+    await revokeCurrentMediaSession(
+      "http://api.test",
+      "secret-token",
+      "client-uuid-2",
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://api.test/api/fs/media-session",
       expect.objectContaining({
         method: "DELETE",
         credentials: "include",
-        headers: { Authorization: "Bearer secret-token" },
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ mediaClientId: "client-uuid-2" }),
       }),
     );
+  });
+
+  it("creates a bounded, idempotent RemoteCleanupHandle", async () => {
+    const owner = { profileId: "p1", generation: 1 };
+    let cleanupCount = 0;
+    const handle = createRemoteCleanupHandle(owner, "ticket-123", async () => {
+      cleanupCount++;
+    });
+
+    expect(handle.owner).toBe(owner);
+    expect(handle.resourceId).toBe("ticket-123");
+    expect(handle.isRetired()).toBe(false);
+
+    await handle.cleanup();
+    expect(cleanupCount).toBe(1);
+    expect(handle.isRetired()).toBe(true);
+
+    // Idempotent: subsequent cleanup does not invoke callback again
+    await handle.cleanup();
+    expect(cleanupCount).toBe(1);
   });
 
   it("maps HEAD status and network failures to one redacted compatibility error", async () => {

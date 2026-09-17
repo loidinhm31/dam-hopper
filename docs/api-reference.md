@@ -253,11 +253,11 @@ when the former is unset. Directories are `0700` and final files `0600`.
 Non-root collection never escalates; an applicable helper audit is
 `permissionDenied` and can make the historical result partial.
 
-| Exit | Meaning |
-| ---: | --- |
-| `0` | Complete applicable historical evidence; bundle written. |
-| `2` | Partial historical evidence; valid bundle written. |
-| `1` | Serialization or secure-output failure; no path is printed. |
+| Exit | Meaning                                                     |
+| ---: | ----------------------------------------------------------- |
+|  `0` | Complete applicable historical evidence; bundle written.    |
+|  `2` | Partial historical evidence; valid bundle written.          |
+|  `1` | Serialization or secure-output failure; no path is printed. |
 
 See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
 for source paths, role applicability, fixed adapter limits, and output details.
@@ -712,6 +712,7 @@ audit-intent failures return a typed failure and do not invoke suspend.
 The helper records `wakeAfterSeconds: 0` in both intent and completion audit
 records. These details are internal to the enrolled helper and are not exposed
 as a browser-selectable path, device, command, suspend mode, or absolute time.
+
 #### Phase 04 helper audit v2 (internal diagnostics)
 
 The helper keeps one audit file at
@@ -741,7 +742,6 @@ audit is capped at 10,000 records. Overflow
 pruning retains the newest half via an exclusive mode-`0600` no-follow
 temporary file, syncs file and parent directory before atomic replacement, and
 removes the temporary file on failure.
-
 
 ### Deferred remediation backlog
 
@@ -1017,6 +1017,7 @@ The response is an array of operation results; target-scoped entries include
 `worktreePath`, and a failed entry can include `targetUnavailable: true` when
 the server confirmed that target disappeared. Generic request-level failures
 are not attributed to every requested target.
+
 ### Profile-owned file and search requests (Phase 03)
 
 The browser selects a profile-owned `ProjectTargetRef` before calling a
@@ -1044,7 +1045,6 @@ truncation or the aggregate cap as a warning.
 See [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)
 for the browser ownership, editor, replace, preview, and invalidation
 contract.
-
 
 ### Worktrees
 
@@ -1997,14 +1997,14 @@ results after edit, removal, logout, or replacement.
 
 ### Persistence breakdown
 
-| Key | Storage | Scope |
-| --- | --- | --- |
-| `damhopper_server_profiles` | `localStorage` | All profile metadata; shared by tabs |
-| `damhopper_profile_auth_v2_<id>` | `localStorage` | Endpoint-bound auth per profile |
-| `damhopper_active_profile_id` | `localStorage` | Compatibility/default endpoint input |
-| `dam-hopper:workspace-state` | Zustand persistence | Qualified `selectedProject` |
-| `dam-hopper:preferences-source:v1` | Zustand persistence | Independent preference/settings/browser IDs |
-| TanStack Query and connection state | Memory only | Owner/generation-qualified |
+| Key                                 | Storage             | Scope                                       |
+| ----------------------------------- | ------------------- | ------------------------------------------- |
+| `damhopper_server_profiles`         | `localStorage`      | All profile metadata; shared by tabs        |
+| `damhopper_profile_auth_v2_<id>`    | `localStorage`      | Endpoint-bound auth per profile             |
+| `damhopper_active_profile_id`       | `localStorage`      | Compatibility/default endpoint input        |
+| `dam-hopper:workspace-state`        | Zustand persistence | Qualified `selectedProject`                 |
+| `dam-hopper:preferences-source:v1`  | Zustand persistence | Independent preference/settings/browser IDs |
+| TanStack Query and connection state | Memory only         | Owner/generation-qualified                  |
 
 No client query cache is persisted to localStorage. The fresh-state reset
 removes allowlisted legacy browser-resource records, never calls
@@ -2098,6 +2098,7 @@ Response:
   "isBinary": false
 }
 ```
+
 **GET /api/fs/search?q=QUERY[&project=NAME&worktreePath=PATH&case=true&max=N]**
 Search text content and return `{ query, matches, truncated }`. Each match
 contains a project-relative path, line, column, and text context. The browser
@@ -2110,89 +2111,116 @@ workspace-aware transports; the browser's **All connected profiles** mode
 performs one owner-bound request per eligible profile and applies a 500-match
 aggregate cap.
 
+### Session-Bound Media Capabilities (v2)
 
-### Session-Bound Media Capabilities
+Image preview and video playback/download use opaque ticket URLs and a
+namespaced, server-issued media-session cookie. Ticket issue and revocation
+routes require Bearer authentication. A media stream URL never contains a
+Bearer token. The complete Phase 07 lifecycle, cleanup, and encryption
+contract is in the [Phase 07 guide](./phase-07-media-isolation-and-encryption.md).
 
-Video playback/download and image preview use opaque ticket URLs and a
-server-issued media-session cookie when the browser can send it. Ticket issue
-requests require Bearer authentication and set `damhopper-media-session`.
-Same-origin streams use the matching cookie; allowlisted cross-origin native
-media uses the short-lived ticket capability because `SameSite=Lax` cookies are
-not sent cross-site. Tickets remain bound to the authenticated actor/session,
-purpose, workspace generation, and revalidated file identity; expiry and logout
-revocation still apply. Do not put a Bearer token in a media URL. Bearer remains
-required on issue/revoke/session-revoke routes.
+#### Client binding and cookie
 
-The media cookie is host-only `HttpOnly; SameSite=Lax; Path=/api/fs` and
-non-`Secure` for HTTP compatibility. The auth fallback cookie is host-only
-`HttpOnly; SameSite=Strict; Path=/`, also non-`Secure`. Each successful image or
-video issuance creates or reuses that actor's media session, returns the opaque
-ticket response, and sets or refreshes the media cookie. Ticket idle lifetime is
-15 minutes; media-session idle lifetime is 30 minutes; both have an eight-hour
-absolute lifetime. Successful issuance and fully validated stream responses can
-refresh idle lifetime but never the absolute deadline. Context changes, expiry,
-and explicit revocation remove affected tickets.
+Every ticket issue, ticket revoke, and media-session logout request requires a
+`mediaClientId` UUIDv4. The server stores its canonical lower-case,
+hyphenated form and names the cookie:
 
-**DELETE /api/fs/media-session**
+```text
+damhopper-media-session-<canonical-lowercase-uuidv4>
+```
 
-Bearer authentication is required. Send credentials so the browser includes the
-media cookie:
+The media cookie is host-only `HttpOnly; SameSite=Lax; Path=/api/fs;
+Max-Age=28800` and is deliberately non-`Secure` for HTTP compatibility. The
+separate authentication cookie remains `HttpOnly; SameSite=Strict; Path=/`.
+The old fixed v1 media-cookie name is ignored.
+
+The parser scans all `Cookie` headers and semicolon-delimited pairs, but only
+the exact namespace selected by the stored ticket binding. A duplicate
+occurrence of that selected cookie fails closed. Invalid token encoding or
+length is not accepted as another client's credential.
+
+#### Endpoint summary
+
+| Method and route               | Request                                                | Response/authorization                                                                                                                         |
+| ------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `POST /api/fs/image/tickets`   | `{ project, worktreePath?, path, mediaClientId }`      | `201` with `ticket`, `streamPath`, `expiresAt`, `purpose: "preview"`, `authorizationMode: "session-cookie-v2"`, and a namespaced `Set-Cookie`. |
+| `DELETE /api/fs/image/tickets` | `{ ticket, mediaClientId }`                            | `204`; actor and client namespace must match.                                                                                                  |
+| `POST /api/fs/video/tickets`   | `{ project, worktreePath?, path, purpose: "playback"\\ | "download", mediaClientId }`                                                                                                                   | `201` with the selected purpose and v2 authorization mode, plus a namespaced `Set-Cookie`. |
+| `DELETE /api/fs/video/tickets` | `{ ticket, mediaClientId }`                            | `204`; actor and client namespace must match.                                                                                                  |
+| `DELETE /api/fs/media-session` | `{ mediaClientId }`                                    | `204` and a clearing `Set-Cookie` for only that namespace. A media cookie is not required.                                                     |
+| `GET                           | HEAD /api/fs/{image,video}/stream/{ticket}`            | no body                                                                                                                                        | Native stream after ticket, binding, target, and file-version checks.                      |
+
+JSON uses camelCase and rejects unknown fields. Ticket responses use
+`Cache-Control: no-store`. Issue responses do not disclose project paths,
+absolute filenames, or bearer tokens. Issue validates the selected project
+target and regular file before recording its identity/version. Image tickets
+allow final `png`, `jpg`, `jpeg`, `gif`, and `webp` extensions. Video tickets
+allow final `mp4`, `m4v`, `webm`, `ogv`, `ogg`, and `mov` extensions.
+
+#### Media-session logout
 
 ```http
 DELETE /api/fs/media-session
 Authorization: Bearer {token}
+Content-Type: application/json
+
+{ "mediaClientId": "550e8400-e29b-41d4-a716-446655440000" }
 ```
 
-The endpoint returns `204 No Content`, clears the media cookie, and revokes the
-presented session's tickets only when the session belongs to the authenticated
-actor. It is safe to call when no usable media cookie exists; no ticket or
-session state is disclosed.
+The authenticated actor and requested client namespace are the revocation
+boundary. The endpoint removes that pair's sessions and tickets and clears
+only the corresponding cookie; it does not revoke another profile/client
+namespace. It is safe to call without a usable media cookie, including during
+profile removal or exact-origin ticket-only cleanup. Remote cleanup is
+best-effort and bounded by the client; server TTLs remain the safety net.
 
-The UI uses this endpoint during profile switching/deletion, profile credential
-replacement, and before logout, including when an open settings dialog outlives
-a concurrently deleted profile. Remote revocation is bounded to five seconds;
-an unreachable server does
-not block local cleanup/logout, so the old cookie and tickets can remain usable
-until their 15-minute ticket or 30-minute session idle expiry, or eight-hour
-absolute expiry. Conversely, if remote
-revocation succeeds but local token persistence or removal then fails, the UI
-intentionally does **not** recreate the remote session. Any restored or retained
-local credential must issue fresh media tickets (and a new media session) before
-streaming again. The shared revoke helper sends the Bearer token to valid HTTP and
-HTTPS origins; HTTP is supported but exposes credentials and media traffic to interception.
+#### Stream authorization and freshness
 
-The browser client accepts only `authorizationMode: "session-cookie-v1"`, resolves
-only an opaque stream path on the configured server origin, performs a credentialed
-`HEAD`, and exposes
-the URL to a native image/video element or download anchor only after a 2xx probe.
-Native elements use `crossOrigin="use-credentials"`. Probe failures expose fixed,
-redacted compatibility guidance and never trigger a media-body or Blob fallback.
-Installed Chromium 151 passed the 116-test full browser suite, including 11
-media-specific tests. The broader gate also passed 1,018 UI tests and 691 Rust tests
-(one ignored performance test);
-`pnpm build` and `pnpm lint` were clean. The same-origin browser fixture does not
-qualify real cross-site CHIPS behavior. Edge, Tauri/WebView, Safari, and Firefox
-remain unqualified and must not be advertised as supported. Session and ticket state
-is process-local, so multi-instance deployments require sticky routing to the
-issuing process until a shared store exists.
+Ticket records retain the actor subject, client ID, session digest, media kind,
+purpose, target, and an incarnation. Stream authorization:
 
-### Native Image Preview Capabilities
+1. Looks up the ticket and expected kind. Unknown, expired, revoked,
+   wrong-kind, or stale-generation capabilities are indistinguishable `404`.
+2. Selects the cookie name from the ticket's stored client binding rather than
+   an arbitrary namespace supplied by the stream caller.
+3. Rejects a duplicate selected cookie. A present cookie must match the
+   bound actor/client session digest. A missing cookie is accepted only when
+   the request has the exact configured allowed origin for ticket-only
+   fallback; untrusted or absent origins cannot use that fallback.
+4. Revalidates the target and exact file identity/version after asynchronous
+   checks, then verifies the ticket incarnation and binding again.
+5. Touches idle deadlines only after all checks pass. Tickets have a
+   15-minute idle and 8-hour absolute lifetime; sessions have a 30-minute idle
+   and 8-hour absolute lifetime.
 
-Image preview is a protected, preview-only session-bound capability contract. It
-does not replace the general file-read API and does not provide image downloads.
+`GET` returns `200` for a full representation or `206` for one valid byte
+range. `HEAD` returns metadata with an empty body. Malformed, multi-range, or
+unsatisfiable ranges return `416` with `Content-Range: bytes */size`.
+Responses include `Accept-Ranges`, `Content-Length`, `Content-Type`, `ETag`,
+`Last-Modified`, and `Cache-Control: private, no-store`. Image and playback
+responses are inline; download responses use the sanitized attachment name.
+File identity/version changes return `410` and revoke the ticket.
+
+The stream routes sit outside bearer middleware because native elements send
+credentialed cookie requests. The browser client accepts only
+`authorizationMode: "session-cookie-v2"`, resolves an opaque stream path on
+the configured origin, performs a credentialed `HEAD`, and then assigns the
+URL directly to a native image/video element or download anchor. Elements set
+`crossOrigin="use-credentials"`. Probe failures are fixed, redacted errors;
+there is no media-body, Blob, bearer-in-URL, or plaintext fallback.
+
+#### Native image preview
 
 **POST /api/fs/image/tickets**
 
-Bearer authentication is required. The JSON body is:
-
 ```json
-{ "project": "NAME", "path": "assets/cover.webp" }
+{
+  "project": "NAME",
+  "worktreePath": "optional/worktree",
+  "path": "assets/cover.webp",
+  "mediaClientId": "550e8400-e29b-41d4-a716-446655440000"
+}
 ```
-
-Only final, case-insensitive `png`, `jpg`, `jpeg`, `gif`, and `webp` extensions
-are accepted. The server resolves the path inside the project sandbox, rejects
-traversal/symlink components and non-regular files, records the file
-identity/version, and returns a fixed-purpose capability:
 
 ```json
 {
@@ -2200,71 +2228,44 @@ identity/version, and returns a fixed-purpose capability:
   "streamPath": "/api/fs/image/stream/opaque-random-token",
   "expiresAt": 1800000000000,
   "purpose": "preview",
-  "authorizationMode": "session-cookie-v1"
+  "authorizationMode": "session-cookie-v2"
 }
 ```
 
-Success is `201 Created` with `Cache-Control: no-store` and a `Set-Cookie`
-header for the created or reused media session. Authentication failure is `401`;
-unsupported input is `400`; sandbox escape is `403`; missing or
-non-regular resources are `404`. Response bodies do not include the project
-path, absolute filename, or bearer token.
+**DELETE /api/fs/image/tickets** accepts
+`{ "ticket": "opaque-token", "mediaClientId": "..." }`. Revocation is
+idempotent and returns `204`; foreign, unknown, or already revoked tickets do
+not reveal prior state.
 
-**DELETE /api/fs/image/tickets**
+**GET|HEAD /api/fs/image/stream/{ticket}** uses the shared stream contract,
+always serves image content inline, and cannot be upgraded to video or
+download behavior.
 
-Bearer authentication is required. Revoke with `{ "ticket": "opaque-token" }`
-and include credentials so the matching media-session cookie is sent. The server
-removes the ticket only when that cookie's session and the authenticated actor
-match its binding. Revocation is idempotent and returns `204 No Content`; missing,
-foreign, unknown, or already revoked tickets do not reveal their prior state.
+#### Video playback and download
 
-**GET|HEAD /api/fs/image/stream/{ticket}**
-
-The URL contains only the opaque capability. The capability is bound to the
-authenticated actor/session that issued it; a matching media-session cookie is
-used when available, while the bound ticket itself authorizes cross-origin native
-media requests. The stream is inline and uses the MIME captured at issuance.
-`GET` returns `200` for the full representation or
-`206` for one valid byte range; malformed, multi-range, or unsatisfiable ranges
-return `416` with `Content-Range: bytes */size`. `HEAD` returns metadata with an
-empty body and ignores range selection. Unknown/revoked capabilities return
-`404`; a file identity/version change revokes the capability and returns `410`.
-
-Responses include `Accept-Ranges`, `Content-Length`, `Content-Type`, `ETag`,
-`Last-Modified`, and `Cache-Control: private, no-store`. Cross-origin responses
-require the request origin to be in the server's exact `DAM_HOPPER_CORS_ORIGINS`
-allowlist. Image
-disposition is always `inline`; no image ticket
-can be upgraded to video playback or download behavior. Workspace, config, and
-settings context changes invalidate shared image and video capabilities.
-
-### Video Playback and Download Capabilities
-
-**POST /api/fs/video/tickets** requires Bearer authentication and accepts:
+**POST /api/fs/video/tickets** accepts:
 
 ```json
-{ "project": "NAME", "path": "media/clip.webm", "purpose": "playback" }
+{
+  "project": "NAME",
+  "worktreePath": "optional/worktree",
+  "path": "media/clip.webm",
+  "purpose": "playback",
+  "mediaClientId": "550e8400-e29b-41d4-a716-446655440000"
+}
 ```
 
-`purpose` is the closed `playback | download` enum. A successful `201 Created`
-response has the same `ticket`, `streamPath`, `expiresAt`, and
-`authorizationMode: "session-cookie-v1"` fields as image issuance, plus the
-selected `purpose`, and sets or refreshes the media-session cookie. The server
-accepts final, case-insensitive `mp4`, `m4v`, `webm`, `ogv`, `ogg`, and `mov`
-extensions after sandbox and regular-file validation.
+`purpose` is the closed `playback | download` enum. Playback and download
+always receive separate capabilities. **DELETE
+/api/fs/video/tickets** accepts `{ "ticket": "opaque-token",
+"mediaClientId": "..." }`. **GET|HEAD
+/api/fs/video/stream/{ticket}** follows the same range, validator,
+revalidation, private no-store, and indistinguishable `404` behavior as image
+streams. Playback is inline; download uses a sanitized attachment filename.
 
-**DELETE /api/fs/video/tickets** requires Bearer authentication and JSON
-`{ "ticket": "opaque-token" }`; include credentials so the matching
-media-session cookie is sent. It removes only a ticket bound to the presented
-actor and media session, returns `204 No Content`, and does not reveal whether
-the ticket was valid.
-
-**GET|HEAD /api/fs/video/stream/{ticket}** requires the opaque ticket to remain
-bound to a live authenticated actor/session. It uses the matching media-session
-cookie when available and otherwise authorizes the bound ticket for cross-origin
-native media. It supports the same range, validator, revalidation, private
-no-store, and indistinguishable `404` behavior as image streams.
-Playback uses inline disposition; download uses a sanitized attachment filename.
+Media session and ticket state is process-local. Multi-instance deployments
+need sticky routing to the process holding the ticket/session until a shared
+store exists.
 
 **GET /api/fs/language-files?project=NAME[&worktreePath=PATH]**
 Scan the selected project target for supported language files. The endpoint is

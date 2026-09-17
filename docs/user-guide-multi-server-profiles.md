@@ -48,26 +48,28 @@ with the same name remain distinct when their IDs or endpoints differ.
 The **Server Connections** dialog shows one row per saved profile with its URL,
 authentication type, auto-connect setting, and current status:
 
-| Status | Meaning |
-| --- | --- |
-| `Disconnected` | No runtime is currently attempting this profile. |
-| `Connecting` | The profile runtime is checking the endpoint or opening its WebSocket. |
-| `Connected` | Auth status and workbench protocol checks passed. |
-| `Login required` | Basic authentication needs a token or fresh login. |
-| `Offline` | The endpoint could not be reached after a bounded retry cycle. |
-| `Unsupported` | Native platform/origin or `workbenchProtocol` rules reject the endpoint. |
+| Status           | Meaning                                                                  |
+| ---------------- | ------------------------------------------------------------------------ |
+| `Disconnected`   | No runtime is currently attempting this profile.                         |
+| `Connecting`     | The profile runtime is checking the endpoint or opening its WebSocket.   |
+| `Connected`      | Auth status and workbench protocol checks passed.                        |
+| `Login required` | Basic authentication needs a token or fresh login.                       |
+| `Offline`        | The endpoint could not be reached after a bounded retry cycle.           |
+| `Unsupported`    | Native platform/origin or `workbenchProtocol` rules reject the endpoint. |
 
 Actions are profile-scoped:
 
 - **Connect** starts only that profile's runtime.
 - **Disconnect** stops that runtime but keeps the saved profile and token.
 - **Login** opens the credentials flow for that profile.
-- **Logout** attempts media-session revocation, clears that profile's token,
-  and disconnects it.
+- **Logout** sends the profile's authenticated actor and generation-bound
+  `mediaClientId` to media-session logout, clears only that namespaced media
+  session/tickets, then clears the profile's token and disconnects it.
 - **Edit** updates metadata, URL, authentication, or auto-connect. A changed
-  endpoint or authentication type invalidates the old endpoint-bound token.
-- **Remove** revokes media when possible, removes the local profile and
-  connection state, and does not delete data from the remote server.
+  endpoint or authentication type invalidates the old endpoint-bound token and
+  retires the old media client namespace.
+- **Remove** revokes that profile's media when possible, removes the local
+  profile and connection state, and does not delete data from the remote server.
 
 The top-nav connection button summarizes all profile runtimes. It shows
 `No connections` when none are configured, the profile name when exactly one
@@ -121,8 +123,10 @@ of silently falling back to the root or another profile.
 - Monaco model and tab keys include profile and worktree scope. Equal paths on
   two profiles are separate tabs.
 - Files at least 5 MiB open in the read-only range viewer. Image and video
-  previews use protected, short-lived media capabilities rather than bearer
-  URLs or whole-file Blob reads.
+  previews use Phase 07's UUIDv4-namespaced, short-lived ticket capabilities
+  rather than bearer URLs or whole-file Blob reads. See the
+  [Phase 07 media guide](./phase-07-media-isolation-and-encryption.md) for
+  cookie binding, cleanup, and exact-origin fallback rules.
 
 See the [Phase 03 workbench contract](./phase-03-files-editor-search-git.md)
 for transport messages, invalidation rules, and source locations.
@@ -150,14 +154,14 @@ generation cancels the retry.
 
 ## Persistence and security
 
-| Record | Storage and scope | Behavior |
-| --- | --- | --- |
-| `damhopper_server_profiles` | `localStorage`, shared by browser tabs | Saved profile metadata and `autoConnect`. |
-| `damhopper_profile_auth_v2_<profileId>` | `localStorage`, per profile | Version 2 token record bound to normalized URL and auth type. |
-| `damhopper_active_profile_id` | `localStorage`, compatibility state | Used by legacy/default endpoint helpers; not a runtime-wide connection selector. |
-| `dam-hopper:workspace-state` | Zustand persistence | Qualified `selectedProject` only. |
-| `dam-hopper:preferences-source:v1` | Zustand persistence | Independent preference, settings, and Browser Debug profile IDs. |
-| Query and connection runtime state | Memory only | Owner/generation-qualified; not persisted as a cache. |
+| Record                                  | Storage and scope                      | Behavior                                                                         |
+| --------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------- |
+| `damhopper_server_profiles`             | `localStorage`, shared by browser tabs | Saved profile metadata and `autoConnect`.                                        |
+| `damhopper_profile_auth_v2_<profileId>` | `localStorage`, per profile            | Version 2 token record bound to normalized URL and auth type.                    |
+| `damhopper_active_profile_id`           | `localStorage`, compatibility state    | Used by legacy/default endpoint helpers; not a runtime-wide connection selector. |
+| `dam-hopper:workspace-state`            | Zustand persistence                    | Qualified `selectedProject` only.                                                |
+| `dam-hopper:preferences-source:v1`      | Zustand persistence                    | Independent preference, settings, and Browser Debug profile IDs.                 |
+| Query and connection runtime state      | Memory only                            | Owner/generation-qualified; not persisted as a cache.                            |
 
 Tokens are readable by JavaScript. Use trusted HTTPS frontend assets and do not
 store passwords. HTTP can expose credentials, cookies, ticket URLs, API

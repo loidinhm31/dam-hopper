@@ -27,6 +27,7 @@ import {
   removeProfileConnection,
   subscribeConnections,
   getConnectionSnapshot,
+  getMediaClientIdForProfile,
   type ConnectionSnapshot,
 } from "@/api/connections.js";
 
@@ -78,7 +79,10 @@ function StatusBadge({ snapshot }: { snapshot: ConnectionSnapshot | null }) {
   if (status === "unsupported") {
     return (
       <span
-        title={snapshot?.error || "Remote connections are supported only on Browser and Windows desktop."}
+        title={
+          snapshot?.error ||
+          "Remote connections are supported only on Browser and Windows desktop."
+        }
         className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-red-500/15 text-red-400 cursor-help"
       >
         <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
@@ -113,7 +117,10 @@ export function ServerProfilesDialog({
   // Subscribe to connection changes across all profiles
   useSyncExternalStore(
     subscribeConnections,
-    () => getProfiles().map((p) => getConnectionSnapshot(p.id)?.status).join(","),
+    () =>
+      getProfiles()
+        .map((p) => getConnectionSnapshot(p.id)?.status)
+        .join(","),
     () => "",
   );
 
@@ -126,7 +133,8 @@ export function ServerProfilesDialog({
   async function handleLogout(profile: ServerProfile) {
     const token = getAuthToken(profile.id);
     if (token) {
-      await revokeCurrentMediaSession(profile.url, token);
+      const mediaClientId = getMediaClientIdForProfile(profile.id);
+      await revokeCurrentMediaSession(profile.url, token, mediaClientId);
     }
     clearAuthToken(profile.id);
     disconnectProfile(profile.id);
@@ -144,7 +152,8 @@ export function ServerProfilesDialog({
 
     const token = getAuthToken(profile.id);
     if (token) {
-      await revokeCurrentMediaSession(profile.url, token);
+      const mediaClientId = getMediaClientIdForProfile(profile.id);
+      await revokeCurrentMediaSession(profile.url, token, mediaClientId);
     }
     removeProfileConnection(profile.id);
     if (!deleteProfile(profile.id)) {

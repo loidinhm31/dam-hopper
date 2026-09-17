@@ -11,14 +11,22 @@ const profileState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/api/server-config.js", () => ({
+  getActiveProfileId: () => `browser-profile-${profileState.version}`,
   getActiveProfile: () => ({
     id: `browser-profile-${profileState.version}`,
     url: window.location.origin,
   }),
+  getProfiles: () => [
+    {
+      id: `browser-profile-${profileState.version}`,
+      url: window.location.origin,
+    },
+  ],
   getAuthToken: () => "browser-test-token",
   getServerUrl: () => window.location.origin,
   normalizeServerUrl: (url: string) => url.replace(/\/$/, ""),
   getProfileChangeVersion: () => profileState.version,
+  isSameOriginProfile: () => true,
   subscribeToProfileChanges: (listener: () => void) => {
     profileState.listeners.add(listener);
     return () => profileState.listeners.delete(listener);
@@ -116,12 +124,18 @@ describe("Explorer image preview in Chromium", () => {
     expect(post?.[1]).toEqual(
       expect.objectContaining({
         credentials: "include",
-        body: JSON.stringify({ project: "demo", path: "images/fixture.png" }),
         headers: expect.objectContaining({
           Authorization: "Bearer browser-test-token",
         }),
       }),
     );
+    expect(
+      JSON.parse(String((post?.[1] as RequestInit | undefined)?.body)),
+    ).toEqual({
+      project: "demo",
+      path: "images/fixture.png",
+      mediaClientId: expect.any(String),
+    });
     const probe = headCalls().find(([input]) =>
       String(input).endsWith("/api/fs/image/stream/image_ticket"),
     );

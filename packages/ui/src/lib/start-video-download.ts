@@ -1,5 +1,5 @@
 import { issueVideoTicket } from "@/api/video-tickets.js";
-import type { ProjectTargetInput } from "@/api/client.js";
+import type { ConnectionRef, ProjectTargetInput } from "@/api/client.js";
 
 /**
  * Starts browser-managed video download without reading media bytes in JavaScript.
@@ -8,10 +8,15 @@ import type { ProjectTargetInput } from "@/api/client.js";
 export async function startVideoDownload(
   target: ProjectTargetInput,
   path: string,
+  owner?: ConnectionRef,
 ): Promise<void> {
-  const ticket = await issueVideoTicket(target, path, "download");
-  if (ticket.purpose !== "download")
-    throw new Error("Video download unavailable");
+  const ticket = await issueVideoTicket(
+    target,
+    path,
+    "download",
+    undefined,
+    owner,
+  );
 
   const anchor = document.createElement("a");
   anchor.href = ticket.url;

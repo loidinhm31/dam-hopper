@@ -15,7 +15,10 @@ import {
   getProfileChangeVersion,
   subscribeToProfileChanges,
 } from "@/api/server-config.js";
-
+import {
+  getConnectionSnapshot,
+  subscribeConnections,
+} from "@/api/connections.js";
 type MediaState = "loading" | "ready" | "buffering" | "seeking" | "error";
 type MediaTicketErrorCode = "MEDIA_SESSION_UNSUPPORTED";
 
@@ -98,10 +101,14 @@ export function VideoPreview({
   const targetProject = target?.project ?? project;
   const requestTarget = useMemo(
     () =>
-      worktreePath == null
+      worktreePath == null && !target?.profileId
         ? targetProject
-        : { project: targetProject, worktreePath },
-    [targetProject, worktreePath],
+        : {
+            project: targetProject,
+            ...(worktreePath != null ? { worktreePath } : {}),
+            ...(target?.profileId ? { profileId: target.profileId } : {}),
+          },
+    [targetProject, worktreePath, target?.profileId],
   );
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const issueControllerRef = useRef<AbortController | null>(null);
@@ -243,6 +250,17 @@ export function VideoPreview({
     [],
   );
 
+  useEffect(() => {
+    return subscribeConnections(() => {
+      if (target?.profileId) {
+        const snap = getConnectionSnapshot(target.profileId);
+        if (!snap || snap.status !== "connected") {
+          teardownPlayback();
+          setMediaState("error");
+        }
+      }
+    });
+  }, [target?.profileId, teardownPlayback]);
   const acceptsMediaEvent = useCallback(() => {
     const video = videoRef.current;
     const sourceUrl = sourceUrlRef.current;

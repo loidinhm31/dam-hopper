@@ -35,7 +35,7 @@ function issued(purpose: "playback" | "download") {
     streamPath: "/api/fs/video/stream/opaque_token",
     expiresAt: 1_800_000_000_000,
     purpose,
-    authorizationMode: "session-cookie-v1",
+    authorizationMode: "session-cookie-v2",
   };
 }
 
@@ -74,6 +74,7 @@ describe("issueVideoTicket", () => {
       worktreePath: "/tmp/project-worktree",
       path: "clips/demo.webm",
       purpose: "playback",
+      mediaClientId: expect.any(String),
     });
     if (ticket.purpose === "playback") await ticket.revoke();
     expect(fetchMock).toHaveBeenLastCalledWith(
@@ -181,13 +182,12 @@ describe("issueVideoTicket", () => {
 
     const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(options.headers).not.toHaveProperty("Authorization");
-    expect(options.body).toBe(
-      JSON.stringify({
-        project: "project",
-        path: "clips/demo.webm",
-        purpose: "download",
-      }),
-    );
+    expect(JSON.parse(options.body as string)).toEqual({
+      project: "project",
+      path: "clips/demo.webm",
+      purpose: "download",
+      mediaClientId: expect.any(String),
+    });
   });
 
   it("turns a caller cancellation into a fixed error code", async () => {
@@ -254,8 +254,11 @@ describe("issueVideoTicket", () => {
         }),
       }),
     );
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({
+      ticket: "opaque_token",
+      mediaClientId: expect.any(String),
+    });
   });
-
   it("never includes server response canaries in its fixed errors", async () => {
     vi.stubGlobal(
       "fetch",

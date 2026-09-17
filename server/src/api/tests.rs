@@ -5028,13 +5028,15 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     .unwrap();
     let state = make_state_with_project(&tmp);
 
+    let client_id = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
     let playback = post_json(
         state.clone(),
         "/api/fs/video/tickets",
         serde_json::json!({
             "project": "test-project",
             "path": "clip.WEBM",
-            "purpose": "playback"
+            "purpose": "playback",
+            "mediaClientId": client_id
         }),
     )
     .await;
@@ -5048,7 +5050,7 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     .unwrap();
     let playback_ticket = playback["ticket"].as_str().unwrap().to_owned();
     assert_eq!(playback["purpose"], "playback");
-    assert_eq!(playback["authorizationMode"], "session-cookie-v1");
+    assert_eq!(playback["authorizationMode"], "session-cookie-v2");
     assert_eq!(
         playback["streamPath"],
         format!("/api/fs/video/stream/{playback_ticket}")
@@ -5062,7 +5064,8 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
         serde_json::json!({
             "project": "test-project",
             "path": "clip.WEBM",
-            "purpose": "download"
+            "purpose": "download",
+            "mediaClientId": client_id
         }),
     )
     .await;
@@ -5076,26 +5079,24 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     let download_ticket = download["ticket"].as_str().unwrap();
     assert_ne!(playback_ticket, download_ticket);
     assert_eq!(download["purpose"], "download");
-    assert_eq!(download["authorizationMode"], "session-cookie-v1");
+    assert_eq!(download["authorizationMode"], "session-cookie-v2");
 
     let revoked = delete_json(
         state.clone(),
         "/api/fs/video/tickets",
-        serde_json::json!({ "ticket": playback_ticket }),
+        serde_json::json!({ "ticket": playback_ticket, "mediaClientId": client_id }),
     )
     .await;
     assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
-    // Scoped revoke requires the issuing session cookie; a guessed ticket alone is inert.
 
     let revoked_again = delete_json(
         state,
         "/api/fs/video/tickets",
-        serde_json::json!({ "ticket": playback_ticket }),
+        serde_json::json!({ "ticket": playback_ticket, "mediaClientId": client_id }),
     )
     .await;
     assert_eq!(revoked_again.status(), StatusCode::NO_CONTENT);
 }
-
 #[tokio::test]
 async fn media_tickets_stream_only_the_resolved_worktree_and_expire_when_it_is_removed() {
     let registry = tempfile::tempdir().unwrap();
@@ -5130,7 +5131,8 @@ async fn media_tickets_stream_only_the_resolved_worktree_and_expire_when_it_is_r
             "project": "test-project",
             "worktreePath": worktree,
             "path": "clip.webm",
-            "purpose": "playback"
+            "purpose": "playback",
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
         }),
     )
     .await;
@@ -5149,7 +5151,8 @@ async fn media_tickets_stream_only_the_resolved_worktree_and_expire_when_it_is_r
         serde_json::json!({
             "project": "test-project",
             "worktreePath": worktree,
-            "path": "cover.png"
+            "path": "cover.png",
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
         }),
     )
     .await;
@@ -5207,7 +5210,8 @@ async fn video_ticket_issuance_requires_auth_and_rejects_non_video_or_unsafe_pat
     let body = serde_json::json!({
         "project": "test-project",
         "path": "document.txt",
-        "purpose": "playback"
+        "purpose": "playback",
+        "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
     });
 
     assert_eq!(
@@ -5229,7 +5233,8 @@ async fn video_ticket_issuance_requires_auth_and_rejects_non_video_or_unsafe_pat
             serde_json::json!({
                 "project": "test-project",
                 "path": "folder.mov",
-                "purpose": "download"
+                "purpose": "download",
+                "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
             }),
         )
         .await
@@ -5243,7 +5248,8 @@ async fn video_ticket_issuance_requires_auth_and_rejects_non_video_or_unsafe_pat
             serde_json::json!({
                 "project": "test-project",
                 "path": "../escape.webm",
-                "purpose": "playback"
+                "purpose": "playback",
+                "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
             }),
         )
         .await
@@ -5257,7 +5263,8 @@ async fn video_ticket_issuance_requires_auth_and_rejects_non_video_or_unsafe_pat
             serde_json::json!({
                 "project": "test-project",
                 "path": "document.txt",
-                "purpose": "preview"
+                "purpose": "preview",
+                "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
             }),
         )
         .await
@@ -5307,7 +5314,8 @@ async fn video_ticket_issuance_is_not_limited_by_live_ticket_count() {
         serde_json::json!({
             "project": "test-project",
             "path": "clip.webm",
-            "purpose": "download"
+            "purpose": "download",
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
         }),
     )
     .await;
@@ -5327,7 +5335,8 @@ async fn workspace_reinitialization_revokes_every_media_ticket() {
         serde_json::json!({
             "project": "test-project",
             "path": "clip.webm",
-            "purpose": "playback"
+            "purpose": "playback",
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
         }),
     )
     .await;
@@ -5378,7 +5387,8 @@ async fn video_ticket_issuance_rejects_fifo_before_opening_it() {
         serde_json::json!({
             "project": "test-project",
             "path": "trap.mp4",
-            "purpose": "playback"
+            "purpose": "playback",
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
         }),
     )
     .await;
@@ -5394,6 +5404,7 @@ async fn issue_video_stream_ticket(state: AppState, path: &str, purpose: &str) -
             "project": "test-project",
             "path": path,
             "purpose": purpose,
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
         }),
     )
     .await;
@@ -5511,7 +5522,10 @@ async fn video_stream_uses_bound_ticket_capability_and_logout_revokes_it() {
                     header::COOKIE,
                     format!("{}; {owning_cookie}", auth_cookie()),
                 )
-                .body(Body::empty())
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::json!({
+                    "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+                }).to_string()))
                 .unwrap(),
         )
         .await
@@ -5741,12 +5755,17 @@ async fn image_tickets_use_a_closed_allowlist_and_fixed_preview_contract() {
     }
     let state = make_state_with_project(&tmp);
 
+    let client_id = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
     for extension in ["png", "JPG", "jpeg", "gif", "WEBP"] {
         let path = format!("preview.{extension}");
         let response = post_json(
             state.clone(),
             "/api/fs/image/tickets",
-            serde_json::json!({ "project": "test-project", "path": path.clone() }),
+            serde_json::json!({
+                "project": "test-project",
+                "path": path.clone(),
+                "mediaClientId": client_id
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::CREATED);
@@ -5757,7 +5776,7 @@ async fn image_tickets_use_a_closed_allowlist_and_fixed_preview_contract() {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let ticket = json["ticket"].as_str().unwrap();
         assert_eq!(json["purpose"], "preview");
-        assert_eq!(json["authorizationMode"], "session-cookie-v1");
+        assert_eq!(json["authorizationMode"], "session-cookie-v2");
         assert_eq!(json["streamPath"], format!("/api/fs/image/stream/{ticket}"));
         assert!(!json.to_string().contains("test-project"));
         assert!(!json.to_string().contains(&path));
@@ -5790,7 +5809,11 @@ async fn image_ticket_issuance_is_not_limited_by_live_ticket_count() {
                 ),
             )
             .body(Body::from(
-                serde_json::json!({ "project": "test-project", "path": "preview.png" }).to_string(),
+                serde_json::json!({
+                    "project": "test-project",
+                    "path": "preview.png",
+                    "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+                }).to_string(),
             ))
             .unwrap();
         let response = router.oneshot(request).await.unwrap();
@@ -5817,8 +5840,12 @@ async fn image_ticket_issuance_is_not_limited_by_live_ticket_count() {
                 .header("Content-Type", "application/json")
                 .header("Cookie", format!("{}; {}", auth_cookie(), cookie.unwrap()))
                 .body(Body::from(
-                    serde_json::json!({ "project": "test-project", "path": "preview.png" })
-                        .to_string(),
+                    serde_json::json!({
+                        "project": "test-project",
+                        "path": "preview.png",
+                        "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )
@@ -5836,7 +5863,11 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
     std::fs::create_dir(tmp.path().join("folder.png")).unwrap();
     let state = make_state_with_project(&tmp);
 
-    let body = serde_json::json!({ "project": "test-project", "path": "document.svg" });
+    let body = serde_json::json!({
+        "project": "test-project",
+        "path": "document.svg",
+        "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+    });
     assert_eq!(
         post_json_without_auth(state.clone(), "/api/fs/image/tickets", body.clone())
             .await
@@ -5847,7 +5878,11 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
         let response = post_json(
             state.clone(),
             "/api/fs/image/tickets",
-            serde_json::json!({ "project": "test-project", "path": path }),
+            serde_json::json!({
+                "project": "test-project",
+                "path": path,
+                "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+            }),
         )
         .await;
         assert_eq!(
@@ -5867,7 +5902,11 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
     let traversal = post_json(
         state,
         "/api/fs/image/tickets",
-        serde_json::json!({ "project": "test-project", "path": "../outside.png" }),
+        serde_json::json!({
+            "project": "test-project",
+            "path": "../outside.png",
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        }),
     )
     .await;
     assert_eq!(traversal.status(), StatusCode::FORBIDDEN);
@@ -5905,7 +5944,11 @@ async fn image_ticket_issuance_rejects_symlinks_and_fifos() {
         let response = post_json(
             state.clone(),
             "/api/fs/image/tickets",
-            serde_json::json!({ "project": "test-project", "path": path }),
+            serde_json::json!({
+                "project": "test-project",
+                "path": path,
+                "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -5916,7 +5959,11 @@ async fn issue_image_stream_ticket(state: AppState, path: &str) -> String {
     let response = post_json(
         state,
         "/api/fs/image/tickets",
-        serde_json::json!({ "project": "test-project", "path": path }),
+        serde_json::json!({
+            "project": "test-project",
+            "path": path,
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        }),
     )
     .await;
     assert_eq!(response.status(), StatusCode::CREATED);
@@ -6024,7 +6071,11 @@ async fn image_stream_uses_bound_ticket_capability_and_logout_revokes_it() {
                     header::COOKIE,
                     format!("{}; {owning_cookie}", auth_cookie()),
                 )
-                .body(Body::empty())
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d" })
+                        .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -6114,7 +6165,10 @@ async fn image_stream_rejects_video_kind_revokes_and_fails_closed_on_stale_files
         delete_json(
             state.clone(),
             "/api/fs/image/tickets",
-            serde_json::json!({ "ticket": video_ticket.clone() }),
+            serde_json::json!({
+                "ticket": video_ticket.clone(),
+                "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+            }),
         )
         .await
         .status(),
@@ -6126,32 +6180,47 @@ async fn image_stream_rejects_video_kind_revokes_and_fails_closed_on_stale_files
             .status(),
         StatusCode::OK
     );
+    let foreign_client_id = "11111111-1111-4111-8111-111111111111";
+    // DELETE with a foreign namespace cannot revoke another client's ticket
     assert_eq!(
         delete_json(
             state.clone(),
             "/api/fs/image/tickets",
-            serde_json::json!({ "ticket": image_ticket.clone() }),
+            serde_json::json!({
+                "ticket": image_ticket.clone(),
+                "mediaClientId": foreign_client_id
+            }),
         )
         .await
         .status(),
         StatusCode::NO_CONTENT
     );
-    assert_eq!(
-        delete_json(
-            state.clone(),
-            "/api/fs/image/tickets",
-            serde_json::json!({ "ticket": image_ticket.clone() }),
-        )
-        .await
-        .status(),
-        StatusCode::NO_CONTENT
-    );
-    // Bare protected DELETE cannot revoke a bound ticket without its media cookie.
     assert_eq!(
         stream_image(state.clone(), &image_ticket, "GET", &[])
             .await
             .status(),
         StatusCode::OK
+    );
+
+    // V2 ticket revoke with matching bearer actor + namespace revokes the ticket
+    assert_eq!(
+        delete_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({
+                "ticket": image_ticket.clone(),
+                "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+            }),
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        stream_image(state.clone(), &image_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
     );
 
     let stale_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
@@ -6174,12 +6243,15 @@ async fn image_revoke_requires_auth_and_context_reload_revokes_both_media_kinds(
     let state = make_state_with_project(&tmp);
     let image_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
     let video_ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
-
     assert_eq!(
         post_json_without_auth(
             state.clone(),
             "/api/fs/image/tickets",
-            serde_json::json!({ "project": "test-project", "path": "cover.png" }),
+            serde_json::json!({
+                "project": "test-project",
+                "path": "cover.png",
+                "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+            }),
         )
         .await
         .status(),
@@ -6190,7 +6262,10 @@ async fn image_revoke_requires_auth_and_context_reload_revokes_both_media_kinds(
         .uri("/api/fs/image/tickets")
         .header("Content-Type", "application/json")
         .body(Body::from(
-            serde_json::json!({ "ticket": image_ticket }).to_string(),
+            serde_json::json!({
+                "ticket": image_ticket,
+                "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+            }).to_string(),
         ))
         .unwrap();
     let response = build_router(state.clone())
@@ -6267,6 +6342,216 @@ async fn config_and_settings_reload_revoke_shared_media_tickets() {
             .lookup_and_touch(&settings_video)
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn v2_media_suite_verifies_namespace_isolation_and_negative_cases() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"image bytes").unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"video bytes").unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let client_a = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let client_b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+    // 1. Missing mediaClientId fails validation with 422
+    let missing_client_id = post_json(
+        state.clone(),
+        "/api/fs/image/tickets",
+        serde_json::json!({ "project": "test-project", "path": "cover.png" }),
+    )
+    .await;
+    assert_eq!(missing_client_id.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // 2. Invalid UUIDv4 mediaClientId fails validation with 422
+    let invalid_uuid = post_json(
+        state.clone(),
+        "/api/fs/image/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": "cover.png",
+            "mediaClientId": "not-a-uuid"
+        }),
+    )
+    .await;
+    assert_eq!(invalid_uuid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // UUIDv1 fails validation with 422
+    let v1_uuid = post_json(
+        state.clone(),
+        "/api/fs/image/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": "cover.png",
+            "mediaClientId": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        }),
+    )
+    .await;
+    assert_eq!(v1_uuid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // 3. Two initial ticket requests in one namespace reuse same session / cookie
+    let first_req = post_json(
+        state.clone(),
+        "/api/fs/image/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": "cover.png",
+            "mediaClientId": client_a
+        }),
+    )
+    .await;
+    assert_eq!(first_req.status(), StatusCode::CREATED);
+    let cookie_a = first_req.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert!(cookie_a.starts_with(&format!("damhopper-media-session-{client_a}=")));
+    let first_body = axum::body::to_bytes(first_req.into_body(), usize::MAX).await.unwrap();
+    let ticket_a1 = serde_json::from_slice::<serde_json::Value>(&first_body).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Second request in same namespace without cookie reuses the active session
+    let second_req = post_json(
+        state.clone(),
+        "/api/fs/image/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": "cover.png",
+            "mediaClientId": client_a
+        }),
+    )
+    .await;
+    assert_eq!(second_req.status(), StatusCode::CREATED);
+    let cookie_a2 = second_req.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(cookie_a, cookie_a2);
+    let second_body = axum::body::to_bytes(second_req.into_body(), usize::MAX).await.unwrap();
+    let ticket_a2 = serde_json::from_slice::<serde_json::Value>(&second_body).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Client B issues a ticket in its own namespace
+    let b_req = post_json(
+        state.clone(),
+        "/api/fs/video/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": "clip.webm",
+            "purpose": "playback",
+            "mediaClientId": client_b
+        }),
+    )
+    .await;
+    assert_eq!(b_req.status(), StatusCode::CREATED);
+    let cookie_b = b_req.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert!(cookie_b.starts_with(&format!("damhopper-media-session-{client_b}=")));
+    let b_body = axum::body::to_bytes(b_req.into_body(), usize::MAX).await.unwrap();
+    let ticket_b = serde_json::from_slice::<serde_json::Value>(&b_body).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // 4. Stream A with A's cookie succeeds
+    let stream_a = stream_image(state.clone(), &ticket_a1, "GET", &[("cookie", &cookie_a)]).await;
+    assert_eq!(stream_a.status(), StatusCode::OK);
+
+    // 5. Selected-cookie duplicates in raw Cookie header fail closed (404)
+    let duplicate_cookie = format!("{cookie_a}; {cookie_a}");
+    let stream_dup = stream_image(state.clone(), &ticket_a1, "GET", &[("cookie", &duplicate_cookie)]).await;
+    assert_eq!(stream_dup.status(), StatusCode::NOT_FOUND);
+
+    // 6. v1 and v2 cookies present together: v1 is ignored, valid v2 authorizes
+    let v1_and_v2 = format!("damhopper-media-session=legacy-token; {cookie_a}");
+    let stream_v1_v2 = stream_image(state.clone(), &ticket_a1, "GET", &[("cookie", &v1_and_v2)]).await;
+    assert_eq!(stream_v1_v2.status(), StatusCode::OK);
+
+    // 7. Forged/foreign namespace: B's cookie cannot authorize A's ticket
+    let stream_forged = stream_image(state.clone(), &ticket_a1, "GET", &[("cookie", &cookie_b)]).await;
+    assert_eq!(stream_forged.status(), StatusCode::NOT_FOUND);
+
+    // 8. Absent third-party cookie: cross-origin with allowed origin succeeds via ticket fallback
+    let origin = [("origin", "https://browser.example")];
+    let stream_fallback = stream_image(state.clone(), &ticket_a1, "GET", &origin).await;
+    assert_eq!(stream_fallback.status(), StatusCode::OK);
+    // Without allowed origin, ticket-only fallback fails
+    let stream_no_origin = stream_image(state.clone(), &ticket_a1, "GET", &[]).await;
+    assert_eq!(stream_no_origin.status(), StatusCode::NOT_FOUND);
+    // 9. DELETE /api/fs/media-session without Content-Type fails with 415
+    let delete_no_ct = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(header::COOKIE, auth_cookie())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_no_ct.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    // DELETE /api/fs/media-session with missing mediaClientId fails with 422
+    let delete_missing = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(header::COOKIE, auth_cookie())
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_missing.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // 10. DELETE /api/fs/media-session for Client A clears only A's cookie and revokes A's tickets
+    let delete_a = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(header::COOKIE, auth_cookie())
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::json!({ "mediaClientId": client_a }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_a.status(), StatusCode::NO_CONTENT);
+    let clear_cookie = delete_a.headers()[header::SET_COOKIE].to_str().unwrap();
+    assert!(clear_cookie.starts_with(&format!("damhopper-media-session-{client_a}=")));
+    assert!(clear_cookie.contains("Max-Age=0"));
+
+    // A's tickets are revoked
+    assert_eq!(
+        stream_image(state.clone(), &ticket_a1, "GET", &origin).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        stream_image(state.clone(), &ticket_a2, "GET", &origin).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // B's tickets and session remain valid and untouched!
+    let stream_b = stream_video(state.clone(), &ticket_b, "GET", &[("cookie", &cookie_b)]).await;
+    assert_eq!(stream_b.status(), StatusCode::OK);
 }
 
 #[tokio::test]

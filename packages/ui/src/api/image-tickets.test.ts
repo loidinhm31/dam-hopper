@@ -35,7 +35,7 @@ function issued() {
     streamPath: "/api/fs/image/stream/opaque_token",
     expiresAt: 1_800_000_000_000,
     purpose: "preview",
-    authorizationMode: "session-cookie-v1",
+    authorizationMode: "session-cookie-v2",
   };
 }
 
@@ -72,8 +72,8 @@ describe("issueImageTicket", () => {
       project: "project",
       worktreePath: "/tmp/project-worktree",
       path: "images/preview.webp",
+      mediaClientId: expect.any(String),
     });
-
     await ticket.revoke();
     expect(fetchMock).toHaveBeenLastCalledWith(
       "https://api.test/api/fs/image/tickets",
@@ -175,11 +175,13 @@ describe("issueImageTicket", () => {
         headers: expect.objectContaining({
           Authorization: "Bearer secret-token",
         }),
-        body: JSON.stringify({ ticket: "opaque_token" }),
       }),
     );
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({
+      ticket: "opaque_token",
+      mediaClientId: expect.any(String),
+    });
   });
-
   it("honors caller cancellation while parsing the response body", async () => {
     const controller = new AbortController();
     let bodyStarted: (() => void) | undefined;

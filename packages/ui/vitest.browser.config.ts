@@ -15,8 +15,10 @@ const imageFixture = readFileSync(
     new URL("./browser-tests/fixtures/one-pixel.png", import.meta.url),
   ),
 );
-const MEDIA_COOKIE = "damhopper-media-session";
+const MEDIA_COOKIE_PREFIX = "damhopper-media-session-";
 const MEDIA_COOKIE_VALUE = "browser-test-media-session";
+const UUID_V4 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KNOWN_TEST_TICKETS = new Set([
   "playback_ticket",
   "active_ticket",
@@ -25,6 +27,7 @@ const KNOWN_TEST_TICKETS = new Set([
 ]);
 const imageIssueCounts = new Map<string, number>();
 const activeImageTickets = new Set<string>();
+const ticketMediaClients = new Map<string, string>();
 // Fixture tickets are intentionally named and reused across browser tests.
 // Reference-count them so asynchronous cleanup from an older test cannot
 // revoke a newer lease with the same fixture ID.
@@ -32,31 +35,38 @@ const activeMediaTickets = new Map(
   [...KNOWN_TEST_TICKETS].map((ticket) => [ticket, 1] as const),
 );
 
-function hasMediaCookie(cookieHeader: string | undefined): boolean {
+function hasMediaCookie(
+  cookieHeader: string | undefined,
+  mediaClientId: string,
+): boolean {
+  if (!cookieHeader) return false;
+  const expectedName = `${MEDIA_COOKIE_PREFIX}${mediaClientId}`;
+  const parts = cookieHeader.split(";").map((p) => p.trim());
+  const matching = parts.filter((part) => part.startsWith(`${expectedName}=`));
+  if (matching.length > 1) return false; // Duplicate fails closed
   return (
-    cookieHeader
-      ?.split(";")
-      .some(
-        (part) => part.trim() === `${MEDIA_COOKIE}=${MEDIA_COOKIE_VALUE}`,
-      ) ?? false
+    matching.length === 1 &&
+    matching[0] === `${expectedName}=${MEDIA_COOKIE_VALUE}`
   );
 }
 
-function setMediaCookie(response: {
-  setHeader: (name: string, value: string) => void;
-}): void {
+function setMediaCookie(
+  response: { setHeader: (name: string, value: string) => void },
+  mediaClientId: string,
+): void {
   response.setHeader(
     "Set-Cookie",
-    `${MEDIA_COOKIE}=${MEDIA_COOKIE_VALUE}; HttpOnly; SameSite=Lax; Path=/api/fs`,
+    `${MEDIA_COOKIE_PREFIX}${mediaClientId}=${MEDIA_COOKIE_VALUE}; HttpOnly; SameSite=Lax; Path=/api/fs; Max-Age=28800`,
   );
 }
 
-function clearMediaCookie(response: {
-  setHeader: (name: string, value: string) => void;
-}): void {
+function clearMediaCookie(
+  response: { setHeader: (name: string, value: string) => void },
+  mediaClientId: string,
+): void {
   response.setHeader(
     "Set-Cookie",
-    `${MEDIA_COOKIE}=; HttpOnly; SameSite=Lax; Path=/api/fs; Max-Age=0`,
+    `${MEDIA_COOKIE_PREFIX}${mediaClientId}=; HttpOnly; SameSite=Lax; Path=/api/fs; Max-Age=0`,
   );
 }
 const requestedBrowserChannel = process.env.BROWSER_CHANNEL?.trim();
@@ -148,6 +158,17 @@ const mediaFixturePlugin = {
       }
       if (request.method === "POST") {
         readJsonBody(request, (body) => {
+          if (
+            !body.mediaClientId ||
+            typeof body.mediaClientId !== "string" ||
+            !UUID_V4.test(body.mediaClientId)
+          ) {
+            response.statusCode = 422;
+            response.end(
+              JSON.stringify({ error: "missing or invalid mediaClientId" }),
+            );
+            return;
+          }
           const purpose = body.purpose === "download" ? "download" : "playback";
           const ticket =
             body.path === "clips/unsupported.webm"
@@ -163,9 +184,10 @@ const mediaFixturePlugin = {
             ticket,
             (activeMediaTickets.get(ticket) ?? 0) + 1,
           );
+          ticketMediaClients.set(ticket, body.mediaClientId);
           response.statusCode = 201;
           response.setHeader("Cache-Control", "no-store");
-          setMediaCookie(response);
+          setMediaCookie(response, body.mediaClientId);
           response.setHeader("Content-Type", "application/json");
           response.end(
             JSON.stringify({
@@ -173,7 +195,7 @@ const mediaFixturePlugin = {
               streamPath: `/api/fs/video/stream/${ticket}`,
               expiresAt: 1_800_000_000_000,
               purpose,
-              authorizationMode: "session-cookie-v1",
+              authorizationMode: "session-cookie-v2",
             }),
           );
         });
@@ -181,10 +203,25 @@ const mediaFixturePlugin = {
       }
       if (request.method === "DELETE") {
         readJsonBody(request, (body) => {
+          if (
+            !body.mediaClientId ||
+            typeof body.mediaClientId !== "string" ||
+            !UUID_V4.test(body.mediaClientId)
+          ) {
+            response.statusCode = 422;
+            response.end(
+              JSON.stringify({ error: "missing or invalid mediaClientId" }),
+            );
+            return;
+          }
           if (typeof body.ticket === "string") {
             const references = activeMediaTickets.get(body.ticket) ?? 0;
-            if (references <= 1) activeMediaTickets.delete(body.ticket);
-            else activeMediaTickets.set(body.ticket, references - 1);
+            if (references <= 1) {
+              activeMediaTickets.delete(body.ticket);
+              ticketMediaClients.delete(body.ticket);
+            } else {
+              activeMediaTickets.set(body.ticket, references - 1);
+            }
           }
           response.statusCode = 204;
           response.end();
@@ -204,9 +241,22 @@ const mediaFixturePlugin = {
         return;
       }
       if (request.method === "DELETE") {
-        response.statusCode = 204;
-        clearMediaCookie(response);
-        response.end();
+        readJsonBody(request, (body) => {
+          if (
+            !body.mediaClientId ||
+            typeof body.mediaClientId !== "string" ||
+            !UUID_V4.test(body.mediaClientId)
+          ) {
+            response.statusCode = 422;
+            response.end(
+              JSON.stringify({ error: "missing or invalid mediaClientId" }),
+            );
+            return;
+          }
+          response.statusCode = 204;
+          clearMediaCookie(response, body.mediaClientId);
+          response.end();
+        });
         return;
       }
       response.statusCode = 405;
@@ -214,8 +264,10 @@ const mediaFixturePlugin = {
     });
     server.middlewares.use("/api/fs/video/stream", (request, response) => {
       const ticket = request.url?.split("?")[0]?.split("/").pop();
+      const mediaClientId = ticketMediaClients.get(ticket ?? "");
       if (
-        !hasMediaCookie(request.headers?.cookie) ||
+        !mediaClientId ||
+        !hasMediaCookie(request.headers?.cookie, mediaClientId) ||
         ticket === "unsupported_ticket" ||
         (activeMediaTickets.get(ticket ?? "") ?? 0) === 0
       ) {
@@ -239,6 +291,17 @@ const mediaFixturePlugin = {
       }
       if (request.method === "POST") {
         readJsonBody(request, (body) => {
+          if (
+            !body.mediaClientId ||
+            typeof body.mediaClientId !== "string" ||
+            !UUID_V4.test(body.mediaClientId)
+          ) {
+            response.statusCode = 422;
+            response.end(
+              JSON.stringify({ error: "missing or invalid mediaClientId" }),
+            );
+            return;
+          }
           const path = typeof body.path === "string" ? body.path : "";
           const issueCount = imageIssueCounts.get(path) ?? 0;
           imageIssueCounts.set(path, issueCount + 1);
@@ -249,9 +312,10 @@ const mediaFixturePlugin = {
                 ? "stale_stream_ticket"
                 : `image_ticket${issueCount ? `_${issueCount + 1}` : ""}`;
           activeImageTickets.add(ticket);
+          ticketMediaClients.set(ticket, body.mediaClientId);
           response.statusCode = 201;
           response.setHeader("Cache-Control", "no-store");
-          setMediaCookie(response);
+          setMediaCookie(response, body.mediaClientId);
           response.setHeader("Content-Type", "application/json");
           response.end(
             JSON.stringify({
@@ -259,7 +323,7 @@ const mediaFixturePlugin = {
               streamPath: `/api/fs/image/stream/${ticket}`,
               expiresAt: 1_800_000_000_000,
               purpose: "preview",
-              authorizationMode: "session-cookie-v1",
+              authorizationMode: "session-cookie-v2",
             }),
           );
         });
@@ -267,8 +331,21 @@ const mediaFixturePlugin = {
       }
       if (request.method === "DELETE") {
         readJsonBody(request, (body) => {
-          if (typeof body.ticket === "string")
+          if (
+            !body.mediaClientId ||
+            typeof body.mediaClientId !== "string" ||
+            !UUID_V4.test(body.mediaClientId)
+          ) {
+            response.statusCode = 422;
+            response.end(
+              JSON.stringify({ error: "missing or invalid mediaClientId" }),
+            );
+            return;
+          }
+          if (typeof body.ticket === "string") {
             activeImageTickets.delete(body.ticket);
+            ticketMediaClients.delete(body.ticket);
+          }
           response.statusCode = 204;
           response.end();
         });
@@ -279,7 +356,11 @@ const mediaFixturePlugin = {
     });
     server.middlewares.use("/api/fs/image/stream", (request, response) => {
       const ticket = request.url?.split("?")[0]?.split("/").pop();
-      if (!hasMediaCookie(request.headers?.cookie)) {
+      const mediaClientId = ticketMediaClients.get(ticket ?? "");
+      if (
+        !mediaClientId ||
+        !hasMediaCookie(request.headers?.cookie, mediaClientId)
+      ) {
         response.statusCode = 404;
         response.end();
         return;
