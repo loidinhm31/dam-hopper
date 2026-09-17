@@ -13,6 +13,7 @@ export interface CommandHistoryEntry {
   useCount: number;
   project?: string;
   projectUsage: Record<string, ProjectUsage>;
+  profileId?: string;
 }
 
 export interface HistorySearchResult {
@@ -20,26 +21,27 @@ export interface HistorySearchResult {
   score: number;
 }
 
-type StoredHistory = { version: 2; entries: unknown[] };
+type StoredHistory = { version: 3; entries: unknown[] };
 type LegacyEntry = Partial<CommandHistoryEntry> & {
   command?: unknown;
   lastUsedAt?: unknown;
   useCount?: unknown;
   project?: unknown;
+  profileId?: unknown;
 };
-
 const STORAGE_KEY = "dam-hopper:command-history";
 const HISTORY_ENABLED_STORAGE_KEY = "dam-hopper:command-history-enabled";
 const MAX_ENTRIES = 1000;
 const DECAY_DAYS = 30;
 
-function stableId(command: string): string {
+function stableId(command: string, profileId?: string): string {
   let value = 2166136261;
-  for (const char of command) {
+  const raw = profileId ? `${profileId}\u0000${command}` : command;
+  for (const char of raw) {
     value ^= char.codePointAt(0) ?? 0;
     value = Math.imul(value, 16777619);
   }
-  return `v2-${(value >>> 0).toString(36)}`;
+  return `v3-${(value >>> 0).toString(36)}`;
 }
 
 function toSearchText(command: string): string {
@@ -77,8 +79,13 @@ function toEntry(value: LegacyEntry): CommandHistoryEntry | null {
             },
           }
         : {};
+  const profileId =
+    typeof value.profileId === "string" ? value.profileId : undefined;
   return {
-    id: typeof value.id === "string" ? value.id : stableId(value.command),
+    id:
+      typeof value.id === "string"
+        ? value.id
+        : stableId(value.command, profileId),
     command: value.command,
     searchText:
       typeof value.searchText === "string"
@@ -88,19 +95,24 @@ function toEntry(value: LegacyEntry): CommandHistoryEntry | null {
     useCount: value.useCount,
     project,
     projectUsage,
+    profileId,
   };
 }
-
 function loadEntries(): CommandHistoryEntry[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    const values = Array.isArray(parsed)
-      ? parsed
-      : Array.isArray((parsed as StoredHistory)?.entries)
-        ? (parsed as StoredHistory).entries
-        : [];
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      (parsed as StoredHistory).version !== 3 ||
+      !Array.isArray((parsed as StoredHistory).entries)
+    ) {
+      // Discard legacy/unversioned entries per Phase 04 / G0 specification
+      return [];
+    }
+    const values = (parsed as StoredHistory).entries;
     return values.flatMap((value) => {
       const entry = toEntry(value as LegacyEntry);
       return entry ? [entry] : [];
@@ -112,7 +124,7 @@ function loadEntries(): CommandHistoryEntry[] {
 
 function saveEntries(entries: CommandHistoryEntry[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, entries }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 3, entries }));
   } catch {
     // Quota or privacy failures intentionally leave command persistence disabled.
   }
@@ -134,11 +146,19 @@ export function setHistoryEnabled(enabled: boolean): void {
   }
 }
 
-export function recordCommand(command: string, project?: string): void {
+export function recordCommand(
+  command: string,
+  project?: string,
+  profileId?: string,
+): void {
   if (!isHistoryEnabled() || !command) return;
   const now = Date.now();
   const entries = loadEntries();
-  const entry = entries.find((candidate) => candidate.command === command);
+  const entry = entries.find(
+    (candidate) =>
+      candidate.command === command &&
+      (candidate.profileId ?? "") === (profileId ?? ""),
+  );
   if (entry) {
     entry.lastUsedAt = now;
     entry.useCount += 1;
@@ -155,7 +175,7 @@ export function recordCommand(command: string, project?: string): void {
     }
   } else {
     entries.push({
-      id: stableId(command),
+      id: stableId(command, profileId),
       command,
       searchText: toSearchText(command),
       lastUsedAt: now,
@@ -164,6 +184,7 @@ export function recordCommand(command: string, project?: string): void {
       projectUsage: project
         ? { [project]: { lastUsedAt: now, useCount: 1 } }
         : {},
+      profileId,
     });
   }
   entries.sort((left, right) => right.lastUsedAt - left.lastUsedAt);
@@ -187,16 +208,25 @@ function score(entry: CommandHistoryEntry, queryTokens: string[]): number {
 }
 
 /** Shared ranking: exact raw prefixes win; normalized Unicode tokens rank the rest. */
-export function searchHistory(query: string, limit = 5): HistorySearchResult[] {
+export function searchHistory(
+  query: string,
+  limit = 5,
+  profileId?: string,
+): HistorySearchResult[] {
   if (!query) return [];
   const queryTokens = tokens(query);
-  const results = loadEntries().flatMap((entry) => {
-    const prefix = entry.command.startsWith(query);
-    const rank = prefix
-      ? 10_000 + score(entry, queryTokens)
-      : score(entry, queryTokens);
-    return rank > 0 ? [{ entry, score: rank }] : [];
-  });
+  const results = loadEntries()
+    .filter(
+      (entry) =>
+        !profileId || !entry.profileId || entry.profileId === profileId,
+    )
+    .flatMap((entry) => {
+      const prefix = entry.command.startsWith(query);
+      const rank = prefix
+        ? 10_000 + score(entry, queryTokens)
+        : score(entry, queryTokens);
+      return rank > 0 ? [{ entry, score: rank }] : [];
+    });
   return results
     .sort((left, right) => right.score - left.score)
     .slice(0, limit);
@@ -217,6 +247,10 @@ export function clearHistory(): void {
   }
 }
 
-export function getHistory(): CommandHistoryEntry[] {
-  return loadEntries();
+export function getHistory(profileId?: string): CommandHistoryEntry[] {
+  const entries = loadEntries();
+  if (!profileId) return entries;
+  return entries.filter(
+    (entry) => !entry.profileId || entry.profileId === profileId,
+  );
 }

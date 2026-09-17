@@ -1,4 +1,7 @@
 # 2026-09-17
+- **Unified multi-profile workbench — Phase 04 terminals, workflow, and owner-directed navigation complete (100%).** Delivered shared keep-alive PTY continuity across shell/project focus changes, owner-qualified terminal layouts/history/pins/incarnations, owner-bound workflow links and notification navigation, profile-isolated diagnostics exports, and fresh-state reset.
+- Scoped Phase 04 UI suites passed **42/42 tests** and the UI TypeScript build completed cleanly; Cycle 3 code review approved **8.8/10** with no critical issues. Follow-up warnings remain non-blocking.
+- [Phase 04 guide](./phase-04-terminal-continuity-workflow-navigation.md) · [Phase 04 plan](../plans/260916-2137-unified-profile/phase-04-terminals-workflow-and-navigation.md) · [Parent plan](../plans/260916-2137-unified-profile/plan.md) · [Final code review](../plans/reports/code-review-260917-1321-phase-04-terminals-and-workflow.md).
 
 - **Unified multi-profile workbench — Phase 02 complete (100%).** Delivered
   independent profile connections and controls, endpoint-bound credentials,

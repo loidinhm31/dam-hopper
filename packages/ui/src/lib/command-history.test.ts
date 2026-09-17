@@ -77,24 +77,23 @@ describe("command history privacy", () => {
     expect(getHistory()).toEqual([]);
   });
 
-  it("retains legacy records in memory until a verified command writes v2", () => {
+  it("discards legacy unversioned/v2 records per unified profile cutover and writes v3", () => {
     const legacy = [
       { command: "git status", lastUsedAt: 1, useCount: 1, project: "web" },
     ];
     localStorage.setItem(entriesKey, JSON.stringify(legacy));
 
-    expect(getHistory()[0]).toMatchObject({
-      command: "git status",
-      id: expect.stringMatching(/^v2-/),
-      projectUsage: { web: { lastUsedAt: 1, useCount: 1 } },
-    });
-    expect(localStorage.getItem(entriesKey)).toBe(JSON.stringify(legacy));
+    // Legacy entries are discarded per design-contracts.md line 125
+    expect(getHistory()).toEqual([]);
 
-    recordCommand("git status", "api");
+    recordCommand("git status", "api", "p1");
     expect(JSON.parse(localStorage.getItem(entriesKey) ?? "{}")).toMatchObject({
-      version: 2,
+      version: 3,
       entries: [
         expect.objectContaining({
+          id: expect.stringMatching(/^v3-/),
+          command: "git status",
+          profileId: "p1",
           projectUsage: expect.objectContaining({ api: expect.any(Object) }),
         }),
       ],

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { isNativeWindowsHost } from "@/api/server-config.js";
+import { terminalKey } from "@/api/ownership.js";
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { useAppZoom } from "@/contexts/AppZoomContext.js";
@@ -55,22 +56,31 @@ export function TerminalKeepAliveHost({
     >
       {mountedSessions.map((session, mountedIndex) => {
         const tabIndex = openTabs?.findIndex(
-          (tab) => tab.sessionId === session.sessionId,
+          (tab) =>
+            tab.sessionId === session.sessionId &&
+            (session.profileId ? tab.profileId === session.profileId : true),
         );
         const terminalOrder = openTabs
           ? tabIndex !== undefined && tabIndex >= 0
             ? tabIndex + 1
             : undefined
           : mountedIndex + 1;
+        const key = session.terminalRef
+          ? terminalKey(session.terminalRef)
+          : session.profileId
+            ? JSON.stringify([session.profileId, session.sessionId])
+            : session.sessionId;
 
         return (
           <TerminalPanel
-            key={session.sessionId}
+            key={key}
             sessionId={session.sessionId}
             project={session.project}
             command={session.command}
             cwd={session.cwd}
             worktreePath={session.worktreePath}
+            profileId={session.profileId}
+            terminalRef={session.terminalRef}
             onExit={() => onSessionExit?.(session.sessionId)}
             onNewTerminal={onNewTerminal}
             onTerminalReady={onTerminalReady}

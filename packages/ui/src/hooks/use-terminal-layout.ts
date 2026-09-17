@@ -43,7 +43,7 @@ function loadLayout(storageKey: string): LayoutNode | null {
 
 function saveLayout(storageKey: string, root: LayoutNode): void {
   try {
-    const layout: PersistedLayout = { version: 1, root };
+    const layout: PersistedLayout = { version: 2, root };
     localStorage.setItem(storageKey, JSON.stringify(layout));
   } catch {
     // localStorage may be full or unavailable — silently continue
@@ -98,7 +98,16 @@ export function useTerminalLayout(storageKey: string): UseTerminalLayoutResult {
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(
     initialData.focus,
   );
+  const prevKeyRef = useRef(storageKey);
 
+  useEffect(() => {
+    if (prevKeyRef.current !== storageKey) {
+      prevKeyRef.current = storageKey;
+      const loaded = loadLayout(storageKey) ?? defaultLayout();
+      setRoot(loaded);
+      setFocusedPaneId(collectPanes(loaded)[0]?.id ?? null);
+    }
+  }, [storageKey]);
   const splitPane = useCallback(
     (paneId: string, direction: SplitDirection): string => {
       const newPane = newPaneNode();

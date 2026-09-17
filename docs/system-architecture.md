@@ -1,12 +1,14 @@
 # System Architecture
 
-## Unified-profile workbench (Phases 00–03; Phase 03 implemented 2026-09-17)
+## Unified-profile workbench (Phases 00–04; Phase 04 implemented 2026-09-17)
 
 This is the frontend ownership cutover for the unified workbench. It is
 separate from the backend workspace-registry redesign later in this document.
-Phases 00–03 are implemented; later phases remain plan-gated. The Phase 03
-files/editor/search/Git contract is summarized in
-[the dedicated workbench guide](./phase-03-files-editor-search-git.md).
+Phases 00–04 are implemented; later phases remain plan-gated. The Phase 03
+files/editor/search/Git contract and Phase 04 terminal/workflow contract are
+summarized in their dedicated workbench guides:
+- [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)
+- [Phase 04: Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)
 
 - `DamHopperApp` mounts one shell and route tree even when profiles are empty,
   offline, login-required, or unsupported. Startup reads profiles and launches
@@ -62,7 +64,7 @@ operations, query/event/cleanup boundaries, protocol-2/media-v2 and
 artifact-incarnation admission, native-scope identity and single-writer gates.
 Cycle 2 approved the baseline at 9.9/10 and recorded 3,090/3,090 tests (1,412 Cargo +
 1,678 Vitest) as prior review evidence. Phase 00 changed no runtime source and
-makes no runtime-qualification claim; Phases 01–03 are implemented in the
+makes no runtime-qualification claim; Phases 01–04 are implemented in the
 frontend ownership cutover, while later phases and S01–S13 remain future
 implementation and qualification work. Qualified web and native release gates
 remain independent.
@@ -130,6 +132,69 @@ previews use session-bound opaque capabilities; credentials are never embedded
 in media URLs and the editor never falls back to whole-file Blob materialization.
 The detailed source map is in
 [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
+
+### Phase 04 terminal continuity, workflow, and owner-directed navigation (2026-09-17)
+
+Phase 04 completes the terminal side of the unified-profile workbench. A
+terminal is identified by the qualified tuple `{ profileId, id }`; a live
+incarnation adds `incarnation`. `terminalKey()` and `terminalInstanceKey()` in
+`packages/ui/src/api/ownership.ts` are the canonical key builders. A bare
+session ID is accepted only as a compatibility lookup and must not decide
+which profile owns a request.
+
+The registry, mounted-session list, activity tracker, incarnation fence, and
+layout tree all use qualified identity:
+
+- `terminal-registry.ts` stores canonical tuple keys and keeps a raw-ID alias
+  only when it is unambiguous. Raw removal verifies that the alias still
+  points at the requested entry before deleting it.
+- `terminal-mounted-sessions.ts` matches `{ profileId, sessionId }`, so a
+  session mounted in another profile is preserved during auto-attach.
+- `terminal-incarnation-state.ts` rejects older lifecycle incarnations before
+  they can replace newer state. Output activity uses the same owner key and a
+  bounded three-second observation window.
+- `TerminalPanel`, `TerminalTabBar`, `PaneContainer`, and keep-alive hosts
+  derive a `TerminalRef` before registering, attaching, focusing, or removing
+  an xterm. PTY DOM lifetime follows the qualified terminal, not a global
+  session ID.
+
+Owner-bound transport is the other half of the boundary. `createApiClient()`
+captures an owner and transport; terminal and workflow requests project only
+server-wire fields after checking the owner. Hooks include profile and
+connection generation in query keys and reject stale generations before
+publishing. A small ambient `api` fallback remains for compatibility paths;
+new owner-aware code must use the bound client rather than the active profile.
+
+Browser persistence is explicitly versioned and partitioned:
+
+| Store | Key/version | Boundary |
+| --- | --- | --- |
+| Terminal layout | `dam-hopper:terminal-layout:v3:<encoded-owner-group>`; payload v2 | `{ profileId, groupId }`; raw session IDs remain inside the owner partition |
+| Terminal pins | `dam-hopper:terminal-pins:v2:<encoded-profileId>`; payload v2 | Profile-specific IDs-only records; legacy v1 is removed |
+| Command history | `StoredHistory.version: 3` | Profile-salted IDs; owner-aware callers filter reads; exact command text stays local |
+
+`fresh-state-reset.ts` removes unqualified legacy terminal layout and pin
+records, while preserving valid v3 layout and v3 command-history records. It
+does not migrate an unqualified terminal into a profile or clear unrelated
+profile/auth/native/server state.
+
+Workflow links carry the profile and may carry a terminal incarnation.
+`workflow-queries.ts` uses owner/generation-qualified keys and bound API
+clients. `workflow-workspace-integration.ts` checks profile ownership and, when
+available, the expected incarnation before revealing a terminal; missing,
+cross-profile, missing-session, and incarnation-mismatch links are unavailable
+instead of being redirected to another terminal. Notification selection uses
+the same qualified target and routes to the owning terminal surface.
+
+Diagnostics export is owner-directed. The frontend filters the diagnostics
+snapshot by `profileId` and optional terminal IDs before exporting bounded
+terminal tails (default 60-minute window and 65,536-byte tail limit). Export
+filenames include the profile when supplied. Browser/react/route diagnostics
+remain available, but terminal output from another profile is excluded.
+
+The implementation map, persistence formats, compatibility notes, review
+warnings, and focused verification evidence are maintained in
+[Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md).
 
 
 ## Proposed concurrent runtime cutover (2026-09-16; not implemented)
@@ -1487,14 +1552,17 @@ native-keyboard-suppressed surfaces disable automatic ghost and history-shortcut
 Fuzzy/non-prefix results remain for an explicitly focused accessible list rather than passive
 completion.
 
-History v2 is browser-local under `dam-hopper:command-history` as `{ version: 2, entries }`.
-Each entry retains an exact raw command, a stable v2 id, last-used timestamp, total use count,
-current project, and a per-project usage map. Its NFKC-lowercased `searchText` and Unicode
-word tokens are derived search fields only; they never reconstruct or alter the raw command.
-The shared ranking puts byte-exact raw prefixes ahead of normalized token-prefix matches, then
-uses recency and usage as tie-breaking signals. Legacy records are normalized in memory and
-are not rewritten until a later verified command write. Disabled or inaccessible local storage
-fails closed, and the Settings controls can stop future writes or clear stored history.
+History v3 is browser-local under `dam-hopper:command-history` as
+`{ version: 3, entries }`. Each entry retains exact raw command text, a stable
+v3 ID salted with `profileId` when supplied, last-used timestamp, total use
+count, current project, and a per-project usage map. Its NFKC-lowercased
+`searchText` and Unicode word tokens are derived search fields only; they never
+reconstruct or alter the raw command. Profile-aware callers pass their owner to
+search and do not merge another profile's qualified entries. Unqualified
+compatibility records remain eligible only where the caller deliberately uses
+the compatibility path. Legacy or unversioned records are discarded rather
+than rewritten. Disabled or inaccessible local storage fails closed, and the
+Settings controls can stop future writes or clear stored history.
 
 The server preserves ordering at the prompt boundary: visible PTY output is emitted before its
 pending `editing` lifecycle snapshot. A marker-only chunk cannot flush `editing`; it waits for

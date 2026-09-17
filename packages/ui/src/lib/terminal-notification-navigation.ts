@@ -1,8 +1,14 @@
+import type { TerminalRef } from "@/api/ownership.js";
+
 export const TERMINAL_NOTIFICATION_SELECT_EVENT =
   "dam-hopper:terminal-notification-select";
 
 export class TerminalNotificationSelectEvent extends Event {
-  constructor(readonly sessionId: string) {
+  constructor(
+    readonly sessionId: string,
+    readonly profileId?: string,
+    readonly terminalRef?: TerminalRef,
+  ) {
     super(TERMINAL_NOTIFICATION_SELECT_EVENT);
   }
 }
@@ -10,17 +16,29 @@ export class TerminalNotificationSelectEvent extends Event {
 export function dispatchTerminalNotificationSelection(
   sessionId: string,
   target: EventTarget = window,
+  profileId?: string,
+  terminalRef?: TerminalRef,
 ): void {
-  target.dispatchEvent(new TerminalNotificationSelectEvent(sessionId));
+  target.dispatchEvent(
+    new TerminalNotificationSelectEvent(sessionId, profileId, terminalRef),
+  );
 }
 
 export function subscribeToTerminalNotificationSelection(
-  listener: (sessionId: string) => void,
+  listener: (
+    sessionId: string,
+    profileId?: string,
+    terminalRef?: TerminalRef,
+  ) => void,
   target: EventTarget = window,
 ): () => void {
   const handleSelection = (event: Event) => {
     if (event instanceof TerminalNotificationSelectEvent) {
-      listener(event.sessionId);
+      if (event.profileId !== undefined || event.terminalRef !== undefined) {
+        listener(event.sessionId, event.profileId, event.terminalRef);
+      } else {
+        listener(event.sessionId);
+      }
     }
   };
 
@@ -118,7 +136,11 @@ export function activateTerminalAfterNavigation({
     if (disposed) return;
 
     unsubscribe = subscribeToTerminal((registeredSessionId) => {
-      if (registeredSessionId !== sessionId || !hasTerminal(sessionId)) return;
+      const matches =
+        registeredSessionId === sessionId ||
+        (registeredSessionId.startsWith("[") &&
+          registeredSessionId.includes(sessionId));
+      if (!matches || !hasTerminal(sessionId)) return;
       activateTerminal(sessionId);
       dispose();
     });

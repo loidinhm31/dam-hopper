@@ -681,6 +681,72 @@ and [code review](../plans/reports/code-reviewer-260902-1144-phase-04-client-typ
 notes, paths, external IDs, or request bodies. Server validation remains
 authoritative for workspace/target ownership, limits, errors, and replay.
 
+### PR-019: Unified-Profile Terminal Continuity and Owner Navigation (Phase 04)
+
+**Status:** Complete / DONE on 2026-09-17. The implementation review recorded
+42/42 focused UI contract tests and a clean UI build. The detailed source map
+and compatibility notes are in
+[Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md);
+the plan record is
+[Phase 04 terminals, workflow, and navigation](../plans/260916-2137-unified-profile/phase-04-terminals-workflow-and-navigation.md).
+
+**Product goal:** A user may switch profiles, reconnect, change terminal
+layout, or follow a workflow/notification link without attaching to another
+profile's PTY or to a stale process incarnation.
+
+**Functional Requirements:**
+
+- Define terminal identity as `{ profileId, id }` and process freshness as
+  `{ profileId, id, incarnation }`; use canonical tuple keys throughout the
+  registry, mounted sessions, activity, layout, and navigation.
+- Route terminal and workflow requests through the API client bound to the
+  captured profile connection/generation. Reject stale generations before
+  publishing results or applying mutations.
+- Preserve terminal continuity with owner-qualified layout `v3`/payload v2,
+  profile-partitioned pin `v2`/payload v2, and profile-aware command-history
+  v3. Remove unqualified legacy terminal stores without attributing them.
+- Carry profile and optional incarnation through workflow links and
+  notification targets. Reveal only the requested owner and incarnation;
+  classify missing, cross-profile, missing-session, and stale links as
+  unavailable.
+- Export diagnostics by requested profile and optional terminal IDs, with
+  bounded time and terminal-tail limits; never include another profile's
+  terminal output.
+
+**Architecture and changed boundaries:**
+
+- `ownership.ts`, `terminal-registry.ts`, `terminal-incarnation-state.ts`,
+  `terminal-output-activity.ts`, `terminal-mounted-sessions.ts`, and
+  `terminal-auto-attach.ts` own identity and lifecycle admission.
+- `terminal-layout-tree.ts`, `use-terminal-layout.ts`,
+  `terminal-pin-persistence.ts`, `command-history.ts`, and
+  `fresh-state-reset.ts` own browser continuity and versioned persistence.
+- `workflow-queries.ts`, `workflow-workspace-integration.ts`,
+  `terminal-notification-navigation.ts`, and
+  `terminal-notification-signal-parser.ts` own owner-directed reveal.
+- `diagnostics-client.ts` and `diagnostics-export.ts` own bounded,
+  profile-filtered evidence export; server PTYs and workflow persistence
+  remain authoritative.
+
+**Acceptance Criteria:**
+
+- [x] Identical raw session IDs on two profiles remain distinct in registry,
+      mounted-session, activity, layout, pin, and query state.
+- [x] Older lifecycle incarnations cannot overwrite current terminal state or
+      receive post-replacement output/focus/input.
+- [x] Auto-attach and cleanup preserve terminals owned by another profile.
+- [x] Owner/generation query and transport boundaries prevent stale results
+      from publishing into the active profile.
+- [x] Workflow and notification selection never silently redirects across
+      profiles or incarnations.
+- [x] Diagnostics exports are bounded and exclude terminal evidence outside
+      the requested owner scope.
+
+**Security and boundaries:** Browser persistence contains IDs and metadata,
+not PTY bytes, credentials, or workflow notes. Compatibility raw-ID lookup is
+fail-closed when ownership is ambiguous. The frontend does not migrate an
+unqualified terminal or infer ownership from the current active profile.
+
 ### Workflow selected-item surface extension (2026-09-07)
 
 The responsive workflow context surface renders authoritative item notes and

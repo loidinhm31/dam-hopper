@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -11,10 +12,16 @@ import { SearchAddon } from "@xterm/addon-search";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { logger } from "@dam-hopper/shared/logger";
+import { terminalKey, type TerminalRef } from "@/api/ownership.js";
+import {
+  getConnectionSnapshot,
+  getTransport as getConnectionTransport,
+} from "@/api/connections.js";
 import { cn } from "@/lib/utils.js";
 import { getTransport } from "@/api/transport.js";
-import { api, type SessionInfo } from "@/api/client.js";
+import type { SessionInfo } from "@/api/client.js";
 import {
+  getTerminal,
   registerTerminal,
   removeTerminal,
   terminalRegistry,
@@ -86,6 +93,8 @@ interface TerminalPanelProps {
   cwd?: string;
   /** Server-validated worktree target used when creating or recovering this session. */
   worktreePath?: string;
+  profileId?: string;
+  terminalRef?: TerminalRef;
   /** Called when the PTY process exits */
   onExit?: (exitCode: number | null) => void;
   /** Called when Shift+Enter is pressed — used to open a new terminal */
@@ -143,6 +152,8 @@ export function TerminalPanel({
   command,
   cwd,
   worktreePath,
+  profileId,
+  terminalRef,
   onExit,
   onNewTerminal,
   onTerminalReady,
@@ -152,7 +163,7 @@ export function TerminalPanel({
   webglEnabled = false,
   className,
 }: TerminalPanelProps) {
-  const transportGeneration = useTransportGeneration();
+  const transportGeneration = useTransportGeneration(profileId);
   const { level: appZoomLevel } = useAppZoom();
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
@@ -186,6 +197,29 @@ export function TerminalPanel({
   }, [attachState]);
   sessionIdRef.current = safeSessionId;
 
+  const effectiveTerminalRef = useMemo<TerminalRef | undefined>(
+    () =>
+      terminalRef ??
+      (profileId ? { profileId, id: safeSessionId } : undefined),
+    [profileId, safeSessionId, terminalRef],
+  );
+  const terminalRegistrationKey = effectiveTerminalRef
+    ? terminalKey(effectiveTerminalRef)
+    : safeSessionId;
+
+  const getPanelTransport = useCallback(() => {
+    if (profileId) {
+      const snap = getConnectionSnapshot(profileId);
+      if (snap) {
+        try {
+          return getConnectionTransport(snap.owner);
+        } catch {
+          // fallback to active transport
+        }
+      }
+    }
+    return getTransport();
+  }, [profileId]);
   // Terminal instance ref — set after term.open(), used by useTerminalSuggestions
   const termRef = useRef<Terminal | null>(null);
   const rendererRef = useRef<TerminalRendererHandle | null>(null);
@@ -217,8 +251,8 @@ export function TerminalPanel({
   const suggestionsRef = useRef(suggestions);
   suggestionsRef.current = suggestions;
   const historyResults = historyQuery
-    ? searchHistory(historyQuery, 50)
-    : getHistory()
+    ? searchHistory(historyQuery, 50, profileId)
+    : getHistory(profileId)
         .slice(0, 50)
         .map((entry) => ({ entry, score: 0 }));
   const ghostSuffix = getTerminalSuggestionSuffix(suggestions.snapshot, "full");
@@ -228,10 +262,10 @@ export function TerminalPanel({
       // A newline is an execution boundary in a PTY; the dialog keeps it copy-only.
       if (/\r|\n/.test(historyCommand)) return;
       suggestionsRef.current.closeExplicitList();
-      getTransport().terminalWrite(safeSessionId, historyCommand);
+      getPanelTransport().terminalWrite(safeSessionId, historyCommand);
       if (!shouldSuppressNativeKeyboard) termRef.current?.focus();
     },
-    [safeSessionId, shouldSuppressNativeKeyboard],
+    [safeSessionId, shouldSuppressNativeKeyboard, getPanelTransport],
   );
 
   useEffect(() => {
@@ -310,7 +344,7 @@ export function TerminalPanel({
     // remains fail-closed before a buffer arrives, then queues until replay parsing
     // is complete so historical OSC 9 events cannot be delivered as live alerts.
     const streamReplayGate = createTerminalStreamReplayGate();
-    const outputActivity = registerTerminalOutputActivity(safeSessionId);
+    const outputActivity = registerTerminalOutputActivity(terminalRegistrationKey);
     const resetActivityForUnavailableStream = () => {
       resetTerminalStreamReplayGateForAttach(streamReplayGate);
       outputActivity.setStreamReady(false);
@@ -373,11 +407,12 @@ export function TerminalPanel({
 
     // Register in global registry so PaneContainer can reparent the terminal element
     const terminalEntry = registerTerminal(
-      safeSessionId,
+      terminalRegistrationKey,
       term,
       fitAddon,
       findController,
       terminalBoundary,
+      effectiveTerminalRef,
     );
     geometryAdapter = new TerminalCursorGeometryAdapter(
       term,
@@ -389,11 +424,13 @@ export function TerminalPanel({
     onTerminalReady?.(safeSessionId);
     releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null, term);
 
-    const transport = getTransport();
+    const transport = getPanelTransport();
     agentNotifications = attachTerminalAgentNotifications({
       term,
       sessionId: safeSessionId,
       project,
+      profileId,
+      terminalRef: effectiveTerminalRef,
       getTerminalOrder: () => terminalOrderRef.current,
     });
 
@@ -500,7 +537,7 @@ export function TerminalPanel({
     unsubExitEnhanced =
       transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
         const currentIncarnation =
-          latestTerminalSessionIncarnation(safeSessionId);
+          latestTerminalSessionIncarnation(terminalRegistrationKey);
         if (
           exitEvent.incarnation === undefined
             ? currentIncarnation !== undefined
@@ -512,7 +549,7 @@ export function TerminalPanel({
 
         if (exitEvent.incarnation !== undefined) {
           rememberTerminalSessionIncarnation(
-            safeSessionId,
+            terminalRegistrationKey,
             exitEvent.incarnation,
           );
         }
@@ -687,7 +724,10 @@ export function TerminalPanel({
         })
         .then((session) => {
           if (session) {
-            rememberTerminalSessionIncarnation(session.id, session.incarnation);
+            rememberTerminalSessionIncarnation(
+              effectiveTerminalRef ?? session.id,
+              session.incarnation,
+            );
           }
           retryUnavailableAfterReplayRef.current = false;
         });
@@ -779,10 +819,9 @@ export function TerminalPanel({
       });
     }
 
-    // Start initialization flow
-    api.workspace
-      .status()
-      .then(() => transport.invoke<SessionInfo[]>("terminal:listDetailed"))
+    // Start initialization flow without ambient workspace.status()
+    transport
+      .invoke<SessionInfo[]>("terminal:listDetailed")
       .then((sessions) => {
         if (disposed) return;
         const existingSession = sessions.find((s) => s.id === safeSessionId);
@@ -849,7 +888,7 @@ export function TerminalPanel({
       findUnsubscribeRef.current = null;
       findController.dispose();
       findControllerRef.current = null;
-      removeTerminal(safeSessionId);
+      removeTerminal(terminalRegistrationKey);
       termRef.current = null;
       openedRef.current = false;
       rendererRef.current?.dispose();
@@ -863,7 +902,7 @@ export function TerminalPanel({
 
   useClientLayoutEffect(() => {
     const term = termRef.current;
-    const entry = terminalRegistry.get(safeSessionId);
+    const entry = getTerminal(terminalRegistrationKey);
     const attachmentElement = entry?.attachmentElement ?? term?.element;
     if (!term || !attachmentElement || !entry) return;
 
@@ -924,7 +963,7 @@ export function TerminalPanel({
       shouldSuppressNativeKeyboard,
     );
     if (!shouldSuppressTerminalFocus) return;
-    const entry = terminalRegistry.get(safeSessionId);
+    const entry = getTerminal(terminalRegistrationKey);
     if (entry) {
       cancelScheduledTerminalFit(entry);
       scheduleTerminalFit(entry, { focus: false });

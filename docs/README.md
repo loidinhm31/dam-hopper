@@ -14,6 +14,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 - **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage profile-scoped server connections and storage
 - **[Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)** — Profile-qualified IDE resources, federated search/replace, previews, and target-aware Git
+- **[Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)** — Owner-qualified terminal identity, persistence, workflow reveal, notifications, and diagnostics
 - **[Frontend Components](./frontend-components.md)** — Shared React component architecture and host lifecycle
 - **[Workflow Context Surface](./workflow-context-surface.md)** — Responsive Plan/item details, notes, and inline editing
 - **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries
@@ -92,6 +93,17 @@ search/replace.
 - Fetch/pull/push retain independent target results; SSH retry does not replay
   successful targets.
 - See [Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
+
+**Terminal Continuity, Workflow, and Owner Navigation (Phase 04)** — Terminal
+identity, xterm lifetime, versioned layout/pin/history persistence, workflow
+reveal, notifications, and profile-filtered diagnostics are all owner-scoped.
+
+- Terminal identity is `{ profileId, id }`; incarnation checks reject stale
+  lifecycle events and cross-profile raw-ID collisions.
+- Layout `v3`, pins `v2`, and command history `v3` never attribute an
+  unqualified legacy record to a profile.
+- See [Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md).
+
 **Project Registry Management** — TOML-based registry, project discovery, hot-reload.
 
 - Config: `~/.config/dam-hopper/dam-hopper.toml` by default, or any file passed via `--config`

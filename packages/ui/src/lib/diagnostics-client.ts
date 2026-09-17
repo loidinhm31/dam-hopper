@@ -3,7 +3,7 @@ import {
   redactLogMetadata,
   type LogEntry,
 } from "@dam-hopper/shared/logger";
-import { getActiveProfile } from "@/api/server-config.js";
+import { getActiveProfile, getProfiles } from "@/api/server-config.js";
 import type { WsStatus } from "@/api/ws-transport.js";
 
 const STORAGE_KEY = "damhopper_diagnostics_frontend_v1";
@@ -239,7 +239,7 @@ export class DiagnosticsClient {
     });
   }
 
-  public snapshot(): ClientDiagnosticsSnapshot {
+  public snapshot(targetProfileId?: string): ClientDiagnosticsSnapshot {
     this.pruneAndPersist();
     const logs = [...this.entries];
     return {
@@ -259,7 +259,7 @@ export class DiagnosticsClient {
           entry.type === "react.error",
       ),
       currentRoute: this.currentRoute,
-      profile: this.getProfileSnapshot(),
+      profile: this.getProfileSnapshot(targetProfileId),
       transportStatus: this.transportStatus,
     };
   }
@@ -357,9 +357,14 @@ export class DiagnosticsClient {
     }
   }
 
-  private getProfileSnapshot(): ClientDiagnosticsSnapshot["profile"] {
+  private getProfileSnapshot(
+    targetProfileId?: string,
+  ): ClientDiagnosticsSnapshot["profile"] {
     try {
-      const profile = getActiveProfile();
+      const profile = targetProfileId
+        ? (getProfiles().find((p) => p.id === targetProfileId) ??
+          getActiveProfile())
+        : getActiveProfile();
       if (!profile) return null;
       return {
         id: profile.id,
@@ -396,6 +401,8 @@ export function setClientTransportStatus(status: WsStatus): void {
   defaultDiagnosticsClient.setTransportStatus(status);
 }
 
-export function getClientDiagnosticsSnapshot(): ClientDiagnosticsSnapshot {
-  return defaultDiagnosticsClient.snapshot();
+export function getClientDiagnosticsSnapshot(
+  targetProfileId?: string,
+): ClientDiagnosticsSnapshot {
+  return defaultDiagnosticsClient.snapshot(targetProfileId);
 }

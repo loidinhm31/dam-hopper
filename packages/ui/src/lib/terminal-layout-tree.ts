@@ -64,7 +64,7 @@ export function loadPersistedLayout(raw: string | null): LayoutNode | null {
   if (
     typeof parsed !== "object" ||
     parsed === null ||
-    parsed.version !== 1 ||
+    (parsed.version !== 1 && parsed.version !== 2) ||
     !isValidNode(parsed.root)
   ) {
     return null;

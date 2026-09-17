@@ -1,4 +1,10 @@
-export const TERMINAL_PIN_STORAGE_KEY = "dam-hopper:terminal-pins:v1";
+export const TERMINAL_PIN_STORAGE_KEY = "dam-hopper:terminal-pins:v2";
+export const LEGACY_TERMINAL_PIN_STORAGE_KEY = "dam-hopper:terminal-pins:v1";
+export function getTerminalPinStorageKey(profileId?: string): string {
+  return profileId
+    ? `dam-hopper:terminal-pins:v2:${encodeURIComponent(profileId)}`
+    : TERMINAL_PIN_STORAGE_KEY;
+}
 
 export interface TerminalPinStorage {
   getItem(key: string): string | null;
@@ -7,7 +13,7 @@ export interface TerminalPinStorage {
 }
 
 interface TerminalPinPayload {
-  version: 1;
+  version: 2;
   sessionIds: string[];
 }
 
@@ -18,10 +24,14 @@ function defaultStorage(): TerminalPinStorage | undefined {
     return undefined;
   }
 }
-
-function removeStoredPins(storage: TerminalPinStorage | undefined) {
+function removeStoredPins(
+  storage: TerminalPinStorage | undefined,
+  profileId?: string,
+) {
   try {
-    storage?.removeItem(TERMINAL_PIN_STORAGE_KEY);
+    const key = getTerminalPinStorageKey(profileId);
+    storage?.removeItem(key);
+    storage?.removeItem(LEGACY_TERMINAL_PIN_STORAGE_KEY);
   } catch {
     // Browser storage is optional UI state.
   }
@@ -31,25 +41,27 @@ function isValidPayload(value: unknown): value is TerminalPinPayload {
   if (!value || typeof value !== "object") return false;
   const payload = value as Partial<TerminalPinPayload>;
   return (
-    payload.version === 1 &&
+    payload.version === 2 &&
     Array.isArray(payload.sessionIds) &&
     payload.sessionIds.every(
       (sessionId) => typeof sessionId === "string" && sessionId.length > 0,
     )
   );
 }
-
 export function loadPinnedTerminalIds(
   storage: TerminalPinStorage | undefined = defaultStorage(),
+  profileId?: string,
 ): Set<string> {
   let raw: string | null;
+  const key = getTerminalPinStorageKey(profileId);
   try {
-    raw = storage?.getItem(TERMINAL_PIN_STORAGE_KEY) ?? null;
+    // Clean up legacy v1 key if present
+    storage?.removeItem(LEGACY_TERMINAL_PIN_STORAGE_KEY);
+    raw = storage?.getItem(key) ?? null;
   } catch {
     return new Set();
   }
   if (raw === null) return new Set();
-
   try {
     const payload: unknown = JSON.parse(raw);
     if (isValidPayload(payload)) return new Set(payload.sessionIds);
@@ -57,27 +69,29 @@ export function loadPinnedTerminalIds(
     // Invalid browser storage must not interrupt terminal initialization.
   }
 
-  removeStoredPins(storage);
+  removeStoredPins(storage, profileId);
   return new Set();
 }
 
 export function savePinnedTerminalIds(
   sessionIds: Iterable<string>,
   storage: TerminalPinStorage | undefined = defaultStorage(),
+  profileId?: string,
 ) {
   const normalized = [...new Set(sessionIds)].filter(
     (sessionId) => sessionId.length > 0,
   );
+  const key = getTerminalPinStorageKey(profileId);
 
   try {
     if (normalized.length === 0) {
-      storage?.removeItem(TERMINAL_PIN_STORAGE_KEY);
+      storage?.removeItem(key);
       return;
     }
     storage?.setItem(
-      TERMINAL_PIN_STORAGE_KEY,
+      key,
       JSON.stringify({
-        version: 1,
+        version: 2,
         sessionIds: normalized,
       } satisfies TerminalPinPayload),
     );

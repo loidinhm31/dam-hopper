@@ -16,7 +16,7 @@ import {
   scheduleTerminalFit,
 } from "@/lib/terminal-fit-scheduler.js";
 import {
-  terminalRegistry,
+  getTerminal,
   subscribeToRegistry,
 } from "@/lib/terminal-registry.js";
 import type { PaneNode } from "@/types/terminal-layout.js";
@@ -123,7 +123,7 @@ export const PaneContainer = memo(function PaneContainer({
     const doReparent = () => {
       if (shouldSuppressTerminalFocus) {
         for (const sessionId of node.sessionIds) {
-          cancelScheduledTerminalFit(terminalRegistry.get(sessionId));
+          cancelScheduledTerminalFit(getTerminal(sessionId));
         }
       }
       attachTerminalsToHost({
@@ -134,7 +134,7 @@ export const PaneContainer = memo(function PaneContainer({
       });
       for (const sessionId of node.sessionIds) {
         syncNativeKeyboardSuppression(
-          terminalRegistry.get(sessionId)?.terminal ?? null,
+          getTerminal(sessionId)?.terminal ?? null,
           shouldSuppressTerminalFocus,
         );
       }
@@ -145,7 +145,12 @@ export const PaneContainer = memo(function PaneContainer({
 
     // Subscribe to registry changes to handle terminals that initialize late
     const unsubscribe = subscribeToRegistry((registeredId) => {
-      if (node.sessionIds.includes(registeredId)) {
+      const entry = getTerminal(registeredId);
+      const rawId = entry?.terminalRef?.id ?? registeredId;
+      if (
+        node.sessionIds.includes(registeredId) ||
+        node.sessionIds.includes(rawId)
+      ) {
         doReparent();
       }
     });
@@ -157,7 +162,7 @@ export const PaneContainer = memo(function PaneContainer({
   useEffect(() => {
     if (!node.activeSessionId) return;
 
-    const entry = terminalRegistry.get(node.activeSessionId);
+    const entry = getTerminal(node.activeSessionId);
     if (!entry) return;
 
     const { terminal } = entry;
@@ -193,7 +198,7 @@ export const PaneContainer = memo(function PaneContainer({
           layout.setFocusedPaneId(prev.id);
           if (prev.activeSessionId) {
             onSelectTab(prev.activeSessionId);
-            const prevEntry = terminalRegistry.get(prev.activeSessionId);
+            const prevEntry = getTerminal(prev.activeSessionId);
             if (!shouldSuppressTerminalFocus) prevEntry?.terminal.focus();
           }
         }
@@ -215,7 +220,7 @@ export const PaneContainer = memo(function PaneContainer({
           layout.setFocusedPaneId(next.id);
           if (next.activeSessionId) {
             onSelectTab(next.activeSessionId);
-            const nextEntry = terminalRegistry.get(next.activeSessionId);
+            const nextEntry = getTerminal(next.activeSessionId);
             if (!shouldSuppressTerminalFocus) nextEntry?.terminal.focus();
           }
         }
@@ -286,7 +291,7 @@ export const PaneContainer = memo(function PaneContainer({
     if (!isFocused || shouldSuppressTerminalFocus || !node.activeSessionId) {
       return;
     }
-    terminalRegistry.get(node.activeSessionId)?.terminal.focus();
+    getTerminal(node.activeSessionId)?.terminal.focus();
   }, [node.activeSessionId, isFocused, shouldSuppressTerminalFocus]);
 
   // ── resize observer → fit active terminal ───────────────────────────────
@@ -296,7 +301,7 @@ export const PaneContainer = memo(function PaneContainer({
 
     const observer = new ResizeObserver(() => {
       if (!node.activeSessionId) return;
-      scheduleTerminalFit(terminalRegistry.get(node.activeSessionId));
+      scheduleTerminalFit(getTerminal(node.activeSessionId));
     });
 
     observer.observe(container);
@@ -321,7 +326,7 @@ export const PaneContainer = memo(function PaneContainer({
         if (node.activeSessionId) {
           onSelectTab(node.activeSessionId);
           if (!shouldSuppressTerminalFocus) {
-            terminalRegistry.get(node.activeSessionId)?.terminal.focus();
+            getTerminal(node.activeSessionId)?.terminal.focus();
           }
         }
       }}

@@ -1,3 +1,5 @@
+import { toTerminalKey, type TerminalRef } from "@/api/ownership.js";
+
 export const TERMINAL_OUTPUT_ACTIVITY_WINDOW_MS = 3_000;
 
 export interface TerminalOutputActivitySnapshot {
@@ -148,19 +150,25 @@ function disposeState(
 }
 
 export function getTerminalOutputActivitySnapshot(
-  sessionId: string,
+  target: TerminalRef | string,
 ): TerminalOutputActivitySnapshot {
-  return sessions.get(sessionId)?.snapshot ?? EMPTY_SNAPSHOT;
+  const key = toTerminalKey(target);
+  return (
+    sessions.get(key)?.snapshot ??
+    (typeof target === "string" ? sessions.get(target)?.snapshot : undefined) ??
+    EMPTY_SNAPSHOT
+  );
 }
 export function getTerminalOutputActivityRevision(): number {
   return activityRevision;
 }
 
 export function subscribeToTerminalOutputActivity(
-  sessionId: string,
+  target: TerminalRef | string,
   listener: Listener,
 ): () => void {
-  const state = getOrCreate(sessionId);
+  const key = toTerminalKey(target);
+  const state = getOrCreate(key);
   state.listeners.add(listener);
   let subscribed = true;
   return () => {
@@ -169,46 +177,49 @@ export function subscribeToTerminalOutputActivity(
     state.listeners.delete(listener);
     if (state.listeners.size === 0 && state.owner === undefined) {
       clearRecentOutput(state, false);
-      sessions.delete(sessionId);
+      sessions.delete(key);
     }
   };
 }
 export function subscribeToTerminalOutputActivitySessions(
-  sessionIds: readonly string[],
+  targets: readonly (TerminalRef | string)[],
   listener: Listener,
 ): () => void {
-  const unsubscribers = [...new Set(sessionIds)].map((sessionId) =>
-    subscribeToTerminalOutputActivity(sessionId, listener),
+  const unsubscribers = [...new Set(targets.map((t) => toTerminalKey(t)))].map(
+    (key) => subscribeToTerminalOutputActivity(key, listener),
   );
   return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
 }
 
-export function markTerminalOutput(sessionId: string): void {
-  markOutputForState(sessionId, getOrCreate(sessionId));
+export function markTerminalOutput(target: TerminalRef | string): void {
+  const key = toTerminalKey(target);
+  markOutputForState(key, getOrCreate(key));
 }
 
 export function setTerminalStreamReady(
-  sessionId: string,
+  target: TerminalRef | string,
   ready: boolean,
 ): void {
-  setReadyForState(getOrCreate(sessionId), ready);
+  const key = toTerminalKey(target);
+  setReadyForState(getOrCreate(key), ready);
 }
 
 export function registerTerminalOutputActivity(
-  sessionId: string,
+  target: TerminalRef | string,
 ): TerminalOutputActivityRegistration {
-  const state = getOrCreate(sessionId);
-  const owner = Symbol(sessionId);
+  const key = toTerminalKey(target);
+  const state = getOrCreate(key);
+  const owner = Symbol(key);
   state.owner = owner;
   clearRecentOutput(state, false);
 
   return {
     markOutput: () => {
-      if (state.owner === owner) markOutputForState(sessionId, state);
+      if (state.owner === owner) markOutputForState(key, state);
     },
     setStreamReady: (ready) => {
       if (state.owner === owner) setReadyForState(state, ready);
     },
-    dispose: () => disposeState(sessionId, state, owner),
+    dispose: () => disposeState(key, state, owner),
   };
 }

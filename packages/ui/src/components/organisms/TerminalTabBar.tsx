@@ -6,6 +6,7 @@ import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicy
 import type { SessionInfo } from "@/api/client.js";
 import type { WithOpenTerminalTitle } from "@/lib/terminal-title.js";
 import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
+import type { TerminalRef } from "@/api/ownership.js";
 export interface TabEntry {
   sessionId: string;
   label: string;
@@ -16,6 +17,8 @@ export interface TabEntry {
   session?: SessionInfo;
   /** Whether this terminal session can be saved as a new profile */
   isSaveable?: boolean;
+  profileId?: string;
+  terminalRef?: TerminalRef;
 }
 export type DisplayTabEntry = WithOpenTerminalTitle<TabEntry>;
 interface SavePromptState {
@@ -101,6 +104,8 @@ export function TerminalTabBar({
               <TerminalActivityIndicator
                 sessionId={tab.sessionId}
                 alive={tab.session?.alive}
+                profileId={tab.profileId}
+                terminalRef={tab.terminalRef}
               />
               <span
                 onDoubleClick={() => onRenameSession?.(tab.sessionId)}

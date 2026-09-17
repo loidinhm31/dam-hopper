@@ -1,3 +1,4 @@
+import type { TerminalRef } from "@/api/ownership.js";
 import type { TerminalAgentType } from "@/api/client.js";
 
 export type TerminalAgentNotificationSource =
@@ -23,6 +24,8 @@ export interface TerminalAgentNotification {
   body?: string;
   status: TerminalAgentNotificationStatus;
   receivedAt: number;
+  profileId?: string;
+  terminalRef?: TerminalRef;
 }
 
 export interface TerminalNotificationParseContext {
@@ -30,6 +33,8 @@ export interface TerminalNotificationParseContext {
   project?: string;
   agent?: TerminalAgentType;
   now?: () => number;
+  profileId?: string;
+  terminalRef?: TerminalRef;
 }
 
 const DEFAULT_TITLE = "Terminal needs attention";
@@ -116,6 +121,8 @@ export function createTerminalAgentNotification(
     body: body || undefined,
     status: fields.status ?? "unknown",
     receivedAt: context.now?.() ?? Date.now(),
+    profileId: context.profileId,
+    terminalRef: context.terminalRef,
   };
 }
 

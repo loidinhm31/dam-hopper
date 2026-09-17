@@ -38,6 +38,7 @@ vi.mock("@/lib/terminal-registry.js", () => ({
   terminalRegistry: {
     get: () => ({ terminal: mockTerminal }),
   },
+  getTerminal: () => ({ terminal: mockTerminal }),
   subscribeToRegistry: () => () => {},
 }));
 vi.mock("@/components/organisms/TerminalScrollButtons.js", () => ({

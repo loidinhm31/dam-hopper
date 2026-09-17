@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import { ApiRequestError, api } from "./client.js";
-import { getApi } from "./connections.js";
-import type { ConnectionRef } from "./ownership.js";
+import { getApi, getConnectionSnapshot } from "./connections.js";
+import type { ConnectionRef, ProfileId } from "./ownership.js";
 import {
   profileQueryKey,
   profileWorkflowOverviewQueryKey,
@@ -90,19 +90,35 @@ export function generateWorkflowRequestId(): string {
   });
 }
 
+export function resolveWorkflowOwner(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}): ConnectionRef | undefined {
+  if (options?.owner) return options.owner;
+  if (options?.profileId) {
+    const snap = getConnectionSnapshot(options.profileId);
+    return snap ? snap.owner : undefined;
+  }
+  return undefined;
+}
+
 export function invalidateWorkflowQueries(
   queryClient: QueryClient,
-  owner?: ConnectionRef,
+  ownerOrOptions?: ConnectionRef | { owner?: ConnectionRef; profileId?: ProfileId },
 ): Promise<void> {
+  const owner =
+    typeof ownerOrOptions === "object" && ownerOrOptions !== null && "generation" in ownerOrOptions
+      ? (ownerOrOptions as ConnectionRef)
+      : resolveWorkflowOwner(ownerOrOptions as { owner?: ConnectionRef; profileId?: ProfileId } | undefined);
   return queryClient.invalidateQueries({
     queryKey: owner ? profileQueryKey(owner, "workflow") : workflowQueryKeys.all,
   });
 }
-
 // ── Query Hooks ─────────────────────────────────────────────────────────────
 
 export function useWorkflowOverview(options?: {
   owner?: ConnectionRef;
+  profileId?: ProfileId;
   enabled?: boolean;
 }) {
   const transportGeneration = useSyncExternalStore(
@@ -110,16 +126,17 @@ export function useWorkflowOverview(options?: {
     getTransportGeneration,
     getTransportGeneration,
   );
+  const owner = resolveWorkflowOwner(options);
 
-  const queryKey = options?.owner
-    ? workflowQueryKeys.overview(options.owner)
+  const queryKey = owner
+    ? workflowQueryKeys.overview(owner)
     : workflowQueryKeys.overview(transportGeneration);
 
   const query = useQuery<OverviewDto>({
     queryKey,
     queryFn: () =>
-      options?.owner
-        ? getApi(options.owner).workflow.overview()
+      owner
+        ? getApi(owner).workflow.overview()
         : api.workflow.overview(),
     staleTime: 0,
     refetchInterval: false,
@@ -143,18 +160,19 @@ export function useWorkflowOverview(options?: {
 
 export function useWorkflowEvents(
   query?: EventsQuery,
-  options?: { owner?: ConnectionRef; enabled?: boolean },
+  options?: { owner?: ConnectionRef; profileId?: ProfileId; enabled?: boolean },
 ) {
+  const owner = resolveWorkflowOwner(options);
   const queryKey = workflowQueryKeys.events(
     query?.cursor,
     query?.limit,
-    options?.owner,
+    owner,
   );
   return useQuery<EventsDto>({
     queryKey,
     queryFn: () =>
-      options?.owner
-        ? getApi(options.owner).workflow.events(query)
+      owner
+        ? getApi(owner).workflow.events(query)
         : api.workflow.events(query),
     placeholderData: (previousData) => previousData,
     staleTime: 0,
@@ -165,129 +183,171 @@ export function useWorkflowEvents(
 
 // ── Mutation Hooks ──────────────────────────────────────────────────────────
 
-export function useCreateWorkflowItem(options?: { owner?: ConnectionRef }) {
+export function useCreateWorkflowItem(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (req: CreateItemRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.createItem(req)
-        : api.workflow.createItem(req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+      owner ? getApi(owner).workflow.createItem(req) : api.workflow.createItem(req),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }
 
-export function usePatchWorkflowItem(options?: { owner?: ConnectionRef }) {
+export function usePatchWorkflowItem(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: ({ id, ...req }: { id: string } & PatchItemRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.patchItem(id, req)
+      owner
+        ? getApi(owner).workflow.patchItem(id, req)
         : api.workflow.patchItem(id, req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }
 
-export function useDeleteWorkflowItem(options?: { owner?: ConnectionRef }) {
+export function useDeleteWorkflowItem(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: ({ id, ...req }: { id: string } & DeleteItemRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.deleteItem(id, req)
+      owner
+        ? getApi(owner).workflow.deleteItem(id, req)
         : api.workflow.deleteItem(id, req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }
 
-export function useCreateWorkflowSession(options?: { owner?: ConnectionRef }) {
+export function useCreateWorkflowSession(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (req: CreateSessionRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.createSession(req)
+      owner
+        ? getApi(owner).workflow.createSession(req)
         : api.workflow.createSession(req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }
 
-export function useEndWorkflowSession(options?: { owner?: ConnectionRef }) {
+export function useEndWorkflowSession(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: ({ id, ...req }: { id: string } & EndSessionRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.endSession(id, req)
+      owner
+        ? getApi(owner).workflow.endSession(id, req)
         : api.workflow.endSession(id, req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }
 
-export function useAbandonWorkflowSession(options?: { owner?: ConnectionRef }) {
+export function useAbandonWorkflowSession(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: ({ id, ...req }: { id: string } & AbandonSessionRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.abandonSession(id, req)
+      owner
+        ? getApi(owner).workflow.abandonSession(id, req)
         : api.workflow.abandonSession(id, req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }
 
-export function useLinkWorkflowResource(options?: { owner?: ConnectionRef }) {
+export function useLinkWorkflowResource(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: ({
       sessionId,
       ...req
     }: { sessionId: string } & LinkResourceRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.linkResource(sessionId, req)
+      owner
+        ? getApi(owner).workflow.linkResource(sessionId, req)
         : api.workflow.linkResource(sessionId, req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }
 
-export function useUnlinkWorkflowResource(options?: { owner?: ConnectionRef }) {
+export function useUnlinkWorkflowResource(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: ({
       sessionId,
       ...req
     }: { sessionId: string } & UnlinkResourceRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.unlinkResource(sessionId, req)
+      owner
+        ? getApi(owner).workflow.unlinkResource(sessionId, req)
         : api.workflow.unlinkResource(sessionId, req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }
 
-export function useCreateWorkflowNote(options?: { owner?: ConnectionRef }) {
+export function useCreateWorkflowNote(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (req: CreateNoteRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.createNote(req)
+      owner
+        ? getApi(owner).workflow.createNote(req)
         : api.workflow.createNote(req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }
 
-export function useDeleteWorkflowNote(options?: { owner?: ConnectionRef }) {
+export function useDeleteWorkflowNote(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: ({ id, ...req }: { id: string } & DeleteNoteRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.deleteNote(id, req)
+      owner
+        ? getApi(owner).workflow.deleteNote(id, req)
         : api.workflow.deleteNote(id, req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }
 
-export function usePurgeWorkflowHistory(options?: { owner?: ConnectionRef }) {
+export function usePurgeWorkflowHistory(options?: {
+  owner?: ConnectionRef;
+  profileId?: ProfileId;
+}) {
   const queryClient = useQueryClient();
+  const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (req: PurgeHistoryRequest) =>
-      options?.owner
-        ? getApi(options.owner).workflow.purgeHistory(req)
+      owner
+        ? getApi(owner).workflow.purgeHistory(req)
         : api.workflow.purgeHistory(req),
-    onSuccess: () => invalidateWorkflowQueries(queryClient, options?.owner),
+    onSuccess: () => invalidateWorkflowQueries(queryClient, owner),
   });
 }

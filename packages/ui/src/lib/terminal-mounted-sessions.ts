@@ -14,7 +14,9 @@ export function upsertMountedSession(
   nextSession: MountedSession,
 ): MountedSession[] {
   const index = sessions.findIndex(
-    (session) => session.sessionId === nextSession.sessionId,
+    (session) =>
+      session.sessionId === nextSession.sessionId &&
+      (session.profileId ?? "") === (nextSession.profileId ?? ""),
   );
 
   if (index === -1) {
@@ -27,7 +29,8 @@ export function upsertMountedSession(
     current.command === nextSession.command &&
     current.cwd === nextSession.cwd &&
     current.name === nextSession.name &&
-    current.worktreePath === nextSession.worktreePath
+    current.worktreePath === nextSession.worktreePath &&
+    (current.profileId ?? "") === (nextSession.profileId ?? "")
   ) {
     return sessions;
   }

@@ -1,3 +1,4 @@
+import type { TerminalRef } from "@/api/ownership.js";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import {
   getTerminalOutputActivityRevision,
@@ -36,6 +37,8 @@ const PRESENTATION_BY_STATUS: Record<
 interface TerminalProjectActivityTab {
   readonly sessionId: string;
   readonly session?: { readonly alive: boolean };
+  readonly profileId?: string;
+  readonly terminalRef?: TerminalRef;
 }
 
 export function TerminalProjectActivityIndicator({
@@ -59,7 +62,12 @@ export function TerminalProjectActivityIndicator({
       tabs.some(
         (tab) =>
           getTerminalOutputActivityStatus(
-            getTerminalOutputActivitySnapshot(tab.sessionId),
+            getTerminalOutputActivitySnapshot(
+              tab.terminalRef ??
+                (tab.profileId
+                  ? { profileId: tab.profileId, id: tab.sessionId }
+                  : tab.sessionId),
+            ),
             tab.session?.alive,
           ) === "receiving",
       ),
@@ -86,20 +94,26 @@ export function TerminalProjectActivityIndicator({
 interface TerminalActivityIndicatorProps {
   sessionId: string;
   alive?: boolean;
+  profileId?: string;
+  terminalRef?: TerminalRef;
 }
 
 export function TerminalActivityIndicator({
   sessionId,
   alive,
+  profileId,
+  terminalRef,
 }: TerminalActivityIndicatorProps) {
+  const target =
+    terminalRef ?? (profileId ? { profileId, id: sessionId } : sessionId);
   const subscribe = useCallback(
     (listener: () => void) =>
-      subscribeToTerminalOutputActivity(sessionId, listener),
-    [sessionId],
+      subscribeToTerminalOutputActivity(target, listener),
+    [target],
   );
   const getSnapshot = useCallback(
-    () => getTerminalOutputActivitySnapshot(sessionId),
-    [sessionId],
+    () => getTerminalOutputActivitySnapshot(target),
+    [target],
   );
   const activitySnapshot = useSyncExternalStore(
     subscribe,

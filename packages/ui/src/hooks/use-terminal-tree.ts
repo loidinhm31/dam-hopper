@@ -143,10 +143,11 @@ export function markOrphanedSessions(
   });
 }
 
-export function useTerminalTree() {
-  const { data: projects = [], isLoading: projectsLoading } = useProjects();
+export function useTerminalTree(options?: { profileId?: string }) {
+  const { data: projects = [], isLoading: projectsLoading } =
+    useProjects(options);
   const { data: sessions = [], isLoading: sessionsLoading } =
-    useTerminalSessions();
+    useTerminalSessions(options);
   const { data: globalConfig } = useGlobalConfig();
   const unavailableTargets = useProjectTargetStore(
     (state) => state.unavailableTargetsByProject,

@@ -101,6 +101,8 @@ export function DraggableTab({
         <TerminalActivityIndicator
           sessionId={tab.sessionId}
           alive={tab.session?.alive}
+          profileId={tab.profileId}
+          terminalRef={tab.terminalRef}
         />
         <TerminalTitleText
           title={tab.title}

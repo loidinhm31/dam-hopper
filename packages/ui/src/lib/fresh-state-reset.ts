@@ -24,7 +24,11 @@ export interface FreshResetResult {
  */
 export function isLegacyResourceKey(key: string): boolean {
   if (key === "dam-hopper:active-project") return true;
-  if (key === "dam-hopper:terminal-pins") return true;
+  if (
+    key === "dam-hopper:terminal-pins" ||
+    key === "dam-hopper:terminal-pins:v1"
+  )
+    return true;
   if (key.includes(":legacy-unowned")) return true;
   if (key.includes("quarantine")) return true;
 

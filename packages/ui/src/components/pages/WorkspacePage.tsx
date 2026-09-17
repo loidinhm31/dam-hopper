@@ -122,9 +122,10 @@ import {
 } from "@/lib/browser-debug-viewport.js";
 import { getBrowserDebugViewportGeometry } from "@/lib/browser-debug-keep-alive.js";
 import {
+  getTerminal,
+  hasTerminal,
   subscribeToRegistry,
   subscribeToRegistryChanges,
-  terminalRegistry,
   getTerminalRegistrySnapshot,
 } from "@/lib/terminal-registry.js";
 import {
@@ -487,7 +488,11 @@ export default function WorkspacePage() {
   const { state, derived, actions } = useTerminalManager(
     searchParams,
     setSearchParams,
-    { terminalAutoSwitchProjectEnabled, setActiveProject },
+    {
+      terminalAutoSwitchProjectEnabled,
+      setActiveProject,
+      profileId: activeProfileId ?? undefined,
+    },
   );
   const {
     activeTab,
@@ -1193,10 +1198,10 @@ export default function WorkspacePage() {
               activateTerminalAfterNavigation({
                 sessionId: selectedSessionId,
                 hasTerminal: (candidateSessionId) =>
-                  terminalRegistry.has(candidateSessionId),
+                  hasTerminal(candidateSessionId),
                 activateTerminal: (candidateSessionId) =>
                   scheduleTerminalFit(
-                    terminalRegistry.get(candidateSessionId),
+                    getTerminal(candidateSessionId),
                     { focus: !suppressNativeFocus },
                   ),
                 subscribeToTerminal: subscribeToRegistry,
@@ -1606,6 +1611,7 @@ export default function WorkspacePage() {
                 currentProjectRevision={activeProjectRevision}
                 layoutRevision={compactTerminalLayoutRevision}
                 renderTerminals={false}
+                profileId={activeProfileId ?? undefined}
                 onSessionExit={handleSessionExit}
                 onNewProjectTerminal={handleLaunchShell}
                 onNewFreeTerminal={handleAddFreeTerminal}

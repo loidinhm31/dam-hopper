@@ -1291,6 +1291,44 @@ Treat `ProjectTargetRef` as a resource identity, not a display convenience:
 The implementation map and focused contract test are maintained in
 [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
 
+### Terminal continuity, workflow, and owner navigation (Phase 04)
+
+Terminal state is profile-qualified. Use `TerminalRef` (`{ profileId, id }`)
+for a session and `TerminalInstanceRef` (`{ profileId, id, incarnation }`)
+when lifecycle freshness matters. Build keys with `terminalKey()` or
+`terminalInstanceKey()`; never use a bare session ID as a write target or as
+the owner of a notification, workflow link, mounted session, or diagnostic
+record. Raw IDs are compatibility lookups only and must be rejected when the
+registry cannot prove a unique owner.
+
+- Capture the profile and connection generation before an asynchronous
+  terminal/workflow operation. Resolve the API client from that owner and
+  verify generation before publishing data or committing a mutation.
+- Keep registry, mounted-session, activity, incarnation, and layout state
+  qualified by profile. A profile's auto-attach or cleanup must not remove
+  another profile's mounted terminal.
+- Keep terminal DOM/xterm lifetime keyed by the qualified ref. A keep-alive
+  host may reparent an xterm, but it must not let an old incarnation receive
+  output, focus, resize, or input after replacement.
+- Treat persistence versions as contracts: layout key `v3` with payload v2,
+  profile-partitioned pin key `v2` with payload v2, and command-history
+  `{ version: 3, entries }`. Persist IDs and owner context, not terminal
+  output or credentials. Fresh reset removes unqualified legacy stores only.
+- Workflow query keys include profile and generation. A terminal reveal checks
+  profile ownership and expected incarnation; missing, cross-profile, or stale
+  links are unavailable, not redirected to an arbitrary live session.
+- Notification selection and diagnostics export use the same qualified target.
+  Diagnostics filters by profile/terminal IDs and applies bounded time/output
+  limits before serialization.
+
+The source map and compatibility caveats are maintained in
+[Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md).
+Focused behavior belongs in
+`packages/ui/src/lib/terminal-continuity-unified-profile.test.ts`; test
+observable cross-profile isolation, stale-incarnation rejection, persistence
+partitioning, workflow reveal failures, notification routing, and export
+filtering rather than implementation details.
+
 
 ### Build & Type Checking
 

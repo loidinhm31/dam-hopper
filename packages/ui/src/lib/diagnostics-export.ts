@@ -39,12 +39,23 @@ export interface DiagnosticsExportOptions {
   terminalTailBytes?: number;
   terminalIds?: string[];
   scope?: DiagnosticsExportScopeContext;
+  profileId?: string;
 }
 
 function filterEntryByScope(
   entry: ClientDiagnosticEntry,
   scopes: string[] | undefined,
+  targetProfileId?: string,
 ) {
+  if (
+    targetProfileId &&
+    entry.metadata &&
+    typeof entry.metadata === "object" &&
+    "profileId" in entry.metadata &&
+    (entry.metadata as { profileId?: string }).profileId !== targetProfileId
+  ) {
+    return false;
+  }
   if (!scopes || scopes.length === 0) return true;
   if (
     entry.type === "browser.error" ||
@@ -56,7 +67,6 @@ function filterEntryByScope(
   }
   return scopes.some((scope) => entry.scope.includes(scope));
 }
-
 export function filterClientDiagnosticsSnapshot(
   snapshot: ClientDiagnosticsSnapshot,
   options: DiagnosticsExportOptions = {},
@@ -71,7 +81,7 @@ export function filterClientDiagnosticsSnapshot(
   const logs = sourceLogs.filter(
     (entry) =>
       entry.timestampMs >= cutoff &&
-      filterEntryByScope(entry, options.scope?.frontendScopes),
+      filterEntryByScope(entry, options.scope?.frontendScopes, options.profileId),
   );
 
   const filtered = {
@@ -112,10 +122,13 @@ export function buildDiagnosticsExportRequest(
       options.terminalTailBytes ??
       DEFAULT_DIAGNOSTICS_EXPORT_REQUEST.terminalTailBytes,
     ...(terminalIds !== undefined ? { terminalIds } : {}),
-    frontend: filterClientDiagnosticsSnapshot(getClientDiagnosticsSnapshot(), {
-      ...options,
-      windowMinutes,
-    }),
+    frontend: filterClientDiagnosticsSnapshot(
+      getClientDiagnosticsSnapshot(options.profileId),
+      {
+        ...options,
+        windowMinutes,
+      },
+    ),
   };
 }
 
@@ -127,6 +140,8 @@ export async function exportDiagnosticsBundle(
 ): Promise<string> {
   const bundle = await exporter(buildDiagnosticsExportRequest(options));
   return downloadJson(bundle, {
-    filePrefix: "dam-hopper-diagnostics",
+    filePrefix: options.profileId
+      ? `dam-hopper-diagnostics-${options.profileId}`
+      : "dam-hopper-diagnostics",
   });
 }
