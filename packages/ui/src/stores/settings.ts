@@ -5,9 +5,16 @@
  * saveDebounced coalesces rapid changes (wheel zoom) into a single write.
  */
 import { create } from "zustand";
-import { api } from "@/api/client.js";
+import { api, type ApiClient } from "@/api/client.js";
 import type { TerminalCodexNotificationSoundPattern } from "@/api/client.js";
 import type { ExplorerLanguageFilter } from "@/api/fs-types.js";
+import type { ConnectionRef, ProfileId } from "@/api/ownership.js";
+import {
+  getConnectionSnapshot,
+  captureConnection,
+  getApi,
+} from "@/api/connections.js";
+import { useWorkbenchSelectionsStore } from "./workbench-selections.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 import {
   isExplorerLanguageFilter,
@@ -107,18 +114,152 @@ interface PersistedSettingsState {
 
 interface SettingsState extends PersistedSettingsState {
   hydrated: boolean;
+  sourceUnset: boolean;
 
-  hydrate: () => Promise<void>;
+  hydrate: (options?: { owner?: ConnectionRef; profileId?: ProfileId }) => Promise<void>;
   set: (partial: Partial<PersistedSettingsState>) => void;
   saveDebounced: (partial: Partial<PersistedSettingsState>) => void;
+  switchPreferenceSource: (profileId: ProfileId | null) => Promise<void>;
+}
+
+interface PreferenceSourceTransaction {
+  profileId: ProfileId;
+  generation: number;
+  editId: number;
 }
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSavedSettings: PersistedSettingsState | null = null;
 let pendingPersistedPatch: Partial<PersistedSettingsState> = {};
 let latestLocalEditId = 0;
+let activeTransaction: PreferenceSourceTransaction | null = null;
 let saveChain: Promise<void> = Promise.resolve();
 
+export function getBoundPreferenceClient(): {
+  owner: ConnectionRef;
+  api: Pick<ApiClient["globalConfig"], "get" | "updateUi">;
+} | null {
+  const profileId = useWorkbenchSelectionsStore.getState().preferencesProfileId;
+  if (!profileId) return null;
+  const snap = getConnectionSnapshot(profileId);
+  if (snap) {
+    if (snap.status !== "connected") return null;
+    try {
+      const owner = captureConnection(profileId);
+      return {
+        owner,
+        api: getApi(owner).globalConfig,
+      };
+    } catch {
+      return null;
+    }
+  }
+  // In unit test environment without connection registry
+  return {
+    owner: { profileId, generation: 1 },
+    api: api.globalConfig,
+  };
+}
+
+function applySnapshotToStore(
+  snapshot: Record<string, unknown> | Partial<PersistedSettingsState>,
+  set: (partial: Partial<SettingsState>) => void,
+): void {
+  const clamped: Partial<SettingsState> = {};
+  if (typeof snapshot.systemFontSize === "number")
+    clamped.systemFontSize = clampFont(snapshot.systemFontSize);
+  if (typeof snapshot.editorFontSize === "number")
+    clamped.editorFontSize = clampFont(snapshot.editorFontSize);
+  if (typeof snapshot.terminalFontSize === "number")
+    clamped.terminalFontSize = clampFont(snapshot.terminalFontSize);
+  if (typeof snapshot.editorZoomWheelEnabled === "boolean")
+    clamped.editorZoomWheelEnabled = snapshot.editorZoomWheelEnabled;
+  if (typeof snapshot.searchTextShortcut === "string")
+    clamped.searchTextShortcut = snapshot.searchTextShortcut;
+  if (typeof snapshot.searchFilenameShortcut === "string")
+    clamped.searchFilenameShortcut = snapshot.searchFilenameShortcut;
+  if (typeof snapshot.terminalWorkspaceShortcut === "string")
+    clamped.terminalWorkspaceShortcut = snapshot.terminalWorkspaceShortcut;
+  if (typeof snapshot.terminalFilePanelShortcut === "string")
+    clamped.terminalFilePanelShortcut = snapshot.terminalFilePanelShortcut;
+  if (typeof snapshot.projectPanelShortcut === "string")
+    clamped.projectPanelShortcut = snapshot.projectPanelShortcut;
+  if (typeof snapshot.revealActiveFileShortcut === "string")
+    clamped.revealActiveFileShortcut = snapshot.revealActiveFileShortcut;
+  if (typeof snapshot.gitPanelShortcut === "string")
+    clamped.gitPanelShortcut = snapshot.gitPanelShortcut;
+  if (typeof snapshot.portsPanelShortcut === "string")
+    clamped.portsPanelShortcut = snapshot.portsPanelShortcut;
+  if (typeof snapshot.fleetTerminalShortcut === "string")
+    clamped.fleetTerminalShortcut = snapshot.fleetTerminalShortcut;
+  if (typeof snapshot.terminalFontSizeIncreaseShortcut === "string")
+    clamped.terminalFontSizeIncreaseShortcut =
+      snapshot.terminalFontSizeIncreaseShortcut;
+  if (typeof snapshot.terminalFontSizeDecreaseShortcut === "string")
+    clamped.terminalFontSizeDecreaseShortcut =
+      snapshot.terminalFontSizeDecreaseShortcut;
+  if (typeof snapshot.terminalSuggestionsEnabled === "boolean")
+    clamped.terminalSuggestionsEnabled = snapshot.terminalSuggestionsEnabled;
+  if (typeof snapshot.terminalAutoSwitchProjectEnabled === "boolean")
+    clamped.terminalAutoSwitchProjectEnabled =
+      snapshot.terminalAutoSwitchProjectEnabled;
+  if (typeof snapshot.terminalCodexNotificationsEnabled === "boolean")
+    clamped.terminalCodexNotificationsEnabled =
+      snapshot.terminalCodexNotificationsEnabled;
+  if (typeof snapshot.terminalCodexNotificationToastEnabled === "boolean")
+    clamped.terminalCodexNotificationToastEnabled =
+      snapshot.terminalCodexNotificationToastEnabled;
+  if (typeof snapshot.terminalCodexBrowserNotificationsEnabled === "boolean")
+    clamped.terminalCodexBrowserNotificationsEnabled =
+      snapshot.terminalCodexBrowserNotificationsEnabled;
+  if (typeof snapshot.terminalCodexNotificationSoundEnabled === "boolean")
+    clamped.terminalCodexNotificationSoundEnabled =
+      snapshot.terminalCodexNotificationSoundEnabled;
+  if (typeof snapshot.terminalCodexNotificationSoundVolume === "number")
+    clamped.terminalCodexNotificationSoundVolume =
+      clampTerminalNotificationSoundVolume(
+        snapshot.terminalCodexNotificationSoundVolume,
+      );
+  if (
+    snapshot.terminalCodexNotificationSoundPattern === "default" ||
+    snapshot.terminalCodexNotificationSoundPattern === "soft" ||
+    snapshot.terminalCodexNotificationSoundPattern === "two-tone" ||
+    snapshot.terminalCodexNotificationSoundPattern === "urgent"
+  )
+    clamped.terminalCodexNotificationSoundPattern =
+      snapshot.terminalCodexNotificationSoundPattern;
+  if (typeof snapshot.terminalScrollButtonsEnabled === "boolean")
+    clamped.terminalScrollButtonsEnabled = snapshot.terminalScrollButtonsEnabled;
+  if (typeof snapshot.terminalCommitStatusEnabled === "boolean")
+    clamped.terminalCommitStatusEnabled = snapshot.terminalCommitStatusEnabled;
+  if (typeof snapshot.terminalScrollStep === "number")
+    clamped.terminalScrollStep = Math.min(
+      50,
+      Math.max(1, snapshot.terminalScrollStep),
+    );
+  if (typeof snapshot.explorerShowHidden === "boolean")
+    clamped.explorerShowHidden = snapshot.explorerShowHidden;
+  if (
+    typeof snapshot.explorerLanguageFilter === "string" &&
+    isExplorerLanguageFilter(snapshot.explorerLanguageFilter)
+  )
+    clamped.explorerLanguageFilter = snapshot.explorerLanguageFilter;
+  if (typeof snapshot.mobileCustomKeyboardEnabled === "boolean")
+    clamped.mobileCustomKeyboardEnabled = snapshot.mobileCustomKeyboardEnabled;
+  if (typeof snapshot.mobileCustomKeyboardFontSize === "number")
+    clamped.mobileCustomKeyboardFontSize = clampKeyboardFont(
+      snapshot.mobileCustomKeyboardFontSize,
+    );
+  if (typeof snapshot.mobileCustomKeyboardPadding === "number")
+    clamped.mobileCustomKeyboardPadding = clampKeyboardPadding(
+      snapshot.mobileCustomKeyboardPadding,
+    );
+  if (typeof snapshot.mobileCustomKeyboardRowGap === "number")
+    clamped.mobileCustomKeyboardRowGap = clampKeyboardRowGap(
+      snapshot.mobileCustomKeyboardRowGap,
+    );
+  set(clamped);
+}
 function pickPersistedSettings(
   state: PersistedSettingsState | SettingsState,
 ): PersistedSettingsState {
@@ -214,10 +355,54 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   mobileCustomKeyboardPadding: 6,
   mobileCustomKeyboardRowGap: 4,
   hydrated: false,
+  sourceUnset: true,
 
-  hydrate: async () => {
+  hydrate: async (options?: { owner?: ConnectionRef; profileId?: ProfileId }) => {
+    const targetProfileId =
+      options?.profileId ??
+      options?.owner?.profileId ??
+      useWorkbenchSelectionsStore.getState().preferencesProfileId;
+
+    if (!targetProfileId) {
+      const offline = useWorkbenchSelectionsStore.getState().preferencesSnapshot;
+      if (offline) {
+        applySnapshotToStore(offline, set);
+      }
+      set({ hydrated: true, sourceUnset: true });
+      lastSavedSettings = pickPersistedSettings(get());
+      return;
+    }
+
+    let boundClient: Pick<ApiClient["globalConfig"], "get"> | null = null;
+    let capturedOwner: ConnectionRef | null = options?.owner ?? null;
+
+    const snap = getConnectionSnapshot(targetProfileId);
+    if (snap) {
+      if (snap.status === "connected") {
+        try {
+          capturedOwner = capturedOwner ?? captureConnection(targetProfileId);
+          boundClient = getApi(capturedOwner).globalConfig;
+        } catch {
+          boundClient = null;
+        }
+      }
+    } else {
+      boundClient = api.globalConfig;
+      capturedOwner = capturedOwner ?? { profileId: targetProfileId, generation: 1 };
+    }
+
+    if (!boundClient) {
+      const offline = useWorkbenchSelectionsStore.getState().preferencesSnapshot;
+      if (offline) {
+        applySnapshotToStore(offline, set);
+      }
+      set({ hydrated: true, sourceUnset: false });
+      lastSavedSettings = pickPersistedSettings(get());
+      return;
+    }
+
     try {
-      const config = await api.globalConfig.get();
+      const config = await boundClient.get();
       const ui = withUiConfigDefaults(config.ui);
       set({
         systemFontSize: ui.systemFontSize,
@@ -269,13 +454,30 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         mobileCustomKeyboardPadding: ui.mobileCustomKeyboardPadding ?? 6,
         mobileCustomKeyboardRowGap: ui.mobileCustomKeyboardRowGap ?? 4,
         hydrated: true,
+        sourceUnset: false,
       });
       lastSavedSettings = pickPersistedSettings(get());
+      useWorkbenchSelectionsStore
+        .getState()
+        .updatePreferencesSnapshot(lastSavedSettings);
     } catch {
-      // Keep defaults; mark hydrated so app doesn't wait forever
-      set({ hydrated: true });
+      const offline = useWorkbenchSelectionsStore.getState().preferencesSnapshot;
+      if (offline) {
+        applySnapshotToStore(offline, set);
+      }
+      set({ hydrated: true, sourceUnset: false });
       lastSavedSettings = pickPersistedSettings(get());
     }
+  },
+
+  switchPreferenceSource: async (profileId: ProfileId | null) => {
+    clearTimeout(debounceTimer!);
+    debounceTimer = null;
+    pendingPersistedPatch = {};
+    latestLocalEditId++;
+    activeTransaction = null;
+    useWorkbenchSelectionsStore.getState().setPreferencesProfileId(profileId);
+    await get().hydrate({ profileId: profileId ?? undefined });
   },
 
   set: (partial) => {
@@ -372,34 +574,73 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   saveDebounced: (partial) => {
-    const localEditId = ++latestLocalEditId;
     get().set(partial);
     const persistedPatch = pickPersistedSettingsPatch(partial, get());
     if (Object.keys(persistedPatch).length === 0) return;
+
+    useWorkbenchSelectionsStore
+      .getState()
+      .updatePreferencesSnapshot(pickPersistedSettings(get()));
+
+    const bound = getBoundPreferenceClient();
+    if (!bound) {
+      clearTimeout(debounceTimer!);
+      debounceTimer = null;
+      pendingPersistedPatch = {};
+      return;
+    }
+
+    const editId = ++latestLocalEditId;
+    activeTransaction = {
+      profileId: bound.owner.profileId,
+      generation: bound.owner.generation,
+      editId,
+    };
+    const currentTx = activeTransaction;
+    const boundApi = bound.api;
+
     pendingPersistedPatch = {
       ...pendingPersistedPatch,
       ...persistedPatch,
     };
-    if (debounceTimer !== null) clearTimeout(debounceTimer);
+
+    clearTimeout(debounceTimer!);
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
       const payload = pendingPersistedPatch;
       pendingPersistedPatch = {};
+
       saveChain = saveChain
         .catch(() => {})
         .then(async () => {
           try {
-            await api.globalConfig.updateUi(payload);
-            lastSavedSettings = {
-              ...(lastSavedSettings ?? pickPersistedSettings(get())),
-              ...payload,
-            };
-            if (localEditId === latestLocalEditId) {
-              set(lastSavedSettings);
+            await boundApi.updateUi(payload);
+            const currentPrefProfileId =
+              useWorkbenchSelectionsStore.getState().preferencesProfileId;
+            if (currentPrefProfileId === currentTx.profileId) {
+              lastSavedSettings = {
+                ...(lastSavedSettings ?? pickPersistedSettings(get())),
+                ...payload,
+              };
+              if (currentTx.editId === latestLocalEditId) {
+                set(lastSavedSettings);
+                useWorkbenchSelectionsStore
+                  .getState()
+                  .updatePreferencesSnapshot(lastSavedSettings);
+              }
             }
           } catch (error) {
-            if (localEditId === latestLocalEditId && lastSavedSettings) {
+            const currentPrefProfileId =
+              useWorkbenchSelectionsStore.getState().preferencesProfileId;
+            if (
+              currentPrefProfileId === currentTx.profileId &&
+              currentTx.editId === latestLocalEditId &&
+              lastSavedSettings
+            ) {
               set(lastSavedSettings);
+              useWorkbenchSelectionsStore
+                .getState()
+                .updatePreferencesSnapshot(lastSavedSettings);
             }
             recordClientDiagnostic(
               "custom",
@@ -407,6 +648,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
               "settings update rejected",
               {
                 error: error instanceof Error ? error.message : String(error),
+                profileId: currentTx.profileId,
+                generation: currentTx.generation,
               },
             );
           }
@@ -418,11 +661,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 lastSavedSettings = pickPersistedSettings(useSettingsStore.getState());
 
 export function __resetSettingsStoreTestState(): void {
-  if (debounceTimer !== null) {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
-  }
+  clearTimeout(debounceTimer!);
+  debounceTimer = null;
   latestLocalEditId = 0;
+  activeTransaction = null;
   pendingPersistedPatch = {};
   saveChain = Promise.resolve();
   lastSavedSettings = pickPersistedSettings(useSettingsStore.getState());

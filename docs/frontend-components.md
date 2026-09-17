@@ -56,6 +56,38 @@ Query state remains memory-only. Host `QueryClient` instances use ordinary
 defaults; profile and generation ownership is encoded by
 `profileQueryKey(owner, ...)` instead of a global active-profile hash.
 
+## Unified-profile Settings, Usage, and Host ownership (Phase 06)
+
+Phase 06 keeps browser preference state separate from server-targeted work. The
+Settings page exposes `preferencesProfileId` (shared UI preference source) and
+`settingsProfileId` (configuration, maintenance, usage, and host target) as
+independent selectors. Project focus does not change either selector.
+
+`useSettingsStore.saveDebounced` captures the bound `ConnectionRef`, API client,
+and edit revision before its 500 ms coalescing timer. Source changes cancel
+undispatched patches; already-dispatched writes finish only against their
+captured profile. Last-known allowlisted preferences remain usable offline,
+while a removed source is marked `source-removed`.
+
+Settings config, TOML import/export, maintenance, Usage insights, and idle
+suspend timing all receive the selected owner. Import captures owner and
+generation before confirmation and `file.text()`, rejects drift before
+dispatch, and leaves server validation/backup/rollback authoritative. Usage
+summary, sessions, health, setup, and destructive operations use
+`profileQueryKey(owner, ...)`; session audit polling stops in hidden documents.
+
+The host popover resolves explicit owner → Settings target → active profile.
+Resource snapshots, incidents, compatibility metrics, idle-suspend state, and
+the optional `hostResourcePinnedMount` preference stay owner-local. The
+transport bridge validates `host:alertChanged` and revision hints, patches only
+the matching owner's cache, and lets REST repair missed or stale events.
+Unread incident presentation is tracked per profile and keyed by `incidentId`.
+The Force Machine to Sleep dialog captures endpoint, generation, fleet snapshot,
+status revision, and request ID; stale conflicts require fresh confirmation and
+ambiguous requests are not retried.
+
+See the [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md) for the source map and full contract.
+
 
 ## Host-resource alert presentation
 

@@ -187,4 +187,51 @@ describe("useHostResourceAlertPresentation", () => {
       [],
     );
   });
+
+  it("isolates unread incidents by profile ID", () => {
+    useHostResourceAlertPresentationStore.getState().recordAlert(alert, "profile-A");
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-A"]
+        ?.unreadIds,
+    ).toEqual(["incident-1"]);
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-B"]
+        ?.unreadIds,
+    ).toBeUndefined();
+
+    const diskAlert: HostResourceResourceAlert = {
+      incidentId: "disk-2",
+      kind: "disk",
+      state: "critical",
+      severity: "critical",
+      openedAt: 1,
+      updatedAt: 1,
+      durationSeconds: 0,
+      scope: "disk:/var",
+      threshold: "usage>=95%",
+      nextAction: "Free space.",
+      evidence: { diskMountPoint: "/var", diskUsagePercent: 95 },
+    };
+    useHostResourceAlertPresentationStore
+      .getState()
+      .recordAlert(diskAlert, "profile-B");
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-A"]
+        ?.unreadIds,
+    ).toEqual(["incident-1"]);
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-B"]
+        ?.unreadIds,
+    ).toEqual(["disk-2"]);
+
+    useHostResourceAlertPresentationStore.getState().markRead("profile-A");
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-A"]
+        ?.unreadIds,
+    ).toEqual([]);
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-B"]
+        ?.unreadIds,
+    ).toEqual(["disk-2"]);
+  });
 });

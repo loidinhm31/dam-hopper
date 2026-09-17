@@ -8,6 +8,10 @@ import {
   useExportSettings,
   useImportSettings,
 } from "@/api/queries.js";
+import { readServerProfiles, type ServerProfile } from "@/api/server-config.js";
+import { getConnectionSnapshot } from "@/api/connections.js";
+import { useWorkbenchSelectionsStore } from "@/stores/workbench-selections.js";
+import { useSettingsStore } from "@/stores/settings.js";
 import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
 import { SettingsUsageInsightsSection } from "@/components/organisms/SettingsUsageInsightsSection.js";
@@ -20,7 +24,6 @@ import {
   SettingsGlobalConfigPanel,
   SettingsWorkspaceConfigPanel,
 } from "@/components/pages/settings-page/SettingsConfigPanels.js";
-
 const SETTINGS_DIAGNOSTICS_SCOPE = {
   page: "settings",
   route: "/settings",
@@ -28,18 +31,46 @@ const SETTINGS_DIAGNOSTICS_SCOPE = {
 };
 
 export function SettingsPage() {
-  const { data: config, isLoading, error } = useConfig();
+  const profilesResult = readServerProfiles();
+  const profiles: ServerProfile[] =
+    profilesResult.status === "available" ? profilesResult.profiles : [];
+
+  const {
+    settingsProfileId,
+    setSettingsProfileId,
+    preferencesProfileId,
+    preferencesStatus,
+  } = useWorkbenchSelectionsStore();
+  const switchPreferenceSource = useSettingsStore(
+    (s) => s.switchPreferenceSource,
+  );
+
+  const targetSnapshot = settingsProfileId
+    ? getConnectionSnapshot(settingsProfileId)
+    : null;
+  const targetProfile =
+    profiles.find((p) => p.id === settingsProfileId) ?? null;
+  const targetOwner = settingsProfileId
+    ? targetSnapshot?.owner ?? { profileId: settingsProfileId, generation: 1 }
+    : undefined;
+
+  const prefProfile =
+    profiles.find((p) => p.id === preferencesProfileId) ?? null;
+  const prefSnapshot = preferencesProfileId
+    ? getConnectionSnapshot(preferencesProfileId)
+    : null;
+
+  const { data: config, isLoading, error } = useConfig(targetOwner);
   const {
     mutateAsync: updateConfig,
     isPending,
     error: saveError,
-  } = useUpdateConfig();
+  } = useUpdateConfig(targetOwner);
 
-  const clearCache = useClearCache();
-  const resetWorkspace = useResetWorkspace();
-  const exportSettings = useExportSettings();
-  const importSettings = useImportSettings();
-
+  const clearCache = useClearCache(targetOwner);
+  const resetWorkspace = useResetWorkspace(targetOwner);
+  const exportSettings = useExportSettings(targetOwner);
+  const importSettings = useImportSettings(targetOwner);
   const [clearMsg, setClearMsg] = useState<string | null>(null);
   const [clearErr, setClearErr] = useState<string | null>(null);
   const [resetErr, setResetErr] = useState<string | null>(null);
@@ -53,7 +84,8 @@ export function SettingsPage() {
     setClearErr(null);
     try {
       await clearCache.mutateAsync();
-      setClearMsg("Cache cleared — all queries will refetch fresh data.");
+      const serverLabel = targetProfile ? ` on ${targetProfile.name}` : "";
+      setClearMsg(`Cache cleared${serverLabel} — all queries will refetch fresh data.`);
     } catch (err) {
       setClearErr(err instanceof Error ? err.message : String(err));
     }
@@ -65,8 +97,11 @@ export function SettingsPage() {
 
   async function handleNuclearReset() {
     setResetErr(null);
+    const serverText = targetProfile
+      ? ` on server "${targetProfile.name}" (${targetSnapshot?.serverUrl || targetProfile.url})`
+      : "";
     const confirmed = window.confirm(
-      "This will kill all terminal sessions and clear all workspace state. Use the sidebar workspace switcher to open a new workspace. Continue?",
+      `This will kill all terminal sessions and clear all workspace state${serverText}. Use the sidebar workspace switcher to open a new workspace. Continue?`,
     );
     if (!confirmed) return;
     try {
@@ -88,12 +123,15 @@ export function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "dam-hopper.toml";
+      const downloadFilename = targetProfile
+        ? `dam-hopper-${targetProfile.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.toml`
+        : "dam-hopper.toml";
+      a.download = downloadFilename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      setExportMsg("Downloaded dam-hopper.toml");
+      setExportMsg(`Downloaded ${downloadFilename}`);
     } catch (err) {
       setExportErr(err instanceof Error ? err.message : String(err));
     }
@@ -115,13 +153,33 @@ export function SettingsPage() {
       return;
     }
 
+    const targetAtStart = settingsProfileId;
+    const generationAtStart = targetSnapshot?.owner.generation ?? 1;
     const wsName = config?.workspace.name ?? "current workspace";
+    const serverLabel = targetProfile
+      ? ` on server "${targetProfile.name}" (${targetSnapshot?.serverUrl || targetProfile.url})`
+      : "";
     const confirmed = window.confirm(
-      `Replace configuration for active workspace "${wsName}" with "${file.name}"?\n\nAn automatic backup will be created before applying.`,
+      `Replace configuration for active workspace "${wsName}"${serverLabel} with "${file.name}"?\n\nAn automatic backup will be created before applying.`,
     );
     if (!confirmed) {
       setImportMsg("Import cancelled.");
       setTimeout(() => setImportMsg(null), 5000);
+      return;
+    }
+
+    const currentSnap = targetAtStart
+      ? getConnectionSnapshot(targetAtStart)
+      : null;
+    if (
+      useWorkbenchSelectionsStore.getState().settingsProfileId !==
+        targetAtStart ||
+      (currentSnap && currentSnap.owner.generation !== generationAtStart)
+    ) {
+      setImportErr(
+        "Import cancelled: settings target server or connection changed during confirmation.",
+      );
+      setTimeout(() => setImportErr(null), 6000);
       return;
     }
 
@@ -154,6 +212,96 @@ export function SettingsPage() {
       }
     >
       <div className="max-w-4xl space-y-3">
+        <section
+          data-testid="settings-profile-targets"
+          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-4"
+        >
+          <div className="flex flex-col sm:flex-row gap-4 sm:items-center justify-between">
+            <div className="space-y-0.5">
+              <label
+                htmlFor="settings-target-select"
+                className="text-sm font-semibold text-[var(--color-text)]"
+              >
+                Settings Target Server
+              </label>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Server whose workspace configuration, global defaults, usage, and maintenance are inspected and modified.
+              </p>
+              {targetProfile && (
+                <div className="flex items-center gap-2 pt-1 text-xs font-mono text-[var(--color-text-muted)]">
+                  <span className="inline-block h-2 w-2 rounded-full bg-[var(--color-success)]" />
+                  <span>{targetProfile.name}</span>
+                  <span>({targetSnapshot?.serverUrl || targetProfile.url})</span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                id="settings-target-select"
+                className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-text)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+                value={settingsProfileId ?? ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSettingsProfileId(val || null);
+                }}
+              >
+                <option value="">(Current / Default Server)</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.url})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-4 sm:items-center justify-between pt-3 border-t border-[var(--color-border)]">
+            <div className="space-y-0.5">
+              <label
+                htmlFor="preferences-source-select"
+                className="text-sm font-semibold text-[var(--color-text)]"
+              >
+                Workbench Preferences Source
+              </label>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Server providing shared UI appearance, editor settings, keyboard shortcuts, and notification rules.
+              </p>
+              <div className="flex items-center gap-2 pt-1 text-xs font-mono text-[var(--color-text-muted)]">
+                <span
+                  className={`inline-block h-2 w-2 rounded-full ${
+                    preferencesStatus === "active"
+                      ? "bg-[var(--color-success)]"
+                      : "bg-[var(--color-warning)]"
+                  }`}
+                />
+                <span>Status: {preferencesStatus}</span>
+                {prefProfile && (
+                  <span>
+                    — {prefProfile.name} ({prefSnapshot?.serverUrl || prefProfile.url})
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                id="preferences-source-select"
+                className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-text)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+                value={preferencesProfileId ?? ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  void switchPreferenceSource(val || null);
+                }}
+              >
+                <option value="">(None / Unset — Local Defaults)</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.url})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </section>
         <SettingsSectionAccordion
           title="Appearance"
           description="Theme, layout density, editor behavior, and notification preferences."
@@ -174,14 +322,14 @@ export function SettingsPage() {
           description="Opt in to privacy-safe local Codex response telemetry and token summaries."
           defaultOpen
         >
-          <SettingsUsageInsightsSection />
+          <SettingsUsageInsightsSection owner={targetOwner} />
         </SettingsSectionAccordion>
         <SettingsSectionAccordion
           title="Terminal Idle Suspend"
           description="Configure quiet duration and scheduled RTC wake timer for server-authoritative suspend."
           defaultOpen
         >
-          <SettingsIdleSuspendTimingSection />
+          <SettingsIdleSuspendTimingSection owner={targetOwner} />
         </SettingsSectionAccordion>
 
         <SettingsSectionAccordion
@@ -189,7 +337,7 @@ export function SettingsPage() {
           description="Edit machine-level defaults that apply across DamHopper workspaces."
           defaultOpen
         >
-          <SettingsGlobalConfigPanel />
+          <SettingsGlobalConfigPanel owner={targetOwner} />
         </SettingsSectionAccordion>
 
         <SettingsSectionAccordion
@@ -204,6 +352,8 @@ export function SettingsPage() {
             onSave={updateConfig}
             isSaving={isPending}
             saveError={saveError}
+            serverUrl={targetSnapshot?.serverUrl || targetProfile?.url}
+            serverName={targetProfile?.name}
           />
         </SettingsSectionAccordion>
 
@@ -220,6 +370,11 @@ export function SettingsPage() {
             onResetWorkspace={() => void handleNuclearReset()}
             resetPending={resetWorkspace.isPending}
             resetErr={resetErr}
+            targetServerLabel={
+              targetProfile
+                ? `${targetProfile.name} (${targetSnapshot?.serverUrl || targetProfile.url})`
+                : undefined
+            }
           />
         </SettingsSectionAccordion>
 
@@ -236,6 +391,11 @@ export function SettingsPage() {
             importPending={importSettings.isPending}
             importMsg={importMsg}
             importErr={importErr}
+            targetServerLabel={
+              targetProfile
+                ? `${targetProfile.name} (${targetSnapshot?.serverUrl || targetProfile.url})`
+                : undefined
+            }
           />
         </SettingsSectionAccordion>
       </div>

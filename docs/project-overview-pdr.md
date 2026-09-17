@@ -337,7 +337,10 @@ See [Native Browser Debug Support](./native-browser-debug-support.md) for the pl
 - Preserve the `GET /api/system/metrics` response shape from the monitor cache; expose immutable deep snapshots and bounded incident history through versioned protected read APIs.
 - Preserve the legacy memory `alert` and publish additive `currentAlerts` for concurrent thermal/disk incidents; return bounded mixed history with per-target recovery records.
 - Publish sanitized, strictly validated compatible `host:alertChanged` events; REST remains authoritative after reconnect, lag, missed events, malformed data, and older servers that omit an additive field.
-- Render in-app status, alert history, evidence, uncertainty, and static operator guidance without credentials or host-mutation controls.
+- Render in-app status, alert history, evidence, uncertainty, and static
+  operator guidance without credentials or generic host-resource remediation
+  controls; the separate idle-suspend status/manual action retains its own
+  authenticated actor, origin, fleet, and revision guards.
 - Feature-detect Linux procfs, PSI, and cgroup v2 data. Return explicit unsupported/stale/partial states on constrained Linux, containers, and non-Linux hosts.
 
 **Current Acceptance Criteria:**
@@ -347,7 +350,9 @@ See [Native Browser Debug Support](./native-browser-debug-support.md) for the pl
 - [x] `GET /api/system/metrics` remains compatible; `/api/system/resources/v1/snapshot` and `/alerts` return cached read-only state.
 - [x] Sustained alert classification, bounded mixed incident history, additive concurrent resource alerts, and compatible `host:alertChanged` delivery are implemented and tested.
 - [x] The client validates resource event shape/evidence before cache updates, retains active incidents when an older server omits `currentAlerts`, and removes only the recovered target from an explicit authoritative array.
-- [x] The top-nav diagnosis UI consumes cached snapshot/alert state and exposes no remediation control.
+- [x] The top-nav diagnosis UI consumes cached snapshot/alert state and
+  exposes no generic resource-remediation control; any idle-suspend action is
+  the separate authenticated contract.
 - [x] Phase 07 completed packaging, compatibility, graceful-degradation, platform/browser, soak-budget, and documentation validation; rollout follow-ups are explicitly deferred.
 
 Phase 07 evidence confirms the monitoring-only/read-only boundary, explicit
@@ -802,6 +807,63 @@ directly to terminal input. Handoff formats only server-generated private
 artifact paths after control-byte stripping and bounded length checks. Artifact
 claim, PNG limits, authorization, bridge origin/source/nonce checks, PTY
 handoff/closing/disposing guards, and failed-write rollback remain mandatory.
+
+### PR-021: Unified-Profile Preferences, Settings, Usage, and Host (Phase 06)
+
+**Status:** Complete / DONE on 2026-09-17. Phase 06 recorded 87/87 targeted
+tests, 1,760/1,760 full Vitest tests, clean TypeScript and modified-file
+ESLint checks, and a 9.5/10 code review. See the
+[Phase 06 guide](./phase-06-preferences-settings-usage-and-host.md) and
+[Phase 06 plan](../plans/260916-2137-unified-profile/phase-06-preferences-settings-usage-and-host.md).
+
+**Product goal:** A user can use profile A for shared workbench preferences,
+profile B for Settings and host policy, and project C for navigation without a
+delayed read, write, usage action, alert, or host confirmation crossing owners.
+
+**Functional requirements:**
+
+- Keep `preferencesProfileId`, `settingsProfileId`, and
+  `browserTargetProfileId` independent. Persist the last successful
+  allowlisted preference snapshot; mark a removed preference source
+  `source-removed`, while clearing removed Settings/Browser targets.
+- Capture `{ profileId, generation }` and the bound API client before debounce,
+  file reads, confirmation, or mutation. Source changes cancel undispatched
+  preference patches; dispatched work remains bound to its original source.
+- Route global/workspace config, maintenance, import/export, Usage insights,
+  and idle-suspend timing to the selected Settings target. Keep server-local
+  project/terminal/runtime ordering, pinned mounts, usage settings, and host
+  snapshots out of shared preference state.
+- Qualify Usage summary/session/health/setup/deletion queries and URL deep links
+  with the selected profile. Do not sum or average data across profiles, even
+  when duplicate profiles point at one host.
+- Qualify host snapshot/history/metrics/idle-suspend queries and event patches
+  by profile and generation. Present missing/stale/unsupported measurements
+  explicitly and retain incident identity by `incidentId`.
+- Bind Force Machine to Sleep confirmation to endpoint label, generation,
+  fleet snapshot, status revision, and request ID. Require renewed confirmation
+  after a conflict and never replay an ambiguous POST.
+
+**Acceptance criteria:**
+
+- [x] Preference debounce and rollback cannot follow a changed source or
+      Settings target; unavailable sources retain safe presentation without
+      remote writes.
+- [x] Settings import captures target through confirmation and delayed
+      `file.text()`, rejects stale target/generation, and preserves server-side
+      validation/backup/rollback.
+- [x] Usage queries, destructive ranges, host alerts, pinned mounts, and idle
+      suspend status remain profile-local; duplicate endpoints are not merged.
+- [x] Host event payloads are validated before cache writes; recovery removes
+      only its incident, and per-profile unread presentation resets on removal.
+- [x] Force-sleep UI preserves existing actor, origin, no-auth, fleet, helper,
+      inhibitor, and revision guards and uses fake executors in tests only.
+
+**Privacy and security:** Preference snapshots exclude credentials and remote
+resource identifiers. Usage remains aggregate/local and does not render prompts,
+responses, commands, or raw telemetry. Host warning projections keep bounded
+safe identities and omit arguments, environment, terminal data, socket details,
+tokens, and raw diagnostics. The frontend does not add host mutation endpoints
+or bypass server authorization.
 
 ### Workflow selected-item surface extension (2026-09-07)
 

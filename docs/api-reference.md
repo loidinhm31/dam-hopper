@@ -367,14 +367,16 @@ counters. Cache attribution labels are descriptive and may overlap, so clients
 must not add them as an accounting total. The existing `GET /api/system/metrics`
 response remains compatible and is served from the monitor's cached projection.
 
-The current UI is monitoring-only. It displays the snapshot, bounded alert
-history, and diagnostic evidence; it does not offer remediation controls. REST
-responses remain authoritative after reconnect, missed events, profile changes,
-or malformed push data. If the deep snapshot is unavailable, the diagnosis
-popover retains CPU and disk from the compatible metrics endpoint and labels the
-deep data unavailable; it never fabricates a zero value. Cgroup v1 is reported
-as unsupported; constrained Linux and containers report per-section
-availability and scope rather than host-wide failure.
+The resource monitoring and diagnosis UI is read-only for generic host
+remediation. The top-nav popover may also display the separate authenticated
+idle-suspend status and existing manual force-suspend action; that action is
+governed by the idle-suspend contract and does not mutate resource-monitor
+state. REST responses remain authoritative after reconnect, missed events,
+profile changes, or malformed push data. If the deep snapshot is unavailable,
+the diagnosis popover retains CPU and disk from the compatible metrics endpoint
+and labels the deep data unavailable; it never fabricates a zero value. Cgroup
+v1 is reported as unsupported; constrained Linux and containers report
+per-section availability and scope rather than host-wide failure.
 
 #### GET /api/system/resources/v1/snapshot
 

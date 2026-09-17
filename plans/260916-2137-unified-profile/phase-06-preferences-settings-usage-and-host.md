@@ -8,7 +8,7 @@
 
 ### Overview
 
-Date: 2026-09-16. Priority: P1. Implementation: pending (0%). Planning status: specified; runtime verification: not run. Scope: Settings and host.
+Date: 2026-09-17. Priority: P1. Implementation: complete (100%; completed 2026-09-17). Planning status: complete; runtime verification: verified (87/87 targeted tests passing, 1760/1760 full suite passing, tsc clean, eslint clean; code review score 9.5/10). Scope: Settings and host.
 
 ### Key Insights
 
@@ -60,13 +60,13 @@ Keep config editing usable for a healthy B when preference source A is unavailab
 7. Force-sleep/power/process-affecting existing actions bind a complete intent before dialog: owner, endpoint label, host snapshot/revision/fleet and request ID. A generation/endpoint/auth change invalidates confirmation. Recheck server revision/conflict response and require refreshed confirmation; never retry ambiguous POST. Keep enabled database-backed actor requirement, no-auth rejection, exact origin policy and all backend inhibitors/executors. User may keep A's labelled dialog while navigating B, but submission still targets A; no implicit retargeting. No new reboot/shutdown/process-kill endpoints are added.
 8. Logout/removal of preference source retains last known presentation and marks unavailable; removal of settings target clears target selection and requires explicit replacement. Local keyboard shortcuts route actions using focused resource owner, not preference source. Shared profile labels are safe metadata; credentials and host-sensitive configuration remain outside diagnostics unless existing consent/redaction allows them.
 
-### Todo list
+### Todo list — DONE (2026-09-17; 100%)
 
-- [ ] Preference source A, Settings target B, project C coexist; each read/save goes to its intended server.
-- [ ] Delayed preference save/import/config update cannot reroute after focus/source/target change; outages retain last snapshot and disable saves.
-- [ ] Server-local ordering, pinned mount and Codex/usage settings never propagate from preference source.
-- [ ] Host statuses/fleet/revisions remain distinct; duplicate profiles are not summed or presented as distinct physical machines.
-- [ ] Destructive confirmation names original owner, rejects stale generation/revision, and has no automatic replay.
+- [x] Preference source A, Settings target B, project C coexist; each read/save goes to its intended server.
+- [x] Delayed preference save/import/config update cannot reroute after focus/source/target change; outages retain last snapshot and disable saves.
+- [x] Server-local ordering, pinned mount and Codex/usage settings never propagate from preference source.
+- [x] Host statuses/fleet/revisions remain distinct; duplicate profiles are not summed or presented as distinct physical machines.
+- [x] Destructive confirmation names original owner, rejects stale generation/revision, and has no automatic replay.
 
 ### Success Criteria
 
@@ -93,3 +93,12 @@ Live S09/S10 verifies preference/config/import/export/usage isolation using temp
 Paths such as `api/`, `hooks/`, `stores/`, `components/`, `contexts/` and `lib/` in this phase are relative to `packages/ui/src/` unless an explicit `server/` or `apps/` prefix is shown. Existing tests mentioned here are updated only where their observable contract changes; proposed test files are not represented as existing. Shared API/shell files follow [execution-map.md](execution-map.md), not concurrent feature ownership.
 
 Unresolved questions: no product decision deferred. Record unavailable qualification prerequisites or contract-relevant source drift before execution.
+
+### Status Update (2026-09-17)
+- Implementation status: complete (100%).
+- Targeted Phase 06 tests: 87/87 passing.
+- Full vitest suite: 1760/1760 tests passing.
+- Code review completed with score 9.5/10.
+- Clean compilation with `tsc -p tsconfig.json`.
+- ESLint zero warnings/errors on modified files.
+- Next steps: Proceed to Phase 07 (media isolation and encryption) or integration qualification.

@@ -63,7 +63,29 @@ const mocks = vi.hoisted(() => ({
     },
   },
 }));
-
+vi.mock("@/api/server-config.js", () => ({
+  readServerProfiles: () => ({
+    status: "available",
+    profiles: [
+      {
+        id: "profile-1",
+        name: "Dev Cluster",
+        url: "http://dev.local:4800",
+        authType: "none",
+        createdAt: 1000,
+        autoConnect: true,
+      },
+      {
+        id: "profile-2",
+        name: "Prod Cluster",
+        url: "http://prod.local:4800",
+        authType: "basic",
+        createdAt: 2000,
+        autoConnect: true,
+      },
+    ],
+  }),
+}));
 vi.mock("react-router-dom", () => ({
   useSearchParams: () => [mocks.params, mocks.setParams],
 }));
@@ -155,5 +177,12 @@ describe("UsagePage", () => {
     expect(windowParams.get("window")).toBe("7d");
     expect(windowParams.has("from")).toBe(false);
     expect(windowParams.has("to")).toBe(false);
+  });
+
+  it("renders server selector for multi-profile usage targeting", () => {
+    const markup = renderToStaticMarkup(<UsagePage />);
+    expect(markup).toContain("usage-server-select");
+    expect(markup).toContain("Dev Cluster");
+    expect(markup).toContain("Prod Cluster");
   });
 });

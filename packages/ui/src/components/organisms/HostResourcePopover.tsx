@@ -12,7 +12,11 @@ import {
   useHostResourceAlerts,
   useHostResourceSnapshot,
   useUpdateUiConfig,
+  resolveTargetOwner,
+  type OwnerInput,
 } from "@/api/queries.js";
+import { useServerProfile } from "@/hooks/use-server-profile.js";
+import { useWorkbenchSelectionsStore } from "@/stores/workbench-selections.js";
 import { HostResourceDiagnosis } from "@/components/organisms/HostResourceDiagnosis.js";
 import { HostResourceGlance } from "@/components/organisms/HostResourceGlance.js";
 import { useHostResourceAlertPresentation } from "@/hooks/use-host-resource-alert-presentation.js";
@@ -27,7 +31,18 @@ import {
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import { cn } from "@/lib/utils.js";
 
-export function HostResourcePopover() {
+export interface HostResourcePopoverProps {
+  owner?: OwnerInput;
+}
+
+export function HostResourcePopover({ owner }: HostResourcePopoverProps = {}) {
+  const activeProfile = useServerProfile();
+  const settingsProfileId = useWorkbenchSelectionsStore(
+    (s) => s.settingsProfileId,
+  );
+  const effectiveOwner = owner ?? settingsProfileId ?? activeProfile?.id;
+  const resolvedOwner = resolveTargetOwner(effectiveOwner);
+
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -37,17 +52,18 @@ export function HostResourcePopover() {
   const [forceSleepOpen, setForceSleepOpen] = useState(false);
   const [forceSleepStatus, setForceSleepStatus] =
     useState<IdleSuspendStatusV1 | null>(null);
-  const { data: globalConfig } = useGlobalConfig();
-  const updateUiConfig = useUpdateUiConfig();
-  const snapshot = useHostResourceSnapshot();
-  const alerts = useHostResourceAlerts(true);
-  const legacyMetrics = useHostMetrics(open);
+  const { data: globalConfig } = useGlobalConfig(resolvedOwner);
+  const updateUiConfig = useUpdateUiConfig(resolvedOwner);
+  const snapshot = useHostResourceSnapshot(true, resolvedOwner);
+  const alerts = useHostResourceAlerts(true, 20, resolvedOwner);
+  const legacyMetrics = useHostMetrics(open, resolvedOwner);
   const uiConfig = withUiConfigDefaults(globalConfig?.ui);
   const alert = snapshot.data?.alert;
   const currentAlerts = snapshot.data?.currentAlerts;
   const alertPresentation = useHostResourceAlertPresentation(
     alert,
     currentAlerts,
+    resolvedOwner?.profileId,
   );
   const effectiveStatus = resolveHostResourceStatus({
     snapshot: snapshot.data,
@@ -270,7 +286,10 @@ export function HostResourcePopover() {
               />
             )}
             <div className="mt-3">
-              <HostIdleSuspendStatus onForceSleep={handleOpenForceSleep} />
+              <HostIdleSuspendStatus
+                onForceSleep={handleOpenForceSleep}
+                owner={resolvedOwner}
+              />
             </div>
             {snapshot.data && (
               <section className="mt-3 border-t border-[var(--color-border)] pt-3">
@@ -324,6 +343,12 @@ export function HostResourcePopover() {
             if (!isOpen) handleCloseForceSleep();
           }}
           initialStatus={forceSleepStatus}
+          owner={resolvedOwner}
+          endpointLabel={
+            activeProfile?.name
+              ? `${activeProfile.name} (${activeProfile.url})`
+              : undefined
+          }
         />
       )}
     </div>

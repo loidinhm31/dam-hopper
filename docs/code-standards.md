@@ -1373,6 +1373,51 @@ of profile IDs, endpoint URLs, tokens, and routing decisions.
 See [Phase 05 Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md)
 for the source map and handoff sequence.
 
+### Preferences, Settings, usage, and host ownership (Phase 06)
+
+Keep preference source and Settings target distinct. `preferencesProfileId`
+selects only the allowlisted persisted UI fields; `settingsProfileId` selects
+server configuration, maintenance, usage, and host policy. Project navigation
+must not mutate either selector. Use `useWorkbenchSelectionsStore` removal
+semantics: retain a removed preference snapshot as `source-removed`, but clear
+the removed Settings/Browser target.
+
+- Capture `ConnectionRef { profileId, generation }` and the bound API client
+  before every debounced save, file read, confirmation, or mutation. A delayed
+  callback must not resolve through the ambient active profile.
+- Keep `settings.ts`'s persistence allowlist and clamping boundary explicit.
+  Coalesce only allowlisted fields; source changes cancel undispatched patches,
+  while dispatched work finishes only on its captured source. Apply late
+  success/rollback only when source and edit revision still match.
+- Build owner-aware query keys with `profileQueryKey(owner, ...)`. Config,
+  projects, workspace, usage, host snapshot/history, and idle-suspend
+  invalidation must be limited to the captured profile. A compatibility
+  unqualified key is permitted only at an explicit no-owner fallback boundary.
+- Import/export must keep target label and generation through confirmation and
+  `file.text()`. Preserve the 1 MiB browser cap and leave TOML validation,
+  backup, atomic publication, and rollback to the server.
+- Treat `hostResourcePinnedMount` as presentation-only UiConfig. Do not feed it
+  into sampling, alert classification, or telemetry, and do not silently
+  rebind a missing mount.
+- Validate `host:alertChanged` evidence with closed kind/state/severity and
+  bounded text/numbers before cache writes. Reduce incidents by `incidentId`;
+  `resolvedAt` (including zero) removes only that incident. Partition unread
+  presentation by profile and cap retained versions.
+- Host idle-suspend UI is display and intent capture, not policy authority.
+  `ForceSleepDialog` captures endpoint, generation, fleet snapshot, status
+  revision, and request ID; stale conflicts require fresh confirmation and
+  ambiguous force-suspend requests use `retry: false`. Never call real power,
+  process, RTC, or privileged executors in tests.
+
+Test observable behavior: source/target independence, delayed save and import
+fencing, offline snapshot retention, owner-qualified usage/host invalidation,
+cross-profile alert isolation, stale fleet conflict handling, and no replay
+after an ambiguous host action. Avoid wording-only assertions that reintroduce
+the removed single-profile contract.
+
+See [Phase 06 Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)
+for the implementation source map and acceptance evidence.
+
 ### Build & Type Checking
 
 ```bash

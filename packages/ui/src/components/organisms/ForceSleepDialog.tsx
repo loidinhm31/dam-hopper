@@ -9,7 +9,9 @@ import {
 } from "@/components/ui/Dialog.js";
 import { Button } from "@/components/atoms/Button.js";
 import { AlertTriangle } from "lucide-react";
-import { useForceSuspend } from "@/api/queries.js";
+import { useForceSuspend, resolveTargetOwner, type OwnerInput } from "@/api/queries.js";
+import { getConnectionSnapshot } from "@/api/connections.js";
+import { generateUUID } from "@/lib/utils.js";
 import {
   asIdleSuspendConflictResponse,
   type IdleSuspendStatusV1,
@@ -26,14 +28,19 @@ export interface ForceSleepDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialStatus: IdleSuspendStatusV1;
+  owner?: OwnerInput;
+  endpointLabel?: string;
 }
 
 export function ForceSleepDialog({
   open,
   onOpenChange,
   initialStatus,
+  owner,
+  endpointLabel,
 }: ForceSleepDialogProps) {
-  const forceSuspend = useForceSuspend();
+  const boundOwner = resolveTargetOwner(owner);
+  const forceSuspend = useForceSuspend(boundOwner);
   const [wakeMode, setWakeMode] = useState<"indefinite" | "timed">("indefinite");
   const [fleetSnapshot, setFleetSnapshot] = useState<IdleSuspendFleetSnapshot>(
     initialStatus.fleetSnapshot,
@@ -44,6 +51,17 @@ export function ForceSleepDialog({
   const [wakeSecondsInput, setWakeSecondsInput] = useState<string>(() =>
     String(getInitialTimedWakeSeconds(initialStatus)),
   );
+  const [intent, setIntent] = useState(() => ({
+    owner: boundOwner,
+    generation: boundOwner?.generation ?? 1,
+    revision: initialStatus.statusRevision,
+    endpointLabel:
+      endpointLabel ||
+      (boundOwner
+        ? getConnectionSnapshot(boundOwner.profileId)?.serverUrl
+        : "selected host"),
+    requestId: generateUUID(),
+  }));
 
   const [prevOpen, setPrevOpen] = useState(open);
   if (prevOpen !== open) {
@@ -55,8 +73,29 @@ export function ForceSleepDialog({
       setConflictWarning(null);
       setErrorMsg(null);
       setWakeSecondsInput(String(getInitialTimedWakeSeconds(initialStatus)));
+      setIntent({
+        owner: boundOwner,
+        generation: boundOwner?.generation ?? 1,
+        revision: initialStatus.statusRevision,
+        endpointLabel:
+          endpointLabel ||
+          (boundOwner
+            ? getConnectionSnapshot(boundOwner.profileId)?.serverUrl
+            : "selected host"),
+        requestId: generateUUID(),
+      });
     }
   }
+
+  const currentConn = intent.owner
+    ? getConnectionSnapshot(intent.owner.profileId)
+    : null;
+  const isStale = Boolean(
+    intent.owner &&
+      currentConn &&
+      (currentConn.status !== "connected" ||
+        currentConn.owner.generation !== intent.generation),
+  );
 
   const activeCount = getActiveSessionCount(fleetSnapshot);
   const isPending = forceSuspend.isPending;
@@ -69,8 +108,7 @@ export function ForceSleepDialog({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (isPending) return;
-
+    if (isPending || isStale) return;
     const wakeAfterSeconds = wakeMode === "indefinite" ? 0 : wakeNum;
     if (wakeMode === "timed" && isTimedInvalid) {
       setErrorMsg(
@@ -130,8 +168,23 @@ export function ForceSleepDialog({
           <DialogDescription className="text-xs text-[var(--color-text-muted)]">
             Put the host machine to sleep immediately. Running work is paused,
             not killed.
+            {intent.endpointLabel && (
+              <span className="block mt-1 font-mono text-[11px] text-[var(--color-text)]">
+                Target host: {intent.endpointLabel} (rev {intent.revision})
+              </span>
+            )}
           </DialogDescription>
         </DialogHeader>
+
+        {isStale && (
+          <div
+            role="alert"
+            className="rounded border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 p-3 text-xs text-[var(--color-danger)]"
+          >
+            Server connection or generation changed while reviewing. Please close
+            and inspect refreshed host status before executing.
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {activeCount > 0 && (
@@ -284,6 +337,7 @@ export function ForceSleepDialog({
               loading={isPending}
               disabled={
                 isPending ||
+                isStale ||
                 (activeCount > 0 && !confirmedActive) ||
                 isTimedInvalid
               }

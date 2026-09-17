@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import type { DamHopperConfig } from "@/api/client.js";
-
+import type { OwnerInput } from "@/api/queries.js";
 const ConfigEditor = lazy(() =>
   import("@/components/organisms/ConfigEditor.js").then((m) => ({
     default: m.ConfigEditor,
@@ -26,16 +26,17 @@ interface SettingsWorkspaceConfigPanelProps {
   onSave: (config: DamHopperConfig) => Promise<DamHopperConfig>;
   isSaving: boolean;
   saveError: unknown;
+  serverUrl?: string;
+  serverName?: string;
 }
-
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function SettingsGlobalConfigPanel() {
+export function SettingsGlobalConfigPanel({ owner }: { owner?: OwnerInput } = {}) {
   return (
     <Suspense fallback={SETTINGS_FALLBACK}>
-      <GlobalConfigEditor />
+      <GlobalConfigEditor owner={owner} />
     </Suspense>
   );
 }
@@ -47,6 +48,8 @@ export function SettingsWorkspaceConfigPanel({
   onSave,
   isSaving,
   saveError,
+  serverUrl,
+  serverName,
 }: SettingsWorkspaceConfigPanelProps) {
   return (
     <>
@@ -67,6 +70,8 @@ export function SettingsWorkspaceConfigPanel({
             onSave={onSave}
             isSaving={isSaving}
             saveError={saveError ? errorMessage(saveError) : null}
+            serverUrl={serverUrl}
+            serverName={serverName}
           />
         </Suspense>
       )}

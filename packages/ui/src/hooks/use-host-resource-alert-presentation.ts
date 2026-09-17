@@ -17,144 +17,179 @@ type AlertVersion = {
   severity: AlertSeverity;
 };
 
+interface ProfileAlertPresentation {
+  versions: AlertVersion[];
+  unreadIds: string[];
+}
+
 interface HostResourceAlertPresentationState {
   versions: AlertVersion[];
   unreadIds: string[];
-  recordAlert: (alert?: PresentableAlert | null) => void;
+  byProfile: Record<string, ProfileAlertPresentation>;
+  recordAlert: (alert?: PresentableAlert | null, profileId?: string) => void;
   recordSnapshotAlerts: (
     alert?: HostResourceAlert | null,
     resourceAlerts?: HostResourceResourceAlert[],
+    profileId?: string,
   ) => void;
-  markRead: () => void;
-  reset: () => void;
+  markRead: (profileId?: string) => void;
+  reset: (profileId?: string) => void;
 }
 
-/**
- * Keeps bounded presentation state only. React Query remains authoritative for
- * the snapshot and incident history, while repeated updates retain one ID.
- */
+function reduceAlert(
+  currentVersions: AlertVersion[],
+  currentUnreadIds: string[],
+  alert: PresentableAlert,
+): { versions: AlertVersion[]; unreadIds: string[] } {
+  const incidentId = alert.incidentId;
+  if (!incidentId) return { versions: currentVersions, unreadIds: currentUnreadIds };
+  if ("resolvedAt" in alert && alert.resolvedAt != null) {
+    return {
+      versions: currentVersions.filter((v) => v.incidentId !== incidentId),
+      unreadIds: currentUnreadIds.filter((id) => id !== incidentId),
+    };
+  }
+  const previous = currentVersions.find((v) => v.incidentId === incidentId);
+  const changed =
+    !previous ||
+    previous.state !== alert.state ||
+    previous.severity !== alert.severity;
+  const versions = [
+    ...currentVersions.filter((v) => v.incidentId !== incidentId),
+    {
+      incidentId,
+      resource: "kind" in alert,
+      state: alert.state,
+      severity: alert.severity,
+    },
+  ].slice(-MAX_PRESENTED_INCIDENTS);
+  const unreadIds = changed
+    ? currentUnreadIds.includes(incidentId)
+      ? currentUnreadIds
+      : [...currentUnreadIds, incidentId].slice(-MAX_PRESENTED_INCIDENTS)
+    : currentUnreadIds;
+  return { versions, unreadIds };
+}
+
+function reduceSnapshotAlerts(
+  currentVersions: AlertVersion[],
+  currentUnreadIds: string[],
+  alert?: HostResourceAlert | null,
+  resourceAlerts?: HostResourceResourceAlert[],
+): { versions: AlertVersion[]; unreadIds: string[] } {
+  const nextAlerts = [
+    ...(alert ? [alert] : []),
+    ...(resourceAlerts ?? []),
+  ];
+  let versions = currentVersions;
+  let unreadIds = currentUnreadIds;
+
+  for (const nextAlert of nextAlerts) {
+    const res = reduceAlert(versions, unreadIds, nextAlert);
+    versions = res.versions;
+    unreadIds = res.unreadIds;
+  }
+
+  if (resourceAlerts !== undefined) {
+    const activeIds = new Set(resourceAlerts.map((item) => item.incidentId));
+    const removedIds = versions
+      .filter((v) => v.resource && !activeIds.has(v.incidentId ?? ""))
+      .map((v) => v.incidentId)
+      .filter((id): id is string => id != null);
+    versions = versions.filter(
+      (v) => !v.resource || activeIds.has(v.incidentId ?? ""),
+    );
+    unreadIds = unreadIds.filter((id) => !removedIds.includes(id));
+  }
+
+  return { versions, unreadIds };
+}
+
 export const useHostResourceAlertPresentationStore =
   create<HostResourceAlertPresentationState>((set) => ({
     versions: [],
     unreadIds: [],
-    recordAlert: (alert) => {
+    byProfile: {},
+    recordAlert: (alert, profileId) => {
       const incidentId = alert?.incidentId;
       if (!alert || !incidentId) return;
       set((current) => {
-        if ("resolvedAt" in alert && alert.resolvedAt != null) {
-          return {
-            versions: current.versions.filter(
-              (version) => version.incidentId !== incidentId,
-            ),
-            unreadIds: current.unreadIds.filter((id) => id !== incidentId),
-          };
+        const globalRes = reduceAlert(current.versions, current.unreadIds, alert);
+        const byProfile = { ...current.byProfile };
+        if (profileId) {
+          const profilePrev = current.byProfile[profileId] ?? { versions: [], unreadIds: [] };
+          byProfile[profileId] = reduceAlert(profilePrev.versions, profilePrev.unreadIds, alert);
         }
-        const previous = current.versions.find(
-          (version) => version.incidentId === incidentId,
-        );
-        const changed =
-          !previous ||
-          previous.state !== alert.state ||
-          previous.severity !== alert.severity;
-        const versions = [
-          ...current.versions.filter(
-            (version) => version.incidentId !== incidentId,
-          ),
-          {
-            incidentId,
-            resource: "kind" in alert,
-            state: alert.state,
-            severity: alert.severity,
-          },
-        ].slice(-MAX_PRESENTED_INCIDENTS);
-        const unreadIds = changed
-          ? current.unreadIds.includes(incidentId)
-            ? current.unreadIds
-            : [...current.unreadIds, incidentId].slice(-MAX_PRESENTED_INCIDENTS)
-          : current.unreadIds;
-        return { versions, unreadIds };
+        return { versions: globalRes.versions, unreadIds: globalRes.unreadIds, byProfile };
       });
     },
-    recordSnapshotAlerts: (alert, resourceAlerts) => {
+    recordSnapshotAlerts: (alert, resourceAlerts, profileId) => {
       set((current) => {
-        const nextAlerts = [
-          ...(alert ? [alert] : []),
-          ...(resourceAlerts ?? []),
-        ];
-        let versions = current.versions;
-        let unreadIds = current.unreadIds;
-
-        for (const nextAlert of nextAlerts) {
-          const incidentId = nextAlert.incidentId;
-          if (!incidentId) continue;
-          const resource = "kind" in nextAlert;
-          const previous = versions.find(
-            (version) => version.incidentId === incidentId,
+        const globalRes = reduceSnapshotAlerts(
+          current.versions,
+          current.unreadIds,
+          alert,
+          resourceAlerts,
+        );
+        const byProfile = { ...current.byProfile };
+        if (profileId) {
+          const profilePrev = current.byProfile[profileId] ?? { versions: [], unreadIds: [] };
+          byProfile[profileId] = reduceSnapshotAlerts(
+            profilePrev.versions,
+            profilePrev.unreadIds,
+            alert,
+            resourceAlerts,
           );
-          const changed =
-            !previous ||
-            previous.state !== nextAlert.state ||
-            previous.severity !== nextAlert.severity;
-          versions = [
-            ...versions.filter((version) => version.incidentId !== incidentId),
-            {
-              incidentId,
-              resource,
-              state: nextAlert.state,
-              severity: nextAlert.severity,
-            },
-          ].slice(-MAX_PRESENTED_INCIDENTS);
-          if (changed && !unreadIds.includes(incidentId)) {
-            unreadIds = [...unreadIds, incidentId].slice(
-              -MAX_PRESENTED_INCIDENTS,
-            );
-          }
         }
-
-        // Undefined means an older server did not send the additive field.
-        // An explicit array is authoritative for resource incidents only.
-        if (resourceAlerts !== undefined) {
-          const activeIds = new Set(
-            resourceAlerts.map((item) => item.incidentId),
-          );
-          const removedIds = versions
-            .filter(
-              (version) =>
-                version.resource && !activeIds.has(version.incidentId ?? ""),
-            )
-            .map((version) => version.incidentId)
-            .filter((id): id is string => id != null);
-          versions = versions.filter(
-            (version) =>
-              !version.resource || activeIds.has(version.incidentId ?? ""),
-          );
-          unreadIds = unreadIds.filter((id) => !removedIds.includes(id));
-        }
-
-        return { versions, unreadIds };
+        return { versions: globalRes.versions, unreadIds: globalRes.unreadIds, byProfile };
       });
     },
-    markRead: () => set({ unreadIds: [] }),
-    reset: () => set({ versions: [], unreadIds: [] }),
+    markRead: (profileId) =>
+      set((current) => {
+        if (profileId && current.byProfile[profileId]) {
+          const nextByProfile = {
+            ...current.byProfile,
+            [profileId]: {
+              ...current.byProfile[profileId],
+              unreadIds: [],
+            },
+          };
+          return { unreadIds: [], byProfile: nextByProfile };
+        }
+        return { unreadIds: [] };
+      }),
+    reset: (profileId) =>
+      set((current) => {
+        if (profileId) {
+          const nextByProfile = { ...current.byProfile };
+          delete nextByProfile[profileId];
+          return { versions: [], unreadIds: [], byProfile: nextByProfile };
+        }
+        return { versions: [], unreadIds: [], byProfile: {} };
+      }),
   }));
 
 export function useHostResourceAlertPresentation(
   alert?: HostResourceAlert | null,
   resourceAlerts?: HostResourceResourceAlert[],
+  profileId?: string,
 ) {
   const recordSnapshotAlerts = useHostResourceAlertPresentationStore(
     (state) => state.recordSnapshotAlerts,
   );
-  const unreadCount = useHostResourceAlertPresentationStore(
-    (state) => state.unreadIds.length,
+  const unreadCount = useHostResourceAlertPresentationStore((state) =>
+    profileId
+      ? (state.byProfile[profileId]?.unreadIds.length ?? 0)
+      : state.unreadIds.length,
   );
-  const markRead = useHostResourceAlertPresentationStore(
+  const markReadStore = useHostResourceAlertPresentationStore(
     (state) => state.markRead,
   );
+  const markRead = () => markReadStore(profileId);
 
   useEffect(() => {
-    recordSnapshotAlerts(alert, resourceAlerts);
-  }, [alert, resourceAlerts, recordSnapshotAlerts]);
+    recordSnapshotAlerts(alert, resourceAlerts, profileId);
+  }, [alert, resourceAlerts, profileId, recordSnapshotAlerts]);
 
   return { unreadCount, markRead };
 }

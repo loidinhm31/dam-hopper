@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 2,006
-files, 4,465,686 tokens, 18,575,137 characters; five security-flagged files
+**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 2,008
+files, 4,478,624 tokens, 18,632,694 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -156,6 +156,33 @@ outside this evidence. The maintained implementation guide is
 These are ownership and admission boundaries, not a new server workspace
 model. `ConnectionRef` generation fences asynchronous UI work; server
 identifiers remain valid only on their captured connection.
+
+## Unified-profile preferences, Settings, usage, and host (Phase 06)
+
+Phase 06 completes the browser ownership boundary for settings and host
+surfaces. It keeps one explicit preference source separate from the Settings
+target and from project/Browser selection. Server configuration, Codex usage,
+host metrics, idle-suspend state, fleet counts, revisions, and resource IDs
+remain local to their owning profile.
+
+| Boundary | Source modules | Contract |
+| --- | --- | --- |
+| Preference source | `stores/settings.ts`, `stores/workbench-selections.ts` | Allowlisted UI state hydrates through captured `{ profileId, generation }`; debounced writes bind the original client/source/edit revision; unavailable or removed sources keep a safe snapshot. |
+| Settings target | `components/pages/SettingsPage.tsx`, `settings-page/*`, `GlobalConfigEditor.tsx`, `ConfigEditor.tsx` | Global/workspace config, maintenance, import/export, usage setup, and idle-suspend timing receive explicit target owner; import rejects target/generation drift before dispatch. |
+| Owner-qualified queries | `api/queries.ts`, `api/client.ts`, `hooks/use-sse.ts` | Usage, host metrics/snapshots/alerts, idle-suspend, config, and invalidation keys use `profileQueryKey(owner, ...)`; events patch only the event owner's cache. |
+| Usage surface | `components/pages/UsagePage.tsx`, `components/usage/*` | URL `profileId` selects the owner; summary/session/health/setup/delete operations remain profile-local; visible session views poll at 15 seconds. |
+| Host presentation | `HostResourcePopover.tsx`, `HostIdleSuspendStatus.tsx`, `ForceSleepDialog.tsx`, `use-host-resource-alert-presentation.ts` | Pinned mount is owner-local presentation state; incidents are keyed by `incidentId`; unread state is partitioned by profile; destructive host intent captures generation/revision and never replays ambiguity. |
+
+The preference save chain coalesces only allowlisted fields and rolls back only
+when its captured source and edit revision still match. Host alert transport
+events are strictly validated, while REST snapshots/history remain the
+reconciliation authority. The browser never averages duplicate profile hosts or
+merges usage totals.
+
+The Phase 06 gate recorded 87/87 targeted tests, 1,760/1,760 full Vitest
+tests, clean TypeScript/modified-file ESLint checks, and a 9.5/10 code review.
+The maintained implementation guide is
+[Phase 06: Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md).
 
 ## Backend boundaries
 

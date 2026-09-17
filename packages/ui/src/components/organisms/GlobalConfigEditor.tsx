@@ -8,16 +8,17 @@ import {
   useAddKnownWorkspace,
   useRemoveKnownWorkspace,
   useWorkspace,
+  type OwnerInput,
 } from "@/api/queries.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 // ── Default Workspace Section ─────────────────────────────────────────────
 
-function DefaultWorkspaceSection() {
+function DefaultWorkspaceSection({ owner }: { owner?: OwnerInput }) {
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
-  const { data: globalConfig, isLoading } = useGlobalConfig();
-  const updateDefaults = useUpdateGlobalDefaults();
+  const { data: globalConfig, isLoading } = useGlobalConfig(owner);
+  const updateDefaults = useUpdateGlobalDefaults(owner);
   const [draft, setDraft] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -110,13 +111,13 @@ function DefaultWorkspaceSection() {
 
 // ── Known Workspaces Section ──────────────────────────────────────────────
 
-function KnownWorkspacesSection() {
+function KnownWorkspacesSection({ owner }: { owner?: OwnerInput }) {
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
-  const { data: workspace } = useWorkspace();
-  const { data: known, isLoading } = useKnownWorkspaces();
-  const addMutation = useAddKnownWorkspace();
-  const removeMutation = useRemoveKnownWorkspace();
+  const { data: workspace } = useWorkspace(owner);
+  const { data: known, isLoading } = useKnownWorkspaces(owner);
+  const addMutation = useAddKnownWorkspace(owner);
+  const removeMutation = useRemoveKnownWorkspace(owner);
   const [addPath, setAddPath] = useState("");
   const [removingPath, setRemovingPath] = useState<string | null>(null);
 
@@ -158,7 +159,7 @@ function KnownWorkspacesSection() {
             </tr>
           </thead>
           <tbody>
-            {(known?.workspaces ?? []).map((ws) => {
+            {(known?.workspaces ?? []).map((ws: { path: string; name: string }) => {
               const isCurrent = ws.path === currentRoot;
               const isRemoving = removingPath === ws.path;
               return (
@@ -252,21 +253,21 @@ function KnownWorkspacesSection() {
 
 // ── GlobalConfigEditor ────────────────────────────────────────────────────
 
-export function GlobalConfigEditor() {
+export function GlobalConfigEditor({ owner }: { owner?: OwnerInput } = {}) {
   return (
     <div className="space-y-6">
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
         <h3 className="text-sm font-medium text-[var(--color-text)]">
           Default Workspace
         </h3>
-        <DefaultWorkspaceSection />
+        <DefaultWorkspaceSection owner={owner} />
       </section>
 
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
         <h3 className="text-sm font-medium text-[var(--color-text)]">
           Known Workspaces
         </h3>
-        <KnownWorkspacesSection />
+        <KnownWorkspacesSection owner={owner} />
       </section>
     </div>
   );
