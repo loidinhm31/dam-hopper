@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  geometryEquals,
   geometryFromScreenGrid,
   geometryFromTextarea,
   normalizeCursorGeometry,
@@ -72,5 +73,25 @@ describe("terminal cursor geometry", () => {
         { clientWidth: 0, clientHeight: 100 },
       ),
     ).toBeNull();
+  });
+});
+
+describe("geometryEquals", () => {
+  it("returns true for identical object or equal scalar fields", () => {
+    const a = { x: 10, y: 20, lineHeight: 16, availableWidth: 100 };
+    const b = { x: 10, y: 20, lineHeight: 16, availableWidth: 100 };
+    expect(geometryEquals(a, b)).toBe(true);
+    expect(geometryEquals(a, a)).toBe(true);
+    expect(geometryEquals(null, null)).toBe(true);
+  });
+
+  it("returns false for different scalar values or null mismatches", () => {
+    const a = { x: 10, y: 20, lineHeight: 16, availableWidth: 100 };
+    expect(geometryEquals(a, null)).toBe(false);
+    expect(geometryEquals(null, a)).toBe(false);
+    expect(geometryEquals(a, { ...a, x: 11 })).toBe(false);
+    expect(geometryEquals(a, { ...a, y: 21 })).toBe(false);
+    expect(geometryEquals(a, { ...a, lineHeight: 18 })).toBe(false);
+    expect(geometryEquals(a, { ...a, availableWidth: 99 })).toBe(false);
   });
 });

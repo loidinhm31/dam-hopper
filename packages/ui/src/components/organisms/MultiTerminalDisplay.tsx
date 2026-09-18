@@ -94,10 +94,28 @@ export function MultiTerminalDisplay({
     [layout.root],
   );
 
+  const onVisibleSessionIdsChangeRef = useRef(onVisibleSessionIdsChange);
   useEffect(() => {
-    onVisibleSessionIdsChange?.(visibleSessionIds);
-    return () => onVisibleSessionIdsChange?.(new Set());
-  }, [onVisibleSessionIdsChange, visibleSessionIds]);
+    onVisibleSessionIdsChangeRef.current = onVisibleSessionIdsChange;
+  }, [onVisibleSessionIdsChange]);
+
+  const prevVisibleIdsRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const prev = prevVisibleIdsRef.current;
+    const same =
+      prev.size === visibleSessionIds.size &&
+      [...prev].every((id) => visibleSessionIds.has(id));
+    if (!same) {
+      prevVisibleIdsRef.current = visibleSessionIds;
+      onVisibleSessionIdsChangeRef.current?.(visibleSessionIds);
+    }
+  }, [visibleSessionIds]);
+
+  useEffect(() => {
+    return () => {
+      onVisibleSessionIdsChangeRef.current?.(new Set());
+    };
+  }, []);
 
   // ── sync new sessions into the split layout ──────────────────────────────
   useEffect(() => {

@@ -7,6 +7,20 @@ export interface CursorGeometry {
   availableWidth: number;
 }
 
+export function geometryEquals(
+  a: CursorGeometry | null,
+  b: CursorGeometry | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.x === b.x &&
+    a.y === b.y &&
+    a.lineHeight === b.lineHeight &&
+    a.availableWidth === b.availableWidth
+  );
+}
+
 type RectLike = Pick<
   DOMRect,
   "left" | "top" | "right" | "bottom" | "width" | "height"
@@ -149,6 +163,7 @@ export class TerminalCursorGeometryAdapter {
   private readonly disposables: Array<{ dispose: () => void }> = [];
   private readonly resizeObserver: ResizeObserver;
   private readonly host: HTMLElement;
+
 
   constructor(
     private readonly terminal: Terminal,

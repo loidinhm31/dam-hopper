@@ -44,6 +44,7 @@ import { handleTerminalSuggestionKeyEvent } from "@/lib/terminal-suggestion-key-
 import { getTerminalSuggestionSuffix } from "@/lib/terminal-suggestion-acceptance.js";
 import {
   TerminalCursorGeometryAdapter,
+  geometryEquals,
   type CursorGeometry,
 } from "@/lib/terminal-cursor-geometry-adapter.js";
 import { bindTerminalTouchScroll } from "@/lib/terminal-touch-scroll.js";
@@ -416,7 +417,11 @@ export function TerminalPanel({
     );
     geometryAdapter = new TerminalCursorGeometryAdapter(
       term,
-      setCursorGeometry,
+      (geometry) => {
+        setCursorGeometry((current) =>
+          geometryEquals(current, geometry) ? current : geometry,
+        );
+      },
     );
     cursorGeometryAdapterRef.current = geometryAdapter;
     terminalEntry.invalidateSuggestionGeometry = () =>
@@ -980,7 +985,6 @@ export function TerminalPanel({
       cursorGeometryAdapterRef.current?.invalidate();
       return;
     }
-    setCursorGeometry(null);
     cursorGeometryAdapterRef.current?.hide();
   }, [suggestions.snapshot.state]);
 
