@@ -180,4 +180,29 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     expect(mocks.useProjectStatus).not.toHaveBeenCalled();
     expect(mocks.useWorktrees).not.toHaveBeenCalled();
   });
+  it("queries project status and worktrees scoped to the group profile", () => {
+    const qualifiedGroup: TraditionalTerminalProjectGroup = {
+      ...group,
+      id: '["profile-2","demo"]',
+      profileId: "profile-2",
+      projectRef: { profileId: "profile-2", project: "demo" },
+    };
+
+    renderToStaticMarkup(
+      <TraditionalTerminalProjectsNavigator
+        groups={[qualifiedGroup]}
+        activeGroupId={qualifiedGroup.id}
+        onSelectGroup={() => {}}
+      />,
+    );
+
+    expect(mocks.useProjectStatus).toHaveBeenCalledWith(
+      { profileId: "profile-2", project: "demo" },
+      true,
+    );
+    expect(mocks.useWorktrees).toHaveBeenCalledWith({
+      profileId: "profile-2",
+      project: "demo",
+    });
+  });
 });

@@ -1,19 +1,22 @@
 import { useState } from "react";
 import { useAddWorktree } from "@/api/queries.js";
+import type { ProjectTargetInput } from "@/api/client.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 
 interface WorktreeAddFormProps {
   projectName: string;
+  target?: ProjectTargetInput;
   onCancel: () => void;
   onAdded: () => void;
 }
 
 export function WorktreeAddForm({
   projectName,
+  target,
   onCancel,
   onAdded,
 }: WorktreeAddFormProps) {
-  const addWorktree = useAddWorktree(projectName);
+  const addWorktree = useAddWorktree(target ?? projectName);
   const [path, setPath] = useState("");
   const [branch, setBranch] = useState("");
   const [createBranch, setCreateBranch] = useState(false);
