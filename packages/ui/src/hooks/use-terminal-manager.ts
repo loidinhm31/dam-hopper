@@ -294,6 +294,7 @@ export function findSessionMeta(
   sessionType?: SessionInfo["type"];
   cwd?: string;
   worktreePath?: string;
+  profileId?: string;
 } | null {
   for (const project of tree) {
     for (const cmd of project.commands) {
@@ -307,6 +308,10 @@ export function findSessionMeta(
             sessionType: match.type,
             cwd: match.cwd,
             worktreePath: match.worktreePath,
+            profileId:
+              match && "profileId" in match && typeof match.profileId === "string"
+                ? match.profileId
+                : undefined,
           };
         }
       } else if (cmd.sessionId === sessionId) {
@@ -317,6 +322,12 @@ export function findSessionMeta(
           sessionType: cmd.session?.type,
           cwd: cmd.session?.cwd ?? cmd.cwd,
           worktreePath: cmd.session?.worktreePath,
+          profileId:
+            cmd.session &&
+            "profileId" in cmd.session &&
+            typeof cmd.session.profileId === "string"
+              ? cmd.session.profileId
+              : undefined,
         };
       }
     }
@@ -330,6 +341,10 @@ export function findSessionMeta(
         sessionType: s.type,
         cwd: s.cwd,
         worktreePath: s.worktreePath,
+        profileId:
+          "profileId" in s && typeof s.profileId === "string"
+            ? s.profileId
+            : undefined,
       }
     : null;
 }
@@ -362,9 +377,11 @@ function sameOpenTabs(a: TabEntry[], b: TabEntry[]) {
         tab.sessionId === other.sessionId &&
         tab.label === other.label &&
         tab.project === other.project &&
-        tab.session === other.session &&
+        tab.profileId === other.profileId &&
         tab.isSaveable === other.isSaveable &&
-        tab.isPinned === other.isPinned
+        tab.isPinned === other.isPinned &&
+        tab.session?.alive === other.session?.alive &&
+        tab.session?.name === other.session?.name
       );
     })
   );

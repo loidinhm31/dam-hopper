@@ -66,6 +66,7 @@ import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
 import { useProjects, useExportDiagnostics } from "@/api/queries.js";
+import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import {
   addKeyboardShortcutListener,
   useDocumentKeyboardShortcut,
@@ -391,6 +392,7 @@ export default function WorkspacePage() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
   const browserDebugHost = useBrowserDebugHost();
+  const { allProjects } = useAggregatedProjects();
   const activeProfile = useServerProfile();
   const activeProfileId = selectedProject?.profileId ?? activeProfile?.id ?? null;
   const { level: appZoomLevel } = useAppZoom();
@@ -491,9 +493,16 @@ export default function WorkspacePage() {
       ) {
         return;
       }
-      if (!projects.some((p) => p.name === activeProject)) {
-        setActiveProject(null);
+      if (projects.some((p) => p.name === activeProject)) {
+        return;
       }
+      const existsInAnyProfile = allProjects.some(
+        (p) => p.project.name === activeProject,
+      );
+      if (existsInAnyProfile) {
+        return;
+      }
+      setActiveProject(null);
     }
   }, [
     projects,
@@ -503,6 +512,7 @@ export default function WorkspacePage() {
     isProjectsFetching,
     selectedProject?.profileId,
     activeProfileId,
+    allProjects,
   ]);
 
   const queryClient = useQueryClient();

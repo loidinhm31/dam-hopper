@@ -19,24 +19,23 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       selectedProject: null,
       navigationRevision: 0,
       setSelectedProject: (project) => {
-        set((state) => {
-          const isSame =
-            (state.selectedProject === null && project === null) ||
-            (state.selectedProject !== null &&
-              project !== null &&
-              state.selectedProject.profileId === project.profileId &&
-              state.selectedProject.project === project.project);
-          if (isSame) return state;
-          if (project?.profileId && project.profileId !== getActiveProfileId()) {
-            setActiveProfile(project.profileId);
-          }
-          return {
-            selectedProject: project,
-            navigationRevision: state.navigationRevision + 1,
-            activeProject: project?.project ?? null,
-            activeProjectRevision: state.activeProjectRevision + 1,
-          };
-        });
+        const current = get().selectedProject;
+        const isSame =
+          (current === null && project === null) ||
+          (current !== null &&
+            project !== null &&
+            current.profileId === project.profileId &&
+            current.project === project.project);
+        if (isSame) return;
+        if (project?.profileId && project.profileId !== getActiveProfileId()) {
+          setActiveProfile(project.profileId);
+        }
+        set((state) => ({
+          selectedProject: project,
+          navigationRevision: state.navigationRevision + 1,
+          activeProject: project?.project ?? null,
+          activeProjectRevision: state.activeProjectRevision + 1,
+        }));
       },
       activeProject: null,
       activeProjectRevision: 0,
