@@ -13,7 +13,7 @@ import {
   GripVertical,
   Pencil,
 } from "lucide-react";
-import { Badge } from "@/components/atoms/Badge.js";
+import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import { inputClass } from "@/components/atoms/Button.js";
 import { CommandSuggestionInput } from "@/components/atoms/CommandSuggestionInput.js";
 import { cn } from "@/lib/utils.js";
@@ -1267,9 +1267,10 @@ export function TerminalTreeView({
               )}
               <span className="truncate">{project.name}</span>
               {project.profileName && (
-                <Badge variant="neutral" className="text-[9px] lowercase font-mono shrink-0">
-                  {project.profileName}
-                </Badge>
+                <ProfileBadge
+                  profileId={project.ref.profileId}
+                  name={project.profileName}
+                />
               )}
               {project.activeCount > 0 && (
                 <span className="rounded-full bg-green-500/20 px-1.5 text-green-600 text-[10px] font-medium">

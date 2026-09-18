@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Plus } from "lucide-react";
-import { Badge } from "@/components/atoms/Badge.js";
+import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import {
   Dialog,
   DialogContent,
@@ -215,9 +215,10 @@ export function TraditionalTerminalProjectsDisplay({
           <span className="min-w-0 flex items-center gap-1.5 truncate text-xs font-semibold text-[var(--color-text)]">
             <span className="truncate">{selectedGroup.label}</span>
             {selectedGroup.profileName && (
-              <Badge variant="neutral" className="text-[9px] lowercase font-mono shrink-0">
-                {selectedGroup.profileName}
-              </Badge>
+              <ProfileBadge
+                profileId={selectedGroup.profileId}
+                name={selectedGroup.profileName}
+              />
             )}
           </span>
           <button

@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { GitBranch, GitCommit, GitMerge, Plus } from "lucide-react";
-import { Badge } from "@/components/atoms/Badge.js";
+import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import { useProjectStatus, useWorktrees } from "@/api/queries.js";
 import type { ProjectTargetInput } from "@/api/client.js";
 import { TerminalProjectActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
@@ -206,9 +206,10 @@ export function TraditionalTerminalProjectsNavigator({
                     {group.label}
                   </span>
                   {group.profileName && (
-                    <Badge variant="neutral" className="text-[9px] lowercase font-mono shrink-0">
-                      {group.profileName}
-                    </Badge>
+                    <ProfileBadge
+                      profileId={group.profileId}
+                      name={group.profileName}
+                    />
                   )}
                   <span className="ml-auto shrink-0 text-[10px] text-[var(--color-text-muted)]">
                     {group.terminalTabs.length}
