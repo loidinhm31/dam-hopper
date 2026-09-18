@@ -205,4 +205,49 @@ describe("MultiTerminalDisplay floating controls", () => {
       container.querySelector("[data-testid=pane-floating-terminal-controls]"),
     ).toBeNull();
   });
+
+  it("reports visible sessions without transient empty set on rerender, clearing only on unmount", async () => {
+    const onVisibleSessionIdsChange = vi.fn();
+    act(() => {
+      root.render(
+        <MultiTerminalDisplay
+          activeSessionId="session-1"
+          mountedSessions={sessions}
+          openTabs={[]}
+          layoutStorageKey="terminal-layout:test"
+          renderTerminals={false}
+          onVisibleSessionIdsChange={onVisibleSessionIdsChange}
+        />,
+      );
+    });
+
+    expect(onVisibleSessionIdsChange).toHaveBeenCalledTimes(1);
+    expect([...onVisibleSessionIdsChange.mock.calls[0][0]]).toEqual(["session-1"]);
+
+    // Re-render with same visible sessions
+    act(() => {
+      root.render(
+        <MultiTerminalDisplay
+          activeSessionId="session-1"
+          mountedSessions={sessions}
+          openTabs={[]}
+          layoutStorageKey="terminal-layout:test"
+          renderTerminals={false}
+          onVisibleSessionIdsChange={onVisibleSessionIdsChange}
+        />,
+      );
+    });
+
+    // Should NOT have called onVisibleSessionIdsChange again (no transient empty set, no duplicate call)
+    expect(onVisibleSessionIdsChange).toHaveBeenCalledTimes(1);
+
+    // Unmount
+    await act(async () => {
+      root.unmount();
+    });
+
+    // Now unmount cleanup fires exactly once with empty set
+    expect(onVisibleSessionIdsChange).toHaveBeenCalledTimes(2);
+    expect([...onVisibleSessionIdsChange.mock.calls[1][0]]).toEqual([]);
+  });
 });

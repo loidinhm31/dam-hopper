@@ -303,6 +303,7 @@ vi.mock("@/lib/terminal-renderer.js", () => ({
   },
 }));
 vi.mock("@/lib/terminal-cursor-geometry-adapter.js", () => ({
+  geometryEquals: () => false,
   TerminalCursorGeometryAdapter: class {
     invalidate = vi.fn();
     hide = vi.fn();
