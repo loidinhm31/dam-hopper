@@ -8,7 +8,7 @@ import {
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import { getTransport, getTransportGeneration } from "../api/transport.js";
-import { getActiveProfileId, getProfiles, subscribeToProfileChanges } from "../api/server-config.js";
+import { getActiveProfileId, getProfiles, subscribeToProfileChanges, type ServerProfile } from "../api/server-config.js";
 import { getTransport as getBoundTransport, getConnectionSnapshot } from "../api/connections.js";
 import { profilePortsQueryKey, profileTunnelsQueryKey } from "../api/query-client.js";
 import type { ConnectionRef, ProfileId } from "../api/ownership.js";

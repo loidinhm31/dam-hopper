@@ -42,7 +42,7 @@ export function TopNav({
   const { level: appZoomLevel } = useAppZoom();
   const headerRef = useRef<HTMLElement>(null);
   const { status } = useIpc();
-  const { activeProject } = useWorkspaceStore();
+  const { selectedProject: focusedProject } = useWorkspaceStore();
   const isCompactWorkspace = useCompactWorkspace();
   const { allProjects } = useAggregatedProjects();
   const projects = useMemo(
@@ -59,7 +59,12 @@ export function TopNav({
 
   const activeProfile = useServerProfile();
   const profileRevision = getProfileChangeVersion();
-  const selectedProject = activeProject ?? projects[0]?.name;
+  const selectedProject = useMemo(
+    () => focusedProject ?? (allProjects[0]
+      ? { profileId: allProjects[0].profileId, project: allProjects[0].project.name }
+      : undefined),
+    [focusedProject, allProjects],
+  );
   const showProjectToolbar = projects.length > 0 && Boolean(selectedProject);
   const compactMobileMenuOpen = isCompactWorkspace && !collapsed;
   const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";

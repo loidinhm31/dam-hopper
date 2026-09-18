@@ -16,6 +16,7 @@ import {
   getProfiles,
   getActiveProfileId,
   subscribeToProfileChanges,
+  type ServerProfile,
 } from "@/api/server-config.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";

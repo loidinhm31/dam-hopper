@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { ProjectRef } from "@/api/ownership.js";
-import { getActiveProfileId, setActiveProfile } from "@/api/server-config.js";
 
 export interface WorkspaceStore {
   selectedProject: ProjectRef | null;
@@ -27,9 +26,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             current.profileId === project.profileId &&
             current.project === project.project);
         if (isSame) return;
-        if (project?.profileId && project.profileId !== getActiveProfileId()) {
-          setActiveProfile(project.profileId);
-        }
         set((state) => ({
           selectedProject: project,
           navigationRevision: state.navigationRevision + 1,
@@ -44,8 +40,8 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
           get().setSelectedProject(null);
           return;
         }
-        const currentRef = get().selectedProject;
-        const targetProfileId = profileId ?? currentRef?.profileId ?? getActiveProfileId() ?? "";
+        if (!profileId) throw new Error("Project selection requires an explicit profile");
+        const targetProfileId = profileId;
         get().setSelectedProject({
           profileId: targetProfileId,
           project: projectName,
@@ -67,9 +63,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         }
         if (state?.selectedProject) {
           state.activeProject = state.selectedProject.project;
-          if (state.selectedProject.profileId && state.selectedProject.profileId !== getActiveProfileId()) {
-            setActiveProfile(state.selectedProject.profileId);
-          }
         }
       },
     },

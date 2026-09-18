@@ -343,6 +343,21 @@ describe("TerminalSuggestionController", () => {
     ]);
   });
 
+  it("records same-ID terminal submissions under their own profiles", () => {
+    const a = createTerminalSuggestionController({
+      sessionId: "shared", project: "shared", profileId: "a", search: () => [],
+    });
+    const b = createTerminalSuggestionController({
+      sessionId: "shared", project: "shared", profileId: "b", search: () => [],
+    });
+    a.handleLifecycle({ id: "shared", generation: 1, lifecycle: "submitted", command: "only-a" });
+    b.handleLifecycle({ id: "shared", generation: 1, lifecycle: "submitted", command: "only-b" });
+    expect(getHistory("a").map((entry) => entry.command)).toEqual(["only-a"]);
+    expect(getHistory("b").map((entry) => entry.command)).toEqual(["only-b"]);
+    a.dispose();
+    b.dispose();
+  });
+
   it("stops history persistence immediately when the suggestion kill switch turns off", () => {
     const controller = createTerminalSuggestionController({
       sessionId: "one",

@@ -109,7 +109,6 @@ const ContextMenuTrigger = React.forwardRef<
   );
 });
 
-/** Body-only portal; Content also self-portals when used without this wrapper. */
 type PortalProps = Omit<
   React.ComponentProps<typeof ContextMenuPrimitive.Portal>,
   "container"
@@ -117,9 +116,11 @@ type PortalProps = Omit<
 
 function ContextMenuPortal({ children, ...props }: PortalProps) {
   return (
-    <ContextMenuPrimitive.Portal {...props}>
-      <PortalScope.Provider value>{children}</PortalScope.Provider>
-    </ContextMenuPrimitive.Portal>
+    <PortalScope.Provider value={true}>
+      <ContextMenuPrimitive.Portal {...props}>
+        {children}
+      </ContextMenuPrimitive.Portal>
+    </PortalScope.Provider>
   );
 }
 
@@ -151,6 +152,7 @@ const ContextMenuContent = React.forwardRef<
     <ContextMenuPrimitive.Portal>{content}</ContextMenuPrimitive.Portal>
   );
 });
+ContextMenuContent.displayName = ContextMenuPrimitive.Content.displayName;
 
 function ContextMenuItem({
   className,

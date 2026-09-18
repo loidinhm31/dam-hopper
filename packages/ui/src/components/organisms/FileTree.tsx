@@ -335,10 +335,10 @@ export function FileTree({
   const targetProject = target?.project ?? project;
   const requestTarget = useMemo(
     () =>
-      worktreePath == null
+      target ?? (worktreePath == null
         ? targetProject
-        : { project: targetProject, worktreePath },
-    [targetProject, worktreePath],
+        : { project: targetProject, worktreePath }),
+    [target, targetProject, worktreePath],
   );
   const {
     explorerShowHidden: showHidden,
@@ -362,7 +362,7 @@ export function FileTree({
   const ops = useFsOps(requestTarget, path);
   const { progress, upload, clearProgress } = useFsUpload(requestTarget, path);
   const { isEncryptEnabled } = useEncryptMode();
-  const { data: projectData } = useProject(project);
+  const { data: projectData } = useProject(targetProject, target?.profileId);
   const projectRoot = worktreePath ?? projectData?.path ?? "";
   const { copied, copy } = useCopyToClipboard();
 

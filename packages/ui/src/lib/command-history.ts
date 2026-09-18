@@ -218,7 +218,7 @@ export function searchHistory(
   const results = loadEntries()
     .filter(
       (entry) =>
-        !profileId || !entry.profileId || entry.profileId === profileId,
+        !profileId || entry.profileId === profileId,
     )
     .flatMap((entry) => {
       const prefix = entry.command.startsWith(query);
@@ -251,6 +251,6 @@ export function getHistory(profileId?: string): CommandHistoryEntry[] {
   const entries = loadEntries();
   if (!profileId) return entries;
   return entries.filter(
-    (entry) => !entry.profileId || entry.profileId === profileId,
+    (entry) => entry.profileId === profileId,
   );
 }

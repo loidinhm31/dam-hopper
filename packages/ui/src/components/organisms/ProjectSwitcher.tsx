@@ -12,7 +12,6 @@ import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import { projectKey, parseProjectKey } from "@/api/ownership.js";
 import { cn } from "@/lib/utils.js";
-import { getActiveProfileId, setActiveProfile } from "@/api/server-config.js";
 
 interface ProjectSwitcherProps {
   className?: string;
@@ -33,24 +32,14 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
 
   const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";
 
-  // No missing-name fallback: if unavailable, stays explicitly unavailable
-  const displayValue = selectedProject
-    ? isSelectedProjectAvailable
-      ? selectedProject.project
-      : `${selectedProject.project} (unavailable)`
-    : "";
-
   return (
     <div className={cn("flex items-center gap-1.5 min-w-0 flex-1", className)}>
       <Folder className="h-4 w-4 shrink-0 text-[var(--color-primary)] opacity-80" />
       <Select
-        value={currentTupleKey}
+        value={currentTupleKey || undefined}
         onValueChange={(val) => {
           const parsed = parseProjectKey(val);
-          if (parsed?.profileId && parsed.profileId !== getActiveProfileId()) {
-            setActiveProfile(parsed.profileId);
-          }
-          setSelectedProject(parsed);
+          if (parsed) setSelectedProject(parsed);
         }}
       >
         <SelectTrigger
@@ -61,9 +50,7 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
           )}
         >
           <div className="truncate text-left flex-1">
-            <SelectValue placeholder="Select project">
-              {displayValue || "Select project"}
-            </SelectValue>
+            <SelectValue placeholder="Select project" />
           </div>
         </SelectTrigger>
         <SelectContent className="min-w-[220px]">

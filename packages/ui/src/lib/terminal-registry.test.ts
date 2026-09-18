@@ -3,6 +3,7 @@ import type { Terminal } from "@xterm/xterm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TerminalFindController } from "./terminal-find-controller.js";
 import {
+  getTerminal,
   getTerminalRegistrySnapshot,
   registerTerminal,
   removeTerminal,
@@ -33,5 +34,22 @@ describe("terminal registry snapshots", () => {
     expect(registered.has(id)).toBe(true);
     expect(removed.has(id)).toBe(false);
     expect(registered).not.toBe(removed);
+  });
+  it("keeps equal backend IDs isolated and refuses unqualified lookup", () => {
+    const a = { profileId: "a", id };
+    const b = { profileId: "b", id };
+    try {
+      const first = registerTerminal(a, {} as Terminal, {} as FitAddon, {} as TerminalFindController);
+      const second = registerTerminal(b, {} as Terminal, {} as FitAddon, {} as TerminalFindController);
+      expect(getTerminal(a)).toBe(first);
+      expect(getTerminal(b)).toBe(second);
+      expect(getTerminal(id)).toBeUndefined();
+      removeTerminal(a);
+      expect(getTerminal(a)).toBeUndefined();
+      expect(getTerminal(b)).toBe(second);
+    } finally {
+      removeTerminal(a);
+      removeTerminal(b);
+    }
   });
 });

@@ -3,6 +3,7 @@ import { useProject } from "@/api/queries.js";
 import type { ProjectTargetInput } from "@/api/client.js";
 import { targetScopedCommandSessionId } from "@/lib/terminal-target-identity.js";
 import type { TreeCommand } from "@/hooks/use-terminal-tree.js";
+import { terminalKey } from "@/api/ownership.js";
 
 interface ProjectInfoCommandsSectionProps {
   projectName: string;
@@ -15,7 +16,7 @@ export function ProjectInfoCommandsSection({
   target,
   onLaunchCommand,
 }: ProjectInfoCommandsSectionProps) {
-  const { data: project } = useProject(projectName);
+  const { data: project } = useProject(projectName, typeof target === "object" ? target.profileId : undefined);
   const commands: Array<{
     key: string;
     command: string;
@@ -70,14 +71,17 @@ export function ProjectInfoCommandsSection({
                   key,
                   type,
                   command,
-                  sessionId: targetScopedCommandSessionId(
-                    type,
-                    projectName,
-                    typeof target === "string"
-                      ? undefined
-                      : (target?.worktreePath ?? undefined),
-                    type === "custom" ? key : undefined,
-                  ),
+                  sessionId: (() => {
+                    const id = targetScopedCommandSessionId(
+                      type,
+                      projectName,
+                      typeof target === "string" ? undefined : (target?.worktreePath ?? undefined),
+                      type === "custom" ? key : undefined,
+                    );
+                    return typeof target === "object" && target.profileId
+                      ? terminalKey({ profileId: target.profileId, id })
+                      : id;
+                  })(),
                 })
               }
               title={`Launch ${key}`}

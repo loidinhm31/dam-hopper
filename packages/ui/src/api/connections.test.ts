@@ -13,6 +13,8 @@ import {
   removeProfileConnection,
   resetConnections,
 } from "./connections.js";
+import { syncActiveProfileConnection } from "./connections.js";
+import { latestTerminalSessionIncarnation, rememberTerminalSessionIncarnation } from "../lib/terminal-incarnation-state.js";
 import { ConnectionOwnerError } from "./ownership.js";
 
 // Mock server-config getters
@@ -54,18 +56,21 @@ vi.mock("./server-config.js", () => ({
 
 // Mock WebSocket so WsTransport doesn't attempt real network calls
 class MockWebSocket {
+  static OPEN = 1;
+  static sockets: MockWebSocket[] = [];
   readyState = 1; // WebSocket.OPEN
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(public url: string) {
+    MockWebSocket.sockets.push(this);
     Promise.resolve().then(() => {
       this.onopen?.();
     });
   }
 
-  send() {}
+  send = vi.fn<(data: string) => void>();
   close() {
     this.readyState = 3;
     this.onclose?.();
@@ -80,6 +85,7 @@ describe("connections registry", () => {
     resetConnections();
     mockTokens = {};
     vi.restoreAllMocks();
+    MockWebSocket.sockets = [];
   });
 
   afterEach(() => {
@@ -207,6 +213,50 @@ describe("connections registry", () => {
 
     expect(ownerSecond).toEqual(ownerFirst);
     expect(ownerSecond.generation).toBe(ownerFirst.generation);
+  });
+
+  it("keeps same-ID terminal writes and peer incarnation state isolated across disconnect and reconnect", async () => {
+    mockTokens["prof-auth"] = "token-b";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ authenticated: true, workbenchProtocol: 2 }),
+    }));
+    await connectProfile("prof-valid");
+    await connectProfile("prof-auth");
+    const ownerA = captureConnection("prof-valid");
+    const ownerB = captureConnection("prof-auth");
+    const a = getTransport(ownerA);
+    const b = getTransport(ownerB);
+    const socketA = MockWebSocket.sockets[0]!;
+    const socketB = MockWebSocket.sockets[1]!;
+    const terminalB = { profileId: "prof-auth", id: "shared" };
+    rememberTerminalSessionIncarnation(terminalB, 9);
+
+    a.terminalWrite("shared", "only-a");
+    b.terminalWrite("shared", "only-b");
+    expect(socketA.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      { kind: "terminal:write", id: "shared", data: "only-a" },
+    ]);
+    expect(socketB.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      { kind: "terminal:write", id: "shared", data: "only-b" },
+    ]);
+
+    disconnectProfile("prof-valid");
+    syncActiveProfileConnection("prof-valid");
+    expect(getConnectionSnapshot("prof-valid")?.status).toBe("disconnected");
+    expect(latestTerminalSessionIncarnation(terminalB)).toBe(9);
+    expect(isCurrentConnection(ownerB)).toBe(true);
+    expect(socketB.readyState).toBe(MockWebSocket.OPEN);
+    a.terminalWrite("shared", "stale-a");
+    b.terminalResize("shared", 100, 30);
+    expect(socketA.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(socketB.send.mock.calls[1]![0])).toEqual({
+      kind: "terminal:resize", id: "shared", cols: 100, rows: 30,
+    });
+    await connectProfile("prof-valid");
+    expect(() => getTransport(ownerA)).toThrowError(ConnectionOwnerError);
+    expect(getTransport(ownerB)).toBe(b);
+    expect(latestTerminalSessionIncarnation(terminalB)).toBe(9);
   });
 
   it("deduplicates concurrent in-flight connect calls", async () => {

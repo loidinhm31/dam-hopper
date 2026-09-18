@@ -46,8 +46,8 @@ export function ProjectInfoPanel({
   target: targetOverride,
   onLaunchCommand,
 }: Props) {
-  const { data: project, isLoading } = useProject(projectName);
-  const derivedTarget = useProjectTarget(projectName);
+  const { data: project, isLoading } = useProject(projectName, targetOverride?.target.profileId);
+  const derivedTarget = useProjectTarget(targetOverride?.target ?? projectName);
   const target = targetOverride ?? derivedTarget;
   const targetRef = target?.target ?? { project: projectName };
   const { data: targetStatus } = useProjectStatus(targetRef);

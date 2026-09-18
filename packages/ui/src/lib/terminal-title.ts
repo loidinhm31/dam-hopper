@@ -22,12 +22,13 @@ export function terminalBaseLabel(
 const PROJECTLESS_TAB_GROUP = Symbol("projectless-terminal-tabs");
 
 export function applyTerminalTitleOrdinals<
-  T extends { label: string; project?: string },
+  T extends { label: string; project?: string; profileId?: string },
 >(readonlyTabs: readonly T[]): Array<WithOpenTerminalTitle<T>> {
   const ordinalsByProject = new Map<string | symbol, number>();
   return readonlyTabs.map((tab) => {
-    const projectGroup =
-      typeof tab.project === "string" && tab.project.length > 0
+    const projectGroup = tab.profileId
+      ? JSON.stringify([tab.profileId, tab.project ?? null])
+      : typeof tab.project === "string" && tab.project.length > 0
         ? tab.project
         : PROJECTLESS_TAB_GROUP;
     const ordinal = (ordinalsByProject.get(projectGroup) ?? 0) + 1;
