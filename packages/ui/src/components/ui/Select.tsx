@@ -7,13 +7,13 @@ const Select = SelectPrimitive.Root;
 const SelectGroup = SelectPrimitive.Group;
 const SelectValue = SelectPrimitive.Value;
 
-function SelectTrigger({
-  className,
-  children,
-  ...props
-}: React.ComponentProps<typeof SelectPrimitive.Trigger>) {
+const SelectTrigger = React.forwardRef<
+  React.ElementRef<typeof SelectPrimitive.Trigger>,
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>
+>(function SelectTrigger({ className, children, ...props }, ref) {
   return (
     <SelectPrimitive.Trigger
+      ref={ref}
       className={cn(
         "flex w-full items-center justify-between gap-2 rounded glass-input px-2.5 py-1.5 text-sm outline-none",
         "disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
@@ -27,7 +27,8 @@ function SelectTrigger({
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
-}
+});
+SelectTrigger.displayName = SelectPrimitive.Trigger.displayName;
 
 function SelectScrollUpButton({
   className,
@@ -63,15 +64,17 @@ function SelectScrollDownButton({
   );
 }
 
-function SelectContent({
-  className,
-  children,
-  position = "popper",
-  ...props
-}: React.ComponentProps<typeof SelectPrimitive.Content>) {
+const SelectContent = React.forwardRef<
+  React.ElementRef<typeof SelectPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
+>(function SelectContent(
+  { className, children, position = "popper", ...props },
+  ref,
+) {
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
+        ref={ref}
         className={cn(
           "relative z-[80] max-h-96 min-w-[8rem] overflow-hidden rounded border border-[var(--color-border)]",
           "bg-[var(--color-surface)] text-[var(--color-text)] shadow-md",
@@ -100,7 +103,8 @@ function SelectContent({
       </SelectPrimitive.Content>
     </SelectPrimitive.Portal>
   );
-}
+});
+SelectContent.displayName = SelectPrimitive.Content.displayName;
 
 function SelectLabel({
   className,

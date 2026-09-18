@@ -915,5 +915,12 @@ describe("WorkspacePage", () => {
       lastWorkflowSurfaceProps?.onOpenTerminal?.("unknown-session-456");
       expect(terminalActions.handleSelectTerminal).not.toHaveBeenCalled();
     });
+
+    it("mounts without infinite loop when selectedProject and activeProject are null", () => {
+      mockActiveProject = null;
+      mockWorkspaceMode = "terminal";
+      stubMatchMedia(false);
+      expect(() => renderToStaticMarkup(<WorkspacePage />)).not.toThrow();
+    });
   });
 });
