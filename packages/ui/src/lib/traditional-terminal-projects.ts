@@ -1,6 +1,7 @@
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import { projectKey, parseTerminalKey, type ProjectRef } from "@/api/ownership.js";
+import { getProfiles } from "@/api/server-config.js";
 
 export const FREE_TRADITIONAL_TERMINAL_GROUP_ID = "free-terminals";
 
@@ -11,6 +12,7 @@ export interface TraditionalTerminalProjectGroup<
   projectName: string | null;
   projectRef?: ProjectRef;
   profileId?: string;
+  profileName?: string;
   label: string;
   terminalTabs: T[];
   mountedSessions: MountedSession[];
@@ -39,6 +41,7 @@ export function buildTraditionalTerminalProjectGroups<T extends TabEntry>(
     const projectName = mounted.project || null;
     const profileId = mounted.terminalRef?.profileId ?? mounted.profileId ?? parseTerminalKey(tab.sessionId)?.profileId;
     const projectRef = profileId ? {profileId, project: projectName ?? ""} : undefined;
+    const profileName = profileId ? (getProfiles().find((p) => p.id === profileId)?.name ?? (profileId !== "default" ? profileId : undefined)) : undefined;
     const id = projectRef ? projectKey(projectRef) : projectName
       ? `project:${projectName}`
       : FREE_TRADITIONAL_TERMINAL_GROUP_ID;
@@ -49,7 +52,8 @@ export function buildTraditionalTerminalProjectGroups<T extends TabEntry>(
         projectName,
         projectRef,
         profileId,
-        label: `${projectName ?? "Free terminals"}${profileId ? ` · ${profileId}` : ""}`,
+        profileName,
+        label: projectName ?? "Free terminals",
         terminalTabs: [],
         mountedSessions: [],
       };
