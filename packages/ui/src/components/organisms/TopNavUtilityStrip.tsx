@@ -9,6 +9,7 @@ import type { ConnectionStatus } from "@/components/atoms/ConnectionDot.js";
 import { cn } from "@/lib/utils.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
+import type { ProjectRef } from "@/api/ownership.js";
 
 interface TopNavUtilityStripProps {
   activeProfileName?: string;
@@ -18,7 +19,7 @@ interface TopNavUtilityStripProps {
   isCompactWorkspace: boolean;
   onOpenProfiles: () => void;
   onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
-  selectedProject?: string;
+  selectedProject?: ProjectRef;
   showProjectToolbar: boolean;
   status: ConnectionStatus;
   workspaceMode?: WorkspaceMode;
@@ -82,7 +83,7 @@ export function TopNavUtilityStrip({
           <div className="hidden h-4 w-[1px] bg-[var(--color-border)] md:block" />
           <div className="hidden min-w-0 md:block">
             <GitBranchControl
-              project={selectedProject}
+              project={selectedProject.project}
               target={selectedTarget?.target}
               compact
               showFeedback={false}

@@ -9,7 +9,7 @@ import {
 } from "@/api/connections.js";
 import type { ProfileId } from "@/api/ownership.js";
 
-/** Re-render consumers when the active WebSocket/REST transport is replaced. */
+/** Re-render on replacement or availability changes of the requested transport. */
 export function useTransportGeneration(profileId?: ProfileId): number {
   return useSyncExternalStore(
     (onStoreChange) => {
@@ -20,7 +20,11 @@ export function useTransportGeneration(profileId?: ProfileId): number {
     },
     () => {
       if (profileId) {
-        return getConnectionSnapshot(profileId)?.owner.generation ?? 0;
+        const snapshot = getConnectionSnapshot(profileId);
+        if (!snapshot) return 0;
+        return snapshot.status === "connected"
+          ? snapshot.owner.generation
+          : -snapshot.owner.generation;
       }
       return getTransportGeneration();
     },

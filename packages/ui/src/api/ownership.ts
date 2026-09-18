@@ -96,7 +96,7 @@ export function projectKey(ref: ProjectRef): string {
   return JSON.stringify([ref.profileId, ref.project]);
 }
 
-export function parseProjectKey(key: string): ProjectRef | null {
+export function parseProjectKey(key: string): QualifiedProjectRef | null {
   try {
     const parsed = JSON.parse(key);
     if (

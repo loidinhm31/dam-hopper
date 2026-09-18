@@ -100,6 +100,20 @@ describe("command history privacy", () => {
     });
   });
 
+  it("keeps duplicate commands and projects owner-local and excludes unowned history", () => {
+    recordCommand("git status", "shared", "a");
+    recordCommand("git status", "shared", "b");
+    recordCommand("git secret-b", "shared", "b");
+    recordCommand("git unowned", "shared");
+    recordCommand("git status", "shared", "a");
+
+    expect(getHistory("a")).toEqual([
+      expect.objectContaining({ command: "git status", profileId: "a", useCount: 2 }),
+    ]);
+    expect(searchHistory("git", 10, "a").map((result) => result.entry.command)).toEqual(["git status"]);
+    expect(getHistory("b").find((entry) => entry.command === "git status")?.useCount).toBe(1);
+  });
+
   it("ranks exact raw prefixes ahead of normalized token matches", () => {
     recordCommand("git status", "web");
     recordCommand("status --short", "web");

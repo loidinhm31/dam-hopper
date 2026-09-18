@@ -2,10 +2,11 @@ import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { ProjectSwitcher } from "@/components/organisms/ProjectSwitcher.js";
 import { cn } from "@/lib/utils.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
+import type { ProjectRef } from "@/api/ownership.js";
 
 interface TopNavProjectToolbarProps {
   compactMobileMenuOpen: boolean;
-  project: string;
+  project: ProjectRef;
 }
 
 export function TopNavProjectToolbar({
@@ -27,7 +28,7 @@ export function TopNavProjectToolbar({
       </div>
       <div className="min-w-0 flex-1">
         <GitBranchControl
-          project={project}
+          project={project.project}
           target={target?.target}
           compact
           showFeedback={false}

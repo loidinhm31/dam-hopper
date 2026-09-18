@@ -96,11 +96,7 @@ export function resolveTargetOwner(
 
 export function getBoundApiClient(owner?: ConnectionRef): ApiClient {
   if (!owner) return api;
-  try {
-    return getApi(owner);
-  } catch {
-    return api;
-  }
+  return getApi(owner);
 }
 type QueryInvalidator = Pick<
   ReturnType<typeof useQueryClient>,
@@ -465,23 +461,23 @@ export function useProjects(options?: {
   });
 }
 
-export function useProject(name: string) {
+export function useProject(name: string, options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
   return useQuery({
-    queryKey: ["project", name],
-    queryFn: () => api.projects.get(name),
+    queryKey: owner ? profileQueryKey(owner, "project", name) : ["project", name],
+    queryFn: () => getBoundApiClient(owner).projects.get(name),
     enabled: !!name,
   });
 }
 
 export function useProjectStatus(target: ProjectTargetInput, enabled = true) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   return useQuery({
-    queryKey: [
-      "project-status",
-      normalized.project,
-      projectTargetCacheKey(normalized),
-    ],
-    queryFn: () => api.projects.status(normalized),
+    queryKey: owner
+      ? profileQueryKey(owner, "project-status", normalized.project, projectTargetCacheKey(normalized))
+      : ["project-status", normalized.project, projectTargetCacheKey(normalized)],
+    queryFn: () => getBoundApiClient(owner).projects.status(normalized),
     enabled: enabled && !!normalized.project,
   });
 }

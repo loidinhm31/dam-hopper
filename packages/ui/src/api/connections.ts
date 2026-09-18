@@ -20,8 +20,6 @@ import {
 import {
   installTransportBridge,
   removeProfileListeners,
-  resetTransportListeners,
-  initTransportListeners,
 } from "../hooks/use-sse.js";
 
 let registryQueryClient: QueryClient | null = null;
@@ -74,6 +72,7 @@ interface ConnectionEntry {
   unsubBridge?: (() => void) | null;
   backoffMs: number;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
+  settleConnect?: () => void;
   snapshot: ConnectionSnapshot;
 }
 
@@ -190,13 +189,14 @@ function handleDrop(profileId: ProfileId, generation: number): void {
     return;
   }
 
+  entry.settleConnect?.();
   entry.unsubBridge?.();
+  entry.generation += 1;
   entry.unsubBridge = null;
   entry.transport?.destroy?.();
   entry.transport = null;
   entry.api = null;
   if (entry.intent) {
-    entry.generation += 1;
     updateSnapshot(profileId, {
       status: "offline",
       error: "Connection lost; reconnecting...",
@@ -251,7 +251,9 @@ export function connectProfile(profileId: ProfileId): Promise<void> {
   if (inFlight) return inFlight;
 
   const promise = performConnectProfile(profileId).finally(() => {
-    inFlightConnects.delete(profileId);
+    if (inFlightConnects.get(profileId) === promise) {
+      inFlightConnects.delete(profileId);
+    }
   });
 
   inFlightConnects.set(profileId, promise);
@@ -305,6 +307,9 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
 
   const entry = getOrCreateEntry(profileId, cleanUrl);
   clearReconnectTimer(entry);
+  entry.settleConnect?.();
+  entry.unsubBridge?.();
+  entry.unsubBridge = null;
   entry.transport?.destroy?.();
   entry.transport = null;
   entry.api = null;
@@ -402,7 +407,6 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
     },
   });
 
-  entry.unsubBridge?.();
   entry.transport = transport;
   entry.unsubBridge = installTransportBridge(
     owner,
@@ -417,19 +421,12 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
 
   let settled = false;
   const connectTimeout = setTimeout(() => {
-    if (!settled) {
-      settled = true;
-      if (entry.status === "connecting") {
-        entry.transport?.destroy?.();
-        entry.transport = null;
-        entry.api = null;
-        updateSnapshot(profileId, {
-          status: "offline",
-          error: "WebSocket connection timed out after 10000ms",
-        });
-      }
-      resolveWsConnected();
+    if (settled) return;
+    settled = true;
+    if (!isStale(profileId, nextGen) && entry.status === "connecting") {
+      handleDrop(profileId, nextGen);
     }
+    resolveWsConnected();
   }, 10_000);
 
   const settle = () => {
@@ -439,6 +436,7 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
       resolveWsConnected();
     }
   };
+  entry.settleConnect = settle;
 
   transport.onStatusChange((wsStatus) => {
     if (isStale(profileId, nextGen)) return;
@@ -451,8 +449,6 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
       const activeId = getActiveProfileId();
       if (!activeId || activeId === profileId) {
         reconfigureTransport(transport);
-        resetTransportListeners();
-        initTransportListeners();
       }
       settle();
     } else if (wsStatus === "disconnected" || wsStatus === "error") {
@@ -470,8 +466,6 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
     const activeId = getActiveProfileId();
     if (!activeId || activeId === profileId) {
       reconfigureTransport(transport);
-      resetTransportListeners();
-      initTransportListeners();
     }
     settle();
   }
@@ -482,20 +476,21 @@ export function disconnectProfile(profileId: ProfileId): void {
   const entry = entries.get(profileId);
   if (!entry) return;
 
+  entry.settleConnect?.();
   entry.intent = false;
+  entry.generation += 1;
+  inFlightConnects.delete(profileId);
   clearReconnectTimer(entry);
   entry.unsubBridge?.();
   entry.unsubBridge = null;
   entry.transport?.destroy?.();
   entry.transport = null;
   entry.api = null;
-  entry.generation += 1;
   entry.backoffMs = INITIAL_BACKOFF_MS;
 
   const activeId = getActiveProfileId();
   if (!activeId || activeId === profileId) {
     reconfigureTransport(new IdleTransport());
-    resetTransportListeners();
   }
   updateSnapshot(profileId, {
     status: "disconnected",
@@ -585,6 +580,8 @@ export function removeProfileConnection(profileId: ProfileId): void {
   const entry = entries.get(profileId);
   if (entry) {
     entry.intent = false;
+    entry.settleConnect?.();
+    entry.generation += 1;
     clearReconnectTimer(entry);
     entry.unsubBridge?.();
     entry.unsubBridge = null;
@@ -612,6 +609,8 @@ export function removeProfileConnection(profileId: ProfileId): void {
 export function resetConnections(): void {
   for (const entry of entries.values()) {
     entry.intent = false;
+    entry.settleConnect?.();
+    entry.generation += 1;
     clearReconnectTimer(entry);
     entry.unsubBridge?.();
     entry.unsubBridge = null;
@@ -647,15 +646,10 @@ export function syncActiveProfileConnection(
     const entry = entries.get(activeProfileId);
     if (entry?.transport && entry.status === "connected") {
       reconfigureTransport(entry.transport);
-      resetTransportListeners();
-      initTransportListeners();
     } else {
       reconfigureTransport(new IdleTransport());
-      resetTransportListeners();
-      void connectProfile(activeProfileId).catch(() => {});
     }
   } else {
     reconfigureTransport(new IdleTransport());
-    resetTransportListeners();
   }
 }

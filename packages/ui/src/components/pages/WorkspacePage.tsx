@@ -51,8 +51,8 @@ import {
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useProjectTargetStore } from "@/stores/project-target.js";
-import type { TerminalInstanceRef } from "@/api/ownership.js";
-import { getApi } from "@/api/connections.js";
+import { projectKey, parseProjectKey, parseTerminalKey, type TerminalInstanceRef } from "@/api/ownership.js";
+import { getApi, captureConnection } from "@/api/connections.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
@@ -60,9 +60,9 @@ import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useBrowserDebug } from "@/hooks/use-browser-debug.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
-import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
+import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
 import { useProjects, useExportDiagnostics } from "@/api/queries.js";
@@ -375,7 +375,7 @@ export default function WorkspacePage() {
   const [terminalDiagnosticsError, setTerminalDiagnosticsError] = useState<
     string | null
   >(null);
-  const exportDiagnostics = useExportDiagnostics();
+  const exportDiagnostics = useExportDiagnostics(terminalDiagnosticsMenuTarget ? parseTerminalKey(terminalDiagnosticsMenuTarget.sessionId)?.profileId : undefined);
   const [terminalFilePanelOpen, setTerminalFilePanelOpenState] = useState(
     loadTerminalFilePanelOpen,
   );
@@ -395,6 +395,7 @@ export default function WorkspacePage() {
   const { allProjects } = useAggregatedProjects();
   const activeProfile = useServerProfile();
   const activeProfileId = selectedProject?.profileId ?? activeProfile?.id ?? null;
+  const selectedProjectId = selectedProject ? projectKey(selectedProject) : null;
   const { level: appZoomLevel } = useAppZoom();
   const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
@@ -496,12 +497,6 @@ export default function WorkspacePage() {
       if (projects.some((p) => p.name === activeProject)) {
         return;
       }
-      const existsInAnyProfile = allProjects.some(
-        (p) => p.project.name === activeProject,
-      );
-      if (existsInAnyProfile) {
-        return;
-      }
       setActiveProject(null);
     }
   }, [
@@ -589,7 +584,7 @@ export default function WorkspacePage() {
       const session = sessionMap.get(sessionId);
       return {
         sessionId,
-        profileId: activeProfileId,
+        profileId: parseTerminalKey(sessionId)?.profileId ?? null,
         incarnation: session?.incarnation,
         project: session?.project ?? mounted?.project ?? null,
         worktreePath: session?.worktreePath ?? mounted?.worktreePath ?? null,
@@ -644,7 +639,7 @@ export default function WorkspacePage() {
       const snapshotRevision = browserDebug.target?.revision ?? 0;
       const snapshotTerminalInstanceRef: TerminalInstanceRef = {
         profileId: target.profileId ?? activeProfileId ?? "default",
-        id: target.sessionId,
+        id: parseTerminalKey(target.sessionId)!.id,
         incarnation: target.incarnation ?? 0,
       };
 
@@ -733,7 +728,7 @@ export default function WorkspacePage() {
       );
       if (
         !isBrowserTerminalTargetReady(currentTarget, browserDebug.target) ||
-        artifact.artifact.terminalId !== target.sessionId ||
+        artifact.artifact.terminalId !== parseTerminalKey(target.sessionId)?.id ||
         (currentTarget.incarnation !== undefined &&
           artifact.artifact.terminalIncarnation !== currentTarget.incarnation)
       ) {
@@ -769,8 +764,11 @@ export default function WorkspacePage() {
   );
 
   const projectName =
-    activeProject ?? (projects.length > 0 ? projects[0].name : null);
-  const projectTarget = useProjectTarget(projectName);
+    selectedProject?.project ??
+    activeProject ??
+    (projects.length > 0 ? projects[0].name : null);
+  const projectTargetInput = selectedProject ?? projectName;
+  const projectTarget = useProjectTarget(projectTargetInput);
 
   const closeTerminalDiagnosticsMenu = useCallback(() => {
     setTerminalDiagnosticsMenuTarget(null);
@@ -815,13 +813,12 @@ export default function WorkspacePage() {
     setTerminalRenameState((state) =>
       state ? { ...state, pending: true } : state,
     );
-    const owner = {
-      profileId: activeProfileId ?? "default",
-      generation: 0,
-    };
+    const terminalRef = parseTerminalKey(sessionId);
     try {
-      await getApi(owner).terminal.rename(sessionId, value);
-      await queryClient.invalidateQueries({ queryKey: ["terminal-sessions"] });
+      if (!terminalRef) throw new Error("Terminal owner unavailable");
+      const owner = captureConnection(terminalRef.profileId);
+      await getApi(owner).terminal.rename(terminalRef.id, value);
+      await queryClient.invalidateQueries({ queryKey: ["profile", owner.profileId], predicate: (query) => query.queryKey.includes("terminal-sessions") });
       setTerminalRenameState(null);
     } catch (error) {
       setTerminalRenameState((state) =>
@@ -841,7 +838,9 @@ export default function WorkspacePage() {
     if (!target || exportDiagnostics.isPending) return;
 
     setTerminalDiagnosticsError(null);
-    const terminalIds = [target.sessionId];
+    const terminalRef = parseTerminalKey(target.sessionId);
+    if (!terminalRef) return;
+    const terminalIds = [terminalRef.id];
     const sessionProject =
       sessionMap.get(target.sessionId)?.project ??
       mountedSessions.find((session) => session.sessionId === target.sessionId)
@@ -849,9 +848,11 @@ export default function WorkspacePage() {
       null;
 
     try {
+      const client = getApi(captureConnection(terminalRef.profileId));
       await exportDiagnosticsBundle(
-        (request) => exportDiagnostics.mutateAsync(request),
+        (request) => client.diagnostics.export(request),
         {
+          profileId: terminalRef.profileId,
           windowMinutes: diagnosticsWindowMinutes,
           includeTerminalOutput: true,
           terminalTailBytes: 65_536,
@@ -1194,6 +1195,7 @@ export default function WorkspacePage() {
       isCompactWorkspace,
       openFile,
       projectName,
+      selectedProjectId,
       projectTarget,
       setTerminalFilePanelOpen,
       workspaceMode,
@@ -1219,7 +1221,7 @@ export default function WorkspacePage() {
       if (!targetProject) return;
       if (options?.closeSearch) closeSearch();
       if (match.project && match.project !== projectName) {
-        setActiveProject(match.project);
+        if (projectTarget?.target.profileId) setActiveProject(match.project, projectTarget.target.profileId);
       }
       const matchTarget = match.project
         ? resolveSearchMatchTarget(
@@ -1240,6 +1242,7 @@ export default function WorkspacePage() {
       closeSearch,
       openWorkspaceFile,
       projectName,
+      selectedProjectId,
       projectTarget,
       setActiveProject,
     ],
@@ -1247,25 +1250,23 @@ export default function WorkspacePage() {
 
   const handleSelectProjectInTree = useCallback(
     (name: string) => {
-      setActiveProject(name);
+      const ref = parseProjectKey(name);
+      if (!ref) return;
+      setActiveProject(ref.project, ref.profileId);
       handleSelectProject(name);
     },
     [handleSelectProject, setActiveProject],
   );
 
   useEffect(() => {
-    if (!selection && projectName) {
-      handleSelectProject(projectName);
+    if (!selection && selectedProjectId) {
+      handleSelectProject(selectedProjectId);
     }
-  }, [handleSelectProject, projectName, selection]);
+  }, [handleSelectProject, selectedProjectId, selection]);
 
   const handleOpenCurrentTerminal = useCallback(() => {
-    if (projectName) {
-      handleLaunchShell(projectName);
-    } else {
-      handleAddFreeTerminal();
-    }
-  }, [handleAddFreeTerminal, handleLaunchShell, projectName]);
+    if (projectName) handleLaunchShell(projectName);
+  }, [handleLaunchShell, projectName]);
 
   useEffect(
     () =>
@@ -1689,13 +1690,13 @@ export default function WorkspacePage() {
                 activeSessionId={activeTab}
                 mountedSessions={mountedSessions}
                 openTabs={terminalTabs}
-                currentProjectName={projectName}
+                currentProjectName={selectedProjectId}
                 layoutRevision={compactTerminalLayoutRevision}
                 renderTerminals={false}
                 onSessionExit={handleSessionExit}
                 onCloseSession={handleCloseTab}
                 onNewProjectTerminal={handleLaunchShell}
-                onNewFreeTerminal={handleAddFreeTerminal}
+                onNewFreeTerminal={(projectId?: string) => { const target = projectId ?? selectedProjectId; if (target) handleAddFreeTerminal(target); }}
                 onSelectTab={handleSelectTab}
                 onToggleTabPin={handleToggleTabPin}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
@@ -1714,14 +1715,14 @@ export default function WorkspacePage() {
                 activeSessionId={activeTab}
                 mountedSessions={mountedSessions}
                 terminalTabs={terminalTabs}
-                currentProjectName={projectName}
+                currentProjectName={selectedProjectId}
                 currentProjectRevision={activeProjectRevision}
                 layoutRevision={compactTerminalLayoutRevision}
                 renderTerminals={false}
                 profileId={activeProfileId ?? undefined}
                 onSessionExit={handleSessionExit}
                 onNewProjectTerminal={handleLaunchShell}
-                onNewFreeTerminal={handleAddFreeTerminal}
+                onNewFreeTerminal={(projectId?: string) => { const target = projectId ?? selectedProjectId; if (target) handleAddFreeTerminal(target); }}
                 onSelectTab={handleSelectTab}
                 onToggleTabPin={handleToggleTabPin}
                 onCloseTab={handleCloseTab}
@@ -1824,6 +1825,7 @@ export default function WorkspacePage() {
       handleAddFreeTerminal,
       handleOpenTunnelInBrowser,
       projectName,
+      selectedProjectId,
       activeProjectRevision,
       handleLaunchShell,
       browserOpen,
@@ -1856,7 +1858,7 @@ export default function WorkspacePage() {
           <TerminalTreeView
             projects={tree}
             freeTerminals={freeTerminals}
-            activeProjectName={projectName ?? undefined}
+            activeProjectName={selectedProjectId ?? undefined}
             selectedId={selectedId}
             onSelectProject={handleSelectProjectInTree}
             onSelectTerminal={handleSelectTerminal}
@@ -1883,6 +1885,7 @@ export default function WorkspacePage() {
       tree,
       freeTerminals,
       projectName,
+      selectedProjectId,
       selectedId,
       handleSelectProjectInTree,
       handleSelectTerminal,
@@ -1945,7 +1948,10 @@ export default function WorkspacePage() {
             <ProjectInfoPanel
               projectName={projectName}
               target={projectTarget}
-              onLaunchCommand={(cmd) => handleLaunchTerminal(projectName, cmd)}
+              onLaunchCommand={(cmd) => {
+                const targetId = selectedProjectId ?? projectName;
+                if (targetId) handleLaunchTerminal(targetId, cmd);
+              }}
             />
           </Suspense>
         </div>
@@ -1954,7 +1960,7 @@ export default function WorkspacePage() {
           Select a project to inspect
         </div>
       ),
-    [handleLaunchTerminal, projectName, projectTarget],
+    [handleLaunchTerminal, projectName, projectTarget, selectedProjectId],
   );
 
   const leftTools = useMemo<ToolWindowDef[]>(
@@ -1992,7 +1998,10 @@ export default function WorkspacePage() {
                   target={projectTarget?.target}
                   path=""
                   onFileOpen={handleFileOpen}
-                  onOpenTerminal={() => handleLaunchShell(projectName)}
+                  onOpenTerminal={() => {
+                    const targetId = selectedProjectId ?? projectName;
+                    if (targetId) handleLaunchShell(targetId);
+                  }}
                   className="flex-1"
                   revealRequest={
                     fileTreeRevealRequest?.project === projectName
@@ -2072,6 +2081,7 @@ export default function WorkspacePage() {
     ],
     [
       projectName,
+      selectedProjectId,
       handleFileOpen,
       handleLaunchShell,
       openDiff,
@@ -2132,14 +2142,17 @@ export default function WorkspacePage() {
           <ProjectInfoPanel
             projectName={projectName}
             target={projectTarget}
-            onLaunchCommand={(cmd) => handleLaunchTerminal(projectName, cmd)}
+            onLaunchCommand={(cmd) => {
+              const targetId = selectedProjectId ?? projectName;
+              if (targetId) handleLaunchTerminal(targetId, cmd);
+            }}
           />
         </Suspense>
       ) : (
         renderCompactPlaceholder("Select a project to inspect")
       ),
     }),
-    [handleLaunchTerminal, projectName, projectTarget],
+    [handleLaunchTerminal, projectName, projectTarget, selectedProjectId],
   );
 
   const compactIdeSurfaces = useMemo<MobileWorkspaceSurface[]>(
@@ -2158,7 +2171,10 @@ export default function WorkspacePage() {
                   target={projectTarget?.target}
                   path=""
                   onFileOpen={handleFileOpen}
-                  onOpenTerminal={() => handleLaunchShell(projectName)}
+                  onOpenTerminal={() => {
+                    const targetId = selectedProjectId ?? projectName;
+                    if (targetId) handleLaunchShell(targetId);
+                  }}
                   className="flex-1"
                   revealRequest={
                     fileTreeRevealRequest?.project === projectName
@@ -2227,6 +2243,7 @@ export default function WorkspacePage() {
       handleSearchResultOpen,
       fileTreeRevealRequest,
       projectName,
+      selectedProjectId,
       terminalContent,
       browserContent,
       projectTarget,
@@ -2301,7 +2318,10 @@ export default function WorkspacePage() {
                 target={projectTarget?.target}
                 path=""
                 onFileOpen={handleFileOpen}
-                onOpenTerminal={() => handleLaunchShell(projectName)}
+                onOpenTerminal={() => {
+                  const targetId = selectedProjectId ?? projectName;
+                  if (targetId) handleLaunchShell(targetId);
+                }}
                 className="flex-1"
                 revealRequest={
                   fileTreeRevealRequest?.project === projectName
@@ -2353,6 +2373,7 @@ export default function WorkspacePage() {
       isTerminalFileTreeResizing,
       openDiff,
       projectName,
+      selectedProjectId,
       setTerminalFilePanelOpen,
       fileTreeRevealRequest,
       terminalFilePanelEditorFocusSignal,

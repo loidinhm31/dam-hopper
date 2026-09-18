@@ -74,7 +74,7 @@ export function TerminalKeepAliveHost({
         return (
           <TerminalPanel
             key={key}
-            sessionId={session.sessionId}
+            sessionId={session.terminalRef?.id ?? session.sessionId}
             project={session.project}
             command={session.command}
             cwd={session.cwd}
@@ -83,7 +83,7 @@ export function TerminalKeepAliveHost({
             terminalRef={session.terminalRef}
             onExit={() => onSessionExit?.(session.sessionId)}
             onNewTerminal={onNewTerminal}
-            onTerminalReady={onTerminalReady}
+            onTerminalReady={() => onTerminalReady?.(session.sessionId)}
             suppressAutoFocus={shouldSuppressTerminalFocus}
             suppressNativeKeyboard={shouldSuppressNativeKeyboard}
             terminalOrder={terminalOrder}

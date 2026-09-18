@@ -33,6 +33,7 @@ export interface TerminalSuggestionSnapshot {
 interface ControllerOptions {
   sessionId: string;
   project: string;
+  profileId?: string;
   search: (
     query: string,
   ) => HistorySearchResult[] | Promise<HistorySearchResult[]>;
@@ -109,7 +110,7 @@ export class TerminalSuggestionController {
     }
     this.deferredLifecycle = undefined;
     if (event.lifecycle === "submitted" && event.command !== undefined) {
-      recordCommand(event.command, this.options.project);
+      recordCommand(event.command, this.options.project, this.options.profileId);
     }
     if (event.lifecycle === "editing") {
       this.promptPaintBytesRemaining = MAX_PROMPT_PAINT_BYTES;

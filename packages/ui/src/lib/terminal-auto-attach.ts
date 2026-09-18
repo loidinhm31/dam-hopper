@@ -5,6 +5,7 @@ import {
   freeTerminalBaseLabel,
   terminalBaseLabel,
 } from "@/lib/terminal-title.js";
+import { parseTerminalKey } from "@/api/ownership.js";
 
 export interface ParsedTerminalSessionId {
   type: string;
@@ -36,7 +37,7 @@ export interface TerminalAutoAttachState {
 export function parseTerminalSessionId(
   sessionId: string,
 ): ParsedTerminalSessionId {
-  const parts = sessionId.split(":");
+  const parts = (parseTerminalKey(sessionId)?.id ?? sessionId).split(":");
   return {
     type: parts[0] ?? sessionId,
     project: parts[1],
@@ -106,7 +107,7 @@ function tabForSession(
     isPinned,
     ...(project ? { project } : {}),
     ...(profileId
-      ? { profileId, terminalRef: { profileId, id: session.id } }
+      ? { profileId, terminalRef: parseTerminalKey(session.id) ?? { profileId, id: session.id } }
       : {}),
   };
 }
@@ -123,7 +124,7 @@ function mountedForSession(
     cwd: session.cwd,
     worktreePath: session.worktreePath,
     ...(profileId
-      ? { profileId, terminalRef: { profileId, id: session.id } }
+      ? { profileId, terminalRef: parseTerminalKey(session.id) ?? { profileId, id: session.id } }
       : {}),
   };
 }
@@ -159,20 +160,20 @@ export function deriveTerminalAutoAttachState({
   const knownSessionIds = new Set(sessions.map((session) => session.id));
   const sessionKey = (id: string, pId?: string) => (pId ? `${pId}::${id}` : id);
   const existingTabKeys = new Set(
-    openTabs.map((tab) => sessionKey(tab.sessionId, tab.profileId)),
+    openTabs.map((tab) => sessionKey(tab.sessionId, tab.profileId ?? tab.terminalRef?.profileId)),
   );
   const existingMountedKeys = new Set(
-    mountedSessions.map((m) => sessionKey(m.sessionId, m.profileId)),
+    mountedSessions.map((m) => sessionKey(m.sessionId, m.profileId ?? m.terminalRef?.profileId)),
+  );
+  const sessionsByKey = new Map(
+    sessions.map((session) => [sessionKey(session.id, sessionProfileId(session) ?? profileId), session]),
   );
 
   const nextOpenTabs = [
     ...openTabs
       .filter((tab) => !ignoredSessionIds.has(tab.sessionId))
       .map((tab) => {
-        if (profileId && tab.profileId && tab.profileId !== profileId) {
-          return tab;
-        }
-        const session = sessionsById.get(tab.sessionId);
+        const session = sessionsByKey.get(sessionKey(tab.sessionId, tab.profileId ?? tab.terminalRef?.profileId)) ?? sessionsById.get(tab.sessionId);
         if (!session) {
           if (tab.session?.alive !== true) return tab;
           return { ...tab, session: { ...tab.session, alive: false } };
@@ -232,10 +233,10 @@ export function deriveTerminalAutoAttachState({
           (liveById.has(mounted.sessionId) ||
             pendingSessionIds.has(mounted.sessionId) ||
             !knownSessionIds.has(mounted.sessionId) ||
-            existingTabKeys.has(sessionKey(mounted.sessionId, mounted.profileId))),
+            existingTabKeys.has(sessionKey(mounted.sessionId, mounted.profileId ?? mounted.terminalRef?.profileId))),
       )
       .map((mounted) => {
-        const session = sessionsById.get(mounted.sessionId);
+        const session = sessionsByKey.get(sessionKey(mounted.sessionId, mounted.profileId ?? mounted.terminalRef?.profileId)) ?? sessionsById.get(mounted.sessionId);
         return session
           ? mountedForSession(
               session,

@@ -1,3 +1,4 @@
+import { projectKey, parseProjectKey, parseTerminalKey, terminalKey } from "@/api/ownership.js";
 import type { PortEntry } from "@/hooks/use-ports.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
@@ -79,7 +80,9 @@ interface MutableGroup extends RuntimeTreeGroup {
   firstSeen: number;
 }
 
-function groupKey(project: string, sessionId?: string) {
+function groupKey(project: string, sessionId?: string, profileId?: string) {
+  const owner = profileId ?? (sessionId ? parseTerminalKey(sessionId)?.profileId : undefined);
+  if (owner) return projectKey({profileId: owner, project});
   const normalized = project.trim();
   if (normalized) return normalized;
   return sessionId?.startsWith("free:")
@@ -88,6 +91,8 @@ function groupKey(project: string, sessionId?: string) {
 }
 
 function groupName(id: string) {
+  const target = parseProjectKey(id);
+  if (target) return `${target.project || FREE_RUNTIME_GROUP_NAME} · ${target.profileId}`;
   if (id === FREE_RUNTIME_GROUP_ID) return FREE_RUNTIME_GROUP_NAME;
   if (id === UNASSIGNED_RUNTIME_GROUP_ID) return UNASSIGNED_RUNTIME_GROUP_NAME;
   return id;
@@ -99,7 +104,7 @@ function ensureGroup(groups: Map<string, MutableGroup>, id: string) {
   const next: MutableGroup = {
     id,
     name: groupName(id),
-    isFreeGroup: id === FREE_RUNTIME_GROUP_ID,
+    isFreeGroup: id === FREE_RUNTIME_GROUP_ID || parseProjectKey(id)?.project === "",
     items: [],
     firstSeen: groups.size,
   };
@@ -108,7 +113,7 @@ function ensureGroup(groups: Map<string, MutableGroup>, id: string) {
 }
 
 function fallbackTerminalLabel(terminal: MountedSession) {
-  if (terminal.sessionId.startsWith("free:")) return "Free terminal";
+  if ((parseTerminalKey(terminal.sessionId)?.id ?? terminal.sessionId).startsWith("free:")) return "Free terminal";
   return terminal.command.split(/[\s/\\]/).find(Boolean) ?? "Terminal";
 }
 
@@ -208,7 +213,7 @@ export function buildRuntimeTree({
   const orphanPortsByGroup = new Map<string, RuntimePortItem[]>();
 
   terminals.forEach((terminal, index) => {
-    const id = groupKey(terminal.project, terminal.sessionId);
+    const id = groupKey(terminal.project, terminal.sessionId, terminal.profileId);
     const group = ensureGroup(groups, id);
     const tab = tabById.get(terminal.sessionId);
     const name = terminal.name ?? tab?.session?.name;
@@ -240,14 +245,14 @@ export function buildRuntimeTree({
   for (const port of ports) {
     if (port.state === "lost") continue;
     const attached = port.sessionId
-      ? sessionItems.get(port.sessionId)
+      ? sessionItems.get(port.profileId ? terminalKey({profileId: port.profileId, id: port.sessionId}) : port.sessionId)
       : undefined;
     if (attached) {
       attached.ports.push(toRuntimePort(port, groupName(attached.groupId)));
       continue;
     }
 
-    const id = groupKey(port.project ?? "", port.sessionId ?? undefined);
+    const id = groupKey(port.project ?? "", port.sessionId ?? undefined, port.profileId);
     ensureGroup(groups, id);
     const groupPorts = orphanPortsByGroup.get(id) ?? [];
     groupPorts.push({

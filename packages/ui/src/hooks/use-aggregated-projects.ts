@@ -1,7 +1,7 @@
 import { useQueries } from "@tanstack/react-query";
 import { useSyncExternalStore, useMemo } from "react";
 import type { ProjectRef } from "@/api/ownership.js";
-import type { ProjectConfig } from "@/api/client.js";
+import type { ProjectConfig, ProjectWithStatus } from "@/api/client.js";
 import {
   getProfiles,
   subscribeToProfileChanges,
@@ -14,12 +14,13 @@ import {
   getApi,
 } from "@/api/connections.js";
 import { profileQueryKey } from "@/api/query-client.js";
+import { useProjects } from "@/api/queries.js";
 
 export interface AggregatedProjectItem {
   profileId: string;
   profileName: string;
   serverUrl: string;
-  project: ProjectConfig;
+  project: ProjectWithStatus;
   ref: ProjectRef;
 }
 
@@ -27,8 +28,16 @@ export interface ProfileProjectGroup {
   profile: ServerProfile;
   serverUrl: string;
   status: string;
-  projects: ProjectConfig[];
+  projects: ProjectWithStatus[];
 }
+const DEFAULT_PROFILE: ServerProfile = Object.freeze({
+  id: "default",
+  name: "Default",
+  url: "",
+  authType: "none" as const,
+  autoConnect: true,
+  createdAt: 0,
+});
 
 export function useAggregatedProjects(): {
   groups: ProfileProjectGroup[];
@@ -43,11 +52,16 @@ export function useAggregatedProjects(): {
   );
 
   const profiles = useMemo(() => getProfiles(), [profileVersion]);
+  const { data: ambientProjects = [], isLoading: ambientLoading } =
+    useProjects(profiles.length === 0 ? undefined : { profileId: "__disabled__" });
 
   // Subscribe to connection snapshots
-  useSyncExternalStore(
+  const connectionVersion = useSyncExternalStore(
     subscribeConnections,
-    () => profiles.map((p) => getConnectionSnapshot(p.id)?.status ?? "none").join(":"),
+    () => profiles.map((p) => {
+      const snapshot = getConnectionSnapshot(p.id);
+      return `${p.id}:${snapshot?.owner.generation}:${snapshot?.status}`;
+    }).join("|"),
     () => "",
   );
 
@@ -61,7 +75,7 @@ export function useAggregatedProjects(): {
         queryKey: isConnected
           ? profileQueryKey(owner, "projects")
           : ["profile", profile.id, "disconnected", "projects"],
-        queryFn: async (): Promise<ProjectConfig[]> => {
+        queryFn: async (): Promise<ProjectWithStatus[]> => {
           if (!isConnected) return [];
           const client = getApi(owner);
           return client.projects.list();
@@ -70,11 +84,36 @@ export function useAggregatedProjects(): {
         staleTime: 30_000,
       };
     });
-  }, [profiles]);
+  }, [profiles, connectionVersion]);
 
   const queryResults = useQueries({ queries: querySpecs });
 
+  const ambientQueryResults = profiles.length === 0 ? ambientProjects : queryResults;
   const { groups, allProjects, isLoading } = useMemo(() => {
+    if (profiles.length === 0) {
+      const flatList: AggregatedProjectItem[] = ambientProjects.map((p) => ({
+        profileId: "default",
+        profileName: "Default",
+        serverUrl: "",
+        project: p,
+        ref: {
+          profileId: "default",
+          project: p.name,
+        },
+      }));
+      return {
+        groups: [
+          {
+            profile: DEFAULT_PROFILE,
+            serverUrl: "",
+            status: "connected",
+            projects: ambientProjects,
+          },
+        ],
+        allProjects: flatList,
+        isLoading: ambientLoading,
+      };
+    }
     const groupList: ProfileProjectGroup[] = [];
     const flatList: AggregatedProjectItem[] = [];
     let loading = false;
@@ -83,7 +122,7 @@ export function useAggregatedProjects(): {
       const snapshot = getConnectionSnapshot(profile.id);
       const status = snapshot?.status ?? "disconnected";
       const result = queryResults[index];
-      const projectList = (result?.data as ProjectConfig[] | undefined) ?? [];
+      const projectList = (result?.data as ProjectWithStatus[] | undefined) ?? [];
 
       if (result?.isLoading && status === "connected") {
         loading = true;
@@ -115,7 +154,7 @@ export function useAggregatedProjects(): {
       allProjects: flatList,
       isLoading: loading,
     };
-  }, [profiles, queryResults]);
+  }, [profiles, ambientQueryResults, ambientLoading]);
 
   return { groups, allProjects, isLoading };
 }

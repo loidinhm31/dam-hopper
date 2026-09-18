@@ -21,8 +21,7 @@ import type { TreeProject, TreeCommand } from "@/hooks/use-terminal-tree.js";
 import type { SessionInfo, ProjectType } from "@/api/client.js";
 import { getSessionStatus, getStatusDotColor } from "@/lib/session-status.js";
 import { terminalBaseLabel } from "@/lib/terminal-title.js";
-import { withUiConfigDefaults } from "@/lib/ui-config.js";
-import { useGlobalConfig, useUpdateUiConfig } from "@/api/queries.js";
+
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface Props {
@@ -38,8 +37,8 @@ interface Props {
   onLaunchProfile: (projectName: string, command: TreeCommand) => void;
   onDeleteProfile: (projectName: string, profileName: string) => void;
   onLaunchSuggestedCommand: (projectName: string, command: string) => void;
-  onAddFreeTerminal: (projectName?: string) => void;
-  onLaunchFreeWithCommand: (command: string, projectName?: string) => void;
+  onAddFreeTerminal: (projectName: string) => void;
+  onLaunchFreeWithCommand: (command: string, projectName: string) => void;
   onSelectFreeTerminal: (sessionId: string) => void;
   onKillFreeTerminal: (sessionId: string) => void;
   onRemoveFreeTerminal: (sessionId: string) => void;
@@ -789,8 +788,19 @@ export function TerminalTreeView({
   onUpdateProfile,
   onUpdateCustomCommand,
 }: Props) {
-  const { data: globalConfig } = useGlobalConfig();
-  const updateUi = useUpdateUiConfig();
+  const [order, setOrder] = useState<{projects: string[]; terminals: string[]; commands: Record<string, string[]>}>({projects: [], terminals: [], commands: {}});
+  projects = [...projects].sort((a, b) => {
+    const left = order.projects.indexOf(a.key), right = order.projects.indexOf(b.key);
+    return (left < 0 ? Infinity : left) - (right < 0 ? Infinity : right);
+  }).map((project) => ({...project, commands: [...project.commands].sort((a,b) => {
+    const ids = order.commands[project.key] ?? [];
+    const left = ids.indexOf(a.key), right = ids.indexOf(b.key);
+    return (left < 0 ? Infinity : left) - (right < 0 ? Infinity : right);
+  })}));
+  freeTerminals = [...freeTerminals].sort((a,b) => {
+    const left = order.terminals.indexOf(a.id), right = order.terminals.indexOf(b.id);
+    return (left < 0 ? Infinity : left) - (right < 0 ? Infinity : right);
+  });
   const isCoarsePointer = useCoarsePointer();
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
@@ -813,7 +823,7 @@ export function TerminalTreeView({
         // ignore malformed storage
       }
     }
-    return new Set(projects.map((project) => project.name));
+    return new Set(projects.map((project) => project.key));
   });
   const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(() => {
     const stored = localStorage.getItem("dam-hopper:expanded-profiles");
@@ -834,11 +844,11 @@ export function TerminalTreeView({
   >(null);
   const [dragProject, setDragProject] = useState<string | null>(null);
   const activeProject = activeProjectName
-    ? projects.find((project) => project.name === activeProjectName)
+    ? projects.find((project) => project.key === activeProjectName)
     : undefined;
 
   const autoExpandedRef = useRef<Set<string>>(
-    new Set(projects.map((project) => project.name)),
+    new Set(projects.map((project) => project.key)),
   );
 
   useEffect(() => {
@@ -846,9 +856,9 @@ export function TerminalTreeView({
     const next = new Set(expandedProjects);
 
     for (const project of projects) {
-      if (!autoExpandedRef.current.has(project.name)) {
-        next.add(project.name);
-        autoExpandedRef.current.add(project.name);
+      if (!autoExpandedRef.current.has(project.key)) {
+        next.add(project.key);
+        autoExpandedRef.current.add(project.key);
         changed = true;
       }
     }
@@ -962,15 +972,10 @@ export function TerminalTreeView({
         const [removed] = newOrder.splice(fromIndex, 1);
         newOrder.splice(toIndex, 0, removed);
 
-        const baseUi = withUiConfigDefaults(globalConfig?.ui);
-
-        updateUi.mutate({
-          ...baseUi,
-          terminalOrder: newOrder,
-        });
+        setOrder((current) => ({...current, terminals: newOrder}));
       }
     } else if (type === "project") {
-      const currentOrder = projects.map((project) => project.name);
+      const currentOrder = projects.map((project) => project.key);
       const fromIndex = currentOrder.indexOf(draggedId);
       const toIndex = currentOrder.indexOf(targetId);
 
@@ -979,16 +984,11 @@ export function TerminalTreeView({
         const [removed] = newOrder.splice(fromIndex, 1);
         newOrder.splice(toIndex, 0, removed);
 
-        const baseUi = withUiConfigDefaults(globalConfig?.ui);
-
-        updateUi.mutate({
-          ...baseUi,
-          projectOrder: newOrder,
-        });
+        setOrder((current) => ({...current, projects: newOrder}));
       }
     } else if (type === "command" && dragProject === projectName) {
       const project = projects.find(
-        (candidate) => candidate.name === projectName,
+        (candidate) => candidate.key === projectName,
       );
       if (project) {
         const currentOrder = project.commands.map((command) => command.key);
@@ -1000,15 +1000,7 @@ export function TerminalTreeView({
           const [removed] = newOrder.splice(fromIndex, 1);
           newOrder.splice(toIndex, 0, removed);
 
-          const baseUi = withUiConfigDefaults(globalConfig?.ui);
-
-          const commandOrderMap = { ...(baseUi.projectCommandOrder || {}) };
-          commandOrderMap[projectName] = newOrder;
-
-          updateUi.mutate({
-            ...baseUi,
-            projectCommandOrder: commandOrderMap,
-          });
+          setOrder((current) => ({...current, commands: {...current.commands, [projectName!]: newOrder}}));
         }
       }
     }
@@ -1151,7 +1143,8 @@ export function TerminalTreeView({
               e.stopPropagation();
               setShowFreeSuggestion((value) => !value);
             }}
-            title="New terminal"
+            disabled={!activeProject}
+            title={activeProject ? "New terminal" : "Select a project owner first"}
             className="rounded p-0.5 hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)] transition-colors"
           >
             <Plus className="h-3 w-3" />
@@ -1159,7 +1152,7 @@ export function TerminalTreeView({
         </div>
         {terminalsExpanded && (
           <div>
-            {showFreeSuggestion && (
+            {showFreeSuggestion && activeProject && (
               <div className="px-2 pb-1 pt-0.5">
                 <CommandSuggestionInput
                   autoFocus
@@ -1169,15 +1162,15 @@ export function TerminalTreeView({
                   onSelect={(command) => {
                     onLaunchFreeWithCommand(
                       command.command,
-                      activeProject?.name,
+                      activeProject!.key,
                     );
                     setShowFreeSuggestion(false);
                   }}
                   onSubmitCustom={(command) => {
                     if (command.trim()) {
-                      onLaunchFreeWithCommand(command, activeProject?.name);
+                      onLaunchFreeWithCommand(command, activeProject!.key);
                     } else {
-                      onAddFreeTerminal(activeProject?.name);
+                      onAddFreeTerminal(activeProject!.key);
                     }
                     setShowFreeSuggestion(false);
                   }}
@@ -1230,32 +1223,32 @@ export function TerminalTreeView({
       )}
 
       {projects.map((project) => {
-        const isExpanded = expandedProjects.has(project.name);
-        const isProjectSelected = selectedId === `project:${project.name}`;
+        const isExpanded = expandedProjects.has(project.key);
+        const isProjectSelected = selectedId === `project:${project.key}`;
 
         return (
-          <div key={project.name}>
+          <div key={project.key}>
             <div
               onClick={() => {
-                toggleProject(project.name);
-                onSelectProject(project.name);
+                toggleProject(project.key);
+                onSelectProject(project.key);
               }}
               draggable
-              onDragStart={(e) => handleDragStart(e, "project", project.name)}
+              onDragStart={(e) => handleDragStart(e, "project", project.key)}
               onDragEnd={handleDragEnd}
-              onDragOver={(e) => handleDragOver(e, "project", project.name)}
-              onDragEnter={() => setDragOverId(project.name)}
-              onDrop={(e) => handleDrop(e, "project", project.name)}
+              onDragOver={(e) => handleDragOver(e, "project", project.key)}
+              onDragEnter={() => setDragOverId(project.key)}
+              onDrop={(e) => handleDrop(e, "project", project.key)}
               className={cn(
                 "group flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium cursor-pointer",
                 "text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors",
                 isProjectSelected &&
                   "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
                 dragType === "project" &&
-                  draggedId === project.name &&
+                  draggedId === project.key &&
                   "opacity-40",
                 dragType === "project" &&
-                  dragOverId === project.name &&
+                  dragOverId === project.key &&
                   "border-t-2 border-[var(--color-primary)]",
               )}
             >
@@ -1271,7 +1264,7 @@ export function TerminalTreeView({
               ) : (
                 <Folder className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
               )}
-              <span className="flex-1 truncate">{project.name}</span>
+              <span className="flex-1 truncate">{project.name} · {project.profileName}</span>
               {project.activeCount > 0 && (
                 <span className="rounded-full bg-green-500/20 px-1.5 text-green-600 text-[10px] font-medium">
                   {project.activeCount}
@@ -1284,12 +1277,12 @@ export function TerminalTreeView({
                 {project.commands.map((cmd) => {
                   if (cmd.type === "terminal") {
                     const profileKey = getProfileEditorKey(
-                      project.name,
+                      project.key,
                       cmd.profileName ?? "",
                     );
                     const isEditing =
                       editState?.kind === "profile" &&
-                      editState.projectName === project.name &&
+                      editState.projectName === project.key &&
                       editState.originalName === cmd.profileName;
                     return (
                       <ProfileRow
@@ -1337,36 +1330,36 @@ export function TerminalTreeView({
                           onSelectTerminal(sessionId)
                         }
                         onLaunchInstance={() =>
-                          onLaunchProfile(project.name, cmd)
+                          onLaunchProfile(project.key, cmd)
                         }
                         onKillInstance={(sessionId) =>
                           onKillTerminal(sessionId)
                         }
                         onRenameSession={onRenameSession}
-                        onEdit={() => startProfileEdit(project.name, cmd)}
+                        onEdit={() => startProfileEdit(project.key, cmd)}
                         onDelete={() =>
-                          onDeleteProfile(project.name, cmd.profileName!)
+                          onDeleteProfile(project.key, cmd.profileName!)
                         }
                         onDragStart={(e) =>
-                          handleDragStart(e, "command", cmd.key, project.name)
+                          handleDragStart(e, "command", cmd.key, project.key)
                         }
                         onDragEnd={handleDragEnd}
                         onDragOver={(e) =>
-                          handleDragOver(e, "command", cmd.key, project.name)
+                          handleDragOver(e, "command", cmd.key, project.key)
                         }
                         onDragEnter={() => setDragOverId(cmd.key)}
                         onDrop={(e) =>
-                          handleDrop(e, "command", cmd.key, project.name)
+                          handleDrop(e, "command", cmd.key, project.key)
                         }
                         isDragged={
                           dragType === "command" &&
                           draggedId === cmd.key &&
-                          dragProject === project.name
+                          dragProject === project.key
                         }
                         isOver={
                           dragType === "command" &&
                           dragOverId === cmd.key &&
-                          dragProject === project.name
+                          dragProject === project.key
                         }
                       />
                     );
@@ -1374,7 +1367,7 @@ export function TerminalTreeView({
 
                   const isEditing =
                     editState?.kind === "command" &&
-                    editState.projectName === project.name &&
+                    editState.projectName === project.key &&
                     editState.originalKey === cmd.key;
                   const canEdit = cmd.type === "custom";
 
@@ -1387,34 +1380,34 @@ export function TerminalTreeView({
                         canEdit={canEdit}
                         isCoarsePointer={isCoarsePointer}
                         onSelect={() => onSelectTerminal(cmd.sessionId)}
-                        onLaunch={() => onLaunchTerminal(project.name, cmd)}
+                        onLaunch={() => onLaunchTerminal(project.key, cmd)}
                         onKill={() => onKillTerminal(cmd.sessionId)}
                         onRenameSession={onRenameSession}
                         onEdit={
                           canEdit
-                            ? () => startCommandEdit(project.name, cmd)
+                            ? () => startCommandEdit(project.key, cmd)
                             : undefined
                         }
                         onDragStart={(e) =>
-                          handleDragStart(e, "command", cmd.key, project.name)
+                          handleDragStart(e, "command", cmd.key, project.key)
                         }
                         onDragEnd={handleDragEnd}
                         onDragOver={(e) =>
-                          handleDragOver(e, "command", cmd.key, project.name)
+                          handleDragOver(e, "command", cmd.key, project.key)
                         }
                         onDragEnter={() => setDragOverId(cmd.key)}
                         onDrop={(e) =>
-                          handleDrop(e, "command", cmd.key, project.name)
+                          handleDrop(e, "command", cmd.key, project.key)
                         }
                         isDragged={
                           dragType === "command" &&
                           draggedId === cmd.key &&
-                          dragProject === project.name
+                          dragProject === project.key
                         }
                         isOver={
                           dragType === "command" &&
                           dragOverId === cmd.key &&
-                          dragProject === project.name
+                          dragProject === project.key
                         }
                       />
                       {isEditing && editState?.kind === "command" && (
@@ -1443,7 +1436,7 @@ export function TerminalTreeView({
                   );
                 })}
 
-                {activeSuggestionProject === project.name ? (
+                {activeSuggestionProject === project.key ? (
                   <div className="px-2 py-1">
                     <CommandSuggestionInput
                       projectType={project.type as ProjectType}
@@ -1451,14 +1444,14 @@ export function TerminalTreeView({
                       autoFocus
                       placeholder="Search commands..."
                       onSelect={(command) => {
-                        onLaunchSuggestedCommand(project.name, command.command);
+                        onLaunchSuggestedCommand(project.key, command.command);
                         setActiveSuggestionProject(null);
                       }}
                       onSubmitCustom={(command) => {
                         if (command.trim()) {
-                          onLaunchSuggestedCommand(project.name, command);
+                          onLaunchSuggestedCommand(project.key, command);
                         } else {
-                          onAddShell(project.name);
+                          onAddShell(project.key);
                         }
                         setActiveSuggestionProject(null);
                       }}
@@ -1469,7 +1462,7 @@ export function TerminalTreeView({
                     type="button"
                     onClick={() => {
                       setEditState(null);
-                      setActiveSuggestionProject(project.name);
+                      setActiveSuggestionProject(project.key);
                     }}
                     className={cn(
                       "flex items-center gap-1.5 pl-8 pr-2 py-1 w-full text-xs",

@@ -1,5 +1,5 @@
 import type { Terminal } from "@xterm/xterm";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { RefObject } from "react";
 import type { TerminalLifecycleEvent } from "@/api/client.js";
 import {
@@ -8,10 +8,7 @@ import {
   type TerminalSuggestionSnapshot,
 } from "@/lib/terminal-suggestion-controller.js";
 import type { TerminalSuggestionAcceptKind } from "@/lib/terminal-suggestion-acceptance.js";
-import {
-  searchHistory,
-  type HistorySearchResult,
-} from "@/lib/command-history.js";
+import { searchHistory } from "@/lib/command-history.js";
 import { useSettingsStore } from "@/stores/settings.js";
 
 export interface HandleInputResult {
@@ -42,9 +39,6 @@ export function handleTerminalSuggestionInput(data: string): HandleInputResult {
   return { forward: true, data };
 }
 
-function searchSuggestionHistory(query: string): HistorySearchResult[] {
-  return searchHistory(query, 5);
-}
 
 /**
  * Session-local React adapter for the non-React suggestion controller.
@@ -57,19 +51,22 @@ export function useTerminalSuggestions(
   _termRef: RefObject<Terminal | null>,
   sessionId: string,
   project: string,
+  profileId: string | undefined,
   automaticEnabled = true,
 ): UseTerminalSuggestionsResult {
   void _termRef;
   const terminalSuggestionsEnabled = useSettingsStore(
     (state) => state.terminalSuggestionsEnabled,
   );
-  const [controller] = useState<TerminalSuggestionController>(() =>
+  const controller = useMemo<TerminalSuggestionController>(() =>
     createTerminalSuggestionController({
       sessionId,
       project,
-      search: searchSuggestionHistory,
-      enabled: terminalSuggestionsEnabled,
+      profileId,
+      search: (query) => profileId ? searchHistory(query, 5, profileId) : [],
+      enabled: terminalSuggestionsEnabled && automaticEnabled && !!profileId,
     }),
+    [sessionId, project, profileId],
   );
 
   const subscribe = useCallback(
@@ -80,8 +77,8 @@ export function useTerminalSuggestions(
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   useEffect(() => {
-    controller.setEnabled(terminalSuggestionsEnabled && automaticEnabled);
-  }, [automaticEnabled, controller, terminalSuggestionsEnabled]);
+    controller.setEnabled(terminalSuggestionsEnabled && automaticEnabled && !!profileId);
+  }, [automaticEnabled, controller, profileId, terminalSuggestionsEnabled]);
 
   useEffect(
     () => () => {

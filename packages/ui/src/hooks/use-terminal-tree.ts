@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import { useProjects, useGlobalConfig } from "@/api/queries.js";
-import { useTerminalSessions } from "@/api/queries.js";
+import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
+import { useAggregatedTerminalSessions } from "@/hooks/use-aggregated-terminal-sessions.js";
+import { projectKey, terminalKey, parseTerminalKey, type ProjectRef } from "@/api/ownership.js";
 import { sanitizeSessionSegment } from "@/lib/utils.js";
 import {
   targetScopedCommandSessionId,
@@ -22,7 +23,7 @@ export function isRecoverableTerminalSession(
 ): boolean {
   return (
     session.targetUnavailable === true ||
-    session.id.startsWith(FREE_TERMINAL_PREFIX)
+    (parseTerminalKey(session.id)?.id ?? session.id).startsWith(FREE_TERMINAL_PREFIX)
   );
 }
 
@@ -42,6 +43,9 @@ export interface TreeCommand {
 }
 
 export interface TreeProject {
+  ref: ProjectRef;
+  key: string;
+  profileName: string;
   name: string;
   type: ProjectType;
   path: string;
@@ -143,12 +147,14 @@ export function markOrphanedSessions(
   });
 }
 
-export function useTerminalTree(options?: { profileId?: string }) {
-  const { data: projects = [], isLoading: projectsLoading } =
-    useProjects(options);
-  const { data: sessions = [], isLoading: sessionsLoading } =
-    useTerminalSessions(options);
-  const { data: globalConfig } = useGlobalConfig();
+export function useTerminalTree() {
+  const { allProjects, isLoading: projectsLoading } = useAggregatedProjects();
+  const { sessions: remoteSessions, isLoading: sessionsLoading, isSuccess: hasSnapshot } = useAggregatedTerminalSessions();
+  const projects = useMemo(() => allProjects.map((item) => ({ ...item.project, profileId: item.profileId, profileName: item.profileName, ref: item.ref })), [allProjects]);
+  const sessions = useMemo(() => remoteSessions.map((session) => ({
+    ...session,
+    id: terminalKey({ profileId: session.profileId, id: session.id }),
+  })), [remoteSessions]);
   const unavailableTargets = useProjectTargetStore(
     (state) => state.unavailableTargetsByProject,
   );
@@ -157,7 +163,9 @@ export function useTerminalTree(options?: { profileId?: string }) {
   );
 
   const sessionsWithTargetState = useMemo(
-    () => markOrphanedSessions(sessions, unavailableTargets),
+    () => sessions.map((session) => markOrphanedSessions([session], {
+      [session.project ?? ""]: unavailableTargets[projectKey({profileId: session.profileId, project: session.project ?? ""})] ?? [],
+    })[0]),
     [sessions, unavailableTargets],
   );
 
@@ -169,7 +177,7 @@ export function useTerminalTree(options?: { profileId?: string }) {
 
   const freeTerminals = useMemo<SessionInfo[]>(() => {
     const list = sessionsWithTargetState.filter(isRecoverableTerminalSession);
-    const order = globalConfig?.ui?.terminalOrder ?? [];
+    const order: string[] = [];
 
     if (order.length > 0) {
       return [...list].sort((a, b) => {
@@ -185,18 +193,18 @@ export function useTerminalTree(options?: { profileId?: string }) {
     }
 
     return list.sort((a, b) => a.startedAt - b.startedAt);
-  }, [sessionsWithTargetState, globalConfig]);
+  }, [sessionsWithTargetState]);
 
   const tree = useMemo<TreeProject[]>(() => {
-    const projectOrder = globalConfig?.ui?.projectOrder ?? [];
-    const commandOrderMap = globalConfig?.ui?.projectCommandOrder ?? {};
+    const projectOrder: string[] = [];
+    const commandOrderMap: Record<string, string[]> = {};
 
     const unsortedTree = projects.map((p) => {
       const commands: TreeCommand[] = [];
-      const activeWorktreePath = activeTargetByProject[p.name];
+      const activeWorktreePath = activeTargetByProject[projectKey(p.ref)];
       const activeTarget = activeWorktreePath
-        ? { project: p.name, worktreePath: activeWorktreePath }
-        : p.name;
+        ? { ...p.ref, worktreePath: activeWorktreePath }
+        : p.ref;
 
       // Build command
       const buildCmd = p.services?.[0]?.buildCommand;
@@ -211,8 +219,8 @@ export function useTerminalTree(options?: { profileId?: string }) {
           label: "Build",
           type: "build",
           command: buildCmd,
-          sessionId,
-          session: sessionMap.get(sessionId),
+          sessionId: terminalKey({ profileId: p.profileId, id: sessionId }),
+          session: sessionMap.get(terminalKey({ profileId: p.profileId, id: sessionId })),
         });
       }
 
@@ -229,8 +237,8 @@ export function useTerminalTree(options?: { profileId?: string }) {
           label: "Run",
           type: "run",
           command: runCmd,
-          sessionId,
-          session: sessionMap.get(sessionId),
+          sessionId: terminalKey({ profileId: p.profileId, id: sessionId }),
+          session: sessionMap.get(terminalKey({ profileId: p.profileId, id: sessionId })),
         });
       }
 
@@ -246,8 +254,8 @@ export function useTerminalTree(options?: { profileId?: string }) {
           key,
           type: "custom",
           command: cmd,
-          sessionId,
-          session: sessionMap.get(sessionId),
+          sessionId: terminalKey({ profileId: p.profileId, id: sessionId }),
+          session: sessionMap.get(terminalKey({ profileId: p.profileId, id: sessionId })),
         });
       }
 
@@ -263,7 +271,8 @@ export function useTerminalTree(options?: { profileId?: string }) {
         );
         const matchingSessions = sessionsWithTargetState.filter(
           (s) =>
-            s.id?.startsWith(prefix) &&
+            parseTerminalKey(s.id)?.profileId === p.profileId &&
+            parseTerminalKey(s.id)!.id.startsWith(prefix) &&
             sessionMatchesProjectTarget(s, activeTarget, p.path),
         );
         commands.push({
@@ -272,7 +281,7 @@ export function useTerminalTree(options?: { profileId?: string }) {
           type: "terminal",
           command: terminal.command,
           cwd: terminal.cwd,
-          sessionId: prefix,
+          sessionId: terminalKey({ profileId: p.profileId, id: prefix }),
           sessions: matchingSessions,
           profileName: terminal.name,
         });
@@ -297,6 +306,9 @@ export function useTerminalTree(options?: { profileId?: string }) {
 
       return {
         name: p.name,
+        ref: p.ref,
+        key: projectKey(p.ref),
+        profileName: p.profileName,
         type: p.type,
         path: p.path,
         branch: p.status?.branch,
@@ -321,11 +333,10 @@ export function useTerminalTree(options?: { profileId?: string }) {
     return unsortedTree;
   }, [
     activeTargetByProject,
-    globalConfig,
     projects,
     sessionMap,
     sessionsWithTargetState,
   ]);
 
-  return { tree, freeTerminals, isLoading: projectsLoading || sessionsLoading };
+  return { tree, freeTerminals, projects, sessions: sessionsWithTargetState, hasSnapshot, isLoading: projectsLoading || sessionsLoading };
 }

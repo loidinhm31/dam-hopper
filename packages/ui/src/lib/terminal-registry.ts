@@ -49,10 +49,16 @@ export function registerTerminal(
     terminalRef,
   };
   terminalRegistry.set(key, entry);
-  const rawId =
-    typeof target === "object" ? target.id : (terminalRef?.id ?? null);
-  if (rawId && rawId !== key && !terminalRegistry.has(rawId)) {
-    terminalRegistry.set(rawId, entry);
+  const rawId = typeof target === "object" ? target.id : (terminalRef?.id ?? null);
+  if (rawId && rawId !== key) {
+    if (!terminalRegistry.has(rawId)) {
+      terminalRegistry.set(rawId, entry);
+    } else {
+      const existing = terminalRegistry.get(rawId);
+      if (existing && existing.terminalRef?.profileId !== terminalRef?.profileId) {
+        terminalRegistry.delete(rawId);
+      }
+    }
   }
   // Notify subscribers that a new terminal is ready
   notifyRegistryChange(key);
@@ -76,15 +82,10 @@ export function getTerminalRegistrySnapshot(): ReadonlySet<string> {
 export function getTerminal(
   target: TerminalRef | string,
 ): TerminalEntry | undefined {
-  const key = toTerminalKey(target);
-  const direct = terminalRegistry.get(key);
+  const direct = terminalRegistry.get(toTerminalKey(target));
   if (direct) return direct;
   if (typeof target === "string") {
-    const raw = terminalRegistry.get(target);
-    if (raw) return raw;
-    for (const entry of terminalRegistry.values()) {
-      if (entry.terminalRef?.id === target) return entry;
-    }
+    return terminalRegistry.get(target);
   }
   return undefined;
 }

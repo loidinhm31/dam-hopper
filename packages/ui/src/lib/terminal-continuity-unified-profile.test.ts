@@ -125,21 +125,29 @@ describe("Phase 04 — Terminal continuity, workflow, and owner-directed navigat
       expect(getTerminalOutputActivitySnapshot(refB).streamReady).toBe(false);
     });
 
-    it("resolves terminal entry by raw session ID when registered under qualified ref", () => {
-      const ref: TerminalRef = { profileId: "profile-a", id: "raw-lookup-pty" };
-      const mockTerm = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[1];
-      const fitAddon = { fit: vi.fn() } as unknown as Parameters<typeof registerTerminal>[2];
-      const findController = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[3];
+    it("isolates terminal entry by qualified ref and refuses unqualified raw lookup on collision", () => {
+      const refA: TerminalRef = { profileId: "profile-a", id: "raw-lookup-pty" };
+      const refB: TerminalRef = { profileId: "profile-b", id: "raw-lookup-pty" };
+      const mockTermA = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[1];
+      const mockTermB = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[1];
+      const fitAddonA = { fit: vi.fn() } as unknown as Parameters<typeof registerTerminal>[2];
+      const fitAddonB = { fit: vi.fn() } as unknown as Parameters<typeof registerTerminal>[2];
+      const findControllerA = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[3];
+      const findControllerB = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[3];
 
-      registerTerminal(ref, mockTerm, fitAddon, findController, undefined, ref);
+      registerTerminal(refA, mockTermA, fitAddonA, findControllerA, undefined, refA);
+      registerTerminal(refB, mockTermB, fitAddonB, findControllerB, undefined, refB);
 
-      // Must be resolvable both by qualified TerminalRef and raw string ID (e.g. from PaneContainer)
-      expect(getTerminal(ref)?.terminal).toBe(mockTerm);
-      expect(getTerminal("raw-lookup-pty")?.terminal).toBe(mockTerm);
-      expect(hasTerminal("raw-lookup-pty")).toBe(true);
-
-      removeTerminal(ref);
+      // Must be resolvable by qualified TerminalRef but refuse unqualified raw string lookup on collision
+      expect(getTerminal(refA)?.terminal).toBe(mockTermA);
+      expect(getTerminal(refB)?.terminal).toBe(mockTermB);
+      expect(getTerminal("raw-lookup-pty")).toBeUndefined();
       expect(hasTerminal("raw-lookup-pty")).toBe(false);
+
+      removeTerminal(refA);
+      removeTerminal(refB);
+      expect(getTerminal(refA)).toBeUndefined();
+      expect(getTerminal(refB)).toBeUndefined();
     });
 
     it("auto-attach preserves Profile A tab and creates Profile B tab when session IDs collide", () => {
