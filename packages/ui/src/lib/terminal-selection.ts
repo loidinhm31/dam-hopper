@@ -7,20 +7,21 @@ export interface TerminalSelectionMetadata {
   sessionType?: SessionInfo["type"];
   cwd?: string;
   worktreePath?: string;
+  profileId?: string;
 }
 
 export interface TerminalProjectSyncOptions {
   sessionId: string;
   metadata: TerminalSelectionMetadata | null;
   terminalAutoSwitchProjectEnabled: boolean;
-  setActiveProject: (project: string) => void;
+  setActiveProject: (project: string, profileId?: string) => void;
 }
 
 export interface TerminalSelectionOptions {
   sessionId: string;
   metadata: TerminalSelectionMetadata | null;
   terminalAutoSwitchProjectEnabled: boolean;
-  setActiveProject: (project: string) => void;
+  setActiveProject: (project: string, profileId?: string) => void;
   openTerminalTab: (
     sessionId: string,
     project: string,
@@ -52,7 +53,11 @@ export function syncTerminalProject({
     isProjectOwned &&
     project.trim().length > 0
   ) {
-    setActiveProject(project);
+    if (metadata?.profileId) {
+      setActiveProject(project, metadata.profileId);
+    } else {
+      setActiveProject(project);
+    }
   }
 }
 
