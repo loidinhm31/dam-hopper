@@ -61,6 +61,11 @@ struct TestFixture {
 fn setup_test_fixture(idle_enabled: bool, quiet: u64, wake: u64) -> TestFixture {
     let tmp = tempfile::tempdir().expect("tempdir");
     let workspace_dir = tmp.path().to_path_buf();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&workspace_dir, std::fs::Permissions::from_mode(0o700));
+    }
     let config_path = workspace_dir.join("dam-hopper.toml");
 
     let initial_toml = format!(

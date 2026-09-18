@@ -96,6 +96,11 @@ struct TestFixture {
 fn setup_test_fixture(idle_enabled: bool, quiet: u64, wake: u64) -> TestFixture {
     let tmp = tempfile::tempdir().expect("tempdir");
     let workspace_dir = tmp.path().to_path_buf();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&workspace_dir, std::fs::Permissions::from_mode(0o700));
+    }
     let config_path = workspace_dir.join("dam-hopper.toml");
 
     let initial_toml = format!(
@@ -187,6 +192,11 @@ async fn setup_agent_activity_fixture(
 ) -> TestFixture {
     let tmp = tempfile::tempdir().expect("tempdir");
     let workspace_dir = tmp.path().to_path_buf();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&workspace_dir, std::fs::Permissions::from_mode(0o700));
+    }
     let config_path = workspace_dir.join("dam-hopper.toml");
 
     let agent_execs = agent_executables.unwrap_or_else(|| {
@@ -414,7 +424,13 @@ async fn test_idle_suspend_cross_module_lifecycle_empty_to_armed_to_resumed() {
 
     // 6. Verify canonical semantic event file written beside diagnostics
     assert!(fixture.state.idle_suspend_event_writer.is_some());
-    let event_path = fixture._tmp.path().join("idle-suspend-events-v1.jsonl");
+    let event_path = fixture
+        .state
+        .diagnostics
+        .log_path()
+        .parent()
+        .unwrap()
+        .join("idle-suspend-events-v1.jsonl");
     assert!(event_path.exists(), "Event log must exist at fixed diagnostics sibling path");
     let raw_events = std::fs::read_to_string(&event_path).expect("read events");
     let event_lines: Vec<&str> = raw_events.lines().filter(|l| !l.trim().is_empty()).collect();
