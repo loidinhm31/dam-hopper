@@ -109,12 +109,41 @@ function gitRootKey(root?: string) {
   return root ?? DEFAULT_GIT_ROOT_ID;
 }
 
+function projectStatusQueryKey(normalized: { project: string; profileId?: string; worktreePath?: string }) {
+  const owner = resolveTargetOwner(normalized.profileId);
+  return owner
+    ? profileQueryKey(owner, "project-status", normalized.project, projectTargetCacheKey(normalized))
+    : ["project-status", normalized.project, projectTargetCacheKey(normalized)];
+}
+
+function projectsQueryKey(owner?: ConnectionRef) {
+  return owner ? profileQueryKey(owner, "projects") : ["projects"];
+}
+
+function fsTreeQueryKey(normalized: { project: string; profileId?: string; worktreePath?: string }) {
+  const owner = resolveTargetOwner(normalized.profileId);
+  return owner
+    ? profileQueryKey(owner, "fs", normalized.project, projectTargetCacheKey(normalized))
+    : ["fs-tree", normalized.project, projectTargetCacheKey(normalized)];
+}
+
 function gitQueryKey(
   prefix: string,
   target: ProjectTargetInput,
   ...parts: unknown[]
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
+  if (owner) {
+    return profileQueryKey(
+      owner,
+      "git",
+      prefix,
+      normalized.project,
+      projectTargetCacheKey(normalized),
+      ...parts,
+    );
+  }
   return [
     prefix,
     normalized.project,
@@ -269,11 +298,7 @@ export async function invalidateGitFileOperation(
       queryKey: gitQueryKey("git-file-diff", normalized),
     }),
     qc.invalidateQueries({
-      queryKey: [
-        "project-status",
-        normalized.project,
-        projectTargetCacheKey(normalized),
-      ],
+      queryKey: projectStatusQueryKey(normalized),
     }),
     reconcileAffectedEditorTabs(normalized, [path]),
   ]);
@@ -291,11 +316,7 @@ export async function invalidateGitHistoryOperation(
       queryKey: gitQueryKey("git-conflicts", normalized),
     }),
     qc.invalidateQueries({
-      queryKey: [
-        "project-status",
-        normalized.project,
-        projectTargetCacheKey(normalized),
-      ],
+      queryKey: projectStatusQueryKey(normalized),
     }),
     qc.invalidateQueries({
       queryKey: gitQueryKey("git-file-diff", normalized),
@@ -309,27 +330,20 @@ export async function invalidateGitBranchOperation(
   target: ProjectTargetInput,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   await Promise.all([
     qc.invalidateQueries({ queryKey: gitQueryKey("branches", normalized) }),
     qc.invalidateQueries({
-      queryKey: [
-        "project-status",
-        normalized.project,
-        projectTargetCacheKey(normalized),
-      ],
+      queryKey: projectStatusQueryKey(normalized),
     }),
-    qc.invalidateQueries({ queryKey: ["projects"] }),
+    qc.invalidateQueries({ queryKey: projectsQueryKey(owner) }),
     qc.invalidateQueries({ queryKey: gitQueryKey("git-log", normalized) }),
     qc.invalidateQueries({ queryKey: gitQueryKey("git-diff", normalized) }),
     qc.invalidateQueries({
       queryKey: gitQueryKey("git-conflicts", normalized),
     }),
     qc.invalidateQueries({
-      queryKey: [
-        "fs-tree",
-        normalized.project,
-        projectTargetCacheKey(normalized),
-      ],
+      queryKey: fsTreeQueryKey(normalized),
     }),
     reconcileProjectEditorTabs(normalized),
   ]);
@@ -350,6 +364,7 @@ function invalidateGitProjectQueries(
   },
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   if (options?.includeBranches) {
     void qc.invalidateQueries({
       queryKey: gitQueryKey("branches", normalized),
@@ -357,15 +372,11 @@ function invalidateGitProjectQueries(
   }
   if (options?.includeProjectStatus) {
     void qc.invalidateQueries({
-      queryKey: [
-        "project-status",
-        normalized.project,
-        projectTargetCacheKey(normalized),
-      ],
+      queryKey: projectStatusQueryKey(normalized),
     });
   }
   if (options?.includeProjects) {
-    void qc.invalidateQueries({ queryKey: ["projects"] });
+    void qc.invalidateQueries({ queryKey: projectsQueryKey(owner) });
   }
   if (options?.includeGitLog) {
     void qc.invalidateQueries({ queryKey: gitQueryKey("git-log", normalized) });
@@ -382,11 +393,7 @@ function invalidateGitProjectQueries(
   }
   if (options?.includeFileTree) {
     void qc.invalidateQueries({
-      queryKey: [
-        "fs-tree",
-        normalized.project,
-        projectTargetCacheKey(normalized),
-      ],
+      queryKey: fsTreeQueryKey(normalized),
     });
   }
   if (options?.reconcileEditorTabs) {
@@ -590,13 +597,20 @@ export interface WorktreeQueryOptions {
 }
 
 export function useWorktrees(
-  project: string,
+  project: ProjectTargetInput,
   options: WorktreeQueryOptions = {},
 ) {
-  const enabled = !!project && (options.enabled ?? true);
+  const normalized = normalizeProjectTarget(project);
+  const projectName = typeof normalized === "string" ? normalized : normalized.project;
+  const profileId = typeof normalized === "object" && normalized !== null ? normalized.profileId : undefined;
+  const owner = resolveTargetOwner(profileId);
+  const enabled = !!projectName && (options.enabled ?? true);
+  const queryKey = owner
+    ? profileQueryKey(owner, "git", "worktrees", projectName)
+    : ["worktrees", projectName];
   return useQuery<Worktree[]>({
-    queryKey: ["worktrees", project],
-    queryFn: () => api.git.worktrees(project),
+    queryKey,
+    queryFn: () => getBoundApiClient(owner).git.worktrees(projectName),
     enabled,
     refetchOnWindowFocus: enabled ? "always" : false,
     refetchOnReconnect: enabled ? "always" : false,
@@ -609,19 +623,21 @@ export function useWorktrees(
 
 export function useGitRoots(target: ProjectTargetInput) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   return useQuery({
     queryKey: gitQueryKey("git-roots", normalized),
-    queryFn: () => api.git.roots(normalized),
+    queryFn: () => getBoundApiClient(owner).git.roots(normalized),
     enabled: !!normalized.project,
   });
 }
 
 export function useBranches(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
   return useQuery({
     queryKey: gitQueryKey("branches", normalized, rootKey),
-    queryFn: () => api.git.branches(normalized, root),
+    queryFn: () => getBoundApiClient(owner).git.branches(normalized, root),
     enabled: !!normalized.project,
   });
 }
@@ -634,6 +650,7 @@ export function useGitLog(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
   return useQuery({
     queryKey: gitQueryKey(
@@ -644,7 +661,7 @@ export function useGitLog(
       offset,
       ref ?? null,
     ),
-    queryFn: () => api.git.log(normalized, limit, offset, ref, root),
+    queryFn: () => getBoundApiClient(owner).git.log(normalized, limit, offset, ref, root),
     enabled: !!normalized.project,
   });
 }
@@ -913,13 +930,14 @@ export function useUpdateProject(options?: OwnerInput) {
 
 export function useGitDiff(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
   return useQuery<GitDiffResult>({
     queryKey: gitQueryKey("git-diff", normalized, rootKey),
     queryFn: async () => {
       try {
         return {
-          ...(await api.git.diff(normalized, root)),
+          ...(await getBoundApiClient(owner).git.diff(normalized, root)),
           gitAvailable: true,
         };
       } catch (error) {
@@ -948,10 +966,11 @@ export function useGitUntracked(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
   return useQuery<DiffFileEntry[]>({
     queryKey: gitQueryKey("git-untracked", normalized, rootKey, offset, limit),
-    queryFn: () => api.git.untrackedFiles(normalized, offset, limit, root),
+    queryFn: () => getBoundApiClient(owner).git.untrackedFiles(normalized, offset, limit, root),
     enabled: !!normalized.project && enabled,
     staleTime: 0,
   });
@@ -963,10 +982,11 @@ export function useGitFileDiff(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
   return useQuery<FileDiffContent>({
     queryKey: gitQueryKey("git-file-diff", normalized, rootKey, path),
-    queryFn: () => api.git.fileDiff(normalized, path, root),
+    queryFn: () => getBoundApiClient(owner).git.fileDiff(normalized, path, root),
     enabled: !!normalized.project && !!path,
     staleTime: 0,
   });
@@ -978,31 +998,31 @@ export function useGitCommitFiles(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
   return useQuery<DiffFileEntry[]>({
     queryKey: gitQueryKey("git-commit-files", normalized, rootKey, hash),
-    queryFn: () => api.git.commitFiles(normalized, hash, root),
+    queryFn: () => getBoundApiClient(owner).git.commitFiles(normalized, hash, root),
     enabled: !!normalized.project && !!hash,
     staleTime: 60_000,
   });
 }
-
 export function useGitCommitMessage(
   target: ProjectTargetInput,
   hash: string,
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
   return useQuery<string>({
     queryKey: gitQueryKey("git-commit-message", normalized, rootKey, hash),
     queryFn: async () =>
-      (await api.git.commitMessage(normalized, hash, root)).message,
+      (await getBoundApiClient(owner).git.commitMessage(normalized, hash, root)).message,
     enabled: !!normalized.project && !!hash,
     staleTime: Infinity,
   });
 }
-
 export function useGitCommitFileDiff(
   target: ProjectTargetInput,
   hash: string,
@@ -1010,6 +1030,7 @@ export function useGitCommitFileDiff(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
   return useQuery<FileDiffContent>({
     queryKey: gitQueryKey(
@@ -1019,7 +1040,7 @@ export function useGitCommitFileDiff(
       hash,
       path,
     ),
-    queryFn: () => api.git.commitFileDiff(normalized, hash, path, root),
+    queryFn: () => getBoundApiClient(owner).git.commitFileDiff(normalized, hash, path, root),
     enabled: !!normalized.project && !!hash && !!path,
     staleTime: Infinity, // historical diffs are immutable
   });
@@ -1027,10 +1048,11 @@ export function useGitCommitFileDiff(
 
 export function useGitConflicts(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
   return useQuery<ConflictFile[]>({
     queryKey: gitQueryKey("git-conflicts", normalized, rootKey),
-    queryFn: () => api.git.conflicts(normalized, root),
+    queryFn: () => getBoundApiClient(owner).git.conflicts(normalized, root),
     enabled: !!normalized.project,
     staleTime: 0,
   });
@@ -1038,9 +1060,10 @@ export function useGitConflicts(target: ProjectTargetInput, root?: string) {
 
 export function useGitStage(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (paths: string[]) => api.git.stage(normalized, paths, root),
+    mutationFn: (paths: string[]) => getBoundApiClient(owner).git.stage(normalized, paths, root),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, normalized, {
         includeGitDiff: true,
@@ -1052,9 +1075,10 @@ export function useGitStage(target: ProjectTargetInput, root?: string) {
 
 export function useGitUnstage(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (paths: string[]) => api.git.unstage(normalized, paths, root),
+    mutationFn: (paths: string[]) => getBoundApiClient(owner).git.unstage(normalized, paths, root),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, normalized, {
         includeGitDiff: true,
@@ -1066,9 +1090,10 @@ export function useGitUnstage(target: ProjectTargetInput, root?: string) {
 
 export function useGitDiscard(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (path: string) => api.git.discard(normalized, path, root),
+    mutationFn: (path: string) => getBoundApiClient(owner).git.discard(normalized, path, root),
     onSuccess: (_data, path) =>
       void invalidateGitFileOperation(qc, normalized, path),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1077,10 +1102,11 @@ export function useGitDiscard(target: ProjectTargetInput, root?: string) {
 
 export function useGitDiscardHunk(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ path, hunkIndex }: { path: string; hunkIndex: number }) =>
-      api.git.discardHunk(normalized, path, hunkIndex, root),
+      getBoundApiClient(owner).git.discardHunk(normalized, path, hunkIndex, root),
     onSuccess: (_data, { path }) =>
       void invalidateGitFileOperation(qc, normalized, path),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1089,10 +1115,11 @@ export function useGitDiscardHunk(target: ProjectTargetInput, root?: string) {
 
 export function useGitResolve(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ path, content }: { path: string; content: string }) =>
-      api.git.resolve(normalized, path, content, root),
+      getBoundApiClient(owner).git.resolve(normalized, path, content, root),
     onSuccess: (_result, { path }) =>
       void invalidateGitHistoryOperation(qc, normalized, [path]),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1101,6 +1128,7 @@ export function useGitResolve(target: ProjectTargetInput, root?: string) {
 
 export function useGitCommit(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -1109,7 +1137,7 @@ export function useGitCommit(target: ProjectTargetInput, root?: string) {
     }: {
       message: string;
       amend?: boolean;
-    }) => api.git.commit(normalized, message, amend, root),
+    }) => getBoundApiClient(owner).git.commit(normalized, message, amend, root),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, normalized, {
         includeConflicts: true,
@@ -1124,13 +1152,14 @@ export function useGitCommit(target: ProjectTargetInput, root?: string) {
 
 export function useGitCreateBranch(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (options: {
       name: string;
       startPoint?: string;
       checkout?: boolean;
-    }) => api.git.createBranch(normalized, { ...options, root }),
+    }) => getBoundApiClient(owner).git.createBranch(normalized, { ...options, root }),
     onSuccess: (_result, vars) =>
       invalidateGitProjectQueries(qc, normalized, {
         includeBranches: true,
@@ -1151,6 +1180,7 @@ export function useGitCheckoutBranch(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (options: {
@@ -1158,7 +1188,7 @@ export function useGitCheckoutBranch(
       startPoint?: string;
       create?: boolean;
       strategy?: CheckoutStrategy;
-    }) => api.git.checkoutBranch(normalized, { ...options, root }),
+    }) => getBoundApiClient(owner).git.checkoutBranch(normalized, { ...options, root }),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, normalized, {
         includeBranches: true,
@@ -1176,10 +1206,11 @@ export function useGitCheckoutBranch(
 
 export function useGitDeleteBranch(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (options: { name: string }) =>
-      api.git.deleteBranch(normalized, { ...options, root }),
+      getBoundApiClient(owner).git.deleteBranch(normalized, { ...options, root }),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, normalized, {
         includeBranches: true,
@@ -1191,9 +1222,10 @@ export function useGitDeleteBranch(target: ProjectTargetInput, root?: string) {
 
 export function useGitCherryPick(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (hash: string) => api.git.cherryPick(normalized, hash, root),
+    mutationFn: (hash: string) => getBoundApiClient(owner).git.cherryPick(normalized, hash, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
@@ -1201,10 +1233,11 @@ export function useGitCherryPick(target: ProjectTargetInput, root?: string) {
 
 export function useGitReset(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, mode }: { hash: string; mode: ResetMode }) =>
-      api.git.reset(normalized, hash, mode, root),
+      getBoundApiClient(owner).git.reset(normalized, hash, mode, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
@@ -1215,9 +1248,10 @@ export function useGitUndoLastCommit(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.git.undoLastCommit(normalized, root),
+    mutationFn: () => getBoundApiClient(owner).git.undoLastCommit(normalized, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
@@ -1228,10 +1262,11 @@ export function useGitCherryPickCommitFiles(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
-      api.git.cherryPickCommitFiles(normalized, hash, paths, root),
+      getBoundApiClient(owner).git.cherryPickCommitFiles(normalized, hash, paths, root),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, normalized, paths),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1243,10 +1278,11 @@ export function useGitDropCommitFiles(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
-      api.git.dropCommitFiles(normalized, hash, paths, root),
+      getBoundApiClient(owner).git.dropCommitFiles(normalized, hash, paths, root),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, normalized, paths),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1255,10 +1291,11 @@ export function useGitDropCommitFiles(
 
 export function useGitDropCommit(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash }: { hash: string }) =>
-      api.git.dropCommit(normalized, hash, root),
+      getBoundApiClient(owner).git.dropCommit(normalized, hash, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
@@ -1269,10 +1306,11 @@ export function useGitEditCommitMessage(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, message }: { hash: string; message: string }) =>
-      api.git.editCommitMessage(normalized, hash, message, root),
+      getBoundApiClient(owner).git.editCommitMessage(normalized, hash, message, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
@@ -1280,10 +1318,11 @@ export function useGitEditCommitMessage(
 
 export function useGitRevertCommit(target: ProjectTargetInput, root?: string) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash }: { hash: string }) =>
-      api.git.revertCommit(normalized, hash, root),
+      getBoundApiClient(owner).git.revertCommit(normalized, hash, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
@@ -1294,10 +1333,11 @@ export function useGitRevertCommitFiles(
   root?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
-      api.git.revertCommitFiles(normalized, hash, paths, root),
+      getBoundApiClient(owner).git.revertCommitFiles(normalized, hash, paths, root),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, normalized, paths),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1309,7 +1349,16 @@ export function useGitRevertCommitFiles(
 export function useGitFetch() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (targets?: ProjectTargetInput[]) => api.git.fetch(targets),
+    mutationFn: (targets?: ProjectTargetInput[]) => {
+      if (targets && targets.length > 0) {
+        const first = normalizeProjectTarget(targets[0]);
+        if (first.profileId) {
+          const owner = resolveTargetOwner(first.profileId);
+          return getBoundApiClient(owner).git.fetch(targets);
+        }
+      }
+      return api.git.fetch(targets);
+    },
     onSuccess: (_result, targets) => {
       markFailedGitResults(_result, targets);
       return invalidateGitBulkTargets(qc, targets, {
@@ -1334,7 +1383,16 @@ export function useGitFetch() {
 export function useGitPull() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (targets?: ProjectTargetInput[]) => api.git.pull(targets),
+    mutationFn: (targets?: ProjectTargetInput[]) => {
+      if (targets && targets.length > 0) {
+        const first = normalizeProjectTarget(targets[0]);
+        if (first.profileId) {
+          const owner = resolveTargetOwner(first.profileId);
+          return getBoundApiClient(owner).git.pull(targets);
+        }
+      }
+      return api.git.pull(targets);
+    },
     onSuccess: (_result, targets) => {
       markFailedGitResults(_result, targets);
       return invalidateGitBulkTargets(qc, targets, {
@@ -1413,17 +1471,20 @@ export function useGitPush() {
         | string
         | {
             project: string;
+            profileId?: string;
             worktreePath?: string;
             root?: string;
             force?: boolean;
           },
     ) => {
       const [project, root, force] = resolveGitPushTarget(target);
+      const profileId = typeof target === "object" ? target.profileId : undefined;
+      const owner = resolveTargetOwner(profileId);
       const targetRef =
         typeof target === "string" || target.worktreePath == null
-          ? project
-          : { project, worktreePath: target.worktreePath };
-      return api.git.push(targetRef, root, force);
+          ? (profileId ? { profileId, project } : project)
+          : (profileId ? { profileId, project, worktreePath: target.worktreePath } : { project, worktreePath: target.worktreePath });
+      return getBoundApiClient(owner).git.push(targetRef, root, force);
     },
     onSuccess: (_result, target) => {
       const targetRef = typeof target === "string" ? target : target;
@@ -1442,16 +1503,23 @@ export function useGitPush() {
   });
 }
 
-export function useAddWorktree(project: string) {
+export function useAddWorktree(project: ProjectTargetInput) {
+  const normalized = normalizeProjectTarget(project);
+  const projectName = typeof normalized === "string" ? normalized : normalized.project;
+  const profileId = typeof normalized === "object" && normalized !== null ? normalized.profileId : undefined;
+  const owner = resolveTargetOwner(profileId);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (opts: {
       path: string;
       branch: string;
       createBranch?: boolean;
-    }) => api.git.addWorktree(project, opts),
+    }) => getBoundApiClient(owner).git.addWorktree(projectName, opts),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["worktrees", project] });
+      const queryKey = owner
+        ? profileQueryKey(owner, "git", "worktrees", projectName)
+        : ["worktrees", projectName];
+      void qc.invalidateQueries({ queryKey });
     },
   });
 }
@@ -1520,12 +1588,20 @@ export function useSshListKeys() {
   });
 }
 
-export function useRemoveWorktree(project: string) {
+export function useRemoveWorktree(project: ProjectTargetInput) {
+  const normalized = normalizeProjectTarget(project);
+  const projectName = typeof normalized === "string" ? normalized : normalized.project;
+  const profileId = typeof normalized === "object" && normalized !== null ? normalized.profileId : undefined;
+  const owner = resolveTargetOwner(profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (path: string) => api.git.removeWorktree(project, path),
+    mutationFn: (path: string) =>
+      getBoundApiClient(owner).git.removeWorktree(projectName, path),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["worktrees", project] });
+      const queryKey = owner
+        ? profileQueryKey(owner, "git", "worktrees", projectName)
+        : ["worktrees", projectName];
+      void qc.invalidateQueries({ queryKey });
     },
   });
 }

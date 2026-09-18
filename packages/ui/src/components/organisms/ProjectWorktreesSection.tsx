@@ -63,6 +63,7 @@ export function ProjectWorktreesSection({
   target,
   isVisible,
 }: ProjectWorktreesSectionProps) {
+  const targetRef = target?.target ?? projectName;
   const {
     data,
     dataUpdatedAt,
@@ -71,13 +72,13 @@ export function ProjectWorktreesSection({
     isFetched,
     isError,
     refetch,
-  } = useWorktrees(projectName, {
+  } = useWorktrees(targetRef, {
     enabled: isVisible,
     pollWhileVisible: isVisible,
   });
-  const { data: sessions = [] } = useTerminalSessions();
+  const { data: sessions = [] } = useTerminalSessions(target?.target?.profileId ? { profileId: target.target.profileId } : undefined);
   const worktrees = useMemo<Worktree[]>(() => data ?? [], [data]);
-  const removeWorktree = useRemoveWorktree(projectName);
+  const removeWorktree = useRemoveWorktree(targetRef);
   const selectTarget = useProjectTargetStore((state) => state.selectTarget);
   const markTargetUnavailable = useProjectTargetStore(
     (state) => state.markTargetUnavailable,
@@ -319,6 +320,7 @@ export function ProjectWorktreesSection({
       ) : (
         <WorktreeAddForm
           projectName={projectName}
+          target={target?.target}
           onCancel={() => setShowAdd(false)}
           onAdded={() => setShowAdd(false)}
         />

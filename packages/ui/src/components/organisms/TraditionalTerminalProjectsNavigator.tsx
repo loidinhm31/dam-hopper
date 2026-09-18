@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { GitBranch, GitCommit, GitMerge, Plus } from "lucide-react";
 import { useProjectStatus, useWorktrees } from "@/api/queries.js";
+import type { ProjectTargetInput } from "@/api/client.js";
 import { TerminalProjectActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
 import {
   traditionalTerminalProjectPanelId,
@@ -11,19 +12,25 @@ import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
 function TraditionalProjectGitSummary({
   projectName,
+  profileId,
+  target,
 }: {
   projectName: string;
+  profileId?: string;
+  target?: ProjectTargetInput;
 }) {
+  const targetInput: ProjectTargetInput =
+    target ?? (profileId ? { profileId, project: projectName } : projectName);
   const {
     data: status,
     isLoading,
     isError,
-  } = useProjectStatus(projectName, true);
+  } = useProjectStatus(targetInput, true);
   const {
     data: worktrees,
     isLoading: isWorktreesLoading,
     isError: isWorktreesError,
-  } = useWorktrees(projectName);
+  } = useWorktrees(targetInput);
   const lastCommit = status?.lastCommit;
   const worktree =
     worktrees?.find((candidate) => candidate.branch === status?.branch) ??
@@ -204,6 +211,8 @@ export function TraditionalTerminalProjectsNavigator({
                 {group.projectName && showCommitStatus ? (
                   <TraditionalProjectGitSummary
                     projectName={group.projectName}
+                    profileId={group.profileId}
+                    target={group.projectRef}
                   />
                 ) : null}
               </span>
