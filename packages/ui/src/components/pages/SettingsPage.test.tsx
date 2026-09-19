@@ -154,18 +154,21 @@ describe("SettingsPage Import / Export integration", () => {
       workspaceName: "test-workspace",
     });
 
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-
     act(() => {
       root.render(<SettingsPage />);
     });
 
-    const fileInput = container.querySelector<HTMLInputElement>("input[type='file']");
+    const fileInput =
+      container.querySelector<HTMLInputElement>("input[type='file']");
     expect(fileInput).toBeTruthy();
 
-    const testFile = new File(["[workspace]\nname = 'imported'\n"], "dam-hopper.toml", {
-      type: "application/toml",
-    });
+    const testFile = new File(
+      ["[workspace]\nname = 'imported'\n"],
+      "dam-hopper.toml",
+      {
+        type: "application/toml",
+      },
+    );
     testFile.text = async () => "[workspace]\nname = 'imported'\n";
 
     await act(async () => {
@@ -175,23 +178,35 @@ describe("SettingsPage Import / Export integration", () => {
       });
       fileInput?.dispatchEvent(new Event("change", { bubbles: true }));
     });
-
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("test-workspace"));
-    expect(mockImportMutate).toHaveBeenCalledWith("[workspace]\nname = 'imported'\n");
-    expect(container.textContent).toContain("Settings imported. Backup saved to dam-hopper.toml.bak.123");
+    const confirmButton = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ].find((btn) => btn.textContent?.includes("Apply configuration"));
+    expect(confirmButton).toBeTruthy();
+    await act(async () => {
+      confirmButton?.click();
+    });
+    expect(mockImportMutate).toHaveBeenCalledWith(
+      "[workspace]\nname = 'imported'\n",
+    );
+    expect(container.textContent).toContain(
+      "Settings imported. Backup saved to dam-hopper.toml.bak.123",
+    );
   });
 
   it("handles import cancellation when confirm dialog is dismissed", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(false);
-
     act(() => {
       root.render(<SettingsPage />);
     });
 
-    const fileInput = container.querySelector<HTMLInputElement>("input[type='file']");
-    const testFile = new File(["[workspace]\nname = 'imported'\n"], "dam-hopper.toml", {
-      type: "application/toml",
-    });
+    const fileInput =
+      container.querySelector<HTMLInputElement>("input[type='file']");
+    const testFile = new File(
+      ["[workspace]\nname = 'imported'\n"],
+      "dam-hopper.toml",
+      {
+        type: "application/toml",
+      },
+    );
 
     await act(async () => {
       Object.defineProperty(fileInput, "files", {
@@ -200,8 +215,13 @@ describe("SettingsPage Import / Export integration", () => {
       });
       fileInput?.dispatchEvent(new Event("change", { bubbles: true }));
     });
-
-    expect(window.confirm).toHaveBeenCalled();
+    const cancelButton = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ].find((btn) => btn.textContent?.includes("Cancel"));
+    expect(cancelButton).toBeTruthy();
+    await act(async () => {
+      cancelButton?.click();
+    });
     expect(mockImportMutate).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Import cancelled.");
   });
@@ -211,8 +231,11 @@ describe("SettingsPage Import / Export integration", () => {
       root.render(<SettingsPage />);
     });
 
-    const fileInput = container.querySelector<HTMLInputElement>("input[type='file']");
-    const bigFile = new File(["dummy"], "huge.toml", { type: "application/toml" });
+    const fileInput =
+      container.querySelector<HTMLInputElement>("input[type='file']");
+    const bigFile = new File(["dummy"], "huge.toml", {
+      type: "application/toml",
+    });
     Object.defineProperty(bigFile, "size", { value: 1024 * 1024 + 1 });
 
     await act(async () => {
@@ -246,9 +269,9 @@ describe("SettingsPage Import / Export integration", () => {
       }
     });
 
-    expect(
-      useWorkbenchSelectionsStore.getState().settingsProfileId,
-    ).toBe("profile-1");
+    expect(useWorkbenchSelectionsStore.getState().settingsProfileId).toBe(
+      "profile-1",
+    );
     expect(container.textContent).toContain("Production Server");
     expect(container.textContent).toContain("https://prod.example.com");
   });
@@ -283,19 +306,12 @@ describe("SettingsPage Import / Export integration", () => {
   it("aborts import if settings target profile changes during confirmation", async () => {
     useWorkbenchSelectionsStore.getState().setSettingsProfileId("profile-1");
 
-    // When confirm is called, simulate target switching to profile-2
-    vi.spyOn(window, "confirm").mockImplementation(() => {
-      useWorkbenchSelectionsStore.getState().setSettingsProfileId("profile-2");
-      return true;
-    });
-
     act(() => {
       root.render(<SettingsPage />);
     });
 
-    const fileInput = container.querySelector<HTMLInputElement>(
-      "input[type='file']",
-    );
+    const fileInput =
+      container.querySelector<HTMLInputElement>("input[type='file']");
     const testFile = new File(
       ["[workspace]\nname = 'imported'\n"],
       "dam-hopper.toml",
@@ -311,7 +327,15 @@ describe("SettingsPage Import / Export integration", () => {
       fileInput?.dispatchEvent(new Event("change", { bubbles: true }));
     });
 
-    expect(mockImportMutate).not.toHaveBeenCalled();
+    useWorkbenchSelectionsStore.getState().setSettingsProfileId("profile-2");
+
+    const confirmButton = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ].find((btn) => btn.textContent?.includes("Apply configuration"));
+    expect(confirmButton).toBeTruthy();
+    await act(async () => {
+      confirmButton?.click();
+    });
     expect(container.textContent).toContain(
       "Import cancelled: settings target server or connection changed during confirmation.",
     );

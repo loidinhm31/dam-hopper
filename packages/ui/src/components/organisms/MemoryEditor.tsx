@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import { useState, useEffect, useRef } from "react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -27,6 +28,12 @@ export function MemoryEditor({ projects, owner, profileId }: Props) {
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">(
     "idle",
   );
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    title: string;
+    message: string;
+    confirmText?: string;
+    action: () => void;
+  } | null>(null);
 
   const {
     data: memoryContent,
@@ -90,28 +97,62 @@ export function MemoryEditor({ projects, owner, profileId }: Props) {
   function handleDiscardPreview() {
     const previewEdited =
       preview !== null && initialPreview !== null && preview !== initialPreview;
-    if (previewEdited && !window.confirm("Discard your edits to this preview?"))
+    if (previewEdited) {
+      setPendingConfirm({
+        title: "Discard preview edits",
+        message: "Discard your edits to this preview?",
+        confirmText: "Discard",
+        action: () => {
+          setPreview(null);
+          setInitialPreview(null);
+        },
+      });
       return;
+    }
     setPreview(null);
     setInitialPreview(null);
   }
 
   function handleSwitchProject(name: string) {
-    if (isDirty && !window.confirm("Switch project? Your unsaved draft will be lost."))
+    if (name === projectName) return;
+    const previewEdited =
+      preview !== null && initialPreview !== null && preview !== initialPreview;
+    if (isDirty || previewEdited) {
+      const message =
+        isDirty && previewEdited
+          ? "Switch project? Your unsaved draft and preview edits will be lost."
+          : isDirty
+            ? "Switch project? Your unsaved draft will be lost."
+            : "Switch project? Your preview edits will be lost.";
+      setPendingConfirm({
+        title: "Switch project",
+        message,
+        confirmText: "Switch",
+        action: () => setProjectName(name),
+      });
       return;
-    if (preview !== null && preview !== initialPreview) {
-      if (!window.confirm("Switch project? Your preview edits will be lost."))
-        return;
     }
     setProjectName(name);
   }
 
   function handleSwitchAgent(a: AgentType) {
-    if (isDirty && !window.confirm("Switch agent? Your unsaved draft will be lost."))
+    if (a === agent) return;
+    const previewEdited =
+      preview !== null && initialPreview !== null && preview !== initialPreview;
+    if (isDirty || previewEdited) {
+      const message =
+        isDirty && previewEdited
+          ? "Switch agent? Your unsaved draft and preview edits will be lost."
+          : isDirty
+            ? "Switch agent? Your unsaved draft will be lost."
+            : "Switch agent? Your preview edits will be lost.";
+      setPendingConfirm({
+        title: "Switch agent",
+        message,
+        confirmText: "Switch",
+        action: () => setAgent(a),
+      });
       return;
-    if (preview !== null && preview !== initialPreview) {
-      if (!window.confirm("Switch agent? Your preview edits will be lost."))
-        return;
     }
     setAgent(a);
   }
@@ -245,6 +286,18 @@ export function MemoryEditor({ projects, owner, profileId }: Props) {
           />
         </div>
       )}
+      <ConfirmDialog
+        open={pendingConfirm !== null}
+        onClose={() => setPendingConfirm(null)}
+        onConfirm={() => {
+          pendingConfirm?.action();
+          setPendingConfirm(null);
+        }}
+        title={pendingConfirm?.title ?? ""}
+        description={pendingConfirm?.message}
+        confirmText={pendingConfirm?.confirmText ?? "Confirm"}
+        variant="danger"
+      />
     </div>
   );
 }

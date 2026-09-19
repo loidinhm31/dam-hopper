@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import { useState } from "react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import {
@@ -51,7 +52,7 @@ export function SettingsPage() {
   const targetProfile =
     profiles.find((p) => p.id === settingsProfileId) ?? null;
   const targetOwner = settingsProfileId
-    ? targetSnapshot?.owner ?? { profileId: settingsProfileId, generation: 1 }
+    ? (targetSnapshot?.owner ?? { profileId: settingsProfileId, generation: 1 })
     : undefined;
 
   const prefProfile =
@@ -78,6 +79,8 @@ export function SettingsPage() {
   const [exportErr, setExportErr] = useState<string | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [importErr, setImportErr] = useState<string | null>(null);
+  const [nuclearResetConfirmOpen, setNuclearResetConfirmOpen] = useState(false);
+  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
 
   async function handleClearCache() {
     setClearMsg(null);
@@ -85,7 +88,9 @@ export function SettingsPage() {
     try {
       await clearCache.mutateAsync();
       const serverLabel = targetProfile ? ` on ${targetProfile.name}` : "";
-      setClearMsg(`Cache cleared${serverLabel} — all queries will refetch fresh data.`);
+      setClearMsg(
+        `Cache cleared${serverLabel} — all queries will refetch fresh data.`,
+      );
     } catch (err) {
       setClearErr(err instanceof Error ? err.message : String(err));
     }
@@ -95,15 +100,14 @@ export function SettingsPage() {
     }, 4000);
   }
 
-  async function handleNuclearReset() {
+  function handleNuclearReset() {
     setResetErr(null);
-    const serverText = targetProfile
-      ? ` on server "${targetProfile.name}" (${targetSnapshot?.serverUrl || targetProfile.url})`
-      : "";
-    const confirmed = window.confirm(
-      `This will kill all terminal sessions and clear all workspace state${serverText}. Use the sidebar workspace switcher to open a new workspace. Continue?`,
-    );
-    if (!confirmed) return;
+    setNuclearResetConfirmOpen(true);
+  }
+
+  async function handleConfirmNuclearReset() {
+    setNuclearResetConfirmOpen(false);
+    setResetErr(null);
     try {
       await resetWorkspace.mutateAsync();
     } catch (err) {
@@ -143,7 +147,7 @@ export function SettingsPage() {
 
   const MAX_IMPORT_SIZE = 1024 * 1024; // 1 MiB
 
-  async function handleImportFile(file: File) {
+  function handleImportFile(file: File) {
     setImportMsg(null);
     setImportErr(null);
 
@@ -153,21 +157,16 @@ export function SettingsPage() {
       return;
     }
 
+    setPendingImportFile(file);
+  }
+
+  async function handleConfirmImportFile() {
+    if (!pendingImportFile) return;
+    const file = pendingImportFile;
+    setPendingImportFile(null);
+
     const targetAtStart = settingsProfileId;
     const generationAtStart = targetSnapshot?.owner.generation ?? 1;
-    const wsName = config?.workspace.name ?? "current workspace";
-    const serverLabel = targetProfile
-      ? ` on server "${targetProfile.name}" (${targetSnapshot?.serverUrl || targetProfile.url})`
-      : "";
-    const confirmed = window.confirm(
-      `Replace configuration for active workspace "${wsName}"${serverLabel} with "${file.name}"?\n\nAn automatic backup will be created before applying.`,
-    );
-    if (!confirmed) {
-      setImportMsg("Import cancelled.");
-      setTimeout(() => setImportMsg(null), 5000);
-      return;
-    }
-
     const currentSnap = targetAtStart
       ? getConnectionSnapshot(targetAtStart)
       : null;
@@ -225,13 +224,16 @@ export function SettingsPage() {
                 Settings Target Server
               </label>
               <p className="text-xs text-[var(--color-text-muted)]">
-                Server whose workspace configuration, global defaults, usage, and maintenance are inspected and modified.
+                Server whose workspace configuration, global defaults, usage,
+                and maintenance are inspected and modified.
               </p>
               {targetProfile && (
                 <div className="flex items-center gap-2 pt-1 text-xs font-mono text-[var(--color-text-muted)]">
                   <span className="inline-block h-2 w-2 rounded-full bg-[var(--color-success)]" />
                   <span>{targetProfile.name}</span>
-                  <span>({targetSnapshot?.serverUrl || targetProfile.url})</span>
+                  <span>
+                    ({targetSnapshot?.serverUrl || targetProfile.url})
+                  </span>
                 </div>
               )}
             </div>
@@ -264,7 +266,8 @@ export function SettingsPage() {
                 Workbench Preferences Source
               </label>
               <p className="text-xs text-[var(--color-text-muted)]">
-                Server providing shared UI appearance, editor settings, keyboard shortcuts, and notification rules.
+                Server providing shared UI appearance, editor settings, keyboard
+                shortcuts, and notification rules.
               </p>
               <div className="flex items-center gap-2 pt-1 text-xs font-mono text-[var(--color-text-muted)]">
                 <span
@@ -277,7 +280,8 @@ export function SettingsPage() {
                 <span>Status: {preferencesStatus}</span>
                 {prefProfile && (
                   <span>
-                    — {prefProfile.name} ({prefSnapshot?.serverUrl || prefProfile.url})
+                    — {prefProfile.name} (
+                    {prefSnapshot?.serverUrl || prefProfile.url})
                   </span>
                 )}
               </div>
@@ -399,6 +403,39 @@ export function SettingsPage() {
           />
         </SettingsSectionAccordion>
       </div>
+      <ConfirmDialog
+        open={nuclearResetConfirmOpen}
+        onClose={() => setNuclearResetConfirmOpen(false)}
+        onConfirm={handleConfirmNuclearReset}
+        title="Reset workspace state?"
+        description={`This will kill all terminal sessions and clear all workspace state${
+          targetProfile
+            ? ` on server "${targetProfile.name}" (${targetSnapshot?.serverUrl || targetProfile.url})`
+            : ""
+        }. Use the sidebar workspace switcher to open a new workspace.`}
+        confirmText="Reset workspace"
+        variant="danger"
+        loading={resetWorkspace.isPending}
+      />
+
+      <ConfirmDialog
+        open={pendingImportFile !== null}
+        onClose={() => {
+          setPendingImportFile(null);
+          setImportMsg("Import cancelled.");
+          setTimeout(() => setImportMsg(null), 5000);
+        }}
+        onConfirm={handleConfirmImportFile}
+        title="Replace configuration?"
+        description={`Replace configuration for active workspace "${config?.workspace.name ?? "current workspace"}"${
+          targetProfile
+            ? ` on server "${targetProfile.name}" (${targetSnapshot?.serverUrl || targetProfile.url})`
+            : ""
+        } with "${pendingImportFile?.name}"?\n\nAn automatic backup will be created before applying.`}
+        confirmText="Apply configuration"
+        variant="danger"
+        loading={importSettings.isPending}
+      />
     </AppLayout>
   );
 }

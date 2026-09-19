@@ -11,6 +11,7 @@ import type { DiffFileEntry, ProjectTargetRef } from "@/api/client.js";
 import { Button } from "@/components/atoms/Button.js";
 import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 
 interface GitLocalChangesProps {
   project: string;
@@ -25,6 +26,7 @@ export function GitLocalChanges({ project, target }: GitLocalChangesProps) {
   const [commitMessage, setCommitMessage] = useState("");
   const [amendCommit, setAmendCommit] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
+  const [discardPath, setDiscardPath] = useState<string | null>(null);
 
   const stageMutation = useGitStage(targetRef);
   const unstageMutation = useGitUnstage(targetRef);
@@ -159,11 +161,7 @@ export function GitLocalChanges({ project, target }: GitLocalChangesProps) {
                       </svg>
                     </button>
                     <button
-                      onClick={() => {
-                        if (confirm(`Discard changes in ${file.path}?`)) {
-                          discardMutation.mutate(file.path);
-                        }
-                      }}
+                      onClick={() => setDiscardPath(file.path)}
                       className="p-1 hover:bg-[var(--color-background)] rounded text-[var(--color-danger)]"
                       title="Discard"
                     >
@@ -244,6 +242,21 @@ export function GitLocalChanges({ project, target }: GitLocalChangesProps) {
           </Button>
         </div>
       </div>
+      <ConfirmDialog
+        open={discardPath !== null}
+        onClose={() => setDiscardPath(null)}
+        onConfirm={() => {
+          if (discardPath) {
+            discardMutation.mutate(discardPath);
+            setDiscardPath(null);
+          }
+        }}
+        title="Discard changes"
+        description={`Discard changes in ${discardPath}? This cannot be undone.`}
+        confirmText="Discard"
+        variant="danger"
+        loading={discardMutation.isPending}
+      />
     </div>
   );
 }
