@@ -113,20 +113,21 @@ enabled = {}
 quiet_period_seconds = {}
 wake_after_seconds = {}
 "#,
-        workspace_dir.display(),
+        workspace_dir.display().to_string().replace('\\', "/"),
         idle_enabled,
         quiet,
         wake
     );
     std::fs::write(&config_path, initial_toml).expect("write initial toml");
-    #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .mode(0o600)
-            .open(workspace_dir.join("idle-suspend-audit.jsonl"))
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(workspace_dir.join("idle-suspend-audit.jsonl"))
             .expect("preprovision audit log");
     }
 
@@ -226,7 +227,7 @@ wake_after_seconds = {}
 automatic_policy = "agent-activity"
 agent_executables = [{}]
 "#,
-        workspace_dir.display(),
+        workspace_dir.display().to_string().replace('\\', "/"),
         idle_enabled,
         safe_quiet,
         safe_wake,
@@ -234,14 +235,15 @@ agent_executables = [{}]
     );
     std::fs::write(&config_path, initial_toml).expect("write initial toml");
 
-    #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .mode(0o600)
-            .open(workspace_dir.join("idle-suspend-audit.jsonl"))
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(workspace_dir.join("idle-suspend-audit.jsonl"))
             .expect("preprovision audit log");
     }
     let (event_sink, _rx) = BroadcastEventSink::new(512);
@@ -1162,6 +1164,7 @@ async fn test_idle_suspend_manual_force_suspend_zero_side_effect_on_active_fleet
 // 7. Integrated Agent Activity Scenarios (Phase 07)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_integrated_agent_activity_service_only_pty_does_not_block_suspend() {
     let fixture = setup_agent_activity_fixture(
@@ -1215,6 +1218,7 @@ async fn test_integrated_agent_activity_service_only_pty_does_not_block_suspend(
     coordinator.shutdown().await;
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_integrated_agent_activity_accepted_input_invalidates_quiet() {
     let fixture = setup_agent_activity_fixture(true, 3, 600, Some(vec!["cat".to_string()])).await;

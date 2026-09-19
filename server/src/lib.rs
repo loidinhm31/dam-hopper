@@ -9,6 +9,10 @@ pub mod error;
 pub mod fs;
 pub mod git;
 pub mod host_actions;
+#[cfg(target_os = "linux")]
+pub mod linux_release;
+#[cfg(windows)]
+#[path = "linux_release_windows.rs"]
 pub mod linux_release;
 pub mod idle_suspend;
 pub mod persistence;

@@ -5,9 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::pty::activity::{ProcessIdentity, TerminalIdentity};
 
+#[cfg(target_os = "linux")]
 pub(crate) mod process;
+#[cfg(target_os = "linux")]
 mod netlink;
 mod tcp_info;
+#[cfg(target_os = "linux")]
 pub(crate) mod tcp;
 pub(crate) mod sampler;
 
@@ -78,7 +81,7 @@ impl NetworkNamespaceIdentity {
         })
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
     pub(crate) fn current_thread() -> Result<Self, ActivityUnavailable> {
         Err(ActivityUnavailable::new(ActivityUnavailableReason::ProcAccess))
     }

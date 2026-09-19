@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Integration tests for HTTP health stability probes and process inspection.
 
 use axum::routing::get;

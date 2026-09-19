@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Tests for release manager CLI grammar, argument validation, and privilege enforcement.
 
 use clap::Parser;

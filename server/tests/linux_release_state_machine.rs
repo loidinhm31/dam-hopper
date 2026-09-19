@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! State machine transition, crash recovery, and retention tests.
 
 mod common;

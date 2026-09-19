@@ -1,6 +1,8 @@
 //! DamHopper Linux release manager executable.
 
+#[cfg(target_os = "linux")]
 use clap::Parser;
+#[cfg(target_os = "linux")]
 use dam_hopper_server::linux_release::{
     acquire_release, current_euid, execute_activation_with_args, execute_manual_rollback,
     execute_recovery, load_host_config, load_or_init_manager_state, save_host_config,
@@ -8,8 +10,10 @@ use dam_hopper_server::linux_release::{
     Commands, HostConfig, Layout, ReleaseError, RoleCommands, TargetRole, ALL_SERVICE_UNITS,
     run_diagnose,
 };
+#[cfg(target_os = "linux")]
 use std::process::ExitCode;
 
+#[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -385,6 +389,7 @@ async fn main() -> ExitCode {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn persist_service_user_selection(
     layout: &Layout,
     role: TargetRole,
@@ -395,4 +400,10 @@ fn persist_service_user_selection(
         .unwrap_or(HostConfig::new(role, allow_web_origins.to_vec())?);
     host_config.service_user = Some(user.trim().to_string());
     save_host_config(&layout.host_config_path(), &host_config)
+}
+
+#[cfg(windows)]
+fn main() -> std::process::ExitCode {
+    eprintln!("dam-hopper release management is only supported on Linux with systemd.");
+    std::process::ExitCode::from(1)
 }

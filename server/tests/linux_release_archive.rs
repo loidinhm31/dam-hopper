@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Integration tests for archive validation, role projection, and attack rejection.
 
 mod common;

@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Integration tests for Linux release publisher contract, manifest validation,
 //! archive integrity, and manager validation CLI command.
 

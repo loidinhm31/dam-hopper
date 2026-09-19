@@ -930,8 +930,17 @@ pub struct ProducerIdentity {
 
 impl ProducerIdentity {
     /// Read production host boot_id from /proc/sys/kernel/random/boot_id and generate a UUID v4 instance ID.
+    #[cfg(target_os = "linux")]
     pub fn load() -> Result<Self, EventWriteError> {
         Self::load_from_path(Path::new("/proc/sys/kernel/random/boot_id"))
+    }
+
+    #[cfg(windows)]
+    pub fn load() -> Result<Self, EventWriteError> {
+        Ok(Self {
+            boot_id: uuid::Uuid::new_v4().to_string(),
+            producer_instance_id: uuid::Uuid::new_v4().to_string(),
+        })
     }
 
     /// Crate-private loader from an explicit boot_id path.
@@ -1110,11 +1119,11 @@ impl IdleSuspendEventWriter {
 
     /// Low-level safe file opening, verification, append and sync.
     fn append_and_sync_verified(&self, line_bytes: &[u8]) -> Result<(), EventWriteError> {
+        #[cfg(unix)]
         let parent = self
             .path
             .parent()
             .ok_or(EventWriteError::ParentPathRejected)?;
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -1161,7 +1170,7 @@ impl IdleSuspendEventWriter {
                 .map_err(|e| EventWriteError::Io(format!("sync: {e}")))?;
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
             let mut options = OpenOptions::new();
             options.create(true).write(true).append(true);

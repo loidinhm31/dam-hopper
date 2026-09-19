@@ -1,11 +1,12 @@
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::PathBuf,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -233,6 +234,7 @@ impl IdleSuspendServerAudit {
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
+    #[cfg(unix)]
     fn open_verified(&self, write: bool) -> Result<File, AuditError> {
         let mut options = OpenOptions::new();
         options.read(true);
@@ -253,6 +255,25 @@ impl IdleSuspendServerAudit {
             || metadata.gid() != expected_gid
             || metadata.mode() & 0o7777 != 0o600
         {
+            return Err(AuditError::Unavailable);
+        }
+        Ok(file)
+    }
+
+    #[cfg(windows)]
+    fn open_verified(&self, write: bool) -> Result<File, AuditError> {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        if write {
+            options.write(true).append(true);
+        }
+        let file = options
+            .open(&*self.path)
+            .map_err(|e| AuditError::Io(format!("Cannot open pre-provisioned audit log: {e}")))?;
+        let metadata = file
+            .metadata()
+            .map_err(|e| AuditError::Io(format!("Cannot stat pre-provisioned audit log: {e}")))?;
+        if !metadata.file_type().is_file() {
             return Err(AuditError::Unavailable);
         }
         Ok(file)

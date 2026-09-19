@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Integration tests for production idle-suspend diagnostics fault matrix,
 //! redaction corpus, bounds enforcement, role awareness, and atomic output.
 

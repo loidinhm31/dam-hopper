@@ -1,9 +1,11 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use crate::idle_suspend::protocol::{
     read_frame_async, write_frame_async, HelperRequestFrame, HelperResponseFrame,
-    HelperResponsePayload, ProtocolError, SuspendOutcome, SuspendWithRtcWakeRequest,
+    HelperResponsePayload,
 };
+use crate::idle_suspend::protocol::{ProtocolError, SuspendOutcome, SuspendWithRtcWakeRequest};
 
 /// Client used by the unprivileged server process to communicate with the privileged helper.
 #[derive(Debug, Clone)]
@@ -28,6 +30,7 @@ impl HelperClient {
     }
 
     /// Send a capability probe request to the helper over the Unix domain socket.
+    #[cfg(unix)]
     pub async fn check_capability(&self) -> Result<(bool, String), ProtocolError> {
         let mut stream = tokio::net::UnixStream::connect(&self.socket_path).await?;
         let req = HelperRequestFrame::new_probe();
@@ -49,7 +52,16 @@ impl HelperClient {
         }
     }
 
+    #[cfg(windows)]
+    pub async fn check_capability(&self) -> Result<(bool, String), ProtocolError> {
+        Err(ProtocolError::IoError(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Unix domain sockets are unavailable on Windows",
+        )))
+    }
+
     /// Send a fixed suspend-with-RTC-wake request to the helper and await resumption.
+    #[cfg(unix)]
     pub async fn execute_suspend(
         &self,
         req: SuspendWithRtcWakeRequest,
@@ -73,5 +85,16 @@ impl HelperClient {
                 error: "Unexpected response payload from helper".to_string(),
             }),
         }
+    }
+
+    #[cfg(windows)]
+    pub async fn execute_suspend(
+        &self,
+        _req: SuspendWithRtcWakeRequest,
+    ) -> Result<SuspendOutcome, ProtocolError> {
+        Err(ProtocolError::IoError(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Unix domain sockets are unavailable on Windows",
+        )))
     }
 }
