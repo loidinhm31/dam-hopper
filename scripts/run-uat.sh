@@ -163,7 +163,7 @@ setup_uat_environment() {
 {
   "schemaVersion": 1,
   "role": "both",
-  "releaseVersion": "0.3.1",
+  "releaseVersion": "0.4.0",
   "profileId": "00000000-0000-4000-8000-000000000001",
   "apiUrl": "${FINAL_API_URL}"
 }
@@ -254,7 +254,7 @@ start_services() {
             --host "$WEB_HOST" \
             --port "$WEB_PORT" \
             --runtime-config "$RUNTIME_CONFIG" \
-            --release-version "0.3.1" \
+            --release-version "0.4.0" \
             > "$LOG_WEB" 2>&1 &
         echo $! > "$PID_WEB"
         echo "✓ Started Web host (PID $!, listening on ${WEB_HOST}:${WEB_PORT})"
