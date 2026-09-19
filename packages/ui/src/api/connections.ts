@@ -22,6 +22,7 @@ import {
   removeProfileListeners,
 } from "../hooks/use-sse.js";
 
+import { generateUUID } from "../lib/utils.js";
 let registryQueryClient: QueryClient | null = null;
 
 export function setConnectionRegistryQueryClient(
@@ -556,7 +557,7 @@ export function getMediaClientId(owner: ConnectionRef): string {
   const key = connectionKey(owner);
   const existing = mediaClientIdsByOwner.get(key);
   if (existing) return existing;
-  const created = crypto.randomUUID();
+  const created = generateUUID();
   mediaClientIdsByOwner.set(key, created);
   return created;
 }

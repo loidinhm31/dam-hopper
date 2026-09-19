@@ -26,6 +26,7 @@ import {
 import type { OpaqueSessionResult } from "@/lib/opaque-session.js";
 import type { ConnectionRef, ProjectTargetInput } from "@/api/client.js";
 import { normalizeProjectTarget } from "@/api/client.js";
+import { generateUUID } from "@/lib/utils.js";
 import {
   isCurrentConnection,
   subscribeConnections,
@@ -351,7 +352,7 @@ export function EncryptProvider({ children }: { children: ReactNode }) {
 
       const { promise, resolve, reject } = createDeferred<string>();
       const request: PromptRequest = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         key,
         project,
         profileId,
