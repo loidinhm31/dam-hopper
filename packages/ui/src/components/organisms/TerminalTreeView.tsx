@@ -1266,9 +1266,9 @@ export function TerminalTreeView({
                 <Folder className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
               )}
               <span className="truncate">{project.name}</span>
-              {project.profileName && (
+              {project.profileName && project.ref?.profileId !== "default" && (
                 <ProfileBadge
-                  profileId={project.ref.profileId}
+                  profileId={project.ref?.profileId}
                   name={project.profileName}
                 />
               )}

@@ -213,7 +213,7 @@ export function TraditionalTerminalProjectsDisplay({
             <span>Projects</span>
           </button>
           <span className="min-w-0 flex items-center gap-1.5 truncate text-xs font-semibold text-[var(--color-text)]">
-            <span className="truncate">{selectedGroup.label}</span>
+            <span className="min-w-0 truncate">{selectedGroup.label}</span>
             {selectedGroup.profileName && (
               <ProfileBadge
                 profileId={selectedGroup.profileId}

@@ -31,12 +31,11 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
     : false;
 
   const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";
-
   return (
     <div className={cn("flex items-center gap-1.5 min-w-0 flex-1", className)}>
       <Folder className="h-4 w-4 shrink-0 text-[var(--color-primary)] opacity-80" />
       <Select
-        value={currentTupleKey || undefined}
+        value={isSelectedProjectAvailable ? currentTupleKey : undefined}
         onValueChange={(val) => {
           const parsed = parseProjectKey(val);
           if (parsed) setSelectedProject(parsed);
@@ -50,7 +49,9 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
           )}
         >
           <div className="truncate text-left flex-1">
-            <SelectValue placeholder="Select project" />
+            <SelectValue placeholder="Select project">
+              {isSelectedProjectAvailable ? selectedProject?.project : undefined}
+            </SelectValue>
           </div>
         </SelectTrigger>
         <SelectContent className="min-w-[220px]">
