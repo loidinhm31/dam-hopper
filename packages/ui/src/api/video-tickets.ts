@@ -29,6 +29,14 @@ import {
 
 const VIDEO_TICKET_TIMEOUT_MS = 15_000;
 const STREAM_PATH = /^\/api\/fs\/video\/stream\/[A-Za-z0-9_-]+$/;
+function normalizeMediaPath(path: string): string {
+  try {
+    return decodeURIComponent(path.replace(/\+/g, " "));
+  } catch {
+    return path;
+  }
+}
+
 
 export type VideoTicketPurpose = "playback" | "download";
 
@@ -210,7 +218,7 @@ export async function issueVideoTicket(
         signal: timeout.signal,
         body: JSON.stringify({
           ...toServerProjectTarget(normalizedTarget),
-          path,
+          path: normalizeMediaPath(path),
           purpose,
           mediaClientId: snapshot.mediaClientId,
         }),
