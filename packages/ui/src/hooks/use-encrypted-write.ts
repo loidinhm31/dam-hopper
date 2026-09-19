@@ -29,6 +29,7 @@ import {
   opaqueRegisterAndLogin,
   type OpaqueSessionResult,
 } from "@/lib/opaque-session.js";
+import { generateUUID } from "@/lib/utils.js";
 import { encryptFile, encryptText } from "@/lib/crypto.js";
 import { toEncryptKey, useEncryptMode } from "@/contexts/EncryptContext.js";
 import {
@@ -84,7 +85,7 @@ export interface UseEncryptedWriteReturn {
  */
 function buildCollisionFreeIdentifier(project: string): string {
   const sanitized = project.replace(/[^a-z0-9]/gi, "-").slice(0, 20);
-  const randomSuffix = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+  const randomSuffix = generateUUID().replace(/-/g, "").slice(0, 12);
   return `enc-${sanitized}-${randomSuffix}`;
 }
 function isTargetUnavailableError(error: unknown): boolean {
@@ -238,7 +239,7 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         }
 
         setStatus("uploading");
-        const uploadId = crypto.randomUUID();
+        const uploadId = generateUUID();
         const encFile = new File([blob], file.name, {
           type: "application/octet-stream",
         });
