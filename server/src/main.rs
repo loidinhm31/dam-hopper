@@ -241,7 +241,9 @@ async fn main() -> anyhow::Result<()> {
     let allowed_origins = parse_cors_origins(cli.cors_origins.as_deref())?;
     let fs = FsSubsystem::new(project_roots(&config));
 
-    let db = if let (Ok(uri), Ok(name)) = (
+    let db = if cli.no_auth {
+        None
+    } else if let (Ok(uri), Ok(name)) = (
         std::env::var("MONGODB_URI"),
         std::env::var("MONGODB_DATABASE"),
     ) {

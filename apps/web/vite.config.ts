@@ -14,11 +14,10 @@ export default defineConfig(({ command, mode }) => {
   const configuredBackend = env.VITE_DAM_HOPPER_SERVER_URL?.replace(/\/$/, "");
   if (command === "build" && configuredBackend) {
     throw new Error(
-      "VITE_DAM_HOPPER_SERVER_URL must be unset for the production same-origin build; use it only for isolated Vite development on port 4801.",
+      "VITE_DAM_HOPPER_SERVER_URL must be unset for the production same-origin build; use it only for isolated Vite development on port 4803.",
     );
   }
-  const backend = configuredBackend || "http://127.0.0.1:4801";
-
+  const backend = configuredBackend || "http://127.0.0.1:4803";
   return {
     base: "./",
     define: {

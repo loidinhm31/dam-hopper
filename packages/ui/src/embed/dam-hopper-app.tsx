@@ -289,11 +289,6 @@ export function DamHopperApp() {
 
       for (const profile of profilesResult.profiles) {
         if (profile.autoConnect === false) continue;
-        if (!isSameOriginProfile(profile)) {
-          void connectProfile(profile.id);
-          continue;
-        }
-
         // Auto-login for "none" auth profiles if no token exists
         if (profile.authType === "none" && !getAuthToken(profile.id)) {
           try {
