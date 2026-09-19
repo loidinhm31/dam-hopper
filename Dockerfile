@@ -29,9 +29,10 @@ FROM node:20-slim@sha256:3d0f05455dea2c82e2f76e7e2543964c30f6b7d673fc1a83286736d
 WORKDIR /build
 
 # pnpm version kept in sync with .github/workflows — update both when upgrading
-RUN corepack enable && corepack prepare pnpm@9 --activate
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY patches ./patches
 COPY apps/web/package.json ./apps/web/
 COPY apps/browser-extension/package.json ./apps/browser-extension/
 COPY packages/browser-bridge/package.json ./packages/browser-bridge/
