@@ -95,10 +95,6 @@ describe("ServerProfilesDialog", () => {
     saveProfiles([profileA, profileB]);
     setActiveProfile(profileA.id);
     setAuthToken("deleted-token", profileB.id);
-    vi.stubGlobal(
-      "confirm",
-      vi.fn(() => true),
-    );
 
     const container = document.createElement("div");
     document.body.append(container);
@@ -119,6 +115,15 @@ describe("ServerProfilesDialog", () => {
     expect(deleteButtons).toHaveLength(2);
     await act(async () => {
       deleteButtons[1]?.click();
+      await Promise.resolve();
+    });
+
+    const confirmButton = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ].find((button) => button.textContent?.includes("Remove profile"));
+    expect(confirmButton).toBeTruthy();
+    await act(async () => {
+      confirmButton?.click();
       await Promise.resolve();
     });
 

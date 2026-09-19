@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import { Button } from "@/components/atoms/Button.js";
 import { Badge } from "@/components/atoms/Badge.js";
 import { useAgentStoreContent, useRemoveFromStore } from "@/api/queries.js";
@@ -14,11 +16,15 @@ export function ItemDetail({ item, onShip }: Props) {
     item.category,
   );
   const remove = useRemoveFromStore();
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
-  function handleRemove() {
-    if (!confirm(`Remove "${item.name}" from store? This cannot be undone.`))
-      return;
-    remove.mutate({ name: item.name, category: item.category });
+  function handleConfirmRemove() {
+    remove.mutate(
+      { name: item.name, category: item.category },
+      {
+        onSettled: () => setConfirmOpen(false),
+      },
+    );
   }
 
   return (
@@ -83,11 +89,22 @@ export function ItemDetail({ item, onShip }: Props) {
           variant="danger"
           size="sm"
           loading={remove.isPending}
-          onClick={handleRemove}
+          onClick={() => setConfirmOpen(true)}
         >
           Remove
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={handleConfirmRemove}
+        title="Remove item"
+        description={`Remove "${item.name}" from store? This cannot be undone.`}
+        confirmText="Remove"
+        variant="danger"
+        loading={remove.isPending}
+      />
     </div>
   );
 }

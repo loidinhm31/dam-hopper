@@ -1,3 +1,4 @@
+import { ConfirmDialog, AlertDialog } from "@/components/ui/ConfirmDialog.js";
 import { useState, useSyncExternalStore } from "react";
 import {
   X,
@@ -106,6 +107,13 @@ export function ServerProfilesDialog({
   onLoginProfile,
 }: Props) {
   const [, setRevision] = useState(0);
+  const [profileToDelete, setProfileToDelete] = useState<ServerProfile | null>(
+    null,
+  );
+  const [deleteAlertMessage, setDeleteAlertMessage] = useState<string | null>(
+    null,
+  );
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Subscribe to profile list changes and cross-tab updates
   useSyncExternalStore(
@@ -141,26 +149,28 @@ export function ServerProfilesDialog({
     handleRefresh();
   }
 
-  async function handleDelete(profile: ServerProfile) {
-    if (
-      !confirm(
-        `Remove server profile "${profile.name}"?\n\nLocal cached resources will be detached. Remote server data is not deleted.`,
-      )
-    ) {
-      return;
+  async function handleConfirmDelete() {
+    if (!profileToDelete) return;
+    const profile = profileToDelete;
+    setIsDeleting(true);
+    try {
+      const token = getAuthToken(profile.id);
+      if (token) {
+        const mediaClientId = getMediaClientIdForProfile(profile.id);
+        await revokeCurrentMediaSession(profile.url, token, mediaClientId);
+      }
+      removeProfileConnection(profile.id);
+      if (!deleteProfile(profile.id)) {
+        setDeleteAlertMessage(
+          "Unable to delete the profile safely in this browser",
+        );
+        return;
+      }
+      setProfileToDelete(null);
+      handleRefresh();
+    } finally {
+      setIsDeleting(false);
     }
-
-    const token = getAuthToken(profile.id);
-    if (token) {
-      const mediaClientId = getMediaClientIdForProfile(profile.id);
-      await revokeCurrentMediaSession(profile.url, token, mediaClientId);
-    }
-    removeProfileConnection(profile.id);
-    if (!deleteProfile(profile.id)) {
-      alert("Unable to delete the profile safely in this browser");
-      return;
-    }
-    handleRefresh();
   }
 
   return (
@@ -242,7 +252,7 @@ export function ServerProfilesDialog({
                         <Edit2 size={15} />
                       </button>
                       <button
-                        onClick={() => void handleDelete(profile)}
+                        onClick={() => setProfileToDelete(profile)}
                         className="p-1.5 hover:bg-[var(--color-surface)] rounded text-[var(--color-error)] transition-colors"
                         title="Remove profile"
                       >
@@ -340,6 +350,24 @@ export function ServerProfilesDialog({
           </button>
         </div>
       </div>
+      <ConfirmDialog
+        open={profileToDelete !== null}
+        onClose={() => {
+          if (!isDeleting) setProfileToDelete(null);
+        }}
+        onConfirm={handleConfirmDelete}
+        title={`Remove server profile "${profileToDelete?.name}"?`}
+        description="Local cached resources will be detached. Remote server data is not deleted."
+        confirmText="Remove profile"
+        variant="danger"
+        loading={isDeleting}
+      />
+      <AlertDialog
+        open={deleteAlertMessage !== null}
+        onClose={() => setDeleteAlertMessage(null)}
+        title="Unable to delete profile"
+        description={deleteAlertMessage}
+      />
     </div>
   );
 }

@@ -238,8 +238,6 @@ describe("usage page in Chromium", () => {
   });
 
   it("uses UTC date-only bounds after destructive-delete confirmation", async () => {
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirm);
     await renderUsage();
     const from = labeledControl("From") as HTMLInputElement;
     const to = labeledControl("To (exclusive)") as HTMLInputElement;
@@ -267,9 +265,11 @@ describe("usage page in Chromium", () => {
       ...container.querySelectorAll<HTMLButtonElement>("button"),
     ].find((button) => button.textContent?.includes("Delete selected range"));
     await act(async () => deleteButton?.click());
-    expect(confirm).toHaveBeenCalledWith(
-      "Delete the selected UTC date range? This cannot be undone.",
-    );
+    const confirmButton = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ].find((button) => button.textContent?.includes("Delete"));
+    expect(confirmButton).toBeTruthy();
+    await act(async () => confirmButton?.click());
     expect(mocks.deleteRange).toHaveBeenCalledWith({
       from: Date.UTC(2026, 6, 1),
       to: Date.UTC(2026, 6, 3),
@@ -277,16 +277,16 @@ describe("usage page in Chromium", () => {
   });
 
   it("keeps a Unix-epoch custom range destructive-range scoped", async () => {
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirm);
     await renderUsage("/usage?from=0&to=86400000&bucket=day");
     const deleteButton = [
       ...container.querySelectorAll<HTMLButtonElement>("button"),
     ].find((button) => button.textContent?.includes("Delete selected range"));
     await act(async () => deleteButton?.click());
-    expect(confirm).toHaveBeenCalledWith(
-      "Delete the selected UTC date range? This cannot be undone.",
-    );
+    const confirmButton = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ].find((button) => button.textContent?.includes("Delete"));
+    expect(confirmButton).toBeTruthy();
+    await act(async () => confirmButton?.click());
     expect(mocks.deleteRange).toHaveBeenCalledWith({ from: 0, to: 86_400_000 });
     expect(mocks.deleteAll).not.toHaveBeenCalled();
   });

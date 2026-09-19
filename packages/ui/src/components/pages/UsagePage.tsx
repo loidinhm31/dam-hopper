@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Pause, Play, RotateCcw, Trash2 } from "lucide-react";
@@ -88,6 +89,7 @@ function parseUtcDateInput(value: string): number | undefined {
 
 export function UsagePage() {
   const [params, setParams] = useSearchParams();
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const profilesResult = readServerProfiles();
   const profiles: ServerProfile[] =
     profilesResult.status === "available" ? profilesResult.profiles : [];
@@ -104,7 +106,7 @@ export function UsagePage() {
     ? getConnectionSnapshot(selectedProfileId)
     : null;
   const usageOwner = selectedProfileId
-    ? usageSnapshot?.owner ?? { profileId: selectedProfileId, generation: 1 }
+    ? (usageSnapshot?.owner ?? { profileId: selectedProfileId, generation: 1 })
     : undefined;
 
   const tabRefs = useRef<Record<UsageView, HTMLButtonElement | null>>({
@@ -126,10 +128,11 @@ export function UsagePage() {
       ? selected
       : { ...DEFAULT_QUERY, ...selected };
   }, [params]);
-  const { data: summary, isLoading, error } = useUsageSummary(
-    query,
-    usageOwner,
-  );
+  const {
+    data: summary,
+    isLoading,
+    error,
+  } = useUsageSummary(query, usageOwner);
   const { data: settings } = useUsageSettings(usageOwner);
   const sessionQuery = useMemo<UsageSessionQuery>(
     () => ({
@@ -179,19 +182,12 @@ export function UsagePage() {
     if (from === undefined || to === undefined || to <= from) return;
     updateQuery({ ...query, from, to, window: undefined, bucket: "day" });
   };
-  const confirmDelete = (rangeOnly: boolean) => {
+  const handleConfirmDelete = () => {
+    setDeleteConfirmOpen(false);
     const targetOwnerSnapshot = usageOwner;
-    const targetRange =
-      rangeOnly && query.from !== undefined && query.to !== undefined
-        ? { from: query.from, to: query.to }
-        : null;
-    const serverLabel = selectedProfile
-      ? ` from server "${selectedProfile.name}"`
-      : "";
-    const message = targetRange
-      ? `Delete the selected UTC date range${serverLabel}? This cannot be undone.`
-      : `Delete all Codex usage aggregates${serverLabel}? This cannot be undone.`;
-    if (!window.confirm(message)) return;
+    const isRange = query.from !== undefined && query.to !== undefined;
+    const targetRange = isRange ? { from: query.from!, to: query.to! } : null;
+
     if (
       targetOwnerSnapshot?.profileId !== usageOwner?.profileId ||
       targetOwnerSnapshot?.generation !== usageOwner?.generation
@@ -260,7 +256,9 @@ export function UsagePage() {
     new Set(
       [
         query.model,
-        ...(sessions.data?.sessions.map((session: { model?: string | null }) => session.model) ?? []),
+        ...(sessions.data?.sessions.map(
+          (session: { model?: string | null }) => session.model,
+        ) ?? []),
       ].filter((model): model is string => Boolean(model)),
     ),
   ).sort();
@@ -357,11 +355,7 @@ export function UsagePage() {
               variant="danger"
               size="sm"
               loading={deleteAll.isPending || deleteRange.isPending}
-              onClick={() =>
-                confirmDelete(
-                  query.from !== undefined && query.to !== undefined,
-                )
-              }
+              onClick={() => setDeleteConfirmOpen(true)}
             >
               <Trash2 className="h-3.5 w-3.5" />
               {query.from !== undefined && query.to !== undefined
@@ -479,6 +473,28 @@ export function UsagePage() {
           />
         )}
       </div>
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onClose={() => setDeleteConfirmOpen(false)}
+        onConfirm={handleConfirmDelete}
+        title={
+          query.from !== undefined && query.to !== undefined
+            ? "Delete selected range?"
+            : "Delete all usage?"
+        }
+        description={
+          query.from !== undefined && query.to !== undefined
+            ? `Delete the selected UTC date range${
+                selectedProfile ? ` from server "${selectedProfile.name}"` : ""
+              }? This cannot be undone.`
+            : `Delete all Codex usage aggregates${
+                selectedProfile ? ` from server "${selectedProfile.name}"` : ""
+              }? This cannot be undone.`
+        }
+        confirmText="Delete"
+        variant="danger"
+        loading={deleteAll.isPending || deleteRange.isPending}
+      />
     </AppLayout>
   );
 }
