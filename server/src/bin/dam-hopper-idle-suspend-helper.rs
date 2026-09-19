@@ -1,9 +1,15 @@
+#[cfg(target_os = "linux")]
 use clap::Parser;
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
 use tracing::{error, info, warn};
+#[cfg(target_os = "linux")]
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+#[cfg(target_os = "linux")]
 use dam_hopper_server::idle_suspend::{
     audit::HelperAudit,
     backend::SystemdLogindBackend,
@@ -11,7 +17,7 @@ use dam_hopper_server::idle_suspend::{
     peer_auth::{EnrolledPeerPolicy, PeerCredentials},
     preflight::SysfsPreflightChecker,
 };
-
+#[cfg(target_os = "linux")]
 #[derive(Debug, Parser)]
 #[command(
     name = "dam-hopper-idle-suspend-helper",
@@ -48,6 +54,7 @@ struct Cli {
     enrolled_pid: Option<u32>,
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -154,4 +161,10 @@ async fn main() -> anyhow::Result<()> {
 
     info!("DamHopper idle-suspend helper stopped cleanly");
     Ok(())
+}
+
+#[cfg(windows)]
+fn main() {
+    eprintln!("dam-hopper-idle-suspend-helper is only supported on Linux with systemd.");
+    std::process::exit(1);
 }

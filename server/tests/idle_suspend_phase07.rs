@@ -82,12 +82,14 @@ wake_after_seconds = {}
     std::fs::write(&config_path, initial_toml).expect("write initial toml");
 
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let _ = opts
             .open(workspace_dir.join("idle-suspend-audit.jsonl"))
             .expect("preprovision audit log");
     }

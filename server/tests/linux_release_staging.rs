@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Integration tests for safe staging, deployment lock, and pending candidate persistence.
 
 mod common;

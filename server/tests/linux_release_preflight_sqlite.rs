@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Tests for daemon SQLite database path resolution, candidate inspection,
 //! path normalization, and process holder protection during migration.
 

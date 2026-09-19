@@ -75,6 +75,36 @@ const SAFE_BASELINE_ENV_VARS: &[&str] = &[
     "SSH_AUTH_SOCK",
     "GPG_TTY",
     "COLORTERM",
+    // Standard Windows baseline environment variables
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "USERNAME",
+    "USERDOMAIN",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramData",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "CommonProgramFiles",
+    "CommonProgramFiles(x86)",
+    "CommonProgramW6432",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_IDENTIFIER",
+    "PROCESSOR_LEVEL",
+    "PROCESSOR_REVISION",
+    "OS",
+    "PUBLIC",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "PSModulePath",
 ];
 
 #[derive(Debug)]
@@ -4605,6 +4635,46 @@ pub(crate) fn build_child_env_from_parent_snapshot(
         }
     }
 
+    #[cfg(windows)]
+    {
+        if !child_env.iter().any(|(k, _)| k.eq_ignore_ascii_case("SystemRoot")) {
+            if let Some(val) = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir")) {
+                child_env.push(("SystemRoot".to_string(), val));
+            } else {
+                child_env.push(("SystemRoot".to_string(), OsString::from(r"C:\Windows")));
+            }
+        }
+        if !child_env.iter().any(|(k, _)| k.eq_ignore_ascii_case("SystemDrive")) {
+            if let Some(val) = std::env::var_os("SystemDrive") {
+                child_env.push(("SystemDrive".to_string(), val));
+            } else {
+                child_env.push(("SystemDrive".to_string(), OsString::from("C:")));
+            }
+        }
+        if !child_env.iter().any(|(k, _)| k.eq_ignore_ascii_case("COMSPEC")) {
+            if let Some(val) = std::env::var_os("COMSPEC") {
+                child_env.push(("COMSPEC".to_string(), val));
+            } else {
+                child_env.push(("COMSPEC".to_string(), OsString::from(r"C:\Windows\System32\cmd.exe")));
+            }
+        }
+        if !child_env.iter().any(|(k, _)| k.eq_ignore_ascii_case("PATHEXT")) {
+            if let Some(val) = std::env::var_os("PATHEXT") {
+                child_env.push(("PATHEXT".to_string(), val));
+            } else {
+                child_env.push(("PATHEXT".to_string(), OsString::from(".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC")));
+            }
+        }
+        if !child_env.iter().any(|(k, _)| k == "HOME") {
+            if let Some((_, profile)) = child_env.iter().find(|(k, _)| k.eq_ignore_ascii_case("USERPROFILE")) {
+                let p = profile.clone();
+                child_env.push(("HOME".to_string(), p));
+            } else if let Some(home) = dirs::home_dir() {
+                child_env.push(("HOME".to_string(), home.into_os_string()));
+            }
+        }
+    }
+
     child_env.extend(
         env.iter()
             .map(|(key, value)| (key.clone(), OsString::from(value))),
@@ -4903,6 +4973,124 @@ mod tests {
             child_env.get("PATH"),
             Some(&OsString::from(r"C:\Windows\System32"))
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn child_env_builder_preserves_windows_system_root_and_baseline() {
+        let parent_env = HashMap::from([
+            ("PATH".to_string(), OsString::from(r"C:\Windows\System32")),
+            ("SystemRoot".to_string(), OsString::from(r"C:\Windows")),
+            ("SystemDrive".to_string(), OsString::from("C:")),
+            (
+                "COMSPEC".to_string(),
+                OsString::from(r"C:\Windows\System32\cmd.exe"),
+            ),
+            (
+                "PATHEXT".to_string(),
+                OsString::from(".COM;.EXE;.BAT;.CMD"),
+            ),
+            (
+                "USERPROFILE".to_string(),
+                OsString::from(r"C:\Users\testuser"),
+            ),
+            (
+                "SECRET_VAR".to_string(),
+                OsString::from("secret"),
+            ),
+        ]);
+
+        let child_env = build_child_env_from_parent_snapshot(&parent_env, &HashMap::new())
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(
+            child_env.get("SystemRoot"),
+            Some(&OsString::from(r"C:\Windows"))
+        );
+        assert_eq!(child_env.get("SystemDrive"), Some(&OsString::from("C:")));
+        assert_eq!(
+            child_env.get("COMSPEC"),
+            Some(&OsString::from(r"C:\Windows\System32\cmd.exe"))
+        );
+        assert_eq!(
+            child_env.get("PATHEXT"),
+            Some(&OsString::from(".COM;.EXE;.BAT;.CMD"))
+        );
+        assert_eq!(
+            child_env.get("USERPROFILE"),
+            Some(&OsString::from(r"C:\Users\testuser"))
+        );
+        assert_eq!(
+            child_env.get("HOME"),
+            Some(&OsString::from(r"C:\Users\testuser"))
+        );
+        assert!(!child_env.contains_key("SECRET_VAR"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn child_env_builder_fallbacks_to_system_root_when_missing_from_parent() {
+        let parent_env = HashMap::from([("PATH".to_string(), OsString::from(r"C:\Tools"))]);
+
+        let child_env = build_child_env_from_parent_snapshot(&parent_env, &HashMap::new())
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+
+        let system_root = child_env.get("SystemRoot");
+        assert!(
+            system_root.is_some(),
+            "SystemRoot should be present via system fallback"
+        );
+        assert_eq!(child_env.get("SystemDrive"), Some(&OsString::from("C:")));
+        assert!(child_env.get("COMSPEC").is_some());
+        assert!(child_env.get("PATHEXT").is_some());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pty_session_preserves_system_root_in_spawned_process() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "terminal:test-system-root-output";
+        let opts = PtyCreateOpts {
+            id: id.to_string(),
+            command: "echo SystemRoot=%SystemRoot%".to_string(),
+            cwd: std::env::current_dir()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            env: HashMap::new(),
+            cols: 80,
+            rows: 24,
+            project: None,
+            worktree_path: None,
+            name: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+        };
+
+        manager.create(opts).expect("spawn PTY session on Windows");
+
+        let expected_root =
+            std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        let expected_str = format!("SystemRoot={expected_root}");
+
+        let start = std::time::Instant::now();
+        let mut ok = false;
+        while start.elapsed() < Duration::from_secs(5) {
+            if manager
+                .get_buffer(id)
+                .map(|b| b.contains(&expected_str))
+                .unwrap_or(false)
+            {
+                ok = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let _ = manager.remove(id);
+        assert!(ok, "Spawned PTY buffer should contain '{expected_str}'");
     }
 
     #[tokio::test(flavor = "multi_thread")]

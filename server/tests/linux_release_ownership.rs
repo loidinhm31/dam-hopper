@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Integration tests for ownership, permission boundaries, and process port inspection.
 
 use dam_hopper_server::linux_release::*;

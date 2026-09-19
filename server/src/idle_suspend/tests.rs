@@ -1,16 +1,16 @@
 use crate::pty::fleet_state::{HandoffClaimError, PtyFleetState};
 use std::fs::{self, OpenOptions};
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
 fn preprovisioned_server_audit(path: PathBuf) -> IdleSuspendServerAudit {
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&path)
-        .unwrap();
+    let mut opts = OpenOptions::new();
+    opts.create_new(true).write(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    opts.open(&path).unwrap();
     IdleSuspendServerAudit::new(path)
 }
 
@@ -468,6 +468,7 @@ fn test_timing_audit_logging() {
     ));
 }
 
+#[cfg(unix)]
 #[test]
 fn test_server_audit_preprovisioned_contract() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -518,6 +519,30 @@ fn test_server_audit_preprovisioned_contract() {
     let fifo_audit = IdleSuspendServerAudit::new(fifo_path);
     assert!(fifo_audit.record_event(&record).is_err());
     assert!(fifo_audit.read_recent_records(1).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn test_server_audit_preprovisioned_contract_windows() {
+    let tmp = tempdir().unwrap();
+    let audit_path = tmp.path().join("idle-suspend-audit.jsonl");
+    let audit = IdleSuspendServerAudit::new(audit_path.clone());
+    let record = TimingAuditRecord::new(
+        "contract-test".to_string(),
+        900,
+        600,
+        1800,
+        1200,
+        "contract-001".to_string(),
+        TimingAuditResult::Committed,
+    )
+    .unwrap();
+
+    assert!(audit.record_event(&record).is_err());
+
+    fs::write(&audit_path, b"operator-bytes\n").unwrap();
+    audit.record_event(&record).unwrap();
+    assert_eq!(fs::read(&audit_path).unwrap()[..15], b"operator-bytes\n"[..]);
 }
 
 #[test]
@@ -1288,7 +1313,11 @@ fn test_helper_audit_record_and_fail_closed() {
     }
 
     // Fail-closed test on invalid directory path
-    let bad_audit = HelperAudit::new("/nonexistent_forbidden_dir/audit.log", 10).unwrap();
+    #[cfg(unix)]
+    let forbidden_path = "/nonexistent_forbidden_dir/audit.log";
+    #[cfg(windows)]
+    let forbidden_path = "Z:\\nonexistent_forbidden_drive\\audit.log";
+    let bad_audit = HelperAudit::new(forbidden_path, 10).unwrap();
     let rec = HelperAuditRecord::new_intent("tx-fail", 600, 1, 0);
     assert!(bad_audit.record(&rec).is_err());
 }
@@ -1350,6 +1379,7 @@ fn test_action_backend_fake_and_sysfs() {
     assert!(written_epoch >= now + 290 && written_epoch <= now + 310);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_helper_server_client_ipc_success_and_audit() {
     let tmp = tempdir().unwrap();
@@ -1422,6 +1452,7 @@ async fn test_helper_server_client_ipc_success_and_audit() {
     server_handle.abort();
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_helper_server_client_inhibitor_and_deduplication() {
     let tmp = tempdir().unwrap();
@@ -1493,6 +1524,7 @@ async fn test_helper_server_client_inhibitor_and_deduplication() {
     server_handle.abort();
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_helper_server_peer_auth_rejection() {
     let tmp = tempdir().unwrap();
@@ -1640,6 +1672,7 @@ fn test_manager_disposal_and_shutdown_gates() {
     ));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_helper_server_malformed_and_oversized_frame_rejection() {
     let tmp = tempdir().unwrap();
@@ -1679,6 +1712,7 @@ async fn test_helper_server_malformed_and_oversized_frame_rejection() {
     server_handle.abort();
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_helper_server_audit_failure_fails_closed() {
     let tmp = tempdir().unwrap();
@@ -1919,6 +1953,7 @@ fn test_preflight_rtc_exclusive_ownership_and_busy_alarm() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_helper_server_indefinite_sleep_execution_and_audit() {
     let tmp = tempdir().unwrap();
@@ -1981,6 +2016,7 @@ async fn test_helper_server_indefinite_sleep_execution_and_audit() {
     assert!(records[4].is_indefinite_sleep());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_helper_server_busy_alarm_and_rtc_failure_suppresses_suspend() {
     let tmp = tempdir().unwrap();
@@ -2258,6 +2294,7 @@ fn test_helper_audit_prune_exclusive_creation_and_symlink_safety() {
     assert!(entries.is_empty(), "No prune temporary files must leak");
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_helper_server_preflight_inhibitor_milestone_and_suppression() {
     let tmp = tempdir().unwrap();
@@ -2335,6 +2372,7 @@ async fn test_helper_server_preflight_inhibitor_milestone_and_suppression() {
     server_handle.abort();
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_helper_server_dedupe_and_auth_milestones() {
     let tmp = tempdir().unwrap();
@@ -2936,6 +2974,7 @@ async fn tokio_wait_for(timeout: std::time::Duration, mut predicate: impl FnMut(
     predicate()
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_coordinator_agent_activity_disabled_mode_observer_only() {
     use crate::idle_suspend::activity::process::tests::MockProcessSource;
@@ -2989,6 +3028,7 @@ async fn test_coordinator_agent_activity_disabled_mode_observer_only() {
     coordinator.shutdown().await;
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_coordinator_agent_activity_clean_boot_no_auto_arm() {
     use crate::idle_suspend::activity::process::tests::MockProcessSource;
@@ -3044,6 +3084,7 @@ async fn test_coordinator_agent_activity_clean_boot_no_auto_arm() {
     coordinator.shutdown().await;
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_coordinator_agent_activity_countdown_and_final_claim() {
     use crate::idle_suspend::activity::process::tests::MockProcessSource;
@@ -3137,6 +3178,7 @@ async fn test_coordinator_agent_activity_countdown_and_final_claim() {
     let _ = pty_manager.kill(id);
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_coordinator_agent_activity_invalidation_resets_countdown() {
     use crate::idle_suspend::activity::process::tests::MockProcessSource;
@@ -3234,6 +3276,7 @@ async fn test_coordinator_agent_activity_invalidation_resets_countdown() {
     let _ = pty_manager.kill(id);
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_coordinator_agent_activity_spent_epoch_latch() {
     use crate::idle_suspend::activity::process::tests::MockProcessSource;
@@ -3328,6 +3371,7 @@ async fn test_coordinator_agent_activity_spent_epoch_latch() {
     let _ = pty_manager.kill(id);
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_coordinator_agent_activity_shutdown() {
     use crate::idle_suspend::activity::process::tests::MockProcessSource;
@@ -3869,17 +3913,18 @@ fn event_validation_reason_subsets_and_bounds() {
 }
 
 fn setup_trusted_diagnostics_dir(tmp: &tempfile::TempDir) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let diag_dir = tmp.path().join("diagnostics");
     fs::create_dir(&diag_dir).unwrap();
-    fs::set_permissions(&diag_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&diag_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
     diag_dir.join("idle-suspend-events-v1.jsonl")
 }
 
 #[test]
 fn event_writer_file_mode_and_sync() {
-    use std::os::unix::fs::PermissionsExt;
-
     let tmp = tempdir().unwrap();
     let event_path = setup_trusted_diagnostics_dir(&tmp);
     let identity = make_test_identity();
@@ -3918,9 +3963,12 @@ fn event_writer_file_mode_and_sync() {
     assert_eq!(e2.producer_sequence, 2);
 
     // Verify file mode 0600 on disk
-    let meta = fs::metadata(&event_path).unwrap();
-    assert_eq!(meta.permissions().mode() & 0o7777, 0o600);
-
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = fs::metadata(&event_path).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o7777, 0o600);
+    }
     // Read lines back and verify deserialization
     let content = fs::read_to_string(&event_path).unwrap();
     let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -3932,6 +3980,7 @@ fn event_writer_file_mode_and_sync() {
     assert_eq!(parsed2, e2);
 }
 
+#[cfg(unix)]
 #[test]
 fn event_writer_sequence_gap_on_failure() {
     use std::os::unix::fs::PermissionsExt;
@@ -4034,6 +4083,7 @@ fn event_writer_overflow_and_permanent_disable() {
     assert!(matches!(err2, Err(EventWriteError::Disabled)));
 }
 
+#[cfg(unix)]
 #[test]
 fn event_writer_security_checks() {
     use std::os::unix::fs::PermissionsExt;
@@ -4593,6 +4643,7 @@ async fn test_coordinator_events_manual_force_suspend_active_fleet_rejection() {
     coordinator.shutdown().await;
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_coordinator_events_agent_activity_measurement_availability_transitions() {
     use crate::idle_suspend::activity::process::tests::MockProcessSource;

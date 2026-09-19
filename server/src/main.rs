@@ -370,6 +370,7 @@ async fn main() -> anyhow::Result<()> {
     // In Phase 03, resolve executor: enroll SystemdIdleSuspendExecutor with privileged helper socket path.
     // SystemdIdleSuspendExecutor dynamically checks socket presence and health per-request,
     // avoiding permanent latching if the helper daemon starts after the API server.
+    #[cfg(target_os = "linux")]
     let idle_suspend_executor: Arc<dyn dam_hopper_server::idle_suspend::IdleSuspendExecutor> = {
         let socket_path = std::env::var("DAM_HOPPER_IDLE_SUSPEND_SOCKET")
             .map(PathBuf::from)
@@ -381,6 +382,11 @@ async fn main() -> anyhow::Result<()> {
         );
         Arc::new(dam_hopper_server::idle_suspend::SystemdIdleSuspendExecutor::new(&socket_path))
     };
+    #[cfg(windows)]
+    let idle_suspend_executor: Arc<dyn dam_hopper_server::idle_suspend::IdleSuspendExecutor> =
+        Arc::new(dam_hopper_server::idle_suspend::UnavailableExecutor::new(
+            "Idle suspend helper and systemd suspend are only supported on Linux",
+        ));
     state.start_idle_suspend_coordinator(idle_suspend_executor).await;
 
     let host_resource_monitor_shutdown = state.host_resource_monitor.clone();
@@ -425,7 +431,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     let shutdown_signal = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -533,7 +539,7 @@ fn write_token(path: &std::path::Path, token: &str) -> anyhow::Result<()> {
         file.write_all(token.as_bytes())?;
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
         std::fs::write(path, token)?;
     }

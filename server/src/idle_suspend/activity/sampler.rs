@@ -5,30 +5,37 @@
 //! and within samples using a dedicated prior-accepted-end map, and emits verified observation
 //! results and opaque final admission tickets.
 
+#[cfg(target_os = "linux")]
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(target_os = "linux")]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
 use parking_lot::{Condvar, Mutex};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+#[cfg(target_os = "linux")]
 use crate::idle_suspend::activity::process::{
     LinuxProcSource, ProcessDiscovery, ProcessSource,
 };
+#[cfg(target_os = "linux")]
 use crate::idle_suspend::activity::tcp::{
     LinuxSocketDiagnostics, NetworkChange, SocketDiagnosticsSource, TcpObserver,
 };
+#[cfg(target_os = "linux")]
 use crate::idle_suspend::activity::{
-    ActivityUnavailable, ActivityUnavailableReason, FailureContext,
-    ProcessChange, MAX_MANAGED_ROOTS_LIMIT,
+    ActivityUnavailable, MAX_MANAGED_ROOTS_LIMIT, ProcessChange,
 };
+use crate::idle_suspend::activity::{ActivityUnavailableReason, FailureContext};
 use crate::idle_suspend::status::{ActivityMeasurementState, ActivityObservationReason};
 use crate::idle_suspend::policy::{AgentExecutableSet, IdleSuspendAutomaticPolicy};
-use crate::pty::activity::{
-    ProcessIdentity, TerminalIdentity, SATURATED_COUNTER_SENTINEL,
-};
+#[cfg(target_os = "linux")]
+use crate::pty::activity::SATURATED_COUNTER_SENTINEL;
+use crate::pty::activity::{ProcessIdentity, TerminalIdentity};
 use crate::pty::manager::PtySessionManager;
 
 // ---------------------------------------------------------------------------
@@ -245,11 +252,13 @@ pub(crate) struct ActivitySamplerResult {
 // Worker Mailbox and Cooperative Scheduling
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "linux")]
 struct SamplerMailbox {
     pending: Option<SampleRequest>,
     shutdown: bool,
 }
 
+#[cfg(target_os = "linux")]
 struct SharedState {
     mailbox: Mutex<SamplerMailbox>,
     condvar: Condvar,
@@ -260,6 +269,7 @@ struct SharedState {
 // Transactional sampler worker
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "linux")]
 struct Worker<P: Send + 'static, T: Send + 'static> {
     shared: Arc<SharedState>,
     pty_manager: Arc<PtySessionManager>,
@@ -276,6 +286,7 @@ struct Worker<P: Send + 'static, T: Send + 'static> {
     result_tx: mpsc::Sender<ActivitySamplerResult>,
 }
 
+#[cfg(target_os = "linux")]
 impl<P: ProcessSource + Send + 'static, T: SocketDiagnosticsSource + Send + 'static> Worker<P, T> {
     fn run(mut self) {
         loop {
@@ -675,11 +686,13 @@ impl<P: ProcessSource + Send + 'static, T: SocketDiagnosticsSource + Send + 'sta
 // ---------------------------------------------------------------------------
 
 /// Thread handle and control interface for the singleton activity sampler worker.
+#[cfg(target_os = "linux")]
 pub(crate) struct ActivitySampler {
     shared: Arc<SharedState>,
     worker_join: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
+#[cfg(target_os = "linux")]
 impl ActivitySampler {
     /// Create and launch a production sampler using Linux procfs and socket diagnostics.
     pub(crate) fn new(
@@ -803,13 +816,82 @@ impl ActivitySampler {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for ActivitySampler {
     fn drop(&mut self) {
         self.shutdown_and_join();
     }
 }
 
-#[cfg(test)]
+#[cfg(windows)]
+pub(crate) struct ActivitySampler {
+    pty_manager: Arc<PtySessionManager>,
+    result_tx: mpsc::Sender<ActivitySamplerResult>,
+    observation_sequence: AtomicU64,
+}
+
+#[cfg(windows)]
+impl ActivitySampler {
+    pub(crate) fn new(
+        pty_manager: Arc<PtySessionManager>,
+        _agent_executables: Arc<AgentExecutableSet>,
+        result_tx: mpsc::Sender<ActivitySamplerResult>,
+    ) -> Self {
+        Self {
+            pty_manager,
+            result_tx,
+            observation_sequence: AtomicU64::new(1),
+        }
+    }
+
+    fn send_unavailable(&self, req: SampleRequest) -> bool {
+        let snapshot = self.pty_manager.capture_activity_snapshot();
+        let seq = self.observation_sequence.fetch_add(1, Ordering::Relaxed);
+        let observation = ActivityObservation {
+            observation_sequence: seq,
+            completed_at: Instant::now(),
+            measurement_state: ActivityMeasurementState::Unavailable,
+            reason: Some(ActivityObservationReason::UnsupportedTransport),
+            delta: ActivityDelta::Unchanged,
+            fleet_generation: snapshot.fleet.generation,
+            input_revision: snapshot.input_revision,
+            output_checkpoints: Vec::new(),
+            recognized_agent_count: None,
+            monitored_terminal_count: None,
+            last_qualifying_activity_at: None,
+            activity_revision: req.activity_revision,
+            epoch_activity_revision: req.epoch_activity_revision,
+            failure_context: None,
+            failure_reason: Some(ActivityUnavailableReason::UnsupportedTransport),
+        };
+        let result = ActivitySamplerResult {
+            request: req,
+            observation,
+            ticket: None,
+        };
+        let _ = self.result_tx.try_send(result);
+        true
+    }
+
+    pub(crate) fn try_send_scheduled(&self, req: SampleRequest) -> bool {
+        self.send_unavailable(req)
+    }
+
+    pub(crate) fn send_final(&self, req: SampleRequest) -> bool {
+        self.send_unavailable(req)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn send_recovery(&self, req: SampleRequest) -> bool {
+        self.send_unavailable(req)
+    }
+
+    pub(crate) fn cancel_current(&self) {}
+
+    pub(crate) fn shutdown_and_join(&self) {}
+}
+
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
@@ -1270,5 +1352,40 @@ pub(crate) mod tests {
 
         // Shutdown must join cleanly without deadlock
         sampler.shutdown_and_join();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests_windows {
+    use super::*;
+    use crate::pty::NoopEventSink;
+
+    #[tokio::test]
+    async fn test_windows_sampler_emits_unavailable() {
+        let pty_manager = Arc::new(PtySessionManager::new(Arc::new(NoopEventSink)));
+        let agent_set = Arc::new(AgentExecutableSet::from_strings(&["codex-agent".to_string()]).unwrap());
+        let (tx, mut rx) = mpsc::channel(16);
+        let sampler = ActivitySampler::new(pty_manager, agent_set, tx);
+
+        let req = SampleRequest::new(
+            1,
+            SampleKind::Scheduled,
+            1,
+            1,
+            1,
+            Instant::now() + Duration::from_secs(5),
+        );
+        assert!(sampler.try_send_scheduled(req));
+
+        let res = rx.recv().await.expect("result delivered");
+        assert_eq!(
+            res.observation.measurement_state,
+            ActivityMeasurementState::Unavailable
+        );
+        assert_eq!(
+            res.observation.reason,
+            Some(ActivityObservationReason::UnsupportedTransport)
+        );
+        assert!(res.ticket.is_none());
     }
 }

@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Tests for platform profile checks, origin validation, and host configuration persistence.
 
 use dam_hopper_server::linux_release::*;

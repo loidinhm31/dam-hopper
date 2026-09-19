@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use common::format2_fixtures::create_format2_fixture;

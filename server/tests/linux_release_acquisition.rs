@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Tests for release acquisition URL validation and redirect constraints.
 
 use dam_hopper_server::linux_release::acquire_client::validate_url_host;

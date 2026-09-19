@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Tests for edge cases, malformed inputs, bounds, and security invariants.
 
 mod linux_release_manifest;

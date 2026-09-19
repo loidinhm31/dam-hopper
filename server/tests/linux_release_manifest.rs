@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Integration tests for valid release manifest fixtures, round-trip parsing,
 //! and role projections.
 

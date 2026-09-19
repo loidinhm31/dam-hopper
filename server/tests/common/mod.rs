@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
+#[cfg(target_os = "linux")]
 pub mod format2_fixtures;
+#[cfg(target_os = "linux")]
 pub mod release_fixtures;
 
 use std::sync::Arc;

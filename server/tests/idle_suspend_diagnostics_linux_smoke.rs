@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Ignored read-only Linux smoke test for production idle-suspend diagnostics.
 //!
 //! Validates:

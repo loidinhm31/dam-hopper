@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Integration tests for systemd unit rendering, token allowlisting, and policy enforcement.
 
 use dam_hopper_server::linux_release::*;
