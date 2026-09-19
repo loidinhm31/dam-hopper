@@ -11,10 +11,11 @@ export const PROFILE_COLOR_PALETTES = [
   "bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/30",
 ] as const;
 
-export function hashProfileColor(seed: string): string {
+export function hashProfileColor(seed?: string | null): string {
+  const str = seed ?? "";
   let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash << 5) - hash + seed.charCodeAt(i);
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
     hash |= 0;
   }
   const index = Math.abs(hash) % PROFILE_COLOR_PALETTES.length;
@@ -32,19 +33,24 @@ export function ProfileBadge({
   profileId,
   className,
 }: ProfileBadgeProps) {
-  const seed = profileId || name;
+  const trimmedName = name?.trim();
+  if (!trimmedName) return null;
+
+  const seed = profileId || trimmedName;
   const colorClass = hashProfileColor(seed);
 
   return (
     <span
+      role="status"
+      aria-label={`Server profile: ${trimmedName}`}
       className={cn(
         "inline-flex items-center rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium tracking-wide lowercase border shrink-0",
         colorClass,
         className,
       )}
-      title={`Server profile: ${name}`}
+      title={`Server profile: ${trimmedName}`}
     >
-      {name}
+      {trimmedName}
     </span>
   );
 }
