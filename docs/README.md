@@ -100,6 +100,11 @@ search/replace.
 - Replace Next/All captures the match target and skips dirty files.
 - Fetch/pull/push retain independent target results; SSH retry does not replay
   successful targets.
+- Live tree subscriptions stay on the target's originating transport through
+  event binding, child loading, cleanup, and unsubscribe; remounts obtain a
+  fresh watch instead of reusing a retired subscription ID.
+- Desktop, compact, and terminal Explorer surfaces contain FileTree failures
+  locally so the shell and active terminals remain mounted.
 - See [Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
 
 **Terminal Continuity, Workflow, and Owner Navigation (Phase 04)** — Terminal

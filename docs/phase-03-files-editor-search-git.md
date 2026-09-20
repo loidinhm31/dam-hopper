@@ -54,6 +54,46 @@ File events update only the matching target. A create, rename, or move that
 cannot be applied safely causes a scoped refetch; it never mutates another
 profile's tree.
 
+### Transport-safe watcher lifecycle (Phase 01 follow-up, 2026-09-20)
+
+The live-tree watcher resolves ownership before it resolves transport. For a
+qualified target, `useFsSubscription` captures the target profile's current
+`ConnectionRef` and obtains that profile's transport; it never falls through
+to the ambient transport when the owner is unavailable. Only legacy,
+unqualified targets may use the ambient compatibility transport. The hook
+observes `useTransportGeneration(profileId)`, so a replacement of the target
+profile retires the old watch before binding a new generation.
+
+The transport captured when `fs:subscribe_tree` succeeds remains authoritative
+for the whole watch lifecycle. Event binding, lazy `fs:list` child loading,
+listener cleanup, and `fs:unsubscribe_tree` all use that same transport. A
+transport may expose the typed `onFsEvent` helper or the generic
+`onEvent("fs:<sub_id>", ...)` seam; neither path changes the owner. Cleanup
+removes the exact cached `{ sub_id, nodes }` payload after unsubscribe, so a
+remount cannot bind an already-retired subscription ID and must request a new
+watch. Abort after a subscription response also unsubscribes that returned ID
+before rejecting.
+
+The defensive `IdleTransport` implements the filesystem capability surface so
+setup/offline screens remain callable: event registration and unsubscribe are
+safe no-ops, while tree subscription and filesystem mutation reject with
+`Error("Server profile required")`. This is a fail-closed compatibility seam,
+not a successful empty-tree response or a route to another profile.
+
+`WorkspacePage` contains each desktop IDE, compact IDE, and terminal floating
+Explorer in its own target-keyed `ErrorBoundary`, with the existing `Suspense`
+fallback inside the boundary. A FileTree render/effect failure therefore
+replaces only that Explorer region; the workspace shell, editor, and mounted
+terminals remain available. See [Frontend Components](./frontend-components.md)
+for the component-level boundary contract.
+
+The connection registry also compares the disconnecting entry's transport
+identity with the actual ambient singleton before replacing ambient state.
+Disconnecting a non-ambient or failed profile leaves the healthy ambient
+transport and generation unchanged; disconnecting the true ambient owner
+demotes the compatibility slot to `IdleTransport`. The WebSocket wire
+messages and backend subscription protocol remain unchanged.
+
 ## Editor and previews
 
 `editor.ts` qualifies file and diff tab keys with profile, project, worktree

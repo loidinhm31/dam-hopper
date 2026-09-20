@@ -43,9 +43,22 @@ export class IdleTransport implements Transport {
   onTerminalBuffer(): () => void {
     return noopUnsubscribe();
   }
-
   onStatusChange(cb: (status: WsStatus) => void): () => void {
     cb("disconnected");
     return noopUnsubscribe();
+  }
+
+  onFsEvent(): () => void {
+    return noopUnsubscribe();
+  }
+
+  fsSubscribeTree(): Promise<{ sub_id: number; nodes: [] }> {
+    return Promise.reject(new Error("Server profile required"));
+  }
+
+  fsUnsubscribeTree(): void {}
+
+  fsOp(): Promise<unknown> {
+    return Promise.reject(new Error("Server profile required"));
   }
 }
