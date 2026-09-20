@@ -1,4 +1,15 @@
 # 2026-09-21
+- **Windows release asset and bootstrap installer — Phase 01 complete
+  (2026-09-21).** Added profile-aware Linux/Windows/all release gates, the
+  exact two-asset Windows contract, bounded four-member ZIP inspection,
+  deterministic Windows ZIP packaging, package scripts, and a package-twice
+  fixture harness. Focused asset-gate coverage passed **23/23 assertions**;
+  deterministic package-twice and Node release-script syntax verification
+  passed; code review approved **9.5/10** with no critical issues. Phase 02
+  PowerShell installer and harness is next. See the [Phase 01 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-01-asset-schema-and-packaging.md),
+  [code review](../plans/reports/code-review-260921-0122-phase01-windows-release-asset-packaging.md),
+  and [roadmap](./project-roadmap.md).
+
 - **Fix search input focus loss during global search typing (2026-09-21).**
   Resolved defect where typing in Global Search (`Ctrl+Shift+F`) caused the search
   input to lose focus on each character entry. Switched `WorkspacePage` search store

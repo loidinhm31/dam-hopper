@@ -1,13 +1,12 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-20 from a temporary Repomix v0.2.26 XML compaction
-(output removed after generation);
-2,084 files, 4,721,410 tokens, 19,827,773 characters; five security-flagged
-files excluded.
+**Generated:** 2026-09-21 from `repomix-output.xml` (Repomix v0.2.26).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
-security scanning are not represented in full.
+security scanning are not represented in full. Release-source entries in the
+compaction include the Windows packager, profile-aware asset checker, package
+scripts, and Windows packaging harnesses.
 
 ## Repository shape
 
@@ -703,6 +702,21 @@ release tooling refuses unsafe path ownership or symlink substitutions rather
 than repairing them. The helper remains root-owned and uses a restricted Unix
 socket with peer credentials.
 
+### Phase 01 Windows direct-server release assets
+
+`deploy/release/build-windows-release-archive.mjs` emits a deterministic
+`dam-hopper-vX.Y.Z-windows-x86_64.zip` containing exactly
+`dam-hopper-server.exe`, `dam-hopper.example.toml`, `LICENSE`, and `README.md`.
+The Windows publication set adds exactly `dam-hopper-install.ps1`, for two
+assets total. `check-release-assets.mjs` defaults to Linux and supports
+`--profile windows` or `--profile all`; the latter requires the exact six-asset
+Linux+Windows union. ZIP structure/CRC/EOCD and PowerShell syntax are checked
+without executing the installer. The package-twice PowerShell harness proves
+same-epoch byte reproducibility and changed-epoch digest variation. This is a
+direct-server package, not a systemd or Manifest v2 release. See
+[Windows Release Asset Packaging](./windows-release-packaging.md).
+
+
 ### Phase 00 merge boundary (2026-09-14)
 
 The merge reconciliation kept refusal-based descriptor provisioning and
@@ -801,6 +815,8 @@ material remain bounded, non-persistent capabilities.
 
 ## Documentation map
 
+- [Windows Release Asset Packaging](./windows-release-packaging.md) —
+  direct-server ZIP, exact profile asset sets, package scripts, and gates.
 - [System Architecture](./system-architecture.md) — live data flow and
   security boundaries, including completed Phase 07 media/encryption and
   Phase 08 native-scope ownership paths.

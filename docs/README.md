@@ -52,6 +52,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, Phase 06 diagnostics, helper service lifecycle, activation, rollback, and recovery
 - **[Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md)** — Canonical API config/audit state, copy-once legacy migration, and descriptor-relative refusal boundaries
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
+- **[Windows Release Asset Packaging](./windows-release-packaging.md)** — Phase 01 direct-server archive, two-asset Windows gate, six-asset combined profile, and focused verification commands
 - Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
 
 Historical implementation plans are not generally indexed here; the active
