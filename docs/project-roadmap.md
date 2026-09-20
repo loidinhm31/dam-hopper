@@ -4,11 +4,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Multi-profile Host Resources watch (2026-09-20)
 
-- **Plan status: IN PROGRESS (2/4 phases; 50%).** Phases 01–02 are complete; Phases 03–04 remain pending.
+- **Plan status: IN PROGRESS (3/4 phases; 75%).** Phases 01–03 are complete; Phase 04 remains pending.
 - **Phase 01 — Multi-profile state and hooks — DONE (2026-09-20; 100%; 5/5h):** Delivered owner-safe automatic watch scope, generation-qualified `useQueries` snapshot polling, per-profile alert presentation, deterministic fleet aggregation, stale-generation fencing, and offline auto-connect last-known handling without connection or host-action side effects.
 - **Validation:** Focused UI tests passed **58/58** across the pure state and multi-profile hook suites; `pnpm --filter @dam-hopper/ui build` passed with no TypeScript errors. See the [Phase 01 plan](../plans/260920-0137-multi-profile-host-resources/phase-01-multi-profile-state-and-hooks.md), [code review](../plans/reports/code-review-260920-0828-multi-host-resources-phase01.md), and [parent plan](../plans/260920-0137-multi-profile-host-resources/plan.md).
 - **Phase 02 — Fleet deck and cards — DONE (2026-09-20; 100%; 4/4h):** Added the ordered semantic `HostResourceFleetDeck` and profile-scoped `HostResourceFleetCard` presentation with connected-only inspection, empty/partial states, last-known offline qualifiers, finite memory/battery facts, safe text wrapping, and display-only sample-age formatting. The deck remains read-only over the Phase 01 owner/generation view model.
-- **Next:** Phase 03 integrates the fleet deck with the host-resource popover while preserving the existing single-profile body and owner-safe drilldown.
+- **Phase 03 — Host Resource popover integration — DONE (2026-09-20; 100%; 6/6h):** Integrated the Fleet Deck and profile pills into the existing Host Resource popover while preserving single-profile behavior, owner-bound drilldown, per-profile acknowledgement, connected-only 1s metrics polling, focus restoration, disconnect/removal fallback, and selected-profile force-sleep labels. Focused popover tests passed **8/8**, the Host organism suite passed **178/178**, and the UI TypeScript build passed. See the [Phase 03 plan](../plans/260920-0137-multi-profile-host-resources/phase-03-host-resource-popover-integration.md), [code review](../plans/reports/code-review-260920-1044-phase03-host-resource-popover.md), and [parent plan](../plans/260920-0137-multi-profile-host-resources/plan.md).
+- **Next:** Phase 04 verifies watch scope, owner isolation, polling tiers, keyboard/accessibility behavior, browser interactions, and single-profile compatibility.
 
 ### Unified multi-profile workbench (2026-09-17)
 

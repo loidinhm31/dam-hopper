@@ -520,6 +520,25 @@ Implementation map:
 `packages/ui/src/components/organisms/HostResourceFleetCard.tsx`, and
 `packages/ui/src/lib/host-resource-state.ts`.
 
+#### Fleet Deck & Drilldown Popover (Phase 03, 2026-09-20)
+
+With no explicit `owner` and more than one configured profile,
+`HostResourcePopover` opens on a Fleet Deck. Its header keeps a Fleet toggle
+and profile pills; connected pills enter the shared owner-bound glance,
+diagnosis, idle-suspend, pin, and force-sleep drilldown. One configured profile
+or an explicit owner retains the existing single-profile behavior.
+
+Acceptance criteria:
+
+- [x] Fleet opening acknowledges no profile; inspection acknowledges only the
+      selected profile.
+- [x] Compatibility metrics use an isolated 1-second query only for the
+      visible connected drilldown; Fleet/closed/offline views do not poll.
+- [x] Removed or disconnected selections return to Fleet without ambient owner
+      fallback or stale diagnosis/action context.
+- [x] Profile/endpoint/host labels remain escaped text; destructive actions stay
+      bound to the selected `ConnectionRef` and existing generation fences.
+
 Phase 07 evidence confirms the monitoring-only/read-only boundary, explicit
 cgroup-v1 and non-Linux unsupported states, and pinned `linux/amd64` packaging.
 The no-tunnel shutdown result must not be generalized to active tunnel teardown.

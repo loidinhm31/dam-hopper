@@ -96,12 +96,27 @@ that owner's usage cache.
 
 ## Host resources and idle suspend
 
-The host popover resolves an effective owner in this order: explicit `owner`,
-`settingsProfileId`, then the active profile. Snapshot, alert history, legacy
-metrics, idle-suspend status, and UiConfig updates all use that owner. The
-optional `hostResourcePinnedMount` is a presentation preference stored in the
-owning server's UiConfig. A missing saved mount stays visibly missing rather
-than silently binding to another filesystem.
+In single-profile mode the host popover resolves an effective owner in this
+order: explicit `owner`, `settingsProfileId`, then the active profile.
+Snapshot, alert history, legacy metrics, idle-suspend status, and UiConfig
+updates all use that owner. When no `owner` is supplied and more than one
+profile is configured, the top-nav popover enters Fleet mode instead: it opens
+the read-only fleet deck, and a connected profile selection supplies the exact
+owner for the shared drilldown. The optional `hostResourcePinnedMount` remains
+a presentation preference in the owning server's UiConfig. A missing saved
+mount stays visibly missing rather than silently binding to another filesystem.
+
+Fleet mode is documented in the architecture's
+[Fleet Deck & Drilldown Popover](./system-architecture.md#fleet-deck--drilldown-popover-phase-03-2026-09-20)
+section: its toolbar keeps a Fleet toggle and profile pills, 1-second
+compatibility metrics run only for the visible connected drilldown, and a
+removed/disconnected selection returns to Fleet without ambient fallback.
+
+`use-host-resource-alert-presentation.ts` tracks unread incident versions both
+in a compatibility aggregate and in `byProfile`. Resource incidents are keyed
+by `incidentId`; a `resolvedAt` value (including `0`) removes only that
+incident. Presentation is capped at 50 incidents. Opening Fleet marks no
+profile read; entering a connected drilldown marks only that profile read.
 
 `use-sse.ts` installs one transport bridge per `ConnectionRef`. It validates
 `host:alertChanged` payloads, patches only the matching profile's snapshot
@@ -109,12 +124,6 @@ incident, and invalidates that owner's snapshot/history queries. It similarly
 validates `host:idleSuspendChanged` revision hints and invalidates only the
 owner's status query. Invalid evidence is ignored; REST snapshots remain the
 repair authority after reconnect or missed events.
-
-`use-host-resource-alert-presentation.ts` tracks unread incident versions both
-in a compatibility aggregate and in `byProfile`. Resource incidents are keyed
-by `incidentId`; a `resolvedAt` value (including `0`) removes only that
-incident. Presentation is capped at 50 incidents and opening the popover marks
-only the selected profile read.
 
 `HostIdleSuspendStatus` displays server state, fleet counts, timing, capability,
 measurement state, bounded warning identities, and the `agent-activity`

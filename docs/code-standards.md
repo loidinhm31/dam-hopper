@@ -1880,6 +1880,35 @@ layout/list boundary and leave scrolling to the owning popover. Focused
 component behavior belongs in `HostResourceFleetCard.test.tsx` and
 `HostResourceFleetDeck.test.tsx`; formatter and status invariants remain in
 `host-resource-state.test.ts`.
+### Host-resource Fleet Deck & Drilldown standards (Phase 03)
+
+Keep `HostResourcePopover` as the single dialog and drilldown owner:
+
+- Enter Fleet mode only when `owner === undefined` and
+  `configuredProfileCount > 1`; preserve the legacy path for one profile or
+  an explicit owner.
+- Keep `inspectedProfileId` local and non-persisted. Fleet opens on the deck;
+  a connected profile pill selects the exact `ConnectionRef` for the shared
+  drilldown. Never retarget a removed/disconnected selection through Settings
+  or the active profile.
+- Keep the header toolbar mounted in both views: a `Fleet` toggle plus
+  profile-ID-keyed pills. Connected pills are actionable; unavailable pills
+  expose status without an action. Fleet opening marks no profile read;
+  inspection marks only that profile.
+- Enable `useHostMetrics` only for the visible connected drilldown
+  (`open && isDrilldown`), preserving its 1-second cadence. Fleet, close,
+  disconnect, and removal must disable detail polling; Phase 01 snapshot
+  reconciliation remains the 15-second fleet observer.
+- On invalidation, clear diagnosis and force-sleep context before returning to
+  Fleet. Bind pin, idle-suspend, and force-sleep labels/actions to the
+  inspected entry; preserve generation and stale-action fences.
+- Reuse the existing glance/diagnosis JSX instead of duplicating a second
+  dialog body. Keep focus in the dialog when switching views and restore the
+  trigger on close/Escape.
+
+Component tests should assert user-visible mode, pressed-pill/read semantics,
+owner-specific drilldown text, polling enablement, and disconnect/removal
+fallback; do not assert Tailwind classes or hook call order.
 
 Mutation hooks invalidate the `['workflow']` root only from `onSuccess`.
 Do not perform optimistic snapshot writes in this layer. A failure must retain

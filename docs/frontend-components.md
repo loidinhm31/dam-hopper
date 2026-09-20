@@ -76,9 +76,20 @@ dispatch, and leaves server validation/backup/rollback authoritative. Usage
 summary, sessions, health, setup, and destructive operations use
 `profileQueryKey(owner, ...)`; session audit polling stops in hidden documents.
 
-The host popover resolves explicit owner → Settings target → active profile.
-Resource snapshots, incidents, compatibility metrics, idle-suspend state, and
-the optional `hostResourcePinnedMount` preference stay owner-local. The
+`HostResourcePopover` keeps explicit-owner compatibility for one configured
+profile or an explicit `owner`: snapshot, incidents, compatibility metrics,
+idle-suspend state, and `hostResourcePinnedMount` stay owner-local. With no
+`owner` and more than one configured profile, it opens in Fleet mode on
+`HostResourceFleetDeck`; a labelled toolbar provides a Fleet toggle and one
+profile pill per watched entry. Connected pills enter a profile drilldown;
+disconnected pills remain status-only.
+
+The shared drilldown binds all reads and actions to the selected
+`ConnectionRef`. Fleet opening marks no profile read; inspection marks only the
+selected profile. Compatibility metrics poll at 1 second only while the
+popover is visible on a connected drilldown; Fleet, closed, or disconnected
+views disable that query. Removal/disconnect clears the selection and returns
+to Fleet rather than falling back to Settings or the active profile. The
 transport bridge validates `host:alertChanged` and revision hints, patches only
 the matching owner's cache, and lets REST repair missed or stale events.
 Unread incident presentation is tracked per profile and keyed by `incidentId`.
@@ -86,7 +97,9 @@ The Force Machine to Sleep dialog captures endpoint, generation, fleet snapshot,
 status revision, and request ID; stale conflicts require fresh confirmation and
 ambiguous requests are not retried.
 
-See the [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md) for the source map and full contract.
+See the [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md) and the architecture's
+[Fleet Deck & Drilldown Popover](./system-architecture.md#fleet-deck--drilldown-popover-phase-03-2026-09-20)
+section for source maps and polling tiers.
 
 ## Unified-profile integration and qualification (Phase 09)
 
