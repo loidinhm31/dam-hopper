@@ -1368,6 +1368,30 @@ Next` and `Replace All` must skip dirty tabs for the same target without
   video previews use scoped ticket capabilities; never put bearer credentials
   in media URLs or load an entire large media file into a Blob.
 
+- Resolve qualified filesystem work through `captureConnection(profileId)` and
+  `getTransport(owner)`. Only an explicit unqualified compatibility caller may
+  use the ambient transport; do not catch an owner-resolution failure and
+  silently dispatch through another profile.
+- In `useFsSubscription`, retain the transport that created the subscription
+  for event binding, lazy `fs:list` calls, listener cleanup, and
+  `fsUnsubscribeTree`. Retire the exact cached subscription payload after
+  cleanup so `staleTime: Infinity` cannot keep a destroyed watch ID alive.
+- Prefer the typed `onFsEvent` capability and otherwise bind the same owner's
+  generic `onEvent("fs:<sub_id>", ...)` channel. A missing capability must
+  produce a controlled unavailable error or no-op cleanup, never an unchecked
+  `WsTransport` cast or an `is not a function` render/effect failure.
+- Keep `IdleTransport` callable and fail closed: event/unsubscribe methods are
+  no-ops; `fsSubscribeTree` and `fsOp` reject with the stable
+  `Server profile required` error. Never fabricate an empty tree or
+  subscription ID for an unavailable profile.
+- Wrap each `WorkspacePage` FileTree surface in a target-keyed local
+  `ErrorBoundary`, keeping its `Suspense` fallback inside. The boundary must
+  exclude the workspace shell, editors, and terminal hosts so Explorer failure
+  cannot tear down active terminal state.
+- In `disconnectProfile`, compare the captured entry transport with the actual
+  ambient transport before calling `reconfigureTransport`; disconnecting a
+  non-owner must not replace a healthy ambient transport or generation.
+
 The implementation map and focused contract test are maintained in
 [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
 

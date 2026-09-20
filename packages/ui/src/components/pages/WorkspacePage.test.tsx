@@ -467,7 +467,9 @@ describe("WorkspacePage", () => {
       const explorerSurface = leftTools.find((tool) => tool.id === "explorer")
         ?.content as ReactElement<{
         children: ReactElement<{
-          children: ReactElement<{ target?: unknown }>;
+          children: ReactElement<{
+            children: ReactElement<{ target?: unknown }>;
+          }>;
         }>;
       }>;
       const projectSurface = rightTools.find(
@@ -480,7 +482,8 @@ describe("WorkspacePage", () => {
 
       const searchTarget = searchSuspense.props.children.props.target;
       const explorerTarget =
-        explorerSurface.props.children.props.children.props.target;
+        explorerSurface.props.children.props.children.props.children.props
+          .target;
       const projectTarget =
         projectSurface.props.children.props.children.props.target?.target;
 
@@ -505,9 +508,12 @@ describe("WorkspacePage", () => {
       }>;
       const explorerSurface = leftTools.find((tool) => tool.id === "explorer")
         ?.content as ReactElement<{
-        children: ReactElement<{ children: ReactElement }>;
+        children: ReactElement<{
+          children: ReactElement<{ children: ReactElement }>;
+        }>;
       }>;
-      const fileTree = explorerSurface.props.children.props.children;
+      const fileTree =
+        explorerSurface.props.children.props.children.props.children;
       return fileTree.key;
     };
 
