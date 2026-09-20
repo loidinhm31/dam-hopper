@@ -182,6 +182,14 @@ export function TerminalRuntimeOutput({
           <MobileTerminalAccessoryBar
             key={activeSessionId}
             sessionId={activeSessionId}
+            profileId={
+              mountedSessions.find((s) => s.sessionId === activeSessionId)
+                ?.profileId
+            }
+            terminalRef={
+              mountedSessions.find((s) => s.sessionId === activeSessionId)
+                ?.terminalRef
+            }
             onPanelOpenChange={handleAccessoryPanelOpenChange}
           />
         ) : null}

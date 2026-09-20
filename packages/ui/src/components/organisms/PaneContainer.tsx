@@ -388,6 +388,14 @@ export const PaneContainer = memo(function PaneContainer({
           <MobileTerminalAccessoryBar
             key={node.activeSessionId}
             sessionId={node.activeSessionId}
+            profileId={
+              mountedSessions.find((s) => s.sessionId === node.activeSessionId)
+                ?.profileId
+            }
+            terminalRef={
+              mountedSessions.find((s) => s.sessionId === node.activeSessionId)
+                ?.terminalRef
+            }
             onPanelOpenChange={handleAccessoryPanelOpenChange}
           />
         ) : null}
