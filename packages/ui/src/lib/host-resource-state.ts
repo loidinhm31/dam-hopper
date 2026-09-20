@@ -8,6 +8,9 @@ import type {
   HostResourceSnapshotV1,
   ResourceAlertState,
 } from "@/api/client.js";
+import type { ServerProfile } from "@/api/server-config.js";
+import type { ConnectionRef } from "@/api/ownership.js";
+import type { ConnectionStatus } from "@/api/connections.js";
 import { formatBytes } from "@/lib/host-metrics-format.js";
 
 const ALERT_LABELS: Record<AlertState | ResourceAlertState, string> = {
@@ -507,3 +510,267 @@ function createStatusPresentation(
       : undefined,
   };
 }
+
+export type HostResourceWatchReason =
+  | "connected"
+  | "auto-connect"
+  | "connected-and-auto-connect";
+
+export interface MultiHostResourceEntry {
+  profile: ServerProfile;
+  owner: ConnectionRef;
+  connectionStatus: ConnectionStatus;
+  connected: boolean;
+  watchReason: HostResourceWatchReason;
+  snapshot?: HostResourceSnapshotV1;
+  status: HostResourceStatusPresentation;
+  unreadCount: number;
+  isLoading: boolean;
+  isFetching: boolean;
+  isError: boolean;
+  isStale: boolean;
+}
+
+export interface HostResourceFleetSummary {
+  watchedCount: number;
+  connectedCount: number;
+  attentionCount: number;
+  unavailableCount: number;
+  unreadCount: number;
+  presentation: HostResourceStatusPresentation;
+}
+
+export interface UseMultiHostResourcesResult {
+  configuredProfileCount: number;
+  entries: MultiHostResourceEntry[];
+  summary: HostResourceFleetSummary;
+}
+
+export function resolveHostResourceWatchReason(
+  connected: boolean,
+  autoConnect?: boolean,
+): HostResourceWatchReason | undefined {
+  if (connected && autoConnect) {
+    return "connected-and-auto-connect";
+  }
+  if (connected) {
+    return "connected";
+  }
+  if (autoConnect) {
+    return "auto-connect";
+  }
+  return undefined;
+}
+
+export function resolveHostResourceEntryStatus({
+  snapshot,
+  connectionStatus,
+  connected,
+  isLoading = false,
+  isFetching = false,
+  isError = false,
+  isStale = false,
+  unreadCount = 0,
+}: HostResourceStatusInput & {
+  connectionStatus: ConnectionStatus;
+  connected: boolean;
+}): HostResourceStatusPresentation {
+  if (!connected) {
+    const connLabel =
+      connectionStatus === "offline" ? "Offline" : "Disconnected";
+    if (snapshot) {
+      const { baseLabel, rank, tone } = getBaseStatus(snapshot);
+      const qualifier = `last known (${connLabel.toLowerCase()})`;
+      return createStatusPresentation(
+        `${baseLabel} · ${qualifier}`,
+        baseLabel,
+        "unavailable",
+        rank,
+        rank > 0 ? tone : "warning",
+        unreadCount,
+      );
+    }
+    return createStatusPresentation(
+      connLabel,
+      connLabel,
+      "terminal-unavailable",
+      0,
+      "warning",
+      unreadCount,
+    );
+  }
+
+  return resolveHostResourceStatus({
+    snapshot,
+    isLoading,
+    isFetching,
+    isError,
+    isStale,
+    unreadCount,
+  });
+}
+
+export function resolveHostResourceFleetSummary(
+  entries: readonly MultiHostResourceEntry[],
+): HostResourceFleetSummary {
+  const watchedCount = entries.length;
+  let connectedCount = 0;
+  let attentionCount = 0;
+  let unavailableCount = 0;
+  let unreadCount = 0;
+
+  let highestRank: 0 | 1 | 2 | 3 = 0;
+  let hasSampling = false;
+  let hasStale = false;
+  let allHealthy = entries.length > 0;
+
+  for (const entry of entries) {
+    if (entry.connected) {
+      connectedCount++;
+    }
+
+    if (entry.status.rank > 0) {
+      attentionCount++;
+      if (entry.status.rank > highestRank) {
+        highestRank = entry.status.rank;
+      }
+    }
+
+    const isEntryUnavailable =
+      !entry.connected ||
+      entry.isError ||
+      entry.status.mode === "terminal-unavailable" ||
+      entry.status.mode === "unavailable" ||
+      entry.status.mode === "refresh-error";
+
+    if (isEntryUnavailable) {
+      unavailableCount++;
+    }
+
+    if (
+      entry.isLoading ||
+      entry.isFetching ||
+      entry.status.mode === "sampling" ||
+      entry.status.mode === "background-loading"
+    ) {
+      hasSampling = true;
+    }
+
+    if (
+      entry.isStale ||
+      entry.status.mode === "stale" ||
+      entry.status.mode === "stale-refreshing"
+    ) {
+      hasStale = true;
+    }
+
+    if (
+      entry.status.rank > 0 ||
+      isEntryUnavailable ||
+      entry.status.baseLabel !== "Healthy"
+    ) {
+      allHealthy = false;
+    }
+
+    unreadCount += entry.unreadCount;
+  }
+
+  let presentation: HostResourceStatusPresentation;
+
+  if (entries.length === 0) {
+    presentation = createStatusPresentation(
+      "No watched profiles",
+      "No watched profiles",
+      "terminal-unavailable",
+      0,
+      "info",
+      0,
+    );
+  } else if (highestRank === 3) {
+    presentation = createStatusPresentation(
+      "Critical",
+      "Critical",
+      "current",
+      3,
+      "critical",
+      unreadCount,
+    );
+  } else if (highestRank === 2) {
+    presentation = createStatusPresentation(
+      "Warning",
+      "Warning",
+      "current",
+      2,
+      "warning",
+      unreadCount,
+    );
+  } else if (highestRank === 1) {
+    presentation = createStatusPresentation(
+      "Advisory",
+      "Advisory",
+      "current",
+      1,
+      "info",
+      unreadCount,
+    );
+  } else if (unavailableCount > 0) {
+    const label =
+      unavailableCount === watchedCount
+        ? "Fleet unavailable"
+        : `${unavailableCount} host${unavailableCount === 1 ? "" : "s"} unavailable`;
+    presentation = createStatusPresentation(
+      label,
+      "Unavailable",
+      "unavailable",
+      0,
+      "warning",
+      unreadCount,
+    );
+  } else if (hasSampling) {
+    presentation = createStatusPresentation(
+      "Sampling fleet",
+      "Sampling fleet",
+      "sampling",
+      0,
+      "info",
+      unreadCount,
+    );
+  } else if (hasStale) {
+    presentation = createStatusPresentation(
+      "Fleet data stale",
+      "Fleet data stale",
+      "stale",
+      0,
+      "warning",
+      unreadCount,
+    );
+  } else if (allHealthy) {
+    presentation = createStatusPresentation(
+      "Healthy",
+      "Healthy",
+      "current",
+      0,
+      "success",
+      unreadCount,
+    );
+  } else {
+    presentation = createStatusPresentation(
+      "Monitoring",
+      "Monitoring",
+      "current",
+      0,
+      "info",
+      unreadCount,
+    );
+  }
+
+  return {
+    watchedCount,
+    connectedCount,
+    attentionCount,
+    unavailableCount,
+    unreadCount,
+    presentation,
+  };
+}
+

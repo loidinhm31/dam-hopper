@@ -4043,6 +4043,62 @@ remains a compatible basic-metrics endpoint; new resource APIs are versioned
 siblings. Phase 03 moves it to the shared monitor's cached projection without
 changing its response shape.
 
+### Multi-profile host-resource hook (Phase 01)
+
+`useMultiHostResources(options?: { enabled?: boolean })` is the fleet
+read-model boundary for the host-resource popover. It returns
+`{ configuredProfileCount, entries, summary }`. `configuredProfileCount`
+includes every configured profile; `entries` and `summary` cover only the
+watched profiles. Each entry carries its `ServerProfile`, captured
+`ConnectionRef { profileId, generation }`, connection status, watch reason,
+snapshot, status presentation, unread count, and query loading/error/stale
+flags. `enabled` controls new snapshot queries without changing the configured
+profile count or watch membership.
+
+**Watch scope is `connected || autoConnect`.** A connected profile is watched
+whether or not it has startup auto-connect enabled. A disconnected profile is
+watched only when `ServerProfile.autoConnect` is true, so the UI can show the
+pending/offline host without issuing a request. Manual, disconnected profiles
+are omitted. The derived `watchReason` is one of `connected`,
+`auto-connect`, or `connected-and-auto-connect`; it is not an error state.
+
+The hook uses an owner-isolated `useQueries` architecture. It creates one query
+spec per watched profile with
+`profileQueryKey(owner, "system", "resource-snapshot")` and calls the bound
+client from that same owner. Only `enabled && connected` queries run, and
+connected queries refresh every 15 seconds. A disconnected auto-connect entry
+has no query request but may still expose a cached snapshot as last-known
+state. Query failures stay on their profile entry; one unavailable host cannot
+hide healthy peers or fail a fleet-wide request. Snapshot alerts are recorded
+in the per-profile presentation store only after the query result passes the
+owner check.
+
+Every asynchronous snapshot is generation-fenced. After the bound client
+resolves, `isCurrentConnection(owner)` must still be true; otherwise the query
+throws `ConnectionOwnerError` and cannot publish the old generation's data.
+The generation is also part of the query key, so replacement creates an
+isolated cache lineage. Alert recording repeats the current-owner check, while
+each entry retains the owner generation that produced its query state.
+Disconnects, endpoint replacement, and reconnects therefore cannot route a late
+response into a newer owner.
+
+`resolveHostResourceFleetSummary(entries)` is a pure deterministic reduction
+over the ordered entries; it does not merge host metric values or deduplicate
+endpoints. It counts watched, connected, attention (`rank > 0`), unavailable
+(disconnected, query error, or unavailable status), and unread entries. Fleet
+presentation precedence is fixed: empty, critical, warning, advisory,
+unavailable, sampling, stale, healthy, then monitoring. Critical/warning/
+advisory use the highest entry rank; availability and sampling/staleness are
+reported only when no active severity outranks them. Unread count is the sum
+of per-profile unread counts, and offline auto-connect profiles contribute
+unavailable state without fabricated incidents.
+
+The focused contracts are covered by
+`packages/ui/src/hooks/use-multi-host-resources.test.tsx` and
+`packages/ui/src/lib/host-resource-state.test.ts`: watch filtering, partial
+query failure isolation, generation fencing, alert partitioning, empty-fleet
+precedence, and deterministic counts.
+
 ### Host-resource glance panel (current UI)
 
 The top-nav popover keeps the same monitoring-only boundary and existing query

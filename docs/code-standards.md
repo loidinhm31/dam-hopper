@@ -1802,6 +1802,53 @@ function. Keyed connections own transport lifecycle per profile, and a
 replacement advances that profile's generation before stale results can update
 state. Workflow data remains memory-only, never a localStorage cache.
 
+### Host resource fleet hook standards (Phase 01)
+
+Keep host-resource fleet state split between the React boundary and pure
+domain helpers:
+
+- `hooks/use-multi-host-resources.ts` owns profile/connection subscriptions,
+  query orchestration, owner capture, and alert-presentation writes.
+- `lib/host-resource-state.ts` owns watch-reason resolution, per-entry status,
+  and fleet-summary reduction. Keep these helpers React-free and deterministic.
+- `UseMultiHostResourcesOptions` currently exposes only `enabled?: boolean`;
+  the result is `{ configuredProfileCount, entries, summary }`.
+
+The watch predicate is exactly `connected || profile.autoConnect`. Include
+connected profiles even when auto-connect is false, include disconnected
+auto-connect profiles as non-fetching entries, and omit disconnected manual
+profiles. Derive an explicit `watchReason`; do not infer watch membership from
+the active profile, route, or Settings target.
+
+Use one `useQueries` spec per watched owner. Build the key with
+`profileQueryKey(owner, "system", "resource-snapshot")`, call
+`getBoundApiClient(owner)`, and never share a request or client across profile
+entries. Enable a query only when the hook is enabled and that entry is
+connected; preserve per-entry loading, error, stale, and cached last-known
+state so a failing host cannot gate healthy peers. The connected refresh
+interval is 15 seconds.
+
+Generation is an admission fence, not display metadata. After every awaited
+snapshot request, require `isCurrentConnection(owner)`; reject stale results
+with `ConnectionOwnerError`. Repeat the check before recording snapshot alerts;
+derive entry state only from the owner/generation-keyed query result. Since the
+generation is in `profileQueryKey`, a replacement starts a separate cache
+lineage. Do not fallback to the active profile or republish a late response
+under a newer generation.
+
+Fleet aggregation must call
+`resolveHostResourceFleetSummary(entries)` rather than duplicating counts in
+components. The reducer counts watched/connected/attention/unavailable/
+unread entries, preserves per-profile boundaries, and applies stable
+presentation precedence (severity before unavailable, sampling, stale, and
+healthy). Unavailable auto-connect entries count as unavailable but do not
+create synthetic incidents or zero-valued metrics.
+
+Focused tests must cover watch filtering, per-owner query isolation, partial
+failure, generation replacement with a late response, alert partitioning, and
+empty/severity/unavailable fleet-summary precedence in
+`use-multi-host-resources.test.tsx` and `host-resource-state.test.ts`.
+
 Mutation hooks invalidate the `['workflow']` root only from `onSuccess`.
 Do not perform optimistic snapshot writes in this layer. A failure must retain
 the authoritative cache and expose the typed mutation error so the component

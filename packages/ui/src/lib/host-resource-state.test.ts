@@ -15,6 +15,10 @@ import {
   resolveHostResourceStorage,
   resolveHostResourceStatus,
   severityClass,
+  resolveHostResourceWatchReason,
+  resolveHostResourceEntryStatus,
+  resolveHostResourceFleetSummary,
+  type MultiHostResourceEntry,
 } from "./host-resource-state.js";
 
 const makeSnapshot = (
@@ -498,5 +502,149 @@ describe("host resource state formatting", () => {
     expect(
       resolveHostResourceStorage({ ...metrics, disks: [] }, "/"),
     ).toMatchObject({ state: "missing", savedMount: "/" });
+  });
+});
+describe("multi-host resource watch reasons and fleet summary", () => {
+  it("resolves watch reasons based on connection and autoConnect intent", () => {
+    expect(resolveHostResourceWatchReason(true, true)).toBe("connected-and-auto-connect");
+    expect(resolveHostResourceWatchReason(true, false)).toBe("connected");
+    expect(resolveHostResourceWatchReason(true, undefined)).toBe("connected");
+    expect(resolveHostResourceWatchReason(false, true)).toBe("auto-connect");
+    expect(resolveHostResourceWatchReason(false, false)).toBeUndefined();
+    expect(resolveHostResourceWatchReason(false, undefined)).toBeUndefined();
+  });
+
+  it("resolves disconnected entry status qualifying cached data as last known", () => {
+    const snap = makeSnapshot({
+      alert: makeAlert("warning"),
+    });
+
+    const withCache = resolveHostResourceEntryStatus({
+      snapshot: snap,
+      connectionStatus: "disconnected",
+      connected: false,
+      unreadCount: 2,
+    });
+    expect(withCache.mode).toBe("unavailable");
+    expect(withCache.label).toContain("last known (disconnected)");
+    expect(withCache.rank).toBe(2);
+    expect(withCache.badgeText).toBe("2");
+    expect(withCache.badgeLabel).toBe("2 unread host incidents");
+
+    const offlineNoCache = resolveHostResourceEntryStatus({
+      snapshot: undefined,
+      connectionStatus: "offline",
+      connected: false,
+      unreadCount: 0,
+    });
+    expect(offlineNoCache.mode).toBe("terminal-unavailable");
+    expect(offlineNoCache.label).toBe("Offline");
+    expect(offlineNoCache.rank).toBe(0);
+  });
+
+  it("produces deterministic fleet summary for empty fleet", () => {
+    const summary = resolveHostResourceFleetSummary([]);
+    expect(summary.watchedCount).toBe(0);
+    expect(summary.connectedCount).toBe(0);
+    expect(summary.attentionCount).toBe(0);
+    expect(summary.unavailableCount).toBe(0);
+    expect(summary.unreadCount).toBe(0);
+    expect(summary.presentation.label).toBe("No watched profiles");
+    expect(summary.presentation.mode).toBe("terminal-unavailable");
+  });
+
+  it("aggregates fleet with active critical, warning, and unread counts", () => {
+    const entry1: MultiHostResourceEntry = {
+      profile: { id: "p1", name: "Host 1", url: "http://h1", authType: "token", createdAt: 0 },
+      owner: { profileId: "p1", generation: 1 },
+      connectionStatus: "connected",
+      connected: true,
+      watchReason: "connected",
+      status: resolveHostResourceStatus({
+        snapshot: makeSnapshot({ alert: makeAlert("critical"), currentAlerts: [] }),
+        unreadCount: 3,
+      }),
+      unreadCount: 3,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isStale: false,
+    };
+
+    const entry2: MultiHostResourceEntry = {
+      profile: { id: "p2", name: "Host 2", url: "http://h2", authType: "token", createdAt: 0 },
+      owner: { profileId: "p2", generation: 1 },
+      connectionStatus: "connected",
+      connected: true,
+      watchReason: "connected",
+      status: resolveHostResourceStatus({
+        snapshot: makeSnapshot({ alert: makeAlert("warning"), currentAlerts: [] }),
+        unreadCount: 1,
+      }),
+      unreadCount: 1,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isStale: false,
+    };
+
+    const summary = resolveHostResourceFleetSummary([entry1, entry2]);
+    expect(summary.watchedCount).toBe(2);
+    expect(summary.connectedCount).toBe(2);
+    expect(summary.attentionCount).toBe(2);
+    expect(summary.unavailableCount).toBe(0);
+    expect(summary.unreadCount).toBe(4);
+    expect(summary.presentation.rank).toBe(3);
+    expect(summary.presentation.tone).toBe("critical");
+    expect(summary.presentation.badgeText).toBe("4");
+  });
+
+  it("counts offline auto-connect profiles as unavailable without creating artificial incidents", () => {
+    const healthyEntry: MultiHostResourceEntry = {
+      profile: { id: "p1", name: "Host 1", url: "http://h1", authType: "token", createdAt: 0 },
+      owner: { profileId: "p1", generation: 1 },
+      connectionStatus: "connected",
+      connected: true,
+      watchReason: "connected",
+      status: resolveHostResourceStatus({
+        snapshot: makeSnapshot({
+          alert: { state: "healthy" } as HostResourceSnapshotV1["alert"],
+          currentAlerts: [],
+        }),
+        unreadCount: 0,
+      }),
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isStale: false,
+    };
+
+    const offlineEntry: MultiHostResourceEntry = {
+      profile: { id: "p2", name: "Host 2", url: "http://h2", authType: "token", createdAt: 0, autoConnect: true },
+      owner: { profileId: "p2", generation: 1 },
+      connectionStatus: "disconnected",
+      connected: false,
+      watchReason: "auto-connect",
+      status: resolveHostResourceEntryStatus({
+        snapshot: undefined,
+        connectionStatus: "disconnected",
+        connected: false,
+        unreadCount: 0,
+      }),
+      unreadCount: 0,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isStale: false,
+    };
+
+    const summary = resolveHostResourceFleetSummary([healthyEntry, offlineEntry]);
+    expect(summary.watchedCount).toBe(2);
+    expect(summary.connectedCount).toBe(1);
+    expect(summary.attentionCount).toBe(0);
+    expect(summary.unavailableCount).toBe(1);
+    expect(summary.presentation.rank).toBe(0);
+    expect(summary.presentation.tone).toBe("warning");
+    expect(summary.presentation.label).toBe("1 host unavailable");
   });
 });
