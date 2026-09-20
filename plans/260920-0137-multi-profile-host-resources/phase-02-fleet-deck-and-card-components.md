@@ -13,10 +13,11 @@
 
 - Date: 2026-09-20
 - Priority: P2
-- Plan status: Pending
-- Implementation status: Not started
-- Review status: Not started
-- Effort: 4h
+- Plan status: Complete / DONE (2026-09-20)
+- Implementation status: Complete / DONE (2026-09-20)
+- Review status: Complete / DONE (2026-09-20)
+- Progress: 100%
+- Completion timestamp: 2026-09-20
 - Goal: render a scan-first Fleet Deck with small, accessible profile cards and no additional data ownership.
 
 ## Key Insights
@@ -112,13 +113,13 @@ Keep status labels deterministic; no relative-age interval inside each card. Age
 
 ## Todo list
 
-- [ ] Create pure `HostResourceFleetCard`.
-- [ ] Render owner, connection, health, unread, host identity, age, and bounded optional facts.
-- [ ] Make only connected cards inspectable with a 44px native button.
-- [ ] Create ordered semantic `HostResourceFleetDeck`.
-- [ ] Add empty and partial-failure presentation.
-- [ ] Preserve long text, focus visibility, and non-color state cues.
-- [ ] Avoid component-local queries, stores, timers, and mutations.
+- [x] Create pure `HostResourceFleetCard`.
+- [x] Render owner, connection, health, unread, host identity, age, and bounded optional facts.
+- [x] Make only connected cards inspectable with a 44px native button.
+- [x] Create ordered semantic `HostResourceFleetDeck`.
+- [x] Add empty and partial-failure presentation.
+- [x] Preserve long text, focus visibility, and non-color state cues.
+- [x] Avoid component-local queries, stores, timers, and mutations.
 
 ## Success Criteria
 
@@ -150,12 +151,12 @@ Keep status labels deterministic; no relative-age interval inside each card. Age
 
 ## Side-Effect Review Checklist
 
-- [ ] Components import no API client, query hook, Zustand store, connection action, or browser storage.
-- [ ] Card click changes only parent inspection selection.
-- [ ] No timer per card and no separate scroll container.
-- [ ] No metric average/sum or cross-host comparison claim.
-- [ ] No action rendered for a stale/disconnected owner.
-- [ ] Strings remain escaped text and long values cannot expand page width.
+- [x] Components import no API client, query hook, Zustand store, connection action, or browser storage.
+- [x] Card click changes only parent inspection selection.
+- [x] No timer per card and no separate scroll container.
+- [x] No metric average/sum or cross-host comparison claim.
+- [x] No action rendered for a stale/disconnected owner.
+- [x] Strings remain escaped text and long values cannot expand page width.
 
 ## Next steps
 

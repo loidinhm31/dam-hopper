@@ -4099,6 +4099,41 @@ The focused contracts are covered by
 query failure isolation, generation fencing, alert partitioning, empty-fleet
 precedence, and deterministic counts.
 
+### Multi-profile host-resource fleet deck (Phase 02)
+
+The Phase 02 deck is a presentational layer over the Phase 01 fleet read model:
+
+```
+useMultiHostResources
+  -> MultiHostResourceEntry[]
+  -> HostResourceFleetDeck
+       -> HostResourceFleetCard
+       -> onInspect(profileId)
+```
+
+`HostResourceFleetDeck` receives `entries`, an optional `selectedProfileId`,
+and `onInspect(profileId)`. It preserves configured entry order, renders a
+labelled section and semantic list, and exposes an explicit empty state when
+no connected or auto-connect profiles are watched. It owns no query, store,
+connection, polling, sorting, aggregation, or mutation behavior.
+
+Each `HostResourceFleetCard` renders one profile as an article. It shows the
+profile name/endpoint, connection and watch state, status icon/label, unread
+count, known host identity, and sample age, plus finite deep-snapshot memory
+and battery facts when available. Connected cards wrap the content in one
+full-width inspection button with a 44px minimum target and pass only the
+profile ID to the parent. Non-connected cards are non-interactive and explain
+that live inspection requires a connection; cached values are qualified as
+**Last known**. Endpoint, profile, hostname, and OS strings remain text with
+overflow-safe wrapping.
+
+`formatSampleAge` is a React-free display formatter used by fleet cards. It
+omits missing, non-finite, negative, and zero timestamps and rounds valid ages
+to `s`, `m`, `h`, or `d`. It has no timer or sampling authority. Card status
+remains per profile; the deck never averages, sums, or compares host metrics.
+Component contracts are covered by `HostResourceFleetCard.test.tsx` and
+`HostResourceFleetDeck.test.tsx`.
+
 ### Host-resource glance panel (current UI)
 
 The top-nav popover keeps the same monitoring-only boundary and existing query

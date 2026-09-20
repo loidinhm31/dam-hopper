@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,060
-files, 4,632,244 tokens, 19,287,888 characters; five security-flagged files
+**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,067
+files, 4,644,538 tokens, 19,339,599 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -72,6 +72,27 @@ and severity/unavailable/sampling/stale precedence without summing or
 deduplicating host metrics. Focused contracts live in
 `packages/ui/src/hooks/use-multi-host-resources.test.tsx` and
 `packages/ui/src/lib/host-resource-state.test.ts`.
+
+### Phase 02 multi-profile host-resource fleet deck and cards
+
+`HostResourceFleetDeck` and `HostResourceFleetCard` are pure React
+presentation boundaries over `MultiHostResourceEntry[]`. The deck preserves
+configured order, renders a labelled semantic list, reports watched count, and
+shows an explicit empty state without reading stores, APIs, or queries.
+
+Cards keep each profile distinct by ID, show connection/watch state, status,
+unread incidents, host identity, and sample age, and include finite deep-memory
+and battery facts only when available. Connected cards expose one 44px
+inspection button that returns only the profile ID; disconnected auto-connect
+entries remain non-interactive and qualify cached data as last known. Long
+profile/endpoint/host strings wrap as text, and no metric is averaged or
+summed across hosts.
+
+`formatSampleAge` rejects invalid or zero timestamps and rounds valid ages to
+seconds/minutes/hours/days without a per-card timer. Focused component
+contracts live in `HostResourceFleetCard.test.tsx` and
+`HostResourceFleetDeck.test.tsx`; formatter/state contracts remain in
+`host-resource-state.test.ts`.
 
 ## Unified-profile files, editor, search, and Git (Phase 03)
 

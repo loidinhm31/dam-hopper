@@ -480,6 +480,46 @@ See [Native Browser Debug Support](./native-browser-debug-support.md) for the pl
       the separate authenticated contract.
 - [x] Phase 07 completed packaging, compatibility, graceful-degradation, platform/browser, soak-budget, and documentation validation; rollout follow-ups are explicitly deferred.
 
+#### Multi-profile host-resource watch presentation (Phases 01–02)
+
+The unified-profile UI may watch configured profiles whose connection is
+connected or whose `autoConnect` intent is enabled. The watch is read-only:
+each entry keeps its profile/generation owner, query state, alert presentation,
+and optional cached snapshot isolated from every other profile.
+
+Phase 02 adds `HostResourceFleetDeck` and `HostResourceFleetCard` as pure
+presentation components. The deck preserves configured order, exposes a
+semantic labelled list and explicit empty state, and composes cards without
+reading stores or APIs. Cards show connection/watch state, per-profile
+resource status, unread incidents, host identity, sample age, and finite
+memory/battery facts when available. Only connected cards expose one
+keyboard-operable inspection target; disconnected auto-connect cards remain
+readable, non-interactive, and qualify cached data as **Last known**.
+
+Acceptance criteria:
+
+- [x] Fleet entries remain distinct by `profile.id`; duplicate names,
+      endpoints, hostnames, and incident IDs never merge.
+- [x] Deck output preserves input order, renders an accessible list, and
+      shows **No connected or auto-connect profiles to watch.** for an empty
+      watch set.
+- [x] Connected cards pass only the selected profile ID to `onInspect` and
+      expose a native target with a 44px minimum hit area; other cards expose
+      no unusable action.
+- [x] Missing, unsupported, or non-finite deep values are omitted rather than
+      rendered as zero; disconnected cached values use an explicit last-known
+      qualifier.
+- [x] `formatSampleAge` is a pure display helper that rejects invalid/zero
+      timestamps and formats valid age in seconds, minutes, hours, or days
+      without a per-card timer.
+- [x] Fleet presentation performs no metric averaging/summing, connection
+      mutation, host action, persistence, or background polling.
+
+Implementation map:
+`packages/ui/src/components/organisms/HostResourceFleetDeck.tsx`,
+`packages/ui/src/components/organisms/HostResourceFleetCard.tsx`, and
+`packages/ui/src/lib/host-resource-state.ts`.
+
 Phase 07 evidence confirms the monitoring-only/read-only boundary, explicit
 cgroup-v1 and non-Linux unsupported states, and pinned `linux/amd64` packaging.
 The no-tunnel shutdown result must not be generalized to active tunnel teardown.
