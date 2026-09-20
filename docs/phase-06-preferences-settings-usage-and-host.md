@@ -135,6 +135,23 @@ conflicts, and uses `retry: false`; an ambiguous POST is never replayed.
 Existing actor, origin, no-auth, inhibitor, helper, and server revision guards
 remain authoritative. Tests use fake executors and never suspend a real host.
 
+### Phase 04 verification status (2026-09-20)
+
+The Multi-profile Host Resources watch verification is complete. The existing
+Chromium suite now covers Fleet/profile navigation, pointer and keyboard
+activation, focus containment/Escape restoration, tiered polling gates,
+disconnect cleanup, per-profile unread isolation with duplicate incident IDs,
+320x700 and 1280x800 layout/contrast/target-size checks, and security
+negatives for escaped text, offline actions, and selected-owner force-sleep.
+
+Focused evidence is **83/83** unit/component tests plus **19/19** Chromium
+tests (**102/102** aggregate). No coverage instrumentation ran; formatter,
+lint, broad build, and project-wide suites remain separate integration gates.
+The [Phase 04 verification plan](../plans/260920-0137-multi-profile-host-resources/phase-04-verification-and-testing.md),
+[QA report](../plans/reports/tester-260920-1130-phase04-multi-profile-host-resources.md),
+and [code review](../plans/reports/code-review-260920-1132-phase04-verification-and-testing.md)
+hold command-level evidence. No architecture drift was found.
+
 ## Source map
 
 | Boundary | Implementation |

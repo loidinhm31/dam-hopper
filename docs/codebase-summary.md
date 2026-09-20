@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,069
-files, 4,658,397 tokens, 19,400,085 characters; five security-flagged files
+**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,072
+files, 4,671,152 tokens, 19,455,558 characters; five security-flagged files
 excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
@@ -114,9 +114,32 @@ than falling back to Settings or the active profile. Focus returns to the
 persistent pill or trigger across view changes and close.
 
 Focused component contracts live in
-`packages/ui/src/components/organisms/HostResourcePopover.test.tsx`; the Phase
-03 review recorded 8/8 popover tests, 178/178 Host organism tests, and a clean
-UI TypeScript build. Phase 04 remains the broader verification gate.
+`packages/ui/src/components/organisms/HostResourcePopover.test.tsx`; Phase 03
+tests preserved single-profile behavior and owner-bound drilldown semantics.
+Phase 04 completes the broader verification gate with 83 focused
+unit/component tests and 19 Chromium tests passing.
+
+### Phase 04 multi-profile host-resource verification
+
+The existing Chromium suite in
+`packages/ui/browser-tests/host-resource-monitoring.browser.tsx` now covers
+five multi-profile flows without a second harness: Fleet/profile navigation
+with pointer and keyboard activation, focus trapping and Escape restoration,
+15-second fleet versus selected-owner 1-second polling gates, disconnect
+cleanup, duplicate-incident unread isolation, 320x700 and 1280x800 layout/
+contrast/target-size checks, and security negatives.
+
+The security flow keeps markup-like profile/host values as literal text,
+exposes no inspection or suspend control for offline cards, and verifies the
+force-sleep hook receives only the inspected `ConnectionRef`. Fixtures use
+synthetic transports and mutations; no real host, RTC/systemd, credentials,
+network endpoint, or profile persistence is exercised.
+
+Focused verification passed **102/102** tests: six Vitest unit/component
+files (83/83) plus the extended Chromium file (19/19). No architecture drift
+was found; `docs/system-architecture.md` records the same owner-qualified
+dataflow and polling tiers with this evidence. Coverage percentages were not
+instrumented by the focused commands.
 
 ## Unified-profile files, editor, search, and Git (Phase 03)
 

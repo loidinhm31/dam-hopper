@@ -1,7 +1,7 @@
 ---
 title: "Multi-profile Host Resources watch"
 description: "Add an automatic fleet overview with profile-safe monitoring and focused host drilldown."
-status: in-progress
+status: completed
 priority: P2
 effort: 19h
 branch: main
@@ -19,18 +19,18 @@ No Rust, Axum, transport, or wire-contract work. Existing resource snapshot, ale
 
 ## Status
 
-- Plan status: IN PROGRESS (3/4 phases; 75%).
+- Plan status: COMPLETE (4/4 phases; 100%; updated 2026-09-20).
 - Phase 03 — Host Resource popover integration: DONE (2026-09-20; 100%; 6/6h).
-- Next: Phase 04 — Verification and testing.
+- Phase 04 — Verification and testing: DONE (2026-09-20; 100%; 4/4h). Focused unit/component and Chromium validation passed 102/102; see the [Phase 04 tester report](../reports/tester-260920-1130-phase04-multi-profile-host-resources.md) and [code review](../reports/code-review-260920-1132-phase04-verification-and-testing.md).
 
 ## Phases
 
 | Phase | Goal | Status / progress | Effort |
 |---|---|---|---:|
-| [01 — Multi-profile state and hooks](./phase-01-multi-profile-state-and-hooks.md) | Automatic watch scope, isolated `useQueries`, fleet aggregation | Complete / 100% | 5h |
-| [02 — Fleet deck and cards](./phase-02-fleet-deck-and-card-components.md) | Accessible overview cards and empty/partial states | Complete / 100% (DONE 2026-09-20) | 4h |
+| [01 — Multi-profile state and hooks](./phase-01-multi-profile-state-and-hooks.md) | Automatic watch scope, isolated `useQueries`, fleet aggregation | DONE / 100% (2026-09-20) | 5h |
+| [02 — Fleet deck and cards](./phase-02-fleet-deck-and-card-components.md) | Accessible overview cards and empty/partial states | DONE / 100% (2026-09-20) | 4h |
 | [03 — Host Resource popover integration](./phase-03-host-resource-popover-integration.md) | Header pills, fleet toggle, profile drilldown, single-profile compatibility | DONE / 100% (2026-09-20) | 6h |
-| [04 — Verification and testing](./phase-04-verification-and-testing.md) | Unit, interaction, accessibility, polling, and edge-case proof | Pending / 0% | 4h |
+| [04 — Verification and testing](./phase-04-verification-and-testing.md) | Unit, interaction, accessibility, polling, and edge-case proof | DONE / 100% (2026-09-20) | 4h |
 
 ## Preflight Contract
 

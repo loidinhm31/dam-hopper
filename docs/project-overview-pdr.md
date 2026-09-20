@@ -539,6 +539,35 @@ Acceptance criteria:
 - [x] Profile/endpoint/host labels remain escaped text; destructive actions stay
       bound to the selected `ConnectionRef` and existing generation fences.
 
+#### Verification and testing (Phase 04, 2026-09-20)
+
+Phase 04 closes the multi-profile Host Resources watch verification gate. The
+existing `host-resource-monitoring.browser.tsx` fixture remains the single
+Chromium harness and now proves Fleet/profile navigation, pointer/Enter/Space
+activation, focus containment and Escape restoration, 15-second fleet versus
+selected-owner 1-second polling, disconnect cleanup, and single-profile
+compatibility.
+
+Acceptance criteria:
+
+- [x] Duplicate incident IDs remain isolated by profile; opening Fleet marks no
+      profile read and inspecting A does not clear B.
+- [x] 320x700 and 1280x800 layouts retain safe-area bounds, no horizontal
+      overflow, readable non-color state, and required control target sizes.
+- [x] Markup-like profile/host values render as literal text; offline cards
+      expose no inspection or suspend action.
+- [x] Force-sleep receives only the inspected `ConnectionRef`; fixtures never
+      invoke real hosts, RTC/systemd, credentials, network endpoints, or
+      profile persistence.
+- [x] Focused proof passes 83/83 unit/component tests and 19/19 Chromium tests
+      (102/102 aggregate). Coverage percentages were not instrumented.
+
+The focused command results and review notes are recorded in the
+[Phase 04 QA report](../plans/reports/tester-260920-1130-phase04-multi-profile-host-resources.md)
+and [code review](../plans/reports/code-review-260920-1132-phase04-verification-and-testing.md).
+No architecture drift was found; the owner/generation and tiered polling
+contracts above remain authoritative.
+
 Phase 07 evidence confirms the monitoring-only/read-only boundary, explicit
 cgroup-v1 and non-Linux unsupported states, and pinned `linux/amd64` packaging.
 The no-tunnel shutdown result must not be generalized to active tunnel teardown.

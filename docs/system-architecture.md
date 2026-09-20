@@ -420,6 +420,47 @@ metrics polling. If the selected profile is removed or disconnects, selection
 and local diagnosis/force-sleep context reset and the view returns to Fleet;
 it never falls through to Settings or the active profile.
 
+### Phase 04 verification and testing (Multi-profile Host Resources, 2026-09-20)
+
+Phase 04 closes the verification gate for the Fleet Deck and owner-bound
+Host Resources drilldown. The existing Chromium suite was extended in
+`packages/ui/browser-tests/host-resource-monitoring.browser.tsx`; no second
+harness or production transport was introduced. The architecture above
+matches the implementation: no owner fallback, no fleet-wide acknowledgement,
+no aggregate metric calculation, and no background 1-second sampler.
+
+Focused evidence:
+
+| Boundary | Evidence | Result |
+| --- | --- | --- |
+| Scope, owner/generation keys, 15s snapshots, partial failure, stale generations, alert buckets, fleet/card/popover semantics | Six focused Vitest files under `packages/ui/src/` | 83/83 passed |
+| Fleet/profile navigation, keyboard focus and Escape restoration | Existing Chromium suite plus five multi-profile flows | 19/19 passed |
+| Tiered polling and action ownership | Fleet disables detail polling; visible connected drilldown enables only its owner; disconnect/close disables it | Verified |
+| Layout and accessibility | 320x700 and 1280x800 viewports, safe areas, no horizontal overflow, contrast, semantic state, 44px controls | Verified |
+| Security negatives | Markup-like profile/host text remains literal; offline cards expose no actions; force-sleep stays bound to the inspected owner | Verified |
+
+The browser flows retain the prior single-profile cases while adding
+Fleet -> profile A -> Fleet -> profile B navigation, duplicate incident-ID
+unread isolation, generation/disconnect cleanup, and owner-specific host
+labels. Tests use synthetic profiles, snapshots, transports, and suspend
+mutations only; they do not contact a host, invoke RTC/systemd, use
+credentials, or persist profile state.
+
+Phase 04 found no architecture drift. The durable dataflow remains:
+
+```text
+profiles + ConnectionRef generations
+  -> owner-qualified fleet snapshot queries (15s)
+  -> Fleet Deck / profile cards
+  -> one selected connected drilldown (1s compatibility metrics)
+  -> owner-bound diagnosis, pin, idle-suspend, and force-sleep boundaries
+```
+
+The focused regression gate and review record are maintained in the
+[Phase 04 verification plan](../plans/260920-0137-multi-profile-host-resources/phase-04-verification-and-testing.md),
+[QA report](../plans/reports/tester-260920-1130-phase04-multi-profile-host-resources.md),
+and [code review](../plans/reports/code-review-260920-1132-phase04-verification-and-testing.md).
+
 ### Phase 09 integration, qualification, and release cutover (2026-09-17)
 
 Phase 09 integrates the owner-qualified workbench across the shell, API clients,

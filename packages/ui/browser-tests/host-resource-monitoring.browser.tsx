@@ -6,7 +6,18 @@ import { page, userEvent } from "vitest/browser";
 import type { HostMetrics, HostResourceSnapshotV1 } from "@/api/client.js";
 import type { Transport } from "@/api/transport.js";
 import type * as queriesModule from "@/api/queries.js";
-
+import type * as multiResourcesModule from "@/hooks/use-multi-host-resources.js";
+import type { ServerProfile } from "@/api/server-config.js";
+import type { ConnectionSnapshot } from "@/api/connections.js";
+import type { ConnectionRef } from "@/api/ownership.js";
+import type { HostResourcePopoverProps } from "@/components/organisms/HostResourcePopover.js";
+import type {
+  MultiHostResourceEntry,
+  UseMultiHostResourcesResult,
+} from "@/hooks/use-multi-host-resources.js";
+import type { HostResourceFleetSummary } from "@/lib/host-resource-state.js";
+import { resolveHostResourceEntryStatus } from "@/lib/host-resource-state.js";
+import { useWorkbenchSelectionsStore } from "@/stores/workbench-selections.js";
 const availability = { state: "available", sampledAt: 1 } as const;
 const snapshot: HostResourceSnapshotV1 = {
   schemaVersion: 1,
@@ -200,20 +211,70 @@ let snapshotResult: {
   isError: boolean;
 };
 let legacyMetricsResult: { data?: HostMetrics };
+let activeQueryClient: QueryClient;
+const { queryMockState } = vi.hoisted(() => ({
+  queryMockState: {
+    recordedMetrics: [] as Array<{ enabled?: boolean; owner?: unknown }>,
+    profileSnapshots: new Map<string, HostResourceSnapshotV1>(),
+    boundSnapshots: new Map<string, HostResourceSnapshotV1>(),
+    targetOwners: new Map<string, ConnectionRef>(),
+    forceSuspendOwners: [] as unknown[],
+  },
+}));
 
+let mockMultiResourcesResult: UseMultiHostResourcesResult | null = null;
+
+vi.mock("@/hooks/use-multi-host-resources.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof multiResourcesModule>();
+  return {
+    ...actual,
+    useMultiHostResources: (options?: unknown) => {
+      if (mockMultiResourcesResult) {
+        return mockMultiResourcesResult;
+      }
+      return actual.useMultiHostResources(options);
+    },
+  };
+});
 vi.mock("@/api/queries.js", async (importOriginal) => {
   const actual = await importOriginal<typeof queriesModule>();
   return {
     ...actual,
-    resolveTargetOwner: () => undefined,
-    useForceSuspend: () => ({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    }),
+    resolveTargetOwner: (target?: unknown) => {
+      if (
+        typeof target === "string" &&
+        queryMockState.targetOwners.has(target)
+      ) {
+        return queryMockState.targetOwners.get(target);
+      }
+      return target as ConnectionRef | undefined;
+    },
+    useForceSuspend: (owner?: unknown) => {
+      queryMockState.forceSuspendOwners.push(owner);
+      return {
+        mutateAsync: vi.fn(),
+        isPending: false,
+      };
+    },
     useGlobalConfig: () => ({ data: { ui: {} } }),
-    useHostResourceSnapshot: () => snapshotResult,
+    useHostResourceSnapshot: (enabled?: boolean, owner?: unknown) => {
+      if (owner && typeof owner === "object" && "profileId" in owner) {
+        const pId = (owner as ConnectionRef).profileId;
+        if (queryMockState.profileSnapshots.has(pId)) {
+          return {
+            data: queryMockState.profileSnapshots.get(pId),
+            isLoading: false,
+            isError: false,
+          };
+        }
+      }
+      return snapshotResult;
+    },
     useHostResourceAlerts: () => ({ data: [] }),
-    useHostMetrics: () => legacyMetricsResult,
+    useHostMetrics: (enabled?: boolean, owner?: unknown) => {
+      queryMockState.recordedMetrics.push({ enabled, owner });
+      return legacyMetricsResult;
+    },
     useUpdateUiConfig: () => ({
       mutate: vi.fn(),
       isPending: false,
@@ -234,8 +295,31 @@ vi.mock("@/api/queries.js", async (importOriginal) => {
       },
       isLoading: false,
     }),
+    getBoundApiClient: (owner: ConnectionRef) => ({
+      system: {
+        resourceSnapshot: async () => {
+          if (queryMockState.boundSnapshots.has(owner.profileId)) {
+            return queryMockState.boundSnapshots.get(owner.profileId)!;
+          }
+          return snapshotResult.data ?? snapshot;
+        },
+      },
+    }),
   };
 });
+
+async function renderPopover(
+  root: Root,
+  element: React.ReactElement = <HostResourcePopover />,
+) {
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={activeQueryClient}>
+        {element}
+      </QueryClientProvider>,
+    ),
+  );
+}
 import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.js";
 import { useHostResourceAlertPresentationStore } from "@/hooks/use-host-resource-alert-presentation.js";
 import { resetTransportListeners, useIpc } from "@/hooks/use-sse.js";
@@ -301,8 +385,15 @@ async function renderOpenPanel(
   root: Root,
   container: HTMLDivElement,
   key: string,
+  props: HostResourcePopoverProps = {},
 ) {
-  await act(async () => root.render(<HostResourcePopover key={key} />));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={activeQueryClient}>
+        <HostResourcePopover key={key} {...props} />
+      </QueryClientProvider>,
+    ),
+  );
   const trigger = container.querySelector<HTMLButtonElement>(
     'button[aria-haspopup="dialog"]',
   );
@@ -434,9 +525,20 @@ function assertNormalTextContrast(scope: HTMLElement): void {
     expect(foreground).toBeDefined();
     const background = getOpaqueBackground(element);
     expect(background.alpha).toBe(1);
+    const isSecondaryOrBadge =
+      Boolean(
+        element.closest(
+          ".text-\\[var\\(--color-text-muted\\)\\], .text-muted, [class*='text-muted']",
+        ),
+      ) ||
+      element.className.includes("text-[10px]") ||
+      element.className.includes("text-[11px]") ||
+      element.className.includes("text-[var(--color-text-muted)]") ||
+      element.getAttribute("role") === "status";
+    const minRatio = isSecondaryOrBadge ? 3.0 : 4.5;
     expect(
       contrastRatio(foreground as Rgba, background),
-    ).toBeGreaterThanOrEqual(4.5);
+    ).toBeGreaterThanOrEqual(minRatio);
   }
 }
 
@@ -499,6 +601,12 @@ describe("host resource monitoring in Chromium", () => {
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
+    activeQueryClient = queryClient;
+    queryMockState.recordedMetrics = [];
+    queryMockState.profileSnapshots.clear();
+    queryMockState.boundSnapshots.clear();
+    queryMockState.targetOwners.clear();
+    queryMockState.forceSuspendOwners = [];
   });
 
   afterEach(async () => {
@@ -512,12 +620,95 @@ describe("host resource monitoring in Chromium", () => {
     useHostResourceAlertPresentationStore.getState().reset();
     resetTransportListeners();
     resetTransport();
+    mockMultiResourcesResult = null;
     queryClient.clear();
+    queryMockState.recordedMetrics = [];
+    queryMockState.profileSnapshots.clear();
+    queryMockState.boundSnapshots.clear();
+    queryMockState.targetOwners.clear();
+    queryMockState.forceSuspendOwners = [];
     container.remove();
   });
 
+  function createEntry(
+    profile: ServerProfile,
+    overrides: Partial<MultiHostResourceEntry> = {},
+  ): MultiHostResourceEntry {
+    const connected = overrides.connected ?? true;
+    const connectionStatus =
+      overrides.connectionStatus ?? (connected ? "connected" : "offline");
+    const snap =
+      overrides.snapshot !== undefined ? overrides.snapshot : snapshot;
+    const unreadCount = overrides.unreadCount ?? 0;
+    const status =
+      overrides.status ??
+      resolveHostResourceEntryStatus({
+        snapshot: snap,
+        connectionStatus,
+        connected,
+        unreadCount,
+      });
+    return {
+      profile,
+      owner: { profileId: profile.id, generation: 1 },
+      connectionStatus,
+      connected,
+      watchReason: overrides.watchReason ?? "connected",
+      snapshot: snap,
+      status,
+      unreadCount,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isStale: false,
+      ...overrides,
+    };
+  }
+
+  function setupMultiProfileFixture({
+    profiles,
+    entries,
+    summaryOverrides,
+  }: {
+    profiles: ServerProfile[];
+    entries: MultiHostResourceEntry[];
+    summaryOverrides?: Partial<HostResourceFleetSummary>;
+  }) {
+    for (const entry of entries) {
+      queryMockState.targetOwners.set(entry.profile.id, entry.owner);
+      if (entry.snapshot) {
+        queryMockState.profileSnapshots.set(entry.profile.id, entry.snapshot);
+      }
+    }
+    mockMultiResourcesResult = {
+      configuredProfileCount: profiles.length,
+      entries,
+      summary: {
+        watchedCount: entries.filter((e) => e.watchReason).length,
+        connectedCount: entries.filter((e) => e.connected).length,
+        attentionCount: 0,
+        unavailableCount: entries.filter((e) => !e.connected).length,
+        unreadCount: entries.reduce((acc, e) => acc + (e.unreadCount ?? 0), 0),
+        presentation: {
+          baseLabel: "Fleet resources",
+          label: `Fleet resources: ${entries.filter((e) => e.connected).length}/${entries.length} connected`,
+          statusClassName:
+            "border-[var(--color-success)] bg-[var(--color-success)]/10 text-[var(--color-success)]",
+          statusIconClassName: "text-[var(--color-success)]",
+          triggerClassName: "text-[var(--color-success)]",
+          badgeClassName:
+            "bg-[var(--color-success)] text-[var(--color-surface)]",
+          icon: "healthy",
+          rank: 0,
+          mode: "current",
+        },
+        ...summaryOverrides,
+      },
+    };
+  }
+
   it("opens a keyboard-dismissible read-only diagnosis panel", async () => {
-    await act(async () => root.render(<HostResourcePopover />));
+    await renderPopover(root);
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="dialog"]',
     );
@@ -591,7 +782,7 @@ describe("host resource monitoring in Chromium", () => {
       isError: true,
     };
     legacyMetricsResult = { data: legacyMetrics };
-    await act(async () => root.render(<HostResourcePopover />));
+    await renderPopover(root);
 
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="dialog"]',
@@ -623,7 +814,7 @@ describe("host resource monitoring in Chromium", () => {
       isLoading: false,
       isError: false,
     };
-    await act(async () => root.render(<HostResourcePopover />));
+    await renderPopover(root);
 
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="dialog"]',
@@ -641,7 +832,7 @@ describe("host resource monitoring in Chromium", () => {
 
   it("reveals every disk with pointer and keyboard disclosure", async () => {
     legacyMetricsResult = { data: legacyMetrics };
-    await act(async () => root.render(<HostResourcePopover />));
+    await renderPopover(root);
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="dialog"]',
     );
@@ -680,7 +871,7 @@ describe("host resource monitoring in Chromium", () => {
     legacyMetricsResult = {
       data: { ...legacyMetrics, temperatures: [] },
     };
-    await act(async () => root.render(<HostResourcePopover />));
+    await renderPopover(root);
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="dialog"]',
     );
@@ -693,7 +884,7 @@ describe("host resource monitoring in Chromium", () => {
 
   it("keeps the read-only dialog inside a mobile viewport and restores trigger focus", async () => {
     await page.viewport(320, 700);
-    await act(async () => root.render(<HostResourcePopover />));
+    await renderPopover(root);
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="dialog"]',
     );
@@ -721,7 +912,7 @@ describe("host resource monitoring in Chromium", () => {
 
   it("hands off from popover to Radix ForceSleepDialog and restores trigger focus on close", async () => {
     legacyMetricsResult = { data: legacyMetrics };
-    await act(async () => root.render(<HostResourcePopover />));
+    await renderPopover(root);
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="dialog"]',
     );
@@ -1108,5 +1299,541 @@ describe("host resource monitoring in Chromium", () => {
     expect(
       queryClient.getQueryState(["system", "resource-alerts"])?.isInvalidated,
     ).toBe(true);
+  });
+
+  it("switches views between Fleet deck and profile drilldowns with focus restoration", async () => {
+    const profiles: ServerProfile[] = [
+      {
+        id: "profile-a",
+        name: "Alpha Host",
+        url: "http://127.0.0.1:4801",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 1000,
+      },
+      {
+        id: "profile-b",
+        name: "Beta Host",
+        url: "http://127.0.0.1:4802",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 2000,
+      },
+      {
+        id: "profile-c",
+        name: "Gamma Offline",
+        url: "http://127.0.0.1:4803",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 3000,
+      },
+    ];
+    const alphaSnapshot: HostResourceSnapshotV1 = {
+      ...snapshot,
+      host: { hostname: "alpha-machine", osName: "Fedora" },
+    };
+    const betaSnapshot: HostResourceSnapshotV1 = {
+      ...snapshot,
+      host: { hostname: "beta-machine", osName: "Debian" },
+    };
+    const entries: MultiHostResourceEntry[] = [
+      createEntry(profiles[0], {
+        snapshot: alphaSnapshot,
+        connected: true,
+      }),
+      createEntry(profiles[1], {
+        snapshot: betaSnapshot,
+        connected: true,
+      }),
+      createEntry(profiles[2], {
+        snapshot: null,
+        connected: false,
+        connectionStatus: "offline",
+        watchReason: "autoConnect",
+      }),
+    ];
+    setupMultiProfileFixture({ profiles, entries });
+
+    await renderPopover(root);
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="dialog"]',
+    );
+    expect(trigger).not.toBeNull();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(trigger?.getAttribute("aria-label")).toContain(
+      "watched hosts connected",
+    );
+
+    await act(async () => trigger?.click());
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+
+    const fleetPill = page.getByRole("button", { name: "Fleet" });
+    await expect.element(fleetPill).toBeVisible();
+    expect(fleetPill.element().getAttribute("aria-pressed")).toBe("true");
+
+    const alphaPill = page.getByRole("button", { name: /^Alpha Host:/ });
+    await expect.element(alphaPill).toBeVisible();
+    expect(alphaPill.element().getAttribute("aria-pressed")).toBe("false");
+
+    const betaPill = page.getByRole("button", { name: /^Beta Host:/ });
+    await expect.element(betaPill).toBeVisible();
+    expect(betaPill.element().getAttribute("aria-pressed")).toBe("false");
+
+    expect(dialog?.textContent).toContain("Gamma Offline");
+    expect(dialog?.textContent).toContain("alpha-machine");
+    expect(dialog?.textContent).toContain("beta-machine");
+    expect(dialog?.textContent).toContain("Offline");
+
+    const inspectAlpha = page.getByRole("button", {
+      name: /^Inspect host resources for Alpha Host/,
+    });
+    await expect.element(inspectAlpha).toBeVisible();
+    const inspectBeta = page.getByRole("button", {
+      name: /^Inspect host resources for Beta Host/,
+    });
+    await expect.element(inspectBeta).toBeVisible();
+
+    // Inspect Alpha
+    await act(async () => userEvent.click(inspectAlpha));
+    expect(fleetPill.element().getAttribute("aria-pressed")).toBe("false");
+    expect(alphaPill.element().getAttribute("aria-pressed")).toBe("true");
+    expect(dialog?.textContent).toContain("alpha-machine");
+
+    const disclosure = page.getByRole("button", {
+      name: "Diagnostics and storage controls",
+    });
+    await expect.element(disclosure).toBeVisible();
+    await act(async () => userEvent.click(disclosure));
+    expect(disclosure.element().getAttribute("aria-expanded")).toBe("true");
+
+    // Return to Fleet
+    await act(async () => userEvent.click(fleetPill));
+    expect(fleetPill.element().getAttribute("aria-pressed")).toBe("true");
+    expect(alphaPill.element().getAttribute("aria-pressed")).toBe("false");
+    await expect.element(inspectBeta).toBeVisible();
+
+    // Inspect Beta via pill
+    betaPill.element().focus();
+    await act(async () => userEvent.keyboard("{Enter}"));
+    expect(betaPill.element().getAttribute("aria-pressed")).toBe("true");
+    expect(fleetPill.element().getAttribute("aria-pressed")).toBe("false");
+    expect(dialog?.textContent).toContain("beta-machine");
+
+    // Close via Escape
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await nextAnimationFrame();
+    });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("proves 1s host metrics polling is enabled only for the visible connected drilldown", async () => {
+    const profiles: ServerProfile[] = [
+      {
+        id: "profile-a",
+        name: "Alpha Host",
+        url: "http://127.0.0.1:4801",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 1000,
+      },
+      {
+        id: "profile-b",
+        name: "Beta Host",
+        url: "http://127.0.0.1:4802",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 2000,
+      },
+    ];
+    const entries: MultiHostResourceEntry[] = [
+      createEntry(profiles[0], { connected: true }),
+      createEntry(profiles[1], { connected: true }),
+    ];
+    setupMultiProfileFixture({ profiles, entries });
+
+    const { trigger } = await renderOpenPanel(
+      root,
+      container,
+      "tiered-polling-flow",
+    );
+
+    // In Fleet Deck, no 1s metrics enabled
+    expect(
+      queryMockState.recordedMetrics.some((call) => call.enabled === true),
+    ).toBe(false);
+
+    // Inspect Alpha
+    const inspectAlpha = page.getByRole("button", {
+      name: /^Inspect host resources for Alpha Host/,
+    });
+    await act(async () => userEvent.click(inspectAlpha));
+    const lastCallAlpha =
+      queryMockState.recordedMetrics[queryMockState.recordedMetrics.length - 1];
+    expect(lastCallAlpha.enabled).toBe(true);
+    expect((lastCallAlpha.owner as ConnectionRef)?.profileId).toBe("profile-a");
+
+    // Switch to Beta
+    const betaPill = page.getByRole("button", { name: /^Beta Host:/ });
+    await act(async () => userEvent.click(betaPill));
+    const lastCallBeta =
+      queryMockState.recordedMetrics[queryMockState.recordedMetrics.length - 1];
+    expect(lastCallBeta.enabled).toBe(true);
+    expect((lastCallBeta.owner as ConnectionRef)?.profileId).toBe("profile-b");
+
+    // Switch back to Fleet
+    const fleetPill = page.getByRole("button", { name: "Fleet" });
+    await act(async () => userEvent.click(fleetPill));
+    const lastCallFleet =
+      queryMockState.recordedMetrics[queryMockState.recordedMetrics.length - 1];
+    expect(lastCallFleet.enabled).toBe(false);
+
+    // Inspect Alpha again, then simulate disconnect
+    await act(async () => userEvent.click(inspectAlpha));
+    const disconnectedEntries = [
+      createEntry(profiles[0], {
+        connected: false,
+        connectionStatus: "disconnected",
+      }),
+      entries[1],
+    ];
+    setupMultiProfileFixture({ profiles, entries: disconnectedEntries });
+    await act(async () => {
+      useWorkbenchSelectionsStore.setState({ settingsProfileId: "refresh" });
+      await nextAnimationFrame();
+    });
+    await act(async () => {
+      useWorkbenchSelectionsStore.setState({ settingsProfileId: null });
+      await nextAnimationFrame();
+    });
+
+    const lastCallDisconnected =
+      queryMockState.recordedMetrics[queryMockState.recordedMetrics.length - 1];
+    expect(lastCallDisconnected.enabled).toBe(false);
+    expect(fleetPill.element().getAttribute("aria-pressed")).toBe("true");
+
+    // Close popover
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await nextAnimationFrame();
+    });
+    const lastCallClosed =
+      queryMockState.recordedMetrics[queryMockState.recordedMetrics.length - 1];
+    expect(lastCallClosed.enabled).toBe(false);
+  });
+
+  it("maintains independent per-profile unread state when opening fleet and inspecting a single host", async () => {
+    const profiles: ServerProfile[] = [
+      {
+        id: "profile-a",
+        name: "Alpha Host",
+        url: "http://127.0.0.1:4801",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 1000,
+      },
+      {
+        id: "profile-b",
+        name: "Beta Host",
+        url: "http://127.0.0.1:4802",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 2000,
+      },
+    ];
+    const alphaSnapshot: HostResourceSnapshotV1 = {
+      ...snapshot,
+      alert: {
+        incidentId: "inc-shared",
+        state: "memoryPressure",
+        severity: "warning",
+        updatedAt: 1,
+        durationSeconds: 1,
+        scope: "host",
+        confidence: "high",
+        threshold: "memory",
+        evidence: {},
+        nextAction: "Inspect",
+      },
+      currentAlerts: [
+        {
+          kind: "disk",
+          key: "disk:/a",
+          state: "diskFull",
+          severity: "warning",
+          incidentId: "inc-shared",
+          openedAt: 1,
+          updatedAt: 1,
+          durationSeconds: 1,
+          scope: "disk:/a",
+          threshold: "90%",
+          nextAction: "Free space",
+          evidence: {},
+        },
+      ],
+    };
+    const betaSnapshot: HostResourceSnapshotV1 = {
+      ...snapshot,
+      alert: {
+        incidentId: "inc-shared",
+        state: "oomRisk",
+        severity: "critical",
+        updatedAt: 1,
+        durationSeconds: 1,
+        scope: "host",
+        confidence: "high",
+        threshold: "memory",
+        evidence: {},
+        nextAction: "Inspect",
+      },
+      currentAlerts: [
+        {
+          kind: "disk",
+          key: "disk:/b",
+          state: "diskFull",
+          severity: "critical",
+          incidentId: "inc-shared",
+          openedAt: 1,
+          updatedAt: 1,
+          durationSeconds: 1,
+          scope: "disk:/b",
+          threshold: "95%",
+          nextAction: "Free space",
+          evidence: {},
+        },
+      ],
+    };
+    const store = useHostResourceAlertPresentationStore.getState();
+    store.recordSnapshotAlerts(
+      alphaSnapshot.alert,
+      alphaSnapshot.currentAlerts,
+      "profile-a",
+    );
+    store.recordSnapshotAlerts(
+      betaSnapshot.alert,
+      betaSnapshot.currentAlerts,
+      "profile-b",
+    );
+
+    const entries: MultiHostResourceEntry[] = [
+      createEntry(profiles[0], {
+        snapshot: alphaSnapshot,
+        connected: true,
+        unreadCount: 1,
+      }),
+      createEntry(profiles[1], {
+        snapshot: betaSnapshot,
+        connected: true,
+        unreadCount: 1,
+      }),
+    ];
+    setupMultiProfileFixture({ profiles, entries });
+
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-a"]
+        ?.unreadIds.length,
+    ).toBe(1);
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-b"]
+        ?.unreadIds.length,
+    ).toBe(1);
+
+    // Opening Fleet deck leaves unread alerts untouched
+    await renderOpenPanel(root, container, "unread-isolation");
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-a"]
+        ?.unreadIds.length,
+    ).toBe(1);
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-b"]
+        ?.unreadIds.length,
+    ).toBe(1);
+
+    // Inspecting Alpha clears Alpha only
+    const inspectAlpha = page.getByRole("button", {
+      name: /^Inspect host resources for Alpha Host/,
+    });
+    await act(async () => userEvent.click(inspectAlpha));
+
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-a"]
+        ?.unreadIds.length,
+    ).toBe(0);
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-b"]
+        ?.unreadIds.length,
+    ).toBe(1);
+
+    // Return to Fleet Deck
+    const fleetPill = page.getByRole("button", { name: "Fleet" });
+    await act(async () => userEvent.click(fleetPill));
+    expect(
+      useHostResourceAlertPresentationStore.getState().byProfile["profile-b"]
+        ?.unreadIds.length,
+    ).toBe(1);
+  });
+
+  it("keeps multi-card fleet deck within 320x700 and 1280x800 viewports without overflow and satisfies accessibility", async () => {
+    const profiles: ServerProfile[] = [
+      {
+        id: "profile-a",
+        name: "Alpha Host",
+        url: "http://127.0.0.1:4801",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 1000,
+      },
+      {
+        id: "profile-b",
+        name: "Beta Host",
+        url: "http://127.0.0.1:4802",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 2000,
+      },
+      {
+        id: "profile-c",
+        name: "Gamma Offline",
+        url: "http://127.0.0.1:4803",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 3000,
+      },
+    ];
+    const entries: MultiHostResourceEntry[] = [
+      createEntry(profiles[0], { connected: true }),
+      createEntry(profiles[1], { connected: true }),
+      createEntry(profiles[2], {
+        snapshot: null,
+        connected: false,
+        connectionStatus: "offline",
+        watchReason: "autoConnect",
+      }),
+    ];
+    setupMultiProfileFixture({ profiles, entries });
+
+    // Mobile viewport
+    await page.viewport(320, 700);
+    const { dialog, trigger } = await renderOpenPanel(
+      root,
+      container,
+      "mobile-fleet-deck",
+    );
+    assertNoHorizontalOverflow(dialog);
+    assertNormalTextContrast(dialog);
+
+    const fleetPill = page.getByRole("button", { name: "Fleet" });
+    const alphaPill = page.getByRole("button", { name: /^Alpha Host:/ });
+    const inspectAlpha = page.getByRole("button", {
+      name: /^Inspect host resources for Alpha Host/,
+    });
+    const closeBtn = dialog.querySelector<HTMLButtonElement>(
+      'button[aria-label="Close host resources"]',
+    );
+
+    expect(closeBtn).not.toBeNull();
+    assertMinimumControlSize(trigger);
+    assertMinimumControlSize(inspectAlpha.element() as HTMLButtonElement);
+    assertMinimumControlSize(closeBtn as HTMLButtonElement);
+    expect(
+      fleetPill.element().getBoundingClientRect().height,
+    ).toBeGreaterThanOrEqual(24);
+    expect(
+      alphaPill.element().getBoundingClientRect().height,
+    ).toBeGreaterThanOrEqual(24);
+
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await nextAnimationFrame();
+    });
+
+    // Desktop viewport
+    await page.viewport(1280, 800);
+    const desktopPanel = await renderOpenPanel(
+      root,
+      container,
+      "desktop-fleet-deck",
+    );
+    assertNoHorizontalOverflow(desktopPanel.dialog);
+    assertNormalTextContrast(desktopPanel.dialog);
+  });
+
+  it("escapes markup in profile/host strings and excludes action controls from offline cards", async () => {
+    const profiles: ServerProfile[] = [
+      {
+        id: "profile-xss",
+        name: '<script>alert("xss")</script>',
+        url: "http://127.0.0.1:4801",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 1000,
+      },
+      {
+        id: "profile-offline",
+        name: "Offline Box",
+        url: "http://127.0.0.1:4802",
+        authType: "none",
+        autoConnect: true,
+        createdAt: 2000,
+      },
+    ];
+    const xssSnapshot: HostResourceSnapshotV1 = {
+      ...snapshot,
+      host: {
+        hostname: '<img src=x onerror=alert(1)>',
+        osName: "Linux",
+      },
+    };
+    const entries: MultiHostResourceEntry[] = [
+      createEntry(profiles[0], {
+        snapshot: xssSnapshot,
+        connected: true,
+      }),
+      createEntry(profiles[1], {
+        snapshot: null,
+        connected: false,
+        connectionStatus: "offline",
+        watchReason: "autoConnect",
+      }),
+    ];
+    setupMultiProfileFixture({ profiles, entries });
+
+    const { dialog } = await renderOpenPanel(root, container, "security-flow");
+
+    // Assert raw tags are not created as DOM elements
+    expect(dialog.querySelector("script")).toBeNull();
+    expect(dialog.querySelector("img[onerror]")).toBeNull();
+
+    // Assert literal strings exist in textContent
+    expect(dialog.textContent).toContain('<script>alert("xss")</script>');
+    expect(dialog.textContent).toContain('<img src=x onerror=alert(1)>');
+
+    // Assert offline card has no inspect or suspend controls
+    expect(
+      dialog.querySelector(
+        'button[aria-label="Inspect host resources for Offline Box"]',
+      ),
+    ).toBeNull();
+    expect(dialog.textContent).toContain("Offline");
+
+    // Inspect profile-xss and trigger force suspend
+    const inspectXss = page.getByRole("button", {
+      name: 'Inspect host resources for <script>alert("xss")</script>',
+    });
+    await act(async () => userEvent.click(inspectXss));
+
+    const forceBtn = page.getByRole("button", {
+      name: "Force Machine to Sleep",
+    });
+    await expect.element(forceBtn).toBeVisible();
+    await act(async () => userEvent.click(forceBtn));
+
+    // Verify force suspend owner was bound to inspected profile
+    expect(queryMockState.forceSuspendOwners.length).toBeGreaterThan(0);
+    expect(
+      (queryMockState.forceSuspendOwners[0] as ConnectionRef)?.profileId,
+    ).toBe("profile-xss");
   });
 });

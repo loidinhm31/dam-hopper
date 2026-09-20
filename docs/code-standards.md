@@ -1910,6 +1910,35 @@ Component tests should assert user-visible mode, pressed-pill/read semantics,
 owner-specific drilldown text, polling enablement, and disconnect/removal
 fallback; do not assert Tailwind classes or hook call order.
 
+### Host-resource verification standards (Phase 04)
+
+Extend the existing Chromium host-resource suite rather than creating another
+harness. Keep fixtures synthetic: mock transports, owner-bound snapshots,
+profile state, and suspend mutations; never invoke a real host, RTC/systemd,
+credential, network, or profile-persistence path.
+
+Durable browser assertions must use roles, accessible names, pressed state,
+visible status text, focus, invocation owner, and viewport geometry. Cover:
+
+- Fleet -> profile A -> Fleet -> profile B navigation with pointer, Enter, and
+  Space activation plus Escape/close trigger restoration.
+- No detail polling in Fleet/closed/offline views; only the visible connected
+  drilldown enables 1-second compatibility metrics for its `ConnectionRef`.
+- Per-profile unread buckets, including duplicate incident IDs; opening Fleet
+  changes none and inspecting one profile clears only that profile.
+- 320x700 and 1280x800 safe-area/no-overflow layouts, readable non-color state,
+  contrast, keyboard focus, and 44px action targets (compact pills may use the
+  established inline target exception).
+- Markup-like profile/host strings as text nodes, absent offline actions, and
+  owner-bound force-sleep calls.
+
+Retain all single-profile behavior assertions. Avoid snapshots, Tailwind class
+checks, hook-call ordering, and implementation-only mock details. The Phase 04
+gate is six focused unit/component files (83 tests) plus
+`browser-tests/host-resource-monitoring.browser.tsx` (19 Chromium tests);
+coverage percentages are not implied when instrumentation is not run.
+
+
 Mutation hooks invalidate the `['workflow']` root only from `onSuccess`.
 Do not perform optimistic snapshot writes in this layer. A failure must retain
 the authoritative cache and expose the typed mutation error so the component
