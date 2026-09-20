@@ -770,7 +770,7 @@ and [code review](../plans/reports/code-reviewer-260902-0312-phase-02-workflow-s
   pagination; notes soft-delete before physical purge.
 - The complete endpoint contract is in
   [Workflow API](./workflow-api.md); the service/data-flow record is in
-  [System Architecture](./system-architecture.md#workflow-phases-01-03-service-rest-and-lifecycle-correlation).
+  [System Architecture](./system-architecture.md#workflow-phases-0103-service-rest-and-lifecycle-correlation).
 
 **Acceptance Criteria:**
 
@@ -1157,7 +1157,7 @@ rollback, and boot recovery include the helper in their managed-unit set.
 Phase 04 verification passed `linux_release_staging` 9/9,
 `linux_release_unit_policy` 10/10, and the boundary verifier 14/14; role
 isolation and the four-service `dam-hopper status` projection are covered. See
-[Linux Release Manager](./linux-release-manager.md#verification-and-end-to-end-coverage-production-cli-phase-04).
+[Linux Release Manager](./linux-release-manager.md#verification-and-end-to-end-coverage).
 
 **Acceptance Criteria:**
 

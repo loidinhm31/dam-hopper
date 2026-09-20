@@ -1,7 +1,7 @@
 ---
 title: "Windows dam-hopper-server build and verification"
 description: "Normalize Windows paths, make the Rust test harness platform-safe, and qualify dam-hopper-server build, startup, and documentation on MSVC."
-status: in-progress
+status: completed
 priority: P1
 effort: 9h
 branch: main
@@ -24,10 +24,10 @@ Primary evidence:
 
 ## Status
 
-- **Plan:** IN PROGRESS (2/3 phases complete; 67%; updated 2026-09-20 17:15:00 +07:00).
+- **Plan:** COMPLETE (3/3 phases complete; 100%; updated 2026-09-20 18:40:00 +07:00).
 - **Phase 01:** DONE (2026-09-20 16:18:03 +07:00; 100%; 2.5/2.5h). Focused Windows MSVC path/config tests passed 128/128; code review approved 9.2/10 with warnings recorded in the review report.
 - **Phase 02:** DONE (2026-09-20 17:15:00 +07:00; 100%; 3.5/3.5h). Test harness and platform gating verified; 978 passed, 0 failed, 3 ignored; code review approved 9.5/10. See the [tester report](../reports/tester-260920-1707-phase02-windows-test-harness.md) and [code review](../reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
-- **Phase 03:** Pending — server build, verification, and documentation.
+- **Phase 03:** DONE (2026-09-20 18:40:00 +07:00; 100%; 3/3h). Server build, verification, and documentation complete; default-run verified, live loopback smoke passed, docs published.
 
 
 ## Preflight Contract
@@ -45,7 +45,7 @@ Primary evidence:
 |---|---|---|---|---:|
 | 01 | [Path and config normalization](./phase-01-path-and-config-normalization.md) | Canonical Windows paths, UNC handling, valid TOML, slash-stable target identity | DONE (2026-09-20 16:18:03 +07:00; 100%) | 2.5h |
 | 02 | [Test harness and platform gating](./phase-02-test-harness-and-platform-gating.md) | Cmd-safe PTY tests, CRLF-stable Git tests, Linux-only gates, path assertions | DONE (2026-09-20 17:15:00 +07:00; 100%) | 3.5h |
-| 03 | [Server build, verification, and documentation](./phase-03-server-build-and-verification.md) | Default binary, full Windows qualification, live health smoke, docs | Pending | 3h |
+| 03 | [Server build, verification, and documentation](./phase-03-server-build-and-verification.md) | Default binary, full Windows qualification, live health smoke, docs | DONE (2026-09-20 18:40:00 +07:00; 100%) | 3h |
 
 ## Side-Effect Review Checklist
 
@@ -53,9 +53,9 @@ Primary evidence:
 - [x] Config writes preserve project meaning, reject traversal, and retain absolute paths.
 - [x] Test shell/Git changes are test-only and temporary-resource scoped.
 - [x] Windows never binds Unix helper sockets, probes sysfs, or attempts suspend.
-- [ ] Startup smoke uses loopback/no-auth only and terminates the child cleanly.
-- [ ] Documentation reports only observed Windows evidence; ignored Linux tests stay visible.
-- [ ] No generated logs, credentials, or build artifacts added to the tree.
+- [x] Startup smoke uses loopback/no-auth only and terminates the child cleanly.
+- [x] Documentation reports only observed Windows evidence; ignored Linux tests stay visible.
+- [x] No generated logs, credentials, or build artifacts added to the tree.
 
 ## Dependencies and unresolved questions
 

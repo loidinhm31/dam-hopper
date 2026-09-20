@@ -13,7 +13,7 @@
 ## Overview
 
 **Priority:** P1  
-**Status:** Pending  
+**Status:** DONE (2026-09-20 18:40:00 +07:00; 100%)  
 **Goal:** Make `cargo run` select the server binary, prove the full Windows Rust unit/integration surface, smoke-test a live server over loopback, and publish an honest Windows runbook.
 
 The manifest declares `dam-hopper-server` at `server/Cargo.toml:18-20` but has no `default-run`. Add `default-run = "dam-hopper-server"` under `[package]`. The prior targeted report proves `cargo check --all-targets`, `cargo build --bins`, both non-Linux stubs, startup, and 127 passed/2 ignored targeted tests; this phase upgrades that evidence to a full serial Windows test/build/startup record.
@@ -119,13 +119,13 @@ The build gate validates compile-time target boundaries. The smoke gate validate
 
 ## Todo list
 
-- [ ] Add `default-run` and preserve all binary targets.
-- [ ] Pass Windows all-target check, debug bins, and release server build.
-- [ ] Pass full serial Windows unit/integration test gate with counts recorded.
-- [ ] Verify both non-Linux stubs and exit statuses/messages.
-- [ ] Complete loopback live server health smoke and cleanup.
-- [ ] Update README, configuration guide, and API terminal docs.
-- [ ] Review evidence wording and remove generated artifacts/secrets.
+- [x] Add `default-run` and preserve all binary targets.
+- [x] Pass Windows all-target check, debug bins, and release server build.
+- [x] Pass full serial Windows unit/integration test gate with counts recorded.
+- [x] Verify both non-Linux stubs and exit statuses/messages.
+- [x] Complete loopback live server health smoke and cleanup.
+- [x] Update README, configuration guide, and API terminal docs.
+- [x] Review evidence wording and remove generated artifacts/secrets.
 
 ## Success Criteria
 
@@ -154,13 +154,13 @@ The build gate validates compile-time target boundaries. The smoke gate validate
 
 ## Side-Effect Review Checklist
 
-- [ ] Only the manifest field and scoped docs/scripts changed in this phase.
-- [ ] Existing `package.json` commands contain no `tee`, Bash redirection, or untracked log output.
-- [ ] Smoke config, token, process, port, and logs are cleaned on success and failure.
-- [ ] No unauthenticated listener remains after smoke; bind was loopback only.
-- [ ] No Linux systemd/sysfs/procfs/block-device behavior or test assertion was altered.
-- [ ] Full-suite report separates passed, ignored, filtered, and unavailable tests.
-- [ ] Documentation makes no claims beyond observed Windows and existing Linux evidence.
+- [x] Only the manifest field and scoped docs/scripts changed in this phase.
+- [x] Existing `package.json` commands contain no `tee`, Bash redirection, or untracked log output.
+- [x] Smoke config, token, process, port, and logs are cleaned on success and failure.
+- [x] No unauthenticated listener remains after smoke; bind was loopback only.
+- [x] No Linux systemd/sysfs/procfs/block-device behavior or test assertion was altered.
+- [x] Full-suite report separates passed, ignored, filtered, and unavailable tests.
+- [x] Documentation makes no claims beyond observed Windows and existing Linux evidence.
 
 ## Next steps
 

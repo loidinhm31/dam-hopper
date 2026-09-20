@@ -31,15 +31,16 @@ relative output always uses forward slashes. Terminal profile `cwd` values are
 serialized relative to their project with forward slashes. Projects outside
 the registry directory remain absolute, preserving the platform path value.
 
-**Windows paths:** Drive-letter, mixed-separator, UNC, and `\\?\` verbatim
-absolute project paths are accepted and covered by Windows-gated tests.
-Verbatim values are preserved by config read/write; UNC availability still
-depends on the target machine and share.
-
+**Windows paths and TOML escaping:** Drive-letter (`C:\projects\app`), mixed-separator (`C:/projects/app`), UNC (`\\server\share\project`), and extended verbatim (`\\?\C:\projects\app`) absolute project paths are supported and covered by Windows-gated tests.
+In TOML configuration files, backslashes must be correctly formatted:
+- Double-quoted strings require double backslashes: `path = "C:\\projects\\app"` or `path = "\\\\server\\share\\project"`.
+- Single-quoted (literal) strings preserve backslashes verbatim: `path = 'C:\projects\app'` or `path = '\\server\share\project'`.
+- Forward-slash format is fully supported and requires no escaping: `path = "C:/projects/app"`.
+Verbatim values are preserved by config read/write; UNC availability depends on the target machine and share.
 The same platform-aware path identity is used for registered Git worktree
 targets. On Windows it normalizes separators, strips extended drive/UNC
-prefixes, and compares case-insensitively; POSIX identity keeps case and
-
+prefixes, and compares case-insensitively; POSIX identity keeps case and treats
+backslashes as ordinary characters.
 ### Path validation and Windows target identity
 
 Configuration validation is lexical and deterministic. The parser rejects
@@ -1155,7 +1156,7 @@ Keys are stored in-memory per session (not persisted to disk).
 1. Create `~/.config/dam-hopper/dam-hopper.toml` with at least two projects whose `projects[].path` values point at separate roots. On Windows, use different drives if available.
    Expected: `GET /api/workspace/status` reports the registry `configPath` and the expected `projectCount`.
 
-2. Start the same-origin server with `cargo run -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800 --host 127.0.0.1`.
+2. Start the same-origin server with `cargo run --manifest-path server/Cargo.toml -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800 --host 127.0.0.1`.
    Expected: startup succeeds without requiring a repo-local `dam-hopper.toml`.
 
 3. Browse and read files in each project, then create or edit a file inside each root.
@@ -1172,6 +1173,71 @@ Keys are stored in-memory per session (not persisted to disk).
 
 7. On Windows or in any environment with a reachable network share, add a temporary UNC-style project entry such as `path = "\\\\server\\share\\project"`.
    Expected: the registry either works for that project in your environment or fails in a clear, local way that you can document before rollout. Do not assume UNC behavior from Linux CI alone.
+
+### Windows Server Loopback Smoke Checklist
+
+To verify `dam-hopper-server` on Windows 11 without exposing network endpoints or touching production configuration:
+
+1. **Create an isolated temporary configuration**:
+   ```powershell
+   # PowerShell
+   $tempConfig = [System.IO.Path]::GetTempFileName() + ".toml"
+   @'
+   [workspace]
+   name = "windows-smoke"
+
+   [[projects]]
+   name = "smoke-proj"
+   path = "."
+   type = "cargo"
+   '@ | Set-Content -Path $tempConfig -Encoding utf8
+   ```
+
+   ```cmd
+   :: cmd.exe
+   set TEMP_CONFIG=%TEMP%\dam-hopper-smoke.toml
+   (
+     echo [workspace]
+     echo name = "windows-smoke"
+     echo.
+     echo [[projects]]
+     echo name = "smoke-proj"
+     echo path = "."
+     echo type = "cargo"
+   ) > "%TEMP_CONFIG%"
+   ```
+
+2. **Start the server bound strictly to loopback (`127.0.0.1`) with `--no-auth`**:
+   ```powershell
+   # PowerShell; pre-build to avoid a first-run compile delay.
+   cargo build --manifest-path server/Cargo.toml --bins
+   $outLog = [System.IO.Path]::GetTempFileName()
+   $errLog = [System.IO.Path]::GetTempFileName()
+   $job = Start-Process -FilePath "cargo" -ArgumentList "run", "--manifest-path", "server/Cargo.toml", "--", "--config", $tempConfig, "--host", "127.0.0.1", "--port", "4801", "--no-auth" -WorkingDirectory (Get-Location).Path -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+   ```
+
+3. **Probe `/api/health` and verify HTTP 200 JSON**:
+   ```powershell
+   $res = $null
+   $deadline = (Get-Date).AddSeconds(30)
+   while ((Get-Date) -lt $deadline -and $null -eq $res) {
+     try {
+       $candidate = Invoke-RestMethod -Uri "http://127.0.0.1:4801/api/health"
+       if ($candidate.status -eq "ok" -and $candidate.schemaVersion -eq 1) { $res = $candidate }
+     } catch {}
+     if ($null -eq $res) { Start-Sleep -Milliseconds 500 }
+   }
+   if ($null -eq $res) { throw "Server did not become healthy within 30 seconds" }
+   $res | ConvertTo-Json
+   # Expected: status = "ok", schemaVersion = 1, role = "api"
+   ```
+
+4. **Clean up the recorded server process and temporary files**:
+   ```powershell
+   if (!$job.HasExited) { & taskkill.exe /PID $job.Id /T /F | Out-Null }
+   Wait-Process -Id $job.Id -Timeout 5 -ErrorAction SilentlyContinue
+   Remove-Item -Path $tempConfig, $outLog, $errLog -Force
+   ```
 
 ## Troubleshooting Configuration
 

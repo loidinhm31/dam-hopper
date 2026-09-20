@@ -319,4 +319,4 @@ physical or out-of-band recovery, and a bounded rollback-owned window.
 No new product or implementation questions were introduced by Phase 07. The
 remaining operational questions about target-host observer feasibility, exclusive
 `rtc0` ownership, shutdown/join latency, and physical or out-of-band wake
-approval remain in [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md#unresolved-questions).
+approval remain in [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md#unresolved-questions-configured-agent-automatic-suspend-canary).
