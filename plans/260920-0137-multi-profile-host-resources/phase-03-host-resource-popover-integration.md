@@ -13,9 +13,11 @@
 
 - Date: 2026-09-20
 - Priority: P2
-- Plan status: Pending
-- Implementation status: Not started
-- Review status: Not started
+- Plan status: DONE (2026-09-20)
+- Implementation status: DONE (2026-09-20)
+- Review status: DONE (2026-09-20)
+- Progress: 100%
+- Completion timestamp: 2026-09-20
 - Effort: 6h
 - Goal: make the current popover a Fleet Deck by default for multi-profile users, then reuse the exact current host view as an owner-bound drilldown.
 
@@ -153,16 +155,16 @@ A selected deep snapshot may have both the fleet observer and detail observer on
 
 ## Todo list
 
-- [ ] Add fleet-versus-legacy mode gate.
-- [ ] Add non-persisted Fleet/profile view selection.
-- [ ] Add accessible Fleet and profile header pills.
-- [ ] Use fleet summary for multi-profile trigger/badge.
-- [ ] Render deck and reuse one owner-bound drilldown body.
-- [ ] Gate 1s metrics to visible connected drilldown.
-- [ ] Mark read only for inspected profile.
-- [ ] Reset safely on disconnect/removal/generation change.
-- [ ] Bind pin/suspend/force-sleep labels and actions to inspected owner.
-- [ ] Preserve legacy one-profile DOM, focus, labels, and behavior.
+- [x] Add fleet-versus-legacy mode gate.
+- [x] Add non-persisted Fleet/profile view selection.
+- [x] Add accessible Fleet and profile header pills.
+- [x] Use fleet summary for multi-profile trigger/badge.
+- [x] Render deck and reuse one owner-bound drilldown body.
+- [x] Gate 1s metrics to visible connected drilldown.
+- [x] Mark read only for inspected profile.
+- [x] Reset safely on disconnect/removal/generation change.
+- [x] Bind pin/suspend/force-sleep labels and actions to inspected owner.
+- [x] Preserve legacy one-profile DOM, focus, labels, and behavior.
 
 ## Success Criteria
 
@@ -197,13 +199,13 @@ A selected deep snapshot may have both the fleet observer and detail observer on
 
 ## Side-Effect Review Checklist
 
-- [ ] Fleet open performs reads only and marks no profile read.
-- [ ] Profile inspection marks only that profile read.
-- [ ] Profile switch resets local diagnosis/action context; it does not change active/Settings profile.
-- [ ] Pin and force-sleep remain single-owner actions with existing confirmation/fencing.
-- [ ] Closing stops high-frequency metrics and removes listeners through normal hook cleanup.
-- [ ] No connect/disconnect, auto-connect preference, profile order, or persisted selection change.
-- [ ] No duplicate dialog, focus trap, high-frequency interval, or query-key family.
+- [x] Fleet open performs reads only and marks no profile read.
+- [x] Profile inspection marks only that profile read.
+- [x] Profile switch resets local diagnosis/action context; it does not change active/Settings profile.
+- [x] Pin and force-sleep remain single-owner actions with existing confirmation/fencing.
+- [x] Closing stops high-frequency metrics and removes listeners through normal hook cleanup.
+- [x] No connect/disconnect, auto-connect preference, profile order, or persisted selection change.
+- [x] No duplicate dialog, focus trap, high-frequency interval, or query-key family.
 
 ## Next steps
 

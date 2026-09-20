@@ -355,13 +355,27 @@ hooks use `profileQueryKey(owner, ...)`. Session list/detail polling runs only
 for visible documents, and destructive confirmation retains the captured owner
 and range.
 
-**Host and suspend.** `HostResourcePopover` resolves an explicit owner before
-the Settings target and active profile. Snapshot, alert history, compatibility
-metrics, idle-suspend status, and `UiConfig.hostResourcePinnedMount` updates
-remain owner-local. The host bridge validates resource evidence and patches
-only the event owner's query keys. `use-host-resource-alert-presentation.ts`
-maintains unread incident versions globally and per profile, keyed by
-`incidentId`, with bounded presentation state.
+**Host and suspend.** `HostResourcePopover` keeps explicit-owner compatibility
+first: an `owner` prop, or at most one configured profile, renders the existing
+single-host drilldown and resolves its owner through Settings/active-profile
+fallbacks. With no explicit `owner` and more than one configured profile it
+enters Fleet mode. The fleet trigger uses the Phase 01 summary; the Fleet Deck
+and profile pills never merge host telemetry or change connection intent.
+
+Fleet mode opens on the deck. Its header toolbar keeps a `Fleet` toggle plus one
+profile pill per watched entry; connected pills inspect that profile and
+disconnected pills remain status-only. Opening Fleet marks no profile read;
+entering a connected drilldown marks only that profile read. The shared
+drilldown body binds snapshot/history/config/pin/idle-suspend/force-suspend
+reads and mutations to the selected `ConnectionRef`, with no ambient fallback.
+
+The fleet hook continues 15-second snapshot reconciliation per watched
+connected profile. Detail compatibility metrics use an isolated 1-second query
+only while the popover is open on a connected drilldown; Fleet, close, and
+offline views disable it. If the selected profile is removed or disconnects,
+the popover clears the selection, diagnosis/action context, and returns to
+Fleet rather than retargeting another profile. Single-profile ownership,
+status, focus, and action guards remain unchanged.
 
 `HostIdleSuspendStatus` presents server-authoritative fleet/timing/measurement
 state without turning unknown values into quiet or zero. `ForceSleepDialog`
@@ -381,6 +395,30 @@ profile ConnectionRef
 
 The complete source map and privacy/safety limits are in the
 [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md).
+
+### Fleet Deck & Drilldown Popover (Phase 03, 2026-09-20)
+
+`HostResourcePopover` selects Fleet mode exactly when
+`owner === undefined && configuredProfileCount > 1`. Otherwise it retains the
+single-profile trigger, acknowledgement, owner fallback, and shared
+drilldown contract. Fleet mode is non-persisted view state: it opens on
+`HostResourceFleetDeck`, while the existing glance/diagnosis/idle-suspend body
+is reused for a selected profile.
+
+The fleet header adds a labelled toolbar with a `Fleet` toggle and one pill per
+watched profile in configured order. Connected pills switch to that profile's
+drilldown; disconnected pills remain non-actionable status text. The summary
+surfaces watched/connected, attention, and unread counts without relying on
+color. Fleet opening does not acknowledge alerts; entering a connected
+drilldown acknowledges only that profile.
+
+`useMultiHostResources` continues owner/generation-qualified 15-second snapshot
+watching for the fleet. The compatibility metrics query is enabled only for
+the visible, connected drilldown (`open && isDrilldown`) and remains bound to
+the selected owner, so no Fleet view or background popover starts 1-second
+metrics polling. If the selected profile is removed or disconnects, selection
+and local diagnosis/force-sleep context reset and the view returns to Fleet;
+it never falls through to Settings or the active profile.
 
 ### Phase 09 integration, qualification, and release cutover (2026-09-17)
 
@@ -4137,9 +4175,12 @@ Component contracts are covered by `HostResourceFleetCard.test.tsx` and
 ### Host-resource glance panel (current UI)
 
 The top-nav popover keeps the same monitoring-only boundary and existing query
-ownership. It combines the cached deep snapshot with the cached compatibility
-metrics; opening the popover may poll the compatibility projection, but it must
-not start another host sampler or add a second telemetry endpoint.
+ownership. In single-profile mode it combines the cached deep snapshot with
+cached compatibility metrics. In Fleet mode the deck uses the fleet read model
+until a connected profile is inspected; that drilldown then combines the
+selected profile's snapshot with its isolated compatibility metrics. The
+visible drilldown may poll compatibility metrics only at its existing tier; it
+must not start another host sampler or add a telemetry endpoint.
 
 The visible body uses two tiers:
 

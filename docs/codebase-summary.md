@@ -1,8 +1,9 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,067
-files, 4,644,538 tokens, 19,339,599 characters; five security-flagged files
+**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,069
+files, 4,658,397 tokens, 19,400,085 characters; five security-flagged files
 excluded).
+
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
 security scanning are not represented in full.
@@ -69,6 +70,7 @@ Snapshot responses are generation-fenced with `isCurrentConnection`, and late
 responses fail with `ConnectionOwnerError` instead of entering a replacement
 owner's cache. `resolveHostResourceFleetSummary` performs deterministic counts
 and severity/unavailable/sampling/stale precedence without summing or
+
 deduplicating host metrics. Focused contracts live in
 `packages/ui/src/hooks/use-multi-host-resources.test.tsx` and
 `packages/ui/src/lib/host-resource-state.test.ts`.
@@ -93,6 +95,28 @@ seconds/minutes/hours/days without a per-card timer. Focused component
 contracts live in `HostResourceFleetCard.test.tsx` and
 `HostResourceFleetDeck.test.tsx`; formatter/state contracts remain in
 `host-resource-state.test.ts`.
+
+### Phase 03 multi-profile host-resource popover integration
+
+`HostResourcePopover` enters Fleet mode only when no explicit `owner` is
+provided and more than one profile is configured. It opens on the
+`HostResourceFleetDeck`, adds a `Fleet` toggle plus one status/profile pill per
+watched entry, and reuses one owner-bound glance/diagnosis/idle-suspend body for
+connected drilldowns. Fleet opening acknowledges no profile; inspection marks
+only the selected profile read.
+
+Phase 01 keeps 15-second snapshots isolated by profile/generation. The
+popover's compatibility metrics query is enabled only for an open, connected
+drilldown, so exactly the inspected owner receives 1-second polling; Fleet,
+closed, and disconnected views start none. Removing or disconnecting the
+inspected entry clears local diagnosis/action state and returns to Fleet rather
+than falling back to Settings or the active profile. Focus returns to the
+persistent pill or trigger across view changes and close.
+
+Focused component contracts live in
+`packages/ui/src/components/organisms/HostResourcePopover.test.tsx`; the Phase
+03 review recorded 8/8 popover tests, 178/178 Host organism tests, and a clean
+UI TypeScript build. Phase 04 remains the broader verification gate.
 
 ## Unified-profile files, editor, search, and Git (Phase 03)
 
