@@ -24,9 +24,9 @@ Primary evidence:
 
 ## Status
 
-- **Plan:** IN PROGRESS (1/3 phases complete; 33%; updated 2026-09-20 16:18:03 +07:00).
+- **Plan:** IN PROGRESS (2/3 phases complete; 67%; updated 2026-09-20 17:15:00 +07:00).
 - **Phase 01:** DONE (2026-09-20 16:18:03 +07:00; 100%; 2.5/2.5h). Focused Windows MSVC path/config tests passed 128/128; code review approved 9.2/10 with warnings recorded in the review report.
-- **Phase 02:** Pending — test harness and platform gating.
+- **Phase 02:** DONE (2026-09-20 17:15:00 +07:00; 100%; 3.5/3.5h). Test harness and platform gating verified; 978 passed, 0 failed, 3 ignored; code review approved 9.5/10. See the [tester report](../reports/tester-260920-1707-phase02-windows-test-harness.md) and [code review](../reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
 - **Phase 03:** Pending — server build, verification, and documentation.
 
 
@@ -44,15 +44,15 @@ Primary evidence:
 | # | Phase | Goal | Status | Effort |
 |---|---|---|---|---:|
 | 01 | [Path and config normalization](./phase-01-path-and-config-normalization.md) | Canonical Windows paths, UNC handling, valid TOML, slash-stable target identity | DONE (2026-09-20 16:18:03 +07:00; 100%) | 2.5h |
-| 02 | [Test harness and platform gating](./phase-02-test-harness-and-platform-gating.md) | Cmd-safe PTY tests, CRLF-stable Git tests, Linux-only gates, path assertions | Pending | 3.5h |
+| 02 | [Test harness and platform gating](./phase-02-test-harness-and-platform-gating.md) | Cmd-safe PTY tests, CRLF-stable Git tests, Linux-only gates, path assertions | DONE (2026-09-20 17:15:00 +07:00; 100%) | 3.5h |
 | 03 | [Server build, verification, and documentation](./phase-03-server-build-and-verification.md) | Default binary, full Windows qualification, live health smoke, docs | Pending | 3h |
 
 ## Side-Effect Review Checklist
 
-- [ ] Linux implementation files and Linux-only assertions unchanged except explicit gates.
-- [ ] Config writes preserve project meaning, reject traversal, and retain absolute paths.
-- [ ] Test shell/Git changes are test-only and temporary-resource scoped.
-- [ ] Windows never binds Unix helper sockets, probes sysfs, or attempts suspend.
+- [x] Linux implementation files and Linux-only assertions unchanged except explicit gates.
+- [x] Config writes preserve project meaning, reject traversal, and retain absolute paths.
+- [x] Test shell/Git changes are test-only and temporary-resource scoped.
+- [x] Windows never binds Unix helper sockets, probes sysfs, or attempts suspend.
 - [ ] Startup smoke uses loopback/no-auth only and terminates the child cleanly.
 - [ ] Documentation reports only observed Windows evidence; ignored Linux tests stay visible.
 - [ ] No generated logs, credentials, or build artifacts added to the tree.

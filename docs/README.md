@@ -41,6 +41,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
+- **[Windows Server Build and Verification Plan](../plans/260920-1312-windows-server-build-and-verify/plan.md)** — MSVC path/config normalization, cross-platform test harness, platform gates, and startup qualification
 - **[Changelog](./CHANGELOG.md)** — Dated feature, persistence, and release notes
 - **[Terminal Idle Suspend Security](./terminal-idle-suspend-security.md)** — Security invariants and helper execution policy
 

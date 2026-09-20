@@ -72,10 +72,15 @@ fn make_pty_opts(id: &str, command: &str) -> PtyCreateOpts {
     let mut env = HashMap::new();
     env.insert("TERM".into(), "xterm-256color".into());
     env.insert("HOME".into(), std::env::var("HOME").unwrap_or_default());
+    let command = if command == "cat" {
+        common::read_stdin_command().to_string()
+    } else {
+        command.to_string()
+    };
     PtyCreateOpts {
         id: id.to_string(),
-        command: command.to_string(),
-        cwd: "/tmp".to_string(),
+        command,
+        cwd: common::test_temp_cwd(),
         env,
         cols: 80,
         rows: 24,

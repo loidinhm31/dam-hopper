@@ -1105,7 +1105,7 @@ async fn test_workflow_harness_bounds_and_terminal_target_mismatch() {
         .pty_manager
         .create(PtyCreateOpts {
             id: terminal_id.clone(),
-            command: "sleep 5".into(),
+            command: common::hold_command(5).into(),
             cwd: ctx._temp_dir.path().display().to_string(),
             env: Default::default(),
             cols: 80,

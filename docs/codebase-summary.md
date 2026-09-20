@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
 **Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v0.2.26;
-2,081 files, 4,711,646 tokens, 19,789,376 characters; five security-flagged
+2,084 files, 4,718,267 tokens, 19,815,665 characters; five security-flagged
 files excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
@@ -417,6 +417,36 @@ Focused regression coverage is in `server/src/config/tests.rs`,
 `server/src/system/tests.rs`, `server/src/agent_store/tests.rs`, and
 `server/tests/workspace_targets.rs`, with Windows-gated drive/UNC/verbatim,
 symlink, and worktree identity cases.
+
+## Windows test harness and platform gating (Phase 02)
+
+The Windows MSVC harness adapts tests, not runtime contracts. API unit tests
+and shared integration helpers select fixed `cmd.exe`/Unix commands, normalize
+CRLF only while comparing PTY output, use existing `TempDir` paths, and compare
+target metadata through `target_path_identity` or canonical `PathBuf` values.
+`browser_debug_artifacts`, `idle_suspend`, `idle_suspend_phase07`,
+`workflow_api`, and project-worktree lifecycle tests consume the shared
+integration command/cwd helpers.
+
+Git test repositories and clones set local `core.autocrlf=false` and
+`core.eol=lf`, preventing user/global configuration from changing LF fixture
+assertions. Linux `/dev`, sysfs, procfs/netlink, and systemd assertions remain
+target-gated; pure unsupported/non-Linux behavior stays covered. In
+`server/src/git/diff.rs`, `discard_hunk` drops libgit2 `Patch`/`Diff` before
+rewriting the working file, avoiding Windows sharing violations.
+System-specific boundaries are covered by
+`server/src/system/tests.rs`, `server/src/system/alerts.rs`, and
+`server/src/system/monitor.rs`; portable state/monitor behavior remains
+separate from Linux-only `/dev` and sysfs fixtures.
+
+
+Serial Windows evidence passed **978 tests, 0 failed, 3 ignored**; focused
+API/Git/system filters passed **160/160**, **90/90**, and **36/36**. This is
+harness/platform qualification, not full server startup or release evidence;
+Phase 03 owns that gate. See the
+[Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/phase-02-test-harness-and-platform-gating.md),
+[test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md),
+and [review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
 
 ## Workspace settings import/export
 

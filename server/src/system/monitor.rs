@@ -628,6 +628,7 @@ mod tests {
         assert!(monitor.task.lock().unwrap().is_none());
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn reconfiguration_immediately_trims_private_resource_alert_retention() {
         let root = Arc::new(RwLock::new(PathBuf::from("/tmp")));

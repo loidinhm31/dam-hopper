@@ -6,13 +6,14 @@
 - Dependency: [Phase 01 — path and config normalization](./phase-01-path-and-config-normalization.md)
 - Scout: [Windows codebase locations](../reports/scout-260919-2248-windows-codebase-locations.md)
 - Existing verification: [Windows test report](../reports/tester-260919-2248-windows-test-report.md)
+- Phase 02 test evidence: [Windows harness report](../reports/tester-260920-1707-phase02-windows-test-harness.md); [code review](../reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
 - Terminal contract: [API reference](../../docs/api-reference.md:1696-1721)
 - Platform architecture: [system architecture](../../docs/system-architecture.md)
 
 ## Overview
 
 **Priority:** P1  
-**Status:** Pending  
+**Status:** DONE (2026-09-20 17:15:00 +07:00; 100%; 3.5/3.5h)  
 **Goal:** Make unit and integration tests exercise the same observable contracts on Windows without pretending Windows has a Unix shell, Linux sysfs, procfs, block devices, or systemd.
 
 The current PTY builder maps non-empty Windows commands to `cmd.exe /C` (`server/src/pty/manager.rs:4484-4549`), while many API tests send `printf`, `$VAR`, `cat`, and `sleep` (`server/src/api/tests.rs:831-893,896-984,3777-4023,4654-4854`). Git tests also use `/tmp` as a clone cwd and inherit user `core.autocrlf` (`server/src/git/tests.rs:62-128`). These are harness defects, not product behavior defects.
@@ -66,20 +67,23 @@ Suggested test-only helpers:
 
 - `server/src/api/tests.rs:831-893,896-984,3777-4048,4654-4868` — cmd-safe terminal commands, CRLF normalization, hold-open cleanup, canonical target assertions.
 - `server/src/git/tests.rs:33-76,94-128` — local Git line-ending policy and platform-valid clone cwd; preserve exact operation assertions at `1368-1450,1516-1538,1806-1828`.
+- `server/src/git/diff.rs:731-800` — release libgit2 patch/diff handles before Windows worktree rewrites.
 - `server/src/system/tests.rs:319-399` — gate `/dev` block-device classifier tests to Linux.
 - `server/src/system/alerts.rs:1436-1479` — gate alert fixtures that assert Linux `/dev` source semantics; leave pure state-machine tests portable.
+- `server/src/system/monitor.rs:631-694` — gate Linux-only resource-alert retention tests while retaining portable monitor coverage.
 - `server/tests/common/mod.rs:1-18` — shared integration command/cwd/path helpers.
 - `server/tests/browser_debug_artifacts.rs:122-140` — replace raw `cat` hold command.
 - `server/tests/idle_suspend.rs:71-88,461,923,1088,1131,1187,1234,1275,1400-1505` — temp cwd and platform command helper; preserve ignored Linux live smoke gate.
 - `server/tests/idle_suspend_phase07.rs:37-54,252,351` — temp cwd and platform command helper.
+- `server/tests/project_worktree_lifecycle.rs:1-193` — existing temporary worktree paths and canonical target-identity assertions.
 - `server/tests/workflow_api.rs:1052-1135` — replace raw `sleep` with the shared hold command.
-- `server/tests/workspace_targets.rs:74-167` — normalized path comparisons and, where needed, local Git line-ending setup.
 
 ### Verify/retain
 
 - `server/src/pty/manager.rs:4484-4549,4890-4916` — existing production cmd.exe/Unix command contract; no behavior rewrite.
 - `server/src/system/platform.rs:338-362` — explicit non-Linux unsupported snapshot test.
-- `server/tests/idle_suspend_diagnostics.rs:1` and `server/tests/idle_suspend_diagnostics_linux_smoke.rs:1` — Linux-only diagnostic gates.
+- `server/tests/workspace_targets.rs:74-167` — normalized path comparisons retained from Phase 01; no Phase 02 source change.
+- `server/tests/idle_suspend_diagnostics.rs:1` and `server/tests/idle_suspend_diagnostics_linux_smoke.rs:1` — Linux-only diagnostic gates retained unchanged.
 
 ### Create/delete
 
@@ -106,13 +110,13 @@ Suggested test-only helpers:
 
 ## Todo list
 
-- [ ] Add cmd-compatible API terminal command helpers.
-- [ ] Normalize CRLF at output assertion boundaries.
-- [ ] Replace `/tmp`, `cat`, `sleep`, `printf`, and `$VAR` in cross-platform tests.
-- [ ] Scope Git `autocrlf`/`eol` settings to all temp repositories and clones.
-- [ ] Gate Linux `/dev` and sysfs/systemd tests without weakening assertions.
-- [ ] Normalize API and workspace-target path assertions.
-- [ ] Verify every PTY test cleans up its child/session.
+- [x] Add cmd-compatible API terminal command helpers.
+- [x] Normalize CRLF at output assertion boundaries.
+- [x] Replace `/tmp`, `cat`, `sleep`, `printf`, and `$VAR` in cross-platform tests.
+- [x] Scope Git `autocrlf`/`eol` settings to all temp repositories and clones.
+- [x] Gate Linux `/dev` and sysfs/systemd tests without weakening assertions.
+- [x] Normalize API and workspace-target path assertions.
+- [x] Verify every PTY test cleans up its child/session.
 
 ## Success Criteria
 
@@ -122,7 +126,7 @@ Suggested test-only helpers:
 - Integration PTY tests run from existing Windows temp directories; worktree metadata assertions accept only equivalent canonical identities.
 - Linux-focused tests remain unchanged in behavior and still require an actual Linux host for live kernel coverage.
 
-Validation: focused Windows commands for `api::tests` terminal filters, Git tests, `system` alerts, `workspace_targets`, `idle_suspend`, `idle_suspend_phase07`, and browser/workflow integration; Phase 03 runs the complete `cargo test` gate.
+Validation complete on Windows 11 MSVC, serial `-j 1`: `cargo test api::tests` 160/160, `cargo test git::tests` 90/90, `cargo test system::` 36/36, and `cargo test --tests` 978 passed, 0 failed, 3 ignored. See the [tester report](../reports/tester-260920-1707-phase02-windows-test-harness.md) and [code review](../reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md). Phase 03 owns the all-target build, startup, and health gate.
 
 ## Risk Assessment
 
@@ -141,14 +145,14 @@ Validation: focused Windows commands for `api::tests` terminal filters, Git test
 
 ## Side-Effect Review Checklist
 
-- [ ] Production PTY command construction is unchanged.
-- [ ] Production Git behavior and user Git configuration are untouched.
-- [ ] No Linux test was made weaker; only target-inapplicable tests are skipped.
-- [ ] All cmd.exe/ping/more children and PTY sessions are stopped and removed.
-- [ ] No test writes outside its `TempDir` or invokes systemctl/sysfs on Windows.
-- [ ] CRLF normalization is not applied to persisted/config/API data.
-- [ ] Path assertions still reject foreign/sibling targets.
+- [x] Production PTY command construction is unchanged.
+- [x] Production Git behavior and user Git configuration are untouched.
+- [x] No Linux test was made weaker; only target-inapplicable tests are skipped.
+- [x] All cmd.exe/ping/more children and PTY sessions are stopped and removed.
+- [x] No test writes outside its `TempDir` or invokes systemctl/sysfs on Windows.
+- [x] CRLF normalization is not applied to persisted/config/API data.
+- [x] Path assertions still reject foreign/sibling targets.
 
 ## Next steps
 
-Once Phase 02 focused checks pass, Phase 03 adds `default-run`, executes the full serial Windows unit/integration suite, performs a live no-auth health smoke, and updates the Windows runbook with the exact evidence boundary.
+Phase 02 DONE (2026-09-20 17:15:00 +07:00; review 9.5/10). Phase 03 adds `default-run`, executes the remaining full Windows build/startup qualification, performs a live no-auth health smoke, and updates the Windows runbook with the exact evidence boundary.
