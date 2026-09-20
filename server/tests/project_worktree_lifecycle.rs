@@ -3,7 +3,9 @@ use std::process::Command;
 
 use dam_hopper_server::{
     error::AppError,
-    workspace_target::{ProjectTargetRef, WorkspaceTargetError, WorkspaceTargetResolver},
+    workspace_target::{
+        target_path_identity, ProjectTargetRef, WorkspaceTargetError, WorkspaceTargetResolver,
+    },
 };
 
 fn git(args: &[&str], cwd: &Path) -> std::process::Output {
@@ -79,8 +81,8 @@ async fn add_list_select_remove_lifecycle_stays_on_configured_repository() {
         dunce::canonicalize(&worktree).unwrap().as_path()
     );
     assert_eq!(
-        selected.worktree().unwrap().repository_path,
-        worktree.to_string_lossy().as_ref()
+        target_path_identity(Path::new(&selected.worktree().unwrap().repository_path)),
+        target_path_identity(&worktree)
     );
 
     let worktree_text = worktree.to_string_lossy().into_owned();

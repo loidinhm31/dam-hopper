@@ -1,3 +1,5 @@
+mod common;
+
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
@@ -124,7 +126,7 @@ fn create_terminal(state: &AppState, root: &std::path::Path) -> u64 {
         .pty_manager
         .create(PtyCreateOpts {
             id: "shell:browser-debug".into(),
-            command: "cat".into(),
+            command: common::read_stdin_command().into(),
             cwd: root.display().to_string(),
             env: Default::default(),
             cols: 80,

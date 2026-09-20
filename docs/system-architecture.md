@@ -3739,6 +3739,54 @@ New WebSocket protocol messages enable explicit buffer attachment:
 - 1 race condition test: `create_during_backoff_cancels_pending_restart` (Phase 07, validates idempotency)
 - Covers: session create/list, write/buffer, resize, kill, remove, respawn, concurrent create race
 
+### Windows server test harness and platform gates (Phase 02, 2026-09-20)
+
+Phase 02 keeps production behavior portable by adapting only tests to the
+host. The API unit harness and shared integration helpers select fixed
+platform commands: Windows PTYs run `cmd.exe`/bounded loopback `ping`, while
+Unix retains `printf`, `cat`, and `sleep`. PTY assertions normalize CRLF to LF
+only at comparison boundaries; persisted/API values and security assertions are
+not rewritten.
+
+Source map for the delivered harness boundary:
+
+| Area | Files |
+| --- | --- |
+| API command/output assertions | `server/src/api/tests.rs` |
+| Shared integration commands and cwd | `server/tests/common/mod.rs` |
+| Git fixture policy and Windows diff rewrite | `server/src/git/tests.rs`, `server/src/git/diff.rs` |
+| System metrics/alerts | `server/src/system/tests.rs`, `server/src/system/alerts.rs`, `server/src/system/monitor.rs` |
+| Integration consumers | `server/tests/browser_debug_artifacts.rs`, `server/tests/idle_suspend.rs`, `server/tests/idle_suspend_phase07.rs`, `server/tests/workflow_api.rs`, `server/tests/project_worktree_lifecycle.rs` |
+
+
+| Boundary | Windows rule | Linux/non-Windows rule |
+| --- | --- | --- |
+| API and integration PTYs | Use `cmd.exe` expansion (`%NAME%`, `%CD%`), existing temp cwd, bounded hold command, and explicit cleanup | Keep Unix shell commands and existing temp-resource cleanup |
+| Git fixtures | Configure each repository/clone locally with `core.autocrlf=false`, `core.eol=lf`; clone from an existing temp parent | Same local config; no global/user config dependency |
+| Target metadata | Compare `target_path_identity`/canonical paths, not raw separator or drive-case strings | Preserve platform-native identity contract |
+| Host-specific tests | Do not probe Linux kernel paths | `/dev`, sysfs, procfs/netlink, and systemd assertions run only on Linux |
+
+The shared helpers live in `server/src/api/tests.rs` and
+`server/tests/common/mod.rs`; `browser_debug_artifacts`, `idle_suspend`,
+`idle_suspend_phase07`, `workflow_api`, and project-worktree integration tests
+consume them rather than duplicating shell strings. Linux-only idle-suspend
+diagnostics remain crate-gated, while explicit unsupported host-metrics tests
+continue to run on non-Linux targets.
+
+The Git diff boundary has one Windows-specific lifetime requirement:
+`discard_hunk` drops the libgit2 `Patch` and `Diff` before rewriting the
+working file. This prevents `ERROR_SHARING_VIOLATION` from an open libgit2
+handle and does not change the discard API or hunk semantics.
+
+Serial Windows MSVC evidence passed **978 tests, 0 failed, 3 ignored**; focused
+API/Git/system filters passed **160/160**, **90/90**, and **36/36**. The review
+approved the implementation at **9.5/10** with no critical issues. The three
+ignored cases are expected Linux or pinned-binary gates and are not counted as
+Windows runtime proof. See the
+[Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/phase-02-test-harness-and-platform-gating.md),
+[test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md),
+and [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
+
 ### port_forward/ (Phase 03: Port Detection ⧖)
 
 Automatic detection and tracking of ports opened by running processes in PTY sessions.

@@ -9,6 +9,23 @@
   See the [Phase 01 plan](../plans/260920-1312-windows-server-build-and-verify/phase-01-path-and-config-normalization.md),
   [Configuration Guide](./configuration-guide.md), and
   [System Architecture](./system-architecture.md).
+- **Windows server test harness and platform gating — Phase 02 complete
+  (2026-09-20).** Cross-platform API and integration harnesses now use
+  platform-owned terminal commands (`cmd.exe`/Unix), assertion-boundary CRLF
+  normalization, existing temporary directories, strict target-path identity,
+  and explicit PTY cleanup. Git fixtures set local `core.autocrlf=false` and
+  `core.eol=lf`; Linux `/dev`, sysfs, and diagnostic assertions remain
+  target-gated while unsupported non-Linux behavior stays covered.
+- The Windows `discard_hunk` path drops libgit2 `Patch`/`Diff` handles before
+  rewriting files, preventing Windows sharing violations without changing the
+  API contract. Serial MSVC validation passed **978/978 executed tests** with
+  **0 failures and 3 expected ignores**; focused API/Git/system filters passed
+  **160/160**, **90/90**, and **36/36**. Code review approved **9.5/10** with
+  no critical issues. See the [Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/phase-02-test-harness-and-platform-gating.md),
+  [test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md),
+  [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md),
+  and [Windows build plan](../plans/260920-1312-windows-server-build-and-verify/plan.md).
+
 
 - **Multi-profile Host Resources watch — Phase 04 verification and testing complete (100%; 2026-09-20).** Focused unit/component and Chromium validation passed **102/102** tests (83 unit/component; 19 browser), and the UI TypeScript check passed with 0 errors. Coverage proves watch scope, owner/generation isolation, tiered polling, unread partitioning, single-profile compatibility, accessibility, responsive layout, and security negatives. The parent plan is now **COMPLETE (4/4 phases; 100%)**. See the [Phase 04 plan](../plans/260920-0137-multi-profile-host-resources/phase-04-verification-and-testing.md), [tester report](../plans/reports/tester-260920-1130-phase04-multi-profile-host-resources.md), [code review](../plans/reports/code-review-260920-1132-phase04-verification-and-testing.md), and [roadmap](./project-roadmap.md).
 

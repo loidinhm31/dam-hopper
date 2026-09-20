@@ -352,6 +352,7 @@ fn disk_metrics(
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn classifies_only_verified_persistent_block_devices_as_alertable() {
     for (source, file_system) in [
