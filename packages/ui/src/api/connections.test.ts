@@ -16,7 +16,8 @@ import {
 import { syncActiveProfileConnection } from "./connections.js";
 import { latestTerminalSessionIncarnation, rememberTerminalSessionIncarnation } from "../lib/terminal-incarnation-state.js";
 import { ConnectionOwnerError } from "./ownership.js";
-
+import { getTransport as getAmbientTransport } from "./transport.js";
+import { IdleTransport } from "./idle-transport.js";
 // Mock server-config getters
 const mockProfiles = [
   {
@@ -257,6 +258,32 @@ describe("connections registry", () => {
     expect(() => getTransport(ownerA)).toThrowError(ConnectionOwnerError);
     expect(getTransport(ownerB)).toBe(b);
     expect(latestTerminalSessionIncarnation(terminalB)).toBe(9);
+  });
+  it("does not demote ambient transport when disconnecting a non-ambient profile", async () => {
+    mockTokens["prof-auth"] = "token-b";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ authenticated: true, workbenchProtocol: 2 }),
+      }),
+    );
+    await connectProfile("prof-valid");
+    const ambientBefore = getAmbientTransport();
+    expect(ambientBefore).not.toBeInstanceOf(IdleTransport);
+
+    await connectProfile("prof-auth");
+
+    disconnectProfile("prof-auth");
+
+    const ambientAfter = getAmbientTransport();
+    expect(ambientAfter).toBe(ambientBefore);
+    expect(ambientAfter).not.toBeInstanceOf(IdleTransport);
+
+    disconnectProfile("prof-valid");
+    const ambientFinal = getAmbientTransport();
+    expect(ambientFinal).toBeInstanceOf(IdleTransport);
   });
 
   it("deduplicates concurrent in-flight connect calls", async () => {

@@ -407,6 +407,29 @@ creating a second server workspace hierarchy.
 - Return independent Git results per target and retry only SSH-auth failures
   after passphrase load, without replaying successful targets.
 
+- Keep the file-tree watch lifetime coupled to its originating owner transport:
+  event binding, lazy child listing, and unsubscribe must not recapture the
+  ambient profile after remount or reconnect.
+- Provide a callable idle/offline filesystem seam that rejects unavailable
+  subscription and mutation operations instead of fabricating an empty watch.
+- Contain FileTree render/effect failures to the Explorer surface while
+  preserving the workspace shell, editor state, and active terminals.
+
+**Transport-safe follow-up acceptance:**
+
+- [x] Qualified targets resolve through their profile's captured
+      `ConnectionRef`; owner-resolution failure never falls back to another
+      profile's ambient transport.
+- [x] Cleanup unsubscribes through the originating transport and retires the
+      exact cached subscription payload, so a remount obtains a fresh watch ID.
+- [x] Profile generation changes retire the prior watch before binding the new
+      generation; unrelated profile disconnects preserve ambient ownership.
+- [x] `IdleTransport` exposes callable event/unsubscribe methods and explicit
+      `Server profile required` rejections for subscription/mutation calls.
+- [x] Desktop, compact, and terminal-floating Explorer surfaces each have a
+      target-keyed local `ErrorBoundary` around `FileTree`/`Suspense`.
+
+
 **Acceptance criteria:**
 
 - [x] Owner-bound clients project profile-qualified targets to server wire

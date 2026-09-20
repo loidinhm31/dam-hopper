@@ -28,6 +28,14 @@
 - **Windows server build, verification, and documentation — Phase 03 complete (2026-09-20 18:40:00 +07:00).** Added `default-run = "dam-hopper-server"`, verified Windows MSVC check/build/release gates, confirmed Linux-only binaries fail closed, and passed the serial suite with **978 tests, 0 failures, 3 ignored**. A loopback-only no-auth server smoke returned HTTP 200 from `/api/health` with valid schema/status and cleaned up its process/config artifacts. Windows runbook guidance now covers commands, paths, PTY shell semantics, unsupported Linux features, and evidence boundaries. Code review approved **9.6/10** with no critical issues. See the [Phase 03 plan](../plans/260920-1312-windows-server-build-and-verify/phase-03-server-build-and-verification.md), [review](../plans/reports/code-review-260920-1835-phase03-server-build-and-verification.md), and [roadmap](./project-roadmap.md).
 
 
+- **Transport-safe FS subscription follow-up — Phase 01 (2026-09-20).**
+  Documented profile-owned transport resolution, originating-watch cleanup and
+  cache retirement, fail-closed `IdleTransport` filesystem methods, ambient
+  ownership checks on disconnect, and local Explorer `ErrorBoundary` scope.
+  See the [Phase 01 plan](../plans/260920-1658-fix-on-fs-event-type-error/phase-01-fix-transport-fs-subscription.md),
+  [Phase 03 files guide](./phase-03-files-editor-search-git.md), and
+  [system architecture](./system-architecture.md).
+
 - **Multi-profile Host Resources watch — Phase 04 verification and testing complete (100%; 2026-09-20).** Focused unit/component and Chromium validation passed **102/102** tests (83 unit/component; 19 browser), and the UI TypeScript check passed with 0 errors. Coverage proves watch scope, owner/generation isolation, tiered polling, unread partitioning, single-profile compatibility, accessibility, responsive layout, and security negatives. The parent plan is now **COMPLETE (4/4 phases; 100%)**. See the [Phase 04 plan](../plans/260920-0137-multi-profile-host-resources/phase-04-verification-and-testing.md), [tester report](../plans/reports/tester-260920-1130-phase04-multi-profile-host-resources.md), [code review](../plans/reports/code-review-260920-1132-phase04-verification-and-testing.md), and [roadmap](./project-roadmap.md).
 
 

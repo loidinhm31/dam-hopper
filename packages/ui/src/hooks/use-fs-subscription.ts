@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getTransport } from "@/api/transport.js";
+import { getTransport, type Transport } from "@/api/transport.js";
 import {
   captureConnection,
   getTransport as getConnectionsTransport,
@@ -18,6 +18,7 @@ import {
   normalizeProjectTarget,
   projectTargetCacheKey,
   type ProjectTargetInput,
+  type ProjectTargetRef,
 } from "@/api/client.js";
 import { scheduleGitFsInvalidation } from "@/lib/git-fs-invalidation.js";
 import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
@@ -77,6 +78,27 @@ export function applyFsDelta(
 // Hook
 // ---------------------------------------------------------------------------
 
+interface FsSubscriptionTransportSeam {
+  fsSubscribeTree?: (
+    project: string | { project: string; worktreePath?: string },
+    path: string,
+  ) => Promise<{ sub_id: number; nodes: ServerTreeNode[] }>;
+  fsUnsubscribeTree?: (sub_id: number) => void;
+  onFsEvent?: (sub_id: number, cb: (ev: FsEventDto) => void) => () => void;
+}
+
+function resolveSubscriptionTransport(
+  targetRef: ProjectTargetRef,
+  originating?: Transport | null,
+): Transport {
+  if (originating) return originating;
+  if (targetRef.profileId) {
+    const conn = captureConnection(targetRef.profileId);
+    return getConnectionsTransport(conn);
+  }
+  return getTransport();
+}
+
 /**
  * Subscribe to a project's file tree via WS.
  *
@@ -92,9 +114,9 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
   const targetKey = projectTargetCacheKey(targetRef);
   const requestTarget =
     worktreePath == null ? project : { project, worktreePath };
-  const transportGeneration = useTransportGeneration();
+  const transportGeneration = useTransportGeneration(profileId);
   const boundTransportGenerationRef = useRef(transportGeneration);
-  const originatingTransportRef = useRef<WsTransport | null>(null);
+  const originatingTransportRef = useRef<Transport | null>(null);
 
   const treeQueryKey = profileId
     ? ["fs-tree", profileId, project, targetKey, path]
@@ -102,25 +124,21 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
   const query = useQuery<FsTreeData>({
     queryKey: treeQueryKey,
     queryFn: async ({ signal }) => {
-      let t: WsTransport;
-      if (targetRef.profileId) {
-        try {
-          const conn = captureConnection(targetRef.profileId);
-          t = getConnectionsTransport(conn) as WsTransport;
-        } catch {
-          t = getTransport() as WsTransport;
-        }
-      } else {
-        t = getTransport() as WsTransport;
+      const t = resolveSubscriptionTransport(targetRef);
+      const fsSeam = t as unknown as FsSubscriptionTransportSeam;
+      if (typeof fsSeam.fsSubscribeTree !== "function") {
+        throw new Error("Transport does not support file tree subscription");
       }
       originatingTransportRef.current = t;
 
       let sub_id: number | undefined;
       try {
-        const result = await t.fsSubscribeTree(requestTarget, path);
+        const result = await fsSeam.fsSubscribeTree(requestTarget, path);
         sub_id = result.sub_id;
         if (signal.aborted) {
-          t.fsUnsubscribeTree(sub_id);
+          if (typeof fsSeam.fsUnsubscribeTree === "function") {
+            fsSeam.fsUnsubscribeTree(sub_id);
+          }
           throw new DOMException("Subscription cancelled", "AbortError");
         }
         return { sub_id, nodes: result.nodes.map(serverNodeToArbor) };
@@ -129,7 +147,9 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
           sub_id !== undefined &&
           !(e instanceof DOMException && e.name === "AbortError")
         ) {
-          t.fsUnsubscribeTree(sub_id);
+          if (typeof fsSeam.fsUnsubscribeTree === "function") {
+            fsSeam.fsUnsubscribeTree(sub_id);
+          }
         }
         throw e;
       }
@@ -149,10 +169,19 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
       });
       return;
     }
-    const t =
-      originatingTransportRef.current ?? (getTransport() as WsTransport);
+    let t: Transport;
+    try {
+      t = resolveSubscriptionTransport(
+        targetRef,
+        originatingTransportRef.current,
+      );
+    } catch {
+      return;
+    }
+
+    const fsSeam = t as unknown as FsSubscriptionTransportSeam;
     const workspaceEpoch = explorerLanguageScanWorkspaceEpoch(qc, targetRef);
-    const off = t.onFsEvent(subId, (ev: FsEventDto) => {
+    const handleEvent = (ev: FsEventDto) => {
       if (
         explorerLanguageScanWorkspaceEpoch(qc, targetRef) !== workspaceEpoch
       ) {
@@ -171,11 +200,31 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
         return next;
       });
       scheduleGitFsInvalidation(qc, targetRef);
-    });
+    };
+
+    let off: () => void;
+    if (typeof fsSeam.onFsEvent === "function") {
+      off = fsSeam.onFsEvent(subId, handleEvent);
+    } else if (typeof t.onEvent === "function") {
+      off = t.onEvent(`fs:${subId}`, (payload) =>
+        handleEvent(payload as FsEventDto),
+      );
+    } else {
+      off = () => {};
+    }
 
     return () => {
       off();
-      t.fsUnsubscribeTree(subId);
+      if (typeof fsSeam.fsUnsubscribeTree === "function") {
+        fsSeam.fsUnsubscribeTree(subId);
+      }
+      if (originatingTransportRef.current === t) {
+        originatingTransportRef.current = null;
+      }
+      const currentCached = qc.getQueryData<FsTreeData>(treeQueryKey);
+      if (currentCached?.sub_id === subId) {
+        qc.removeQueries({ queryKey: treeQueryKey, exact: true });
+      }
     };
   }, [
     subId,
@@ -189,8 +238,10 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
   ]);
   /** Load children for a dir node and splice them into the cached tree. */
   async function loadChildren(nodeId: string) {
-    const t =
-      originatingTransportRef.current ?? (getTransport() as WsTransport);
+    const t = resolveSubscriptionTransport(
+      targetRef,
+      originatingTransportRef.current,
+    );
     const wire = toServerProjectTarget(targetRef);
     const resp = await t.invoke<FsListResponse>("fs:list", {
       ...wire,

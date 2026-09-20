@@ -12,6 +12,10 @@ preferences/settings/usage/host contract, Phase 07 media/encryption contract,
 Phase 08 native scope contract, and Phase 09 qualification/release contract
 are summarized in their dedicated workbench guides:
 
+The 2026-09-20 Phase 01 transport-safe filesystem subscription follow-up
+hardens this ownership boundary and adds local Explorer failure containment;
+its architecture note appears below the Phase 03 ownership section.
+
 - [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)
 - [Phase 04: Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)
 - [Phase 05: Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md)
@@ -184,6 +188,52 @@ previews use session-bound opaque capabilities; credentials are never embedded
 in media URLs and the editor never falls back to whole-file Blob materialization.
 The detailed source map is in
 [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
+
+### Phase 01 transport-safe filesystem subscriptions (2026-09-20)
+
+The Phase 03 live tree uses one owner-first transport resolver. A qualified
+`ProjectTargetRef` captures the target profile's current `ConnectionRef` and
+resolves its transport through `connections.ts`; it does not fall back to the
+ambient singleton when the owner is missing, disconnected, or stale. The
+ambient transport remains available only for explicit legacy, unqualified
+targets. `useTransportGeneration(profileId)` fences profile reconnects and
+replacement generations.
+
+```text
+qualified ProjectTargetRef
+  -> captureConnection(profileId)
+  -> getTransport(owner)
+  -> fs:subscribe_tree
+  -> originating transport
+       |-> onFsEvent or onEvent("fs:<sub_id>")
+       |-> fs:list child hydration
+       |-> fs:unsubscribe_tree + listener cleanup
+       `-> exact QueryClient payload retirement
+```
+
+The transport returned by the subscription is retained for event registration,
+lazy child loading, cleanup, and unsubscribe. Cleanup removes the exact
+`{ sub_id, nodes }` query payload after retiring the server watch, so a
+same-cache remount requests a fresh subscription before binding events. An
+aborted subscribe also retires the returned ID. This preserves the existing
+`fs:subscribe_tree`, `fs:event`, and `fs:unsubscribe_tree` wire contract while
+coupling cache lifetime to server watcher lifetime.
+
+`IdleTransport` implements the FS capability shape for empty/setup/offline
+screens: event registration and unsubscribe are callable no-ops, while
+subscription and mutation methods reject with `Server profile required`.
+It cannot fabricate a tree or silently route an unavailable target through
+another profile. `disconnectProfile` compares the entry transport with the
+actual ambient transport before replacement; non-ambient disconnects leave a
+healthy ambient owner untouched, while the true ambient owner fails closed to
+idle.
+
+Each `WorkspacePage` Explorer surface (desktop IDE, compact IDE, and terminal
+floating panel) has a keyed local `ErrorBoundary` around its `Suspense` and
+`FileTree`. A FileTree render/effect failure is therefore contained to that
+Explorer region; the shell, editor, and active terminal hosts are not remounted.
+The boundary key includes surface and target identity so a profile/project
+change clears a latched error without resetting unrelated workspace state.
 
 ### Phase 04 terminal continuity, workflow, and owner-directed navigation (2026-09-17)
 
@@ -545,6 +595,48 @@ claim that concurrent workspaces or profiles have shipped.
   remain unchanged. Shared UI preferences come from one explicitly chosen server.
 - Implementation and release require the plan's multi-server isolation,
   migration/failure, live browser, and supported-native verification gates.
+
+## Proposed trusted plugin platform (2026-09-20; not implemented)
+
+This is a planning design only. No runtime plugin loader, registry, runner,
+dynamic route, or embedded plugin UI exists yet. The implementation plan is
+[DamHopper plugin platform](../plans/260920-1603-plugin-platform/plan.md);
+its cross-repository contract is owned by the companion evcrate plan.
+
+- DamHopper remains the network and authentication boundary. It derives the
+  actor from `AuthenticatedActor.subject`, resolves the configured project or
+  worktree with the existing server resolver, and applies explicit
+  actor/installation/target/operation grants. Plugin administration uses a
+  separate subject allowlist whose default is empty; login, registration, and
+  `--no-auth` never imply administrator authority.
+- A root-provisioned, owner-account systemd runner is the sole durable
+  installation/source/grant registry and sole worker supervisor. The API
+  reaches it through a peer-credential-checked Unix socket and exposes only an
+  authorized façade; every invoke rechecks the actor session and current grant
+  revision. The runner starts one private framed-pipe worker per enabled
+  installation. Plugins expose no listener. The initial deployment configures
+  one explicit advisor-data owner and preserves the dedicated `dam-hopper` API
+  identity.
+- Administrator-approved `.tar.gz` packages are validated into immutable
+  version directories. Lifecycle state atomically selects one matching
+  backend/UI digest generation, retains the prior compatible pair for rollback,
+  and never treats source history, policy, or evaluation data as package state.
+  Trusted executable plugins are not advertised as a malicious-code sandbox.
+- The browser receives approved navigation through its captured
+  profile/connection-generation/project owner. It fetches the approved
+  self-contained document from a non-navigable, `nosniff`
+  `application/octet-stream` endpoint; the host verifies bundle identity,
+  injects/enforces restrictive CSP, and mounts the bytes as opaque-origin
+  `srcdoc` in `sandbox="allow-scripts"`. A nonce- and generation-bound
+  `MessageChannel` must acknowledge its transferred port before any context or
+  data is released. The frame receives no host credentials, arbitrary
+  transport, filesystem API, or network path.
+- Contract/security/isolation feasibility freezes at G0. A real evcrate
+  owner-worker read slice is required at G1, the four-view separate-LAN-browser
+  flow at G2, package lifecycle and rollback at G3, and Linux workload plus
+  deployment qualification at G4. A loader or fixture worker alone is never
+  platform completion. The standalone evcrate viewer remains operational until
+  joint G4 acceptance, then is replaced rather than retained as a second mode.
 
 ## High-Level Overview
 
