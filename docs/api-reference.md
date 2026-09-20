@@ -1706,7 +1706,14 @@ target, rejects cwd values outside it, and persists the canonical target in
 session metadata. `worktreePath` requires `project`; omitting it preserves
 configured-root or legacy project behavior.
 
-Platform behavior for free terminals differs only where the request omits `cwd`: Windows uses an existing user home directory, then the server's existing current directory; Unix retains the `HOME`-then-`/tmp` fallback. On Windows, an empty command or the exact `bash` selector starts the native interactive `cmd.exe` with no arguments. Other command strings run as `cmd.exe /C <command>`. Unix shell selection and command execution remain unchanged. Windows does not provide Unix shell lifecycle integration, so lifecycle-dependent suggestions and history remain unverified.
+Platform behavior for free terminals differs only where the request omits `cwd`: Windows uses an existing user home directory, then the server's existing current directory; Unix retains the `HOME`-then-`/tmp` fallback. On Windows, an empty command or the exact `bash` selector starts the native interactive `cmd.exe` with no arguments. Other command strings run as `cmd.exe /C <command>`.
+
+**Windows cmd.exe semantics & test implications:**
+- Environment variable expansion in `cmd.exe` uses `%VAR%` syntax rather than Unix `$VAR`.
+- `cmd.exe` output uses CRLF (`\r\n`); normalize captured terminal output in test assertions. Input is submitted to the PTY as raw bytes, so callers choose the line terminator.
+- Windows does not provide Unix shell lifecycle integration (e.g. zsh/fish precmd/preexec hooks, prompt tracking, or sysfs/procfs monitoring); terminal sessions on Windows operate in unmonitored raw mode without Unix-specific shell lifecycle events.
+- Unix shell selection, bash fallback, and POSIX process management remain completely unchanged on Linux/macOS.
+For the isolated Windows loopback startup and cleanup procedure, see the [Configuration Guide](./configuration-guide.md#windows-server-loopback-smoke-checklist).
 
 Response: the created `SessionInfo`, including `worktreePath` when the session
 is target-scoped.

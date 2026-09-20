@@ -1,8 +1,9 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v0.2.26;
-2,084 files, 4,718,267 tokens, 19,815,665 characters; five security-flagged
-files excluded).
+**Generated:** 2026-09-20 from a temporary Repomix v0.2.26 XML compaction
+(output removed after generation);
+2,084 files, 4,721,410 tokens, 19,827,773 characters; five security-flagged
+files excluded.
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -440,13 +441,15 @@ System-specific boundaries are covered by
 separate from Linux-only `/dev` and sysfs fixtures.
 
 
-Serial Windows evidence passed **978 tests, 0 failed, 3 ignored**; focused
-API/Git/system filters passed **160/160**, **90/90**, and **36/36**. This is
-harness/platform qualification, not full server startup or release evidence;
-Phase 03 owns that gate. See the
-[Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/phase-02-test-harness-and-platform-gating.md),
-[test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md),
-and [review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
+Serial Windows Phase 02 evidence passed **978 tests, 0 failed, 3 ignored**;
+focused API/Git/system filters passed **160/160**, **90/90**, and **36/36**.
+See the [Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/phase-02-test-harness-and-platform-gating.md), [test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md), and [review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
+
+## Windows server build, qualification, and docs (Phase 03)
+`server/Cargo.toml` sets `dam-hopper-server` as Cargo's default binary while
+retaining all four declared targets. Windows check/build/release/test gates,
+Linux-only stub behavior, and the loopback `/api/health` smoke passed; see the
+[Phase 03 plan](../plans/260920-1312-windows-server-build-and-verify/phase-03-server-build-and-verification.md) and [review](../plans/reports/code-review-260920-1835-phase03-server-build-and-verification.md).
 
 ## Workspace settings import/export
 

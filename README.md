@@ -152,10 +152,11 @@ pnpm build        # web app
 pnpm build:native # desktop native host assets
 pnpm build:server # Rust release binary
 
-# Run Rust tests (121 tests)
+# Run Rust tests
 pnpm test
 # or: cd server && cargo test
-
+# On Windows (page file / rlib limit): run serially with -j 1
+# PowerShell / cmd: cd server && cargo test -j 1
 # Lint web
 pnpm lint
 
@@ -164,6 +165,32 @@ pnpm format
 ```
 
 The generated Android Studio project lives in `apps/native/src-tauri/gen/android`. Tauri now runs the native package's local `npm run dev` / `npm run build` hooks, so Android Studio and Gradle do not depend on a globally installed `pnpm`.
+### Windows Development & Qualification
+
+`dam-hopper-server` is qualified on Windows 11 MSVC (`x86_64-pc-windows-msvc`). Commands can be run directly from PowerShell or `cmd.exe`:
+
+```powershell
+# Build debug binaries
+cargo build --manifest-path server/Cargo.toml --bins
+
+# Run server via default-run (resolves dam-hopper-server)
+cargo run --manifest-path server/Cargo.toml -- --help
+
+# Run release build
+cargo build --manifest-path server/Cargo.toml --release --bin dam-hopper-server
+
+# Run full serial test suite (avoids MSVC rlib/page-file exhaustion)
+cargo test --manifest-path server/Cargo.toml -j 1
+
+# Run isolated loopback smoke test (--no-auth)
+cargo run --manifest-path server/Cargo.toml -- --config "C:\path\to\dam-hopper.toml" --host 127.0.0.1 --port 4801 --no-auth
+```
+
+**Platform Boundaries:**
+- Linux-only utilities (`dam-hopper` release manager and `dam-hopper-idle-suspend-helper`) intentionally exit 1 with an explanatory message on Windows.
+- Windows does not bind Unix helper sockets, probe sysfs/procfs, or attempt RTC/systemd suspend (`UnavailableExecutor` fail-closed behavior).
+- Linux deployment qualification and systemd live tests require a Linux host.
+For the full path/TOML and health-cleanup procedure, see the [Windows server loopback smoke checklist](./docs/configuration-guide.md#windows-server-loopback-smoke-checklist). Terminal shell behavior is documented in the [API Reference](./docs/api-reference.md#terminals).
 
 ```text
 server/        # Rust binary (Axum + Tokio) — all backend logic

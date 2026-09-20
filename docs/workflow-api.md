@@ -588,9 +588,9 @@ session endpoints. A terminal final exit, crash, or removal may provide a
 the session. Agent metadata is also manual in this MVP; future harness
 producers require a separate security and contract review.
 
-See [System Architecture](./system-architecture.md#workflow-phases-01-03-service-rest-and-lifecycle-correlation),
-[Codebase Summary](./codebase-summary.md#workflow-tracking-service-and-rest-api-phases-01-03),
-and [Project Overview & PDR](./project-overview-pdr.md#pr-013-terminal-lifecycle-correlation-and-agent-adapter)
+See [System Architecture](./system-architecture.md#workflow-phases-0103-service-rest-and-lifecycle-correlation),
+[Codebase Summary](./codebase-summary.md#workflow-tracking),
+and [Project Overview & PDR](./project-overview-pdr.md#pr-013-terminal-lifecycle-correlation-and-agent-adapter-phase-03)
 for the design and requirement records.
 
 ### Known implementation note
