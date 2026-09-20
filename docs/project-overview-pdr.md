@@ -20,9 +20,9 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Store global defaults at ~/.config/dam-hopper/config.toml
 
 **Acceptance Criteria:**
-
 - ✓ Load and parse explicit or global `dam-hopper.toml` registry files
 - ✓ Resolve relative project paths against the registry file and preserve absolute project paths
+- ✓ Preserve Windows drive, mixed-separator, UNC, and `\\?\` project paths through TOML round trips; reject traversal and rooted relative fields
 - ✓ Support `workspace:switch` via API for directory or direct registry-file targets
 - ✓ Fallback to global config defaults and legacy discovery when higher-priority sources are missing
 
@@ -30,6 +30,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 - Serde for TOML deserialization with snake_case field mapping
 - Startup resolution priority: `--config` / `DAM_HOPPER_CONFIG` > `--workspace` / `DAM_HOPPER_WORKSPACE` > global registry path > `defaults.workspace` > legacy current-directory discovery
+- Resolve validated relative paths lexically; do not require filesystem canonicalization during registry parsing
 
 ### PR-002: Terminal Session Management
 
@@ -165,6 +166,10 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Symlinks relative to project root
 - Shallow clone for remote import (temp cleanup)
 - URL regex validation before clone
+- Canonicalize local import sources, reject `..` and symlink escapes, and
+  refuse overwrite conflicts
+- Compare distribution links canonically when possible, with lexical fallback
+  for broken links; choose directory/file symlink APIs per platform
 
 ### PR-006: REST API & Authentication
 

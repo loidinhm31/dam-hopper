@@ -231,8 +231,7 @@ pub fn select_workspace_disk<I>(workspace_root: &Path, disks: I) -> Option<DiskM
 where
     I: IntoIterator<Item = DiskMountSnapshot>,
 {
-    let workspace = workspace_root
-        .canonicalize()
+    let workspace = dunce::canonicalize(workspace_root)
         .unwrap_or_else(|_| workspace_root.to_path_buf());
 
     disks

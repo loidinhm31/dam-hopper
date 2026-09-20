@@ -2,6 +2,14 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Windows dam-hopper-server build and verification (2026-09-20)
+
+- **Plan status: IN PROGRESS (1/3 phases; 33%; updated 2026-09-20 16:18:03 +07:00).** Phase 01 is complete; Phases 02–03 remain pending.
+- **Phase 01 — Path and config normalization — DONE (2026-09-20 16:18:03 +07:00; 100%; 2.5/2.5h):** Standardized `dunce` canonical paths, Windows extended drive/UNC identity handling, TOML-safe path serialization, terminal cwd slash normalization, workspace-target comparisons, disk selection, and agent-store path checks without changing the schema or authorization contract.
+- **Validation:** Focused Windows MSVC suites passed **128/128** (config 86, workspace-target unit 12, workspace-target integration 8, disk selection 1, agent store 21). Code review approved **9.2/10** with non-blocking warnings for Windows rooted/drive-relative path rejection and repository Rust line-ending consistency. See the [Phase 01 plan](../plans/260920-1312-windows-server-build-and-verify/phase-01-path-and-config-normalization.md), [code review](../plans/reports/code-review-260920-1407-phase01-path-and-config-normalization.md), and [parent plan](../plans/260920-1312-windows-server-build-and-verify/plan.md).
+- **Next:** Phase 02 completes test-harness/platform gating; Phase 03 owns full Windows build, startup/health qualification, and documentation. Do not run project-wide gates until those phases land.
+
+
 ### Multi-profile Host Resources watch (2026-09-20)
 
 - **Plan status: COMPLETE (4/4 phases; 100%).** All four phases completed on 2026-09-20.

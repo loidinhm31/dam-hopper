@@ -17,11 +17,49 @@ name = "my-workspace"
 
 ### Project Discovery
 
-Define projects with type-specific defaults. Project paths can be absolute or relative; relative paths resolve against the config file directory. Other path fields like `env_file` and terminal profile `cwd` remain project-relative and reject absolute or traversal-containing values.
+Define projects with type-specific defaults. `projects[].path` may be
+absolute or relative. The existing registry file path is normalized with the
+platform-safe `dunce` canonicalizer to establish `configPath` and its
+directory; project path values themselves resolve lexically against that
+directory, with redundant `.` components removed and no symlink resolution.
+`env_file` and terminal-profile `cwd` remain project-relative and reject
+absolute, rooted/prefix, or `..` traversal paths.
 
-**Path Serialization:** When DamHopper writes the registry TOML, absolute project paths are preserved when projects live outside the config file directory. Projects inside the config directory are written as relative paths for portability. Relative paths are normalized to forward slashes in TOML output regardless of platform.
+**Path serialization:** When DamHopper writes registry TOML, project paths
+inside the config directory are written as relative paths for portability;
+relative output always uses forward slashes. Terminal profile `cwd` values are
+serialized relative to their project with forward slashes. Projects outside
+the registry directory remain absolute, preserving the platform path value.
 
-**Windows paths:** Drive-letter absolute paths are supported. Mixed separators and `\\?\` verbatim prefixes are covered by automated tests. Verbatim paths preserve the exact Windows path string and are mainly useful when you need explicit device-style paths. UNC paths can be used only with manual validation in your target environment because they are not covered by automated CI in this repo.
+**Windows paths:** Drive-letter, mixed-separator, UNC, and `\\?\` verbatim
+absolute project paths are accepted and covered by Windows-gated tests.
+Verbatim values are preserved by config read/write; UNC availability still
+depends on the target machine and share.
+
+The same platform-aware path identity is used for registered Git worktree
+targets. On Windows it normalizes separators, strips extended drive/UNC
+prefixes, and compares case-insensitively; POSIX identity keeps case and
+
+### Path validation and Windows target identity
+
+Configuration validation is lexical and deterministic. The parser rejects
+`..` in a project path and rejects absolute/rooted/prefix paths in project
+`env_file` and terminal `cwd`; it does not inspect the filesystem to decide
+whether a path is safe. A relative project path is joined to the registry
+directory after validation. The TOML writer emits portable forward-slash
+relative paths and leaves external absolute paths absolute.
+
+Explicit `worktreePath` values must be absolute and must match a fresh Git
+worktree listing for the configured project. The resolver canonicalizes live
+targets and verifies directory containment, but keeps a normalized lexical
+identity for removed targets. Windows identity is case-insensitive and
+collapses `\\?\` drive/UNC aliases; POSIX identity does not reinterpret
+backslashes as separators. Containment and relative projection use this same
+identity, preventing case/prefix aliases from bypassing target ownership.
+
+The resolver's discovery cache is a listing optimization only; it never
+authorizes a target. Missing, prunable, symlink-replaced, or foreign
+worktrees fail closed rather than redirecting to the configured project root.
 
 ```toml
 [[projects]]
@@ -178,6 +216,12 @@ path = ".dam-hopper/agent-store"
 
 If omitted, defaults to `.dam-hopper/agent-store/` relative to the loaded registry file directory.
 
+Import scans canonicalize the selected source directory, reject literal `..`
+components and symlink escapes, and never overwrite an existing store item.
+Distribution checks canonical symlink targets when available and falls back to
+lexical comparison for broken links. On Windows, directory and file links use
+the corresponding platform-specific symlink API.
+
 ### Feature Flags
 
 All features are enabled by default.
@@ -198,6 +242,7 @@ light_sample_seconds = 5
 process_sample_seconds = 15
 process_deadline_millis = 150
 snapshot_deadline_millis = 500
+
 ```
 
 The monitor reads bounded `/proc`, PSI, cgroup v2, and mount evidence when the
@@ -207,6 +252,11 @@ malformed, stale, or timed-out sources degrade only the affected deep section.
 `GET /api/system/metrics` remains available as the compatible basic-metrics
 fallback. Host diagnostics expose bounded process names and summaries only;
 they do not expose raw argv or environment values.
+
+`HostMetricsSampler` selects the longest matching disk mount on every supported
+platform. On Windows it canonicalizes the workspace and supports drive-root
+mount paths; when no mount matches, the reported disk falls back to the
+workspace path with zero capacity rather than guessing a host mount.
 
 Do not add re-authentication, action, helper, IPC, enrollment, or host-mutation
 settings to this release. Those remain deferred backlog, not configuration.

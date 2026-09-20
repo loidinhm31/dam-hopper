@@ -1,8 +1,8 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,072
-files, 4,671,152 tokens, 19,455,558 characters; five security-flagged files
-excluded).
+**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v0.2.26;
+2,081 files, 4,711,646 tokens, 19,789,376 characters; five security-flagged
+files excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -386,6 +386,37 @@ resource links, notes, and bounded events in SQLite. The telemetry subsystem is
 separate and opt-in, with private SQLite storage and bounded aggregate queries.
 Media tickets and browser-debug artifacts use authenticated, scoped, expiring
 capabilities rather than project-path access.
+
+## Backend path and configuration normalization (Phase 01)
+
+The path/config boundary is implemented by
+`server/src/config/parser.rs`, `server/src/workspace_target.rs`,
+`server/src/agent_store/{importer,distributor}.rs`, and `server/src/system.rs`:
+
+- The existing registry file path is normalized with `dunce` for `configPath`
+  and its directory. Project parsing rejects `..` components and rejects
+  rooted, prefixed, absolute, or traversal-containing `env_file`/terminal
+  `cwd` values. Relative project roots then join the registry directory
+  lexically without project-path symlink resolution.
+- TOML output uses forward-slash relative paths inside the registry directory,
+  writes `.` for the registry root, and preserves external absolute paths.
+  Windows drive, mixed-separator, UNC, and `\\?\` project paths round-trip
+  through the writer.
+- Worktree targets require absolute paths and fresh Git registration. Live
+  directories are canonicalized and checked for containment. Stable identity
+  normalizes missing-target syntax; Windows lowercases, uses `/`, and removes
+  extended drive/UNC aliases, while POSIX preserves case and backslashes.
+- Agent imports canonicalize their source and reject literal `..` or symlink
+  escapes; existing store items are never overwritten. Distribution compares
+  canonical symlink targets and has a lexical fallback for broken links.
+- Host disk selection canonicalizes the workspace and chooses the longest
+  matching mount, including Windows drive roots; no match returns a
+  zero-capacity workspace fallback.
+
+Focused regression coverage is in `server/src/config/tests.rs`,
+`server/src/system/tests.rs`, `server/src/agent_store/tests.rs`, and
+`server/tests/workspace_targets.rs`, with Windows-gated drive/UNC/verbatim,
+symlink, and worktree identity cases.
 
 ## Workspace settings import/export
 

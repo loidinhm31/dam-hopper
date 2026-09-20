@@ -1,4 +1,15 @@
 # 2026-09-20
+- **Windows server path/config normalization — Phase 01 complete
+  (2026-09-20).** Registry parsing/writing now keeps Windows drive, mixed
+  separator, UNC, and verbatim project paths TOML-safe; terminal relative
+  paths use forward slashes; worktree matching shares one case-insensitive
+  extended-prefix-aware identity; disk selection and Agent Store
+  import/distribution use the same `dunce` path boundary. Documentation now
+  records the lexical validation, containment, symlink, and fallback rules.
+  See the [Phase 01 plan](../plans/260920-1312-windows-server-build-and-verify/phase-01-path-and-config-normalization.md),
+  [Configuration Guide](./configuration-guide.md), and
+  [System Architecture](./system-architecture.md).
+
 - **Multi-profile Host Resources watch — Phase 04 verification and testing complete (100%; 2026-09-20).** Focused unit/component and Chromium validation passed **102/102** tests (83 unit/component; 19 browser), and the UI TypeScript check passed with 0 errors. Coverage proves watch scope, owner/generation isolation, tiered polling, unread partitioning, single-profile compatibility, accessibility, responsive layout, and security negatives. The parent plan is now **COMPLETE (4/4 phases; 100%)**. See the [Phase 04 plan](../plans/260920-0137-multi-profile-host-resources/phase-04-verification-and-testing.md), [tester report](../plans/reports/tester-260920-1130-phase04-multi-profile-host-resources.md), [code review](../plans/reports/code-review-260920-1132-phase04-verification-and-testing.md), and [roadmap](./project-roadmap.md).
 
 

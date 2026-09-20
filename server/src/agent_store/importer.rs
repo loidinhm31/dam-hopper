@@ -61,8 +61,7 @@ pub async fn scan_repo(repo_url: &str) -> Result<RepoScanResult> {
 
 /// Scan a local directory for importable items. No cleanup needed.
 pub async fn scan_local_dir(dir_path: &Path) -> Result<LocalScanResult> {
-    let resolved = dir_path
-        .canonicalize()
+    let resolved = dunce::canonicalize(dir_path)
         .map_err(|_| AppError::NotFound(format!("Path does not exist: {}", dir_path.display())))?;
 
     let meta = fs::symlink_metadata(&resolved)
@@ -89,9 +88,12 @@ pub async fn import_from_repo(
     selected_items: &[RepoScanItem],
     store_path: &Path,
 ) -> Result<Vec<ImportResult>> {
-    let source_dir = source_dir
-        .canonicalize()
-        .unwrap_or(source_dir.to_path_buf());
+    let source_dir = dunce::canonicalize(source_dir).map_err(|_| {
+        AppError::NotFound(format!(
+            "Source directory does not exist: {}",
+            source_dir.display()
+        ))
+    })?;
     let mut results = Vec::new();
 
     for item in selected_items {
@@ -108,7 +110,7 @@ pub async fn import_from_repo(
 
         // Guard against symlink-based traversal via canonicalize + starts_with
         let src = source_dir.join(&item.relative_path);
-        let src_canonical = match src.canonicalize() {
+        let src_canonical = match dunce::canonicalize(&src) {
             Ok(p) => p,
             Err(_) => {
                 results.push(ImportResult {
