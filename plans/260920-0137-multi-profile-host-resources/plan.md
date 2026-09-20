@@ -22,7 +22,7 @@ No Rust, Axum, transport, or wire-contract work. Existing resource snapshot, ale
 | Phase | Goal | Status / progress | Effort |
 |---|---|---|---:|
 | [01 — Multi-profile state and hooks](./phase-01-multi-profile-state-and-hooks.md) | Automatic watch scope, isolated `useQueries`, fleet aggregation | Complete / 100% | 5h |
-| [02 — Fleet deck and cards](./phase-02-fleet-deck-and-card-components.md) | Accessible overview cards and empty/partial states | Pending / 0% | 4h |
+| [02 — Fleet deck and cards](./phase-02-fleet-deck-and-card-components.md) | Accessible overview cards and empty/partial states | Complete / 100% (DONE 2026-09-20) | 4h |
 | [03 — Popover integration](./phase-03-host-resource-popover-integration.md) | Header pills, fleet toggle, profile drilldown, single-profile compatibility | Pending / 0% | 6h |
 | [04 — Verification and testing](./phase-04-verification-and-testing.md) | Unit, interaction, accessibility, polling, and edge-case proof | Pending / 0% | 4h |
 

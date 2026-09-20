@@ -115,6 +115,44 @@ passing tests (nine skipped/ignored); G2-Web passed. G2-Native remains blocked
 pending real Windows S13 runtime, SSH, WebView2/DPAPI, and Browser relay proof.
 See the [Phase 09 verification matrix](../plans/260916-2137-unified-profile/verification-matrix.md).
 
+## Host-resource fleet deck and cards (Phase 02)
+
+**Locations:** `packages/ui/src/components/organisms/HostResourceFleetDeck.tsx`,
+`HostResourceFleetCard.tsx`, and
+`packages/ui/src/lib/host-resource-state.ts`.
+
+`HostResourceFleetDeck` is a layout-only boundary over the Phase 01
+`MultiHostResourceEntry[]` read model. It receives `entries`,
+`selectedProfileId`, and `onInspect(profileId)`, renders the configured order
+as a labelled `section` with a semantic `ul`/`li` list, and reports the watched
+profile count. An empty list uses the explicit status message **No connected or
+auto-connect profiles to watch.** It does not read stores, queries, APIs, or
+connection actions, and it does not sort, aggregate, poll, or create a second
+scroll container.
+
+`HostResourceFleetCard` keeps the profile boundary visible in a compact
+scan-first article:
+
+- Profile name and endpoint are escaped text with overflow-safe wrapping;
+  endpoint text is never a navigation link.
+- Connection state and watch reason, status icon/label, unread incident count,
+  hostname/OS, and sample age are shown when available.
+- Connected cards expose one full-width, keyboard-operable inspection button
+  with a 44px minimum target and an accessible name containing the profile and
+  status. The callback receives only that profile ID.
+- Disconnected, offline, connecting, or otherwise unavailable rows remain
+  readable non-interactive articles and say that live inspection requires a
+  connection. A cached snapshot is explicitly labelled **Last known**.
+- Optional memory and battery facts use the existing finite-value formatters;
+  unsupported or missing values are omitted rather than rendered as zero.
+
+The pure `formatSampleAge(sampledAt, now)` helper rejects missing, non-finite,
+negative, and zero timestamps, then rounds ages into seconds, minutes, hours,
+or days. Cards compute this text during normal renders; they do not install one
+timer per card. Focused behavior is covered by
+`HostResourceFleetCard.test.tsx`, `HostResourceFleetDeck.test.tsx`, and
+`host-resource-state.test.ts`.
+
 ## Host-resource alert presentation
 
 **Locations:** `packages/ui/src/components/organisms/HostResourcePopover.tsx`,

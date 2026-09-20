@@ -1849,6 +1849,38 @@ failure, generation replacement with a late response, alert partitioning, and
 empty/severity/unavailable fleet-summary precedence in
 `use-multi-host-resources.test.tsx` and `host-resource-state.test.ts`.
 
+### Host-resource fleet deck and card standards (Phase 02)
+
+Keep fleet presentation pure and downstream of
+`useMultiHostResources`:
+
+- `HostResourceFleetDeck` owns only the labelled section, watched-count
+  summary, configured ordering, semantic list, empty state, selected-profile
+  styling, and card composition.
+- `HostResourceFleetCard` receives one `MultiHostResourceEntry` and the
+  `onInspect(profileId)` callback. It must not import an API client, query hook,
+  connection action, store, browser storage, timer, or mutation.
+- Use profile ID as the list key and callback identity. Never join cards by
+  display name, URL, hostname, incident ID, or metric values.
+- A connected card may expose exactly one native button with a visible focus
+  state and at least a 44px target. A disconnected/offline/connecting card is
+  a readable non-interactive article; do not use a disabled button as its only
+  state surface.
+- Keep connection/status wording and an icon alongside color. Qualify cached
+  disconnected snapshots as **Last known**, omit unsupported or non-finite
+  memory/battery values, and render profile/endpoint/host text with safe
+  wrapping.
+- Reuse pure helpers from `host-resource-state.ts`, including
+  `resolveHostResourceMemory`, battery formatters, status projection, and
+  `formatSampleAge`. The age helper is display-only (`s`/`m`/`h`/`d`) and must
+  not create per-card timers or sampling authority.
+
+Fleet cards do not average or sum host metrics. Keep the deck as the sole
+layout/list boundary and leave scrolling to the owning popover. Focused
+component behavior belongs in `HostResourceFleetCard.test.tsx` and
+`HostResourceFleetDeck.test.tsx`; formatter and status invariants remain in
+`host-resource-state.test.ts`.
+
 Mutation hooks invalidate the `['workflow']` root only from `onSuccess`.
 Do not perform optimistic snapshot writes in this layer. A failure must retain
 the authoritative cache and expose the typed mutation error so the component

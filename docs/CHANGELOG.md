@@ -1,7 +1,10 @@
 # 2026-09-20
 
+- **Multi-profile Host Resources watch — Phase 02 fleet deck and cards complete (100%; 2026-09-20).** Added ordered semantic `HostResourceFleetDeck` composition and profile-scoped `HostResourceFleetCard` summaries with connected-only inspection, empty/partial states, last-known offline qualifiers, finite memory/battery facts, safe long-text wrapping, and display-only sample-age formatting.
+- The deck/cards remain read-only presentation over the Phase 01 owner/generation view model: no connection actions, metric averaging, host mutations, or per-card polling. See the [Phase 02 plan](../plans/260920-0137-multi-profile-host-resources/phase-02-fleet-deck-and-card-components.md), [frontend component architecture](./frontend-components.md#host-resource-fleet-deck-and-cards-phase-02), and [system architecture](./system-architecture.md#multi-profile-host-resource-fleet-deck-phase-02).
+
 - **Multi-profile Host Resources watch — Phase 01 multi-profile state and hooks complete (100%; 2026-09-20).** Added owner-safe automatic watch scope, generation-qualified resource-snapshot `useQueries`, per-profile alert presentation, deterministic fleet aggregation, stale-generation fencing, and offline auto-connect last-known handling without connection or host-action side effects.
-- Focused UI validation passed **58/58 tests** across the pure host-resource state and multi-profile hook suites; `pnpm --filter @dam-hopper/ui build` passed with no TypeScript errors. Phases 02–04 remain pending under the parent plan.
+- Focused Phase 01 UI validation passed **58/58 tests** across the pure host-resource state and multi-profile hook suites; `pnpm --filter @dam-hopper/ui build` passed with no TypeScript errors. Phases 03–04 remain pending under the parent plan.
 - See the [Phase 01 plan](../plans/260920-0137-multi-profile-host-resources/phase-01-multi-profile-state-and-hooks.md), [code review](../plans/reports/code-review-260920-0828-multi-host-resources-phase01.md), [parent plan](../plans/260920-0137-multi-profile-host-resources/plan.md), and [roadmap](./project-roadmap.md).
 
 # 2026-09-17

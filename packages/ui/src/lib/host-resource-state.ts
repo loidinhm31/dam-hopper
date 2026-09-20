@@ -113,6 +113,20 @@ function isFiniteNonNegative(
 function formatCompactNumber(value: number): string {
   return value.toFixed(2).replace(/\.?0+$/, "");
 }
+export function formatSampleAge(
+  sampledAt: number | null | undefined,
+  now: number = Date.now(),
+): string | undefined {
+  if (!isFiniteNonNegative(sampledAt) || sampledAt === 0) return undefined;
+  const seconds = Math.max(0, Math.round((now - sampledAt) / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  return `${days}d`;
+}
 
 export function severityClass(severity: AlertSeverity): string {
   if (severity === "critical") return "text-[var(--color-danger)]";

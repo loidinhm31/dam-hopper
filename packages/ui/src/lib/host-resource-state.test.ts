@@ -9,6 +9,7 @@ import {
   formatBatteryStatus,
   formatOptionalBytes,
   formatOptionalPercent,
+  formatSampleAge,
   normalizeProgressPercent,
   normalizeProgressRatio,
   resolveHostResourceMemory,
@@ -87,6 +88,18 @@ describe("host resource state formatting", () => {
     expect(formatBatteryPower(3.256)).toBe("3.26 W");
     expect(formatBatteryEnergy(Number.NaN)).toBeUndefined();
     expect(formatBatteryPower(-1)).toBeUndefined();
+  });
+  it("formats sample age deterministically and omits non-finite inputs", () => {
+    const now = 1_000_000_000;
+    expect(formatSampleAge(undefined, now)).toBeUndefined();
+    expect(formatSampleAge(null, now)).toBeUndefined();
+    expect(formatSampleAge(0, now)).toBeUndefined();
+    expect(formatSampleAge(-100, now)).toBeUndefined();
+    expect(formatSampleAge(Number.NaN, now)).toBeUndefined();
+    expect(formatSampleAge(now - 15_000, now)).toBe("15s");
+    expect(formatSampleAge(now - 120_000, now)).toBe("2m");
+    expect(formatSampleAge(now - 7_200_000, now)).toBe("2h");
+    expect(formatSampleAge(now - 172_800_000, now)).toBe("2d");
   });
 
   it.each([
