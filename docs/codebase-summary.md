@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-17 from `repomix-output.xml` (Repomix v1.18.0; 2,025
-files, 4,538,673 tokens, 18,898,951 characters; five security-flagged files
+**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,060
+files, 4,632,244 tokens, 19,287,888 characters; five security-flagged files
 excluded).
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -55,6 +55,23 @@ These are frontend ownership boundaries only. Server project names, workspace
 configuration, PTYs, workflow/usage history, and remote data remain
 server-authoritative. The unified-profile backend-workspace proposal below is
 not part of this implementation.
+
+### Phase 01 multi-profile host-resource monitoring
+
+`useMultiHostResources` builds a fleet read model from configured profiles and
+keyed connection snapshots. Its watch scope is `connected || autoConnect`:
+connected profiles are queried, while disconnected auto-connect profiles remain
+visible as non-fetching unavailable entries. Each watched profile gets an
+owner/generation-qualified `profileQueryKey` and bound API client through
+`useQueries`; partial failures stay isolated to one profile.
+
+Snapshot responses are generation-fenced with `isCurrentConnection`, and late
+responses fail with `ConnectionOwnerError` instead of entering a replacement
+owner's cache. `resolveHostResourceFleetSummary` performs deterministic counts
+and severity/unavailable/sampling/stale precedence without summing or
+deduplicating host metrics. Focused contracts live in
+`packages/ui/src/hooks/use-multi-host-resources.test.tsx` and
+`packages/ui/src/lib/host-resource-state.test.ts`.
 
 ## Unified-profile files, editor, search, and Git (Phase 03)
 

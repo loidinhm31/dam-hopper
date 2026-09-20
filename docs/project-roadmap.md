@@ -2,6 +2,13 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Multi-profile Host Resources watch (2026-09-20)
+
+- **Plan status: IN PROGRESS (1/4 phases; 25%).** Phase 01 is complete; Phases 02–04 remain pending.
+- **Phase 01 — Multi-profile state and hooks — DONE (2026-09-20; 100%; 5/5h):** Delivered owner-safe automatic watch scope, generation-qualified `useQueries` snapshot polling, per-profile alert presentation, deterministic fleet aggregation, stale-generation fencing, and offline auto-connect last-known handling without connection or host-action side effects.
+- **Validation:** Focused UI tests passed **58/58** across the pure state and multi-profile hook suites; `pnpm --filter @dam-hopper/ui build` passed with no TypeScript errors. See the [Phase 01 plan](../plans/260920-0137-multi-profile-host-resources/phase-01-multi-profile-state-and-hooks.md), [code review](../plans/reports/code-review-260920-0828-multi-host-resources-phase01.md), and [parent plan](../plans/260920-0137-multi-profile-host-resources/plan.md).
+- **Next:** Phase 02 builds the accessible Fleet Deck and cards against the completed `MultiHostResourceEntry` and `HostResourceFleetSummary` contracts.
+
 ### Unified multi-profile workbench (2026-09-17)
 
 - **Plan status: COMPLETE (10/10 phases; 100%).** Phases 00–09 are complete as of 2026-09-17. Phase 09 closed the unified multi-profile workbench integration and qualification cutover; Windows S13 runtime evidence remains a separately tracked native-platform follow-up.

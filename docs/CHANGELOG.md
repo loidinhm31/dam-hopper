@@ -1,3 +1,9 @@
+# 2026-09-20
+
+- **Multi-profile Host Resources watch — Phase 01 multi-profile state and hooks complete (100%; 2026-09-20).** Added owner-safe automatic watch scope, generation-qualified resource-snapshot `useQueries`, per-profile alert presentation, deterministic fleet aggregation, stale-generation fencing, and offline auto-connect last-known handling without connection or host-action side effects.
+- Focused UI validation passed **58/58 tests** across the pure host-resource state and multi-profile hook suites; `pnpm --filter @dam-hopper/ui build` passed with no TypeScript errors. Phases 02–04 remain pending under the parent plan.
+- See the [Phase 01 plan](../plans/260920-0137-multi-profile-host-resources/phase-01-multi-profile-state-and-hooks.md), [code review](../plans/reports/code-review-260920-0828-multi-host-resources-phase01.md), [parent plan](../plans/260920-0137-multi-profile-host-resources/plan.md), and [roadmap](./project-roadmap.md).
+
 # 2026-09-17
 - **Unified multi-profile workbench — Phase 09 integration and qualification complete; release cutover closed (2026-09-17; 100%).** Parent plan is now complete: all 10/10 phases (Phase 00 through Phase 09) delivered.
 - Qualification passed **3,504 tests** with **0 failures** (9 skipped/ignored) across Rust, UI unit/browser, shared, browser bridge, native, live-harness, and embedded-browser suites. The live dual-server harness passed **24/24** S01–S12 assertions; Cycle 2 code review approved **9.8/10**.
