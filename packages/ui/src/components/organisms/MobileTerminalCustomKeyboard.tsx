@@ -94,14 +94,8 @@ export function MobileTerminalCustomKeyboard({
         data-key-id={key.id}
         onPointerDown={(event) => {
           preventDefault(event);
-          onPress(key);
         }}
-        onClick={(event) => {
-          if (event.detail === 0) onPress(key);
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
+        onClick={() => {
           onPress(key);
         }}
         title={ariaLabel}

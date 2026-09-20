@@ -5,10 +5,17 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
-  type KeyboardEvent,
 } from "react";
-import { getTransport } from "@/api/transport.js";
+import { flushSync } from "react-dom";
+import {
+  type Transport,
+  getTransport,
+} from "@/api/transport.js";
+import {
+  getConnectionSnapshot,
+  getTransport as getConnectionTransport,
+} from "@/api/connections.js";
+import { parseTerminalKey, type TerminalRef } from "@/api/ownership.js";
 import {
   getCustomMobileTerminalKeySequence,
   type CustomMobileTerminalKey,
@@ -31,10 +38,14 @@ const PANEL_MAX_HEIGHT =
 
 export function MobileTerminalAccessoryBar({
   sessionId,
+  profileId,
+  terminalRef,
   className,
   onPanelOpenChange,
 }: {
   sessionId: string;
+  profileId?: string;
+  terminalRef?: TerminalRef;
   className?: string;
   onPanelOpenChange?: (isOpen: boolean) => void;
 }) {
@@ -52,7 +63,35 @@ export function MobileTerminalAccessoryBar({
   const outsideRefs = useMemo(() => [panelRef], []);
   const invokingControlRef = useRef<"keys" | "keyboard">("keys");
   const keyboardInputRef = useRef<HTMLInputElement>(null);
-  const keyboardValueRef = useRef("");
+  const parsedRef = useMemo(
+    () => terminalRef ?? parseTerminalKey(sessionId),
+    [sessionId, terminalRef],
+  );
+  const safeSessionId = parsedRef?.id ?? sessionId;
+  const ownerProfileId = parsedRef?.profileId ?? profileId;
+
+  const writeTerminal = useCallback(
+    (sequence: string) => {
+      if (!sequence) return;
+      let transport: Transport;
+      if (ownerProfileId && getConnectionSnapshot(ownerProfileId)) {
+        const snapshot = getConnectionSnapshot(ownerProfileId);
+        if (snapshot?.status === "connected") {
+          try {
+            transport = getConnectionTransport(snapshot.owner);
+          } catch {
+            transport = getTransport();
+          }
+        } else {
+          transport = getTransport();
+        }
+      } else {
+        transport = getTransport();
+      }
+      transport.terminalWrite(safeSessionId, sequence);
+    },
+    [ownerProfileId, safeSessionId],
+  );
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
   const mobileCustomKeyboardEnabled = useSettingsStore(
@@ -94,25 +133,27 @@ export function MobileTerminalAccessoryBar({
   const handlePress = useCallback(
     (id: MobileTerminalKeyId) => {
       const sequence = getMobileTerminalKeySequence(id);
-      if (sequence) getTransport().terminalWrite(sessionId, sequence);
+      if (sequence) writeTerminal(sequence);
     },
-    [sessionId],
+    [writeTerminal],
   );
 
   const toggleKeyboard = useCallback(() => {
     invokingControlRef.current = "keyboard";
-    setIsKeyboardOpen((current) => {
-      const next = !current;
-      requestAnimationFrame(() => {
-        if (next && !shouldUseCustomKeyboard) {
-          keyboardInputRef.current?.focus();
-        } else {
-          keyboardInputRef.current?.blur();
-        }
-      });
-      return next;
+    if (isKeyboardOpen) {
+      keyboardInputRef.current?.blur();
+      setIsKeyboardOpen(false);
+      return;
+    }
+    if (shouldUseCustomKeyboard) {
+      setIsKeyboardOpen(true);
+      return;
+    }
+    flushSync(() => {
+      setIsKeyboardOpen(true);
     });
-  }, [shouldUseCustomKeyboard]);
+    keyboardInputRef.current?.focus();
+  }, [isKeyboardOpen, shouldUseCustomKeyboard]);
 
   const handleCustomKeyPress = useCallback(
     (key: CustomMobileTerminalKey) => {
@@ -133,7 +174,7 @@ export function MobileTerminalAccessoryBar({
         alt: isAltActive,
         meta: isMetaActive,
       });
-      if (sequence) getTransport().terminalWrite(sessionId, sequence);
+      if (sequence) writeTerminal(sequence);
       if (isShiftActive && key.kind === "text") setIsShiftActive(false);
       if (isCtrlActive && key.kind === "text") setIsCtrlActive(false);
       if (isAltActive && key.kind === "text") setIsAltActive(false);
@@ -145,39 +186,15 @@ export function MobileTerminalAccessoryBar({
       isCtrlActive,
       isMetaActive,
       isShiftActive,
-      sessionId,
+      writeTerminal,
     ],
   );
 
-  const handleKeyboardInput = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const nextValue = event.target.value;
-      const previousValue = keyboardValueRef.current;
-      const appended = nextValue.startsWith(previousValue)
-        ? nextValue.slice(previousValue.length)
-        : nextValue;
-      if (appended) getTransport().terminalWrite(sessionId, appended);
-      keyboardValueRef.current = "";
-      event.target.value = "";
+  const handleTerminalInput = useCallback(
+    (sequence: string) => {
+      if (sequence) writeTerminal(sequence);
     },
-    [sessionId],
-  );
-
-  const handleKeyboardKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Backspace") {
-        event.preventDefault();
-        getTransport().terminalWrite(sessionId, "\x7f");
-        keyboardValueRef.current = "";
-        event.currentTarget.value = "";
-      } else if (event.key === "Enter") {
-        event.preventDefault();
-        getTransport().terminalWrite(sessionId, "\r");
-        keyboardValueRef.current = "";
-        event.currentTarget.value = "";
-      }
-    },
-    [sessionId],
+    [writeTerminal],
   );
 
   const toggleKeys = useCallback(() => {
@@ -197,8 +214,7 @@ export function MobileTerminalAccessoryBar({
   ) : (
     <MobileTerminalNativeKeyboardInput
       inputRef={keyboardInputRef}
-      onChange={handleKeyboardInput}
-      onKeyDown={handleKeyboardKeyDown}
+      onTerminalInput={handleTerminalInput}
     />
   );
   const controlId = `terminal-accessory-${useId().replaceAll(":", "")}`;
@@ -210,7 +226,8 @@ export function MobileTerminalAccessoryBar({
         | React.MouseEvent<HTMLDivElement>
         | React.PointerEvent<HTMLDivElement>,
     ) => {
-      if (event.target instanceof HTMLInputElement) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.("[data-native-keyboard-input]")) {
         event.stopPropagation();
         return;
       }
@@ -223,7 +240,7 @@ export function MobileTerminalAccessoryBar({
   return (
     <div className="relative w-full shrink-0">
       <TerminalFloatingControlShell
-        sessionId={sessionId}
+        sessionId={safeSessionId}
         className={className}
         isOpen={isExpanded || isKeyboardOpen}
         outsideRefs={outsideRefs}
@@ -256,7 +273,8 @@ export function MobileTerminalAccessoryBar({
           onMouseDown={guardPanelPointer}
           onPointerDown={guardPanelPointer}
           onClick={(event) => {
-            if (event.target instanceof HTMLInputElement) {
+            const target = event.target as HTMLElement | null;
+            if (target?.closest?.("[data-native-keyboard-input]")) {
               event.stopPropagation();
               return;
             }

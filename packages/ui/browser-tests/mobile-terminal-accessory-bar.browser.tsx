@@ -437,6 +437,65 @@ describe("mobile terminal accessory bar in Chromium", () => {
     expect(backspace.defaultPrevented).toBe(true);
     expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\x7f");
     expect(hostClick).not.toHaveBeenCalled();
+
+    // Padding click on wrapper retains or acquires input focus without host propagation
+    const wrapper = document.querySelector<HTMLElement>(
+      "[data-native-keyboard-input]",
+    );
+    expect(wrapper).not.toBeNull();
+    await userEvent.click(wrapper!);
+    expect(document.activeElement).toBe(nativeInput);
+    expect(hostClick).not.toHaveBeenCalled();
+
+    // Real Chromium beforeinput events
+    mockTerminalWrite.mockClear();
+    nativeInput?.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertText",
+        data: "z",
+      }),
+    );
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "z");
+
+    mockTerminalWrite.mockClear();
+    nativeInput?.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "deleteContentBackward",
+      }),
+    );
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\x7f");
+
+    mockTerminalWrite.mockClear();
+    nativeInput?.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertLineBreak",
+      }),
+    );
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\r");
+
+    // Composition start, update, end in Chromium
+    mockTerminalWrite.mockClear();
+    nativeInput?.dispatchEvent(
+      new CompositionEvent("compositionstart", { bubbles: true }),
+    );
+    expect(mockTerminalWrite).not.toHaveBeenCalled();
+    nativeInput?.dispatchEvent(
+      new CompositionEvent("compositionend", {
+        bubbles: true,
+        data: "ç",
+      }),
+    );
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "ç");
   });
 
   it("uses the same custom keyboard on desktop when the setting is enabled", async () => {
@@ -496,6 +555,33 @@ describe("mobile terminal accessory bar in Chromium", () => {
     await userEvent.click(desktopShiftButton);
     expect(desktopLetter?.textContent).toBe("a");
     expect(desktopLetter?.getAttribute("aria-label")).toBe("Send a");
+    mockTerminalWrite.mockClear();
+    await userEvent.click(
+      page.getByRole("button", { name: "Send a", exact: true }),
+    );
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "a");
+    await userEvent.click(desktopCapsButton);
+
+    // Assistive-style click with detail: 1 and no pointerdown
+    mockTerminalWrite.mockClear();
+    desktopLetter?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }),
+    );
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "a");
+
+    // Keyboard activation (Enter and Space) on focused button
+    desktopLetter?.focus();
+    mockTerminalWrite.mockClear();
+    await userEvent.keyboard("{Enter}");
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "a");
+
+    mockTerminalWrite.mockClear();
+    await userEvent.keyboard(" ");
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "a");
   });
 
   it("uses a minimized custom keyboard on compact coarse surfaces", async () => {

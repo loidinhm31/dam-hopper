@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
 import {
   act,
-  type ChangeEvent,
   type KeyboardEvent,
-  type RefObject,
 } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +11,7 @@ const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 const mockSettings = vi.hoisted(() => ({ customKeyboard: false }));
 const mockViewport = vi.hoisted(() => ({ compact: false, coarse: false }));
 const mockTerminalWrite = vi.hoisted(() => vi.fn());
+const mockProfileTerminalWrite = vi.hoisted(() => vi.fn());
 
 vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
   useAndroidChromeInputPolicy: () => ({
@@ -29,6 +28,20 @@ vi.mock("@/stores/settings.js", () => ({
 vi.mock("@/api/transport.js", () => ({
   getTransport: () => ({ terminalWrite: mockTerminalWrite }),
 }));
+vi.mock("@/api/connections.js", () => ({
+  getConnectionSnapshot: (profileId: string) =>
+    profileId === "remote-profile"
+      ? {
+          owner: { profileId: "remote-profile", generation: 1 },
+          status: "connected",
+        }
+      : null,
+  getTransport: (owner: { profileId: string }) =>
+    owner.profileId === "remote-profile"
+      ? { terminalWrite: mockProfileTerminalWrite }
+      : { terminalWrite: mockTerminalWrite },
+}));
+
 
 vi.mock("@/hooks/use-compact-workspace.js", () => ({
   useCompactWorkspace: () => mockViewport.compact,
@@ -42,25 +55,6 @@ vi.mock("@/components/organisms/MobileTerminalCustomKeyboard.js", () => ({
   MobileTerminalCustomKeyboard: () => <div data-testid="custom-keyboard" />,
 }));
 
-vi.mock("@/components/organisms/MobileTerminalNativeKeyboardInput.js", () => ({
-  MobileTerminalNativeKeyboardInput: ({
-    inputRef,
-    onChange,
-    onKeyDown,
-  }: {
-    inputRef: RefObject<HTMLInputElement | null>;
-    onChange: (event: ChangeEvent<HTMLInputElement>) => void;
-    onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  }) => (
-    <input
-      ref={inputRef}
-      data-testid="native-keyboard"
-      placeholder="Type for terminal"
-      onChange={onChange}
-      onKeyDown={onKeyDown}
-    />
-  ),
-}));
 
 vi.mock("@/components/organisms/MobileTerminalSpecialKeys.js", () => ({
   MobileTerminalSpecialKeys: ({
@@ -361,5 +355,206 @@ describe("MobileTerminalAccessoryBar", () => {
       container.querySelector('[aria-label="Hide terminal keys"]'),
     ).toBeNull();
     expect(document.activeElement).toBe(keysButton);
+  });
+
+  it("handles beforeinput insertText, deleteContentBackward, and insertLineBreak", async () => {
+    renderBar();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Open mobile keyboard"]')
+        ?.click(),
+    );
+    const nativeInput = container.querySelector<HTMLInputElement>(
+      "[data-testid=native-keyboard]",
+    );
+    expect(nativeInput).not.toBeNull();
+
+    // insertText
+    mockTerminalWrite.mockClear();
+    const insertEvent = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertText",
+      data: "a",
+    });
+    await act(async () => nativeInput?.dispatchEvent(insertEvent));
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "a");
+
+    // deleteContentBackward
+    mockTerminalWrite.mockClear();
+    const deleteEvent = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "deleteContentBackward",
+    });
+    await act(async () => nativeInput?.dispatchEvent(deleteEvent));
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\x7f");
+
+    // insertLineBreak
+    mockTerminalWrite.mockClear();
+    const lineBreakEvent = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertLineBreak",
+    });
+    await act(async () => nativeInput?.dispatchEvent(lineBreakEvent));
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "\r");
+  });
+
+  it("handles paste after typing without swallowing characters", async () => {
+    renderBar();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Open mobile keyboard"]')
+        ?.click(),
+    );
+    const nativeInput = container.querySelector<HTMLInputElement>(
+      "[data-testid=native-keyboard]",
+    );
+    expect(nativeInput).not.toBeNull();
+
+    // Typed character via beforeinput
+    mockTerminalWrite.mockClear();
+    nativeInput?.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertText",
+        data: "x",
+      }),
+    );
+    expect(mockTerminalWrite).toHaveBeenCalledWith("session-1", "x");
+
+    // Subsequent paste via beforeinput or change
+    mockTerminalWrite.mockClear();
+    nativeInput?.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertFromPaste",
+        data: "pasted-command",
+      }),
+    );
+    expect(mockTerminalWrite).toHaveBeenCalledWith("session-1", "pasted-command");
+  });
+
+  it("handles composition start, update, and end without premature terminal writes", async () => {
+    renderBar();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Open mobile keyboard"]')
+        ?.click(),
+    );
+    const nativeInput = container.querySelector<HTMLInputElement>(
+      "[data-testid=native-keyboard]",
+    );
+    expect(nativeInput).not.toBeNull();
+
+    mockTerminalWrite.mockClear();
+    await act(async () => {
+      nativeInput?.dispatchEvent(
+        new CompositionEvent("compositionstart", { bubbles: true }),
+      );
+    });
+    expect(mockTerminalWrite).not.toHaveBeenCalled();
+
+    // Interim change during composition should not emit
+    if (nativeInput) nativeInput.value = "n";
+    await act(async () => {
+      nativeInput?.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(mockTerminalWrite).not.toHaveBeenCalled();
+
+    // Composition end emits committed text
+    await act(async () => {
+      nativeInput?.dispatchEvent(
+        new CompositionEvent("compositionend", {
+          bubbles: true,
+          data: "ñ",
+        }),
+      );
+    });
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(mockTerminalWrite).toHaveBeenLastCalledWith("session-1", "ñ");
+  });
+
+  it("keeps panel open when an inside pointerdown causes DOM re-render", async () => {
+    renderBar();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Open mobile keyboard"]')
+        ?.click(),
+    );
+    const panel = container.querySelector(
+      "[data-testid=mobile-terminal-accessory-panel]",
+    );
+    expect(panel).not.toBeNull();
+
+    // Dispatch pointerdown inside panel where composedPath includes the panel
+    const pointerEvent = new MouseEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(pointerEvent, "composedPath", {
+      value: () => [panel, container, document.body, document],
+    });
+    await act(async () => document.dispatchEvent(pointerEvent));
+
+    // Panel should still be open
+    expect(
+      container.querySelector("[data-testid=mobile-terminal-accessory-panel]"),
+    ).not.toBeNull();
+
+    // Outside pointerdown should dismiss
+    const outsideEvent = new MouseEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(outsideEvent, "composedPath", {
+      value: () => [document.body, document],
+    });
+    await act(async () => document.dispatchEvent(outsideEvent));
+
+    expect(
+      container.querySelector("[data-testid=mobile-terminal-accessory-panel]"),
+    ).toBeNull();
+  });
+
+  it("routes terminalWrite to the correct profile transport and raw session id for multi-profile composite keys", async () => {
+    mockProfileTerminalWrite.mockClear();
+    mockTerminalWrite.mockClear();
+    act(() => {
+      root.render(
+        <MobileTerminalAccessoryBar
+          sessionId={JSON.stringify(["remote-profile", "term-999"])}
+        />,
+      );
+    });
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Open mobile keyboard"]')
+        ?.click(),
+    );
+
+    const nativeInput = container.querySelector<HTMLInputElement>(
+      "[data-testid=native-keyboard]",
+    );
+    expect(nativeInput).not.toBeNull();
+
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => nativeInput?.dispatchEvent(enter));
+    expect(enter.defaultPrevented).toBe(true);
+
+    // Should write to the remote profile's transport with raw backend ID "term-999"
+    expect(mockProfileTerminalWrite).toHaveBeenCalledWith("term-999", "\r");
+    expect(mockTerminalWrite).not.toHaveBeenCalled();
   });
 });

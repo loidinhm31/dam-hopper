@@ -49,6 +49,8 @@ vi.mock("@/hooks/use-coarse-pointer.js", () => ({
 }));
 
 vi.mock("@/api/transport.js", () => ({
+  getTransportGeneration: () => 0,
+  subscribeTransportChanges: () => () => {},
   getTransport: () => ({ terminalWrite: vi.fn() }),
   reconfigureTransport: vi.fn(),
   initTransport: vi.fn(),

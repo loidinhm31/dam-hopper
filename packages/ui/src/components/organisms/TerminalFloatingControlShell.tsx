@@ -37,10 +37,20 @@ export function TerminalFloatingControlShell({
     if (!isOpen) return;
 
     const handlePointerDown = (event: globalThis.PointerEvent) => {
-      const target = event.target as Node;
+      const path =
+        typeof event.composedPath === "function" ? event.composedPath() : [];
+      const acceptedRoots = [
+        controlsRef.current,
+        ...outsideRefs.map((ref) => ref.current),
+      ].filter(Boolean);
+      if (path.some((entry) => acceptedRoots.includes(entry as HTMLElement))) {
+        return;
+      }
+      const target = event.target as Node | null;
       if (
-        controlsRef.current?.contains(target) ||
-        outsideRefs.some((ref) => ref.current?.contains(target))
+        target &&
+        (controlsRef.current?.contains(target) ||
+          outsideRefs.some((ref) => ref.current?.contains(target)))
       ) {
         return;
       }
