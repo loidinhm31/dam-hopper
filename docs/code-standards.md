@@ -719,6 +719,25 @@ not fabricated from local release asset names. The checker does not itself
 provide a GitHub DSSE/certificate trust root, so external verification remains
 explicit and missing evidence holds stable publication.
 
+### Windows direct-server release asset standards (Phase 01)
+
+Keep Windows release packaging independent from the Linux systemd/Manifest v2
+path. `deploy/release/build-windows-release-archive.mjs` emits one deterministic
+`dam-hopper-vX.Y.Z-windows-x86_64.zip` with exactly four root files:
+`dam-hopper-server.exe`, `dam-hopper.example.toml`, `LICENSE`, and `README.md`.
+The public Windows set is exactly that ZIP plus `dam-hopper-install.ps1`; do
+not add Linux manifests, SBOMs, units, or runtime state.
+
+`deploy/release/check-release-assets.mjs` defaults to Linux and must keep
+`--profile windows` at exactly two assets and `--profile all` at the exact
+six-asset Linux+Windows union. Windows checks parse (but never execute) the
+PowerShell installer and validate ZIP member names, root paths, bounds, CRC,
+EOCD, and trailing bytes. Keep migration evidence Linux-only. The focused
+contract harness is `tests/deploy/windows-release-asset-gate.test.mjs`; the
+PowerShell reproducibility harness is
+`tests/deploy/windows-release-package-twice.ps1`. See
+[Windows Release Asset Packaging](./windows-release-packaging.md).
+
 ### Async Patterns
 
 **Never hold locks across `.await`:**

@@ -567,6 +567,22 @@ See the [Phase 09 plan](../plans/260916-2137-unified-profile/phase-09-integratio
 [API reference](./api-reference.md), and
 [configuration guide](./configuration-guide.md).
 
+### Phase 01 Windows release asset boundary
+
+Windows packaging is a direct-server boundary beside, not inside, the Linux
+systemd release graph. `build-windows-release-archive.mjs` creates a
+deterministic ZIP containing the server executable, example configuration,
+license, and README. Publication exposes only that ZIP and
+`dam-hopper-install.ps1`; no systemd unit, Linux Manifest v2, or SPDX SBOM is
+required.
+
+`check-release-assets.mjs` selects exact publication projections with
+`--profile linux|windows|all`: Windows validates two assets, while `all`
+validates the six-asset Linux+Windows union. The checker validates bytes and
+syntax but does not install services, start the server, or qualify the native
+Windows/WebView2 runtime. Detailed commands and failure boundaries are in
+[Windows Release Asset Packaging](./windows-release-packaging.md).
+
 ## Proposed concurrent runtime cutover (2026-09-16; not implemented)
 
 Reference note: the source all-workspaces implementation plan is not present in
@@ -599,9 +615,9 @@ claim that concurrent workspaces or profiles have shipped.
 ## Proposed trusted plugin platform (2026-09-20; not implemented)
 
 This is a planning design only. No runtime plugin loader, registry, runner,
-dynamic route, or embedded plugin UI exists yet. The implementation plan is
-[DamHopper plugin platform](../plans/260920-1603-plugin-platform/plan.md);
-its cross-repository contract is owned by the companion evcrate plan.
+dynamic route, or embedded plugin UI exists yet. The source implementation plan
+is not present in this checkout; the companion evcrate plan owns its
+cross-repository contract.
 
 - DamHopper remains the network and authentication boundary. It derives the
   actor from `AuthenticatedActor.subject`, resolves the configured project or

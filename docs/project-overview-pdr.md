@@ -655,6 +655,39 @@ See the [Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/pha
 [test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md),
 and [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
 
+### PR-022: Windows Direct-Server Release Assets (Phase 01)
+
+**Status:** Asset specification and deterministic packaging gate complete.
+
+**Functional requirements:**
+
+- Produce `dam-hopper-vX.Y.Z-windows-x86_64.zip` with the server executable,
+  example TOML, `LICENSE`, and `README.md` as root-level files.
+- Publish exactly two Windows assets: the ZIP and `dam-hopper-install.ps1`.
+- Support checker profiles `linux`, `windows`, and `all`; Windows requires two
+  assets and `all` requires the exact six-asset Linux+Windows union.
+- Keep Windows direct-server packaging separate from Linux systemd and Manifest
+  v2 assets.
+
+**Acceptance criteria:**
+
+- [x] ZIP output is deterministic for identical inputs and epoch; changed epoch
+      changes the digest.
+- [x] ZIP inspection rejects missing/extra/nested/traversal members, CRC or
+      EOCD corruption, trailing bytes, and oversized entries.
+- [x] The asset gate parses PowerShell syntax without executing the installer.
+- [x] `release:windows-archive`, `release:windows-check-assets`,
+      `release:windows-package-twice`, and `release:verify-windows` expose the
+      focused package/reproducibility/syntax checks.
+- [x] Windows package evidence does not imply native/Tauri S13 or WebView2
+      runtime qualification.
+
+**Implementation map:** `deploy/release/build-windows-release-archive.mjs`,
+`deploy/release/check-release-assets.mjs`,
+`tests/deploy/windows-release-package-twice.ps1`, and
+`tests/deploy/windows-release-asset-gate.test.mjs`. The operational command
+guide is [Windows Release Asset Packaging](./windows-release-packaging.md).
+
 ### PR-011: Workflow Tracking Domain & Relational Persistence (Phase 01)
 
 **Status:** Domain and SQLite repository foundation implemented on 2026-09-02.
