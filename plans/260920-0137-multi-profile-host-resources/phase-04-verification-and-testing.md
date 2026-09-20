@@ -14,9 +14,12 @@
 
 - Date: 2026-09-20
 - Priority: P2
-- Plan status: Pending
-- Implementation status: Not started
-- Review status: Not started
+- Plan status: DONE (2026-09-20)
+- Implementation status: DONE (2026-09-20)
+- Review status: DONE (2026-09-20)
+- Progress: 100%
+- Completion timestamp: 2026-09-20
+- Validation: focused unit/component and Chromium suites passed 102/102 (83 unit/component; 19 browser); TypeScript check passed with 0 errors.
 - Effort: 4h
 - Goal: prove watch scope, owner isolation, tiered polling, user flow, accessibility, and single-profile compatibility with focused durable tests.
 
@@ -124,16 +127,16 @@ Avoid exact DOM snapshots, Tailwind classes, hook call order, internal array len
 
 ## Todo list
 
-- [ ] Add pure scope/fleet summary tests.
-- [ ] Add real QueryClient hook tests with fake profile/connection events.
-- [ ] Prove isolated keys, stale-generation rejection, cadence, and cleanup.
-- [ ] Prove duplicate incident isolation and per-profile acknowledgement.
-- [ ] Add card/deck semantic and edge-case tests.
-- [ ] Extend popover tests while retaining single-profile behavior proof.
-- [ ] Extend Chromium flow, focus, target-size, contrast, and viewport checks.
-- [ ] Verify no real host action and no offline action controls.
-- [ ] Run focused unit and browser commands only.
-- [ ] Complete post-implementation architecture comparison.
+- [x] Add pure scope/fleet summary tests.
+- [x] Add real QueryClient hook tests with fake profile/connection events.
+- [x] Prove isolated keys, stale-generation rejection, cadence, and cleanup.
+- [x] Prove duplicate incident isolation and per-profile acknowledgement.
+- [x] Add card/deck semantic and edge-case tests.
+- [x] Extend popover tests while retaining single-profile behavior proof.
+- [x] Extend Chromium flow, focus, target-size, contrast, and viewport checks.
+- [x] Verify no real host action and no offline action controls.
+- [x] Run focused unit and browser commands only.
+- [x] Complete post-implementation architecture comparison.
 
 ## Success Criteria
 
@@ -166,12 +169,12 @@ Avoid exact DOM snapshots, Tailwind classes, hook call order, internal array len
 
 ## Side-Effect Review Checklist
 
-- [ ] Test setup restores fake timers, roots, QueryClient, profile/connection listeners, alert store, and browser viewport/safe-area variables.
-- [ ] No shared localStorage/profile records leak between cases.
-- [ ] No real network, SSE, suspend, RTC, or config mutation.
-- [ ] Focus and open dialogs cleaned after each browser case.
-- [ ] Targeted tests defend behavior, not implementation text/classes.
-- [ ] Broad validation intentionally deferred to integration owner.
+- [x] Test setup restores fake timers, roots, QueryClient, profile/connection listeners, alert store, and browser viewport/safe-area variables.
+- [x] No shared localStorage/profile records leak between cases.
+- [x] No real network, SSE, suspend, RTC, or config mutation.
+- [x] Focus and open dialogs cleaned after each browser case.
+- [x] Targeted tests defend behavior, not implementation text/classes.
+- [x] Broad validation intentionally deferred to integration owner.
 
 ## Next steps
 
