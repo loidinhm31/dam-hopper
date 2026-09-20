@@ -32,8 +32,7 @@ pub fn parse_config_str_at_path(
 
     validate_config(&raw)?;
 
-    let canonical = file_path
-        .canonicalize()
+    let canonical = dunce::canonicalize(file_path)
         .unwrap_or_else(|_| file_path.to_path_buf());
     let config_dir = canonical
         .parent()
@@ -144,15 +143,13 @@ fn validate_project_path(raw: &str, field: &str) -> Result<(), AppError> {
 /// Supporting paths like env files should stay project-relative.
 fn validate_relative_path(raw: &str, field: &str) -> Result<(), AppError> {
     let p = Path::new(raw);
-    if p.is_absolute() {
+    if p.is_absolute()
+        || p.has_root()
+        || p.components()
+            .any(|c| matches!(c, Component::Prefix(_) | Component::ParentDir))
+    {
         return Err(AppError::Config(format!(
-            "Field '{}' must be a relative path, got absolute: {}",
-            field, raw
-        )));
-    }
-    if p.components().any(|c| c == Component::ParentDir) {
-        return Err(AppError::Config(format!(
-            "Field '{}' must not contain '..' components: {}",
+            "Field '{}' must be a relative path without traversal or root prefixes, got: {}",
             field, raw
         )));
     }
@@ -246,8 +243,7 @@ fn resolve_terminal(raw: TerminalProfileRaw, project_path: &Path) -> TerminalPro
 // ──────────────────────────────────────────────
 
 pub fn write_config(file_path: &Path, config: &DamHopperConfig) -> Result<(), AppError> {
-    let abs_path = file_path
-        .canonicalize()
+    let abs_path = dunce::canonicalize(file_path)
         .unwrap_or_else(|_| file_path.to_path_buf());
     let config_dir = abs_path
         .parent()
@@ -547,7 +543,7 @@ fn project_to_toml(p: &ProjectConfig, config_dir: &Path) -> toml::Value {
                 let rel_cwd = pathdiff::diff_paths(&abs_cwd, &project_path)
                     .unwrap_or(abs_cwd)
                     .to_string_lossy()
-                    .to_string();
+                    .replace('\\', "/");
                 let rel_cwd = if rel_cwd.is_empty() {
                     ".".to_string()
                 } else {

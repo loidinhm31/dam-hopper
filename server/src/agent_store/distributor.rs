@@ -499,8 +499,8 @@ async fn check_existing_target(target_path: &Path, expected_source: &Path) -> bo
     };
     // Prefer canonical comparison when both sides exist (handles symlink chains).
     // Fall back to lexical comparison to avoid returning false on broken store paths.
-    let resolved_canon = std::fs::canonicalize(&resolved).ok();
-    let expected_canon = std::fs::canonicalize(expected_source).ok();
+    let resolved_canon = dunce::canonicalize(&resolved).ok();
+    let expected_canon = dunce::canonicalize(expected_source).ok();
     match (resolved_canon, expected_canon) {
         (Some(rc), Some(ec)) => rc == ec,
         _ => resolved == expected_source,

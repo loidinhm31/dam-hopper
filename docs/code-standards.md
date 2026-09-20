@@ -219,6 +219,41 @@ observation:
   startup. Reload, import, and workspace activation must reapply those
   startup-owned values; only the runtime timing pair is mutable.
 
+### Path and configuration normalization (Phase 01)
+
+Keep path handling platform-aware, lexical where possible, and consistent
+across config, target, host, and Agent Store boundaries:
+
+- `config/parser.rs` canonicalizes the existing registry file with `dunce` to
+  establish `configPath` and its directory, then validates project paths by
+  `Path` components: project roots may be absolute, but `..` is rejected;
+  `env_file` and terminal `cwd` must be project-relative and cannot contain a
+  root, prefix, or traversal. Resolve project paths lexically against that
+  directory without project-path symlink resolution.
+- `project_path_for_toml` writes paths inside the registry directory as
+  forward-slash relative values, writes `.` for the registry root, and
+  preserves external absolute values. Terminal `cwd` values are serialized
+  relative to the project with forward slashes. Windows drive, mixed-separator,
+  UNC, and `\\?\` verbatim values must survive parse/write round trips.
+- `workspace_target.rs` requires explicit target paths to be absolute and
+  freshly registered by Git. Canonicalize live directories and verify
+  containment; keep a normalized lexical identity for missing targets.
+  Windows identity normalizes separators, removes extended drive/UNC aliases,
+  and lowercases; POSIX identity keeps case and backslashes significant.
+  Use that identity for matching, containment, and relative projection.
+- Agent imports canonicalize the source directory, reject literal `..` and
+  symlink escapes, and never overwrite store items. Distribution compares
+  canonical symlink targets when possible and uses lexical comparison for
+  broken links; Windows chooses directory versus file symlink APIs.
+- Host disk selection canonicalizes the workspace before choosing the longest
+  matching mount. A non-match uses a zero-capacity workspace fallback; tests
+  cover Windows drive-root mounts without requiring a real host disk.
+
+Tests should assert observable path identity and refusal behavior with
+`tempfile`, platform-gated Windows cases, and real Git worktrees. Do not use
+string-only slash replacement on POSIX or silently normalize unsafe input.
+
+
 ### PTY activity observation and input admission (Phase 02)
 
 Keep PTY activity evidence at the existing manager/session boundaries; do not

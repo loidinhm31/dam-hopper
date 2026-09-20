@@ -1588,6 +1588,12 @@ The monitor is descriptive and degrades per signal:
 - Exact page-cache bytes for an arbitrary mount are not promised. Mount identity,
   filesystem/access context, and any estimate carry an uncertainty label.
 
+The existing disk projection is cross-platform even though deep resource
+signals are Linux-focused: `HostMetricsSampler` canonicalizes the workspace
+with `dunce`, selects the longest matching mount prefix, and supports Windows
+drive-root mounts. With no matching mount it reports a zero-capacity
+workspace fallback rather than selecting an unrelated disk.
+
 Privileged actions use a separate host-local fixed-action helper. The DamHopper
 server never accepts an arbitrary command, shell string, executable path, or host
 password from the browser. The helper is reachable only through restricted local
@@ -1627,10 +1633,24 @@ Handles registry loading, legacy discovery fallback, and feature flags.
 
 **Registry and sandbox semantics:**
 
-- Canonical registry path is `~/.config/dam-hopper/dam-hopper.toml`, with `--config` and `DAM_HOPPER_CONFIG` as explicit overrides
-- Relative `projects[].path` values resolve against the loaded registry file directory; absolute paths are preserved
-- File API security is enforced by per-project roots in `ProjectSandbox`, not by `workspace_dir`
-- Example: with a registry at `~/.config/dam-hopper/dam-hopper.toml`, `path = "./apps/web"` resolves to `~/.config/dam-hopper/apps/web`, while `path = "D:\\repos\\api"` stays `D:\repos\api` on Windows
+- Canonical registry path is `~/.config/dam-hopper/dam-hopper.toml`, with
+  `--config` and `DAM_HOPPER_CONFIG` as explicit overrides.
+- The existing registry file path is normalized with `dunce` to establish
+  `configPath` and its directory. Relative `projects[].path` values are
+  validated for traversal, then joined lexically to that directory; redundant
+  `.` components are removed without project-path symlink access. Absolute
+  values are preserved.
+- `env_file` and terminal-profile `cwd` remain project-relative and reject
+  absolute, rooted/prefix, or `..` paths.
+- `project_path_for_toml` emits forward-slash relative values for paths inside
+  the registry directory, writes `.` for the registry root, and preserves
+  external absolute values. Windows drive, mixed-separator, UNC, and
+  `\\?\` verbatim project paths round-trip through TOML.
+- File API security is enforced by per-project roots in `ProjectSandbox`, not
+  by `workspace_dir`. Example: with a registry at
+  `~/.config/dam-hopper/dam-hopper.toml`, `path = "./apps/web"` resolves to
+  `~/.config/dam-hopper/apps/web`, while `path = "D:\\repos\\api"` stays
+  `D:\repos\api` on Windows.
 
 **Path resolution priority:**
 
@@ -1640,6 +1660,7 @@ Handles registry loading, legacy discovery fallback, and feature flags.
 4. `~/.config/dam-hopper/config.toml` `defaults.workspace`
 5. Current working directory via legacy upward `dam-hopper.toml` discovery
 6. Empty config fallback
+
 
 ### Project worktree targets (Phase 07 target lifecycle)
 
@@ -1689,6 +1710,13 @@ for new operations. Discovery uses a short-lived bounded cache for UI listing;
 add, remove, prune, explicit refresh, and project-configuration reload
 invalidate the relevant discovery entry. A failed discovery leaves existing UI
 rows visible with a stale-data warning and offers retry.
+
+Target matching uses one platform-aware identity. Windows lexical paths
+normalize `.`/`..`, use `/`, remove extended drive/UNC aliases, and compare
+case-insensitively; POSIX paths retain case and treat backslashes as ordinary
+filename bytes. The identity powers containment and relative projection even
+when a worktree has disappeared, while live-target authorization still
+requires canonical directories inside a freshly listed Git worktree.
 
 App-initiated removal re-fetches discovery immediately before checking
 exact-target ownership, refuses dirty editor tabs or live terminal sessions,
@@ -3872,11 +3900,16 @@ web UI can show recoverable state instead of generic errors.
 
 ### agent_store/
 
-Distributes `.claude/` items across projects.
+Distributes `.claude/` and `.gemini/` items across projects while keeping
+canonical store paths server-local.
 
-**distributor.rs** — Ship/unship/absorb operations.
+**importer.rs** — Canonicalizes local/repository sources, rejects literal
+`..` components and symlink escapes, and refuses overwrite conflicts.
 
-**health_check.rs** — Detects broken symlinks.
+**distributor.rs** — Ship/unship/absorb operations resolve category-specific
+paths, compare symlink targets canonically when possible, and fall back to
+lexical comparison for broken links. Windows selects directory or file
+symlink creation as appropriate.
 
 ### api/
 

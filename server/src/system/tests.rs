@@ -196,6 +196,42 @@ fn ignores_non_matching_mounts() {
     assert!(selected.is_none());
 }
 
+#[cfg(windows)]
+#[test]
+fn selects_workspace_disk_on_windows_with_drive_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let drive = root.components().next().unwrap();
+    let mount_point = PathBuf::from(drive.as_os_str());
+
+    let selected = select_workspace_disk(
+        root,
+        vec![
+            DiskMountSnapshot {
+                name: "system".into(),
+                mount_point: mount_point.clone(),
+                total_bytes: 100,
+                available_bytes: 50,
+                file_system: Some("NTFS".into()),
+                source: None,
+                source_kind: super::DiskSourceKind::Unknown,
+            },
+            DiskMountSnapshot {
+                name: "other".into(),
+                mount_point: PathBuf::from(r"Z:\"),
+                total_bytes: 200,
+                available_bytes: 80,
+                file_system: Some("NTFS".into()),
+                source: None,
+                source_kind: super::DiskSourceKind::Unknown,
+            },
+        ],
+    )
+    .expect("disk selected on windows");
+
+    assert_eq!(selected.name, "system");
+}
+
 #[test]
 fn unmatched_workspace_disk_falls_back_to_workspace_path() {
     let fallback = super::fallback_disk(Path::new("/work/repos/demo"));
