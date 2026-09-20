@@ -1,4 +1,13 @@
 # 2026-09-20
+
+- **Transport-safe FS subscription follow-up — Phase 01 (2026-09-20).**
+  Documented profile-owned transport resolution, originating-watch cleanup and
+  cache retirement, fail-closed `IdleTransport` filesystem methods, ambient
+  ownership checks on disconnect, and local Explorer `ErrorBoundary` scope.
+  See the [Phase 01 plan](../plans/260920-1658-fix-on-fs-event-type-error/phase-01-fix-transport-fs-subscription.md),
+  [Phase 03 files guide](./phase-03-files-editor-search-git.md), and
+  [system architecture](./system-architecture.md).
+
 - **Multi-profile Host Resources watch — Phase 04 verification and testing complete (100%; 2026-09-20).** Focused unit/component and Chromium validation passed **102/102** tests (83 unit/component; 19 browser), and the UI TypeScript check passed with 0 errors. Coverage proves watch scope, owner/generation isolation, tiered polling, unread partitioning, single-profile compatibility, accessibility, responsive layout, and security negatives. The parent plan is now **COMPLETE (4/4 phases; 100%)**. See the [Phase 04 plan](../plans/260920-0137-multi-profile-host-resources/phase-04-verification-and-testing.md), [tester report](../plans/reports/tester-260920-1130-phase04-multi-profile-host-resources.md), [code review](../plans/reports/code-review-260920-1132-phase04-verification-and-testing.md), and [roadmap](./project-roadmap.md).
 
 

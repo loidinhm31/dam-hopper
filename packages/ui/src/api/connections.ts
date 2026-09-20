@@ -2,7 +2,11 @@ import { useSyncExternalStore } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { ApiClient } from "./client.js";
 import { createApiClient } from "./client.js";
-import { type Transport, reconfigureTransport } from "./transport.js";
+import {
+  type Transport,
+  reconfigureTransport,
+  getTransport as getAmbientTransport,
+} from "./transport.js";
 import { IdleTransport } from "./idle-transport.js";
 import { WsTransport } from "./ws-transport.js";
 import {
@@ -477,6 +481,10 @@ export function disconnectProfile(profileId: ProfileId): void {
   const entry = entries.get(profileId);
   if (!entry) return;
 
+  const currentAmbient = getAmbientTransport();
+  const ownsAmbient =
+    entry.transport != null && entry.transport === currentAmbient;
+
   entry.settleConnect?.();
   entry.intent = false;
   entry.generation += 1;
@@ -489,8 +497,7 @@ export function disconnectProfile(profileId: ProfileId): void {
   entry.api = null;
   entry.backoffMs = INITIAL_BACKOFF_MS;
 
-  const activeId = getActiveProfileId();
-  if (!activeId || activeId === profileId) {
+  if (ownsAmbient) {
     reconfigureTransport(new IdleTransport());
   }
   updateSnapshot(profileId, {

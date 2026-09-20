@@ -298,6 +298,17 @@ fallback/diagnostic path. Focused tests in
 `packages/ui/src/components/ui/ErrorBoundary.test.tsx` cover these boundaries,
 guard ordering, and storage failures.
 
+### Explorer-local transport errors (Phase 01 follow-up)
+
+`WorkspacePage` wraps the desktop IDE Explorer, compact IDE Explorer, and
+terminal floating Explorer in separate `ErrorBoundary` instances. Each boundary
+is keyed by surface, profile, project, and target, and keeps the existing
+`Suspense` fallback inside the boundary. A FileTree render/effect failure
+therefore replaces only its Explorer region; it does not remount the workspace
+shell, editor, or active terminal hosts. Changing the target clears a latched
+boundary error without resetting unrelated workspace state.
+
+
 ## Usage Insights Settings
 
 **Locations:** `packages/ui/src/components/pages/SettingsPage.tsx`,
@@ -1222,6 +1233,16 @@ watchers, and uploads through the captured profile transport. Filesystem events
 update or refetch only the matching target. `LargeFileViewer` uses read-only
 64 KiB range reads for files at least 5 MiB; image/video preview components use
 their owner-scoped media-ticket adapters.
+
+`useFsSubscription` resolves a qualified target through
+`captureConnection(profileId)` and `getTransport(owner)`, with no ambient
+fallback when that owner is unavailable. The transport captured by
+`fs:subscribe_tree` remains the owner for event binding, lazy child listing,
+unsubscribe, and cache cleanup. Cleanup retires the exact subscription payload,
+so a remount creates a fresh watch; profile generation changes follow the same
+teardown/rebind path. `IdleTransport` keeps the seam callable while offline:
+event/unsubscribe methods are no-ops, and subscription/mutation methods reject
+with `Server profile required`.
 
 `SearchPanel` exposes Project target and All connected profiles scopes. The
 search hook preserves profile/project/target metadata, reports per-profile

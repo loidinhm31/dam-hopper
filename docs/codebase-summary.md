@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,072
-files, 4,671,152 tokens, 19,455,558 characters; five security-flagged files
+**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,095
+files, 4,726,645 tokens, 19,710,721 characters; five security-flagged files
 excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
@@ -174,6 +174,33 @@ reload only clean open tabs.
 The focused contract coverage is in
 `packages/ui/src/api/phase-03-files-editor-search-git.test.ts`. The full source
 and behavior map is [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
+
+### Transport-safe FS subscription follow-up (Phase 01, 2026-09-20)
+
+The filesystem tree hook now resolves a qualified target through
+`captureConnection(profileId)` and `getTransport(owner)`. A profile-qualified
+failure stays unavailable; it cannot fall through to the ambient singleton or
+another profile. Unqualified legacy targets retain the explicit ambient
+compatibility path.
+
+`useTransportGeneration(profileId)` fences profile reconnects. The transport
+that returns a tree subscription remains the owner for `onFsEvent` (or the
+generic `onEvent("fs:<sub_id>")` fallback), lazy `fs:list` child loading,
+unsubscribe, and listener cleanup. Cleanup retires the exact cached
+`{ sub_id, nodes }` payload, so a later mount requests a fresh watch even when
+the QueryClient would otherwise retain infinite-stale data. Abort cleanup also
+retires a subscription returned after cancellation.
+
+`IdleTransport` supplies callable FS methods for empty/setup states: event
+registration and unsubscribe no-op, while subscription and mutation reject
+with `Server profile required`. `disconnectProfile` compares actual transport
+identity before replacing ambient state, preserving healthy non-ambient
+connections.
+
+`WorkspacePage` wraps the desktop IDE, compact IDE, and terminal floating
+`FileTree` surfaces in target-keyed local `ErrorBoundary` instances around
+`Suspense`. An Explorer render/effect error therefore does not unmount the
+workspace shell, editor, or active terminals.
 
 ## Unified-profile terminal continuity and owner navigation (Phase 04)
 

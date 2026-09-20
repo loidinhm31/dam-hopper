@@ -33,7 +33,8 @@ const mocks = vi.hoisted(() => {
       ],
     })),
     fsUnsubscribeTree: vi.fn(),
-    onFsEvent: vi.fn(),
+    onFsEvent: vi.fn() as unknown,
+    onEvent: vi.fn(() => () => {}),
   };
   return { queryClient, transport };
 });
@@ -87,18 +88,29 @@ async function mount() {
   const container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  mocks.transport.onFsEvent.mockImplementation((_id, handler) => {
-    eventHandler = handler;
-    return vi.fn();
-  });
+  const onFsEvent = (mocks.transport as Record<string, unknown>).onFsEvent;
+  if (
+    typeof onFsEvent === "function" &&
+    "mockImplementation" in onFsEvent &&
+    typeof onFsEvent.mockImplementation === "function"
+  ) {
+    onFsEvent.mockImplementation(
+      (_id: number, handler: (event: FsEventDto) => void) => {
+        eventHandler = handler;
+        return vi.fn();
+      },
+    );
+  }
   await act(async () => root?.render(<TestSubscription />));
 }
 
-afterEach(() => {
-  act(() => root?.unmount());
+afterEach(async () => {
+  await act(async () => root?.unmount());
   root = null;
   eventHandler = undefined;
   document.body.replaceChildren();
+  (mocks.transport as Record<string, unknown>).onFsEvent = vi.fn();
+  (mocks.transport as Record<string, unknown>).onEvent = vi.fn(() => () => {});
   vi.clearAllMocks();
   vi.useRealTimers();
 });
@@ -293,6 +305,32 @@ describe("useFsSubscription Git refresh", () => {
     vi.advanceTimersByTime(GIT_FS_INVALIDATION_DEBOUNCE_MS);
     expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["git-diff", "alpha", "root"],
+    });
+  });
+  it("falls back to onEvent when transport does not implement onFsEvent", async () => {
+    delete (mocks.transport as Record<string, unknown>).onFsEvent;
+    await mount();
+    expect(mocks.transport.onEvent).toHaveBeenCalledWith(
+      "fs:7",
+      expect.any(Function),
+    );
+  });
+
+  it("handles transport with no onFsEvent or onEvent without throwing", async () => {
+    delete (mocks.transport as Record<string, unknown>).onFsEvent;
+    delete (mocks.transport as Record<string, unknown>).onEvent;
+    expect(async () => {
+      await mount();
+    }).not.toThrow();
+  });
+  it("retires cached query on unmount", async () => {
+    mocks.queryClient.getQueryData.mockReturnValue({ sub_id: 7, nodes: [] });
+    await mount();
+    act(() => root?.unmount());
+    root = null;
+    expect(mocks.queryClient.removeQueries).toHaveBeenCalledWith({
+      queryKey: ["fs-tree", "alpha", "root", ""],
+      exact: true,
     });
   });
 });

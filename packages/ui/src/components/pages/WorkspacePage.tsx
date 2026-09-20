@@ -26,6 +26,7 @@ import { IdeShell } from "@/components/templates/IdeShell.js";
 import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShell.js";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
 import { TerminalFloatingFilePanel } from "@/components/organisms/TerminalFloatingFilePanel.js";
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import {
   BrowserDebugKeepAliveHost,
   type BrowserDebugKeepAliveHandle,
@@ -1991,25 +1992,29 @@ export default function WorkspacePage() {
         content: (
           <div className="flex flex-col h-full">
             {projectName ? (
-              <Suspense fallback={<PanelFallback label="Loading files…" />}>
-                <FileTree
-                  key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
-                  project={projectName}
-                  target={projectTarget?.target}
-                  path=""
-                  onFileOpen={handleFileOpen}
-                  onOpenTerminal={() => {
-                    const targetId = selectedProjectId ?? projectName;
-                    if (targetId) handleLaunchShell(targetId);
-                  }}
-                  className="flex-1"
-                  revealRequest={
-                    fileTreeRevealRequest?.project === projectName
-                      ? fileTreeRevealRequest
-                      : null
-                  }
-                />
-              </Suspense>
+              <ErrorBoundary
+                key={`explorer-boundary-${projectTarget?.target.profileId ?? "ambient"}:${projectName}:${projectTarget?.targetKey ?? "root"}`}
+              >
+                <Suspense fallback={<PanelFallback label="Loading files…" />}>
+                  <FileTree
+                    key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+                    project={projectName}
+                    target={projectTarget?.target}
+                    path=""
+                    onFileOpen={handleFileOpen}
+                    onOpenTerminal={() => {
+                      const targetId = selectedProjectId ?? projectName;
+                      if (targetId) handleLaunchShell(targetId);
+                    }}
+                    className="flex-1"
+                    revealRequest={
+                      fileTreeRevealRequest?.project === projectName
+                        ? fileTreeRevealRequest
+                        : null
+                    }
+                  />
+                </Suspense>
+              </ErrorBoundary>
             ) : (
               <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
                 No projects configured
@@ -2164,25 +2169,29 @@ export default function WorkspacePage() {
         content: (
           <div className="flex min-h-0 flex-1 flex-col">
             {projectName ? (
-              <Suspense fallback={<PanelFallback label="Loading files…" />}>
-                <FileTree
-                  key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
-                  project={projectName}
-                  target={projectTarget?.target}
-                  path=""
-                  onFileOpen={handleFileOpen}
-                  onOpenTerminal={() => {
-                    const targetId = selectedProjectId ?? projectName;
-                    if (targetId) handleLaunchShell(targetId);
-                  }}
-                  className="flex-1"
-                  revealRequest={
-                    fileTreeRevealRequest?.project === projectName
-                      ? fileTreeRevealRequest
-                      : null
-                  }
-                />
-              </Suspense>
+              <ErrorBoundary
+                key={`compact-explorer-boundary-${projectTarget?.target.profileId ?? "ambient"}:${projectName}:${projectTarget?.targetKey ?? "root"}`}
+              >
+                <Suspense fallback={<PanelFallback label="Loading files…" />}>
+                  <FileTree
+                    key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+                    project={projectName}
+                    target={projectTarget?.target}
+                    path=""
+                    onFileOpen={handleFileOpen}
+                    onOpenTerminal={() => {
+                      const targetId = selectedProjectId ?? projectName;
+                      if (targetId) handleLaunchShell(targetId);
+                    }}
+                    className="flex-1"
+                    revealRequest={
+                      fileTreeRevealRequest?.project === projectName
+                        ? fileTreeRevealRequest
+                        : null
+                    }
+                  />
+                </Suspense>
+              </ErrorBoundary>
             ) : (
               renderCompactPlaceholder("No projects configured")
             )}
@@ -2311,25 +2320,29 @@ export default function WorkspacePage() {
         onActivate={controls.onActivate}
         explorerContent={
           projectName ? (
-            <Suspense fallback={<PanelFallback label="Loading files…" />}>
-              <FileTree
-                key={`terminal-panel-${projectName}:${projectTarget?.targetKey ?? "root"}`}
-                project={projectName}
-                target={projectTarget?.target}
-                path=""
-                onFileOpen={handleFileOpen}
-                onOpenTerminal={() => {
-                  const targetId = selectedProjectId ?? projectName;
-                  if (targetId) handleLaunchShell(targetId);
-                }}
-                className="flex-1"
-                revealRequest={
-                  fileTreeRevealRequest?.project === projectName
-                    ? fileTreeRevealRequest
-                    : null
-                }
-              />
-            </Suspense>
+            <ErrorBoundary
+              key={`terminal-explorer-boundary-${projectTarget?.target.profileId ?? "ambient"}:${projectName}:${projectTarget?.targetKey ?? "root"}`}
+            >
+              <Suspense fallback={<PanelFallback label="Loading files…" />}>
+                <FileTree
+                  key={`terminal-panel-${projectName}:${projectTarget?.targetKey ?? "root"}`}
+                  project={projectName}
+                  target={projectTarget?.target}
+                  path=""
+                  onFileOpen={handleFileOpen}
+                  onOpenTerminal={() => {
+                    const targetId = selectedProjectId ?? projectName;
+                    if (targetId) handleLaunchShell(targetId);
+                  }}
+                  className="flex-1"
+                  revealRequest={
+                    fileTreeRevealRequest?.project === projectName
+                      ? fileTreeRevealRequest
+                      : null
+                  }
+                />
+              </Suspense>
+            </ErrorBoundary>
           ) : (
             renderCompactPlaceholder("No projects configured")
           )
