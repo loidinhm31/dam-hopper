@@ -24,7 +24,7 @@ import {
 import { resolve, basename, dirname, isAbsolute, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-
+import { inflateRawSync } from "node:zlib";
 const TAG_REGEX = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const VERSION_REGEX = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const COMMIT_SHA_REGEX = /^[0-9a-f]{40}$/;
@@ -419,23 +419,38 @@ function validateManifestShape(manifest, label) {
 
 
 function readBoundedFile(filePath, label, maxBytes, failure = failMigration) {
-  if (
-    typeof FS_CONSTANTS.O_NOFOLLOW !== "number" ||
-    typeof FS_CONSTANTS.O_NONBLOCK !== "number"
-  ) {
-    failure(`${label} cannot be read with no-follow protection`);
+  const isWindows = process.platform === "win32";
+  if (!isWindows) {
+    if (
+      typeof FS_CONSTANTS.O_NOFOLLOW !== "number" ||
+      typeof FS_CONSTANTS.O_NONBLOCK !== "number"
+    ) {
+      failure(`${label} cannot be read with no-follow protection`);
+    }
+  } else {
+    let linkStats;
+    try {
+      linkStats = lstatSync(filePath);
+    } catch (err) {
+      failure(`cannot inspect ${label}: ${err.message}`);
+    }
+    if (linkStats.isSymbolicLink()) {
+      failure(`${label} must not be a symbolic link`);
+    }
+    if (!linkStats.isFile()) {
+      failure(`${label} must be a regular file`);
+    }
   }
 
   let fd;
   try {
-    fd = openSync(
-      filePath,
-      FS_CONSTANTS.O_RDONLY | FS_CONSTANTS.O_NOFOLLOW | FS_CONSTANTS.O_NONBLOCK,
-    );
+    const flags = isWindows
+      ? FS_CONSTANTS.O_RDONLY
+      : FS_CONSTANTS.O_RDONLY | FS_CONSTANTS.O_NOFOLLOW | FS_CONSTANTS.O_NONBLOCK;
+    fd = openSync(filePath, flags);
   } catch (err) {
     failure(`cannot read ${label}: ${err.message}`);
   }
-
   try {
     let stats;
     try {
@@ -620,13 +635,319 @@ function validateSignature(signature, expectedDigest, label) {
 }
 
 
+const VALID_PROFILES = Object.freeze(["linux", "windows", "all"]);
+const WINDOWS_ZIP_REQUIRED_MEMBERS = Object.freeze([
+  "dam-hopper-server.exe",
+  "dam-hopper.example.toml",
+  "LICENSE",
+  "README.md",
+]);
+const MAX_ZIP_MEMBER_BYTES = 100 * 1024 * 1024;
+
+const CRC_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let k = 0; k < 8; k++) {
+    c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+  }
+  CRC_TABLE[i] = c >>> 0;
+}
+
+function computeCrc32(buffer) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buffer.length; i++) {
+    crc = CRC_TABLE[(crc ^ buffer[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 function computeSha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
+}
+
+function getPowerShellExecutable() {
+  const custom = process.env.POWERSHELL_BIN;
+  if (custom) return custom;
+  const candidates = ["pwsh", "powershell"];
+  for (const cmd of candidates) {
+    try {
+      execFileSync(cmd, ["-NoProfile", "-NonInteractive", "-Command", "exit 0"], {
+        stdio: "ignore",
+      });
+      return cmd;
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+
+function validatePowerShellScriptSyntax(ps1Path) {
+  const psBin = getPowerShellExecutable();
+  if (!psBin) {
+    throw new Error(
+      "PowerShell syntax validation requires 'pwsh' or 'powershell' in PATH (or POWERSHELL_BIN)",
+    );
+  }
+  try {
+    execFileSync(
+      psBin,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($env:TARGET_PS1_PATH, [ref]$tokens, [ref]$errors); if ($errors.Count -gt 0) { foreach ($err in $errors) { [Console]::Error.WriteLine($err.ToString()) }; exit 1 }",
+      ],
+      {
+        env: { ...process.env, TARGET_PS1_PATH: ps1Path },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  } catch (err) {
+    const detail = err.stderr ? err.stderr.toString("utf8").trim() : err.message;
+    throw new Error(
+      `Bootstrap installer syntax error in ${basename(ps1Path)}: ${detail}`,
+    );
+  }
+}
+
+function inspectWindowsReleaseZip(zipPath, tag) {
+  const zipBytes = readBoundedFile(
+    zipPath,
+    "Windows release archive",
+    MAX_RELEASE_ASSET_BYTES,
+    failAsset,
+  );
+  if (zipBytes.length === 0) {
+    throw new Error(`Windows release archive is empty: ${basename(zipPath)}`);
+  }
+  if (zipBytes.length < 22) {
+    throw new Error(`Windows release archive is too small for EOCD record: ${basename(zipPath)}`);
+  }
+
+  let eocdOffset = -1;
+  const minOffset = Math.max(0, zipBytes.length - 22 - 65535);
+  for (let i = zipBytes.length - 22; i >= minOffset; i--) {
+    if (zipBytes.readUInt32LE(i) === 0x06054b50) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset === -1) {
+    throw new Error(`End of Central Directory (EOCD) signature not found in ${basename(zipPath)}`);
+  }
+
+  const diskNumber = zipBytes.readUInt16LE(eocdOffset + 4);
+  const startDisk = zipBytes.readUInt16LE(eocdOffset + 6);
+  const diskEntries = zipBytes.readUInt16LE(eocdOffset + 8);
+  const totalEntries = zipBytes.readUInt16LE(eocdOffset + 10);
+  const cdSize = zipBytes.readUInt32LE(eocdOffset + 12);
+  const cdOffset = zipBytes.readUInt32LE(eocdOffset + 16);
+  const commentLength = zipBytes.readUInt16LE(eocdOffset + 20);
+
+  if (diskNumber !== 0 || startDisk !== 0) {
+    throw new Error(`Multi-disk ZIP archives are disallowed in ${basename(zipPath)}`);
+  }
+  if (diskEntries !== totalEntries) {
+    throw new Error(`ZIP disk entries (${diskEntries}) do not match total entries (${totalEntries})`);
+  }
+  if (totalEntries !== WINDOWS_ZIP_REQUIRED_MEMBERS.length) {
+    throw new Error(
+      `Windows release ZIP must contain exactly ${WINDOWS_ZIP_REQUIRED_MEMBERS.length} members, got ${totalEntries}`,
+    );
+  }
+  if (eocdOffset + 22 + commentLength !== zipBytes.length) {
+    throw new Error(`Trailing bytes detected after EOCD record in ${basename(zipPath)}`);
+  }
+  if (commentLength !== 0) {
+    throw new Error(`ZIP archive comment must be empty in ${basename(zipPath)}`);
+  }
+  if (cdOffset + cdSize !== eocdOffset) {
+    throw new Error(`Central directory boundary does not meet EOCD record in ${basename(zipPath)}`);
+  }
+  if (cdOffset < 0 || cdOffset + cdSize > zipBytes.length) {
+    throw new Error(`Invalid central directory offset/size in ${basename(zipPath)}`);
+  }
+
+  let pos = cdOffset;
+  const seenNames = new Set();
+  const cdEntries = [];
+
+  for (let i = 0; i < totalEntries; i++) {
+    if (pos + 46 > cdOffset + cdSize) {
+      throw new Error(`Malformed central directory header in ${basename(zipPath)}`);
+    }
+    const signature = zipBytes.readUInt32LE(pos);
+    if (signature !== 0x02014b50) {
+      throw new Error(`Invalid central directory signature at offset ${pos} in ${basename(zipPath)}`);
+    }
+
+    const versionMadeBy = zipBytes.readUInt16LE(pos + 4);
+    const versionNeeded = zipBytes.readUInt16LE(pos + 6);
+    const flags = zipBytes.readUInt16LE(pos + 8);
+    const method = zipBytes.readUInt16LE(pos + 10);
+    const crc = zipBytes.readUInt32LE(pos + 16);
+    const compressedSize = zipBytes.readUInt32LE(pos + 20);
+    const uncompressedSize = zipBytes.readUInt32LE(pos + 24);
+    const nameLen = zipBytes.readUInt16LE(pos + 28);
+    const extraLen = zipBytes.readUInt16LE(pos + 30);
+    const commentLen = zipBytes.readUInt16LE(pos + 32);
+    const externalAttr = zipBytes.readUInt32LE(pos + 38);
+    const lfhOffset = zipBytes.readUInt32LE(pos + 42);
+
+    if (flags & 0x0001) {
+      throw new Error(`Encrypted ZIP entries are disallowed in ${basename(zipPath)}`);
+    }
+    if (versionNeeded > 20) {
+      throw new Error(`Unsupported ZIP version (${versionNeeded}) in ${basename(zipPath)}`);
+    }
+    if (method !== 0 && method !== 8) {
+      throw new Error(`Unsupported compression method (${method}) in ${basename(zipPath)}`);
+    }
+    if (uncompressedSize === 0) {
+      throw new Error(`ZIP member uncompressed size must be positive in ${basename(zipPath)}`);
+    }
+    if (uncompressedSize > MAX_ZIP_MEMBER_BYTES) {
+      throw new Error(`ZIP member uncompressed size exceeds limit in ${basename(zipPath)}`);
+    }
+    if (commentLen !== 0) {
+      throw new Error(`ZIP member comment must be empty in ${basename(zipPath)}`);
+    }
+
+    if (externalAttr & 0x10) {
+      throw new Error(`ZIP directory entries are disallowed in ${basename(zipPath)}`);
+    }
+    const unixMode = (externalAttr >>> 16) & 0xffff;
+    if ((unixMode & 0o170000) === 0o120000) {
+      throw new Error(`ZIP symlink entries are disallowed in ${basename(zipPath)}`);
+    }
+    if ((unixMode & 0o170000) === 0o040000) {
+      throw new Error(`ZIP directory entries are disallowed in ${basename(zipPath)}`);
+    }
+
+    if (pos + 46 + nameLen + extraLen + commentLen > cdOffset + cdSize) {
+      throw new Error(`Central directory entry exceeds bounds in ${basename(zipPath)}`);
+    }
+
+    const name = zipBytes.subarray(pos + 46, pos + 46 + nameLen).toString("utf8");
+    if (name.includes("\0")) {
+      throw new Error(`ZIP entry name contains NUL byte in ${basename(zipPath)}`);
+    }
+    if (name.includes("\\") || name.includes("/")) {
+      throw new Error(`ZIP entry must be a root file without directory separators: '${name}'`);
+    }
+    if (name === "." || name === ".." || name.includes("..")) {
+      throw new Error(`ZIP entry name contains traversal characters: '${name}'`);
+    }
+    if (/^[a-zA-Z]:/.test(name)) {
+      throw new Error(`ZIP entry name must not be an absolute path: '${name}'`);
+    }
+    if (!WINDOWS_ZIP_REQUIRED_MEMBERS.includes(name)) {
+      throw new Error(`Unexpected ZIP entry name in ${basename(zipPath)}: '${name}'`);
+    }
+    if (seenNames.has(name)) {
+      throw new Error(`Duplicate ZIP entry in ${basename(zipPath)}: '${name}'`);
+    }
+    seenNames.add(name);
+
+    cdEntries.push({
+      name,
+      method,
+      crc,
+      compressedSize,
+      uncompressedSize,
+      lfhOffset,
+    });
+
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+
+  if (pos !== cdOffset + cdSize) {
+    throw new Error(`Central directory size does not match parsed entries in ${basename(zipPath)}`);
+  }
+
+  for (const required of WINDOWS_ZIP_REQUIRED_MEMBERS) {
+    if (!seenNames.has(required)) {
+      throw new Error(`Missing required ZIP member in ${basename(zipPath)}: '${required}'`);
+    }
+  }
+
+  for (const entry of cdEntries) {
+    if (entry.lfhOffset + 30 > cdOffset) {
+      throw new Error(`LFH offset exceeds central directory offset for '${entry.name}'`);
+    }
+    const lfhSig = zipBytes.readUInt32LE(entry.lfhOffset);
+    if (lfhSig !== 0x04034b50) {
+      throw new Error(`Invalid LFH signature for '${entry.name}' at offset ${entry.lfhOffset}`);
+    }
+
+    const lfhMethod = zipBytes.readUInt16LE(entry.lfhOffset + 8);
+    const lfhCrc = zipBytes.readUInt32LE(entry.lfhOffset + 14);
+    const lfhCompSize = zipBytes.readUInt32LE(entry.lfhOffset + 18);
+    const lfhUncompSize = zipBytes.readUInt32LE(entry.lfhOffset + 22);
+    const lfhNameLen = zipBytes.readUInt16LE(entry.lfhOffset + 26);
+    const lfhExtraLen = zipBytes.readUInt16LE(entry.lfhOffset + 28);
+
+    if (lfhMethod !== entry.method) {
+      throw new Error(`LFH compression method does not match CDFH for '${entry.name}'`);
+    }
+    if (lfhCrc !== entry.crc) {
+      throw new Error(`LFH CRC-32 does not match CDFH for '${entry.name}'`);
+    }
+    if (lfhCompSize !== entry.compressedSize) {
+      throw new Error(`LFH compressed size does not match CDFH for '${entry.name}'`);
+    }
+    if (lfhUncompSize !== entry.uncompressedSize) {
+      throw new Error(`LFH uncompressed size does not match CDFH for '${entry.name}'`);
+    }
+
+    const lfhName = zipBytes
+      .subarray(entry.lfhOffset + 30, entry.lfhOffset + 30 + lfhNameLen)
+      .toString("utf8");
+    if (lfhName !== entry.name) {
+      throw new Error(`LFH name '${lfhName}' does not match CDFH name '${entry.name}'`);
+    }
+
+    const dataOffset = entry.lfhOffset + 30 + lfhNameLen + lfhExtraLen;
+    if (dataOffset + entry.compressedSize > cdOffset) {
+      throw new Error(`Compressed data exceeds CD offset for '${entry.name}'`);
+    }
+
+    const rawData = zipBytes.subarray(dataOffset, dataOffset + entry.compressedSize);
+    let decompressed;
+    if (entry.method === 0) {
+      if (entry.compressedSize !== entry.uncompressedSize) {
+        throw new Error(`Stored method size mismatch for '${entry.name}'`);
+      }
+      decompressed = rawData;
+    } else {
+      try {
+        decompressed = inflateRawSync(rawData, { maxOutputLength: MAX_ZIP_MEMBER_BYTES });
+      } catch (err) {
+        throw new Error(`Failed to decompress ZIP member '${entry.name}': ${err.message}`);
+      }
+    }
+
+    if (decompressed.length !== entry.uncompressedSize) {
+      throw new Error(
+        `Decompressed size (${decompressed.length}) does not match declared (${entry.uncompressedSize}) for '${entry.name}'`,
+      );
+    }
+    const computedCrc = computeCrc32(decompressed);
+    if (computedCrc !== entry.crc) {
+      throw new Error(
+        `CRC-32 mismatch for '${entry.name}': declared ${entry.crc.toString(16)}, computed ${computedCrc.toString(16)}`,
+      );
+    }
+  }
+
+  return seenNames;
 }
 
 function parseArgs() {
   const args = process.argv.slice(2);
   let tag = process.env.RELEASE_TAG || null;
+  let profile = "linux";
   let dir = null;
   let releaseId = null;
   let repo = process.env.GITHUB_REPOSITORY || null;
@@ -642,6 +963,8 @@ function parseArgs() {
     const arg = args[i];
     if (arg === "--tag" && i + 1 < args.length) {
       tag = args[++i];
+    } else if (arg === "--profile" && i + 1 < args.length) {
+      profile = args[++i];
     } else if (arg === "--dir" && i + 1 < args.length) {
       dir = args[++i];
     } else if (arg === "--release-id" && i + 1 < args.length) {
@@ -667,12 +990,18 @@ function parseArgs() {
 
   if (!tag) {
     console.error(
-      "Usage: node check-release-assets.mjs --tag <vX.Y.Z> [--dir <dir>] [--release-id <id>] [--repo <owner/repo>] [--migration-evidence <path>] [--require-migration-gate] [--allow-unverified-publish]",
+      "Usage: node check-release-assets.mjs --tag <vX.Y.Z> [--profile <linux|windows|all>] [--dir <dir>] [--release-id <id>] [--repo <owner/repo>] [--migration-evidence <path>] [--require-migration-gate] [--allow-unverified-publish]",
     );
     process.exit(1);
   }
   if (!TAG_REGEX.test(tag)) {
     console.error(`Invalid release tag '${tag}'. Must match vMAJOR.MINOR.PATCH`);
+    process.exit(1);
+  }
+  if (!VALID_PROFILES.includes(profile)) {
+    console.error(
+      `Invalid profile '${profile}'. Must be one of: ${VALID_PROFILES.join(", ")}`,
+    );
     process.exit(1);
   }
 
@@ -683,6 +1012,7 @@ function parseArgs() {
 
   return {
     tag,
+    profile,
     dir: dir ? resolve(process.cwd(), dir) : null,
     releaseId,
     repo,
@@ -698,7 +1028,7 @@ function parseArgs() {
   };
 }
 
-function getExpectedAssetNames(tag) {
+function getLinuxExpectedAssetNames(tag) {
   return [
     "dam-hopper-install.sh",
     `dam-hopper-${tag}-linux-x86_64-systemd.tar.gz`,
@@ -707,7 +1037,106 @@ function getExpectedAssetNames(tag) {
   ].sort();
 }
 
-function checkLocalDirectory(dir, tag, expectedNames) {
+function getWindowsExpectedAssetNames(tag) {
+  return [
+    "dam-hopper-install.ps1",
+    `dam-hopper-${tag}-windows-x86_64.zip`,
+  ].sort();
+}
+
+function getExpectedAssetNames(tag, profile = "linux") {
+  if (profile === "linux") {
+    return getLinuxExpectedAssetNames(tag);
+  }
+  if (profile === "windows") {
+    return getWindowsExpectedAssetNames(tag);
+  }
+  if (profile === "all") {
+    return Array.from(
+      new Set([...getLinuxExpectedAssetNames(tag), ...getWindowsExpectedAssetNames(tag)]),
+    ).sort();
+  }
+  throw new Error(`Unknown profile: ${profile}`);
+}
+
+function validateLinuxAssetSet(dir, tag, digests, expectedNames) {
+  const manifestBytes = readBoundedFile(
+    resolve(dir, "release-manifest.json"),
+    "release manifest",
+    MAX_MANIFEST_BYTES,
+    failAsset,
+  );
+  const manifest = parseJsonBytes(
+    manifestBytes,
+    "release manifest",
+    failAsset,
+  );
+  validateManifestShape(manifest, "release manifest");
+  if (manifest.release.tag !== tag) {
+    throw new Error(
+      `Manifest release.tag '${manifest.release.tag}' does not match expected '${tag}'`,
+    );
+  }
+
+  const archiveName = `dam-hopper-${tag}-linux-x86_64-systemd.tar.gz`;
+  if (manifest.archive.name !== archiveName) {
+    throw new Error(
+      `Manifest archive.name '${manifest.archive.name}' does not match expected '${archiveName}'`,
+    );
+  }
+
+  const archiveDigest = digests[archiveName];
+  if (!archiveDigest) {
+    throw new Error(`Missing digest for archive '${archiveName}'`);
+  }
+  if (manifest.archive.size !== archiveDigest.size) {
+    throw new Error(
+      `Manifest archive.size (${manifest.archive.size}) differs from actual archive (${archiveDigest.size})`,
+    );
+  }
+  if (manifest.archive.sha256 !== archiveDigest.sha256) {
+    throw new Error(
+      `Manifest archive.sha256 (${manifest.archive.sha256}) differs from actual archive (${archiveDigest.sha256})`,
+    );
+  }
+
+  const installerBytes = readBoundedFile(
+    resolve(dir, "dam-hopper-install.sh"),
+    "dam-hopper-install.sh",
+    MAX_RELEASE_ASSET_BYTES,
+    failAsset,
+  );
+  try {
+    execFileSync("bash", ["-n"], { input: installerBytes });
+  } catch (err) {
+    throw new Error(
+      `Bootstrap installer syntax error in dam-hopper-install.sh: ${err.message}`,
+    );
+  }
+
+  const sbomName = `dam-hopper-${tag}-linux-x86_64-systemd.spdx.json`;
+  const sbomBytes = readBoundedFile(
+    resolve(dir, sbomName),
+    "release SBOM",
+    MAX_SBOM_BYTES,
+    failAsset,
+  );
+  const sbom = parseJsonBytes(sbomBytes, "release SBOM", failAsset);
+  if (sbom.spdxVersion !== "SPDX-2.3") {
+    throw new Error(`SBOM spdxVersion '${sbom.spdxVersion}' is not SPDX-2.3`);
+  }
+}
+
+function validateWindowsAssetSet(dir, tag, digests, expectedNames) {
+  const ps1Path = resolve(dir, "dam-hopper-install.ps1");
+  validatePowerShellScriptSyntax(ps1Path);
+
+  const zipName = `dam-hopper-${tag}-windows-x86_64.zip`;
+  const zipPath = resolve(dir, zipName);
+  inspectWindowsReleaseZip(zipPath, tag);
+}
+
+function checkLocalDirectory(dir, tag, expectedNames, profile = "linux") {
   if (!existsSync(dir)) {
     throw new Error(`Asset directory does not exist: ${dir}`);
   }
@@ -747,9 +1176,6 @@ function checkLocalDirectory(dir, tag, expectedNames) {
   }
 
   const digests = {};
-  let manifestBytes;
-  let installerBytes;
-  let sbomBytes;
   for (const name of expectedNames) {
     const filePath = resolve(dir, name);
     const maxBytes =
@@ -767,61 +1193,17 @@ function checkLocalDirectory(dir, tag, expectedNames) {
     if (buf.length === 0) {
       throw new Error(`Asset file is empty: ${name}`);
     }
-    if (name === "release-manifest.json") {
-      manifestBytes = buf;
-    } else if (name === "dam-hopper-install.sh") {
-      installerBytes = buf;
-    } else if (name.endsWith(".spdx.json")) {
-      sbomBytes = buf;
-    }
     digests[name] = {
       size: buf.length,
       sha256: computeSha256(buf),
     };
   }
 
-  const manifest = parseJsonBytes(
-    manifestBytes,
-    "release manifest",
-    failAsset,
-  );
-  validateManifestShape(manifest, "release manifest");
-  if (manifest.release.tag !== tag) {
-    throw new Error(
-      `Manifest release.tag '${manifest.release.tag}' does not match expected '${tag}'`,
-    );
+  if (profile === "linux" || profile === "all") {
+    validateLinuxAssetSet(dir, tag, digests, expectedNames);
   }
-
-  const archiveName = `dam-hopper-${tag}-linux-x86_64-systemd.tar.gz`;
-  if (manifest.archive.name !== archiveName) {
-    throw new Error(
-      `Manifest archive.name '${manifest.archive.name}' does not match expected '${archiveName}'`,
-    );
-  }
-
-  const archiveDigest = digests[archiveName];
-  if (manifest.archive.size !== archiveDigest.size) {
-    throw new Error(
-      `Manifest archive.size (${manifest.archive.size}) differs from actual archive (${archiveDigest.size})`,
-    );
-  }
-  if (manifest.archive.sha256 !== archiveDigest.sha256) {
-    throw new Error(
-      `Manifest archive.sha256 (${manifest.archive.sha256}) differs from actual archive (${archiveDigest.sha256})`,
-    );
-  }
-
-  try {
-    execFileSync("bash", ["-n"], { input: installerBytes });
-  } catch (err) {
-    throw new Error(
-      `Bootstrap installer syntax error in dam-hopper-install.sh: ${err.message}`,
-    );
-  }
-
-  const sbom = parseJsonBytes(sbomBytes, "release SBOM", failAsset);
-  if (sbom.spdxVersion !== "SPDX-2.3") {
-    throw new Error(`SBOM spdxVersion '${sbom.spdxVersion}' is not SPDX-2.3`);
+  if (profile === "windows" || profile === "all") {
+    validateWindowsAssetSet(dir, tag, digests, expectedNames);
   }
 
   console.log(`✓ Local release asset gate passed for ${tag}:`);
@@ -832,7 +1214,6 @@ function checkLocalDirectory(dir, tag, expectedNames) {
 
   return digests;
 }
-
 function validateManifestArtifact({
   evidencePath,
   artifact,
@@ -1356,6 +1737,7 @@ function isStablePublishJob(tag, allowUnverifiedPublish = false) {
 function main() {
   const {
     tag,
+    profile,
     dir,
     releaseId,
     repo,
@@ -1365,7 +1747,15 @@ function main() {
     requireMigrationGate,
     allowUnverifiedPublish,
   } = parseArgs();
-  const expectedNames = getExpectedAssetNames(tag);
+  const expectedNames = getExpectedAssetNames(tag, profile);
+
+  if (profile === "windows") {
+    if (migrationEvidencePath || requireMigrationGate) {
+      throw new Error(
+        "Migration gate: migration evidence is not supported for profile 'windows'",
+      );
+    }
+  }
 
   if (assetsJsonPath && (releaseId || repoArgumentProvided)) {
     throw new Error(
@@ -1381,21 +1771,23 @@ function main() {
 
   let localDigests = null;
   if (dir) {
-    localDigests = checkLocalDirectory(dir, tag, expectedNames);
+    localDigests = checkLocalDirectory(dir, tag, expectedNames, profile);
   }
 
-  if (requireMigrationGate && !migrationEvidencePath) {
-    throw new Error(
-      "Migration gate: --migration-evidence is required when the migration gate is enabled",
-    );
-  }
-  if (isStablePublishJob(tag, allowUnverifiedPublish) && !migrationEvidencePath) {
-    throw new Error(
-      "Migration gate: stable GitHub publication is held until externally verified migration evidence is supplied",
-    );
-  }
-  if (migrationEvidencePath) {
-    checkMigrationGate(migrationEvidencePath, tag, dir, localDigests);
+  if (profile === "linux" || profile === "all") {
+    if (requireMigrationGate && !migrationEvidencePath) {
+      throw new Error(
+        "Migration gate: --migration-evidence is required when the migration gate is enabled",
+      );
+    }
+    if (isStablePublishJob(tag, allowUnverifiedPublish) && !migrationEvidencePath) {
+      throw new Error(
+        "Migration gate: stable GitHub publication is held until externally verified migration evidence is supplied",
+      );
+    }
+    if (migrationEvidencePath) {
+      checkMigrationGate(migrationEvidencePath, tag, dir, localDigests);
+    }
   }
 
   if (assetsJsonPath || (releaseId && repo)) {

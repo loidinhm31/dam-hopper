@@ -1,8 +1,9 @@
 # Linux Release Publisher and Bootstrap
 
-Status: Phase 06 is complete; bounded Phase 03 migration-gate
-qualification was approved on 2026-09-13. This guide describes the central
-GitHub publisher and the non-root bootstrap for the Linux x86_64 systemd release.
+Status: Phase 03 cross-platform Release CI and guidance are complete
+(2026-09-21); Phase 06 Linux migration-gate qualification was approved on
+2026-09-13. This guide describes the central GitHub publisher and the non-root
+bootstrap for the Linux x86_64 systemd release.
 The runtime manifest and manager rules remain authoritative in [Linux Release
 Manifest v2](./linux-release-manifest.md) and [Linux Release Manager](./linux-release-manager.md).
 
@@ -28,9 +29,7 @@ owns only exact SemVer tags after its metadata gate.
 
 ## Publisher DAG
 
-`.github/workflows/release-linux.yml` is the central publisher. It keeps build
-jobs read-only, carries final bytes between jobs, and grants `contents: write`
-only to the final publish job:
+`.github/workflows/release-linux.yml` is the central publisher for both Linux and Windows x86_64 release assets. It keeps build and packaging jobs read-only, carries immutable artifact bytes between jobs, and grants `contents: write` only to the final publish job:
 
 ```text
 vX.Y.Z push or manual tag input
@@ -38,28 +37,27 @@ vX.Y.Z push or manual tag input
           v
 validate-metadata
   exact tag regex + Cargo/web version alignment
-       /                         \
-      v                           v
-build-rust                    build-web
-three vendored Rust bins      frozen pnpm9/Node20 web dist
-      \                       /
-       v                     v
-package-release
-  download inputs -> archive twice -> compare SHA-256
-  -> generate Manifest v2 + SPDX SBOM -> stage installer
-  -> local exact-four-asset gate -> upload one artifact
-          |
-          v
-attest-release
-  GitHub build provenance for all four final subjects
-          |
-          v
-publish-release (linux-release environment approval)
-  create draft -> query remote assets -> exact remote gate -> undraft once
+       /                               \
+      v                                 v
+build-rust + build-web             build-rust-windows
+  Linux bins + web dist             dam-hopper-server.exe
+      |                                 |
+      v                                 v
+package-release                     package-windows-release
+  profile=linux (exact 4)           profile=windows (exact 2)
+  archive twice + manifest/SBOM     archive twice + PS1 installer
+       \                               /
+        v                             v
+       attest-release
+         GitHub build provenance for all six final subjects
+                    |
+                    v
+       publish-release (linux-release environment approval)
+         merge artifacts -> profile=all local/remote gate -> undraft
 ```
 
 A dry run (`workflow_dispatch` with `dry_run=true`) executes through packaging,
-local gate, and attestation; `publish-release` is skipped. A stable push has the
+local profile gates, and attestation; `publish-release` is skipped. A stable push has the
 same graph and publishes only after the protected `linux-release` environment
 approves. External repository settings must still enforce protected stable tags
 and immutable releases; the workflow does not itself change those settings.
@@ -81,6 +79,60 @@ filename, size, and digest, so embedding it would create a digest cycle. GitHub
 generated source archives are not product assets and are not consumed by the
 manager or bootstrap.
 
+### Windows direct-server profile and bootstrap installer (Phases 01–03)
+
+The Windows release is a separate direct-server package, not a systemd or
+Manifest v2 projection. It contains exactly two public assets:
+
+| Name | Contents |
+| --- | --- |
+| `dam-hopper-install.ps1` | PowerShell bootstrap script; syntax-checked, not executed by the gate |
+| `dam-hopper-vX.Y.Z-windows-x86_64.zip` | Deterministic ZIP with exactly four root files |
+
+The ZIP members are `dam-hopper-server.exe`, `dam-hopper.example.toml`,
+`LICENSE`, and `README.md`. It must not contain Linux units,
+`release-manifest.json`, or an SPDX SBOM. A combined publication uses
+`--profile all` and must contain the exact six-asset union: these two Windows
+assets plus the four Linux assets above. See
+[Windows Release Asset Packaging](./windows-release-packaging.md) for the
+profile grammar, package scripts, ZIP checks, and reproducibility harness.
+
+The Windows package does not claim native/Tauri S13 runtime qualification.
+
+
+The Windows profile is a direct-server installation, not a Linux role or
+systemd deployment. Its PowerShell bootstrap accepts exactly one release
+selector and keeps all writes user-scoped:
+
+```text
+dam-hopper-install.ps1 (-Version vX.Y.Z | -Latest)
+  [-InstallDir <absolute-path>]
+  [-AddToPath]
+  [-VerifyAttestation]
+  [-DryRun]
+```
+
+`-InstallDir` defaults to `%LOCALAPPDATA%\Programs\dam-hopper`.
+`-AddToPath` changes only the invoking user's PATH and requires a new shell;
+`-VerifyAttestation` requires `gh`; and `-DryRun` performs metadata/archive
+verification without changing files, config, PATH, or processes. The installer
+preserves an existing `dam-hopper.toml`, does not start the server, and checks
+the release asset's size and SHA-256 before extraction. See
+[Windows Release Asset Packaging](./windows-release-packaging.md) for
+copyable commands, launch/config behavior, and focused installer tests.
+
+The local Windows harness is:
+
+```powershell
+pnpm release:windows-gate-test
+pnpm release:windows-installer-test
+pnpm release:verify-windows
+```
+
+The first command checks the profile-aware asset contract locally; the second
+uses a loopback Node fixture and temporary artifacts without contacting a
+production release. The third is a syntax/parser gate.
+
 ## Build inputs and checks
 
 ### Metadata and binaries
@@ -97,7 +149,7 @@ node deploy/release/check-version-alignment.mjs vX.Y.Z
 feature, and target `x86_64-unknown-linux-gnu`; the workflow version-checks and
 uploads the manager/server/web binaries, while archive assembly copies the
 helper when that output is present. `build-web` installs with
-`pnpm install --frozen-lockfile` using pnpm 9 and Node 24, builds
+`pnpm install --frozen-lockfile` using pnpm 10 and Node 24, builds
 `@dam-hopper/web`, requires `apps/web/dist/index.html`, and rejects the
 host-specific `VITE_DAM_HOPPER_SERVER_URL` string in the output.
 
@@ -166,19 +218,24 @@ credential, mutable URL, or application database may enter the archive.
 
 ## Asset gates and attestations
 
-`deploy/release/check-release-assets.mjs` supports a local directory gate, a
-remote GitHub release gate, and the explicit Manifest v2 migration gate:
+`deploy/release/check-release-assets.mjs` supports local and remote GitHub
+asset gates for Linux, Windows, or the combined publication set. The
+`--profile <linux|windows|all>` flag selects the exact contract and defaults
+to `linux`:
 
-- local mode requires exactly the four expected Linux filenames, rejects every
-  extra visible entry and every non-regular hidden entry, computes each local
-  size/SHA-256, validates the complete shallow Linux Manifest v2 structure,
-  bounds release inputs, checks manifest tag and whole archive bytes, checks
-  bootstrap `bash -n`, and requires SBOM `spdxVersion` `SPDX-2.3`;
-- remote mode reads GitHub asset metadata (via `gh api` or `--assets-json`),
-  requires exactly four unique names, `state: uploaded`, positive sizes, and
-  SHA-256 `digest` values matching local outputs when local outputs are
-  supplied. GitHub API mode requires a positive numeric release ID plus
-  `owner/repository`; fixture mode rejects ignored release selectors.
+- `linux` requires exactly the four Linux filenames, validates shallow Manifest
+  v2 structure and whole-file digests, checks the Bash bootstrap with `bash -n`,
+  and requires SBOM `spdxVersion` `SPDX-2.3`;
+- `windows` requires exactly `dam-hopper-install.ps1` and
+  `dam-hopper-vX.Y.Z-windows-x86_64.zip`, validates PowerShell syntax and the
+  ZIP's exact four root members, CRC, bounds, and EOCD/trailing-byte rules;
+- `all` requires the exact six-name union and applies Linux migration checks
+  when migration evidence is requested or required.
+
+Remote mode reads GitHub asset metadata (via `gh api` or `--assets-json`) and
+requires unique names, `state: uploaded`, positive sizes, and matching
+SHA-256 values. Migration evidence is rejected for the Windows-only profile.
+
 - migration mode requires `--migration-evidence PATH --require-migration-gate`
   and `--dir` so evidence binds to real publication bytes. The evidence
   environment is fixed to `production`, expires within 24 hours, and contains
@@ -191,6 +248,7 @@ remote GitHub release gate, and the explicit Manifest v2 migration gate:
   published manager inventory entry. Active v2 assets cannot be paired with a
   manager downgrade.
 
+
 The checker is a bounded shallow publication gate: it validates evidence
 structure, release identity, manifest structure, whole-file digests, and path
 binding, but does not inspect archive entries against manifest inventory. The
@@ -202,28 +260,27 @@ authoritative target-inventory feed, so the checker does not claim to
 authenticate those records independently. Missing external evidence therefore
 remains a release-blocking condition.
 
-The release owner must obtain the evidence from the authoritative target
-inventory and complete external attestation verification before invoking the
-required gate:
+The release owner can verify release assets using profile-specific commands or the combined publication gate:
 
 ```bash
+# Verify Linux profile (exact 4 assets)
+node deploy/release/check-release-assets.mjs --profile linux --tag vX.Y.Z --dir artifacts/final
+
+# Verify Windows profile (exact 2 assets)
+node deploy/release/check-release-assets.mjs --profile windows --tag vX.Y.Z --dir artifacts/final
+
+# Verify combined release (exact 6 assets, with optional Linux migration gate)
 node deploy/release/check-release-assets.mjs \
+  --profile all \
   --tag vX.Y.Z \
   --dir artifacts/final \
   --migration-evidence path/to/migration-evidence.json \
   --require-migration-gate
 ```
 
-In the protected `publish-release` job, the checker fails closed when a stable
-tag has no migration evidence, so the current workflow cannot undraft a stable
-release until that input is wired. This is an intentional manual hold, not a
-claim that the workflow already generates or verifies migration evidence.
+In the protected `publish-release` job, the checker runs with `--profile all` and verifies that all six local and remote release assets match in name, positive size, and SHA-256 digest before undrafting.
 
-The attestation job still uses `actions/attest-build-provenance` for the
-installer, archive, manifest, and SBOM. Target-manager capability evidence and
-the forward/rollback migration records remain separate owner inputs until an
-external verifier and authoritative inventory source are integrated.
-
+The attestation job uses `actions/attest-build-provenance` for all six published release subjects: the Linux installer, runtime archive, manifest, and SPDX SBOM, plus the Windows installer and deterministic ZIP archive. Target-manager capability evidence and the forward/rollback migration records remain separate owner inputs until an external verifier and authoritative inventory source are integrated.
 ## Bootstrap installer
 
 `deploy/release/dam-hopper-install.sh` downloads as the invoking user and uses
@@ -295,11 +352,21 @@ pnpm release:check-version [vX.Y.Z]
 pnpm release:archive -- --version vX.Y.Z --target-dir ... --web-dist ...
 pnpm release:manifest -- --archive ... --tag vX.Y.Z --commit <40-char-sha>
 pnpm release:check-assets -- --dir ... --tag vX.Y.Z
+pnpm release:check-assets -- --profile all --dir ... --tag vX.Y.Z
 pnpm release:check-assets -- --dir ... --tag vX.Y.Z \
   --migration-evidence path/to/migration-evidence.json \
   --require-migration-gate
+pnpm release:windows-archive -- --tag vX.Y.Z
+pnpm release:windows-check-assets -- --tag vX.Y.Z --dir artifacts/windows
+pnpm release:windows-package-twice -- -Version vX.Y.Z
+pnpm release:verify-windows
 pnpm release:verify
 ```
+
+`release:windows-package-twice` builds the Windows ZIP twice, compares bytes
+and SHA-256, confirms an altered epoch changes the digest, stages the two
+Windows assets, and runs the Windows profile gate. `release:verify-windows`
+checks Node syntax for the Windows packager and profile-aware checker.
 
 The publisher contract integration test exercises real archive creation, Node
 manifest generation, role projections, tamper rejection, prohibited-file

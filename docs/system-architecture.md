@@ -567,6 +567,36 @@ See the [Phase 09 plan](../plans/260916-2137-unified-profile/phase-09-integratio
 [API reference](./api-reference.md), and
 [configuration guide](./configuration-guide.md).
 
+### Phase 01–03 Windows release assets and cross-platform CI boundary
+
+Windows packaging is a direct-server boundary beside, not inside, the Linux
+systemd release graph. `build-windows-release-archive.mjs` creates a
+deterministic ZIP containing the server executable, example configuration,
+license, and README. Publication exposes only that ZIP and
+`dam-hopper-install.ps1`; no systemd unit, Linux Manifest v2, or SPDX SBOM is
+required.
+
+The stable workflow keeps platform bytes immutable across jobs:
+
+```text
+validate-metadata
+  ├─ build-rust + build-web -> package-release (--profile linux)
+  └─ build-rust-windows -> package-windows-release (--profile windows)
+       \                      /
+        attest-release (six subjects)
+                    |
+        publish-release (--profile all, local + GitHub metadata)
+```
+
+`attest-release` has the only provenance permissions and covers the four Linux
+subjects plus the Windows installer and ZIP. `publish-release` has the only
+`contents: write`, runs behind the protected `linux-release` environment, and
+undrafts only after exact six-name, positive-size, local/remote SHA-256 equality.
+Dry runs stop before publication. The checker validates bytes and syntax but
+does not install services, start the server, or qualify the native
+Windows/WebView2 runtime. Detailed commands and failure boundaries are in
+[Windows Release Asset Packaging](./windows-release-packaging.md).
+
 ## Proposed concurrent runtime cutover (2026-09-16; not implemented)
 
 Reference note: the source all-workspaces implementation plan is not present in
@@ -667,6 +697,10 @@ through G4.
 
 ### D02 owner runner and worker supervision
 
+This is a planning design only. No runtime plugin loader, registry, runner,
+dynamic route, or embedded plugin UI exists yet. The source implementation plan
+is not present in this checkout; the companion evcrate plan owns its
+cross-repository contract.
 The D02 runtime path is:
 
 ```text

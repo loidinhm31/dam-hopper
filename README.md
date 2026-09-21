@@ -75,6 +75,63 @@ DamHopper releases are published as immutable, attested GitHub release bundles f
 
 For complete operator instructions, systemd unit definitions, security boundaries, and format-2 migration, see [Linux systemd guide](./docs/linux-systemd.md).
 
+### Quickstart: Windows Release Installer (x86_64 Direct Server)
+
+DamHopper releases provide a verified PowerShell bootstrap installer and deterministic zip archive for Windows `x86_64-pc-windows-msvc`. No compiler, Node.js, or administrative elevation is required.
+
+**Prerequisites:**
+- 64-bit Windows 10 / 11 / Server 2022+ (x86_64)
+- PowerShell 5.1+ or PowerShell 7+
+- Internet access for downloading GitHub release assets
+- Optional: GitHub CLI (`gh`) for artifact attestation verification
+
+1. **Download and run the installer (one-liner):**
+   ```powershell
+   Invoke-WebRequest -Uri "https://github.com/loidinhm31/dam-hopper/releases/latest/download/dam-hopper-install.ps1" -OutFile "$env:TEMP\dam-hopper-install.ps1"; & "$env:TEMP\dam-hopper-install.ps1" -Latest -AddToPath; Remove-Item "$env:TEMP\dam-hopper-install.ps1"
+   ```
+
+2. **Or run with explicit parameters:**
+   ```powershell
+   # Install specific version with User PATH registration
+   .\dam-hopper-install.ps1 -Version v0.4.2 -AddToPath
+
+   # Install to custom directory
+   .\dam-hopper-install.ps1 -Latest -InstallDir "D:\Tools\dam-hopper" -AddToPath
+
+   # Verify GitHub artifact attestation (requires gh CLI)
+   .\dam-hopper-install.ps1 -Latest -AddToPath -VerifyAttestation
+
+   # Dry-run mode (verifies release metadata and archive without extracting or altering system state)
+   .\dam-hopper-install.ps1 -Latest -DryRun
+   ```
+
+   *Note:*
+   - Default install directory is `%LOCALAPPDATA%\Programs\dam-hopper` (`bin\dam-hopper-server.exe`).
+   - The installer is non-admin: it never requests elevation, never starts background processes, and preserves existing configuration files (`dam-hopper.toml`).
+   - When `-AddToPath` is used, the install `bin` directory is added to your **User PATH**. Open a fresh PowerShell or Command Prompt terminal for PATH changes to take effect in your shell session.
+
+3. **Launch the server:**
+   After opening a fresh terminal (or using the full binary path):
+   ```powershell
+   # Using PATH with default global config
+   dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml"
+
+   # Loopback smoke test (development only)
+   dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml" --host 127.0.0.1 --port 4801
+   ```
+
+   *Development note:* For local unauthenticated development without MongoDB, `--no-auth` can be used on a trusted loopback interface (`127.0.0.1:4801`). `--no-auth` is strictly forbidden in production environments.
+
+4. **Upgrading:**
+   Re-running the installer with `-Latest` or a newer `-Version` safely stages and replaces the server binary while preserving your existing `dam-hopper.toml` configuration:
+   ```powershell
+   .\dam-hopper-install.ps1 -Latest
+   ```
+For the complete Windows asset contract, profile-specific release gates,
+attestation behavior, and configuration/smoke runbook, see
+[Windows Release Asset Packaging](./docs/windows-release-packaging.md) and the
+[Configuration Guide](./docs/configuration-guide.md#windows-direct-server-installation-and-configuration).
+
 ### Build from source (Contributors)
 
 ```bash

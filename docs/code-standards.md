@@ -794,6 +794,56 @@ not fabricated from local release asset names. The checker does not itself
 provide a GitHub DSSE/certificate trust root, so external verification remains
 explicit and missing evidence holds stable publication.
 
+### Windows direct-server release and installer standards (Phases 01–03)
+
+Keep Windows release packaging independent from the Linux systemd/Manifest v2
+path. `deploy/release/build-windows-release-archive.mjs` emits one deterministic
+`dam-hopper-vX.Y.Z-windows-x86_64.zip` with exactly four root files:
+`dam-hopper-server.exe`, `dam-hopper.example.toml`, `LICENSE`, and `README.md`.
+The public Windows set is exactly that ZIP plus `dam-hopper-install.ps1`; do
+not add Linux manifests, SBOMs, units, or runtime state.
+
+`deploy/release/check-release-assets.mjs` defaults to Linux and must keep
+`--profile windows` at exactly two assets and `--profile all` at the exact
+six-asset Linux+Windows union. Windows checks parse (but never execute) the
+PowerShell installer and validate ZIP member names, root paths, bounds, CRC,
+EOCD, and trailing bytes. Keep migration evidence Linux-only.
+
+The installer contract is strict: exactly one of `-Version vX.Y.Z` and
+`-Latest`, with optional `-InstallDir`, `-AddToPath`, `-VerifyAttestation`, or
+`-DryRun`. Digest/size verification precedes extraction; extraction accepts
+only the four root members; existing `dam-hopper.toml` is never overwritten;
+PATH changes are User-scoped and idempotent; and the installer never starts
+the server. The fixture harness must keep tests loopback-only and restore User
+PATH and temporary files in `finally`.
+
+The focused contract harness is `tests/deploy/windows-release-asset-gate.test.mjs`;
+the package reproducibility harness is `tests/deploy/windows-release-package-twice.ps1`;
+and the installer integration harness is
+`tests/deploy/windows-release-install.ps1`, backed by
+`tests/deploy/windows-release-install-fixture.mjs`. Run
+`pnpm release:windows-installer-test` and `pnpm release:verify-windows` on
+Windows. See [Windows Release Asset Packaging](./windows-release-packaging.md).
+
+The stable publisher in `.github/workflows/release-linux.yml` branches from
+shared metadata/version validation into independent Linux and Windows package
+jobs. Keep the package contracts explicit: Linux invokes
+`check-release-assets.mjs --profile linux`, Windows invokes `--profile windows`,
+and only the merged publication job invokes `--profile all`.
+
+Build/package jobs remain read-only. `attest-release` alone receives
+`id-token: write` and `attestations: write` and attests the exact six subjects;
+`publish-release` alone receives `contents: write`, uses the protected
+`linux-release` environment, checks local and remote size/digest equality, and
+undrafts only after the combined gate. Dry runs must not publish.
+
+Keep `release:windows-gate-test` as the focused local contract harness; it
+tests profile selection, exact asset sets, bounded ZIP parsing, PowerShell
+syntax, metadata, and reproducibility without executing the installer or
+contacting a production release. It complements, rather than replaces,
+`release:windows-package-twice`, `release:windows-installer-test`, and
+`release:verify-windows`.
+
 ### Async Patterns
 
 **Never hold locks across `.await`:**

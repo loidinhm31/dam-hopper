@@ -105,6 +105,7 @@ node "$REPO_ROOT/deploy/release/generate-release-manifest.mjs" \
 cp -- "$REPO_ROOT/deploy/release/dam-hopper-install.sh" "$FINAL_DIR/"
 chmod 0755 "$FINAL_DIR/dam-hopper-install.sh"
 node "$REPO_ROOT/deploy/release/check-release-assets.mjs" \
+    --profile linux \
     --tag "$VERSION" \
     --dir "$FINAL_DIR"
 
