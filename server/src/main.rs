@@ -73,6 +73,71 @@ fn try_load_env_file(path: &std::path::Path, source: &'static str) {
     }
 }
 
+fn explicit_config_path_from_args<I>(args: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if arg == std::ffi::OsStr::new("--config") {
+            return args.next().map(PathBuf::from);
+        }
+        if let Some(value) = arg
+            .to_str()
+            .and_then(|arg| arg.strip_prefix("--config="))
+        {
+            return Some(PathBuf::from(value));
+        }
+    }
+    None
+}
+
+fn explicit_config_path_from_process() -> Option<PathBuf> {
+    explicit_config_path_from_args(std::env::args_os().skip(1))
+        .or_else(|| std::env::var_os("DAM_HOPPER_CONFIG").map(PathBuf::from))
+}
+
+fn load_explicit_config_env() {
+    if let Some(explicit_config) = explicit_config_path_from_process() {
+        if let Some(parent) = explicit_config.parent() {
+            try_load_env_file(&parent.join(".env"), "explicit_config");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::explicit_config_path_from_args;
+
+    #[test]
+    fn explicit_config_path_is_discovered_from_separate_argument() {
+        let path = explicit_config_path_from_args([
+            OsString::from("--config"),
+            OsString::from(r"C:\dam-hopper\dam-hopper.toml"),
+        ]);
+
+        assert_eq!(
+            path,
+            Some(PathBuf::from(r"C:\dam-hopper\dam-hopper.toml"))
+        );
+    }
+
+    #[test]
+    fn explicit_config_path_is_discovered_from_equals_argument() {
+        let path = explicit_config_path_from_args([OsString::from(
+            r"--config=C:\dam-hopper\dam-hopper.toml",
+        )]);
+
+        assert_eq!(
+            path,
+            Some(PathBuf::from(r"C:\dam-hopper\dam-hopper.toml"))
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Early CWD-based .env lookup (matches standard dotenv behavior)
@@ -87,13 +152,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Canonical global config directory (.env next to global config)
     try_load_env_file(&global_env_path(), "global_config");
-
+    // Load config-adjacent environment variables before Clap reads env-backed options.
+    load_explicit_config_env();
     let cli = Cli::parse();
-    if let Some(explicit_config) = &cli.config {
-        if let Some(parent) = explicit_config.parent() {
-            try_load_env_file(&parent.join(".env"), "explicit_config");
-        }
-    }
     // Disable libgit2 repository owner validation so git operations succeed on projects
     // across user homes, WSL mounts, and external drives owned by other users or UIDs.
     unsafe {
