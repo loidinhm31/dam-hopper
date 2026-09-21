@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-21 from `repomix-output.xml` (Repomix v1.18.0; 2,159
-files, 4,792,939 tokens, 19,996,689 characters; five security-flagged files
+**Generated:** 2026-09-21 from `repomix-output.xml` (Repomix v1.18.0; 2,161
+files, 4,797,769 tokens, 20,017,262 characters; five security-flagged files
 excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
