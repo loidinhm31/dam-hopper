@@ -98,7 +98,7 @@ status revision, and request ID; stale conflicts require fresh confirmation and
 ambiguous requests are not retried.
 
 See the [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md) and the architecture's
-[Fleet Deck & Drilldown Popover](./system-architecture.md#fleet-deck--drilldown-popover-phase-03-2026-09-20)
+[Fleet Deck & Drilldown Popover](./system-architecture.md#fleet-deck-drilldown-popover-phase-03-2026-09-20)
 section for source maps and polling tiers.
 
 ## Unified-profile integration and qualification (Phase 09)

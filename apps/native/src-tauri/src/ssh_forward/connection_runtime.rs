@@ -1592,6 +1592,7 @@ impl ConnectionRegistry {
     pub(crate) fn state_for_scope(&self, scope_id: &str, connection_id: &str) -> Option<SshConnectionState> {
         self.get_entry(scope_id, connection_id).map(|entry| entry.state)
     }
+}
 
 // Keep the legacy runtime types referenced while the command facade is being
 // migrated in Phase 04. This prevents accidental reuse of their semantics in
@@ -1690,6 +1691,7 @@ mod tests {
             registry.test_entry(id).unwrap().error_code,
             Some(SshForwardErrorCode::CredentialNotSaved)
         );
+    }
 
     #[test]
     fn connection_admission_rejects_an_inflight_authentication() {

@@ -371,3 +371,13 @@ async fn test_import_from_repo_no_overwrite() {
         .unwrap_or("")
         .contains("Already exists"));
 }
+
+#[tokio::test]
+async fn test_import_from_repo_fails_closed_on_missing_source_dir() {
+    let tmp = TempDir::new().unwrap();
+    let missing_src = tmp.path().join("does-not-exist");
+    let store_path = tmp.path().join("store");
+    let result = import_from_repo(&missing_src, &[], &store_path).await;
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), crate::error::AppError::NotFound(_)));
+}

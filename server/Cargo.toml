@@ -1,7 +1,8 @@
 [package]
 name = "dam-hopper-server"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
+default-run = "dam-hopper-server"
 license = "MIT"
 description = "Rust backend server for the DamHopper multi-project development workspace UI"
 repository = "https://github.com/loidinhm31/dam-hopper"

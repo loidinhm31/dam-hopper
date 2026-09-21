@@ -79,5 +79,5 @@ not perform optimistic cache writes. The surface has no workflow URL or
 localStorage persistence and does not introduce a new API or DTO.
 
 For the complete component architecture and keyboard/focus contracts, see
-[Frontend Components](./frontend-components.md#workflow-context-surface-phases-05-06)
+[Frontend Components](./frontend-components.md#workflow-context-surface-phases-0506)
 and [System Architecture](./system-architecture.md#workflow-context-surface-ui-phase-05).

@@ -628,7 +628,7 @@ fn normalize_target_path(path: PathBuf) -> PathBuf {
 /// disappeared or arrived through a platform-specific alias. Windows paths
 /// are case-insensitive and may use extended drive/UNC prefixes; POSIX paths
 /// retain their case-sensitive identity.
-pub(crate) fn target_path_identity(path: &Path) -> String {
+pub fn target_path_identity(path: &Path) -> String {
     #[cfg(windows)]
     {
         let mut identity = normalize_target_path(path.to_path_buf())

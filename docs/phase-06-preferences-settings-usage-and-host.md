@@ -107,7 +107,7 @@ a presentation preference in the owning server's UiConfig. A missing saved
 mount stays visibly missing rather than silently binding to another filesystem.
 
 Fleet mode is documented in the architecture's
-[Fleet Deck & Drilldown Popover](./system-architecture.md#fleet-deck--drilldown-popover-phase-03-2026-09-20)
+[Fleet Deck & Drilldown Popover](./system-architecture.md#fleet-deck-drilldown-popover-phase-03-2026-09-20)
 section: its toolbar keeps a Fleet toggle and profile pills, 1-second
 compatibility metrics run only for the visible connected drilldown, and a
 removed/disconnected selection returns to Fleet without ambient fallback.

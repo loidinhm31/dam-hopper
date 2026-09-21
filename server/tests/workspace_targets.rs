@@ -3,7 +3,9 @@ use std::process::Command;
 
 use dam_hopper_server::{
     error::AppError,
-    workspace_target::{ProjectTargetRef, WorkspaceTargetError, WorkspaceTargetResolver},
+    workspace_target::{
+        target_path_identity, ProjectTargetRef, WorkspaceTargetError, WorkspaceTargetResolver,
+    },
 };
 
 fn git(args: &[&str], cwd: &Path) {
@@ -110,8 +112,8 @@ async fn resolver_accepts_root_worktree_spaces_and_symlink_aliases() {
     assert!(!explicit_root.is_root());
     assert!(explicit_root.worktree().unwrap().is_main);
     assert_eq!(
-        explicit_root.worktree().unwrap().repository_path,
-        repo.path().to_string_lossy().as_ref()
+        target_path_identity(Path::new(&explicit_root.worktree().unwrap().repository_path)),
+        target_path_identity(repo.path())
     );
 
     let resolved = resolver
@@ -159,11 +161,14 @@ async fn resolver_maps_nested_project_to_the_same_subdirectory_in_each_worktree(
     let listed = resolver.refresh_project_worktrees(&nested).await.unwrap();
     let listed_feature = listed
         .iter()
-        .find(|worktree| worktree.repository_path == worktree_string)
+        .find(|worktree| {
+            target_path_identity(Path::new(&worktree.repository_path))
+                == target_path_identity(&worktree_root)
+        })
         .unwrap();
     assert_eq!(
-        listed_feature.path,
-        selected_path.to_string_lossy().as_ref()
+        target_path_identity(Path::new(&listed_feature.path)),
+        target_path_identity(&selected_path)
     );
     let error = resolver
         .resolve(&target("nested", Some(&worktree_root)), &nested)

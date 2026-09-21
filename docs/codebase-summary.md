@@ -432,6 +432,69 @@ separate and opt-in, with private SQLite storage and bounded aggregate queries.
 Media tickets and browser-debug artifacts use authenticated, scoped, expiring
 capabilities rather than project-path access.
 
+## Backend path and configuration normalization (Phase 01)
+
+The path/config boundary is implemented by
+`server/src/config/parser.rs`, `server/src/workspace_target.rs`,
+`server/src/agent_store/{importer,distributor}.rs`, and `server/src/system.rs`:
+
+- The existing registry file path is normalized with `dunce` for `configPath`
+  and its directory. Project parsing rejects `..` components and rejects
+  rooted, prefixed, absolute, or traversal-containing `env_file`/terminal
+  `cwd` values. Relative project roots then join the registry directory
+  lexically without project-path symlink resolution.
+- TOML output uses forward-slash relative paths inside the registry directory,
+  writes `.` for the registry root, and preserves external absolute paths.
+  Windows drive, mixed-separator, UNC, and `\\?\` project paths round-trip
+  through the writer.
+- Worktree targets require absolute paths and fresh Git registration. Live
+  directories are canonicalized and checked for containment. Stable identity
+  normalizes missing-target syntax; Windows lowercases, uses `/`, and removes
+  extended drive/UNC aliases, while POSIX preserves case and backslashes.
+- Agent imports canonicalize their source and reject literal `..` or symlink
+  escapes; existing store items are never overwritten. Distribution compares
+  canonical symlink targets and has a lexical fallback for broken links.
+- Host disk selection canonicalizes the workspace and chooses the longest
+  matching mount, including Windows drive roots; no match returns a
+  zero-capacity workspace fallback.
+
+Focused regression coverage is in `server/src/config/tests.rs`,
+`server/src/system/tests.rs`, `server/src/agent_store/tests.rs`, and
+`server/tests/workspace_targets.rs`, with Windows-gated drive/UNC/verbatim,
+symlink, and worktree identity cases.
+
+## Windows test harness and platform gating (Phase 02)
+
+The Windows MSVC harness adapts tests, not runtime contracts. API unit tests
+and shared integration helpers select fixed `cmd.exe`/Unix commands, normalize
+CRLF only while comparing PTY output, use existing `TempDir` paths, and compare
+target metadata through `target_path_identity` or canonical `PathBuf` values.
+`browser_debug_artifacts`, `idle_suspend`, `idle_suspend_phase07`,
+`workflow_api`, and project-worktree lifecycle tests consume the shared
+integration command/cwd helpers.
+
+Git test repositories and clones set local `core.autocrlf=false` and
+`core.eol=lf`, preventing user/global configuration from changing LF fixture
+assertions. Linux `/dev`, sysfs, procfs/netlink, and systemd assertions remain
+target-gated; pure unsupported/non-Linux behavior stays covered. In
+`server/src/git/diff.rs`, `discard_hunk` drops libgit2 `Patch`/`Diff` before
+rewriting the working file, avoiding Windows sharing violations.
+System-specific boundaries are covered by
+`server/src/system/tests.rs`, `server/src/system/alerts.rs`, and
+`server/src/system/monitor.rs`; portable state/monitor behavior remains
+separate from Linux-only `/dev` and sysfs fixtures.
+
+
+Serial Windows Phase 02 evidence passed **978 tests, 0 failed, 3 ignored**;
+focused API/Git/system filters passed **160/160**, **90/90**, and **36/36**.
+See the [Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/phase-02-test-harness-and-platform-gating.md), [test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md), and [review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
+
+## Windows server build, qualification, and docs (Phase 03)
+`server/Cargo.toml` sets `dam-hopper-server` as Cargo's default binary while
+retaining all four declared targets. Windows check/build/release/test gates,
+Linux-only stub behavior, and the loopback `/api/health` smoke passed; see the
+[Phase 03 plan](../plans/260920-1312-windows-server-build-and-verify/phase-03-server-build-and-verification.md) and [review](../plans/reports/code-review-260920-1835-phase03-server-build-and-verification.md).
+
 ## Workspace settings import/export
 
 The Settings page and protected Rust API exchange only the active workspace
