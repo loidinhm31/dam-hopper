@@ -32,6 +32,7 @@ interface SearchPanelProps {
   onClose?: () => void;
   inputRef?: React.RefObject<HTMLInputElement | null>;
   consumeOpenSelection?: boolean;
+  autoFocus?: boolean;
 }
 
 export function SearchPanel({
@@ -42,6 +43,7 @@ export function SearchPanel({
   onClose,
   inputRef,
   consumeOpenSelection = Boolean(onClose),
+  autoFocus = Boolean(onClose),
 }: SearchPanelProps) {
   const worktreePath = target?.worktreePath;
   const targetProject = target?.project ?? project;
@@ -214,7 +216,7 @@ export function SearchPanel({
         <div className="flex items-center gap-1.5">
           <input
             ref={resolvedRef}
-            autoFocus
+            autoFocus={autoFocus}
             type="text"
             placeholder={
               mode === "filename"
@@ -225,6 +227,8 @@ export function SearchPanel({
                   ? "Search across all connected profiles…"
                   : "Search project target contents…"
             }
+            value={query}
+            // Synchronously update query state on each keystroke for controlled input
             onChange={(event) => setQuery(mode, event.target.value)}
             className="flex-1 text-xs px-2 py-1.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)] transition-colors"
           />
