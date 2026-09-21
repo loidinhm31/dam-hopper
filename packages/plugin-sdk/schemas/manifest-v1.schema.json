@@ -1,0 +1,119 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://dam-hopper.dev/schemas/manifest-v1.json",
+  "title": "PluginManifestV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifestVersion",
+    "id",
+    "version",
+    "publisher",
+    "hostVersionRange",
+    "contracts",
+    "capabilities",
+    "entrypoints",
+    "inventory"
+  ],
+  "properties": {
+    "manifestVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*[a-z0-9]$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1
+    },
+    "hostVersionRange": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runnerProtocol",
+        "workerSdk",
+        "uiBridge",
+        "manifest",
+        "dataApi"
+      ],
+      "properties": {
+        "runnerProtocol": { "type": "string", "minLength": 1 },
+        "workerSdk": { "type": "string", "minLength": 1 },
+        "uiBridge": { "type": "string", "minLength": 1 },
+        "manifest": { "type": "integer", "const": 1 },
+        "dataApi": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "entrypoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend"],
+      "properties": {
+        "backend": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runtime", "range", "entry"],
+          "properties": {
+            "runtime": { "type": "string", "const": "node" },
+            "range": { "type": "string", "minLength": 1 },
+            "entry": { "type": "string", "minLength": 1 }
+          }
+        },
+        "ui": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entry", "mode"],
+          "properties": {
+            "entry": { "type": "string", "minLength": 1 },
+            "mode": { "type": "string", "const": "opaque-srcdoc" }
+          }
+        }
+      }
+    },
+    "navigation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "route"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "route": { "type": "string", "minLength": 1 },
+          "icon": { "type": "string" }
+        }
+      }
+    },
+    "inventory": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "size", "sha256", "mode"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "size": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "mode": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

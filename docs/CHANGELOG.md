@@ -1,5 +1,11 @@
 # 2026-09-20
 
+- **Trusted plugin platform — Phase D00 candidate freeze (2026-09-20).**
+  Added the versioned `@dam-hopper/plugin-sdk` contract candidate, Rust DTO and
+  framing mirror, opaque UI bridge/cancellation feasibility evidence, resource
+  budgets, and G0 artifact checklist. This is not a production loader or
+  runtime release; see the [D00 contract reference](./plugin-platform-d00.md).
+
 - **Transport-safe FS subscription follow-up — Phase 01 (2026-09-20).**
   Documented profile-owned transport resolution, originating-watch cleanup and
   cache retirement, fail-closed `IdleTransport` filesystem methods, ambient

@@ -21,6 +21,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Phase 07 Media Isolation and Encryption](./phase-07-media-isolation-and-encryption.md)** — UUIDv4-namespaced media sessions, ticket-bound native streams, narrow remote cleanup, and owner-qualified encrypted writes
 - **[Phase 08 Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md)** — Concurrent Windows native SSH scopes, lifecycle fences, per-scope teardown, and explicit Browser target ownership
 - **[Phase 09 Integration and Qualification](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md)** — Dual-server harness, reconciled test ledger, web/native release gates, and rollback boundaries
+- **[Trusted Plugin Platform D00](./plugin-platform-d00.md)** — Candidate contracts, framing, opaque UI bridge, cancellation, Rust mirror, and G0 artifacts
 - **[Frontend Components](./frontend-components.md)** — Shared React component architecture and host lifecycle
 - **[Workflow Context Surface](./workflow-context-surface.md)** — Responsive Plan/item details, notes, and inline editing
 - **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries

@@ -49,6 +49,27 @@ server/src/
 └── commands/         # Command registry
 ```
 
+### Trusted plugin contract candidate (Phase D00)
+
+The dependency-light TypeScript contract source lives in
+`packages/plugin-sdk/src/`; its four JSON Schemas and positive/negative
+fixtures live beside the package. Wire fields use camelCase, request IDs are
+strings, JSON-RPC batches and unknown manifest fields fail closed, and contract
+changes require corresponding fixtures rather than ad-hoc examples.
+
+The Rust mirror is `server/src/plugins/{contract,error,framing,manifest}.rs`,
+exported by `server/src/lib.rs`. DTOs use
+`serde(rename_all = "camelCase")`; manifest DTOs use
+`serde(deny_unknown_fields)`. Both implementations use a four-byte
+big-endian length prefix, reject payloads over 16 MiB before body allocation,
+bound aggregate buffering at 64 MiB, and reserve 64 KiB for control frames.
+`FrameDecoder` must never treat partial input as a complete JSON-RPC message.
+
+Worker cancellation is request/context keyed and follows
+`active -> cancelled -> settled`; unknown or repeated cancellation is reported
+without creating a second settlement. The SDK, Rust fixture test, and browser
+isolation test are the contract evidence locations.
+
 ### Error Handling Pattern
 
 Each module defines `thiserror` enum:
