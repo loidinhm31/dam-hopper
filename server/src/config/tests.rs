@@ -15,6 +15,28 @@ use super::{
     },
 };
 
+
+#[test]
+fn test_global_env_path() {
+    let env_path = super::global_env_path();
+    assert!(env_path.ends_with(".env"));
+    let reg_path = super::global_registry_path();
+    assert_eq!(env_path.parent(), reg_path.parent());
+}
+
+#[test]
+fn test_config_directory_env_loading() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    let env_file = config_dir.join(".env");
+    let test_var_name = format!("TEST_DAM_HOPPER_VAR_{}", std::process::id());
+    std::fs::write(&env_file, format!("{test_var_name}=test_value_123\n")).unwrap();
+
+    assert!(std::env::var(&test_var_name).is_err());
+    dotenvy::from_path(&env_file).unwrap();
+    assert_eq!(std::env::var(&test_var_name).unwrap(), "test_value_123");
+    std::env::remove_var(&test_var_name);
+}
 // ──────────────────────────────────────────────
 // Preset tests
 // ──────────────────────────────────────────────
