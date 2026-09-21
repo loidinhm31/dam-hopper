@@ -1,7 +1,7 @@
 ---
 title: "DamHopper trusted plugin platform"
 description: "Add a generic owner-account plugin host, isolated UI, lifecycle management, and Linux/LAN qualification for the evcrate replacement."
-status: completed
+status: in-progress
 priority: P1
 effort: unestimated
 branch: main
@@ -27,7 +27,7 @@ Current standalone evcrate remains operational through G4. Final evcrate E05 rem
 | ID | Deliverable | Joint dependency / gate | Status |
 |---|---|---|---|
 | [D00](phase-00-contracts-and-feasibility.md) | Contract candidate, grant matrix, opaque-`srcdoc`/cancel/budget feasibility | E00 → G0 | Completed 2026-09-21 |
-| [D01](phase-01-package-registry.md) | Runner-owned safe package/trust staging; early real evcrate candidate intake | G0; overlaps E01/E02 | Pending |
+| [D01](phase-01-package-registry.md) | Runner-owned safe package/trust staging; early real evcrate candidate intake | G0; overlaps E01/E02 | DONE (2026-09-21; 100%) |
 | [D02](phase-02-owner-runner.md) | Owner UID runner, framed UDS/pipes, supervision/cancel/restart/service | G0; overlaps D01/E01/E02 | Pending |
 | [D03](phase-03-authorized-api.md) | Actor/grant/target contexts over existing REST+WS owner transport | D01/D02 interfaces; E01/E02 → G1 | Pending |
 | [D04](phase-04-isolated-ui-host.md) | Inert bytes, host CSP, opaque iframe bridge, dynamic route/nav | G1; E03 → G2 | Pending |
@@ -71,7 +71,7 @@ G1 and G2 do not wait for lifecycle polish: D01 accepts E02's early immutable pa
 
 ## Planning status
 
-D00 contracts, feasibility evidence, and immutable candidate delivery completed 2026-09-21. G0 candidate package/fixture digests are recorded above; joint E00 domain publication and cross-repository pin remain the next gate. Effort remains unestimated until G0 feasibility evidence plus named staffing/hardware. The active-plan helper could not persist because no session ID was available; use this directory explicitly.
+D00 contracts, feasibility evidence, and immutable candidate delivery completed 2026-09-21. Phase D01 runner-owned package registry and trust staging is DONE (2026-09-21; 100%): bounded streamed intake, adversarial archive validation/extraction, digest-bound trust approval, durable registry/journal recovery, revision-tagged queries/CAS, and early E02 candidate staging are complete. Targeted archive/registry/contract-fixture validation passed 24/24 and Cycle 2 review approved 9.0/10 with no critical issues. The parent plan remains IN PROGRESS at 2/7 phases (29%); D02 owner-runner is next. G0 joint E00 domain publication and cross-repository pin remain the next gate. Effort remains unestimated until G0 feasibility evidence plus named staffing/hardware. The active-plan helper could not persist because no session ID was available; use this directory explicitly.
 
 ## Unresolved questions
 

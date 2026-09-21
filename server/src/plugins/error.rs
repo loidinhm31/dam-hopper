@@ -76,4 +76,12 @@ impl PluginError {
     pub fn unauthorized(message: impl Into<String>) -> Self {
         Self::new(PluginErrorCode::Unauthorized, message)
     }
+
+    pub fn runner_unavailable(message: impl Into<String>) -> Self {
+        Self::new(PluginErrorCode::RunnerUnavailable, message)
+    }
+
+    pub fn deadline_exceeded(message: impl Into<String>) -> Self {
+        Self::new(PluginErrorCode::DeadlineExceeded, message)
+    }
 }

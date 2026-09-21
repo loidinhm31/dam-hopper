@@ -17,6 +17,8 @@ wire DTOs and framing rules in `server/src/plugins`. Later phases own the
 installation registry, worker supervision, API integration, browser navigation,
 and Linux qualification.
 
+- [Phase D01 registry and trust staging](./architecture/plugin-platform-d01.md)
+
 A trusted backend plugin is **not** advertised as a malicious-code sandbox. The
 runner is owner-provisioned and same-identity controlled; authorization,
 resource budgets, package immutability, and browser isolation remain explicit
