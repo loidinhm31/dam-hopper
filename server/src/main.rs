@@ -9,7 +9,7 @@ use dam_hopper_server::{
     api::router::{build_router_with_web_dir_and_origins, parse_cors_origins},
     config::{
         ConfigResolutionInput, ConfigSource, DamHopperConfig, global_config_path,
-        global_registry_path, read_global_config_at, resolve_startup_config,
+        global_env_path, global_registry_path, read_global_config_at, resolve_startup_config,
     },
     crypto::load_or_create_server_setup,
     diagnostics::{DiagnosticStore, DiagnosticTracingLayer},
@@ -60,8 +60,22 @@ struct Cli {
 
 const TOKEN_CAPACITY: usize = 512;
 
+fn try_load_env_file(path: &std::path::Path, source: &'static str) {
+    if path.is_file() {
+        match dotenvy::from_path(path) {
+            Ok(()) => {
+                tracing::info!(path = %path.display(), %source, "Loaded environment file");
+            }
+            Err(err) => {
+                tracing::warn!(path = %path.display(), %source, %err, "Failed to load environment file");
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Early CWD-based .env lookup (matches standard dotenv behavior)
     dotenvy::dotenv().ok();
 
     let diagnostics = DiagnosticStore::default();
@@ -71,7 +85,15 @@ async fn main() -> anyhow::Result<()> {
         .with(DiagnosticTracingLayer::new(diagnostics.clone()))
         .init();
 
+    // Canonical global config directory (.env next to global config)
+    try_load_env_file(&global_env_path(), "global_config");
+
     let cli = Cli::parse();
+    if let Some(explicit_config) = &cli.config {
+        if let Some(parent) = explicit_config.parent() {
+            try_load_env_file(&parent.join(".env"), "explicit_config");
+        }
+    }
     // Disable libgit2 repository owner validation so git operations succeed on projects
     // across user homes, WSL mounts, and external drives owned by other users or UIDs.
     unsafe {
@@ -119,6 +141,12 @@ async fn main() -> anyhow::Result<()> {
 
     let workspace_dir = resolution.workspace_dir;
     let config = resolution.config;
+
+    if cli.config.is_none() {
+        if let Some(parent) = config.config_path.parent() {
+            try_load_env_file(&parent.join(".env"), "resolved_config");
+        }
+    }
 
     match resolution.source {
         ConfigSource::EmptyFallback => {

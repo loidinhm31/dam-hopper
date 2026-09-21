@@ -1215,6 +1215,7 @@ if (-not (Test-Path "$installDir\dam-hopper.toml")) {
   gh attestation verify "$assetDir\dam-hopper-install.ps1" --repo "loidinhm31/dam-hopper"
   ```
 - **Dry-run mode:** Pass `-DryRun` to verify release metadata and archive integrity without modifying filesystem or environment state.
+- **Environment and `.env` loading:** The server automatically loads `.env` files from: (1) the directory containing the active `dam-hopper.toml` configuration file (e.g. `%LOCALAPPDATA%\Programs\dam-hopper\.env`), (2) the canonical user configuration directory (`%USERPROFILE%\.config\dam-hopper\.env`), and (3) the current working directory. Variables set in the system/shell environment take precedence; this allows placing `MONGODB_URI` and `MONGODB_DATABASE` right next to `dam-hopper.toml`.
 - **Platform boundaries:** Windows direct-server operation does not provide Linux systemd service management, manager migration, or terminal idle-suspend helper semantics. The server runs as a direct foreground process managed by the user or an external supervisor.
 ### Windows Server Loopback Smoke Checklist
 
