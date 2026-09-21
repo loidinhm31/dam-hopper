@@ -17,11 +17,50 @@ name = "my-workspace"
 
 ### Project Discovery
 
-Define projects with type-specific defaults. Project paths can be absolute or relative; relative paths resolve against the config file directory. Other path fields like `env_file` and terminal profile `cwd` remain project-relative and reject absolute or traversal-containing values.
+Define projects with type-specific defaults. `projects[].path` may be
+absolute or relative. The existing registry file path is normalized with the
+platform-safe `dunce` canonicalizer to establish `configPath` and its
+directory; project path values themselves resolve lexically against that
+directory, with redundant `.` components removed and no symlink resolution.
+`env_file` and terminal-profile `cwd` remain project-relative and reject
+absolute, rooted/prefix, or `..` traversal paths.
 
-**Path Serialization:** When DamHopper writes the registry TOML, absolute project paths are preserved when projects live outside the config file directory. Projects inside the config directory are written as relative paths for portability. Relative paths are normalized to forward slashes in TOML output regardless of platform.
+**Path serialization:** When DamHopper writes registry TOML, project paths
+inside the config directory are written as relative paths for portability;
+relative output always uses forward slashes. Terminal profile `cwd` values are
+serialized relative to their project with forward slashes. Projects outside
+the registry directory remain absolute, preserving the platform path value.
 
-**Windows paths:** Drive-letter absolute paths are supported. Mixed separators and `\\?\` verbatim prefixes are covered by automated tests. Verbatim paths preserve the exact Windows path string and are mainly useful when you need explicit device-style paths. UNC paths can be used only with manual validation in your target environment because they are not covered by automated CI in this repo.
+**Windows paths and TOML escaping:** Drive-letter (`C:\projects\app`), mixed-separator (`C:/projects/app`), UNC (`\\server\share\project`), and extended verbatim (`\\?\C:\projects\app`) absolute project paths are supported and covered by Windows-gated tests.
+In TOML configuration files, backslashes must be correctly formatted:
+- Double-quoted strings require double backslashes: `path = "C:\\projects\\app"` or `path = "\\\\server\\share\\project"`.
+- Single-quoted (literal) strings preserve backslashes verbatim: `path = 'C:\projects\app'` or `path = '\\server\share\project'`.
+- Forward-slash format is fully supported and requires no escaping: `path = "C:/projects/app"`.
+Verbatim values are preserved by config read/write; UNC availability depends on the target machine and share.
+The same platform-aware path identity is used for registered Git worktree
+targets. On Windows it normalizes separators, strips extended drive/UNC
+prefixes, and compares case-insensitively; POSIX identity keeps case and treats
+backslashes as ordinary characters.
+### Path validation and Windows target identity
+
+Configuration validation is lexical and deterministic. The parser rejects
+`..` in a project path and rejects absolute/rooted/prefix paths in project
+`env_file` and terminal `cwd`; it does not inspect the filesystem to decide
+whether a path is safe. A relative project path is joined to the registry
+directory after validation. The TOML writer emits portable forward-slash
+relative paths and leaves external absolute paths absolute.
+
+Explicit `worktreePath` values must be absolute and must match a fresh Git
+worktree listing for the configured project. The resolver canonicalizes live
+targets and verifies directory containment, but keeps a normalized lexical
+identity for removed targets. Windows identity is case-insensitive and
+collapses `\\?\` drive/UNC aliases; POSIX identity does not reinterpret
+backslashes as separators. Containment and relative projection use this same
+identity, preventing case/prefix aliases from bypassing target ownership.
+
+The resolver's discovery cache is a listing optimization only; it never
+authorizes a target. Missing, prunable, symlink-replaced, or foreign
+worktrees fail closed rather than redirecting to the configured project root.
 
 ```toml
 [[projects]]
@@ -178,6 +217,12 @@ path = ".dam-hopper/agent-store"
 
 If omitted, defaults to `.dam-hopper/agent-store/` relative to the loaded registry file directory.
 
+Import scans canonicalize the selected source directory, reject literal `..`
+components and symlink escapes, and never overwrite an existing store item.
+Distribution checks canonical symlink targets when available and falls back to
+lexical comparison for broken links. On Windows, directory and file links use
+the corresponding platform-specific symlink API.
+
 ### Feature Flags
 
 All features are enabled by default.
@@ -198,6 +243,7 @@ light_sample_seconds = 5
 process_sample_seconds = 15
 process_deadline_millis = 150
 snapshot_deadline_millis = 500
+
 ```
 
 The monitor reads bounded `/proc`, PSI, cgroup v2, and mount evidence when the
@@ -207,6 +253,11 @@ malformed, stale, or timed-out sources degrade only the affected deep section.
 `GET /api/system/metrics` remains available as the compatible basic-metrics
 fallback. Host diagnostics expose bounded process names and summaries only;
 they do not expose raw argv or environment values.
+
+`HostMetricsSampler` selects the longest matching disk mount on every supported
+platform. On Windows it canonicalizes the workspace and supports drive-root
+mount paths; when no mount matches, the reported disk falls back to the
+workspace path with zero capacity rather than guessing a host mount.
 
 Do not add re-authentication, action, helper, IPC, enrollment, or host-mutation
 settings to this release. Those remain deferred backlog, not configuration.
@@ -1105,7 +1156,7 @@ Keys are stored in-memory per session (not persisted to disk).
 1. Create `~/.config/dam-hopper/dam-hopper.toml` with at least two projects whose `projects[].path` values point at separate roots. On Windows, use different drives if available.
    Expected: `GET /api/workspace/status` reports the registry `configPath` and the expected `projectCount`.
 
-2. Start the same-origin server with `cargo run -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800 --host 127.0.0.1`.
+2. Start the same-origin server with `cargo run --manifest-path server/Cargo.toml -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800 --host 127.0.0.1`.
    Expected: startup succeeds without requiring a repo-local `dam-hopper.toml`.
 
 3. Browse and read files in each project, then create or edit a file inside each root.
@@ -1122,6 +1173,71 @@ Keys are stored in-memory per session (not persisted to disk).
 
 7. On Windows or in any environment with a reachable network share, add a temporary UNC-style project entry such as `path = "\\\\server\\share\\project"`.
    Expected: the registry either works for that project in your environment or fails in a clear, local way that you can document before rollout. Do not assume UNC behavior from Linux CI alone.
+
+### Windows Server Loopback Smoke Checklist
+
+To verify `dam-hopper-server` on Windows 11 without exposing network endpoints or touching production configuration:
+
+1. **Create an isolated temporary configuration**:
+   ```powershell
+   # PowerShell
+   $tempConfig = [System.IO.Path]::GetTempFileName() + ".toml"
+   @'
+   [workspace]
+   name = "windows-smoke"
+
+   [[projects]]
+   name = "smoke-proj"
+   path = "."
+   type = "cargo"
+   '@ | Set-Content -Path $tempConfig -Encoding utf8
+   ```
+
+   ```cmd
+   :: cmd.exe
+   set TEMP_CONFIG=%TEMP%\dam-hopper-smoke.toml
+   (
+     echo [workspace]
+     echo name = "windows-smoke"
+     echo.
+     echo [[projects]]
+     echo name = "smoke-proj"
+     echo path = "."
+     echo type = "cargo"
+   ) > "%TEMP_CONFIG%"
+   ```
+
+2. **Start the server bound strictly to loopback (`127.0.0.1`) with `--no-auth`**:
+   ```powershell
+   # PowerShell; pre-build to avoid a first-run compile delay.
+   cargo build --manifest-path server/Cargo.toml --bins
+   $outLog = [System.IO.Path]::GetTempFileName()
+   $errLog = [System.IO.Path]::GetTempFileName()
+   $job = Start-Process -FilePath "cargo" -ArgumentList "run", "--manifest-path", "server/Cargo.toml", "--", "--config", $tempConfig, "--host", "127.0.0.1", "--port", "4801", "--no-auth" -WorkingDirectory (Get-Location).Path -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+   ```
+
+3. **Probe `/api/health` and verify HTTP 200 JSON**:
+   ```powershell
+   $res = $null
+   $deadline = (Get-Date).AddSeconds(30)
+   while ((Get-Date) -lt $deadline -and $null -eq $res) {
+     try {
+       $candidate = Invoke-RestMethod -Uri "http://127.0.0.1:4801/api/health"
+       if ($candidate.status -eq "ok" -and $candidate.schemaVersion -eq 1) { $res = $candidate }
+     } catch {}
+     if ($null -eq $res) { Start-Sleep -Milliseconds 500 }
+   }
+   if ($null -eq $res) { throw "Server did not become healthy within 30 seconds" }
+   $res | ConvertTo-Json
+   # Expected: status = "ok", schemaVersion = 1, role = "api"
+   ```
+
+4. **Clean up the recorded server process and temporary files**:
+   ```powershell
+   if (!$job.HasExited) { & taskkill.exe /PID $job.Id /T /F | Out-Null }
+   Wait-Process -Id $job.Id -Timeout 5 -ErrorAction SilentlyContinue
+   Remove-Item -Path $tempConfig, $outLog, $errLog -Force
+   ```
 
 ## Troubleshooting Configuration
 

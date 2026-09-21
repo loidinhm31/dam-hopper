@@ -20,9 +20,9 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Store global defaults at ~/.config/dam-hopper/config.toml
 
 **Acceptance Criteria:**
-
 - ✓ Load and parse explicit or global `dam-hopper.toml` registry files
 - ✓ Resolve relative project paths against the registry file and preserve absolute project paths
+- ✓ Preserve Windows drive, mixed-separator, UNC, and `\\?\` project paths through TOML round trips; reject traversal and rooted relative fields
 - ✓ Support `workspace:switch` via API for directory or direct registry-file targets
 - ✓ Fallback to global config defaults and legacy discovery when higher-priority sources are missing
 
@@ -30,6 +30,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 - Serde for TOML deserialization with snake_case field mapping
 - Startup resolution priority: `--config` / `DAM_HOPPER_CONFIG` > `--workspace` / `DAM_HOPPER_WORKSPACE` > global registry path > `defaults.workspace` > legacy current-directory discovery
+- Resolve validated relative paths lexically; do not require filesystem canonicalization during registry parsing
 
 ### PR-002: Terminal Session Management
 
@@ -165,6 +166,10 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Symlinks relative to project root
 - Shallow clone for remote import (temp cleanup)
 - URL regex validation before clone
+- Canonicalize local import sources, reject `..` and symlink escapes, and
+  refuse overwrite conflicts
+- Compare distribution links canonically when possible, with lexical fallback
+  for broken links; choose directory/file symlink APIs per platform
 
 ### PR-006: REST API & Authentication
 
@@ -610,6 +615,46 @@ evidence.
 - Preserve the deferred threat model in [system architecture](./system-architecture.md#deferred-remediation-design-fixed-v1-contract); do not treat it as shipped capability.
 - Before any future privileged implementation: reopen architecture/security review; define kernel/distro/systemd and pidfd policy; approve audit retention and any global cache operation; accept residual enrolled-server compromise risk.
 
+### Windows Server Build and Test Qualification (Phase 02)
+
+**Status:** Phase 02 test-harness and platform-gating requirements complete on
+2026-09-20. Phase 03 still owns the full Windows build, startup/health smoke,
+and operator runbook evidence.
+
+**Product intent:** Keep backend API, PTY, Git, path, and Linux-only host
+contracts unchanged while making real Windows MSVC tests exercise equivalent
+observable behavior. Tests must model `cmd.exe`, CRLF, Windows temporary paths,
+and user-configurable Git line endings rather than weakening assertions or
+faking Linux kernel interfaces.
+
+**Acceptance criteria:**
+
+- [x] API and integration PTY tests use platform-owned command helpers, retain
+      semantic output/redaction/lifecycle assertions, and normalize CRLF only
+      at terminal comparison boundaries.
+- [x] Integration PTYs use existing `TempDir` paths; target metadata compares
+      the shared canonical identity contract rather than raw separator strings.
+- [x] Every temporary Git repository and clone sets local
+      `core.autocrlf=false` and `core.eol=lf`; global/user Git configuration is
+      never changed.
+- [x] Linux `/dev`, sysfs, procfs/netlink, and systemd assertions remain
+      target-gated; explicit unsupported/non-Linux behavior remains tested.
+- [x] `discard_hunk` releases libgit2 diff handles before Windows file rewrite,
+      preventing sharing violations without changing the API.
+- [x] Serial Windows validation passed **978 tests, 0 failed, 3 ignored**;
+      focused API/Git/system filters passed **160/160**, **90/90**, and
+      **36/36**. Review approved **9.5/10** with no critical issues.
+
+**Technical constraints:** Helpers remain test-local, use no runtime
+dependencies, accept only test-owned/static command inputs, clean up PTYs and
+child processes, and run Windows suites serially (`cargo test ... -j 1`).
+Ignored Linux or pinned-binary cases remain visible and are not Windows release
+evidence.
+
+See the [Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/phase-02-test-harness-and-platform-gating.md),
+[test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md),
+and [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
+
 ### PR-022: Trusted plugin platform contracts (Phase D00)
 
 **Status:** Candidate ready for the G0 joint pin as of 2026-09-20. D00 freezes
@@ -786,7 +831,7 @@ and [code review](../plans/reports/code-reviewer-260902-0312-phase-02-workflow-s
   pagination; notes soft-delete before physical purge.
 - The complete endpoint contract is in
   [Workflow API](./workflow-api.md); the service/data-flow record is in
-  [System Architecture](./system-architecture.md#workflow-phases-01-03-service-rest-and-lifecycle-correlation).
+  [System Architecture](./system-architecture.md#workflow-phases-0103-service-rest-and-lifecycle-correlation).
 
 **Acceptance Criteria:**
 
@@ -1173,7 +1218,7 @@ rollback, and boot recovery include the helper in their managed-unit set.
 Phase 04 verification passed `linux_release_staging` 9/9,
 `linux_release_unit_policy` 10/10, and the boundary verifier 14/14; role
 isolation and the four-service `dam-hopper status` projection are covered. See
-[Linux Release Manager](./linux-release-manager.md#verification-and-end-to-end-coverage-production-cli-phase-04).
+[Linux Release Manager](./linux-release-manager.md#verification-and-end-to-end-coverage).
 
 **Acceptance Criteria:**
 

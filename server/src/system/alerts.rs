@@ -1244,6 +1244,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn disk(
         mount_point: &str,
         source: &str,
@@ -1264,6 +1265,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn persistent_disk(
         mount_point: &str,
         file_system: &str,
@@ -1432,6 +1434,7 @@ mod tests {
         assert!(transition.active.is_empty());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn disk_targets_are_independent_and_virtual_filesystems_do_not_alert() {
         let mut state = ResourceAlertEngineState::healthy(0);
@@ -1495,6 +1498,7 @@ mod tests {
         assert!(!sample.targets.contains_key("temperature:sensor50"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn target_state_is_capped_and_repeated_samples_are_deduplicated() {
         let mut state = ResourceAlertEngineState::healthy(0);

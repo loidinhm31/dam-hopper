@@ -2,6 +2,17 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Windows dam-hopper-server build and verification (2026-09-20)
+
+- **Plan status: COMPLETED (3/3 phases; 100%; updated 2026-09-20 18:40:00 +07:00).** Phase 01, Phase 02, and Phase 03 are complete.
+- **Phase 01 — Path and config normalization — DONE (2026-09-20 16:18:03 +07:00; 100%; 2.5/2.5h):** Standardized `dunce` canonical paths, Windows extended drive/UNC identity handling, TOML-safe path serialization, terminal cwd slash normalization, workspace-target comparisons, disk selection, and agent-store path checks without changing the schema or authorization contract.
+- **Phase 02 — Test harness and platform gating — DONE (2026-09-20 17:15:00 +07:00; 100%; 3.5/3.5h):** Replaced POSIX-only test commands with platform-owned `cmd.exe`/Unix helpers, normalized CRLF only at terminal assertions, moved integration PTYs to existing temporary directories, isolated Git fixtures with local LF settings, gated Linux-only `/dev`/sysfs diagnostics, and kept canonical target identity checks strict. `discard_hunk` now releases libgit2 diff handles before Windows file rewrite.
+- **Validation:** Serial Windows MSVC evidence passed **978 tests, 0 failed, 3 ignored** (`cargo test --tests -j 1`); focused API/Git/system filters passed **160/160**, **90/90**, and **36/36**. Code review approved **9.5/10** with no critical issues. Three ignored cases are expected binary/Linux gates; a non-blocking `PanicExecutor` dead-code warning remains documented in the review. See the [Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/phase-02-test-harness-and-platform-gating.md), [test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md), [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md), and [parent plan](../plans/260920-1312-windows-server-build-and-verify/plan.md).
+- **Phase 03 — Server build, verification, and documentation — DONE (2026-09-20 18:40:00 +07:00; 100%; 3/3h):** Added `default-run = "dam-hopper-server"`, verified Windows MSVC all-target/build/release gates, confirmed Linux-only stubs fail closed, passed the serial suite with **978 tests passed, 0 failed, 3 ignored**, completed the loopback no-auth `/api/health` smoke with cleanup, and published Windows runbook guidance. See the [Phase 03 plan](../plans/260920-1312-windows-server-build-and-verify/phase-03-server-build-and-verification.md) and [review](../plans/reports/code-review-260920-1835-phase03-server-build-and-verification.md).
+- **Validation:** `cargo run -- --help` resolved the server binary; debug and release builds passed; `/api/health` returned HTTP 200 with `schemaVersion=1`, `status="ok"`; unsupported helper/release binaries exited 1 with expected messages. Windows evidence remains distinct from Linux production diagnostics and deployment qualification.
+- **Next:** Parent plan complete. Continue with normal Linux CI/regression qualification and optional dedicated Windows CI; native Windows host activity/suspend remains out of scope.
+
+
 ### Multi-profile Host Resources watch (2026-09-20)
 
 - **Plan status: COMPLETE (4/4 phases; 100%).** All four phases completed on 2026-09-20.

@@ -66,6 +66,50 @@ use tempfile::TempDir;
 
 const TEST_TOKEN: &str = "test-token-12345";
 
+#[cfg(windows)]
+fn hold_command(seconds: u64) -> String {
+    format!("ping 127.0.0.1 -n {} >NUL", seconds.saturating_add(1))
+}
+
+#[cfg(not(windows))]
+fn hold_command(seconds: u64) -> String {
+    format!("sleep {seconds}")
+}
+
+#[cfg(windows)]
+fn read_stdin_command() -> &'static str {
+    ""
+}
+
+#[cfg(not(windows))]
+fn read_stdin_command() -> &'static str {
+    "cat"
+}
+
+#[cfg(windows)]
+fn print_env_and_hold_command(var: &str, seconds: u64) -> String {
+    format!("echo %{var}%& ping 127.0.0.1 -n {} >NUL", seconds.saturating_add(1))
+}
+
+#[cfg(not(windows))]
+fn print_env_and_hold_command(var: &str, seconds: u64) -> String {
+    format!("printf '%s\\n' \"${var}\"; sleep {seconds}")
+}
+
+#[cfg(windows)]
+fn print_cwd_and_hold_command(seconds: u64) -> String {
+    format!("echo %CD%& ping 127.0.0.1 -n {} >NUL", seconds.saturating_add(1))
+}
+
+#[cfg(not(windows))]
+fn print_cwd_and_hold_command(seconds: u64) -> String {
+    format!("printf '%s' \"$PWD\"; sleep {seconds}")
+}
+
+fn normalize_terminal_output(output: &str) -> String {
+    output.replace("\r\n", "\n")
+}
+
 fn make_state(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
 
@@ -836,7 +880,11 @@ async fn diagnostics_export_includes_live_terminal_tail() {
         .pty_manager
         .create(crate::pty::manager::PtyCreateOpts {
             id: "shell:diag-export".to_string(),
-            command: "printf 'token=secret123\\n'; sleep 5".to_string(),
+            command: if cfg!(windows) {
+                format!("echo token=secret123& {}", hold_command(5))
+            } else {
+                "printf 'token=secret123\\n'; sleep 5".to_string()
+            },
             cwd: tmp.path().display().to_string(),
             env: std::collections::HashMap::new(),
             cols: 80,
@@ -924,7 +972,7 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
             .pty_manager
             .create(crate::pty::manager::PtyCreateOpts {
                 id: id.to_string(),
-                command: "sleep 5".to_string(),
+                command: hold_command(5),
                 cwd: tmp.path().display().to_string(),
                 env: std::collections::HashMap::new(),
                 cols: 80,
@@ -1355,12 +1403,10 @@ root = "."
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["name"], "switched");
     assert_eq!(
-        json["configPath"],
-        switched_cfg
-            .canonicalize()
-            .unwrap()
-            .to_string_lossy()
-            .to_string()
+        crate::workspace_target::target_path_identity(Path::new(
+            json["configPath"].as_str().unwrap()
+        )),
+        crate::workspace_target::target_path_identity(&switched_cfg)
     );
 
     let resp = get(state, "/api/workspace").await;
@@ -3782,7 +3828,7 @@ async fn terminal_create_preserves_explicit_otel_attributes_without_usage_work()
         "/api/terminal",
         serde_json::json!({
             "id": "terminal:otel-conflict",
-            "command": "printf '%s\\n' \"$OTEL_RESOURCE_ATTRIBUTES\"; sleep 2",
+            "command": print_env_and_hold_command("OTEL_RESOURCE_ATTRIBUTES", 2),
             "cwd": tmp.path().to_str().unwrap(),
             "env": {"OTEL_RESOURCE_ATTRIBUTES": "user.attribute=preserved"}
         }),
@@ -3813,7 +3859,7 @@ async fn terminal_lifecycle_create_buffer_kill() {
     // Use `cat` — blocks on stdin, guaranteed alive during buffer read and kill.
     let body = serde_json::json!({
         "id": "lifecycle-session",
-        "command": "cat",
+        "command": read_stdin_command(),
         "cwd": tmp.path().to_str().unwrap(),
     });
     let create_resp = post_json(state.clone(), "/api/terminal", body).await;
@@ -3861,7 +3907,7 @@ async fn terminal_create_loads_project_env_file_for_terminal_sessions() {
 
     let body = serde_json::json!({
         "id": "env-file-session",
-        "command": "printf '%s\n' \"$MONGODB_DATABASE\"; cat",
+        "command": print_env_and_hold_command("MONGODB_DATABASE", 2),
         "cwd": tmp.path().to_str().unwrap(),
         "project": "test-project"
     });
@@ -3897,7 +3943,7 @@ async fn terminal_create_loads_target_worktree_env_file() {
         "/api/terminal",
         serde_json::json!({
             "id": "target-env-session",
-            "command": "printf '%s\\n' \"$TARGET_ENV\"; cat",
+            "command": print_env_and_hold_command("TARGET_ENV", 2),
             "project": "test-project",
             "worktreePath": worktree_text,
         }),
@@ -3939,7 +3985,7 @@ async fn terminal_create_rejects_cwd_outside_target_without_creating_session() {
         "/api/terminal",
         serde_json::json!({
             "id": "invalid-target-cwd-session",
-            "command": "cat",
+            "command": read_stdin_command(),
             "project": "test-project",
             "worktreePath": worktree_text,
             "cwd": outside.path(),
@@ -3958,7 +4004,7 @@ async fn terminal_create_defaults_project_cwd_to_project_root() {
 
     let body = serde_json::json!({
         "id": "project-default-cwd-session",
-        "command": "printf '%s' \"$PWD\"; cat",
+        "command": print_cwd_and_hold_command(2),
         "project": "test-project"
     });
     let resp = post_json(state.clone(), "/api/terminal", body).await;
@@ -3968,7 +4014,14 @@ async fn terminal_create_defaults_project_cwd_to_project_root() {
         state
             .pty_manager
             .get_buffer("project-default-cwd-session")
-            .map(|buf| buf.contains(&tmp.path().to_string_lossy().to_string()))
+            .map(|buf| {
+                let norm = normalize_terminal_output(&buf);
+                norm.contains(&tmp.path().to_string_lossy().to_string())
+                    || norm.lines().any(|line| {
+                        crate::workspace_target::target_path_identity(Path::new(line.trim()))
+                            == crate::workspace_target::target_path_identity(tmp.path())
+                    })
+            })
             .unwrap_or(false)
     });
     assert!(
@@ -4001,7 +4054,7 @@ async fn terminal_create_request_env_overrides_project_env_file() {
 
     let body = serde_json::json!({
         "id": "env-override-session",
-        "command": "printf '%s\n' \"$MONGODB_DATABASE\"; cat",
+        "command": print_env_and_hold_command("MONGODB_DATABASE", 2),
         "cwd": tmp.path().to_str().unwrap(),
         "project": "test-project",
         "env": {
@@ -4541,10 +4594,17 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["path"], worktree_path.to_string_lossy().as_ref());
     assert_eq!(
-        json["repositoryPath"],
-        worktree_path.to_string_lossy().as_ref()
+        crate::workspace_target::target_path_identity(Path::new(
+            json["path"].as_str().unwrap()
+        )),
+        crate::workspace_target::target_path_identity(&worktree_path)
+    );
+    assert_eq!(
+        crate::workspace_target::target_path_identity(Path::new(
+            json["repositoryPath"].as_str().unwrap()
+        )),
+        crate::workspace_target::target_path_identity(&worktree_path)
     );
     assert!(json["isAvailable"].as_bool().unwrap());
 
@@ -4661,7 +4721,7 @@ async fn terminal_create_and_rename_round_trips_custom_name() {
         "/api/terminal",
         serde_json::json!({
             "id": session_id,
-            "command": "sleep 30",
+            "command": hold_command(30),
             "name": "  Build shell  ",
         }),
     )
@@ -4746,7 +4806,7 @@ async fn terminal_target_metadata_blocks_concurrent_worktree_removal() {
         serde_json::json!({
             "id": session_id,
             "project": "test-project",
-            "command": "sleep 30",
+            "command": hold_command(30),
             "cwd": "src",
             "worktreePath": worktree_path,
             "cols": 80,
@@ -4761,10 +4821,17 @@ async fn terminal_target_metadata_blocks_concurrent_worktree_removal() {
         .await
         .unwrap();
     let sessions: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(sessions[0]["worktreePath"], worktree_string);
     assert_eq!(
-        sessions[0]["cwd"],
-        worktree_path.join("src").to_string_lossy().as_ref()
+        crate::workspace_target::target_path_identity(Path::new(
+            sessions[0]["worktreePath"].as_str().unwrap()
+        )),
+        crate::workspace_target::target_path_identity(Path::new(&worktree_string))
+    );
+    assert_eq!(
+        crate::workspace_target::target_path_identity(Path::new(
+            sessions[0]["cwd"].as_str().unwrap()
+        )),
+        crate::workspace_target::target_path_identity(&worktree_path.join("src"))
     );
 
     let blocked = delete_json(
@@ -4834,7 +4901,7 @@ async fn terminal_target_metadata_projects_absolute_configured_root_cwd() {
         serde_json::json!({
             "id": session_id,
             "project": "test-project",
-            "command": "sleep 30",
+            "command": hold_command(30),
             "cwd": project_src,
             "worktreePath": worktree_path,
             "cols": 80,
@@ -4847,10 +4914,17 @@ async fn terminal_target_metadata_projects_absolute_configured_root_cwd() {
         .await
         .unwrap();
     let session: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(session["worktreePath"], worktree_string);
     assert_eq!(
-        session["cwd"],
-        worktree_path.join("src").to_string_lossy().as_ref()
+        crate::workspace_target::target_path_identity(Path::new(
+            session["worktreePath"].as_str().unwrap()
+        )),
+        crate::workspace_target::target_path_identity(Path::new(&worktree_string))
+    );
+    assert_eq!(
+        crate::workspace_target::target_path_identity(Path::new(
+            session["cwd"].as_str().unwrap()
+        )),
+        crate::workspace_target::target_path_identity(&worktree_path.join("src"))
     );
 
     let killed = delete_json(

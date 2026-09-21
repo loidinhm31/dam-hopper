@@ -59,8 +59,14 @@ fn git_output(args: &[&str], cwd: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+fn configure_test_repo(dir: &Path) {
+    git(&["config", "core.autocrlf", "false"], dir);
+    git(&["config", "core.eol", "lf"], dir);
+}
+
 fn init_repo_with_commit(dir: &Path) {
     git(&["init", "-b", "main"], dir);
+    configure_test_repo(dir);
     git(&["config", "user.email", "test@test.com"], dir);
     git(&["config", "user.name", "Test"], dir);
 
@@ -111,19 +117,24 @@ fn make_remote_clone_repo() -> (TempDir, TempDir, TempDir) {
             remote.path().to_str().unwrap(),
             clone.path().to_str().unwrap(),
         ],
-        Path::new("/tmp"),
+        seed.path(),
     );
+    configure_test_repo(clone.path());
     git(&["config", "user.email", "test@test.com"], clone.path());
     git(&["config", "user.name", "Test"], clone.path());
-
     (remote, seed, clone)
 }
 
 fn clone_repo(remote: &Path, dest: &Path) {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let cwd = dest.parent().filter(|p| p.exists()).unwrap_or(remote);
     git(
         &["clone", remote.to_str().unwrap(), dest.to_str().unwrap()],
-        Path::new("/tmp"),
+        cwd,
     );
+    configure_test_repo(dest);
     git(&["config", "user.email", "test@test.com"], dest);
     git(&["config", "user.name", "Test"], dest);
 }

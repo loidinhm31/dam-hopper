@@ -68,6 +68,8 @@ type = "cargo"
     assert_eq!(cfg.projects.len(), 1);
     assert_eq!(cfg.projects[0].name, "api");
     assert_eq!(cfg.projects[0].project_type, ProjectType::Cargo);
+    assert!(std::path::Path::new(&cfg.projects[0].path).is_absolute());
+    #[cfg(unix)]
     assert!(cfg.projects[0].path.starts_with('/'));
     assert!(!cfg.server.telemetry.enabled);
     assert_eq!(cfg.server.telemetry.detail_retention_days, 90);
@@ -257,7 +259,7 @@ cwd = "./ops"
     assert_eq!(cfg.projects[0].terminals.len(), 1);
     assert_eq!(
         cfg.projects[0].terminals[0].cwd,
-        dir.path().join("backend/ops").to_string_lossy()
+        dir.path().join("backend").join("ops").to_string_lossy()
     );
 }
 
@@ -295,14 +297,14 @@ fn accept_absolute_project_path() {
     std::fs::write(
         &config_path,
         format!(
-            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"{}\"\ntype=\"cargo\"",
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath='{}'\ntype=\"cargo\"",
             project_path.display()
         ),
     )
     .unwrap();
 
     let cfg = read_config(&config_path).unwrap();
-    assert_eq!(cfg.projects[0].path, project_path.to_string_lossy());
+    assert_eq!(std::path::PathBuf::from(&cfg.projects[0].path), project_path);
 }
 
 #[test]
@@ -375,7 +377,7 @@ fn reject_path_traversal_in_absolute_project_path() {
     std::fs::write(
         &config_path,
         format!(
-            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"{}\"\ntype=\"cargo\"",
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath='{}'\ntype=\"cargo\"",
             project_path.display()
         ),
     )
@@ -404,7 +406,7 @@ fn reject_absolute_env_file() {
     std::fs::write(
         &config_path,
         format!(
-            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\nenv_file=\"{}\"",
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\nenv_file='{}'",
             env_file.display()
         ),
     )
@@ -447,13 +449,47 @@ fn reject_absolute_terminal_cwd() {
     std::fs::write(
         &config_path,
         format!(
-            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\n\n[[projects.terminals]]\nname=\"shell\"\ncommand=\"bash\"\ncwd=\"{}\"",
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\n\n[[projects.terminals]]\nname=\"shell\"\ncommand=\"bash\"\ncwd='{}'",
             cwd.display()
         ),
     )
     .unwrap();
 
     assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_rooted_and_prefix_paths_in_relative_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+
+    for invalid_path in ["/rooted", "\\rooted", "C:drive_relative", r"\\server\share\file"] {
+        std::fs::write(
+            &config_path,
+            format!(
+                "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\nenv_file='{}'",
+                invalid_path
+            ),
+        )
+        .unwrap();
+        assert!(
+            read_config(&config_path).is_err(),
+            "env_file='{invalid_path}' should be rejected"
+        );
+
+        std::fs::write(
+            &config_path,
+            format!(
+                "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\n\n[[projects.terminals]]\nname=\"shell\"\ncommand=\"bash\"\ncwd='{}'",
+                invalid_path
+            ),
+        )
+        .unwrap();
+        assert!(
+            read_config(&config_path).is_err(),
+            "terminal cwd='{invalid_path}' should be rejected"
+        );
+    }
 }
 
 #[cfg(windows)]
@@ -467,14 +503,17 @@ fn accept_windows_absolute_project_path() {
     std::fs::write(
         &config_path,
         format!(
-            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"{}\"\ntype=\"cargo\"",
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath='{}'\ntype=\"cargo\"",
             project_path_raw
         ),
     )
     .unwrap();
 
     let cfg = read_config(&config_path).unwrap();
-    assert_eq!(cfg.projects[0].path, project_path.to_string_lossy());
+    assert_eq!(
+        std::path::PathBuf::from(&cfg.projects[0].path),
+        project_path
+    );
 }
 
 #[cfg(windows)]
@@ -665,7 +704,10 @@ fn write_config_escapes_native_windows_absolute_project_paths() {
 
     let written = std::fs::read_to_string(&config_path).unwrap();
     let escaped = project_path.to_string_lossy().replace('\\', "\\\\");
-    assert!(written.contains(&format!("path = \"{}\"", escaped)));
+    assert!(
+        written.contains(&format!("path = '{}'", project_path.to_string_lossy()))
+            || written.contains(&format!("path = \"{}\"", escaped))
+    );
 
     let reloaded = read_config(&config_path).unwrap();
     assert_eq!(reloaded.projects[0].path, project_path.to_string_lossy());
@@ -683,6 +725,57 @@ fn project_path_for_toml_preserves_verbatim_windows_absolute_paths() {
 
     assert_eq!(formatted, verbatim.to_string_lossy());
     assert!(std::path::Path::new(&formatted).is_absolute());
+}
+
+#[cfg(windows)]
+#[test]
+fn config_roundtrip_preserves_unc_project_paths() {
+    use super::schema::{DamHopperConfig, FeaturesConfig, ProjectConfig, WorkspaceInfo};
+    use crate::workspace_target::target_path_identity;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let unc_path = r"\\server\share\projects\app";
+
+    let config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "unc-ws".to_string(),
+            root: ".".to_string(),
+        },
+        agent_store: None,
+        server: super::schema::ServerConfig::default(),
+        projects: vec![ProjectConfig {
+            name: "unc-project".to_string(),
+            path: unc_path.to_string(),
+            project_type: ProjectType::Cargo,
+            services: None,
+            commands: None,
+            env_file: None,
+            tags: None,
+            terminals: vec![],
+            agents: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: super::schema::DEFAULT_RESTART_MAX_RETRIES,
+            health_check_url: None,
+        }],
+        features: FeaturesConfig::default(),
+        config_path: config_path.clone(),
+    };
+
+    write_config(&config_path, &config).unwrap();
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    let parsed: toml::Value = toml::from_str(&written).unwrap();
+    let project_path_written = parsed["projects"][0]["path"].as_str().unwrap();
+
+    let reloaded = read_config(&config_path).unwrap();
+    assert_eq!(
+        target_path_identity(std::path::Path::new(&reloaded.projects[0].path)),
+        target_path_identity(std::path::Path::new(unc_path))
+    );
+    assert_eq!(
+        target_path_identity(std::path::Path::new(project_path_written)),
+        target_path_identity(std::path::Path::new(unc_path))
+    );
 }
 
 // ──────────────────────────────────────────────
@@ -991,7 +1084,7 @@ fn resolve_explicit_config_path_uses_exact_file() {
     assert_eq!(resolution.config.workspace.name, "explicit");
     assert_eq!(
         resolution.config.config_path,
-        registry.canonicalize().unwrap()
+        dunce::canonicalize(&registry).unwrap()
     );
     assert_eq!(resolution.workspace_dir, registry.parent().unwrap());
 }

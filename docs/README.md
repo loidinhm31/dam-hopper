@@ -42,6 +42,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
+- **[Windows Server Build and Verification Plan](../plans/260920-1312-windows-server-build-and-verify/plan.md)** — MSVC path/config normalization, cross-platform test harness, platform gates, and startup qualification
 - **[Changelog](./CHANGELOG.md)** — Dated feature, persistence, and release notes
 - **[Terminal Idle Suspend Security](./terminal-idle-suspend-security.md)** — Security invariants and helper execution policy
 
@@ -190,7 +191,7 @@ generic network coverage.
 - Unexpected pre-existing RTC alarms, inhibitors, capability failures, and RTC
   or audit failures suppress suspend. See [API Reference](./api-reference.md#terminal-idle-suspend),
   [Configuration Guide](./configuration-guide.md#terminal-idle-suspend-opt-in-linux-suspend),
-  and [Systemd runbook](./linux-systemd.md#11-terminal-idle-suspend-helper-enrollment--rollback-runbook).
+  and [Systemd runbook](./linux-systemd.md#11-terminal-idle-suspend-helper-enrollment-rollback-runbook).
 
 **Git Operations** — Clone, push, pull, status, branch actions, history edits.
 
@@ -229,7 +230,7 @@ transport channels, profile-safe React Query state, and mutation wrappers.
 - See [Workflow API](./workflow-api.md) and [Workflow Client State](./workflow-client-state.md),
   [System Architecture](./system-architecture.md#workflow-client-types-transport-and-query-state-phase-04),
   [Project Overview & PDR](./project-overview-pdr.md#pr-014-workflow-client-types-transport-and-query-state-phase-04),
-  [Codebase Summary](./codebase-summary.md#workflow-client-types-transport-and-query-state-phase-04),
+  [Codebase Summary](./codebase-summary.md#workflow-tracking),
   and [Code Standards](./code-standards.md#workflow-client-contracts-phase-04).
 
 ## Common Tasks
@@ -265,7 +266,7 @@ incarnation or `exited`/`crashed` after final exit; explicit removal and
 missing startup identities detach links that were still `attached` or `stale`.
 See [Workflow API](./workflow-api.md#resource-links).
 
-See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle) for the UI flow.
+See [Frontend Components](./frontend-components.md#terminal-workspace-shell) for the UI flow.
 
 ## Recent Changes
 

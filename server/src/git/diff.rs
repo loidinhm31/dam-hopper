@@ -785,9 +785,19 @@ pub fn discard_hunk(
         )));
     }
 
-    let (hunk, _) = patch
-        .hunk(hunk_index)
-        .map_err(|e| AppError::Git(e.message().to_string()))?;
+    let (new_start, new_count, old_start, old_count) = {
+        let (hunk, _) = patch
+            .hunk(hunk_index)
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        (
+            hunk.new_start() as usize,
+            hunk.new_lines() as usize,
+            hunk.old_start() as usize,
+            hunk.old_lines() as usize,
+        )
+    };
+    drop(patch);
+    drop(diff);
 
     // Normalize to LF for manipulation, then re-apply detected line ending
     let orig_lines: Vec<&str> = original_content
@@ -798,11 +808,6 @@ pub fn discard_hunk(
         .split('\n')
         .map(|l| l.trim_end_matches('\r'))
         .collect();
-
-    let new_start = hunk.new_start() as usize;
-    let new_count = hunk.new_lines() as usize;
-    let old_start = hunk.old_start() as usize;
-    let old_count = hunk.old_lines() as usize;
 
     // git2 line numbers are 1-based; convert to 0-based indices
     let new_start_idx = new_start.saturating_sub(1);
