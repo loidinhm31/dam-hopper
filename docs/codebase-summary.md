@@ -6,7 +6,7 @@ The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
 security scanning are not represented in full. Release-source entries in the
 compaction include the Windows packager, profile-aware asset checker, package
-scripts, and Windows packaging harnesses.
+scripts, and Windows packaging/install harnesses.
 
 ## Repository shape
 
