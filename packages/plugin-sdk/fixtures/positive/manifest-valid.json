@@ -1,0 +1,71 @@
+{
+  "manifestVersion": 1,
+  "id": "evcrate.advisor",
+  "version": "0.1.0",
+  "publisher": "evcrate",
+  "hostVersionRange": ">=0.4.0",
+  "contracts": {
+    "runnerProtocol": "^1.0.0",
+    "workerSdk": "^1.0.0",
+    "uiBridge": "^1.0.0",
+    "manifest": 1,
+    "dataApi": "^1.0.0"
+  },
+  "capabilities": [
+    "history.refresh",
+    "history.summary",
+    "history.page",
+    "history.detail",
+    "policy.readCurrent",
+    "evaluations.list",
+    "evaluations.read",
+    "evaluations.compare"
+  ],
+  "entrypoints": {
+    "backend": {
+      "runtime": "node",
+      "range": ">=22.19.0",
+      "entry": "backend/worker.cjs"
+    },
+    "ui": {
+      "entry": "ui/index.html",
+      "mode": "opaque-srcdoc"
+    }
+  },
+  "navigation": [
+    {
+      "id": "overview",
+      "title": "Overview",
+      "route": "/overview"
+    },
+    {
+      "id": "history",
+      "title": "History",
+      "route": "/history"
+    },
+    {
+      "id": "config",
+      "title": "Configuration",
+      "route": "/config"
+    },
+    {
+      "id": "evaluations",
+      "title": "Evaluations",
+      "route": "/evaluations"
+    }
+  ],
+  "inventory": [
+    {
+      "path": "backend/worker.cjs",
+      "size": 1024,
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "mode": 420
+    },
+    {
+      "path": "ui/index.html",
+      "size": 2048,
+      "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "mode": 420
+    }
+  ]
+}

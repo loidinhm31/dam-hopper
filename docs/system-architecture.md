@@ -596,47 +596,72 @@ claim that concurrent workspaces or profiles have shipped.
 - Implementation and release require the plan's multi-server isolation,
   migration/failure, live browser, and supported-native verification gates.
 
-## Proposed trusted plugin platform (2026-09-20; not implemented)
+## Trusted plugin platform — Phase D00 candidate freeze (2026-09-20; G0 pending)
 
-This is a planning design only. No runtime plugin loader, registry, runner,
-dynamic route, or embedded plugin UI exists yet. The implementation plan is
+[Phase D00](../plans/260920-1603-plugin-platform/phase-00-contracts-and-feasibility.md)
+freezes the candidate contracts and feasibility evidence for the trusted plugin
+platform. The implementation plan is
 [DamHopper plugin platform](../plans/260920-1603-plugin-platform/plan.md);
-its cross-repository contract is owned by the companion evcrate plan.
+the companion evcrate plan owns the cross-repository consumer. This is a
+candidate freeze, not a claim that the loader, registry, runner service,
+dynamic route, or embedded plugin UI is production-complete.
 
-- DamHopper remains the network and authentication boundary. It derives the
-  actor from `AuthenticatedActor.subject`, resolves the configured project or
-  worktree with the existing server resolver, and applies explicit
-  actor/installation/target/operation grants. Plugin administration uses a
-  separate subject allowlist whose default is empty; login, registration, and
-  `--no-auth` never imply administrator authority.
-- A root-provisioned, owner-account systemd runner is the sole durable
-  installation/source/grant registry and sole worker supervisor. The API
-  reaches it through a peer-credential-checked Unix socket and exposes only an
-  authorized façade; every invoke rechecks the actor session and current grant
-  revision. The runner starts one private framed-pipe worker per enabled
-  installation. Plugins expose no listener. The initial deployment configures
-  one explicit advisor-data owner and preserves the dedicated `dam-hopper` API
-  identity.
-- Administrator-approved `.tar.gz` packages are validated into immutable
-  version directories. Lifecycle state atomically selects one matching
-  backend/UI digest generation, retains the prior compatible pair for rollback,
-  and never treats source history, policy, or evaluation data as package state.
-  Trusted executable plugins are not advertised as a malicious-code sandbox.
-- The browser receives approved navigation through its captured
-  profile/connection-generation/project owner. It fetches the approved
-  self-contained document from a non-navigable, `nosniff`
-  `application/octet-stream` endpoint; the host verifies bundle identity,
-  injects/enforces restrictive CSP, and mounts the bytes as opaque-origin
-  `srcdoc` in `sandbox="allow-scripts"`. A nonce- and generation-bound
-  `MessageChannel` must acknowledge its transferred port before any context or
-  data is released. The frame receives no host credentials, arbitrary
-  transport, filesystem API, or network path.
-- Contract/security/isolation feasibility freezes at G0. A real evcrate
-  owner-worker read slice is required at G1, the four-view separate-LAN-browser
-  flow at G2, package lifecycle and rollback at G3, and Linux workload plus
-  deployment qualification at G4. A loader or fixture worker alone is never
-  platform completion. The standalone evcrate viewer remains operational until
-  joint G4 acceptance, then is replaced rather than retained as a second mode.
+### G0 candidate artifact set
+
+| Artifact | Candidate location or rule |
+| --- | --- |
+| Generic SDK | `packages/plugin-sdk/dam-hopper-plugin-sdk-0.1.0.tgz`; SHA-256 pinned jointly at G0 |
+| Contract schemas | `manifest-v1`, `runner-protocol-v1`, `worker-sdk-v1`, and `ui-bridge-v1` under `packages/plugin-sdk/schemas/` |
+| Fixtures | Positive/negative JSON fixtures and the self-contained `opaque-ui` fixture under `packages/plugin-sdk/fixtures/` |
+| TypeScript evidence | Framing, manifest, runner, worker cancellation, error, and bridge sources/tests under `packages/plugin-sdk/src/` |
+| Rust evidence | Serde DTOs, errors, and the matching frame decoder under `server/src/plugins/`, exported by `server/src/lib.rs` |
+| Browser evidence | `packages/ui/browser-tests/plugin-isolation.browser.tsx` covering CSP, opaque origin, port acknowledgement, and revocation |
+
+The candidate wire format is a four-byte big-endian byte length followed by
+UTF-8 JSON-RPC 2.0. Payloads are capped at 16 MiB before body allocation,
+control frames at 64 KiB, and aggregate buffered frames at 64 MiB. String IDs,
+strict params, no JSON-RPC batches, and one terminal response per request are
+required. Public calls cover runner hello, metadata-only listing, approved UI
+read, activation/deactivation, contexts, invocation, and cancellation.
+Administrative staging, approval, rollback, disable/remove, grant replacement,
+and binding replacement are separately authorized; worker health/shutdown are
+notifications.
+
+The manifest pairs immutable package inventory and SHA-256 entries with
+contract versions, capabilities, a Node backend entrypoint, and an optional
+`opaque-srcdoc` UI entrypoint. The runner registry is the intended durable
+authority for installation/source/grant/binding state. Actor, installation,
+configured target, operation, grant revision, activation generation, frame
+session, and API epoch are rechecked at authorization fences. Administrator
+subjects are root-seeded out of band and default deny.
+
+The browser host fetches approved self-contained bytes through a non-navigable
+octet-stream boundary, injects restrictive CSP, and mounts them as
+`srcdoc` in `sandbox="allow-scripts"` without `allow-same-origin`. A nonce- and
+generation-bound `MessageChannel` must acknowledge its transferred port before
+context or data release. Revocation closes the port and invalidates the
+generation. The UI bridge and backend remain capability-limited; no credentials,
+arbitrary filesystem API, plugin listener, or arbitrary path reader crosses
+the boundary.
+
+### Candidate flow and later gates
+
+1. D00 packages and hashes the generic SDK, validates schemas/fixtures, mirrors
+   the DTO/framing contract in Rust, and records cancellation/isolation
+   feasibility plus candidate resource budgets.
+2. G0 jointly pins the SDK digest, contract versions, fixtures, and budget
+   interpretation with E00. The Node `>=22.19` distribution and target Linux
+   assumptions remain unresolved inputs to that pin.
+3. D01–D06 implement the owner-worker registry, authorized API façade, browser
+   integration, lifecycle/rollback, and Linux workload/deployment gates.
+
+The target deployment remains DamHopper's network/auth boundary plus a
+root-provisioned owner-account systemd runner reached through a
+peer-credential-checked Unix socket. Trusted executable plugins are not a
+malicious-code sandbox, and a fixture worker or loader alone is never platform
+completion. Contract/security/isolation feasibility is G0; owner-worker read
+slice, LAN browser flow, lifecycle/rollback, and Linux qualification are G1
+through G4.
 
 ## High-Level Overview
 

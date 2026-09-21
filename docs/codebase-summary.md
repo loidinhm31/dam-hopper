@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-20 from `repomix-output.xml` (Repomix v1.18.0; 2,095
-files, 4,726,645 tokens, 19,710,721 characters; five security-flagged files
+**Generated:** 2026-09-21 from `repomix-output.xml` (Repomix v1.18.0; 2,126
+files, 4,743,100 tokens, 19,780,781 characters; five security-flagged files
 excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
@@ -18,6 +18,7 @@ security scanning are not represented in full.
 - `apps/browser-extension/` — optional browser-extension host.
 - `packages/ui/` — shared React components, stores, API/WS clients, terminal
   surfaces, and browser tests.
+- `packages/plugin-sdk/` — candidate dependency-light plugin contracts, schemas, fixtures, and packed SDK artifact.
 - `packages/shared/` — dependency-light shared runtime utilities, including
   logger and redaction helpers.
 - `deploy/` — release scripts, systemd templates, installer assets, and role
@@ -25,6 +26,23 @@ security scanning are not represented in full.
 - `plans/` — feature plans, research, phase records, and verification reports.
 - `docs/` — operator, API, architecture, standards, and product-requirement
   documentation.
+
+## Trusted plugin platform candidate (Phase D00)
+
+The candidate generic SDK is `@dam-hopper/plugin-sdk` `0.1.0`. Its source
+exports manifest, runner protocol, worker cancellation, UI bridge, framing, and
+error contracts. Four versioned JSON Schemas, positive/negative fixtures, and a
+self-contained opaque UI fixture are under `packages/plugin-sdk/`.
+
+- `packages/plugin-sdk/dam-hopper-plugin-sdk-0.1.0.tgz` is the candidate packed
+  artifact; its SHA-256 is pinned jointly at G0.
+- `server/src/plugins/` mirrors DTOs, error codes, manifest validation, and the
+  four-byte length-prefixed JSON-RPC decoder; `server/src/lib.rs` exports it.
+- `server/tests/plugin_contract_fixtures.rs` and SDK tests provide
+  cross-language rejection/acceptance evidence. The Chromium browser test
+  covers opaque origin, CSP, port acknowledgement, and revocation.
+- D00 is candidate-ready, not a shipped loader/registry/runner. E00/G0 still
+  consume the digest, runtime distribution, and Linux qualification inputs.
 
 ## Unified-profile workbench frontend (Phases 00–02)
 

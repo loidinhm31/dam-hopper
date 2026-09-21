@@ -610,6 +610,44 @@ evidence.
 - Preserve the deferred threat model in [system architecture](./system-architecture.md#deferred-remediation-design-fixed-v1-contract); do not treat it as shipped capability.
 - Before any future privileged implementation: reopen architecture/security review; define kernel/distro/systemd and pidfd policy; approve audit retention and any global cache operation; accept residual enrolled-server compromise risk.
 
+### PR-022: Trusted plugin platform contracts (Phase D00)
+
+**Status:** Candidate ready for the G0 joint pin as of 2026-09-20. D00 freezes
+cross-repository contracts and feasibility evidence; it does not claim a
+production loader, registry, runner service, or plugin route.
+
+**Functional requirements:**
+
+- Publish a versioned, dependency-light `@dam-hopper/plugin-sdk` with manifest,
+  runner, worker, framing, error, and opaque UI bridge contracts.
+- Use four-byte big-endian framed UTF-8 JSON-RPC 2.0, string IDs, no batches,
+  bounded payload/control frames, and strict unknown-field rejection.
+- Expose the approved public runner methods, separately authorized management
+  methods, worker health/shutdown notifications, and request cancellation.
+- Bind actor, installation, configured target, operation, grant revision,
+  activation generation, frame session, and API epoch at authorization fences.
+- Serve only approved self-contained UI bytes through an opaque
+  `sandbox="allow-scripts"` document and nonce/generation-bound acknowledged
+  `MessagePort`.
+
+**Acceptance criteria:**
+
+- Four versioned JSON Schemas, TypeScript validators, Rust DTOs/framer, and
+  positive/negative fixtures agree on field casing, versions, limits, and
+  rejection behavior.
+- Cancellation evidence covers cooperative settlement, idempotent late cancel,
+  and non-cooperative escalation without a second terminal settlement.
+- The browser fixture proves opaque origin, restrictive CSP, one-use port
+  acknowledgement, bidirectional messaging, and revocation.
+- Candidate package, schema/fixture set, and resource budgets are reviewable
+  inputs to G0; their final digests are pinned jointly rather than implied.
+
+**Constraints and dependencies:** Trusted same-identity execution is not a
+malicious-code sandbox. Administrator subjects remain root-seeded and
+default-deny; no arbitrary paths, plugin listeners, or implicit admin authority
+are allowed. E00 must consume these candidates, select an immutable Node
+`>=22.19` distribution, and qualify the target Linux deployment before G0.
+
 ### PR-011: Workflow Tracking Domain & Relational Persistence (Phase 01)
 
 **Status:** Domain and SQLite repository foundation implemented on 2026-09-02.
