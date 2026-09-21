@@ -138,4 +138,34 @@ describe("SearchPanel", () => {
     expect(markup).toContain("Replace Next");
     expect(markup).toContain('disabled=""');
   });
+
+  it("binds controlled query value and disables autoFocus when embedded without onClose", () => {
+    mockSearchState.mode = "content";
+    mockSearchState.queries.content = "sample-query";
+    mockData = undefined;
+
+    const markup = renderToStaticMarkup(
+      <SearchPanel project="demo-project" onResultClick={() => undefined} />,
+    );
+
+    expect(markup).toContain('value="sample-query"');
+    expect(markup).not.toContain("autofocus");
+  });
+
+  it("enables autoFocus when onClose is provided for modal dialog", () => {
+    mockSearchState.mode = "content";
+    mockSearchState.queries.content = "sample-query";
+    mockData = undefined;
+
+    const markup = renderToStaticMarkup(
+      <SearchPanel
+        project="demo-project"
+        onClose={() => undefined}
+        onResultClick={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('value="sample-query"');
+    expect(markup).toContain("autofocus");
+  });
 });
