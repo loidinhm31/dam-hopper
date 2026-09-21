@@ -1,3 +1,16 @@
+# 2026-09-21
+- **Fix search input focus loss during global search typing (2026-09-21).**
+  Resolved defect where typing in Global Search (`Ctrl+Shift+F`) caused the search
+  input to lose focus on each character entry. Switched `WorkspacePage` search store
+  consumption to fine-grained selectors (`open`, `close`, `openWith`) to prevent
+  whole-page re-renders on query updates; restored controlled `value={query}`
+  binding in `SearchPanel`; and made `autoFocus` contextual to modal dialog callers
+  (`autoFocus = Boolean(onClose)`), preventing background embedded panels in
+  `MobileWorkspaceShell` or `IdeShell` from competing for focus. Verified across
+  Chromium browser tests and UI test suites. See the
+  [implementation plan](../plans/260921-1137-search-panel-focus-fix/plan.md) and
+  [debugger report](../plans/reports/debugger-260921-1137-search-panel-focus-root-cause.md).
+
 # 2026-09-20
 - **Windows server path/config normalization — Phase 01 complete
   (2026-09-20).** Registry parsing/writing now keeps Windows drive, mixed

@@ -881,11 +881,9 @@ export default function WorkspacePage() {
     terminalDiagnosticsMenuTarget,
   ]);
 
-  const {
-    open: searchOpen,
-    close: closeSearch,
-    openWith: openSearch,
-  } = useSearchUiStore();
+  const searchOpen = useSearchUiStore((s) => s.open);
+  const closeSearch = useSearchUiStore((s) => s.close);
+  const openSearch = useSearchUiStore((s) => s.openWith);
   const searchTextShortcut = useSettingsStore((s) => s.searchTextShortcut);
   const searchFilenameShortcut = useSettingsStore(
     (s) => s.searchFilenameShortcut,
@@ -1975,6 +1973,7 @@ export default function WorkspacePage() {
             <SearchPanel
               project={projectName}
               target={projectTarget?.target}
+              autoFocus={false}
               onResultClick={handleSearchResultOpen}
             />
           </Suspense>
@@ -2207,6 +2206,7 @@ export default function WorkspacePage() {
             <SearchPanel
               project={projectName}
               target={projectTarget?.target}
+              autoFocus={false}
               closeOnResultClick
               onResultClick={handleSearchResultOpen}
             />
