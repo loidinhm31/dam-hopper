@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::schema::{GlobalConfig, KnownWorkspace};
 
-fn dam_hopper_config_dir() -> PathBuf {
+pub fn dam_hopper_config_dir() -> PathBuf {
     let xdg_home = std::env::var("XDG_CONFIG_HOME")
         .ok()
         .map(PathBuf::from)
@@ -22,6 +22,10 @@ pub fn global_config_path() -> PathBuf {
 
 pub fn global_registry_path() -> PathBuf {
     dam_hopper_config_dir().join("dam-hopper.toml")
+}
+
+pub fn global_env_path() -> PathBuf {
+    dam_hopper_config_dir().join(".env")
 }
 
 // ──────────────────────────────────────────────

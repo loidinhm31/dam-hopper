@@ -42,6 +42,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Workflow Client State](./workflow-client-state.md)** — Phase 04 shared UI DTOs, transport mapping, and React Query isolation
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
+- **[Codebase Summary: Release and Deployment](./codebase-summary-release.md)** — Detailed Linux/Windows release boundaries, installer contract, security, and verification map
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
 - **[Windows Server Build and Verification Plan](../plans/260920-1312-windows-server-build-and-verify/plan.md)** — MSVC path/config normalization, cross-platform test harness, platform gates, and startup qualification
@@ -51,10 +52,13 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Deployment
 
 - **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
+- **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Cross-platform Release CI DAG, profile-specific gates, six-subject attestation, and Linux bootstrap ownership
+- **[Linux Release Manifest v2](./linux-release-manifest.md)** — Linux-only manifest contract and Windows asset boundary
 - **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
 - **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, Phase 06 diagnostics, helper service lifecycle, activation, rollback, and recovery
 - **[Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md)** — Canonical API config/audit state, copy-once legacy migration, and descriptor-relative refusal boundaries
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
+- **[Windows Release Asset Packaging and Bootstrap Installer](./windows-release-packaging.md)** — Phases 01–03 deterministic archive, PowerShell installer, CI publication, profile gates, and direct-server boundaries
 - Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
 
 Historical implementation plans are not generally indexed here; the active

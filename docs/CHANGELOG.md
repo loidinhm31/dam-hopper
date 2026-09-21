@@ -4,6 +4,18 @@
 - **Trusted plugin platform — Phase D02 owner-account runner and worker supervision complete (2026-09-21; 100%).** Delivered strict framed JSON-RPC and EOF-safe authenticated Unix transport, exact handshake and peer validation, fixed Node worker launch, one worker per installation, multiplexed cancellation, deadline escalation and process-group teardown, generation-fenced context routing, durable restart exhaustion, and the hardened systemd owner boundary.
 - Scoped protocol/supervision validation passed **13/13**; full plugin subsystem validation passed **37/37 tests across five suites**; test-targeted `cargo check` completed with **0 errors, 0 warnings**. Cycle 2 review approved **9.0/10** with no critical issues. D02 is ready for D03 (Phase D03 — Authorized API and transport); D06 retains deployment runtime-directory/account integration. See the [D02 plan](../plans/260920-1603-plugin-platform/phase-02-owner-runner.md) and [Cycle 2 review](../plans/reports/code-review-260921-1523-phase-d02-owner-runner.md).
 
+- **Windows PowerShell bootstrap installer — Phase 02 complete (2026-09-21).** Added the non-admin `dam-hopper-install.ps1` with `-Version`/`-Latest`, `-InstallDir`, `-AddToPath`, `-VerifyAttestation`, and `-DryRun`; digest/size verification; safe four-member ZIP extraction; config preservation; User PATH updates; and a loopback fixture-backed harness. The focused installer integration coverage passed **14/14 scenarios**. See the [Phase 02 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-02-powershell-installer.md), [Windows release guidance](./windows-release-packaging.md), and [roadmap](./project-roadmap.md).
+- **Windows Release CI and guidance — Phase 03 complete (2026-09-21).** Extended the stable publisher with the Windows MSVC build/package path, explicit Linux/Windows profile gates, six-subject attestation, and the final `--profile all` local/remote publication gate. README, configuration, publisher, and Manifest v2 boundary guidance now describe direct-server installation, digest/attestation sources, and Linux-only runtime ownership. See the [Phase 03 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-03-release-workflow-and-docs.md), [release guidance](./linux-release-publisher-bootstrap.md), and [code review](../plans/reports/code-review-260921-1904-phase03-release-ci-workflow-and-guidance-docs.md).
+- **Windows release asset and bootstrap installer — Phase 01 complete
+  (2026-09-21).** Added profile-aware Linux/Windows/all release gates, the
+  exact two-asset Windows contract, bounded four-member ZIP inspection,
+  deterministic Windows ZIP packaging, package scripts, and a package-twice
+  fixture harness. Focused asset-gate coverage passed **23/23 assertions**;
+  deterministic package-twice and Node release-script syntax verification
+  passed; code review approved **9.5/10** with no critical issues. See the
+  [Phase 01 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-01-asset-schema-and-packaging.md),
+  [code review](../plans/reports/code-review-260921-0122-phase01-windows-release-asset-packaging.md),
+  and [roadmap](./project-roadmap.md).
 
 - **Fix search input focus loss during global search typing (2026-09-21).**
   Resolved defect where typing in Global Search (`Ctrl+Shift+F`) caused the search

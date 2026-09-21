@@ -6,7 +6,9 @@ excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
-security scanning are not represented in full.
+security scanning are not represented in full. Release-source entries in the
+compaction include the Windows packager, profile-aware asset checker, package
+scripts, and Windows packaging/install harnesses.
 
 ## Repository shape
 
@@ -449,6 +451,22 @@ retaining all four declared targets. Windows check/build/release/test gates,
 Linux-only stub behavior, and the loopback `/api/health` smoke passed; see the
 [Phase 03 plan](../plans/260920-1312-windows-server-build-and-verify/phase-03-server-build-and-verification.md) and [review](../plans/reports/code-review-260920-1835-phase03-server-build-and-verification.md).
 
+## Cross-platform release CI and guidance (Phase 03)
+
+`.github/workflows/release-linux.yml` branches after shared metadata validation
+into Linux and Windows build/package paths. Linux uses `--profile linux`;
+Windows builds `x86_64-pc-windows-msvc` and uses `--profile windows`.
+`attest-release` covers four Linux subjects plus the Windows installer and ZIP.
+`publish-release` merges immutable bundles, checks the exact six-asset union
+with `--profile all` against local and GitHub metadata, and undrafts only behind
+the protected `linux-release` environment. Dry runs do not publish.
+
+`release:windows-gate-test` is the focused local profile/ZIP/PowerShell
+contract harness; package-twice and installer fixtures remain separate
+reproducibility and installation boundaries. See [Windows Release Asset
+Packaging](./windows-release-packaging.md) and [Linux Release Publisher and
+Bootstrap](./linux-release-publisher-bootstrap.md).
+
 ## Workspace settings import/export
 
 The Settings page and protected Rust API exchange only the active workspace
@@ -664,65 +682,15 @@ only in-memory storage and in-frame alert shims. `FileTree` exposes Preview from
 browser-local `dam-hopper:html-view-mode:v1` value and the
 `dam-hopper:html-view-mode-changed` event synchronizes mounted tabs.
 
-## Linux release and deployment
+## Release, deployment, security, and verification details
 
-`server/src/linux_release/` owns manifest validation, role projection, unit
-staging, systemd lifecycle, health, rollback, recovery, and release evidence.
-Systemd templates define API, helper, web, and recovery services. The API
-runtime identity is taken from the finalized unit's `User=`/`Group=` pair;
-release tooling refuses unsafe path ownership or symlink substitutions rather
-than repairing them. The helper remains root-owned and uses a restricted Unix
-socket with peer credentials.
+The Linux and Windows release architecture, the Phase 03 cross-platform CI
+workflow, the PowerShell installer contract, and historical Linux provisioning
+boundaries are maintained in the [release and deployment detail](./codebase-summary-release.md).
+That page records the release-source evidence summarized from `repomix-output.xml`,
+including profile gates, six-subject attestation, and the fixture-backed Windows
+installer harness.
 
-### Phase 00 merge boundary (2026-09-14)
-
-The merge reconciliation kept refusal-based descriptor provisioning and
-excluded recursive string-path `chown`, while incorporating the workflow and
-Explorer HTML preview surfaces. The API unit renders
-`--config /var/lib/dam-hopper/dam-hopper.toml`; the merge boundary is complete.
-
-### Phase 01 runtime-state boundary (2026-09-14)
-
-`server/src/linux_release/api_runtime.rs` now provisions the descriptor-relative
-API state root, canonical `/var/lib/dam-hopper/dam-hopper.toml`, and server
-`/var/lib/dam-hopper/idle-suspend-audit.jsonl`. A validated legacy
-`/etc/dam-hopper/dam-hopper.toml` is an optional exact-byte, copy-once source
-only when canonical state is absent. Staging uses an exclusive no-follow
-temporary sibling and Linux `renameat2(RENAME_NOREPLACE)`; mismatches, unsafe
-legacy state, races, and post-publication failures remain refusal/reporting
-boundaries. See [Linux API Runtime State Provisioning](./linux-release-runtime-provisioning.md).
-
-### Phase 02 systemd unit/policy boundary (2026-09-14)
-
-`deploy/systemd/dam-hopper-api.service.in` renders
-`--config @API_HOME@/dam-hopper.toml`; the checked-in unit resolves that
-operand to `/var/lib/dam-hopper/dam-hopper.toml` and must stay synchronized
-with the production-default rendering. `validate_api_unit_policy` requires
-exactly one canonical `ExecStart` and one zero-operand privileged
-`provision-api-runtime` prestart. Staging renders, parses, and policy-checks
-the same unit; duplicate directives, legacy/alternate paths, and extra
-arguments fail closed. Focused unit-policy/staging evidence records 29/29.
-
-### Phase 03 preflight, installer, and reset boundary (2026-09-14)
-
-`activate_preflight.rs` gates SQLite holder checks only for `server`/`both`
-roles. It inspects canonical `/var/lib/dam-hopper/dam-hopper.toml` first and
-the extant `/etc/dam-hopper/dam-hopper.toml` migration source second, using
-no-follow regular-file descriptors, a 64 KiB bound, UTF-8/TOML parsing, and
-fixed API `HOME`/working-directory path semantics. Unsafe presence fails closed;
-missing is the only absence state. Missing keys use the schema default for that
-config; when both TOMLs are absent, the canonical default is included. Results
-retain the migration-window `/etc/dam-hopper/sessions.db` fallback, with
-stable-deduplicated DB, `-wal`, and `-shm` holder checks without filesystem mutation.
-
-The bootstrap installer stages release-manager bytes only. It does not create,
-copy, chmod, chown, or repair daemon TOML; first `server`/`both` start invokes
-the runtime provisioner, while `web` remains API-state-free. The reset tool
-defaults to the canonical config, refuses unsafe metadata, and performs a
-same-directory atomic replacement as the exact API identity, preserving
-`0600` ownership/mode and parseable TOML. Dry-run is observation-only; helper
-units, audits, and foreign RTC alarms remain preserved. Clean-install,
-security, and reset smoke journeys pin these boundaries.
 
 ## Frontend architecture
 
@@ -772,6 +740,8 @@ material remain bounded, non-persistent capabilities.
 
 ## Documentation map
 
+- [Windows Release Asset Packaging](./windows-release-packaging.md) —
+  direct-server ZIP, exact profile asset sets, package scripts, and gates.
 - [System Architecture](./system-architecture.md) — live data flow and
   security boundaries, including completed Phase 07 media/encryption and
   Phase 08 native-scope ownership paths.

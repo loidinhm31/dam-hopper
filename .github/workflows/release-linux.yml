@@ -1,4 +1,4 @@
-name: Release Linux (x86_64)
+name: Release Linux and Windows (x86_64)
 
 on:
   push:
@@ -95,6 +95,40 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  build-rust-windows:
+    name: Build Rust release binary (x86_64-pc-windows-msvc)
+    needs: validate-metadata
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+          key: "release-windows-latest"
+
+      - name: Build Windows release server binary
+        run: |
+          cd server
+          cargo build --release --target x86_64-pc-windows-msvc --bin dam-hopper-server
+
+      - name: Verify compiled binary version output
+        shell: bash
+        run: |
+          server/target/x86_64-pc-windows-msvc/release/dam-hopper-server.exe --version
+
+      - name: Upload compiled Windows Rust binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-binary-windows
+          path: server/target/x86_64-pc-windows-msvc/release/dam-hopper-server.exe
+          if-no-files-found: error
+          retention-days: 1
+
   build-web:
     name: Build web assets
     needs: validate-metadata
@@ -175,30 +209,75 @@ jobs:
             --web-dist "apps/web/dist" \
             --output-dir "artifacts/final"
 
-      - name: Upload final release assets
+      - name: Upload final Linux release assets
         uses: actions/upload-artifact@v4
         with:
-          name: dam-hopper-release-assets
+          name: dam-hopper-linux-release-assets
           path: artifacts/final/*
           if-no-files-found: error
           retention-days: 7
 
+  package-windows-release:
+    name: Package deterministic Windows archive and installer
+    needs: [validate-metadata, build-rust-windows]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Download Windows Rust binary
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-binary-windows
+          path: artifacts/bin
+
+      - name: Package Windows archive twice and validate Windows release subjects
+        env:
+          SOURCE_DATE_EPOCH: 1700000000
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests/deploy/windows-release-package-twice.ps1 `
+            -Version "${{ needs.validate-metadata.outputs.release_tag }}" `
+            -BinaryPath "artifacts/bin/dam-hopper-server.exe" `
+            -OutputDir "artifacts/final" `
+            -Epoch 1700000000
+
+      - name: Upload final Windows release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: dam-hopper-windows-release-assets
+          path: artifacts/final/*
+          if-no-files-found: error
+          retention-days: 7
   attest-release:
     name: Generate GitHub artifact attestations
-    needs: [validate-metadata, package-release]
+    needs: [validate-metadata, package-release, package-windows-release]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       attestations: write
       contents: read
     steps:
-      - name: Download final release assets
+      - name: Download final Linux release assets
         uses: actions/download-artifact@v4
         with:
-          name: dam-hopper-release-assets
+          name: dam-hopper-linux-release-assets
           path: artifacts/final
 
-      - name: Attest all four release subjects
+      - name: Download final Windows release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: dam-hopper-windows-release-assets
+          path: artifacts/final
+
+      - name: Attest all six release subjects
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
@@ -206,13 +285,15 @@ jobs:
             artifacts/final/dam-hopper-${{ needs.validate-metadata.outputs.release_tag }}-linux-x86_64-systemd.tar.gz
             artifacts/final/release-manifest.json
             artifacts/final/dam-hopper-${{ needs.validate-metadata.outputs.release_tag }}-linux-x86_64-systemd.spdx.json
-
+            artifacts/final/dam-hopper-install.ps1
+            artifacts/final/dam-hopper-${{ needs.validate-metadata.outputs.release_tag }}-windows-x86_64.zip
   publish-release:
     name: Publish immutable GitHub release
     needs:
       [
         validate-metadata,
         package-release,
+        package-windows-release,
         attest-release,
       ]
     if: needs.validate-metadata.outputs.is_dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
@@ -227,12 +308,17 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Download final release assets
+      - name: Download final Linux release assets
         uses: actions/download-artifact@v4
         with:
-          name: dam-hopper-release-assets
+          name: dam-hopper-linux-release-assets
           path: artifacts/final
 
+      - name: Download final Windows release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: dam-hopper-windows-release-assets
+          path: artifacts/final
       - name: Create draft release and upload assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -245,9 +331,9 @@ jobs:
             artifacts/final/* \
             --draft \
             --title "DamHopper ${TAG}" \
-            --notes "See release-manifest.json and dam-hopper-install.sh for verified installation instructions."
+            --notes "See release-manifest.json and dam-hopper-install.sh for Linux, or dam-hopper-install.ps1 for Windows verified installation instructions."
 
-      - name: Query draft release and verify exact 4 assets
+      - name: Query draft release and verify exact 6 assets (all profiles)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.validate-metadata.outputs.release_tag }}
@@ -255,6 +341,7 @@ jobs:
         run: |
           RELEASE_ID=$(gh release view "${TAG}" --json databaseId --jq '.databaseId')
           node deploy/release/check-release-assets.mjs \
+            --profile all \
             --tag "${TAG}" \
             --dir "artifacts/final" \
             --release-id "${RELEASE_ID}" \
