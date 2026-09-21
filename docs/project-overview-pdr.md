@@ -655,9 +655,11 @@ See the [Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/pha
 [test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md),
 and [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
 
-### PR-022: Windows Direct-Server Release Assets (Phase 01)
+### PR-022: Windows Direct-Server Release and Bootstrap Installer (Phases 01–02)
 
-**Status:** Asset specification and deterministic packaging gate complete.
+**Status:** Asset specification, deterministic packaging, and the non-admin
+PowerShell bootstrap installer are complete; CI publication and user-facing
+README integration remain Phase 03 work.
 
 **Functional requirements:**
 
@@ -668,6 +670,12 @@ and [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-
   assets and `all` requires the exact six-asset Linux+Windows union.
 - Keep Windows direct-server packaging separate from Linux systemd and Manifest
   v2 assets.
+- The installer accepts exactly one of `-Version vX.Y.Z` and `-Latest`, plus
+  `-InstallDir`, `-AddToPath`, `-VerifyAttestation`, and `-DryRun`.
+- Resolve and verify release metadata, size, and SHA-256 before extraction;
+  extract only the four expected root files; preserve existing
+  `dam-hopper.toml`; update only User PATH when requested; and never start the
+  server or require elevation.
 
 **Acceptance criteria:**
 
@@ -676,15 +684,23 @@ and [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-
 - [x] ZIP inspection rejects missing/extra/nested/traversal members, CRC or
       EOCD corruption, trailing bytes, and oversized entries.
 - [x] The asset gate parses PowerShell syntax without executing the installer.
+- [x] Installer integration coverage passes 14/14 fixture-backed scenarios,
+      including install, upgrade/config preservation, latest resolution,
+      dry-run, digest/size failures, archive safety, invalid arguments, PATH
+      idempotence, endpoint security, locked upgrade handling, and cleanup.
 - [x] `release:windows-archive`, `release:windows-check-assets`,
-      `release:windows-package-twice`, and `release:verify-windows` expose the
-      focused package/reproducibility/syntax checks.
+      `release:windows-package-twice`, `release:windows-installer-test`, and
+      `release:verify-windows` expose focused package/reproducibility/installer
+      checks.
 - [x] Windows package evidence does not imply native/Tauri S13 or WebView2
       runtime qualification.
 
 **Implementation map:** `deploy/release/build-windows-release-archive.mjs`,
 `deploy/release/check-release-assets.mjs`,
-`tests/deploy/windows-release-package-twice.ps1`, and
+`deploy/release/dam-hopper-install.ps1`,
+`tests/deploy/windows-release-package-twice.ps1`,
+`tests/deploy/windows-release-install.ps1`,
+`tests/deploy/windows-release-install-fixture.mjs`, and
 `tests/deploy/windows-release-asset-gate.test.mjs`. The operational command
 guide is [Windows Release Asset Packaging](./windows-release-packaging.md).
 

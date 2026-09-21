@@ -20,11 +20,11 @@ created: 2026-09-20
 ## Overview
 Add an independently validated Windows `x86_64-pc-windows-msvc` server asset and non-admin PowerShell bootstrap while preserving the Linux exact-four release contract. Publish one combined six-asset release only after per-profile checks and attestation.
 ## Status
-- **Plan:** IN PROGRESS (1/3 phases; updated 2026-09-21).
+- **Plan:** IN PROGRESS (2/3 phases complete; ~67%; updated 2026-09-21).
 - **Phase 01:** DONE (2026-09-21; 100%). Asset contracts, deterministic Windows ZIP packaging, profile-aware gates, package scripts, and focused harness are complete. See the [Phase 01 plan](./phase-01-asset-schema-and-packaging.md) and [code review](../reports/code-review-260921-0122-phase01-windows-release-asset-packaging.md).
-- **Phase 02:** PENDING — PowerShell installer and harness.
-- **Phase 03:** PENDING — CI publication and guidance.
-- **Next:** Start Phase 02 against the finalized Windows asset names and profile contracts.
+- **Phase 02:** DONE (2026-09-21; 100%). PowerShell bootstrap installer, fixture mock server, 14/14 integration tests passing, and Review Cycle 2 verified. See the [Phase 02 plan](./phase-02-powershell-installer.md).
+- **Phase 03:** PENDING (0%) — CI publication and guidance.
+- **Next:** Start Phase 03 for release workflow integration, GitHub Actions attestation, and user documentation.
 
 ## Key Insights
 - Linux remains the default checker profile; Windows has no Linux Manifest v2 or migration-evidence contract.
@@ -49,8 +49,8 @@ Modify `package.json`, `deploy/release/check-release-assets.mjs`, `.github/workf
 
 ## Todo list
 - [x] Phase 01 — asset schema and packaging — DONE (2026-09-21)
-- [ ] Phase 02 — PowerShell installer and harness
-- [ ] Phase 03 — CI publication and guidance
+- [x] Phase 02 — PowerShell installer and harness — DONE (2026-09-21)
+- [ ] Phase 03 — CI publication and guidance — NEXT
 
 ## Success Criteria
 Default Linux checks still require exactly four assets; Windows checks require exactly two plus the four-member ZIP; all-profile publication requires six matching local/remote digests; installer smoke tests pass without elevation or auto-start.
@@ -62,7 +62,7 @@ ZIP nondeterminism, GitHub metadata gaps, unsafe archive paths, User PATH corrup
 Fail closed on digest/size/attestation mismatch, traversal, links, malformed tags, and unsafe install paths. Use least-privilege User PATH/config writes; never execute archive contents or overwrite an existing sample config.
 
 ## Next steps
-Phase 01 is complete and ready for Phase 02 (PowerShell installer and harness). Then implement Phase 03 (CI publication and guidance). Run repository-wide validation only after all phases land.
+Phase 01 and Phase 02 are complete (2/3 phases; ~67%). Proceed to Phase 03 for CI publication, GitHub Actions attestation, and user guidance. Run repository-wide validation only after Phase 03 lands.
 
 ## Preflight Contract
 - Work from repository root with Node 20+, pnpm 10+, and Windows MSVC target `x86_64-pc-windows-msvc`.

@@ -39,6 +39,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Workflow Client State](./workflow-client-state.md)** — Phase 04 shared UI DTOs, transport mapping, and React Query isolation
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
+- **[Codebase Summary: Release and Deployment](./codebase-summary-release.md)** — Detailed Linux/Windows release boundaries, installer contract, security, and verification map
 - **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format and lifecycle events
 - **[Project Roadmap](./project-roadmap.md)** — Current status and explicitly historical/deferred work
 - **[Windows Server Build and Verification Plan](../plans/260920-1312-windows-server-build-and-verify/plan.md)** — MSVC path/config normalization, cross-platform test harness, platform gates, and startup qualification
@@ -52,7 +53,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, Phase 06 diagnostics, helper service lifecycle, activation, rollback, and recovery
 - **[Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md)** — Canonical API config/audit state, copy-once legacy migration, and descriptor-relative refusal boundaries
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
-- **[Windows Release Asset Packaging](./windows-release-packaging.md)** — Phase 01 direct-server archive, two-asset Windows gate, six-asset combined profile, and focused verification commands
+- **[Windows Release Asset Packaging and Bootstrap Installer](./windows-release-packaging.md)** — Phase 01 deterministic archive, Phase 02 PowerShell installer parameters, direct-server boundaries, and focused verification commands
 - Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
 
 Historical implementation plans are not generally indexed here; the active
