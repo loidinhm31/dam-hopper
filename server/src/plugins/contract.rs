@@ -245,3 +245,47 @@ pub struct WorkerShutdownNotification {
     pub exit_code: Option<i32>,
     pub signal: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagementStageBeginParams {
+    pub expected_sha256: String,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagementStageBeginResult {
+    pub stage_id: String,
+    pub transaction_id: String,
+    pub max_chunk_size: usize,
+    pub security_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagementStageChunkParams {
+    pub stage_id: String,
+    pub sequence: u64,
+    pub chunk_bytes_base64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagementStageChunkResult {
+    pub received_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagementStageFinishParams {
+    pub stage_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagementApproveParams {
+    pub stage_id: String,
+    pub expected_sha256: String,
+    pub security_revision: u64,
+}

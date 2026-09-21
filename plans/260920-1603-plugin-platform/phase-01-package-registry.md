@@ -12,8 +12,12 @@
 
 - **Date:** 2026-09-20
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Plan status:** DONE (2026-09-21)
+- **Implementation status:** DONE (2026-09-21)
+- **Review status:** DONE (2026-09-21; Cycle 2 review 9.0/10)
+- **Progress:** 100% (11/11 implementation steps; 6/6 todo items)
+- **Completion timestamp:** 2026-09-21
+- **Validation:** Targeted archive, registry, and contract-fixture integration tests passed 24/24 with no failures. See the [test report](../reports/test-report-260921-1150-plugin-package-registry-tests.md), [reviewer-fix QA](../reports/qa-260921-1215-phase-d01-reviewer-fixes.md), and [Cycle 2 review](../reports/code-review-260921-1216-phase-d01-cycle2-verification.md).
 - **Dependency:** G0. Implement in parallel with D02 and evcrate E01/E02.
 - **Gate contribution:** D01 accepts E02's early immutable real package candidate and makes it available to D02/D03 for G1. It does not wait for E04 publication polish.
 - **Effort:** Unestimated.
@@ -115,12 +119,12 @@ The registry uses generic durable write/sync primitives but has separate schema/
 
 ## Todo List
 
-- [ ] Runner-owned layout and strict state/journal invariants implemented.
-- [ ] Streaming intake and adversarial archive rejection implemented.
-- [ ] Independent digest review/approval and admin revision binding implemented.
-- [ ] Initial installation commit and crash recovery implemented.
-- [ ] Revision-tagged read façade and grant/binding CAS implemented.
-- [ ] Early E02 real package candidate staged for G1 without E04 dependency.
+- [x] Runner-owned layout and strict state/journal invariants implemented.
+- [x] Streaming intake and adversarial archive rejection implemented.
+- [x] Independent digest review/approval and admin revision binding implemented.
+- [x] Initial installation commit and crash recovery implemented.
+- [x] Revision-tagged read façade and grant/binding CAS implemented.
+- [x] Early E02 real package candidate staged for G1 without E04 dependency.
 
 ## Success Criteria
 

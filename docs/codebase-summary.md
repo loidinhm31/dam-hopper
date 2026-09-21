@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-21 from `repomix-output.xml` (Repomix v1.18.0; 2,126
-files, 4,743,100 tokens, 19,780,781 characters; five security-flagged files
+**Generated:** 2026-09-21 from `repomix-output.xml` (Repomix v1.18.0; 2,159
+files, 4,792,939 tokens, 19,996,689 characters; five security-flagged files
 excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
@@ -27,7 +27,7 @@ security scanning are not represented in full.
 - `docs/` — operator, API, architecture, standards, and product-requirement
   documentation.
 
-## Trusted plugin platform candidate (Phase D00)
+## Trusted plugin platform (Phases D00–D01)
 
 The candidate generic SDK is `@dam-hopper/plugin-sdk` `0.1.0`. Its source
 exports manifest, runner protocol, worker cancellation, UI bridge, framing, and
@@ -36,13 +36,29 @@ self-contained opaque UI fixture are under `packages/plugin-sdk/`.
 
 - `packages/plugin-sdk/dam-hopper-plugin-sdk-0.1.0.tgz` is the candidate packed
   artifact; its SHA-256 is pinned jointly at G0.
-- `server/src/plugins/` mirrors DTOs, error codes, manifest validation, and the
-  four-byte length-prefixed JSON-RPC decoder; `server/src/lib.rs` exports it.
-- `server/tests/plugin_contract_fixtures.rs` and SDK tests provide
-  cross-language rejection/acceptance evidence. The Chromium browser test
-  covers opaque origin, CSP, port acknowledgement, and revocation.
-- D00 is candidate-ready, not a shipped loader/registry/runner. E00/G0 still
-  consume the digest, runtime distribution, and Linux qualification inputs.
+- D00 Rust mirrors live in `server/src/plugins/{contract,error,framing,manifest}.rs`;
+  `server/src/lib.rs` exports the module. Four-byte big-endian frames, 16 MiB
+  payload/64 KiB control caps, string IDs, strict params, and no JSON-RPC
+  batches remain the runner contract.
+- D01 registry modules add bounded staging (`stage.rs`, `registry_stage.rs`),
+  archive inspection/extraction (`package*.rs`), strict state/journal/layout
+  records, digest-bound trust approval, revision-tagged queries, and grant/
+  binding CAS updates. The runner-owned state layout and API are documented in
+  [Phase D01 architecture](./architecture/plugin-platform-d01.md).
+- `registry-v1.json` is the sole durable package/install/grant/binding
+  authority. Staged gzip-tar input is capped at 32 MiB compressed, 64 MiB
+  expanded, 2,048 entries, 512 KiB decoded chunks, and 5 MiB UI bytes.
+  Path traversal, links/special files, duplicates/case collisions, inventory
+  mismatch, and undeclared regular entries fail closed.
+- `server/tests/plugin_package_archive.rs` and
+  `server/tests/plugin_package_registry.rs` cover path/archive adversaries,
+  stream lifecycle, digest review, revision rejection, CAS updates, and crash
+  cleanup. The targeted D01 gate passed 24/24 tests including contract
+  fixtures; this is phase evidence, not a broad release claim.
+- D01 is complete for the initial immutable installation/G1 input. D02–D06
+  still own the real worker, authorized API, UI host, lifecycle, and Linux
+  qualification gates. The registry is trusted same-UID code, not a malicious
+  plugin sandbox.
 
 ## Unified-profile workbench frontend (Phases 00–02)
 
@@ -75,89 +91,28 @@ configuration, PTYs, workflow/usage history, and remote data remain
 server-authoritative. The unified-profile backend-workspace proposal below is
 not part of this implementation.
 
-### Phase 01 multi-profile host-resource monitoring
+### Multi-profile host resources (Phases 01–04)
 
-`useMultiHostResources` builds a fleet read model from configured profiles and
-keyed connection snapshots. Its watch scope is `connected || autoConnect`:
-connected profiles are queried, while disconnected auto-connect profiles remain
-visible as non-fetching unavailable entries. Each watched profile gets an
-owner/generation-qualified `profileQueryKey` and bound API client through
-`useQueries`; partial failures stay isolated to one profile.
+`useMultiHostResources` builds an owner/generation-qualified fleet read model:
+connected profiles query, disconnected auto-connect profiles remain visible as
+unavailable, and one profile failure never contaminates another cache.
+`isCurrentConnection` fences late snapshots; `resolveHostResourceFleetSummary`
+keeps severity, unavailable, sampling, and stale precedence without averaging
+or summing host metrics.
 
-Snapshot responses are generation-fenced with `isCurrentConnection`, and late
-responses fail with `ConnectionOwnerError` instead of entering a replacement
-owner's cache. `resolveHostResourceFleetSummary` performs deterministic counts
-and severity/unavailable/sampling/stale precedence without summing or
+`HostResourceFleetDeck`/`HostResourceFleetCard` are pure presentation over
+`MultiHostResourceEntry[]`. They preserve configured order, expose explicit
+empty/offline states, keep incident/read state per profile, and offer inspection
+only for connected cards. `HostResourcePopover` enters Fleet mode only for
+multi-profile contexts; drilldown queries and destructive actions stay bound to
+the inspected owner and generation.
 
-deduplicating host metrics. Focused contracts live in
-`packages/ui/src/hooks/use-multi-host-resources.test.tsx` and
-`packages/ui/src/lib/host-resource-state.test.ts`.
-
-### Phase 02 multi-profile host-resource fleet deck and cards
-
-`HostResourceFleetDeck` and `HostResourceFleetCard` are pure React
-presentation boundaries over `MultiHostResourceEntry[]`. The deck preserves
-configured order, renders a labelled semantic list, reports watched count, and
-shows an explicit empty state without reading stores, APIs, or queries.
-
-Cards keep each profile distinct by ID, show connection/watch state, status,
-unread incidents, host identity, and sample age, and include finite deep-memory
-and battery facts only when available. Connected cards expose one 44px
-inspection button that returns only the profile ID; disconnected auto-connect
-entries remain non-interactive and qualify cached data as last known. Long
-profile/endpoint/host strings wrap as text, and no metric is averaged or
-summed across hosts.
-
-`formatSampleAge` rejects invalid or zero timestamps and rounds valid ages to
-seconds/minutes/hours/days without a per-card timer. Focused component
-contracts live in `HostResourceFleetCard.test.tsx` and
-`HostResourceFleetDeck.test.tsx`; formatter/state contracts remain in
-`host-resource-state.test.ts`.
-
-### Phase 03 multi-profile host-resource popover integration
-
-`HostResourcePopover` enters Fleet mode only when no explicit `owner` is
-provided and more than one profile is configured. It opens on the
-`HostResourceFleetDeck`, adds a `Fleet` toggle plus one status/profile pill per
-watched entry, and reuses one owner-bound glance/diagnosis/idle-suspend body for
-connected drilldowns. Fleet opening acknowledges no profile; inspection marks
-only the selected profile read.
-
-Phase 01 keeps 15-second snapshots isolated by profile/generation. The
-popover's compatibility metrics query is enabled only for an open, connected
-drilldown, so exactly the inspected owner receives 1-second polling; Fleet,
-closed, and disconnected views start none. Removing or disconnecting the
-inspected entry clears local diagnosis/action state and returns to Fleet rather
-than falling back to Settings or the active profile. Focus returns to the
-persistent pill or trigger across view changes and close.
-
-Focused component contracts live in
-`packages/ui/src/components/organisms/HostResourcePopover.test.tsx`; Phase 03
-tests preserved single-profile behavior and owner-bound drilldown semantics.
-Phase 04 completes the broader verification gate with 83 focused
-unit/component tests and 19 Chromium tests passing.
-
-### Phase 04 multi-profile host-resource verification
-
-The existing Chromium suite in
-`packages/ui/browser-tests/host-resource-monitoring.browser.tsx` now covers
-five multi-profile flows without a second harness: Fleet/profile navigation
-with pointer and keyboard activation, focus trapping and Escape restoration,
-15-second fleet versus selected-owner 1-second polling gates, disconnect
-cleanup, duplicate-incident unread isolation, 320x700 and 1280x800 layout/
-contrast/target-size checks, and security negatives.
-
-The security flow keeps markup-like profile/host values as literal text,
-exposes no inspection or suspend control for offline cards, and verifies the
-force-sleep hook receives only the inspected `ConnectionRef`. Fixtures use
-synthetic transports and mutations; no real host, RTC/systemd, credentials,
-network endpoint, or profile persistence is exercised.
-
-Focused verification passed **102/102** tests: six Vitest unit/component
-files (83/83) plus the extended Chromium file (19/19). No architecture drift
-was found; `docs/system-architecture.md` records the same owner-qualified
-dataflow and polling tiers with this evidence. Coverage percentages were not
-instrumented by the focused commands.
+Polling is 15 seconds for fleet snapshots and 1 second only for an open,
+connected drilldown. Disconnect/removal clears owner-local diagnosis state and
+returns to Fleet without falling back to Settings or another profile. Focused
+verification passed 102/102 tests (83 Vitest/component plus 19 Chromium);
+fixtures used synthetic transports and did not touch real credentials, hosts,
+RTC, systemd, network endpoints, or persistence.
 
 ## Unified-profile files, editor, search, and Git (Phase 03)
 

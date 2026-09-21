@@ -1,3 +1,7 @@
+# 2026-09-21
+- **Trusted plugin platform — Phase D01 runner-owned package registry and trust staging complete (2026-09-21; 100%).** Delivered bounded streamed package intake, adversarial archive/path/link validation, immutable extraction and publication, independent SHA-256 review/approval bound to admin/security revisions, strict registry/journal durability and crash recovery, revision-tagged reads/CAS updates, and early E02 candidate staging for G1.
+- Targeted `plugin_package_archive`, `plugin_package_registry`, and `plugin_contract_fixtures` validation passed **24/24** with no failures; Cycle 2 review approved **9.0/10** with no critical issues. D01 is a G1 input, not production/G3/G4 completion. See the [D01 plan](../plans/260920-1603-plugin-platform/phase-01-package-registry.md), [test report](../plans/reports/test-report-260921-1150-plugin-package-registry-tests.md), [reviewer-fix QA](../plans/reports/qa-260921-1215-phase-d01-reviewer-fixes.md), and [Cycle 2 review](../plans/reports/code-review-260921-1216-phase-d01-cycle2-verification.md).
+
 # 2026-09-20
 - **Windows server path/config normalization — Phase 01 complete
   (2026-09-20).** Registry parsing/writing now keeps Windows drive, mixed
