@@ -4,10 +4,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Windows release asset and bootstrap installer (2026-09-21)
 
-- **Plan status: IN PROGRESS (1/3 phases; 33%; updated 2026-09-21).** Phase 01 is complete; Phases 02 and 03 remain pending.
+- **Plan status: IN PROGRESS (2/3 phases; 67%; updated 2026-09-21).** Phases 01 and 02 are complete; Phase 03 remains pending.
 - **Phase 01 — Asset specification and packaging — DONE (2026-09-21; 100%).** Added profile-aware Linux/Windows/all release gates, the exact two-asset Windows contract, bounded four-member ZIP inspection, deterministic Windows ZIP packaging, package scripts, and the package-twice fixture harness.
-- **Validation:** Focused Windows asset-gate coverage passed **23/23 assertions**; deterministic package-twice verification passed; Node release-script syntax verification passed; code review approved **9.5/10** with no critical issues. See the [Phase 01 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-01-asset-schema-and-packaging.md), [code review](../plans/reports/code-review-260921-0122-phase01-windows-release-asset-packaging.md), and [parent plan](../plans/260920-2327-windows-release-asset-and-installer/plan.md).
-- **Next:** Phase 02 — PowerShell installer and harness, consuming the finalized Windows asset names and profile contracts. Phase 03 follows with CI publication and release guidance.
+- **Phase 02 — PowerShell bootstrap installer — DONE (2026-09-21; 100%).** Added the non-admin `dam-hopper-install.ps1` command contract (`-Version`/`-Latest`, `-InstallDir`, `-AddToPath`, `-VerifyAttestation`, and `-DryRun`), digest-first download, bounded ZIP validation, config preservation, User PATH handling, and a loopback fixture-backed PowerShell harness.
+- **Validation:** Focused Windows asset-gate coverage passed **23/23 assertions**; Phase 02 installer integration coverage passed **14/14 scenarios**; deterministic package-twice and Node release-script syntax verification passed. See the [Phase 01 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-01-asset-schema-and-packaging.md), [Phase 02 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-02-powershell-installer.md), and [parent plan](../plans/260920-2327-windows-release-asset-and-installer/plan.md).
+- **Next:** Phase 03 — Windows CI publication, six-asset release gating, attestation wiring, and README/configuration guidance.
 
 
 ### Windows dam-hopper-server build and verification (2026-09-20)

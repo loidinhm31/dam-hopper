@@ -1174,6 +1174,31 @@ Keys are stored in-memory per session (not persisted to disk).
 7. On Windows or in any environment with a reachable network share, add a temporary UNC-style project entry such as `path = "\\\\server\\share\\project"`.
    Expected: the registry either works for that project in your environment or fails in a clear, local way that you can document before rollout. Do not assume UNC behavior from Linux CI alone.
 
+### Windows direct-server installation
+
+The Phase 02 PowerShell bootstrap installs the Windows x86_64 direct-server
+package without elevation or service registration. Its default destination is
+`%LOCALAPPDATA%\Programs\dam-hopper`; use
+[Windows Release Asset Packaging](./windows-release-packaging.md) for the full
+`-Version`/`-Latest`, `-InstallDir`, `-AddToPath`, `-VerifyAttestation`, and
+`-DryRun` grammar.
+
+```powershell
+# After downloading dam-hopper-install.ps1 from the selected release:
+$installDir = Join-Path $env:LOCALAPPDATA "Programs\dam-hopper"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\dam-hopper-install.ps1 `
+  -Latest -InstallDir $installDir -AddToPath
+
+# Existing dam-hopper.toml is preserved on upgrades.
+& "$installDir\bin\dam-hopper-server.exe" `
+  --config "$installDir\dam-hopper.toml"
+```
+
+`-AddToPath` changes only User PATH and requires a new shell. The installer
+does not start the server; launch it explicitly with `--config`. Windows
+direct-server operation does not provide Linux systemd, manager migration, or
+idle-suspend semantics.
+
 ### Windows Server Loopback Smoke Checklist
 
 To verify `dam-hopper-server` on Windows 11 without exposing network endpoints or touching production configuration:

@@ -10,8 +10,7 @@
 
 ## Overview
 **Priority:** P1  
-**Status:** Pending  
-**Goal:** Add a non-admin `deploy/release/dam-hopper-install.ps1` that resolves an exact/latest stable release, authenticates its metadata, safely installs the server into the current user's LocalAppData, and leaves activation to the user.
+**Status:** DONE (2026-09-21; 100%; Review Cycle 2 passed)
 
 The default destination is `%LOCALAPPDATA%\Programs\dam-hopper`; only
 `bin\dam-hopper-server.exe` is on the optional User PATH. The installer copies
@@ -97,12 +96,12 @@ All writes are user-scoped. The final executable is invoked later by the user wi
 12. Add `release:windows-installer-test`/`release:verify-windows` package entry points and document that a fresh shell is required after PATH changes.
 
 ## Todo list
-- [ ] Implement strict parameter and tag/repository validation.
-- [ ] Implement metadata/manifest digest resolution and bounded download.
-- [ ] Implement optional attestation verification.
-- [ ] Implement safe ZIP inspection/extraction and atomic user-scoped install.
-- [ ] Implement config-preserving sample creation and User PATH update.
-- [ ] Add local fixture harness, tamper cases, and cleanup assertions.
+- [x] Implement strict parameter and tag/repository validation.
+- [x] Implement metadata/manifest digest resolution and bounded download.
+- [x] Implement optional attestation verification.
+- [x] Implement safe ZIP inspection/extraction and atomic user-scoped install.
+- [x] Implement config-preserving sample creation and User PATH update.
+- [x] Add local fixture harness, tamper cases, and cleanup assertions.
 
 ## Success Criteria
 - `-Version vX.Y.Z` and `-Latest` resolve only the intended stable Windows asset; conflicts and malformed tags fail before download.
@@ -126,14 +125,14 @@ All writes are user-scoped. The final executable is invoked later by the user wi
 - Config creation uses a safe example with no credentials; existing user configuration is preserved and no `.env`/token/database file is accepted.
 
 ## Side-Effect Review Checklist
-- [ ] Normal install writes only the selected install directory and optional User PATH.
-- [ ] Existing `dam-hopper.toml` remains byte-identical on upgrade.
-- [ ] Dry-run performs no persistent file, PATH, process, or registry mutation.
-- [ ] Failed digest/attestation/archive checks leave no partial install.
-- [ ] Harness restores PATH and removes temp roots/fixture server/processes.
+- [x] Normal install writes only the selected install directory and optional User PATH.
+- [x] Existing `dam-hopper.toml` remains byte-identical on upgrade.
+- [x] Dry-run performs no persistent file, PATH, process, or registry mutation.
+- [x] Failed digest/attestation/archive checks leave no partial install.
+- [x] Harness restores PATH and removes temp roots/fixture server/processes.
 
 ## Next steps
-Give Phase 03 the installer command grammar, exact download URL, config path, and attestation behavior for README/release documentation. Keep Windows installation separate from Linux roles/systemd activation.
-
+1. Phase 02 completed on 2026-09-21: Review Cycle 2 verified all five prior findings resolved, with 14/14 integration scenarios passing.
+2. Next: implement Phase 03 CI publication and guidance documentation, including README/release workflow handoff for the verified installer command grammar, exact download URL, config path, and attestation behavior.
 ## Unresolved Questions
 None blocking. Confirm during implementation whether the supported end-user floor is Windows PowerShell 5.1 alone or PowerShell 7; the script should remain 5.1-compatible unless the repository explicitly narrows support.

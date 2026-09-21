@@ -81,7 +81,7 @@ filename, size, and digest, so embedding it would create a digest cycle. GitHub
 generated source archives are not product assets and are not consumed by the
 manager or bootstrap.
 
-### Windows direct-server profile (Phase 01)
+### Windows direct-server profile and bootstrap installer (Phases 01–02)
 
 The Windows release is a separate direct-server package, not a systemd or
 Manifest v2 projection. It contains exactly two public assets:
@@ -101,6 +101,37 @@ profile grammar, package scripts, ZIP checks, and reproducibility harness.
 
 The Windows package does not claim native/Tauri S13 runtime qualification.
 
+
+The Windows profile is a direct-server installation, not a Linux role or
+systemd deployment. Its PowerShell bootstrap accepts exactly one release
+selector and keeps all writes user-scoped:
+
+```text
+dam-hopper-install.ps1 (-Version vX.Y.Z | -Latest)
+  [-InstallDir <absolute-path>]
+  [-AddToPath]
+  [-VerifyAttestation]
+  [-DryRun]
+```
+
+`-InstallDir` defaults to `%LOCALAPPDATA%\Programs\dam-hopper`.
+`-AddToPath` changes only the invoking user's PATH and requires a new shell;
+`-VerifyAttestation` requires `gh`; and `-DryRun` performs metadata/archive
+verification without changing files, config, PATH, or processes. The installer
+preserves an existing `dam-hopper.toml`, does not start the server, and checks
+the release asset's size and SHA-256 before extraction. See
+[Windows Release Asset Packaging](./windows-release-packaging.md) for
+copyable commands, launch/config behavior, and focused installer tests.
+
+The local Windows harness is:
+
+```powershell
+pnpm release:windows-installer-test
+pnpm release:verify-windows
+```
+
+The first command uses a loopback Node fixture and temporary artifacts; it
+does not contact a production release. The second is a syntax/parser gate.
 
 ## Build inputs and checks
 

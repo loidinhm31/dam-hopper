@@ -1,6 +1,6 @@
-# Windows Release Asset Packaging (Phase 01)
+# Windows Release Asset Packaging and Bootstrap Installer (Phases 01–02)
 
-Status: Phase 01 asset specification and packaging script complete.
+Status: Phase 01 asset packaging and Phase 02 PowerShell bootstrap installer complete.
 
 This guide defines the direct-server Windows release package. It is separate from
 the Linux systemd release: Windows assets do not install or manage systemd units,
@@ -79,7 +79,8 @@ The root `package.json` exposes these focused commands:
 | `pnpm release:windows-archive -- --tag vX.Y.Z` | Build one deterministic ZIP. Forward `--binary`, `--config-example`, `--license`, `--readme`, `--output-dir`, or `--epoch` when defaults are unsuitable. |
 | `pnpm release:windows-check-assets -- --tag vX.Y.Z --dir artifacts/windows` | Run the Windows two-asset gate (`--profile windows` is supplied by the script). |
 | `pnpm release:windows-package-twice -- -Version vX.Y.Z` | Run the PowerShell reproducibility harness, then stage and gate the final two assets. |
-| `pnpm release:verify-windows` | Node syntax check for the Windows packager and profile-aware asset checker. |
+| `pnpm release:windows-installer-test` | Run the fixture-backed PowerShell installer integration harness (14 scenarios; Windows only). |
+| `pnpm release:verify-windows` | Run Node syntax checks plus PowerShell parser checks for the Windows release scripts. |
 | `pnpm release:verify` | Existing cross-platform release syntax/version checks; it is not a substitute for the Windows package-twice gate. |
 
 `tests/deploy/windows-release-package-twice.ps1` builds the same inputs twice
@@ -97,6 +98,105 @@ containing spaces:
 ```powershell
 node tests/deploy/windows-release-asset-gate.test.mjs
 ```
+
+## PowerShell bootstrap installer (Phase 02)
+
+The published `dam-hopper-install.ps1` is a non-admin, direct-server bootstrap.
+It downloads the exact Windows ZIP selected from GitHub release metadata,
+checks its positive size and SHA-256 digest, validates the four expected root
+files, stages the replacement privately, and never starts the server or
+registers a Windows service. The default destination is
+`%LOCALAPPDATA%\Programs\dam-hopper`; `bin\dam-hopper-server.exe`, notices,
+and the example TOML are installed there. An existing
+`dam-hopper.toml` is preserved on upgrades.
+
+Download the script from the same release as the ZIP, inspect it according to
+your organization's script trust policy, then invoke it with PowerShell:
+
+```powershell
+$tag = "vX.Y.Z"
+$installer = Join-Path $env:TEMP "dam-hopper-install.ps1"
+Invoke-WebRequest `
+  "https://github.com/loidinhm31/dam-hopper/releases/download/$tag/dam-hopper-install.ps1" `
+  -OutFile $installer
+
+# Exact release, default per-user destination
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer -Version $tag
+
+# Latest stable release and optional User PATH update
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer -Latest -AddToPath
+```
+
+Supported command parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `-Version vX.Y.Z` | Install one stable `vMAJOR.MINOR.PATCH` release. Mutually exclusive with `-Latest`. |
+| `-Latest` | Resolve the latest stable release. Mutually exclusive with `-Version`. |
+| `-InstallDir <absolute-path>` | Override the default `%LOCALAPPDATA%\Programs\dam-hopper` destination. |
+| `-AddToPath` | Add `<InstallDir>\bin` to the invoking user's PATH, without elevation or Machine PATH changes. Open a new shell after a change. |
+| `-VerifyAttestation` | Require `gh` and verify the downloaded ZIP; when published, also verify the installer asset. A missing/failed attestation aborts before install. |
+| `-DryRun` | Resolve metadata, download, hash, and inspect the archive, then report paths without writing files, config, PATH, or processes. |
+| `-?` / `-Help` | Show usage. |
+
+Examples for a custom destination, provenance check, and no-write check:
+
+```powershell
+# Install to an absolute custom directory
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer `
+  -Version $tag -InstallDir "C:\Tools\dam-hopper"
+
+# Require GitHub artifact attestations (requires gh in PATH)
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer `
+  -Version $tag -VerifyAttestation
+
+# Verify the release without changing the destination or User PATH
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer `
+  -Version $tag -InstallDir "C:\Tools\dam-hopper" -DryRun
+```
+
+After installation, launch the server explicitly with the generated config:
+
+```powershell
+$installDir = Join-Path $env:LOCALAPPDATA "Programs\dam-hopper"
+& "$installDir\bin\dam-hopper-server.exe" `
+  --config "$installDir\dam-hopper.toml"
+```
+
+The installer uses the release asset's metadata as the digest authority and
+does not trust a checksum embedded only inside the ZIP. It accepts
+`GITHUB_REPOSITORY=OWNER/REPO` only when it matches the validated owner/name
+shape. The loopback API override used by tests is not an end-user option.
+Windows direct-server operation is intentionally separate from Linux systemd,
+Manifest v2, manager migration, and suspend workflows.
+
+## Installer and fixture verification
+
+Run the focused integration harness on Windows PowerShell 5.1 (the installer
+syntax remains PowerShell 7-compatible) with Node 20+ and pnpm available:
+
+```powershell
+# Local loopback fixture; no production release or external network is used
+pnpm release:windows-installer-test
+
+# Node syntax plus PowerShell parser checks for the Windows release scripts
+pnpm release:verify-windows
+```
+
+`release:windows-installer-test` invokes
+`tests/deploy/windows-release-install.ps1`, which creates a temporary
+loopback fixture using
+`tests/deploy/windows-release-install-fixture.mjs`. It covers 14 scenarios:
+clean install, upgrade/config preservation, `-Latest`, `-DryRun`, digest and
+size mismatch, traversal/directory/extra/missing ZIP members, invalid
+arguments, User PATH idempotence, non-loopback HTTP rejection, and locked
+binary upgrade cleanup. The harness restores User PATH, stops the fixture, and
+removes its temporary workspace in `finally` cleanup.
+
+For the package contract and reproducibility checks, also run
+`pnpm release:windows-check-assets`, `pnpm release:windows-package-twice`,
+and the focused asset-gate test documented above. `release:verify-windows` is a
+syntax gate; it does not prove a live installation.
 
 ## Boundaries and handoff
 

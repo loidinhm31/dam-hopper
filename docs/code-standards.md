@@ -719,7 +719,7 @@ not fabricated from local release asset names. The checker does not itself
 provide a GitHub DSSE/certificate trust root, so external verification remains
 explicit and missing evidence holds stable publication.
 
-### Windows direct-server release asset standards (Phase 01)
+### Windows direct-server release and installer standards (Phases 01–02)
 
 Keep Windows release packaging independent from the Linux systemd/Manifest v2
 path. `deploy/release/build-windows-release-archive.mjs` emits one deterministic
@@ -732,11 +732,23 @@ not add Linux manifests, SBOMs, units, or runtime state.
 `--profile windows` at exactly two assets and `--profile all` at the exact
 six-asset Linux+Windows union. Windows checks parse (but never execute) the
 PowerShell installer and validate ZIP member names, root paths, bounds, CRC,
-EOCD, and trailing bytes. Keep migration evidence Linux-only. The focused
-contract harness is `tests/deploy/windows-release-asset-gate.test.mjs`; the
-PowerShell reproducibility harness is
-`tests/deploy/windows-release-package-twice.ps1`. See
-[Windows Release Asset Packaging](./windows-release-packaging.md).
+EOCD, and trailing bytes. Keep migration evidence Linux-only.
+
+The installer contract is strict: exactly one of `-Version vX.Y.Z` and
+`-Latest`, with optional `-InstallDir`, `-AddToPath`, `-VerifyAttestation`, or
+`-DryRun`. Digest/size verification precedes extraction; extraction accepts
+only the four root members; existing `dam-hopper.toml` is never overwritten;
+PATH changes are User-scoped and idempotent; and the installer never starts
+the server. The fixture harness must keep tests loopback-only and restore User
+PATH and temporary files in `finally`.
+
+The focused contract harness is `tests/deploy/windows-release-asset-gate.test.mjs`;
+the package reproducibility harness is `tests/deploy/windows-release-package-twice.ps1`;
+and the installer integration harness is
+`tests/deploy/windows-release-install.ps1`, backed by
+`tests/deploy/windows-release-install-fixture.mjs`. Run
+`pnpm release:windows-installer-test` and `pnpm release:verify-windows` on
+Windows. See [Windows Release Asset Packaging](./windows-release-packaging.md).
 
 ### Async Patterns
 
