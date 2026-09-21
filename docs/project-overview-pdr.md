@@ -655,11 +655,11 @@ See the [Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/pha
 [test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md),
 and [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
 
-### PR-022: Windows Direct-Server Release and Bootstrap Installer (Phases 01–02)
+### PR-022: Windows Direct-Server Release, Bootstrap Installer, and CI Publication (Phases 01–03)
 
-**Status:** Asset specification, deterministic packaging, and the non-admin
-PowerShell bootstrap installer are complete; CI publication and user-facing
-README integration remain Phase 03 work.
+**Status:** COMPLETE (2026-09-21). Asset specification, deterministic
+packaging, non-admin PowerShell bootstrap, stable Release CI publication, and
+user-facing guidance are complete.
 
 **Functional requirements:**
 
@@ -676,6 +676,9 @@ README integration remain Phase 03 work.
   extract only the four expected root files; preserve existing
   `dam-hopper.toml`; update only User PATH when requested; and never start the
   server or require elevation.
+- Extend `.github/workflows/release-linux.yml` with independent Windows build
+  and package jobs, explicit Linux/Windows profile gates, six-subject
+  attestation, and a final `--profile all` local/remote gate before undrafting.
 
 **Acceptance criteria:**
 
@@ -689,20 +692,25 @@ README integration remain Phase 03 work.
       dry-run, digest/size failures, archive safety, invalid arguments, PATH
       idempotence, endpoint security, locked upgrade handling, and cleanup.
 - [x] `release:windows-archive`, `release:windows-check-assets`,
-      `release:windows-package-twice`, `release:windows-installer-test`, and
-      `release:verify-windows` expose focused package/reproducibility/installer
-      checks.
+      `release:windows-package-twice`, `release:windows-gate-test`,
+      `release:windows-installer-test`, and `release:verify-windows` expose
+      focused package, contract, reproducibility, installer, and syntax checks.
+- [x] CI builds `dam-hopper-server.exe`, packages immutable Linux and Windows
+      artifact bundles, and attests the exact six release subjects.
+- [x] Publication checks the exact six local/remote assets with `--profile all`
+      under the protected `linux-release` environment; dry runs cannot publish.
 - [x] Windows package evidence does not imply native/Tauri S13 or WebView2
       runtime qualification.
 
-**Implementation map:** `deploy/release/build-windows-release-archive.mjs`,
-`deploy/release/check-release-assets.mjs`,
-`deploy/release/dam-hopper-install.ps1`,
+**Implementation map:** `.github/workflows/release-linux.yml`,
+`deploy/release/build-windows-release-archive.mjs`,
+`deploy/release/check-release-assets.mjs`, `deploy/release/dam-hopper-install.ps1`,
 `tests/deploy/windows-release-package-twice.ps1`,
 `tests/deploy/windows-release-install.ps1`,
 `tests/deploy/windows-release-install-fixture.mjs`, and
 `tests/deploy/windows-release-asset-gate.test.mjs`. The operational command
 guide is [Windows Release Asset Packaging](./windows-release-packaging.md).
+[Phase 03 workflow plan](../plans/260920-2327-windows-release-asset-and-installer/phase-03-release-workflow-and-docs.md) and [code review](../plans/reports/code-review-260921-1904-phase03-release-ci-workflow-and-guidance-docs.md) record the implementation and focused verification.
 
 ### PR-011: Workflow Tracking Domain & Relational Persistence (Phase 01)
 

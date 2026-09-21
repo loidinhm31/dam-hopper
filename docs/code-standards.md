@@ -719,7 +719,7 @@ not fabricated from local release asset names. The checker does not itself
 provide a GitHub DSSE/certificate trust root, so external verification remains
 explicit and missing evidence holds stable publication.
 
-### Windows direct-server release and installer standards (Phases 01–02)
+### Windows direct-server release and installer standards (Phases 01–03)
 
 Keep Windows release packaging independent from the Linux systemd/Manifest v2
 path. `deploy/release/build-windows-release-archive.mjs` emits one deterministic
@@ -749,6 +749,25 @@ and the installer integration harness is
 `tests/deploy/windows-release-install-fixture.mjs`. Run
 `pnpm release:windows-installer-test` and `pnpm release:verify-windows` on
 Windows. See [Windows Release Asset Packaging](./windows-release-packaging.md).
+
+The stable publisher in `.github/workflows/release-linux.yml` branches from
+shared metadata/version validation into independent Linux and Windows package
+jobs. Keep the package contracts explicit: Linux invokes
+`check-release-assets.mjs --profile linux`, Windows invokes `--profile windows`,
+and only the merged publication job invokes `--profile all`.
+
+Build/package jobs remain read-only. `attest-release` alone receives
+`id-token: write` and `attestations: write` and attests the exact six subjects;
+`publish-release` alone receives `contents: write`, uses the protected
+`linux-release` environment, checks local and remote size/digest equality, and
+undrafts only after the combined gate. Dry runs must not publish.
+
+Keep `release:windows-gate-test` as the focused local contract harness; it
+tests profile selection, exact asset sets, bounded ZIP parsing, PowerShell
+syntax, metadata, and reproducibility without executing the installer or
+contacting a production release. It complements, rather than replaces,
+`release:windows-package-twice`, `release:windows-installer-test`, and
+`release:verify-windows`.
 
 ### Async Patterns
 

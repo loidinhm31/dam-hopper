@@ -38,6 +38,22 @@ This is a direct-server package, not a systemd or Manifest v2 release. See
 [Windows Release Asset Packaging](./windows-release-packaging.md) for the
 asset contract, installer grammar, and operator/test commands.
 
+### Phase 03 cross-platform Release CI and guidance
+
+`.github/workflows/release-linux.yml` branches after shared metadata validation:
+Linux builds/package under `--profile linux`; Windows builds
+`x86_64-pc-windows-msvc` and packages under `--profile windows`. Immutable
+artifact bundles flow into `attest-release`, which attests the four Linux
+subjects plus the Windows installer and ZIP. `publish-release` merges those
+bytes, checks the exact six-asset union with `--profile all` against local and
+GitHub metadata, and undrafts only behind the protected `linux-release`
+environment. Dry runs stop before publication.
+
+The focused local `release:windows-gate-test` script exercises the profile-aware
+asset contract without executing the installer or contacting a production
+release. The package-twice and installer fixtures remain separate
+reproducibility and live-installation boundaries.
+
 ### Phase 00 merge boundary (2026-09-14)
 
 The merge reconciliation kept refusal-based descriptor provisioning and

@@ -1,6 +1,8 @@
-# Windows Release Asset Packaging and Bootstrap Installer (Phases 01–02)
+# Windows Release Asset Packaging and Bootstrap Installer (Phases 01–03)
 
-Status: Phase 01 asset packaging and Phase 02 PowerShell bootstrap installer complete.
+Status: Phase 01 asset packaging, Phase 02 PowerShell bootstrap installer, and
+Phase 03 cross-platform Release CI workflow and guidance are complete
+(2026-09-21).
 
 This guide defines the direct-server Windows release package. It is separate from
 the Linux systemd release: Windows assets do not install or manage systemd units,
@@ -80,10 +82,32 @@ The root `package.json` exposes these focused commands:
 | `pnpm release:windows-check-assets -- --tag vX.Y.Z --dir artifacts/windows` | Run the Windows two-asset gate (`--profile windows` is supplied by the script). |
 | `pnpm release:windows-package-twice -- -Version vX.Y.Z` | Run the PowerShell reproducibility harness, then stage and gate the final two assets. |
 | `pnpm release:windows-installer-test` | Run the fixture-backed PowerShell installer integration harness (14 scenarios; Windows only). |
+| `pnpm release:windows-gate-test` | Run the focused Node asset-gate contract harness (23 assertions; no release network or installer execution). |
 | `pnpm release:verify-windows` | Run Node syntax checks plus PowerShell parser checks for the Windows release scripts. |
 | `pnpm release:verify` | Existing cross-platform release syntax/version checks; it is not a substitute for the Windows package-twice gate. |
 
-`tests/deploy/windows-release-package-twice.ps1` builds the same inputs twice
+`release:windows-gate-test` is the focused regression harness for profile
+selection, exact asset sets, ZIP safety, PowerShell parsing, reproducibility,
+remote metadata, and paths containing spaces. The workflow's package job runs
+the Windows profile gate itself; this command exercises the contract locally.
+
+### Release CI workflow (Phase 03)
+
+`.github/workflows/release-linux.yml` is the stable cross-platform publisher.
+After shared metadata/version validation, `build-rust-windows` targets
+`x86_64-pc-windows-msvc`, and `package-windows-release` packages the downloaded
+binary twice with `SOURCE_DATE_EPOCH=1700000000`. Linux and Windows package
+jobs use independent `--profile linux` and `--profile windows` gates.
+
+`attest-release` downloads both immutable artifact bundles and attests six
+subjects: the Linux installer, archive, Manifest v2, and SPDX SBOM, plus the
+Windows installer and ZIP. `publish-release` combines the bundles, checks the
+exact six-asset union with `--profile all` against local and GitHub metadata,
+and undrafts only after the gate and protected `linux-release` environment pass.
+Dry runs package, gate, and attest without publishing.
+
+The workflow's package job runs
+`tests/deploy/windows-release-package-twice.ps1`, which builds the same inputs twice
 with one epoch, requires byte-for-byte and SHA-256 equality, confirms a changed
 epoch changes the digest, and invokes the Windows asset gate. It uses an
 existing Windows release binary when available and otherwise creates a
@@ -176,6 +200,9 @@ Run the focused integration harness on Windows PowerShell 5.1 (the installer
 syntax remains PowerShell 7-compatible) with Node 20+ and pnpm available:
 
 ```powershell
+# Focused asset-gate contract tests; no production release is contacted
+pnpm release:windows-gate-test
+
 # Local loopback fixture; no production release or external network is used
 pnpm release:windows-installer-test
 

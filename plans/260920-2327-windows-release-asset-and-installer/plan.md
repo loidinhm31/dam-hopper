@@ -1,7 +1,7 @@
 ---
 title: "Windows Release Asset and Bootstrap Installer"
 description: "Publish a deterministic Windows x86_64 server archive with a verified PowerShell installer and release guidance."
-status: in-progress
+status: completed
 priority: P1
 effort: 16h
 branch: main
@@ -20,11 +20,11 @@ created: 2026-09-20
 ## Overview
 Add an independently validated Windows `x86_64-pc-windows-msvc` server asset and non-admin PowerShell bootstrap while preserving the Linux exact-four release contract. Publish one combined six-asset release only after per-profile checks and attestation.
 ## Status
-- **Plan:** IN PROGRESS (2/3 phases complete; ~67%; updated 2026-09-21).
+- **Plan:** COMPLETE (3/3 phases complete; 100%; updated 2026-09-21).
 - **Phase 01:** DONE (2026-09-21; 100%). Asset contracts, deterministic Windows ZIP packaging, profile-aware gates, package scripts, and focused harness are complete. See the [Phase 01 plan](./phase-01-asset-schema-and-packaging.md) and [code review](../reports/code-review-260921-0122-phase01-windows-release-asset-packaging.md).
 - **Phase 02:** DONE (2026-09-21; 100%). PowerShell bootstrap installer, fixture mock server, 14/14 integration tests passing, and Review Cycle 2 verified. See the [Phase 02 plan](./phase-02-powershell-installer.md).
-- **Phase 03:** PENDING (0%) — CI publication and guidance.
-- **Next:** Start Phase 03 for release workflow integration, GitHub Actions attestation, and user documentation.
+- **Phase 03:** DONE (2026-09-21; 100%). Release CI workflow, 6-subject attestation, profile gates, and comprehensive user/publisher guidance documentation. See the [Phase 03 plan](./phase-03-release-workflow-and-docs.md).
+- **Next:** Complete project-wide validation and tag rehearsal when preparing next public release.
 
 ## Key Insights
 - Linux remains the default checker profile; Windows has no Linux Manifest v2 or migration-evidence contract.
@@ -50,7 +50,7 @@ Modify `package.json`, `deploy/release/check-release-assets.mjs`, `.github/workf
 ## Todo list
 - [x] Phase 01 — asset schema and packaging — DONE (2026-09-21)
 - [x] Phase 02 — PowerShell installer and harness — DONE (2026-09-21)
-- [ ] Phase 03 — CI publication and guidance — NEXT
+- [x] Phase 03 — CI publication and guidance — DONE (2026-09-21)
 
 ## Success Criteria
 Default Linux checks still require exactly four assets; Windows checks require exactly two plus the four-member ZIP; all-profile publication requires six matching local/remote digests; installer smoke tests pass without elevation or auto-start.
@@ -62,7 +62,7 @@ ZIP nondeterminism, GitHub metadata gaps, unsafe archive paths, User PATH corrup
 Fail closed on digest/size/attestation mismatch, traversal, links, malformed tags, and unsafe install paths. Use least-privilege User PATH/config writes; never execute archive contents or overwrite an existing sample config.
 
 ## Next steps
-Phase 01 and Phase 02 are complete (2/3 phases; ~67%). Proceed to Phase 03 for CI publication, GitHub Actions attestation, and user guidance. Run repository-wide validation only after Phase 03 lands.
+All 3 phases are complete (3/3 phases; 100%). Repository-wide validation can be run for public release qualification.
 
 ## Preflight Contract
 - Work from repository root with Node 20+, pnpm 10+, and Windows MSVC target `x86_64-pc-windows-msvc`.
@@ -72,9 +72,9 @@ Phase 01 and Phase 02 are complete (2/3 phases; ~67%). Proceed to Phase 03 for C
 - Installer tests use a local HTTP fixture, loopback only where needed, and restore User PATH/cleanup in all paths.
 
 ## Side-Effect Review Checklist
-- [ ] Linux release assets and migration evidence remain unchanged.
-- [ ] Windows installer never requires elevation, starts a process, or overwrites user config.
-- [ ] PATH changes are opt-in, de-duplicated, User-scoped, and reversible in tests.
-- [ ] CI build/package jobs have read-only permissions; only publication has contents write.
-- [ ] Final release contains exactly six non-empty assets with matching digests.
-- [ ] Docs distinguish Windows direct-server support from Linux systemd operations.
+- [x] Linux release assets and migration evidence remain unchanged.
+- [x] Windows installer never requires elevation, starts a process, or overwrites user config.
+- [x] PATH changes are opt-in, de-duplicated, User-scoped, and reversible in tests.
+- [x] CI build/package jobs have read-only permissions; only publication has contents write.
+- [x] Final release contains exactly six non-empty assets with matching digests.
+- [x] Docs distinguish Windows direct-server support from Linux systemd operations.

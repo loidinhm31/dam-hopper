@@ -477,6 +477,22 @@ retaining all four declared targets. Windows check/build/release/test gates,
 Linux-only stub behavior, and the loopback `/api/health` smoke passed; see the
 [Phase 03 plan](../plans/260920-1312-windows-server-build-and-verify/phase-03-server-build-and-verification.md) and [review](../plans/reports/code-review-260920-1835-phase03-server-build-and-verification.md).
 
+## Cross-platform release CI and guidance (Phase 03)
+
+`.github/workflows/release-linux.yml` branches after shared metadata validation
+into Linux and Windows build/package paths. Linux uses `--profile linux`;
+Windows builds `x86_64-pc-windows-msvc` and uses `--profile windows`.
+`attest-release` covers four Linux subjects plus the Windows installer and ZIP.
+`publish-release` merges immutable bundles, checks the exact six-asset union
+with `--profile all` against local and GitHub metadata, and undrafts only behind
+the protected `linux-release` environment. Dry runs do not publish.
+
+`release:windows-gate-test` is the focused local profile/ZIP/PowerShell
+contract harness; package-twice and installer fixtures remain separate
+reproducibility and installation boundaries. See [Windows Release Asset
+Packaging](./windows-release-packaging.md) and [Linux Release Publisher and
+Bootstrap](./linux-release-publisher-bootstrap.md).
+
 ## Workspace settings import/export
 
 The Settings page and protected Rust API exchange only the active workspace
@@ -694,11 +710,12 @@ browser-local `dam-hopper:html-view-mode:v1` value and the
 
 ## Release, deployment, security, and verification details
 
-The Linux and Windows release architecture, the Phase 02 PowerShell
-installer contract, and historical Linux provisioning boundaries are maintained
-in the [release and deployment detail](./codebase-summary-release.md).
-That page also records the release-source evidence summarized from
-`repomix-output.xml`, including the fixture-backed Windows installer harness.
+The Linux and Windows release architecture, the Phase 03 cross-platform CI
+workflow, the PowerShell installer contract, and historical Linux provisioning
+boundaries are maintained in the [release and deployment detail](./codebase-summary-release.md).
+That page records the release-source evidence summarized from `repomix-output.xml`,
+including profile gates, six-subject attestation, and the fixture-backed Windows
+installer harness.
 
 
 ## Frontend architecture
