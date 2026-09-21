@@ -49,11 +49,13 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Deployment
 
 - **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
+- **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Cross-platform Release CI DAG, profile-specific gates, six-subject attestation, and Linux bootstrap ownership
+- **[Linux Release Manifest v2](./linux-release-manifest.md)** — Linux-only manifest contract and Windows asset boundary
 - **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
 - **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, Phase 06 diagnostics, helper service lifecycle, activation, rollback, and recovery
 - **[Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md)** — Canonical API config/audit state, copy-once legacy migration, and descriptor-relative refusal boundaries
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
-- **[Windows Release Asset Packaging and Bootstrap Installer](./windows-release-packaging.md)** — Phase 01 deterministic archive, Phase 02 PowerShell installer parameters, direct-server boundaries, and focused verification commands
+- **[Windows Release Asset Packaging and Bootstrap Installer](./windows-release-packaging.md)** — Phases 01–03 deterministic archive, PowerShell installer, CI publication, profile gates, and direct-server boundaries
 - Docker serves the built SPA and backend on port 4800; it is separate from systemd and nohup ownership.
 
 Historical implementation plans are not generally indexed here; the active

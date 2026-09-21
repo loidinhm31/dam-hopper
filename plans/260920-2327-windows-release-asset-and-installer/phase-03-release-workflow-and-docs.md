@@ -11,7 +11,7 @@
 
 ## Overview
 **Priority:** P1  
-**Status:** Pending  
+**Status:** COMPLETE / DONE (2026-09-21; 100%; verified).
 **Goal:** Extend the stable release DAG with a Windows MSVC build/package path, attest both platform outputs, publish one exact six-asset release, and document safe Windows installation/configuration without blurring Linux systemd boundaries.
 
 The Linux workflow remains the source of Linux Manifest v2 and migration evidence. Windows jobs produce only the two Windows public assets and never manufacture Linux manager evidence. Package jobs gate themselves by profile; only the final merged publication gate uses `--profile all`.
@@ -99,12 +99,12 @@ Publication is still a draft-first transaction. The release directory is the onl
 12. Review final asset directory and permissions; ensure no generated artifact, token, local path, or unverified test result is committed.
 
 ## Todo list
-- [ ] Add Windows build and package jobs with explicit target/artifact paths.
-- [ ] Add platform-specific profile gates and merged six-asset final gate.
-- [ ] Attest all six subjects with least-privilege permissions.
-- [ ] Preserve dry-run/protected Linux migration semantics.
-- [ ] Publish README/configuration/release guidance and verify links/commands.
-- [ ] Complete workflow rehearsal and side-effect review.
+- [x] Add Windows build and package jobs with explicit target/artifact paths.
+- [x] Add platform-specific profile gates and merged six-asset final gate.
+- [x] Attest all six subjects with least-privilege permissions.
+- [x] Preserve dry-run/protected Linux migration semantics.
+- [x] Publish README/configuration/release guidance and verify links/commands.
+- [x] Complete workflow rehearsal and side-effect review.
 
 ## Success Criteria
 - A stable-tag workflow builds `dam-hopper-server.exe`, emits a deterministic Windows ZIP plus installer, and passes `profile=windows` independently.
@@ -127,12 +127,12 @@ Publication is still a draft-first transaction. The release directory is the onl
 - Never document `--no-auth` as production operation; loopback-only smoke is the boundary. Do not imply Windows has systemd, Linux migration, or suspend support.
 
 ## Side-Effect Review Checklist
-- [ ] Linux workflow jobs, asset names, Manifest v2, and evidence semantics remain intact.
-- [ ] Windows package artifacts are isolated, deterministic, and contain no runtime secrets.
-- [ ] Attestation subjects exactly match the six final files.
-- [ ] Combined gate runs before `gh release edit --draft=false` and honors dry-run/protected environment.
-- [ ] Documentation paths, command examples, and option names match implementation.
-- [ ] No generated release bytes, credentials, local machine paths, or temporary logs are committed.
+- [x] Linux workflow jobs, asset names, Manifest v2, and evidence semantics remain intact.
+- [x] Windows package artifacts are isolated, deterministic, and contain no runtime secrets.
+- [x] Attestation subjects exactly match the six final files.
+- [x] Combined gate runs before `gh release edit --draft=false` and honors dry-run/protected environment.
+- [x] Documentation paths, command examples, and option names match implementation.
+- [x] No generated release bytes, credentials, local machine paths, or temporary logs are committed.
 
 ## Next steps
 After implementation, run the main agent's project-wide validation and a controlled release rehearsal. Capture real workflow/installer evidence separately from plan assumptions; update release docs only with observed results.

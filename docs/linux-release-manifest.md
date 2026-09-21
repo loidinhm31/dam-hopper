@@ -15,14 +15,14 @@ outside this specification:
 - Focused contract tests: `server/tests/linux_release_manifest.rs` and
   `server/tests/linux_release_manifest_errors.rs`
 
-## Publisher and bootstrap boundary (Phase 06)
+## Publisher and bootstrap boundary (Phase 03 cross-platform release; Phase 06 Linux runtime)
 
-The central publisher emits four external, attested assets: the executable
-`dam-hopper-install.sh`, one profile archive, `release-manifest.json`, and the
-tag-specific SPDX 2.3 SBOM. The manifest stays outside the archive because it
-declares the archive's own size and SHA-256. The publisher assembles the archive
-with normalized modes, sorted paths, fixed ownership/mtime, POSIX tar headers,
-and timestamp-free gzip, then runs the Rust validator before publication.
+The central publisher's Linux profile emits four external, attested assets: the
+executable `dam-hopper-install.sh`, one profile archive, `release-manifest.json`,
+and the tag-specific SPDX 2.3 SBOM. The manifest stays outside the archive
+because it declares the archive's own size and SHA-256. The publisher assembles
+the archive with normalized modes, sorted paths, fixed ownership/mtime, POSIX tar
+headers, and timestamp-free gzip, then runs the Rust validator before publication.
 
 The bootstrap downloads the manifest and exact archive as the invoking user,
 checks the declared archive digest, optionally verifies GitHub attestations,
@@ -40,6 +40,15 @@ Phase 01 defines one immutable archive per release:
 ```text
 dam-hopper-vX.Y.Z-linux-x86_64-systemd.tar.gz
 ```
+
+### Manifest Scope and Windows Asset Boundary
+
+`release-manifest.json` is strictly scoped to the Linux `x86_64-unknown-linux-gnu` systemd profile. It is consumed solely by the Linux bootstrap installer and runtime manager.
+
+The Windows release (`dam-hopper-vX.Y.Z-windows-x86_64.zip` and `dam-hopper-install.ps1`) is completely external to Manifest v2:
+- **No Windows schema fields:** Do not add Windows fields, files, or profiles to `release-manifest.json` or its schema. The schema continues to reject unknown fields.
+- **Windows verification:** The Windows bootstrap installer verifies the ZIP archive's SHA-256 and byte size against the GitHub Release API asset metadata, and optionally verifies build provenance via `gh attestation verify`.
+- **Combined publication:** In a combined release (`--profile all`), `release-manifest.json` is published alongside the Windows assets, but only describes the Linux runtime components.
 
 The protected Git tag `vX.Y.Z` is the release authority. Checked-in Cargo and
 web package versions are mirrors and must match the tag before publishing; they
