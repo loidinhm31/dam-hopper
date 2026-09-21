@@ -1,7 +1,7 @@
 use std::fs;
-use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 
 use super::error::PluginError;
 
@@ -53,7 +53,10 @@ impl PluginRegistryLayout {
     }
 
     pub fn package_dir(&self, plugin_id: &str, version: &str, sha256: &str) -> PathBuf {
-        self.packages_dir().join(plugin_id).join(version).join(sha256)
+        self.packages_dir()
+            .join(plugin_id)
+            .join(version)
+            .join(sha256)
     }
 
     /// Ensure required root directories exist with restricted permissions.

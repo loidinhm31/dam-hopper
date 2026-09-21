@@ -37,8 +37,12 @@ impl ActiveStageUpload {
         security_revision: u64,
     ) -> Result<Self, PluginError> {
         let expected_sha256_lower = expected_sha256.to_lowercase();
-        if expected_sha256_lower.len() != 64 || !expected_sha256_lower.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(PluginError::invalid_input(format!("expected_sha256 must be 64-char hex, got: '{expected_sha256}'")));
+        if expected_sha256_lower.len() != 64
+            || !expected_sha256_lower.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err(PluginError::invalid_input(format!(
+                "expected_sha256 must be 64-char hex, got: '{expected_sha256}'"
+            )));
         }
         if total_bytes == 0 || total_bytes > MAX_PACKAGE_COMPRESSED_BYTES {
             return Err(PluginError::invalid_input(format!("total_bytes ({total_bytes}) invalid or exceeds limit ({MAX_PACKAGE_COMPRESSED_BYTES})")));
@@ -49,7 +53,10 @@ impl ActiveStageUpload {
         let stage_dir = layout.stage_dir(&stage_id);
 
         fs::create_dir_all(&stage_dir).map_err(|e| {
-            PluginError::runner_unavailable(format!("Failed to create staging dir '{}': {e}", stage_dir.display()))
+            PluginError::runner_unavailable(format!(
+                "Failed to create staging dir '{}': {e}",
+                stage_dir.display()
+            ))
         })?;
 
         #[cfg(unix)]
@@ -68,7 +75,10 @@ impl ActiveStageUpload {
         }
 
         let file = open_opts.open(&package_file_path).map_err(|e| {
-            PluginError::runner_unavailable(format!("Failed to create staging file '{}': {e}", package_file_path.display()))
+            PluginError::runner_unavailable(format!(
+                "Failed to create staging file '{}': {e}",
+                package_file_path.display()
+            ))
         })?;
 
         let now = Utc::now().to_rfc3339();
@@ -108,19 +118,33 @@ impl ActiveStageUpload {
 
     pub fn append_chunk(&mut self, sequence: u64, chunk: &[u8]) -> Result<u64, PluginError> {
         if self.last_activity.elapsed() > STAGE_IDLE_TIMEOUT {
-            return Err(PluginError::deadline_exceeded(format!("Stage '{}' timed out", self.stage_id)));
+            return Err(PluginError::deadline_exceeded(format!(
+                "Stage '{}' timed out",
+                self.stage_id
+            )));
         }
         if sequence != self.expected_sequence {
-            return Err(PluginError::invalid_input(format!("Invalid sequence: expected {}, got {sequence}", self.expected_sequence)));
+            return Err(PluginError::invalid_input(format!(
+                "Invalid sequence: expected {}, got {sequence}",
+                self.expected_sequence
+            )));
         }
         if chunk.len() > MAX_STAGE_CHUNK_BYTES {
-            return Err(PluginError::invalid_input(format!("Chunk size ({}) exceeds limit ({MAX_STAGE_CHUNK_BYTES})", chunk.len())));
+            return Err(PluginError::invalid_input(format!(
+                "Chunk size ({}) exceeds limit ({MAX_STAGE_CHUNK_BYTES})",
+                chunk.len()
+            )));
         }
         if self.received_bytes + chunk.len() as u64 > self.total_bytes {
-            return Err(PluginError::invalid_input(format!("Received bytes overflow total ({})", self.total_bytes)));
+            return Err(PluginError::invalid_input(format!(
+                "Received bytes overflow total ({})",
+                self.total_bytes
+            )));
         }
 
-        self.file.write_all(chunk).map_err(|e| PluginError::runner_unavailable(format!("Failed to write chunk: {e}")))?;
+        self.file
+            .write_all(chunk)
+            .map_err(|e| PluginError::runner_unavailable(format!("Failed to write chunk: {e}")))?;
         self.hasher.update(chunk);
         self.received_bytes += chunk.len() as u64;
         self.expected_sequence += 1;
@@ -130,10 +154,17 @@ impl ActiveStageUpload {
 
     pub fn finish(mut self, layout: &PluginRegistryLayout) -> Result<String, PluginError> {
         if self.received_bytes != self.total_bytes {
-            return Err(PluginError::invalid_input(format!("Incomplete upload: expected {}, received {}", self.total_bytes, self.received_bytes)));
+            return Err(PluginError::invalid_input(format!(
+                "Incomplete upload: expected {}, received {}",
+                self.total_bytes, self.received_bytes
+            )));
         }
-        self.file.flush().map_err(|e| PluginError::runner_unavailable(format!("Flush failed: {e}")))?;
-        self.file.sync_all().map_err(|e| PluginError::runner_unavailable(format!("Sync failed: {e}")))?;
+        self.file
+            .flush()
+            .map_err(|e| PluginError::runner_unavailable(format!("Flush failed: {e}")))?;
+        self.file
+            .sync_all()
+            .map_err(|e| PluginError::runner_unavailable(format!("Sync failed: {e}")))?;
 
         let actual_digest = hex::encode(self.hasher.finalize());
         if actual_digest != self.expected_sha256 {
@@ -153,10 +184,16 @@ impl ActiveStageUpload {
                 installation_id: None,
                 created_at: now.clone(),
                 updated_at: now,
-                error: Some(format!("Digest mismatch: expected {}, got {actual_digest}", self.expected_sha256)),
+                error: Some(format!(
+                    "Digest mismatch: expected {}, got {actual_digest}",
+                    self.expected_sha256
+                )),
             };
             let _ = write_journal_record(layout, &record);
-            return Err(PluginError::invalid_input(format!("Digest mismatch: expected {}, got {actual_digest}", self.expected_sha256)));
+            return Err(PluginError::invalid_input(format!(
+                "Digest mismatch: expected {}, got {actual_digest}",
+                self.expected_sha256
+            )));
         }
         Ok(actual_digest)
     }

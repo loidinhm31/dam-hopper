@@ -15,7 +15,10 @@ impl PluginRegistry {
         let state = self.read_state()?;
         let mut items = Vec::new();
         for inst in state.installations.values() {
-            let pkg_key = format!("{}@{}#{}", inst.plugin_id, inst.active_version, inst.active_package_digest);
+            let pkg_key = format!(
+                "{}@{}#{}",
+                inst.plugin_id, inst.active_version, inst.active_package_digest
+            );
             if let Some(pkg) = state.packages.get(&pkg_key) {
                 items.push(PluginMetadataItem {
                     id: inst.installation_id.clone(),
@@ -31,7 +34,10 @@ impl PluginRegistry {
         Ok((items, state.registry_revision))
     }
 
-    pub fn get_installation(&self, installation_id: &str) -> Result<Option<InstallationRecord>, PluginError> {
+    pub fn get_installation(
+        &self,
+        installation_id: &str,
+    ) -> Result<Option<InstallationRecord>, PluginError> {
         let state = self.read_state()?;
         Ok(state.installations.get(installation_id).cloned())
     }
@@ -47,7 +53,9 @@ impl PluginRegistry {
         })?;
 
         if !inst.enabled {
-            return Err(PluginError::forbidden(format!("Installation '{installation_id}' is disabled")));
+            return Err(PluginError::forbidden(format!(
+                "Installation '{installation_id}' is disabled"
+            )));
         }
 
         if inst.active_package_digest != expected_digest.to_lowercase() {
@@ -57,7 +65,10 @@ impl PluginRegistry {
             )));
         }
 
-        let pkg_key = format!("{}@{}#{}", inst.plugin_id, inst.active_version, inst.active_package_digest);
+        let pkg_key = format!(
+            "{}@{}#{}",
+            inst.plugin_id, inst.active_version, inst.active_package_digest
+        );
         let pkg = state.packages.get(&pkg_key).ok_or_else(|| {
             PluginError::runner_unavailable(format!("Package '{pkg_key}' missing from registry"))
         })?;
@@ -66,17 +77,28 @@ impl PluginRegistry {
             PluginError::invalid_input(format!("Plugin '{}' has no UI entrypoint", inst.plugin_id))
         })?;
 
-        let ui_path = self.layout.package_dir(&inst.plugin_id, &inst.active_version, &inst.active_package_digest).join(&ui_entry.entry);
+        let ui_path = self
+            .layout
+            .package_dir(
+                &inst.plugin_id,
+                &inst.active_version,
+                &inst.active_package_digest,
+            )
+            .join(&ui_entry.entry);
         if !ui_path.exists() {
-            return Err(PluginError::runner_unavailable(format!("UI file missing at '{}'", ui_path.display())));
+            return Err(PluginError::runner_unavailable(format!(
+                "UI file missing at '{}'",
+                ui_path.display()
+            )));
         }
 
-        let bytes = fs::read(&ui_path).map_err(|e| {
-            PluginError::runner_unavailable(format!("Failed to read UI file: {e}"))
-        })?;
+        let bytes = fs::read(&ui_path)
+            .map_err(|e| PluginError::runner_unavailable(format!("Failed to read UI file: {e}")))?;
 
         if bytes.len() as u64 > MAX_UI_DOCUMENT_BYTES {
-            return Err(PluginError::invalid_input(format!("UI size exceeds {MAX_UI_DOCUMENT_BYTES} limit")));
+            return Err(PluginError::invalid_input(format!(
+                "UI size exceeds {MAX_UI_DOCUMENT_BYTES} limit"
+            )));
         }
 
         let sha256 = hex::encode(Sha256::digest(&bytes));
@@ -110,9 +132,12 @@ impl PluginRegistry {
             )));
         }
 
-        let inst = state.installations.get_mut(installation_id).ok_or_else(|| {
-            PluginError::invalid_input(format!("Installation '{installation_id}' not found"))
-        })?;
+        let inst = state
+            .installations
+            .get_mut(installation_id)
+            .ok_or_else(|| {
+                PluginError::invalid_input(format!("Installation '{installation_id}' not found"))
+            })?;
 
         inst.grants = new_grants;
         inst.updated_at = Utc::now().to_rfc3339();
@@ -145,9 +170,12 @@ impl PluginRegistry {
             )));
         }
 
-        let inst = state.installations.get_mut(installation_id).ok_or_else(|| {
-            PluginError::invalid_input(format!("Installation '{installation_id}' not found"))
-        })?;
+        let inst = state
+            .installations
+            .get_mut(installation_id)
+            .ok_or_else(|| {
+                PluginError::invalid_input(format!("Installation '{installation_id}' not found"))
+            })?;
 
         inst.bindings = new_bindings;
         inst.updated_at = Utc::now().to_rfc3339();

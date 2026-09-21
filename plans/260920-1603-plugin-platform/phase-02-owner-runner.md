@@ -13,13 +13,23 @@
 
 - **Date:** 2026-09-20
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
-- **Dependencies:** G0 and D01's immutable installation reference; implement alongside D01 and E01/E02.
+- **Plan status:** DONE (2026-09-21; 100%).
+- **Implementation status:** DONE (2026-09-21; 100%).
+- **Review status:** DONE (Cycle 2: approved 9.0/10; no critical issues).
+- **Completion timestamp:** 2026-09-21
+- **Progress:** 100% (6/6 todo items; scoped D02 deliverables complete; follow-on hardening warnings tracked below).
+- **Validation:** Scoped protocol/supervision suites passed 13/13; full plugin subsystem validation passed 37/37 tests across five suites; test-targeted `cargo check` completed with 0 errors and 0 warnings. See the [Cycle 2 review](../reports/code-review-260921-1523-phase-d02-owner-runner.md).
+- **Dependencies:** G0 and D01's immutable installation reference were consumed; deployment runtime-directory/account integration remains D06 scope.
 - **Gate contribution:** D02 supplies the real owner-worker process path required by G1. It is not satisfied by an in-process mock or fixture-only worker.
 - **Effort:** Unestimated.
 
 Add a Rust system runner under the explicit advisor owner UID. The runner is the only worker supervisor and starts exactly one Node worker per enabled installation. It speaks the frozen framed protocol to the API over a local authenticated Unix socket and to workers over private pipes.
+
+## Completion summary
+
+D02 delivers the trusted owner-account execution boundary for the plugin platform: strict framed JSON-RPC and EOF-safe transport over authenticated Unix sockets, exact version handshake and peer validation, fixed Node worker launch with scrubbed environment and bounded diagnostics, one worker per enabled installation, multiplexed invoke/cancel handling, deadline escalation with process-group termination, generation-fenced context routing, durable crash/restart exhaustion, and the hardened systemd service template. The implementation is ready for D03's authorized API and transport layer; deployment runtime-directory/account integration remains D06 scope.
+
+Cycle 2 review recorded six non-blocking warnings (racy cancellation request-ID mapping, structured RPC error mapping, control-frame ceiling enforcement, worker notifications, bounded request queueing, and default peer-UID policy) plus suggestions including residual process-group cleanup; no critical issue blocks D03.
 
 ## Key Insights
 
@@ -108,12 +118,12 @@ D02 installs the service template needed to define the boundary, while D06 provi
 
 ## Todo List
 
-- [ ] Framed runner and worker transports enforce G0 limits and strict JSON-RPC.
-- [ ] Unix peer credentials bind the API and configured owner identities.
-- [ ] Fixed Node spawn and one-worker-per-installation supervision work with the real E02 worker.
-- [ ] Generic declared-operation budgets, cancellation, deadlines and exactly-once settlement are implemented without domain parsing.
-- [ ] Restart exhaustion is durable and visible without worker duplication.
-- [ ] Service template defines the owner boundary for D06 integration.
+- [x] Framed runner and worker transports enforce G0 limits and strict JSON-RPC (Validated: strict JSON-RPC 2.0 validation, EOF truncation handling, UTF-8 char boundary sanitization).
+- [x] Unix peer credentials bind the API and configured owner identities (SO_PEERCRED verified, systemd template configured).
+- [x] Fixed Node spawn and one-worker-per-installation supervision work with the real E02 worker (Supervision verified with real Node.js process and test package).
+- [x] Generic declared-operation budgets, cancellation, deadlines and exactly-once settlement are implemented without domain parsing (Multiplexed full-duplex transport, cancel responsiveness <250ms, deadline exceeded escalates to process group termination and crash tracking, generation fencing active).
+- [x] Restart exhaustion is durable and visible without worker duplication.
+- [x] Service template defines the owner boundary for D06 integration.
 
 ## Success Criteria
 
@@ -140,7 +150,7 @@ D02 installs the service template needed to define the boundary, while D06 provi
 
 ## Next Steps
 
-1. D03 binds authenticated actor/connection epochs, target grants and contexts to this runner transport.
+1. D03 (Phase D03 — Authorized API and transport) binds authenticated actor/connection epochs, target grants and contexts to this runner transport.
 2. D04 consumes generation/revocation state for the isolated frame bridge.
 3. D05 adds full lifecycle orchestration; D06 renders, installs and qualifies these units.
 

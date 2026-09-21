@@ -4,9 +4,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Trusted plugin platform (2026-09-21)
 
-- **Plan status: IN PROGRESS (2/7 phases; 29%; updated 2026-09-21).** D00 and D01 are complete; D02–D06 remain pending. G0 joint pin and G1–G4 remain release gates.
+- **Plan status: IN PROGRESS (3/7 phases; 43%; updated 2026-09-21).** D00, D01, and D02 are complete; D03–D06 remain pending. G0 joint pin and G1–G4 remain release gates.
 - **Phase D00 — Contracts, identity, and feasibility — DONE (2026-09-21; 100%).** Generic SDK/schema candidate, Rust parity, opaque UI/cancellation feasibility, and G0 artifact inputs recorded.
 - **Phase D01 — Runner-owned package registry and trust staging — DONE (2026-09-21; 100%).** Runner-owned staged intake, bounded archive inspection/extraction, independent digest review/approval, strict durable registry/journal, CAS revisions, crash recovery, and early E02 candidate staging complete.
+- **Phase D02 — Owner-account runner and worker supervision — DONE (2026-09-21; 100%).** Strict framed JSON-RPC over authenticated Unix transport, exact handshake/peer validation, fixed Node worker launch, one-worker-per-installation supervision, multiplexed cancellation, deadline/process-group escalation, generation-fenced context routing, durable restart exhaustion, and the hardened systemd owner boundary complete.
+- **D02 validation:** Scoped protocol/supervision suites passed **13/13**; full plugin subsystem validation passed **37/37 tests across five suites**; test-targeted `cargo check` completed with **0 errors, 0 warnings**. Cycle 2 review approved **9.0/10** with no critical issues. See the [D02 plan](../plans/260920-1603-plugin-platform/phase-02-owner-runner.md) and [Cycle 2 review](../plans/reports/code-review-260921-1523-phase-d02-owner-runner.md).
 - **D01 checklist (6/6):**
   - [x] Runner-owned layout and strict state/journal invariants.
   - [x] Streaming intake and adversarial archive rejection.
@@ -15,7 +17,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   - [x] Revision-tagged read façade and grant/binding CAS.
   - [x] Early E02 real package candidate staged for G1 without E04 dependency.
 - **Validation:** Targeted `plugin_package_archive`, `plugin_package_registry`, and `plugin_contract_fixtures` passed **24/24**; Cycle 2 review approved **9.0/10** with no critical issues. D01 is G1 input, not production/G3/G4 completion. See the [D01 plan](../plans/260920-1603-plugin-platform/phase-01-package-registry.md), [test report](../plans/reports/test-report-260921-1150-plugin-package-registry-tests.md), and [Cycle 2 review](../plans/reports/code-review-260921-1216-phase-d01-cycle2-verification.md).
-- **Next:** D02 owner-runner supervision and framed transport consume the immutable D01 installation reference; D03 then supplies the authorized G1 API path.
+- **Next:** D03 (Phase D03 — Authorized API and transport) binds authenticated actor/connection epochs, target grants, and contexts to the D02 runner transport for the authorized G1 path.
 
 
 ### Windows dam-hopper-server build and verification (2026-09-20)

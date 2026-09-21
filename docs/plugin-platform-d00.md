@@ -18,6 +18,7 @@ installation registry, worker supervision, API integration, browser navigation,
 and Linux qualification.
 
 - [Phase D01 registry and trust staging](./architecture/plugin-platform-d01.md)
+- [Phase D02 owner-account runner and worker supervision](./architecture/plugin-platform-d02.md)
 
 A trusted backend plugin is **not** advertised as a malicious-code sandbox. The
 runner is owner-provisioned and same-identity controlled; authorization,

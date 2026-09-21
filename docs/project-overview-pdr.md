@@ -693,6 +693,63 @@ default-deny; no arbitrary paths, plugin listeners, or implicit admin authority
 are allowed. E00 must consume these candidates, select an immutable Node
 `>=22.19` distribution, and qualify the target Linux deployment before G0.
 
+### PR-023: Trusted plugin owner runner and worker supervision (Phase D02)
+
+**Status:** Core implementation complete 2026-09-21; D03–D06 remain required
+for authorized API integration, lifecycle/rollback, and Linux qualification.
+The detailed interface is [Phase D02 runner architecture](./architecture/plugin-platform-d02.md).
+
+**Functional requirements:**
+
+- Run `dam-hopper-plugin-runner` under the configured non-root owner account;
+  expose only an owner-created AF_UNIX pathname socket to the API.
+- Validate socket paths and modes plus `SO_PEERCRED` at both ends. Reject root,
+  unknown, or changed peers unless an explicit deployment option allows them.
+- Negotiate exact runner protocol `1.0.0` with a five-second `runner.hello`
+  handshake before dispatching public methods.
+- Use four-byte big-endian framed UTF-8 JSON-RPC 2.0 with strict object/ID/
+  method validation, no batches, and a 16 MiB payload ceiling.
+- Start lazily on activation at most one fixed-entrypoint Node worker per
+  enabled installation, using private pipes, a minimal environment,
+  process-group isolation, and bounded sanitized stderr.
+- Keep API/runner and runner/worker links full duplex so cancellation and
+  control calls remain responsive during long-running invocation.
+- Track bounded contexts, per-context and per-worker invokes, long-operation
+  admission, deadlines, activation generations, and cancellation outcomes.
+- Kill the complete worker process group on deadline, protocol, pipe, or
+  deactivation failure; settle owned calls and revoke old contexts once.
+- Persist installation failure after three crashes within 60 seconds; require
+  explicit lifecycle action before reactivation.
+
+**Acceptance criteria:**
+
+- [x] CLI, listener, peer checks, handshake, framing, typed client, real Node
+      process, and hardened systemd template exist in the checked-in paths.
+- [x] Public runner calls cover listing/UI reads, activation/deactivation,
+      context open/close, invoke, and cancel; management calls remain separate.
+- [x] Limits are 16 contexts/worker, four invokes/context, 16 invokes/worker,
+      one declared long-running invoke, 10-second ordinary and 30-second
+      declared scan deadlines, and 15-minute context idle expiry.
+- [x] Full-duplex integration routes UUID-bearing contexts and acknowledges
+      cancellation without waiting for a slow invoke to finish.
+- [x] Generation fences reject stale contexts after restart; registry failure
+      persistence disables the installation at the third crash in 60 seconds.
+- [ ] The planned 32-entry fair FIFO queue is not shipped in this revision.
+      Over-limit calls return `OVERLOADED`; callers must not rely on ordering.
+      The transport-level control lane is the current fairness/responsiveness
+      guarantee.
+
+**Security and operational constraints:** D02 is trusted same-identity
+execution, not a malicious-code sandbox. The production unit must render
+owner/group, expected API UID, runtime directory, absolute pinned Node path,
+`MemoryMax=1G`, `TasksMax=64`, `NoNewPrivileges`, `ProtectSystem=strict`,
+`ProtectHome=read-only`, `PrivateTmp`, and restricted address families. D06
+owns target-host qualification and cgroup/account policy.
+
+**Unresolved questions:** Owner UID/group, socket group, and immutable Node
+`>=22.19` artifact/path remain G0/D06 deployment inputs. D03 must decide the
+stable JSON-RPC `error.data` mapping for `PluginErrorCode`.
+
 ### PR-011: Workflow Tracking Domain & Relational Persistence (Phase 01)
 
 **Status:** Domain and SQLite repository foundation implemented on 2026-09-02.

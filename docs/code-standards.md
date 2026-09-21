@@ -46,6 +46,7 @@ server/src/
 │   └── audit.rs      # Bounded mode-0600 helper JSONL audit
 ├── git/              # Git operations
 ├── agent_store/      # Item distribution
+├── plugins/          # D00 contracts, D01 registry, D02 runner/supervision
 └── commands/         # Command registry
 ```
 
@@ -69,6 +70,59 @@ Worker cancellation is request/context keyed and follows
 `active -> cancelled -> settled`; unknown or repeated cancellation is reported
 without creating a second settlement. The SDK, Rust fixture test, and browser
 isolation test are the contract evidence locations.
+
+### Trusted plugin runner implementation (Phase D02)
+
+The D02 implementation lives in `server/src/plugins/runner_server.rs`,
+`runner_client.rs`, `worker_process.rs`, and `worker_supervisor.rs`; the
+`dam-hopper-plugin-runner` binary composes them. Keep D00/D01 wire names and
+camelCase DTOs unchanged. The full interface and deployment contract is in
+[Phase D02 runner architecture](./architecture/plugin-platform-d02.md).
+
+Transport rules:
+
+- Use `stream.into_split()` for both Unix RPC endpoints. A reader must continue
+  receiving frames while request work awaits; a writer lock may cover only one
+  complete `write_frame_async` call.
+- Route responses by non-empty string ID through a pending map. On EOF, protocol
+  error, or pipe failure, drain pending senders exactly once.
+- Require `runner.hello` first and negotiate exact `RUNNER_PROTOCOL_VERSION`;
+  do not silently downgrade or dispatch public methods before handshake.
+- Preserve the four-byte big-endian frame prefix, pre-allocation ceiling,
+  aggregate buffer bound, UTF-8 validation, no-batch rule, and strict JSON-RPC
+  field validation. The defined 64 KiB control budget is not yet enforced per
+  method; do not document it as an implemented check.
+
+Worker and supervisor rules:
+
+- Spawn only from the D01 immutable package directory and configured Node path.
+  Keep stdin/stdout/stderr piped, stdout protocol-only, and the minimal
+  environment (`env_clear`, inherited `PATH` when present, production mode,
+  and temporary directory).
+- Create a Unix process group and kill the group on graceful-stop timeout,
+  deadline escalation, worker failure, or supervisor deactivation. Drain all
+  pending calls with one terminal error.
+- Store only bounded, UTF-8-safe stderr diagnostics (1,024-byte lines and 50
+  retained lines). Never put stderr, request bodies, credentials, or source
+  paths in RPC responses.
+- Keep activation generation and context generation checks under the
+  supervisor lock. Clear contexts on crash/deactivation before publishing a
+  replacement worker; stale contexts return `CONTEXT_REVOKED`.
+- Enforce 16 contexts/worker, four invokes/context, 16 invokes/worker, one
+  declared long-running operation/worker, 10-second ordinary deadlines,
+  30-second scan deadlines, and the three-failures-in-60-seconds budget.
+  Current over-limit behavior is immediate `OVERLOADED`; no 32-entry fair
+  queue is implemented, so callers must not depend on FIFO ordering.
+- Never hold a synchronous registry/supervisor mutex across `.await`. Resolve
+  state and reserve counters under lock, perform pipe I/O without the lock,
+  then settle counters/status under lock.
+
+Errors use `PluginErrorCode` and stable constructors (`invalid_input`,
+`overloaded`, `deadline_exceeded`, `worker_failed`, `context_revoked`, and
+`runner_unavailable`). The current RunnerServer/RunnerClient bridge maps
+JSON-RPC failures to generic `-32603`/`RUNNER_UNAVAILABLE`; until D03 defines
+`error.data` mapping, do not promise end-to-end preservation of every plugin
+error code.
 
 ### Error Handling Pattern
 

@@ -35,7 +35,10 @@ impl AdminSubjectList {
         }
         let config_digest = hex::encode(hasher.finalize());
 
-        Self { subjects: set, config_digest }
+        Self {
+            subjects: set,
+            config_digest,
+        }
     }
 
     pub fn is_admin(&self, subject: &str) -> bool {
@@ -134,7 +137,9 @@ pub fn validate_stage_approval(
     }
 
     let expires_at = DateTime::parse_from_rfc3339(&review.stage_expires_at)
-        .map_err(|e| PluginError::invalid_input(format!("Invalid stage expiration timestamp: {e}")))?
+        .map_err(|e| {
+            PluginError::invalid_input(format!("Invalid stage expiration timestamp: {e}"))
+        })?
         .with_timezone(&Utc);
 
     if Utc::now() > expires_at {

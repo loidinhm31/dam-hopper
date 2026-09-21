@@ -596,15 +596,16 @@ claim that concurrent workspaces or profiles have shipped.
 - Implementation and release require the plan's multi-server isolation,
   migration/failure, live browser, and supported-native verification gates.
 
-## Trusted plugin platform — Phase D00 candidate freeze (2026-09-20; G0 pending)
+## Trusted plugin platform — D00 contracts, D01 registry, and D02 runner (2026-09-21; G0/G1 pending)
 
 [Phase D00](../plans/260920-1603-plugin-platform/phase-00-contracts-and-feasibility.md)
 freezes the candidate contracts and feasibility evidence for the trusted plugin
-platform. The implementation plan is
-[DamHopper plugin platform](../plans/260920-1603-plugin-platform/plan.md);
-the companion evcrate plan owns the cross-repository consumer. This is a
-candidate freeze, not a claim that the loader, registry, runner service,
-dynamic route, or embedded plugin UI is production-complete.
+platform. D01 adds the runner-owned registry and D02 adds the owner-account
+runner/worker boundary; the implementation plan is
+[DamHopper plugin platform](../plans/260920-1603-plugin-platform/plan.md).
+The companion evcrate plan owns the cross-repository consumer. This is not a
+claim that the authorized API, dynamic route, embedded plugin UI, lifecycle
+rollback, or Linux qualification is production-complete.
 
 ### G0 candidate artifact set
 
@@ -652,8 +653,9 @@ the boundary.
 2. G0 jointly pins the SDK digest, contract versions, fixtures, and budget
    interpretation with E00. The Node `>=22.19` distribution and target Linux
    assumptions remain unresolved inputs to that pin.
-3. D01–D06 implement the owner-worker registry, authorized API façade, browser
-   integration, lifecycle/rollback, and Linux workload/deployment gates.
+3. D01 delivers the owner registry and D02 delivers the owner-worker runner;
+   D03–D06 implement the authorized API façade, browser integration,
+   lifecycle/rollback, and Linux workload/deployment gates.
 
 The target deployment remains DamHopper's network/auth boundary plus a
 root-provisioned owner-account systemd runner reached through a
@@ -662,6 +664,83 @@ malicious-code sandbox, and a fixture worker or loader alone is never platform
 completion. Contract/security/isolation feasibility is G0; owner-worker read
 slice, LAN browser flow, lifecycle/rollback, and Linux qualification are G1
 through G4.
+
+### D02 owner runner and worker supervision
+
+The D02 runtime path is:
+
+```text
+API RunnerClient
+  └─ AF_UNIX pathname socket + 4-byte BE framed JSON-RPC
+      └─ RunnerServer (owner account, SO_PEERCRED gate)
+          └─ SupervisorManager (lazy entry per enabled installation)
+              └─ InstallationSupervisor (one generation at a time)
+                  └─ WorkerProcess (Node, private pipes, process group)
+```
+
+`dam-hopper-plugin-runner` accepts `--socket-path`, required `--registry-dir`,
+`--node-bin`, optional `--expected-api-uid`, and `--allow-root-peer`. The
+production systemd template supplies the absolute release paths and expected
+API UID. The binary initializes `PluginRegistry`, installs SIGINT/SIGTERM
+shutdown, and removes the socket after `deactivate_all`.
+
+`RunnerServer` creates the listener, rejects unsafe socket paths, sets mode
+`0660`, validates each accepted peer with `SO_PEERCRED`, rejects UID 0 by
+default, and requires an exact `runner.hello`/protocol `1.0.0` handshake within
+five seconds. Once handshaked, its reader stays live while each public request
+is dispatched in a Tokio task and responses use one locked writer. Public
+methods are `runner.hello`, `plugin.list`, `plugin.readUi`, activation and
+deactivation, context open/close, `plugin.invoke`, and `request.cancel`.
+Management methods remain a separate authorized boundary.
+
+Both runner and worker transports use a four-byte unsigned big-endian length
+followed by UTF-8 JSON-RPC 2.0. The Rust frame path rejects lengths above
+16 MiB before allocation, aggregate decoder buffers above 64 MiB, invalid
+UTF-8, truncated headers, malformed/trailing JSON, batches, numeric IDs,
+unknown fields, and result/error dual responses. The contract defines a
+64 KiB control budget; per-method enforcement remains a documented follow-up.
+
+`RunnerClient` validates the socket type, symlink/mode, optional owner UID, and
+connected peer UID before the same handshake. It splits the stream, routes
+responses from a background reader by `api-req-N` IDs into pending oneshot
+channels, and locks only the writer for one frame. Up to five reconnect
+attempts use exponential backoff from 50 ms; EOF fails all pending calls as
+`RUNNER_UNAVAILABLE`.
+
+`WorkerProcess` starts the configured Node executable against the immutable D01
+package entrypoint with package cwd, private stdin/stdout/stderr pipes,
+`env_clear()` plus `PATH` (when present), `NODE_ENV=production`, and
+`TMPDIR=/tmp`. Unix `process_group(0)` makes the PID the process-group ID.
+Stdout is protocol-only and any framing/JSON/EOF fault fails pending calls.
+Stderr is a UTF-8-safe bounded ring (1,024-byte lines, newest 50 lines).
+Worker hello must complete within five seconds. Teardown sends
+`worker.shutdown`, waits five seconds, then escalates SIGTERM/SIGKILL to the
+whole process group.
+
+The supervisor state machine is `Stopped → Starting → Ready → Draining →
+Stopped|Failed`. It enforces 16 contexts/worker, four invokes/context, 16
+invokes/worker, one declared long-running invoke/worker, 10-second ordinary
+deadlines, 30-second declared scan deadlines, and a 15-minute context idle TTL.
+Full-duplex transport keeps cancel/close control responsive while an invoke
+runs. Over-limit invokes currently fail fast with `OVERLOADED`; D02 does not
+ship the planned 32-entry fair FIFO queue, so callers must not depend on
+ordering or queue admission.
+
+Activation increments a generation before spawn and publishes `Ready` only
+after worker hello. Crashes, deadlines, EOF, and deactivation clear contexts
+and kill the old process group. Context IDs use
+`ctx:<installation-id>:<uuid>` and old-generation contexts return
+`CONTEXT_REVOKED`. Three failures inside 60 seconds persist installation
+disablement through the D01 registry and leave the supervisor `Failed` until an
+explicit lifecycle action re-enables it.
+
+The service template adds owner `User`/`Group`, `RuntimeDirectoryMode=0750`,
+`UMask=0027`, `KillMode=mixed`, `MemoryMax=1G`, `TasksMax=64`,
+`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=read-only`,
+`PrivateTmp`, and restricted address families. These controls isolate the
+trusted owner boundary but are not a malicious-plugin sandbox. The full
+interface, CLI table, systemd placeholders, evidence paths, and unresolved
+deployment inputs are in [Phase D02 runner architecture](./architecture/plugin-platform-d02.md).
 
 ## High-Level Overview
 

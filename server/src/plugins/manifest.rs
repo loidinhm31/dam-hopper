@@ -6,8 +6,7 @@ use super::error::PluginError;
 
 static ID_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9_.-]*[a-z0-9]$").unwrap());
-static SHA256_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-f0-9]{64}$").unwrap());
+static SHA256_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-f0-9]{64}$").unwrap());
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -101,15 +100,21 @@ pub fn validate_manifest(raw: &str) -> Result<ManifestV1, PluginError> {
     })?;
 
     if manifest.publisher.trim().is_empty() {
-        return Err(PluginError::invalid_input("Manifest publisher must not be empty"));
+        return Err(PluginError::invalid_input(
+            "Manifest publisher must not be empty",
+        ));
     }
 
     if manifest.host_version_range.trim().is_empty() {
-        return Err(PluginError::invalid_input("Manifest hostVersionRange must not be empty"));
+        return Err(PluginError::invalid_input(
+            "Manifest hostVersionRange must not be empty",
+        ));
     }
 
     if manifest.contracts.manifest != 1 {
-        return Err(PluginError::incompatible("Manifest contracts.manifest must be 1"));
+        return Err(PluginError::incompatible(
+            "Manifest contracts.manifest must be 1",
+        ));
     }
 
     if manifest.entrypoints.backend.runtime != "node" {
@@ -118,7 +123,9 @@ pub fn validate_manifest(raw: &str) -> Result<ManifestV1, PluginError> {
 
     if let Some(ui) = &manifest.entrypoints.ui {
         if ui.mode != "opaque-srcdoc" {
-            return Err(PluginError::invalid_input("Ui mode must be 'opaque-srcdoc'"));
+            return Err(PluginError::invalid_input(
+                "Ui mode must be 'opaque-srcdoc'",
+            ));
         }
     }
 

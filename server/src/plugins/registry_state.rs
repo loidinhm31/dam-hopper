@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use super::contract::GrantKey;
@@ -9,8 +9,7 @@ use super::manifest::{ManifestContracts, ManifestEntrypoints};
 
 static ID_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9_.-]*[a-z0-9]$").unwrap());
-static SHA256_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-f0-9]{64}$").unwrap());
+static SHA256_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-f0-9]{64}$").unwrap());
 
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 
@@ -72,7 +71,9 @@ pub struct InstallationRecord {
 impl InstallationRecord {
     pub fn validate(&self) -> Result<(), PluginError> {
         if self.installation_id.trim().is_empty() {
-            return Err(PluginError::invalid_input("installation_id cannot be empty"));
+            return Err(PluginError::invalid_input(
+                "installation_id cannot be empty",
+            ));
         }
         if !ID_REGEX.is_match(&self.plugin_id) {
             return Err(PluginError::invalid_input(format!(
@@ -133,14 +134,10 @@ impl RegistryV1Record {
             )));
         }
         if self.registry_revision == 0 {
-            return Err(PluginError::invalid_input(
-                "registry_revision must be >= 1",
-            ));
+            return Err(PluginError::invalid_input("registry_revision must be >= 1"));
         }
         if self.security_revision == 0 {
-            return Err(PluginError::invalid_input(
-                "security_revision must be >= 1",
-            ));
+            return Err(PluginError::invalid_input("security_revision must be >= 1"));
         }
         if !SHA256_REGEX.is_match(&self.admin_config_digest) {
             return Err(PluginError::invalid_input(format!(

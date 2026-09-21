@@ -8,6 +8,7 @@ malicious-code sandbox or a production lifecycle/update service.
 - [D01 implementation plan](../../plans/260920-1603-plugin-platform/phase-01-package-registry.md)
 - [Plugin platform plan](../../plans/260920-1603-plugin-platform/plan.md)
 - [System architecture](../system-architecture.md)
+- [D02 owner-account runner and supervision](./plugin-platform-d02.md)
 
 ## Scope and ownership
 
