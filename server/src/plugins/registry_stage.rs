@@ -27,7 +27,9 @@ impl PluginRegistry {
         total_bytes: u64,
     ) -> Result<StageBeginResult, PluginError> {
         if !self.admin_subjects.is_admin(actor) {
-            return Err(PluginError::unauthorized(format!("Actor '{actor}' is not authorized admin")));
+            return Err(PluginError::unauthorized(format!(
+                "Actor '{actor}' is not authorized admin"
+            )));
         }
 
         let state = self.read_state()?;
@@ -62,11 +64,15 @@ impl PluginRegistry {
     ) -> Result<u64, PluginError> {
         let mut stages = self.active_stages.lock();
         let session = stages.get_mut(stage_id).ok_or_else(|| {
-            PluginError::invalid_input(format!("No active stage upload session with ID '{stage_id}'"))
+            PluginError::invalid_input(format!(
+                "No active stage upload session with ID '{stage_id}'"
+            ))
         })?;
 
         if session.actor_subject != actor || !self.admin_subjects.is_admin(actor) {
-            return Err(PluginError::unauthorized(format!("Actor '{actor}' cannot write to stage '{stage_id}'")));
+            return Err(PluginError::unauthorized(format!(
+                "Actor '{actor}' cannot write to stage '{stage_id}'"
+            )));
         }
 
         session.append_chunk(sequence, chunk)
@@ -78,7 +84,9 @@ impl PluginRegistry {
         })?;
 
         if session.actor_subject != actor || !self.admin_subjects.is_admin(actor) {
-            return Err(PluginError::unauthorized(format!("Actor '{actor}' not authorized for stage '{stage_id}'")));
+            return Err(PluginError::unauthorized(format!(
+                "Actor '{actor}' not authorized for stage '{stage_id}'"
+            )));
         }
 
         let transaction_id = session.transaction_id.clone();
@@ -123,7 +131,9 @@ impl PluginRegistry {
         };
         write_journal_record(&self.layout, &record)?;
 
-        self.stage_reviews.lock().insert(stage_id.to_string(), review.clone());
+        self.stage_reviews
+            .lock()
+            .insert(stage_id.to_string(), review.clone());
         Ok(review)
     }
 }

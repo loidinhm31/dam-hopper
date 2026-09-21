@@ -43,7 +43,9 @@ pub fn extract_package_archive(
     archive.set_ignore_zeros(false);
 
     let entries = archive.entries().map_err(|e| {
-        PluginError::invalid_input(format!("Failed to read archive entries for extraction: {e}"))
+        PluginError::invalid_input(format!(
+            "Failed to read archive entries for extraction: {e}"
+        ))
     })?;
 
     for entry_res in entries {
@@ -51,12 +53,12 @@ pub fn extract_package_archive(
             PluginError::invalid_input(format!("Failed to read entry during extraction: {e}"))
         })?;
 
-        let raw_path = entry.path().map_err(|e| {
-            PluginError::invalid_input(format!("Invalid path in entry: {e}"))
-        })?;
-        let raw_str = raw_path.to_str().ok_or_else(|| {
-            PluginError::invalid_input("Non-UTF-8 path during extraction")
-        })?;
+        let raw_path = entry
+            .path()
+            .map_err(|e| PluginError::invalid_input(format!("Invalid path in entry: {e}")))?;
+        let raw_str = raw_path
+            .to_str()
+            .ok_or_else(|| PluginError::invalid_input("Non-UTF-8 path during extraction"))?;
         let normalized = normalize_package_path(raw_str)?;
         let target_path = extract_dest_dir.join(&normalized);
 
@@ -137,9 +139,8 @@ pub fn extract_package_archive(
 
     // Also write inventory.json
     let inventory_path = extract_dest_dir.join("inventory.json");
-    let inventory_bytes = serde_json::to_vec_pretty(&manifest.inventory).map_err(|e| {
-        PluginError::invalid_input(format!("Failed to serialize inventory: {e}"))
-    })?;
+    let inventory_bytes = serde_json::to_vec_pretty(&manifest.inventory)
+        .map_err(|e| PluginError::invalid_input(format!("Failed to serialize inventory: {e}")))?;
     fs::write(&inventory_path, &inventory_bytes).map_err(|e| {
         PluginError::runner_unavailable(format!("Failed to write inventory.json: {e}"))
     })?;

@@ -10,8 +10,7 @@ use super::registry_layout::PluginRegistryLayout;
 static UUID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$").unwrap()
 });
-static SHA256_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-f0-9]{64}$").unwrap());
+static SHA256_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-f0-9]{64}$").unwrap());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -89,9 +88,9 @@ pub fn write_journal_record(
     let bytes = serde_json::to_vec_pretty(record).map_err(|e| {
         PluginError::invalid_input(format!("Failed to serialize journal record: {e}"))
     })?;
-    crate::linux_release::durable_fs::atomic_write_file(&path, &bytes, Some(0o600)).map_err(|e| {
-        PluginError::runner_unavailable(format!("Failed to write journal record: {e}"))
-    })?;
+    crate::linux_release::durable_fs::atomic_write_file(&path, &bytes, Some(0o600)).map_err(
+        |e| PluginError::runner_unavailable(format!("Failed to write journal record: {e}")),
+    )?;
     Ok(())
 }
 
@@ -108,9 +107,8 @@ pub fn read_journal_record(
     let data = fs::read_to_string(&path).map_err(|e| {
         PluginError::runner_unavailable(format!("Failed to read journal record: {e}"))
     })?;
-    let record: TransactionRecord = serde_json::from_str(&data).map_err(|e| {
-        PluginError::invalid_input(format!("Failed to parse journal record: {e}"))
-    })?;
+    let record: TransactionRecord = serde_json::from_str(&data)
+        .map_err(|e| PluginError::invalid_input(format!("Failed to parse journal record: {e}")))?;
     record.validate()?;
     Ok(record)
 }

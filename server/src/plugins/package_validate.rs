@@ -44,7 +44,10 @@ pub fn validate_inventory_match(
     }
 
     for (path, entry) in entries {
-        if path != "manifest.json" && !entry.is_dir && !manifest.inventory.iter().any(|i| &i.path == path) {
+        if path != "manifest.json"
+            && !entry.is_dir
+            && !manifest.inventory.iter().any(|i| &i.path == path)
+        {
             return Err(PluginError::invalid_input(format!(
                 "Undeclared archive entry '{}' not listed in manifest inventory",
                 path
@@ -79,10 +82,7 @@ pub fn validate_entrypoints(
 
     if let Some(ui) = &manifest.entrypoints.ui {
         let ui_entry = entries.get(&ui.entry).ok_or_else(|| {
-            PluginError::invalid_input(format!(
-                "UI entrypoint '{}' not found in archive",
-                ui.entry
-            ))
+            PluginError::invalid_input(format!("UI entrypoint '{}' not found in archive", ui.entry))
         })?;
         if ui_entry.is_dir {
             return Err(PluginError::invalid_input(format!(

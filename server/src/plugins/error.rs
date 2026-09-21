@@ -84,4 +84,20 @@ impl PluginError {
     pub fn deadline_exceeded(message: impl Into<String>) -> Self {
         Self::new(PluginErrorCode::DeadlineExceeded, message)
     }
+
+    pub fn worker_failed(message: impl Into<String>) -> Self {
+        Self::new(PluginErrorCode::WorkerFailed, message)
+    }
+
+    pub fn context_revoked(message: impl Into<String>) -> Self {
+        Self::new(PluginErrorCode::ContextRevoked, message)
+    }
+
+    pub fn snapshot_expired(message: impl Into<String>) -> Self {
+        Self::new(PluginErrorCode::SnapshotExpired, message)
+    }
+
+    pub fn runtime_unavailable(message: impl Into<String>) -> Self {
+        Self::new(PluginErrorCode::RuntimeUnavailable, message)
+    }
 }

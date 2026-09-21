@@ -21,7 +21,11 @@ pub struct BoundedReader<R> {
 
 impl<R: Read> BoundedReader<R> {
     pub fn new(inner: R, limit: u64) -> Self {
-        Self { inner, total_read: 0, limit }
+        Self {
+            inner,
+            total_read: 0,
+            limit,
+        }
     }
 }
 
@@ -32,7 +36,10 @@ impl<R: Read> Read for BoundedReader<R> {
         if self.total_read > self.limit {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Uncompressed archive size exceeded maximum limit of {} bytes", self.limit),
+                format!(
+                    "Uncompressed archive size exceeded maximum limit of {} bytes",
+                    self.limit
+                ),
             ));
         }
         Ok(n)
@@ -60,9 +67,9 @@ pub fn inspect_and_validate_package(
     let mut archive = Archive::new(&mut bounded);
     archive.set_ignore_zeros(false);
 
-    let entries = archive.entries().map_err(|e| {
-        PluginError::invalid_input(format!("Failed to read archive entries: {e}"))
-    })?;
+    let entries = archive
+        .entries()
+        .map_err(|e| PluginError::invalid_input(format!("Failed to read archive entries: {e}")))?;
 
     let mut tracker = PathCollisionTracker::new();
     let mut entry_count = 0;
@@ -77,9 +84,8 @@ pub fn inspect_and_validate_package(
             )));
         }
 
-        let mut entry = entry_res.map_err(|e| {
-            PluginError::invalid_input(format!("Failed to read entry: {e}"))
-        })?;
+        let mut entry = entry_res
+            .map_err(|e| PluginError::invalid_input(format!("Failed to read entry: {e}")))?;
 
         let is_dir = match entry.header().entry_type() {
             EntryType::Regular => false,
@@ -94,9 +100,9 @@ pub fn inspect_and_validate_package(
         let raw_path = entry.path().map_err(|e| {
             PluginError::invalid_input(format!("Invalid path in archive header: {e}"))
         })?;
-        let raw_str = raw_path.to_str().ok_or_else(|| {
-            PluginError::invalid_input("Archive entry path is not valid UTF-8")
-        })?;
+        let raw_str = raw_path
+            .to_str()
+            .ok_or_else(|| PluginError::invalid_input("Archive entry path is not valid UTF-8"))?;
 
         let normalized = normalize_package_path(raw_str)?;
         tracker.check_and_insert(&normalized)?;
@@ -107,7 +113,13 @@ pub fn inspect_and_validate_package(
         if is_dir {
             inspected_entries.insert(
                 normalized.clone(),
-                InspectedEntry { path: normalized, is_dir: true, size: 0, mode: header_mode, sha256: None },
+                InspectedEntry {
+                    path: normalized,
+                    is_dir: true,
+                    size: 0,
+                    mode: header_mode,
+                    sha256: None,
+                },
             );
             continue;
         }

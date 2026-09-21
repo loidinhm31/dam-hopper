@@ -30,10 +30,15 @@ impl PluginRegistry {
             } else {
                 let file = self.layout.stage_review_file(stage_id);
                 if file.exists() {
-                    let c = fs::read_to_string(&file).map_err(|e| PluginError::runner_unavailable(format!("Read review: {e}")))?;
-                    serde_json::from_str(&c).map_err(|e| PluginError::invalid_input(format!("Parse review: {e}")))?
+                    let c = fs::read_to_string(&file).map_err(|e| {
+                        PluginError::runner_unavailable(format!("Read review: {e}"))
+                    })?;
+                    serde_json::from_str(&c)
+                        .map_err(|e| PluginError::invalid_input(format!("Parse review: {e}")))?
                 } else {
-                    return Err(PluginError::invalid_input(format!("Stage '{stage_id}' not found or not finished")));
+                    return Err(PluginError::invalid_input(format!(
+                        "Stage '{stage_id}' not found or not finished"
+                    )));
                 }
             }
         };
@@ -72,7 +77,9 @@ impl PluginRegistry {
             let _guard = self.state_lock.lock();
             let fresh = self.read_state()?;
             if fresh.security_revision != current_state.security_revision {
-                return Err(PluginError::forbidden("Concurrent security revision advance"));
+                return Err(PluginError::forbidden(
+                    "Concurrent security revision advance",
+                ));
             }
         }
 
@@ -90,7 +97,9 @@ impl PluginRegistry {
         let mut fresh_state = self.read_state()?;
         if fresh_state.security_revision != current_state.security_revision {
             let _ = fs::remove_dir_all(&temp_extracted);
-            return Err(PluginError::forbidden("Concurrent security revision advance"));
+            return Err(PluginError::forbidden(
+                "Concurrent security revision advance",
+            ));
         }
 
         publish_extracted_package(
@@ -100,7 +109,10 @@ impl PluginRegistry {
             &review.version,
             &review.archive_sha256,
         )?;
-        let pkg_key = format!("{}@{}#{}", review.plugin_id, review.version, review.archive_sha256);
+        let pkg_key = format!(
+            "{}@{}#{}",
+            review.plugin_id, review.version, review.archive_sha256
+        );
         let now_str = Utc::now().to_rfc3339();
         let pkg_record = RegisteredPackageRecord {
             plugin_id: review.plugin_id.clone(),
@@ -145,7 +157,9 @@ impl PluginRegistry {
             updated_at: now_str.clone(),
         };
 
-        fresh_state.installations.insert(installation_id.clone(), inst_record.clone());
+        fresh_state
+            .installations
+            .insert(installation_id.clone(), inst_record.clone());
         fresh_state.registry_revision += 1;
         self.write_state(&fresh_state)?;
 

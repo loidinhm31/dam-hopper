@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-21 from `repomix-output.xml` (Repomix v1.18.0; 2,161
-files, 4,797,769 tokens, 20,017,262 characters; five security-flagged files
+**Generated:** 2026-09-21 from `repomix-output.xml` (Repomix v1.18.0; 2,174
+files, 4,834,061 tokens, 20,180,613 characters; five security-flagged files
 excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
@@ -27,38 +27,37 @@ security scanning are not represented in full.
 - `docs/` — operator, API, architecture, standards, and product-requirement
   documentation.
 
-## Trusted plugin platform (Phases D00–D01)
+## Trusted plugin platform (Phases D00–D02)
 
-The candidate generic SDK is `@dam-hopper/plugin-sdk` `0.1.0`. Its source
-exports manifest, runner protocol, worker cancellation, UI bridge, framing, and
-error contracts. Four versioned JSON Schemas, positive/negative fixtures, and a
-self-contained opaque UI fixture are under `packages/plugin-sdk/`.
+The candidate SDK is `@dam-hopper/plugin-sdk` `0.1.0`; schemas, fixtures, and
+the packed artifact live under `packages/plugin-sdk/`. D00 Rust mirrors and
+strict four-byte big-endian JSON-RPC framing live in `server/src/plugins/`.
 
-- `packages/plugin-sdk/dam-hopper-plugin-sdk-0.1.0.tgz` is the candidate packed
-  artifact; its SHA-256 is pinned jointly at G0.
-- D00 Rust mirrors live in `server/src/plugins/{contract,error,framing,manifest}.rs`;
-  `server/src/lib.rs` exports the module. Four-byte big-endian frames, 16 MiB
-  payload/64 KiB control caps, string IDs, strict params, and no JSON-RPC
-  batches remain the runner contract.
-- D01 registry modules add bounded staging (`stage.rs`, `registry_stage.rs`),
-  archive inspection/extraction (`package*.rs`), strict state/journal/layout
-  records, digest-bound trust approval, revision-tagged queries, and grant/
-  binding CAS updates. The runner-owned state layout and API are documented in
+- D00 caps payloads at 16 MiB, aggregate buffered frames at 64 MiB, and
+  defines a 64 KiB control budget; string IDs, strict params, and no batches
+  fail closed.
+- D01 owns the immutable package registry, bounded gzip-tar staging/extraction,
+  digest approval, strict state/journal records, and grant/binding CAS. See
   [Phase D01 architecture](./architecture/plugin-platform-d01.md).
-- `registry-v1.json` is the sole durable package/install/grant/binding
-  authority. Staged gzip-tar input is capped at 32 MiB compressed, 64 MiB
-  expanded, 2,048 entries, 512 KiB decoded chunks, and 5 MiB UI bytes.
-  Path traversal, links/special files, duplicates/case collisions, inventory
-  mismatch, and undeclared regular entries fail closed.
-- `server/tests/plugin_package_archive.rs` and
-  `server/tests/plugin_package_registry.rs` cover path/archive adversaries,
-  stream lifecycle, digest review, revision rejection, CAS updates, and crash
-  cleanup. The targeted D01 gate passed 24/24 tests including contract
-  fixtures; this is phase evidence, not a broad release claim.
-- D01 is complete for the initial immutable installation/G1 input. D02–D06
-  still own the real worker, authorized API, UI host, lifecycle, and Linux
-  qualification gates. The registry is trusted same-UID code, not a malicious
-  plugin sandbox.
+- D02 adds `dam-hopper-plugin-runner`, `RunnerServer`, `RunnerClient`,
+  `WorkerProcess`, and `InstallationSupervisor` under `server/src/`. The
+  runner binds an owner-created AF_UNIX socket, checks `SO_PEERCRED`, performs
+  exact `runner.hello`, and multiplexes framed JSON-RPC requests.
+- Worker processes use immutable D01 package roots, private framed
+  stdin/stdout, sanitized bounded stderr, a cleared/allowlisted environment,
+  and a Unix process group. One supervisor generation owns one worker and
+  revokes contexts on crash/deadline.
+- D02 enforces 16 contexts/worker, four invokes/context, 16 invokes/worker,
+  one declared long-running invoke, 10/30-second deadlines, and a durable
+  three-failures-in-60-seconds installation budget. Current over-limit calls
+  fail fast with `OVERLOADED`; a 32-entry fair queue is not implemented.
+- `deploy/systemd/dam-hopper-plugin-runner.service.in` renders the owner,
+  expected API UID, runtime directory, cgroup caps, and systemd hardening.
+  The full interface is in [Phase D02 architecture](./architecture/plugin-platform-d02.md).
+- Focused evidence is in `server/tests/plugin_runner_protocol.rs` and
+  `server/tests/plugin_runner_supervision.rs`; D03–D06 still own authorized
+  API, lifecycle, UI, and Linux qualification. This remains trusted
+  same-identity execution, not a malicious-code sandbox.
 
 ## Unified-profile workbench frontend (Phases 00–02)
 
