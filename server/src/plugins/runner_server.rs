@@ -375,7 +375,7 @@ async fn dispatch_method(
             let params: PluginReadUiParams = serde_json::from_value(params).map_err(|e| {
                 PluginError::invalid_input(format!("Invalid plugin.readUi params: {e}"))
             })?;
-            let res = registry.read_ui_bytes(&params.installation_id, &params.expected_digest)?;
+            let res = registry.read_ui_bytes(&params)?;
             Ok(serde_json::to_value(res).unwrap())
         }
         "plugin.activate" => {

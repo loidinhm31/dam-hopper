@@ -442,15 +442,87 @@ impl RunnerClient {
         })
     }
 
+    async fn execute_invoke(
+        &self,
+        request_id: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, PluginError> {
+        let mut retries = 0;
+        let (writer, pending_responses) = loop {
+            let mut session_guard = self.session.lock().await;
+            if session_guard.is_none() {
+                match self.connect_and_handshake().await {
+                    Ok(session) => *session_guard = Some(session),
+                    Err(error) => {
+                        if retries >= self.config.max_reconnect_retries {
+                            return Err(error);
+                        }
+                        retries += 1;
+                        let delay = self.config.reconnect_base_delay * (1 << (retries - 1));
+                        drop(session_guard);
+                        sleep(delay).await;
+                        continue;
+                    }
+                }
+            }
+            let session = session_guard.as_ref().unwrap();
+            break (session.writer.clone(), session.pending_responses.clone());
+        };
+
+        let request = build_json_rpc_request(request_id, "plugin.invoke", params);
+        let request_bytes = serde_json::to_vec(&request).unwrap();
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = pending_responses.lock();
+            if pending.contains_key(request_id) {
+                return Err(PluginError::invalid_input(
+                    "Plugin request ID is already in flight",
+                ));
+            }
+            pending.insert(request_id.to_string(), tx);
+        }
+
+        {
+            let mut writer = writer.lock().await;
+            if let Err(error) = write_frame_async(&mut *writer, &request_bytes).await {
+                pending_responses.lock().remove(request_id);
+                *self.session.lock().await = None;
+                return Err(PluginError::runner_unavailable(format!(
+                    "Runner write failure: {error}"
+                )));
+            }
+        }
+
+        match rx.await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(error),
+            Err(_) => {
+                *self.session.lock().await = None;
+                Err(PluginError::runner_unavailable(
+                    "Runner dropped invoke response channel",
+                ))
+            }
+        }
+    }
+
+    pub async fn invoke_with_request_id(
+        &self,
+        request_id: &str,
+        params: PluginInvokeParams,
+    ) -> Result<PluginInvokeResult, PluginError> {
+        let res = self
+            .execute_invoke(request_id, serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res)
+            .map_err(|e| PluginError::invalid_input(format!("Failed to parse invoke result: {e}")))
+    }
+
     pub async fn invoke(
         &self,
         params: PluginInvokeParams,
     ) -> Result<PluginInvokeResult, PluginError> {
-        let res = self
-            .execute_call("plugin.invoke", serde_json::to_value(params).unwrap())
-            .await?;
-        serde_json::from_value(res)
-            .map_err(|e| PluginError::invalid_input(format!("Failed to parse invoke result: {e}")))
+        let request_id = self.generate_request_id();
+        self.invoke_with_request_id(&request_id, params).await
     }
 
     pub async fn cancel_request(

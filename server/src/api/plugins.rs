@@ -11,7 +11,7 @@ use crate::state::AppState;
 use crate::workspace_target::ProjectTargetRef;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListPluginsQuery {
     pub project: String,
     pub worktree_path: Option<String>,
@@ -24,14 +24,14 @@ pub struct ListPluginsResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TargetWireDto {
     pub project: String,
     pub worktree_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenContextRequest {
     pub epoch: u64,
     pub installation_id: String,
@@ -43,17 +43,18 @@ pub struct OpenContextRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloseContextRequest {
     pub epoch: u64,
     pub context_id: String,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InvokeRequest {
     pub epoch: u64,
     pub context_id: String,
+    pub request_id: String,
     pub operation: String,
     pub payload: serde_json::Value,
     pub deadline_ms: Option<u64>,
@@ -66,7 +67,7 @@ pub struct InvokeResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CancelRequest {
     pub epoch: u64,
     pub context_id: String,
@@ -76,11 +77,15 @@ pub struct CancelRequest {
 pub fn plugin_error_response(err: PluginError) -> Response {
     let status = match err.code {
         PluginErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
-        PluginErrorCode::Forbidden | PluginErrorCode::SourcePermissionDenied => StatusCode::FORBIDDEN,
+        PluginErrorCode::Forbidden | PluginErrorCode::SourcePermissionDenied => {
+            StatusCode::FORBIDDEN
+        }
         PluginErrorCode::InvalidInput
         | PluginErrorCode::Incompatible
         | PluginErrorCode::DetailChangedOrMissing => StatusCode::BAD_REQUEST,
-        PluginErrorCode::SourceMissing | PluginErrorCode::SourceNotConfigured => StatusCode::NOT_FOUND,
+        PluginErrorCode::SourceMissing | PluginErrorCode::SourceNotConfigured => {
+            StatusCode::NOT_FOUND
+        }
         PluginErrorCode::Overloaded => StatusCode::TOO_MANY_REQUESTS,
         PluginErrorCode::DeadlineExceeded => StatusCode::GATEWAY_TIMEOUT,
         PluginErrorCode::Cancelled => StatusCode::CONFLICT,
@@ -125,7 +130,22 @@ pub async fn list_plugins_handler(
     }
 
     let Some(Extension(actor)) = actor else {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Unauthorized" })),
+        )
+            .into_response();
+    };
+
+    let configured_root = match state.workspace_target_project_path(&query.project).await {
+        Ok(path) => path,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Project target not found" })),
+            )
+                .into_response();
+        }
     };
 
     let target_ref = ProjectTargetRef {
@@ -135,7 +155,7 @@ pub async fn list_plugins_handler(
 
     match state
         .plugin_service
-        .list_plugins(&actor, &target_ref, state.no_auth)
+        .list_plugins(&actor, &target_ref, &configured_root, state.no_auth)
         .await
     {
         Ok(plugins) => Json(ListPluginsResponse { plugins }).into_response(),
@@ -153,10 +173,17 @@ pub async fn open_context_handler(
     }
 
     let Some(Extension(actor)) = actor else {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Unauthorized" })),
+        )
+            .into_response();
     };
 
-    let configured_root = match state.workspace_target_project_path(&request.target.project).await {
+    let configured_root = match state
+        .workspace_target_project_path(&request.target.project)
+        .await
+    {
         Ok(path) => path,
         Err(e) => {
             return (
@@ -201,7 +228,11 @@ pub async fn invoke_handler(
     }
 
     let Some(Extension(actor)) = actor else {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Unauthorized" })),
+        )
+            .into_response();
     };
 
     match state
@@ -210,6 +241,7 @@ pub async fn invoke_handler(
             &actor,
             request.epoch,
             &request.context_id,
+            &request.request_id,
             &request.operation,
             request.payload,
             request.deadline_ms,
@@ -232,7 +264,11 @@ pub async fn cancel_handler(
     }
 
     let Some(Extension(actor)) = actor else {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Unauthorized" })),
+        )
+            .into_response();
     };
 
     match state
@@ -261,7 +297,11 @@ pub async fn close_context_handler(
     }
 
     let Some(Extension(actor)) = actor else {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Unauthorized" })),
+        )
+            .into_response();
     };
 
     match state
@@ -271,5 +311,45 @@ pub async fn close_context_handler(
     {
         Ok(res) => Json(res).into_response(),
         Err(e) => plugin_error_response(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invoke_request_rejects_legacy_params_field() {
+        let request = serde_json::json!({
+            "epoch": 1,
+            "requestId": "frame-request-1",
+            "contextId": "ctx-1",
+            "operation": "advisor.scan",
+            "payload": {},
+            "params": {}
+        });
+
+        assert!(serde_json::from_value::<InvokeRequest>(request).is_err());
+    }
+
+    #[test]
+    fn list_metadata_exposes_active_identity_in_camel_case() {
+        let response = ListPluginsResponse {
+            plugins: vec![PluginMetadataItem {
+                id: "install-1".to_string(),
+                version: "1.0.0".to_string(),
+                publisher: "publisher".to_string(),
+                capabilities: vec![],
+                has_ui: true,
+                active_digest: "a".repeat(64),
+                active_generation: 4,
+                enabled: true,
+            }],
+        };
+
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["plugins"][0]["activeDigest"], "a".repeat(64));
+        assert_eq!(value["plugins"][0]["activeGeneration"], 4);
+        assert!(value["plugins"][0].get("active_digest").is_none());
     }
 }

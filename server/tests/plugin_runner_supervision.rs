@@ -176,7 +176,6 @@ async fn test_real_worker_lifecycle_and_snapshot_summary() {
     assert_eq!(sup.status(), SupervisorStatus::Ready);
     assert_eq!(sup.generation(), 2);
 
-    let current_gen = sup.generation();
     let open_res = sup
         .open_context(ContextOpenParams {
             actor_subject: "user-bob".to_string(),
@@ -186,12 +185,12 @@ async fn test_real_worker_lifecycle_and_snapshot_summary() {
             allowed_operations: vec!["snapshot.summary".to_string(), "check.env".to_string()],
             allow_current_account_policy: false,
             api_connection_epoch: 1,
-            activation_generation: current_gen,
+            activation_generation: sup.activation_generation(),
         })
         .await
         .unwrap();
 
-    assert_eq!(open_res.activation_generation, sup.generation());
+    assert_eq!(open_res.activation_generation, sup.activation_generation());
 
     // Invoke snapshot.summary
     let invoke_res = sup
@@ -254,7 +253,6 @@ async fn test_real_worker_cancellation() {
     let sup = sup_mgr.get_or_create(&installation_id).await.unwrap();
     sup.activate().await.unwrap();
 
-    let current_gen = sup.generation();
     let open_res = sup
         .open_context(ContextOpenParams {
             actor_subject: "user-bob".to_string(),
@@ -264,7 +262,7 @@ async fn test_real_worker_cancellation() {
             allowed_operations: vec!["slow.op".to_string()],
             allow_current_account_policy: false,
             api_connection_epoch: 1,
-            activation_generation: current_gen,
+            activation_generation: sup.activation_generation(),
         })
         .await
         .unwrap();
@@ -332,7 +330,6 @@ async fn test_real_worker_crash_and_restart_exhaustion() {
     let sup = sup_mgr.get_or_create(&installation_id).await.unwrap();
     sup.activate().await.unwrap();
 
-    let current_gen = sup.generation();
     let open_res = sup
         .open_context(ContextOpenParams {
             actor_subject: "user-bob".to_string(),
@@ -342,7 +339,7 @@ async fn test_real_worker_crash_and_restart_exhaustion() {
             allowed_operations: vec!["crash.worker".to_string()],
             allow_current_account_policy: false,
             api_connection_epoch: 1,
-            activation_generation: current_gen,
+            activation_generation: sup.activation_generation(),
         })
         .await
         .unwrap();
@@ -362,7 +359,6 @@ async fn test_real_worker_crash_and_restart_exhaustion() {
 
     // Reactivate and trigger crash 2
     sup.activate().await.unwrap();
-    let current_gen2 = sup.generation();
     let open_res2 = sup
         .open_context(ContextOpenParams {
             actor_subject: "user-bob".to_string(),
@@ -372,7 +368,7 @@ async fn test_real_worker_crash_and_restart_exhaustion() {
             allowed_operations: vec!["crash.worker".to_string()],
             allow_current_account_policy: false,
             api_connection_epoch: 1,
-            activation_generation: current_gen2,
+            activation_generation: sup.activation_generation(),
         })
         .await
         .unwrap();
@@ -391,7 +387,6 @@ async fn test_real_worker_crash_and_restart_exhaustion() {
 
     // Reactivate and trigger crash 3
     sup.activate().await.unwrap();
-    let current_gen3 = sup.generation();
     let open_res3 = sup
         .open_context(ContextOpenParams {
             actor_subject: "user-bob".to_string(),
@@ -401,7 +396,7 @@ async fn test_real_worker_crash_and_restart_exhaustion() {
             allowed_operations: vec!["crash.worker".to_string()],
             allow_current_account_policy: false,
             api_connection_epoch: 1,
-            activation_generation: current_gen3,
+            activation_generation: sup.activation_generation(),
         })
         .await
         .unwrap();
@@ -488,7 +483,7 @@ async fn test_context_id_uuid_support_through_runner_server() {
             allowed_operations: vec!["snapshot.summary".to_string()],
             allow_current_account_policy: false,
             api_connection_epoch: 1,
-            activation_generation: 2,
+            activation_generation: 1,
         })
         .await
         .unwrap();
@@ -569,7 +564,7 @@ async fn test_concurrent_invokes_and_cancellation_multiplexed() {
             allowed_operations: vec!["slow.op".to_string()],
             allow_current_account_policy: false,
             api_connection_epoch: 1,
-            activation_generation: 2,
+            activation_generation: 1,
         })
         .await
         .unwrap();
@@ -627,7 +622,7 @@ async fn test_stale_context_revocation_across_worker_restarts() {
             allowed_operations: vec!["snapshot.summary".to_string()],
             allow_current_account_policy: false,
             api_connection_epoch: 1,
-            activation_generation: sup.generation(),
+            activation_generation: sup.activation_generation(),
         })
         .await
         .unwrap();

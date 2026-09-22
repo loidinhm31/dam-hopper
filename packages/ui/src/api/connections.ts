@@ -89,6 +89,35 @@ const tombstones = new Set<ProfileId>();
 const inFlightConnects = new Map<ProfileId, Promise<void>>();
 const listeners = new Set<() => void>();
 const mediaClientIdsByOwner = new Map<string, string>();
+const invalidationListeners = new Map<string, Set<() => void>>();
+
+function invalidateEntry(entry: ConnectionEntry): void {
+  const key = connectionKey({
+    profileId: entry.profileId,
+    generation: entry.generation,
+  });
+  const callbacks = invalidationListeners.get(key);
+  if (!callbacks) return;
+  invalidationListeners.delete(key);
+  for (const callback of callbacks) callback();
+}
+
+export function onConnectionInvalidated(
+  owner: ConnectionRef,
+  listener: () => void,
+): () => void {
+  const key = connectionKey(owner);
+  let callbacks = invalidationListeners.get(key);
+  if (!callbacks) {
+    callbacks = new Set();
+    invalidationListeners.set(key, callbacks);
+  }
+  callbacks.add(listener);
+  return () => {
+    callbacks?.delete(listener);
+    if (callbacks?.size === 0) invalidationListeners.delete(key);
+  };
+}
 function notifyListeners(): void {
   for (const listener of listeners) {
     listener();
@@ -196,6 +225,7 @@ function handleDrop(profileId: ProfileId, generation: number): void {
 
   entry.settleConnect?.();
   entry.unsubBridge?.();
+  invalidateEntry(entry);
   entry.generation += 1;
   entry.unsubBridge = null;
   entry.transport?.destroy?.();
@@ -313,6 +343,7 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
   const entry = getOrCreateEntry(profileId, cleanUrl);
   clearReconnectTimer(entry);
   entry.settleConnect?.();
+  invalidateEntry(entry);
   entry.unsubBridge?.();
   entry.unsubBridge = null;
   entry.transport?.destroy?.();
@@ -486,6 +517,7 @@ export function disconnectProfile(profileId: ProfileId): void {
     entry.transport != null && entry.transport === currentAmbient;
 
   entry.settleConnect?.();
+  invalidateEntry(entry);
   entry.intent = false;
   entry.generation += 1;
   inFlightConnects.delete(profileId);
@@ -570,9 +602,7 @@ export function getMediaClientId(owner: ConnectionRef): string {
 }
 
 /** Returns the active mediaClientId for a profile, generating a stable one if disconnected. */
-export function getMediaClientIdForProfile(
-  profileId: ProfileId,
-): string {
+export function getMediaClientIdForProfile(profileId: ProfileId): string {
   const snap = getConnectionSnapshot(profileId);
   const owner: ConnectionRef = snap?.owner ?? { profileId, generation: 1 };
   return getMediaClientId(owner);
@@ -589,6 +619,7 @@ export function removeProfileConnection(profileId: ProfileId): void {
   if (entry) {
     entry.intent = false;
     entry.settleConnect?.();
+    invalidateEntry(entry);
     entry.generation += 1;
     clearReconnectTimer(entry);
     entry.unsubBridge?.();
@@ -618,6 +649,7 @@ export function resetConnections(): void {
   for (const entry of entries.values()) {
     entry.intent = false;
     entry.settleConnect?.();
+    invalidateEntry(entry);
     entry.generation += 1;
     clearReconnectTimer(entry);
     entry.unsubBridge?.();
@@ -634,6 +666,7 @@ export function resetConnections(): void {
   tombstones.clear();
   inFlightConnects.clear();
   listeners.clear();
+  invalidationListeners.clear();
   mediaClientIdsByOwner.clear();
 }
 

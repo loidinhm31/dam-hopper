@@ -68,7 +68,11 @@ import type {
   InvokeResponse,
   ListPluginsResponse,
   OpenContextRequest,
+  PluginEpoch,
   PluginMetadataItem,
+  PluginRevokedEvent,
+  PluginUiAsset,
+  PluginUiAssetRequest,
   RequestCancelResult,
 } from "./plugin-types.js";
 export type {
@@ -81,7 +85,11 @@ export type {
   InvokeResponse,
   ListPluginsResponse,
   OpenContextRequest,
+  PluginEpoch,
   PluginMetadataItem,
+  PluginRevokedEvent,
+  PluginUiAsset,
+  PluginUiAssetRequest,
   RequestCancelResult,
 };
 import type {
@@ -1649,9 +1657,11 @@ export type ProjectTargetInput =
   | { project: string; worktreePath?: string | null; profileId?: string }
   | ProjectTargetRef;
 
-export function normalizeProjectTarget(
-  target: ProjectTargetInput,
-): { project: string; worktreePath?: string; profileId?: string } {
+export function normalizeProjectTarget(target: ProjectTargetInput): {
+  project: string;
+  worktreePath?: string;
+  profileId?: string;
+} {
   if (typeof target === "string") return { project: target };
   const worktreePath =
     target.worktreePath != null && target.worktreePath.trim() !== ""
@@ -1895,7 +1905,11 @@ export function createApiClient(
     return targets.map(toWireTarget);
   }
 
-  const usageDelete = (request: { confirmation: string; from?: number; to?: number }) =>
+  const usageDelete = (request: {
+    confirmation: string;
+    from?: number;
+    to?: number;
+  }) =>
     transport.invoke<{ deleted: true }>("usage:deleteAll", {
       ...request,
     });
@@ -1903,762 +1917,859 @@ export function createApiClient(
   return {
     owner,
     transport,
-  workspace: {
-    get: () => transport.invoke<WorkspaceInfo>("workspace:get"),
-    switch: (path: string) =>
-      transport.invoke<WorkspaceInfo>("workspace:switch", path),
-    known: () =>
-      transport.invoke<KnownWorkspacesResponse>("workspace:known"),
-    addKnown: (path: string) =>
-      transport.invoke<KnownWorkspace>("workspace:addKnown", path),
-    removeKnown: (path: string) =>
-      transport.invoke<{ removed: boolean }>(
-        "workspace:removeKnown",
-        path,
-      ),
-    status: () => transport.invoke<WorkspaceStatus>("workspace:status"),
-    init: (path: string) =>
-      transport.invoke<{ name: string; root: string }>(
-        "workspace:init",
-        path,
-      ),
-    discover: (path: string) =>
-      transport.invoke<DiscoverResponse>("workspace:discover", path),
-  },
-  globalConfig: {
-    get: () => transport.invoke<GlobalConfig>("globalConfig:get"),
-    updateDefaults: (defaults: { workspace?: string }) =>
-      transport.invoke<{ updated: true }>(
-        "globalConfig:updateDefaults",
-        defaults,
-      ),
-    updateUi: (ui: Partial<UiConfig>) =>
-      transport.invoke<{ updated: true }>("globalConfig:updateUi", ui),
-  },
-  projects: {
-    list: () => transport.invoke<ProjectWithStatus[]>("projects:list"),
-    get: (name: string) =>
-      transport.invoke<ProjectWithStatus>("projects:get", name),
-    status: (target: ProjectTargetInput) =>
-      transport.invoke<GitStatus | null>(
-        "projects:status",
-        toWireTarget(target),
-      ),
-  },
-  git: {
-    fetch: (targets?: ProjectTargetInput[]) =>
-      transport.invoke<GitOpResult[]>("git:fetch", toWireTargetList(targets)),
-    pull: (targets?: ProjectTargetInput[]) =>
-      transport.invoke<GitOpResult[]>("git:pull", toWireTargetList(targets)),
-    push: (target: ProjectTargetInput, root?: string, force?: boolean) =>
-      transport.invoke<GitOpResult>("git:push", {
-        ...toWireTarget(target),
-        root,
-        force,
-      }),
-    worktrees: (project: string) =>
-      transport.invoke<Worktree[]>("git:worktrees", project),
-    roots: (target: ProjectTargetInput) =>
-      transport.invoke<VcsRoot[]>(
-        "git:roots",
-        toWireTarget(target),
-      ),
-    addWorktree: (
-      project: string,
-      options: { path: string; branch: string; createBranch?: boolean },
-    ) =>
-      transport.invoke<Worktree>("git:addWorktree", { project, options }),
-    removeWorktree: (project: string, path: string) =>
-      transport.invoke<void>("git:removeWorktree", { project, path }),
-    branches: (target: ProjectTargetInput, root?: string) =>
-      transport.invoke<Branch[]>("git:branches", {
-        ...toWireTarget(target),
-        root,
-      }),
-    createBranch: (
-      target: ProjectTargetInput,
-      options: {
-        name: string;
-        startPoint?: string;
-        checkout?: boolean;
-        root?: string;
-      },
-    ) =>
-      transport.invoke<GitActionResult>("git:createBranch", {
-        ...toWireTarget(target),
-        options,
-      }),
-    checkoutBranch: (
-      target: ProjectTargetInput,
-      options: {
-        branch: string;
-        startPoint?: string;
-        create?: boolean;
-        strategy?: CheckoutStrategy;
-        root?: string;
-      },
-    ) =>
-      transport.invoke<GitActionResult>("git:checkoutBranch", {
-        ...toWireTarget(target),
-        options,
-      }),
-    deleteBranch: (
-      target: ProjectTargetInput,
-      options: {
-        name: string;
-        root?: string;
-      },
-    ) =>
-      transport.invoke<GitActionResult>("git:deleteBranch", {
-        ...toWireTarget(target),
-        options,
-      }),
-    updateBranch: (
-      target: ProjectTargetInput,
-      branch?: string,
-      root?: string,
-    ) =>
-      transport.invoke<BranchUpdateResult>("git:updateBranch", {
-        ...toWireTarget(target),
-        branch,
-        root,
-      }),
-    log: (
-      target: ProjectTargetInput,
-      limit?: number,
-      offset?: number,
-      ref?: string,
-      root?: string,
-    ) =>
-      transport.invoke<GitLogEntry[]>("git:log", {
-        ...toWireTarget(target),
-        limit,
-        offset,
-        ref,
-        root,
-      }),
-    diff: (target: ProjectTargetInput, root?: string) =>
-      transport.invoke<DiffResponse>("git:diff", {
-        ...toWireTarget(target),
-        root,
-      }),
-    untrackedFiles: (
-      target: ProjectTargetInput,
-      offset: number,
-      limit: number,
-      root?: string,
-    ) =>
-      transport.invoke<DiffFileEntry[]>("git:untrackedFiles", {
-        ...toWireTarget(target),
-        offset,
-        limit,
-        root,
-      }),
-    fileDiff: (target: ProjectTargetInput, path: string, root?: string) =>
-      transport.invoke<FileDiffContent>("git:fileDiff", {
-        ...toWireTarget(target),
-        path,
-        root,
-      }),
-    stage: (target: ProjectTargetInput, paths: string[], root?: string) =>
-      transport.invoke<{ ok: boolean; error?: string }>("git:stage", {
-        ...toWireTarget(target),
-        paths,
-        root,
-      }),
-    unstage: (target: ProjectTargetInput, paths: string[], root?: string) =>
-      transport.invoke<{ ok: boolean; error?: string }>("git:unstage", {
-        ...toWireTarget(target),
-        paths,
-        root,
-      }),
-    discard: (target: ProjectTargetInput, path: string, root?: string) =>
-      transport.invoke<{ ok: boolean; error?: string }>("git:discard", {
-        ...toWireTarget(target),
-        path,
-        root,
-      }),
-    discardHunk: (
-      target: ProjectTargetInput,
-      path: string,
-      hunkIndex: number,
-      root?: string,
-    ) =>
-      transport.invoke<{ ok: boolean; error?: string }>(
-        "git:discardHunk",
-        {
+    workspace: {
+      get: () => transport.invoke<WorkspaceInfo>("workspace:get"),
+      switch: (path: string) =>
+        transport.invoke<WorkspaceInfo>("workspace:switch", path),
+      known: () => transport.invoke<KnownWorkspacesResponse>("workspace:known"),
+      addKnown: (path: string) =>
+        transport.invoke<KnownWorkspace>("workspace:addKnown", path),
+      removeKnown: (path: string) =>
+        transport.invoke<{ removed: boolean }>("workspace:removeKnown", path),
+      status: () => transport.invoke<WorkspaceStatus>("workspace:status"),
+      init: (path: string) =>
+        transport.invoke<{ name: string; root: string }>(
+          "workspace:init",
+          path,
+        ),
+      discover: (path: string) =>
+        transport.invoke<DiscoverResponse>("workspace:discover", path),
+    },
+    globalConfig: {
+      get: () => transport.invoke<GlobalConfig>("globalConfig:get"),
+      updateDefaults: (defaults: { workspace?: string }) =>
+        transport.invoke<{ updated: true }>(
+          "globalConfig:updateDefaults",
+          defaults,
+        ),
+      updateUi: (ui: Partial<UiConfig>) =>
+        transport.invoke<{ updated: true }>("globalConfig:updateUi", ui),
+    },
+    projects: {
+      list: () => transport.invoke<ProjectWithStatus[]>("projects:list"),
+      get: (name: string) =>
+        transport.invoke<ProjectWithStatus>("projects:get", name),
+      status: (target: ProjectTargetInput) =>
+        transport.invoke<GitStatus | null>(
+          "projects:status",
+          toWireTarget(target),
+        ),
+    },
+    git: {
+      fetch: (targets?: ProjectTargetInput[]) =>
+        transport.invoke<GitOpResult[]>("git:fetch", toWireTargetList(targets)),
+      pull: (targets?: ProjectTargetInput[]) =>
+        transport.invoke<GitOpResult[]>("git:pull", toWireTargetList(targets)),
+      push: (target: ProjectTargetInput, root?: string, force?: boolean) =>
+        transport.invoke<GitOpResult>("git:push", {
+          ...toWireTarget(target),
+          root,
+          force,
+        }),
+      worktrees: (project: string) =>
+        transport.invoke<Worktree[]>("git:worktrees", project),
+      roots: (target: ProjectTargetInput) =>
+        transport.invoke<VcsRoot[]>("git:roots", toWireTarget(target)),
+      addWorktree: (
+        project: string,
+        options: { path: string; branch: string; createBranch?: boolean },
+      ) => transport.invoke<Worktree>("git:addWorktree", { project, options }),
+      removeWorktree: (project: string, path: string) =>
+        transport.invoke<void>("git:removeWorktree", { project, path }),
+      branches: (target: ProjectTargetInput, root?: string) =>
+        transport.invoke<Branch[]>("git:branches", {
+          ...toWireTarget(target),
+          root,
+        }),
+      createBranch: (
+        target: ProjectTargetInput,
+        options: {
+          name: string;
+          startPoint?: string;
+          checkout?: boolean;
+          root?: string;
+        },
+      ) =>
+        transport.invoke<GitActionResult>("git:createBranch", {
+          ...toWireTarget(target),
+          options,
+        }),
+      checkoutBranch: (
+        target: ProjectTargetInput,
+        options: {
+          branch: string;
+          startPoint?: string;
+          create?: boolean;
+          strategy?: CheckoutStrategy;
+          root?: string;
+        },
+      ) =>
+        transport.invoke<GitActionResult>("git:checkoutBranch", {
+          ...toWireTarget(target),
+          options,
+        }),
+      deleteBranch: (
+        target: ProjectTargetInput,
+        options: {
+          name: string;
+          root?: string;
+        },
+      ) =>
+        transport.invoke<GitActionResult>("git:deleteBranch", {
+          ...toWireTarget(target),
+          options,
+        }),
+      updateBranch: (
+        target: ProjectTargetInput,
+        branch?: string,
+        root?: string,
+      ) =>
+        transport.invoke<BranchUpdateResult>("git:updateBranch", {
+          ...toWireTarget(target),
+          branch,
+          root,
+        }),
+      log: (
+        target: ProjectTargetInput,
+        limit?: number,
+        offset?: number,
+        ref?: string,
+        root?: string,
+      ) =>
+        transport.invoke<GitLogEntry[]>("git:log", {
+          ...toWireTarget(target),
+          limit,
+          offset,
+          ref,
+          root,
+        }),
+      diff: (target: ProjectTargetInput, root?: string) =>
+        transport.invoke<DiffResponse>("git:diff", {
+          ...toWireTarget(target),
+          root,
+        }),
+      untrackedFiles: (
+        target: ProjectTargetInput,
+        offset: number,
+        limit: number,
+        root?: string,
+      ) =>
+        transport.invoke<DiffFileEntry[]>("git:untrackedFiles", {
+          ...toWireTarget(target),
+          offset,
+          limit,
+          root,
+        }),
+      fileDiff: (target: ProjectTargetInput, path: string, root?: string) =>
+        transport.invoke<FileDiffContent>("git:fileDiff", {
+          ...toWireTarget(target),
+          path,
+          root,
+        }),
+      stage: (target: ProjectTargetInput, paths: string[], root?: string) =>
+        transport.invoke<{ ok: boolean; error?: string }>("git:stage", {
+          ...toWireTarget(target),
+          paths,
+          root,
+        }),
+      unstage: (target: ProjectTargetInput, paths: string[], root?: string) =>
+        transport.invoke<{ ok: boolean; error?: string }>("git:unstage", {
+          ...toWireTarget(target),
+          paths,
+          root,
+        }),
+      discard: (target: ProjectTargetInput, path: string, root?: string) =>
+        transport.invoke<{ ok: boolean; error?: string }>("git:discard", {
+          ...toWireTarget(target),
+          path,
+          root,
+        }),
+      discardHunk: (
+        target: ProjectTargetInput,
+        path: string,
+        hunkIndex: number,
+        root?: string,
+      ) =>
+        transport.invoke<{ ok: boolean; error?: string }>("git:discardHunk", {
           ...toWireTarget(target),
           path,
           hunkIndex,
           root,
-        },
-      ),
-    conflicts: (target: ProjectTargetInput, root?: string) =>
-      transport.invoke<ConflictFile[]>("git:conflicts", {
-        ...toWireTarget(target),
-        root,
-      }),
-    resolve: (
-      target: ProjectTargetInput,
-      path: string,
-      content: string,
-      root?: string,
-    ) =>
-      transport.invoke<{ ok: boolean; error?: string }>("git:resolve", {
-        ...toWireTarget(target),
-        path,
-        content,
-        root,
-      }),
-    commit: (
-      target: ProjectTargetInput,
-      message: string,
-      amend?: boolean,
-      root?: string,
-    ) =>
-      transport.invoke<{ ok: boolean; hash: string; error?: string }>(
-        "git:commit",
-        {
+        }),
+      conflicts: (target: ProjectTargetInput, root?: string) =>
+        transport.invoke<ConflictFile[]>("git:conflicts", {
           ...toWireTarget(target),
-          message,
-          amend,
           root,
-        },
-      ),
-    cherryPick: (target: ProjectTargetInput, hash: string, root?: string) =>
-      transport.invoke<GitActionResult>("git:cherryPick", {
-        ...toWireTarget(target),
-        hash,
-        root,
-      }),
-    reset: (
-      target: ProjectTargetInput,
-      hash: string,
-      mode: ResetMode,
-      root?: string,
-    ) =>
-      transport.invoke<GitActionResult>("git:reset", {
-        ...toWireTarget(target),
-        hash,
-        mode,
-        root,
-      }),
-    undoLastCommit: (target: ProjectTargetInput, root?: string) =>
-      transport.invoke<GitActionResult>("git:undoLastCommit", {
-        ...toWireTarget(target),
-        root,
-      }),
-    commitFiles: (target: ProjectTargetInput, hash: string, root?: string) =>
-      transport.invoke<DiffFileEntry[]>("git:commitFiles", {
-        ...toWireTarget(target),
-        hash,
-        root,
-      }),
-    commitMessage: (target: ProjectTargetInput, hash: string, root?: string) =>
-      transport.invoke<CommitMessageResponse>("git:commitMessage", {
-        ...toWireTarget(target),
-        hash,
-        root,
-      }),
-    editCommitMessage: (
-      target: ProjectTargetInput,
-      hash: string,
-      message: string,
-      root?: string,
-    ) =>
-      transport.invoke<GitActionResult>("git:editCommitMessage", {
-        ...toWireTarget(target),
-        hash,
-        message,
-        root,
-      }),
-    commitFileDiff: (
-      target: ProjectTargetInput,
-      hash: string,
-      path: string,
-      root?: string,
-    ) =>
-      transport.invoke<FileDiffContent>("git:commitFileDiff", {
-        ...toWireTarget(target),
-        hash,
-        path,
-        root,
-      }),
-    cherryPickCommitFiles: (
-      target: ProjectTargetInput,
-      hash: string,
-      paths: string[],
-      root?: string,
-    ) =>
-      transport.invoke<GitActionResult>("git:cherryPickCommitFiles", {
-        ...toWireTarget(target),
-        hash,
-        paths,
-        root,
-      }),
-    dropCommitFiles: (
-      target: ProjectTargetInput,
-      hash: string,
-      paths: string[],
-      root?: string,
-    ) =>
-      transport.invoke<GitActionResult>("git:dropCommitFiles", {
-        ...toWireTarget(target),
-        hash,
-        paths,
-        root,
-      }),
-    dropCommit: (target: ProjectTargetInput, hash: string, root?: string) =>
-      transport.invoke<GitActionResult>("git:dropCommit", {
-        ...toWireTarget(target),
-        hash,
-        root,
-      }),
-    revertCommit: (target: ProjectTargetInput, hash: string, root?: string) =>
-      transport.invoke<GitActionResult>("git:revertCommit", {
-        ...toWireTarget(target),
-        hash,
-        root,
-      }),
-    revertCommitFiles: (
-      target: ProjectTargetInput,
-      hash: string,
-      paths: string[],
-      root?: string,
-    ) =>
-      transport.invoke<GitActionResult>("git:revertCommitFiles", {
-        ...toWireTarget(target),
-        hash,
-        paths,
-        root,
-      }),
-  },
-  config: {
-    get: () => transport.invoke<DamHopperConfig>("config:get"),
-    update: (config: DamHopperConfig) =>
-      transport.invoke<DamHopperConfig>("config:update", config),
-    updateProject: (name: string, data: Partial<ProjectConfig>) =>
-      transport.invoke<ProjectConfig>("config:updateProject", {
-        name,
-        patch: data,
-      }),
-  },
-  settings: {
-    clearCache: () =>
-      transport.invoke<{ cleared: boolean }>("cache:clear"),
-    reset: () => transport.invoke<{ reset: boolean }>("workspace:reset"),
-    exportConfig: () =>
-      transport.invoke<string>("settings:export"),
-    importConfig: (tomlContent: string) =>
-      transport.invoke<SettingsImportResponse>("settings:import", tomlContent),
-  },
-  diagnostics: {
-    export: (request: DiagnosticExportRequest) =>
-      transport.invoke<DiagnosticExportResponse>(
-        "diagnostics:export",
-        request,
-      ),
-  },
-  commands: {
-    search: (query: string, projectType?: string, limit?: number) =>
-      transport.invoke<SearchResult[]>("commands:search", {
-        query,
-        projectType,
-        limit,
-      }),
-    list: (projectType: string) =>
-      transport.invoke<SearchResult[]>("commands:list", { projectType }),
-  },
-  agentStore: {
-    list: (category?: AgentItemCategory) =>
-      transport.invoke<AgentStoreItem[]>(
-        "agent-store:list",
-        category ? { category } : undefined,
-      ),
-    get: (name: string, category: AgentItemCategory) =>
-      transport.invoke<AgentStoreItem | null>("agent-store:get", {
-        name,
-        category,
-      }),
-    getContent: (
-      name: string,
-      category: AgentItemCategory,
-      fileName?: string,
-    ) =>
-      transport.invoke<string>("agent-store:getContent", {
-        name,
-        category,
-        fileName,
-      }),
-    remove: (name: string, category: AgentItemCategory) =>
-      transport.invoke<{ removed: boolean }>("agent-store:remove", {
-        name,
-        category,
-      }),
-    ship: (
-      itemName: string,
-      category: AgentItemCategory,
-      projectName: string,
-      agent: AgentType,
-      method?: DistributionMethod,
-    ) =>
-      transport.invoke<ShipResult>("agent-store:ship", {
-        itemName,
-        category,
-        projectName,
-        agent,
-        method,
-      }),
-    unship: (
-      itemName: string,
-      category: AgentItemCategory,
-      projectName: string,
-      agent: AgentType,
-    ) =>
-      transport.invoke<ShipResult>("agent-store:unship", {
-        itemName,
-        category,
-        projectName,
-        agent,
-      }),
-    absorb: (
-      itemName: string,
-      category: AgentItemCategory,
-      projectName: string,
-      agent: AgentType,
-    ) =>
-      transport.invoke<ShipResult>("agent-store:absorb", {
-        itemName,
-        category,
-        projectName,
-        agent,
-      }),
-    bulkShip: (
-      items: Array<{ name: string; category: AgentItemCategory }>,
-      targets: Array<{ projectName: string; agent: AgentType }>,
-      method?: DistributionMethod,
-    ) =>
-      transport.invoke<ShipResult[]>("agent-store:bulkShip", {
-        items,
-        targets,
-        method,
-      }),
-    matrix: () =>
-      transport.invoke<DistributionMatrix>("agent-store:matrix"),
-    scan: () =>
-      transport.invoke<ProjectAgentScanResult[]>("agent-store:scan"),
-    health: () =>
-      transport.invoke<HealthCheckResult>("agent-store:health"),
-  },
-  agentMemory: {
-    list: (projectName: string) =>
-      transport.invoke<Record<AgentType, string | null>>(
-        "agent-memory:list",
-        { projectName },
-      ),
-    get: (projectName: string, agent: AgentType) =>
-      transport.invoke<string | null>("agent-memory:get", {
-        projectName,
-        agent,
-      }),
-    update: (projectName: string, agent: AgentType, content: string) =>
-      transport.invoke<{ updated: boolean }>("agent-memory:update", {
-        projectName,
-        agent,
-        content,
-      }),
-    templates: () =>
-      transport.invoke<MemoryTemplateInfo[]>("agent-memory:templates"),
-    apply: (templateName: string, projectName: string, agent: AgentType) =>
-      transport.invoke<{ content: string }>("agent-memory:apply", {
-        templateName,
-        projectName,
-        agent,
-      }),
-  },
-  agentImport: {
-    scan: (repoUrl: string) =>
-      transport.invoke<RepoScanResult>("agent-store:importScan", {
-        repoUrl,
-      }),
-    scanLocal: (dirPath: string) =>
-      transport.invoke<LocalScanResult>("agent-store:importScanLocal", {
-        dirPath,
-      }),
-    confirm: (
-      tmpDir: string,
-      selectedItems: Array<{
-        name: string;
-        category: AgentItemCategory;
-        relativePath: string;
-      }>,
-      skipCleanup?: boolean,
-    ) =>
-      transport.invoke<ImportResult[]>("agent-store:importConfirm", {
-        tmpDir,
-        selectedItems,
-        skipCleanup,
-      }),
-  },
-  terminal: {
-    create: (opts: {
-      id: string;
-      project?: string;
-      command: string;
-      cwd?: string;
-      cols: number;
-      rows: number;
-      worktreePath?: string;
-      name?: string | null;
-    }) => transport.invoke<SessionInfo>("terminal:create", opts),
-    kill: (id: string) => transport.invoke<void>("terminal:kill", id),
-    remove: (id: string) => transport.invoke<void>("terminal:remove", id),
-    rename: (id: string, name: string | null) =>
-      transport.invoke<SessionInfo>("terminal:rename", { id, name }),
-    list: () => transport.invoke<SessionInfo[]>("terminal:list"),
-    listDetailed: () =>
-      transport.invoke<SessionInfo[]>("terminal:listDetailed"),
-    getBuffer: (id: string) =>
-      transport.invoke<string>("terminal:buffer", id),
-  },
-  health: {
-    get: () => transport.invoke<HealthResponse>("health:get"),
-  },
-  system: {
-    metrics: () => transport.invoke<HostMetrics>("system:metrics"),
-    resourceSnapshot: () =>
-      transport.invoke<HostResourceSnapshotV1>("system:resourceSnapshot"),
-    resourceAlerts: (limit = 20) =>
-      transport.invoke<HostResourceAlertIncident[]>(
-        "system:resourceAlerts",
-        {
+        }),
+      resolve: (
+        target: ProjectTargetInput,
+        path: string,
+        content: string,
+        root?: string,
+      ) =>
+        transport.invoke<{ ok: boolean; error?: string }>("git:resolve", {
+          ...toWireTarget(target),
+          path,
+          content,
+          root,
+        }),
+      commit: (
+        target: ProjectTargetInput,
+        message: string,
+        amend?: boolean,
+        root?: string,
+      ) =>
+        transport.invoke<{ ok: boolean; hash: string; error?: string }>(
+          "git:commit",
+          {
+            ...toWireTarget(target),
+            message,
+            amend,
+            root,
+          },
+        ),
+      cherryPick: (target: ProjectTargetInput, hash: string, root?: string) =>
+        transport.invoke<GitActionResult>("git:cherryPick", {
+          ...toWireTarget(target),
+          hash,
+          root,
+        }),
+      reset: (
+        target: ProjectTargetInput,
+        hash: string,
+        mode: ResetMode,
+        root?: string,
+      ) =>
+        transport.invoke<GitActionResult>("git:reset", {
+          ...toWireTarget(target),
+          hash,
+          mode,
+          root,
+        }),
+      undoLastCommit: (target: ProjectTargetInput, root?: string) =>
+        transport.invoke<GitActionResult>("git:undoLastCommit", {
+          ...toWireTarget(target),
+          root,
+        }),
+      commitFiles: (target: ProjectTargetInput, hash: string, root?: string) =>
+        transport.invoke<DiffFileEntry[]>("git:commitFiles", {
+          ...toWireTarget(target),
+          hash,
+          root,
+        }),
+      commitMessage: (
+        target: ProjectTargetInput,
+        hash: string,
+        root?: string,
+      ) =>
+        transport.invoke<CommitMessageResponse>("git:commitMessage", {
+          ...toWireTarget(target),
+          hash,
+          root,
+        }),
+      editCommitMessage: (
+        target: ProjectTargetInput,
+        hash: string,
+        message: string,
+        root?: string,
+      ) =>
+        transport.invoke<GitActionResult>("git:editCommitMessage", {
+          ...toWireTarget(target),
+          hash,
+          message,
+          root,
+        }),
+      commitFileDiff: (
+        target: ProjectTargetInput,
+        hash: string,
+        path: string,
+        root?: string,
+      ) =>
+        transport.invoke<FileDiffContent>("git:commitFileDiff", {
+          ...toWireTarget(target),
+          hash,
+          path,
+          root,
+        }),
+      cherryPickCommitFiles: (
+        target: ProjectTargetInput,
+        hash: string,
+        paths: string[],
+        root?: string,
+      ) =>
+        transport.invoke<GitActionResult>("git:cherryPickCommitFiles", {
+          ...toWireTarget(target),
+          hash,
+          paths,
+          root,
+        }),
+      dropCommitFiles: (
+        target: ProjectTargetInput,
+        hash: string,
+        paths: string[],
+        root?: string,
+      ) =>
+        transport.invoke<GitActionResult>("git:dropCommitFiles", {
+          ...toWireTarget(target),
+          hash,
+          paths,
+          root,
+        }),
+      dropCommit: (target: ProjectTargetInput, hash: string, root?: string) =>
+        transport.invoke<GitActionResult>("git:dropCommit", {
+          ...toWireTarget(target),
+          hash,
+          root,
+        }),
+      revertCommit: (target: ProjectTargetInput, hash: string, root?: string) =>
+        transport.invoke<GitActionResult>("git:revertCommit", {
+          ...toWireTarget(target),
+          hash,
+          root,
+        }),
+      revertCommitFiles: (
+        target: ProjectTargetInput,
+        hash: string,
+        paths: string[],
+        root?: string,
+      ) =>
+        transport.invoke<GitActionResult>("git:revertCommitFiles", {
+          ...toWireTarget(target),
+          hash,
+          paths,
+          root,
+        }),
+    },
+    config: {
+      get: () => transport.invoke<DamHopperConfig>("config:get"),
+      update: (config: DamHopperConfig) =>
+        transport.invoke<DamHopperConfig>("config:update", config),
+      updateProject: (name: string, data: Partial<ProjectConfig>) =>
+        transport.invoke<ProjectConfig>("config:updateProject", {
+          name,
+          patch: data,
+        }),
+    },
+    settings: {
+      clearCache: () => transport.invoke<{ cleared: boolean }>("cache:clear"),
+      reset: () => transport.invoke<{ reset: boolean }>("workspace:reset"),
+      exportConfig: () => transport.invoke<string>("settings:export"),
+      importConfig: (tomlContent: string) =>
+        transport.invoke<SettingsImportResponse>(
+          "settings:import",
+          tomlContent,
+        ),
+    },
+    diagnostics: {
+      export: (request: DiagnosticExportRequest) =>
+        transport.invoke<DiagnosticExportResponse>(
+          "diagnostics:export",
+          request,
+        ),
+    },
+    commands: {
+      search: (query: string, projectType?: string, limit?: number) =>
+        transport.invoke<SearchResult[]>("commands:search", {
+          query,
+          projectType,
           limit,
-        },
-      ),
-    idleSuspendStatus: async () => {
-      const raw = await transport.invoke<unknown>(
-        "system:idleSuspendStatus",
-      );
-      return decodeIdleSuspendStatusV1(raw);
+        }),
+      list: (projectType: string) =>
+        transport.invoke<SearchResult[]>("commands:list", { projectType }),
     },
-    updateIdleSuspendTiming: (timing: IdleSuspendTimingPatchRequest) =>
-      transport.invoke<IdleSuspendTimingPatchResponse>(
-        "system:updateIdleSuspendTiming",
-        timing,
-      ),
-    forceSuspend: (request: ForceSuspendRequest) =>
-      transport.invoke<ForceSuspendAcceptedResponse>(
-        "system:forceSuspend",
-        request,
-      ),
-  },
-  usage: {
-    summary: (query: UsageSummaryQuery = {}) =>
-      transport.invoke<UsageSummary>("usage:summary", query),
-    sessions: (query: UsageSessionQuery = {}) =>
-      transport.invoke<UsageSessionPage>("usage:sessions", query),
-    session: (id: string) =>
-      transport.invoke<UsageSessionDetail>("usage:session", { id }),
-    health: () => transport.invoke<UsageHealth>("usage:health"),
-    settings: () => transport.invoke<UsageSettings>("usage:settings"),
-    setupStatus: () =>
-      transport.invoke<UsageSetupStatus>("usage:setupStatus"),
-    updateSettings: (patch: UsageSettingsPatch) =>
-      transport.invoke<UsageSettings>("usage:updateSettings", patch),
-    configure: (patch: UsageSettingsPatch) =>
-      transport.invoke<UsageSetupStatus>("usage:configure", patch),
-    delete: (request: { confirmation: string; from?: number; to?: number }) =>
-      transport.invoke<{ deleted: true }>("usage:deleteAll", {
-        ...request,
-      }),
-    deleteAll: () => usageDelete({ confirmation: "delete-usage-data" }),
-    deleteRange: (from: number, to: number) =>
-      usageDelete({ confirmation: "delete-usage-data", from, to }),
-  },
-  fs: {
-    list: (target: ProjectTargetInput, path: string) =>
-      transport.invoke<FsListResponse>("fs:list", {
-        ...toWireTarget(target),
-        path,
-      }),
-    languageFiles: (target: ProjectTargetInput) =>
-      transport.invoke<LanguageFilesResponse>(
-        "fs:languageFiles",
-        toWireTarget(target),
-      ),
-    read: (target: ProjectTargetInput, path: string, opts?: { offset?: number; len?: number }) => {
-      const wire = toWireTarget(target);
-      const fsTrans = transport as unknown as FsTransportSeam;
-      if (typeof fsTrans.fsRead === "function") {
-        return fsTrans.fsRead({ profileId: owner.profileId, project: wire.project, worktreePath: wire.worktreePath }, path, opts) as Promise<FsReadResponse>;
-      }
-      return transport.invoke<FsReadResponse>("fs:read", {
-        ...wire,
-        path,
-        ...opts,
-      });
+    agentStore: {
+      list: (category?: AgentItemCategory) =>
+        transport.invoke<AgentStoreItem[]>(
+          "agent-store:list",
+          category ? { category } : undefined,
+        ),
+      get: (name: string, category: AgentItemCategory) =>
+        transport.invoke<AgentStoreItem | null>("agent-store:get", {
+          name,
+          category,
+        }),
+      getContent: (
+        name: string,
+        category: AgentItemCategory,
+        fileName?: string,
+      ) =>
+        transport.invoke<string>("agent-store:getContent", {
+          name,
+          category,
+          fileName,
+        }),
+      remove: (name: string, category: AgentItemCategory) =>
+        transport.invoke<{ removed: boolean }>("agent-store:remove", {
+          name,
+          category,
+        }),
+      ship: (
+        itemName: string,
+        category: AgentItemCategory,
+        projectName: string,
+        agent: AgentType,
+        method?: DistributionMethod,
+      ) =>
+        transport.invoke<ShipResult>("agent-store:ship", {
+          itemName,
+          category,
+          projectName,
+          agent,
+          method,
+        }),
+      unship: (
+        itemName: string,
+        category: AgentItemCategory,
+        projectName: string,
+        agent: AgentType,
+      ) =>
+        transport.invoke<ShipResult>("agent-store:unship", {
+          itemName,
+          category,
+          projectName,
+          agent,
+        }),
+      absorb: (
+        itemName: string,
+        category: AgentItemCategory,
+        projectName: string,
+        agent: AgentType,
+      ) =>
+        transport.invoke<ShipResult>("agent-store:absorb", {
+          itemName,
+          category,
+          projectName,
+          agent,
+        }),
+      bulkShip: (
+        items: Array<{ name: string; category: AgentItemCategory }>,
+        targets: Array<{ projectName: string; agent: AgentType }>,
+        method?: DistributionMethod,
+      ) =>
+        transport.invoke<ShipResult[]>("agent-store:bulkShip", {
+          items,
+          targets,
+          method,
+        }),
+      matrix: () => transport.invoke<DistributionMatrix>("agent-store:matrix"),
+      scan: () =>
+        transport.invoke<ProjectAgentScanResult[]>("agent-store:scan"),
+      health: () => transport.invoke<HealthCheckResult>("agent-store:health"),
     },
-    writeFile: (target: ProjectTargetInput, path: string, content: string, expectedMtime: number) => {
-      const wire = toWireTarget(target);
-      const fsTrans = transport as unknown as FsTransportSeam;
-      if (typeof fsTrans.fsWriteFile === "function") {
-        return fsTrans.fsWriteFile({ profileId: owner.profileId, project: wire.project, worktreePath: wire.worktreePath }, path, content, expectedMtime) as Promise<FsWriteResponse>;
-      }
-      return transport.invoke<FsWriteResponse>("fs:writeFile", {
-        ...wire,
-        path,
-        content,
-        expectedMtime,
-      });
+    agentMemory: {
+      list: (projectName: string) =>
+        transport.invoke<Record<AgentType, string | null>>(
+          "agent-memory:list",
+          { projectName },
+        ),
+      get: (projectName: string, agent: AgentType) =>
+        transport.invoke<string | null>("agent-memory:get", {
+          projectName,
+          agent,
+        }),
+      update: (projectName: string, agent: AgentType, content: string) =>
+        transport.invoke<{ updated: boolean }>("agent-memory:update", {
+          projectName,
+          agent,
+          content,
+        }),
+      templates: () =>
+        transport.invoke<MemoryTemplateInfo[]>("agent-memory:templates"),
+      apply: (templateName: string, projectName: string, agent: AgentType) =>
+        transport.invoke<{ content: string }>("agent-memory:apply", {
+          templateName,
+          projectName,
+          agent,
+        }),
     },
-    subscribeTree: (target: ProjectTargetInput, path: string) => {
-      const wire = toWireTarget(target);
-      const fsTrans = transport as unknown as FsTransportSeam;
-      if (typeof fsTrans.fsSubscribeTree === "function") {
-        return fsTrans.fsSubscribeTree({ profileId: owner.profileId, project: wire.project, worktreePath: wire.worktreePath }, path) as Promise<number>;
-      }
-      return transport.invoke<{ sub_id: number }>("fs:subscribeTree", { ...wire, path }).then((r) => r.sub_id);
+    agentImport: {
+      scan: (repoUrl: string) =>
+        transport.invoke<RepoScanResult>("agent-store:importScan", {
+          repoUrl,
+        }),
+      scanLocal: (dirPath: string) =>
+        transport.invoke<LocalScanResult>("agent-store:importScanLocal", {
+          dirPath,
+        }),
+      confirm: (
+        tmpDir: string,
+        selectedItems: Array<{
+          name: string;
+          category: AgentItemCategory;
+          relativePath: string;
+        }>,
+        skipCleanup?: boolean,
+      ) =>
+        transport.invoke<ImportResult[]>("agent-store:importConfirm", {
+          tmpDir,
+          selectedItems,
+          skipCleanup,
+        }),
     },
-    unsubscribeTree: (sub_id: number) => {
-      const fsTrans = transport as unknown as FsTransportSeam;
-      if (typeof fsTrans.fsUnsubscribeTree === "function") {
-        return fsTrans.fsUnsubscribeTree(sub_id) as Promise<boolean>;
-      }
-      return transport.invoke<{ ok: boolean }>("fs:unsubscribeTree", { sub_id }).then((r) => r.ok);
+    terminal: {
+      create: (opts: {
+        id: string;
+        project?: string;
+        command: string;
+        cwd?: string;
+        cols: number;
+        rows: number;
+        worktreePath?: string;
+        name?: string | null;
+      }) => transport.invoke<SessionInfo>("terminal:create", opts),
+      kill: (id: string) => transport.invoke<void>("terminal:kill", id),
+      remove: (id: string) => transport.invoke<void>("terminal:remove", id),
+      rename: (id: string, name: string | null) =>
+        transport.invoke<SessionInfo>("terminal:rename", { id, name }),
+      list: () => transport.invoke<SessionInfo[]>("terminal:list"),
+      listDetailed: () =>
+        transport.invoke<SessionInfo[]>("terminal:listDetailed"),
+      getBuffer: (id: string) =>
+        transport.invoke<string>("terminal:buffer", id),
     },
-    onEvent: (sub_id: number, cb: (event: FsEventDto) => void) => {
-      const fsTrans = transport as unknown as FsTransportSeam;
-      if (typeof fsTrans.onFsEvent === "function") {
-        return fsTrans.onFsEvent(sub_id, cb) as () => void;
-      }
-      return transport.onEvent(`fs:${sub_id}`, (payload) => cb(payload as FsEventDto));
+    health: {
+      get: () => transport.invoke<HealthResponse>("health:get"),
     },
-    uploadFile: (target: ProjectTargetInput, dir: string, file: File, onProgress?: (pct: number) => void) => {
-      const wire = toWireTarget(target);
-      const fsTrans = transport as unknown as FsTransportSeam;
-      if (typeof fsTrans.fsUploadFile === "function") {
-        return fsTrans.fsUploadFile({ profileId: owner.profileId, project: wire.project, worktreePath: wire.worktreePath }, dir, file, onProgress) as Promise<FsUploadResult>;
-      }
-      return Promise.reject(new Error("Upload not supported by current transport"));
+    system: {
+      metrics: () => transport.invoke<HostMetrics>("system:metrics"),
+      resourceSnapshot: () =>
+        transport.invoke<HostResourceSnapshotV1>("system:resourceSnapshot"),
+      resourceAlerts: (limit = 20) =>
+        transport.invoke<HostResourceAlertIncident[]>("system:resourceAlerts", {
+          limit,
+        }),
+      idleSuspendStatus: async () => {
+        const raw = await transport.invoke<unknown>("system:idleSuspendStatus");
+        return decodeIdleSuspendStatusV1(raw);
+      },
+      updateIdleSuspendTiming: (timing: IdleSuspendTimingPatchRequest) =>
+        transport.invoke<IdleSuspendTimingPatchResponse>(
+          "system:updateIdleSuspendTiming",
+          timing,
+        ),
+      forceSuspend: (request: ForceSuspendRequest) =>
+        transport.invoke<ForceSuspendAcceptedResponse>(
+          "system:forceSuspend",
+          request,
+        ),
     },
-    putFile: (target: ProjectTargetInput, dir: string, file: File, uploadId: string, encKey: CryptoKey, onProgress?: (pct: number) => void) => {
-      const wire = toWireTarget(target);
-      const fsTrans = transport as unknown as FsTransportSeam;
-      if (typeof fsTrans.fsPutFile === "function") {
-        return fsTrans.fsPutFile({ profileId: owner.profileId, project: wire.project, worktreePath: wire.worktreePath }, dir, file, uploadId, encKey, onProgress) as Promise<FsPutResult>;
-      }
-      return Promise.reject(new Error("Encrypted putFile not supported by current transport"));
+    usage: {
+      summary: (query: UsageSummaryQuery = {}) =>
+        transport.invoke<UsageSummary>("usage:summary", query),
+      sessions: (query: UsageSessionQuery = {}) =>
+        transport.invoke<UsageSessionPage>("usage:sessions", query),
+      session: (id: string) =>
+        transport.invoke<UsageSessionDetail>("usage:session", { id }),
+      health: () => transport.invoke<UsageHealth>("usage:health"),
+      settings: () => transport.invoke<UsageSettings>("usage:settings"),
+      setupStatus: () =>
+        transport.invoke<UsageSetupStatus>("usage:setupStatus"),
+      updateSettings: (patch: UsageSettingsPatch) =>
+        transport.invoke<UsageSettings>("usage:updateSettings", patch),
+      configure: (patch: UsageSettingsPatch) =>
+        transport.invoke<UsageSetupStatus>("usage:configure", patch),
+      delete: (request: { confirmation: string; from?: number; to?: number }) =>
+        transport.invoke<{ deleted: true }>("usage:deleteAll", {
+          ...request,
+        }),
+      deleteAll: () => usageDelete({ confirmation: "delete-usage-data" }),
+      deleteRange: (from: number, to: number) =>
+        usageDelete({ confirmation: "delete-usage-data", from, to }),
     },
-    putSave: (target: ProjectTargetInput, path: string, blob: Blob, saveId: string, encKey: CryptoKey) => {
-      const wire = toWireTarget(target);
-      const fsTrans = transport as unknown as FsTransportSeam;
-      if (typeof fsTrans.fsPutSave === "function") {
-        return fsTrans.fsPutSave({ profileId: owner.profileId, project: wire.project, worktreePath: wire.worktreePath }, path, blob, saveId, encKey) as Promise<FsPutResult>;
-      }
-      return Promise.reject(new Error("Encrypted putSave not supported by current transport"));
-    },
-    op: (op: "delete" | "rename" | "mkdir" | "create_file", params: Record<string, unknown>) => {
-      const fsTrans = transport as unknown as FsTransportSeam;
-      if (typeof fsTrans.fsOp === "function") {
-        return fsTrans.fsOp(op, params) as Promise<FsOpResult>;
-      }
-      return transport.invoke<FsOpResult>(`fs:${op}`, params);
-    },
-  },
-  tunnels: {
-    list: () => transport.invoke<TunnelInfo[]>("tunnel:list"),
-    create: (port: number, label: string) =>
-      transport.invoke<TunnelInfo>("tunnel:create", { port, label }),
-    stop: (id: string) => transport.invoke<void>("tunnel:stop", { id }),
-  },
-  browserDebug: {
-    createArtifact: (
-      terminalId: string,
-      terminalIncarnation: number,
-      selection: BrowserSelectionV1,
-    ) =>
-      transport.invoke<BrowserDebugArtifactResponse>(
-        "browser-debug:create",
-        { terminalId, terminalIncarnation, selection },
-      ),
-    deleteArtifact: (artifactId: string) =>
-      transport.invoke<void>("browser-debug:delete", { artifactId }),
-    handoff: (artifactId: string) =>
-      transport.invoke<BrowserDebugHandoffResponse>(
-        "browser-debug:handoff",
-        { artifactId },
-      ),
-    uploadPng: (artifactId: string, png: Blob) => {
-      const upload = transport.uploadBrowserDebugPng;
-      if (!upload)
-        throw new Error(
-          "Browser screenshot upload is unsupported by this transport",
+    fs: {
+      list: (target: ProjectTargetInput, path: string) =>
+        transport.invoke<FsListResponse>("fs:list", {
+          ...toWireTarget(target),
+          path,
+        }),
+      languageFiles: (target: ProjectTargetInput) =>
+        transport.invoke<LanguageFilesResponse>(
+          "fs:languageFiles",
+          toWireTarget(target),
+        ),
+      read: (
+        target: ProjectTargetInput,
+        path: string,
+        opts?: { offset?: number; len?: number },
+      ) => {
+        const wire = toWireTarget(target);
+        const fsTrans = transport as unknown as FsTransportSeam;
+        if (typeof fsTrans.fsRead === "function") {
+          return fsTrans.fsRead(
+            {
+              profileId: owner.profileId,
+              project: wire.project,
+              worktreePath: wire.worktreePath,
+            },
+            path,
+            opts,
+          ) as Promise<FsReadResponse>;
+        }
+        return transport.invoke<FsReadResponse>("fs:read", {
+          ...wire,
+          path,
+          ...opts,
+        });
+      },
+      writeFile: (
+        target: ProjectTargetInput,
+        path: string,
+        content: string,
+        expectedMtime: number,
+      ) => {
+        const wire = toWireTarget(target);
+        const fsTrans = transport as unknown as FsTransportSeam;
+        if (typeof fsTrans.fsWriteFile === "function") {
+          return fsTrans.fsWriteFile(
+            {
+              profileId: owner.profileId,
+              project: wire.project,
+              worktreePath: wire.worktreePath,
+            },
+            path,
+            content,
+            expectedMtime,
+          ) as Promise<FsWriteResponse>;
+        }
+        return transport.invoke<FsWriteResponse>("fs:writeFile", {
+          ...wire,
+          path,
+          content,
+          expectedMtime,
+        });
+      },
+      subscribeTree: (target: ProjectTargetInput, path: string) => {
+        const wire = toWireTarget(target);
+        const fsTrans = transport as unknown as FsTransportSeam;
+        if (typeof fsTrans.fsSubscribeTree === "function") {
+          return fsTrans.fsSubscribeTree(
+            {
+              profileId: owner.profileId,
+              project: wire.project,
+              worktreePath: wire.worktreePath,
+            },
+            path,
+          ) as Promise<number>;
+        }
+        return transport
+          .invoke<{ sub_id: number }>("fs:subscribeTree", { ...wire, path })
+          .then((r) => r.sub_id);
+      },
+      unsubscribeTree: (sub_id: number) => {
+        const fsTrans = transport as unknown as FsTransportSeam;
+        if (typeof fsTrans.fsUnsubscribeTree === "function") {
+          return fsTrans.fsUnsubscribeTree(sub_id) as Promise<boolean>;
+        }
+        return transport
+          .invoke<{ ok: boolean }>("fs:unsubscribeTree", { sub_id })
+          .then((r) => r.ok);
+      },
+      onEvent: (sub_id: number, cb: (event: FsEventDto) => void) => {
+        const fsTrans = transport as unknown as FsTransportSeam;
+        if (typeof fsTrans.onFsEvent === "function") {
+          return fsTrans.onFsEvent(sub_id, cb) as () => void;
+        }
+        return transport.onEvent(`fs:${sub_id}`, (payload) =>
+          cb(payload as FsEventDto),
         );
-      return upload.call(transport, artifactId, png);
+      },
+      uploadFile: (
+        target: ProjectTargetInput,
+        dir: string,
+        file: File,
+        onProgress?: (pct: number) => void,
+      ) => {
+        const wire = toWireTarget(target);
+        const fsTrans = transport as unknown as FsTransportSeam;
+        if (typeof fsTrans.fsUploadFile === "function") {
+          return fsTrans.fsUploadFile(
+            {
+              profileId: owner.profileId,
+              project: wire.project,
+              worktreePath: wire.worktreePath,
+            },
+            dir,
+            file,
+            onProgress,
+          ) as Promise<FsUploadResult>;
+        }
+        return Promise.reject(
+          new Error("Upload not supported by current transport"),
+        );
+      },
+      putFile: (
+        target: ProjectTargetInput,
+        dir: string,
+        file: File,
+        uploadId: string,
+        encKey: CryptoKey,
+        onProgress?: (pct: number) => void,
+      ) => {
+        const wire = toWireTarget(target);
+        const fsTrans = transport as unknown as FsTransportSeam;
+        if (typeof fsTrans.fsPutFile === "function") {
+          return fsTrans.fsPutFile(
+            {
+              profileId: owner.profileId,
+              project: wire.project,
+              worktreePath: wire.worktreePath,
+            },
+            dir,
+            file,
+            uploadId,
+            encKey,
+            onProgress,
+          ) as Promise<FsPutResult>;
+        }
+        return Promise.reject(
+          new Error("Encrypted putFile not supported by current transport"),
+        );
+      },
+      putSave: (
+        target: ProjectTargetInput,
+        path: string,
+        blob: Blob,
+        saveId: string,
+        encKey: CryptoKey,
+      ) => {
+        const wire = toWireTarget(target);
+        const fsTrans = transport as unknown as FsTransportSeam;
+        if (typeof fsTrans.fsPutSave === "function") {
+          return fsTrans.fsPutSave(
+            {
+              profileId: owner.profileId,
+              project: wire.project,
+              worktreePath: wire.worktreePath,
+            },
+            path,
+            blob,
+            saveId,
+            encKey,
+          ) as Promise<FsPutResult>;
+        }
+        return Promise.reject(
+          new Error("Encrypted putSave not supported by current transport"),
+        );
+      },
+      op: (
+        op: "delete" | "rename" | "mkdir" | "create_file",
+        params: Record<string, unknown>,
+      ) => {
+        const fsTrans = transport as unknown as FsTransportSeam;
+        if (typeof fsTrans.fsOp === "function") {
+          return fsTrans.fsOp(op, params) as Promise<FsOpResult>;
+        }
+        return transport.invoke<FsOpResult>(`fs:${op}`, params);
+      },
     },
-  },
-  workflow: {
-    overview: () => transport.invoke<OverviewDto>("workflow:overview"),
-    events: (query: EventsQuery = {}) =>
-      transport.invoke<EventsDto>("workflow:events", query),
-    createItem: (req: CreateItemRequest) =>
-      transport.invoke<MutationDto<ItemDto>>("workflow:createItem", req),
-    patchItem: (id: string, req: PatchItemRequest) =>
-      transport.invoke<MutationDto<ItemDto>>("workflow:patchItem", {
-        id,
-        ...req,
-      }),
-    deleteItem: (id: string, req: DeleteItemRequest) =>
-      transport.invoke<MutationDto<TombstoneDto>>("workflow:deleteItem", {
-        id,
-        ...req,
-      }),
-    createSession: (req: CreateSessionRequest) =>
-      transport.invoke<MutationDto<SessionDto>>(
-        "workflow:createSession",
-        req,
-      ),
-    endSession: (id: string, req: EndSessionRequest) =>
-      transport.invoke<MutationDto<SessionDto>>("workflow:endSession", {
-        id,
-        ...req,
-      }),
-    abandonSession: (id: string, req: AbandonSessionRequest) =>
-      transport.invoke<MutationDto<SessionDto>>(
-        "workflow:abandonSession",
-        {
+    tunnels: {
+      list: () => transport.invoke<TunnelInfo[]>("tunnel:list"),
+      create: (port: number, label: string) =>
+        transport.invoke<TunnelInfo>("tunnel:create", { port, label }),
+      stop: (id: string) => transport.invoke<void>("tunnel:stop", { id }),
+    },
+    browserDebug: {
+      createArtifact: (
+        terminalId: string,
+        terminalIncarnation: number,
+        selection: BrowserSelectionV1,
+      ) =>
+        transport.invoke<BrowserDebugArtifactResponse>("browser-debug:create", {
+          terminalId,
+          terminalIncarnation,
+          selection,
+        }),
+      deleteArtifact: (artifactId: string) =>
+        transport.invoke<void>("browser-debug:delete", { artifactId }),
+      handoff: (artifactId: string) =>
+        transport.invoke<BrowserDebugHandoffResponse>("browser-debug:handoff", {
+          artifactId,
+        }),
+      uploadPng: (artifactId: string, png: Blob) => {
+        const upload = transport.uploadBrowserDebugPng;
+        if (!upload)
+          throw new Error(
+            "Browser screenshot upload is unsupported by this transport",
+          );
+        return upload.call(transport, artifactId, png);
+      },
+    },
+    workflow: {
+      overview: () => transport.invoke<OverviewDto>("workflow:overview"),
+      events: (query: EventsQuery = {}) =>
+        transport.invoke<EventsDto>("workflow:events", query),
+      createItem: (req: CreateItemRequest) =>
+        transport.invoke<MutationDto<ItemDto>>("workflow:createItem", req),
+      patchItem: (id: string, req: PatchItemRequest) =>
+        transport.invoke<MutationDto<ItemDto>>("workflow:patchItem", {
           id,
           ...req,
-        },
-      ),
-    linkResource: (sessionId: string, req: LinkResourceRequest) =>
-      transport.invoke<MutationDto<LinkDto>>("workflow:linkResource", {
-        sessionId,
-        ...req,
-      }),
-    unlinkResource: (sessionId: string, req: UnlinkResourceRequest) =>
-      transport.invoke<MutationDto<TombstoneDto>>(
-        "workflow:unlinkResource",
-        {
+        }),
+      deleteItem: (id: string, req: DeleteItemRequest) =>
+        transport.invoke<MutationDto<TombstoneDto>>("workflow:deleteItem", {
+          id,
+          ...req,
+        }),
+      createSession: (req: CreateSessionRequest) =>
+        transport.invoke<MutationDto<SessionDto>>(
+          "workflow:createSession",
+          req,
+        ),
+      endSession: (id: string, req: EndSessionRequest) =>
+        transport.invoke<MutationDto<SessionDto>>("workflow:endSession", {
+          id,
+          ...req,
+        }),
+      abandonSession: (id: string, req: AbandonSessionRequest) =>
+        transport.invoke<MutationDto<SessionDto>>("workflow:abandonSession", {
+          id,
+          ...req,
+        }),
+      linkResource: (sessionId: string, req: LinkResourceRequest) =>
+        transport.invoke<MutationDto<LinkDto>>("workflow:linkResource", {
           sessionId,
           ...req,
-        },
-      ),
-    createNote: (req: CreateNoteRequest) =>
-      transport.invoke<MutationDto<NoteDto>>("workflow:createNote", req),
-    deleteNote: (id: string, req: DeleteNoteRequest) =>
-      transport.invoke<MutationDto<TombstoneDto>>("workflow:deleteNote", {
-        id,
-        ...req,
-      }),
-    purgeHistory: (req: PurgeHistoryRequest) =>
-      transport.invoke<PurgeDto>("workflow:purgeHistory", req),
-  },
+        }),
+      unlinkResource: (sessionId: string, req: UnlinkResourceRequest) =>
+        transport.invoke<MutationDto<TombstoneDto>>("workflow:unlinkResource", {
+          sessionId,
+          ...req,
+        }),
+      createNote: (req: CreateNoteRequest) =>
+        transport.invoke<MutationDto<NoteDto>>("workflow:createNote", req),
+      deleteNote: (id: string, req: DeleteNoteRequest) =>
+        transport.invoke<MutationDto<TombstoneDto>>("workflow:deleteNote", {
+          id,
+          ...req,
+        }),
+      purgeHistory: (req: PurgeHistoryRequest) =>
+        transport.invoke<PurgeDto>("workflow:purgeHistory", req),
+    },
     plugins: {
       list: (target: ServerProjectTarget) => {
         const query = new URLSearchParams({ project: target.project });
         if (target.worktreePath) query.set("worktreePath", target.worktreePath);
-        return transport.invoke<ListPluginsResponse>(`plugins:list?${query.toString()}`);
+        return transport.invoke<ListPluginsResponse>(
+          `plugins:list?${query.toString()}`,
+        );
+      },
+      getEpoch: () => {
+        const method = (transport as Transport & PluginTransportSeam)
+          .getPluginEpoch;
+        if (!method) {
+          return Promise.reject(
+            new Error("Plugin connection epoch is unavailable"),
+          );
+        }
+        return method.call(transport);
+      },
+      readUiAsset: (request: PluginUiAssetRequest, signal?: AbortSignal) => {
+        const method = (transport as Transport & PluginTransportSeam)
+          .fetchPluginUi;
+        if (!method) {
+          return Promise.reject(new Error("Plugin UI assets are unavailable"));
+        }
+        return method.call(transport, request, signal);
       },
       openContext: (req: OpenContextRequest) =>
         transport.invoke<ContextOpenResult>("plugins:openContext", req),
@@ -2668,6 +2779,24 @@ export function createApiClient(
         transport.invoke<InvokeResponse<T>>("plugins:invoke", req),
       cancel: (req: CancelRequest) =>
         transport.invoke<RequestCancelResult>("plugins:cancel", req),
+      onRevoked: (listener: (event: PluginRevokedEvent) => void) =>
+        transport.onEvent("plugin:revoked", (payload) => {
+          if (typeof payload !== "object" || payload === null) return;
+          const value = payload as Record<string, unknown>;
+          const contextId = value.contextId ?? value.context_id;
+          if (
+            typeof contextId !== "string" ||
+            contextId.length === 0 ||
+            typeof value.reason !== "string"
+          ) {
+            return;
+          }
+          listener({
+            kind: "plugin:revoked",
+            contextId,
+            reason: value.reason,
+          });
+        }),
     },
   };
 }
@@ -2687,7 +2816,9 @@ export interface ApiClient {
   };
   globalConfig: {
     get: () => Promise<GlobalConfig>;
-    updateDefaults: (defaults: { workspace?: string }) => Promise<{ updated: true }>;
+    updateDefaults: (defaults: {
+      workspace?: string;
+    }) => Promise<{ updated: true }>;
     updateUi: (ui: Partial<UiConfig>) => Promise<{ updated: true }>;
   };
   projects: {
@@ -2698,44 +2829,176 @@ export interface ApiClient {
   git: {
     fetch: (targets?: ProjectTargetInput[]) => Promise<GitOpResult[]>;
     pull: (targets?: ProjectTargetInput[]) => Promise<GitOpResult[]>;
-    push: (target: ProjectTargetInput, root?: string, force?: boolean) => Promise<GitOpResult>;
+    push: (
+      target: ProjectTargetInput,
+      root?: string,
+      force?: boolean,
+    ) => Promise<GitOpResult>;
     worktrees: (project: string) => Promise<Worktree[]>;
     roots: (target: ProjectTargetInput) => Promise<VcsRoot[]>;
-    addWorktree: (project: string, options: { path: string; branch: string; createBranch?: boolean }) => Promise<Worktree>;
+    addWorktree: (
+      project: string,
+      options: { path: string; branch: string; createBranch?: boolean },
+    ) => Promise<Worktree>;
     removeWorktree: (project: string, path: string) => Promise<void>;
     branches: (target: ProjectTargetInput, root?: string) => Promise<Branch[]>;
-    createBranch: (target: ProjectTargetInput, options: { name: string; startPoint?: string; checkout?: boolean; root?: string }) => Promise<GitActionResult>;
-    checkoutBranch: (target: ProjectTargetInput, options: { branch: string; startPoint?: string; create?: boolean; strategy?: CheckoutStrategy; root?: string }) => Promise<GitActionResult>;
-    deleteBranch: (target: ProjectTargetInput, options: { name: string; root?: string }) => Promise<GitActionResult>;
-    updateBranch: (target: ProjectTargetInput, branch: string, root?: string) => Promise<BranchUpdateResult>;
-    log: (target: ProjectTargetInput, limit?: number, offset?: number, ref?: string, root?: string) => Promise<GitLogEntry[]>;
+    createBranch: (
+      target: ProjectTargetInput,
+      options: {
+        name: string;
+        startPoint?: string;
+        checkout?: boolean;
+        root?: string;
+      },
+    ) => Promise<GitActionResult>;
+    checkoutBranch: (
+      target: ProjectTargetInput,
+      options: {
+        branch: string;
+        startPoint?: string;
+        create?: boolean;
+        strategy?: CheckoutStrategy;
+        root?: string;
+      },
+    ) => Promise<GitActionResult>;
+    deleteBranch: (
+      target: ProjectTargetInput,
+      options: { name: string; root?: string },
+    ) => Promise<GitActionResult>;
+    updateBranch: (
+      target: ProjectTargetInput,
+      branch: string,
+      root?: string,
+    ) => Promise<BranchUpdateResult>;
+    log: (
+      target: ProjectTargetInput,
+      limit?: number,
+      offset?: number,
+      ref?: string,
+      root?: string,
+    ) => Promise<GitLogEntry[]>;
     diff: (target: ProjectTargetInput, root?: string) => Promise<DiffResponse>;
-    untrackedFiles: (target: ProjectTargetInput, offset: number, limit: number, root?: string) => Promise<DiffFileEntry[]>;
-    fileDiff: (target: ProjectTargetInput, path: string, root?: string) => Promise<FileDiffContent>;
-    stage: (target: ProjectTargetInput, paths: string[], root?: string) => Promise<{ ok: boolean; error?: string }>;
-    unstage: (target: ProjectTargetInput, paths: string[], root?: string) => Promise<{ ok: boolean; error?: string }>;
-    discard: (target: ProjectTargetInput, path: string, root?: string) => Promise<{ ok: boolean; error?: string }>;
-    discardHunk: (target: ProjectTargetInput, path: string, hunkIndex: number, root?: string) => Promise<{ ok: boolean; error?: string }>;
-    conflicts: (target: ProjectTargetInput, root?: string) => Promise<ConflictFile[]>;
-    resolve: (target: ProjectTargetInput, path: string, content: string, root?: string) => Promise<{ ok: boolean; error?: string }>;
-    commit: (target: ProjectTargetInput, message: string, amend?: boolean, root?: string) => Promise<{ ok: boolean; hash: string; error?: string }>;
-    cherryPick: (target: ProjectTargetInput, hash: string, root?: string) => Promise<GitActionResult>;
-    reset: (target: ProjectTargetInput, hash: string, mode: ResetMode, root?: string) => Promise<GitActionResult>;
-    undoLastCommit: (target: ProjectTargetInput, root?: string) => Promise<GitActionResult>;
-    commitFiles: (target: ProjectTargetInput, hash: string, root?: string) => Promise<DiffFileEntry[]>;
-    commitMessage: (target: ProjectTargetInput, hash: string, root?: string) => Promise<CommitMessageResponse>;
-    editCommitMessage: (target: ProjectTargetInput, hash: string, message: string, root?: string) => Promise<GitActionResult>;
-    commitFileDiff: (target: ProjectTargetInput, hash: string, path: string, root?: string) => Promise<FileDiffContent>;
-    cherryPickCommitFiles: (target: ProjectTargetInput, hash: string, paths: string[], root?: string) => Promise<GitActionResult>;
-    dropCommitFiles: (target: ProjectTargetInput, hash: string, paths: string[], root?: string) => Promise<GitActionResult>;
-    dropCommit: (target: ProjectTargetInput, hash: string, root?: string) => Promise<GitActionResult>;
-    revertCommit: (target: ProjectTargetInput, hash: string, root?: string) => Promise<GitActionResult>;
-    revertCommitFiles: (target: ProjectTargetInput, hash: string, paths: string[], root?: string) => Promise<GitActionResult>;
+    untrackedFiles: (
+      target: ProjectTargetInput,
+      offset: number,
+      limit: number,
+      root?: string,
+    ) => Promise<DiffFileEntry[]>;
+    fileDiff: (
+      target: ProjectTargetInput,
+      path: string,
+      root?: string,
+    ) => Promise<FileDiffContent>;
+    stage: (
+      target: ProjectTargetInput,
+      paths: string[],
+      root?: string,
+    ) => Promise<{ ok: boolean; error?: string }>;
+    unstage: (
+      target: ProjectTargetInput,
+      paths: string[],
+      root?: string,
+    ) => Promise<{ ok: boolean; error?: string }>;
+    discard: (
+      target: ProjectTargetInput,
+      path: string,
+      root?: string,
+    ) => Promise<{ ok: boolean; error?: string }>;
+    discardHunk: (
+      target: ProjectTargetInput,
+      path: string,
+      hunkIndex: number,
+      root?: string,
+    ) => Promise<{ ok: boolean; error?: string }>;
+    conflicts: (
+      target: ProjectTargetInput,
+      root?: string,
+    ) => Promise<ConflictFile[]>;
+    resolve: (
+      target: ProjectTargetInput,
+      path: string,
+      content: string,
+      root?: string,
+    ) => Promise<{ ok: boolean; error?: string }>;
+    commit: (
+      target: ProjectTargetInput,
+      message: string,
+      amend?: boolean,
+      root?: string,
+    ) => Promise<{ ok: boolean; hash: string; error?: string }>;
+    cherryPick: (
+      target: ProjectTargetInput,
+      hash: string,
+      root?: string,
+    ) => Promise<GitActionResult>;
+    reset: (
+      target: ProjectTargetInput,
+      hash: string,
+      mode: ResetMode,
+      root?: string,
+    ) => Promise<GitActionResult>;
+    undoLastCommit: (
+      target: ProjectTargetInput,
+      root?: string,
+    ) => Promise<GitActionResult>;
+    commitFiles: (
+      target: ProjectTargetInput,
+      hash: string,
+      root?: string,
+    ) => Promise<DiffFileEntry[]>;
+    commitMessage: (
+      target: ProjectTargetInput,
+      hash: string,
+      root?: string,
+    ) => Promise<CommitMessageResponse>;
+    editCommitMessage: (
+      target: ProjectTargetInput,
+      hash: string,
+      message: string,
+      root?: string,
+    ) => Promise<GitActionResult>;
+    commitFileDiff: (
+      target: ProjectTargetInput,
+      hash: string,
+      path: string,
+      root?: string,
+    ) => Promise<FileDiffContent>;
+    cherryPickCommitFiles: (
+      target: ProjectTargetInput,
+      hash: string,
+      paths: string[],
+      root?: string,
+    ) => Promise<GitActionResult>;
+    dropCommitFiles: (
+      target: ProjectTargetInput,
+      hash: string,
+      paths: string[],
+      root?: string,
+    ) => Promise<GitActionResult>;
+    dropCommit: (
+      target: ProjectTargetInput,
+      hash: string,
+      root?: string,
+    ) => Promise<GitActionResult>;
+    revertCommit: (
+      target: ProjectTargetInput,
+      hash: string,
+      root?: string,
+    ) => Promise<GitActionResult>;
+    revertCommitFiles: (
+      target: ProjectTargetInput,
+      hash: string,
+      paths: string[],
+      root?: string,
+    ) => Promise<GitActionResult>;
   };
   config: {
     get: () => Promise<DamHopperConfig>;
     update: (config: DamHopperConfig) => Promise<DamHopperConfig>;
-    updateProject: (name: string, data: Partial<ProjectConfig>) => Promise<ProjectConfig>;
+    updateProject: (
+      name: string,
+      data: Partial<ProjectConfig>,
+    ) => Promise<ProjectConfig>;
   };
   settings: {
     clearCache: () => Promise<{ cleared: boolean }>;
@@ -2744,21 +3007,57 @@ export interface ApiClient {
     importConfig: (tomlContent: string) => Promise<SettingsImportResponse>;
   };
   diagnostics: {
-    export: (request: DiagnosticExportRequest) => Promise<DiagnosticExportResponse>;
+    export: (
+      request: DiagnosticExportRequest,
+    ) => Promise<DiagnosticExportResponse>;
   };
   commands: {
-    search: (query: string, projectType?: string, limit?: number) => Promise<SearchResult[]>;
+    search: (
+      query: string,
+      projectType?: string,
+      limit?: number,
+    ) => Promise<SearchResult[]>;
     list: (projectType: string) => Promise<SearchResult[]>;
   };
   agentStore: {
     list: (category?: AgentItemCategory) => Promise<AgentStoreItem[]>;
-    get: (name: string, category: AgentItemCategory) => Promise<AgentStoreItem | null>;
-    getContent: (name: string, category: AgentItemCategory, fileName?: string) => Promise<string>;
-    remove: (name: string, category: AgentItemCategory) => Promise<{ removed: boolean }>;
-    ship: (itemName: string, category: AgentItemCategory, projectName: string, agent: AgentType, method?: DistributionMethod) => Promise<ShipResult>;
-    unship: (itemName: string, category: AgentItemCategory, projectName: string, agent: AgentType) => Promise<ShipResult>;
-    absorb: (itemName: string, category: AgentItemCategory, projectName: string, agent: AgentType) => Promise<ShipResult>;
-    bulkShip: (items: Array<{ name: string; category: AgentItemCategory }>, targets: Array<{ projectName: string; agent: AgentType }>, method?: DistributionMethod) => Promise<ShipResult[]>;
+    get: (
+      name: string,
+      category: AgentItemCategory,
+    ) => Promise<AgentStoreItem | null>;
+    getContent: (
+      name: string,
+      category: AgentItemCategory,
+      fileName?: string,
+    ) => Promise<string>;
+    remove: (
+      name: string,
+      category: AgentItemCategory,
+    ) => Promise<{ removed: boolean }>;
+    ship: (
+      itemName: string,
+      category: AgentItemCategory,
+      projectName: string,
+      agent: AgentType,
+      method?: DistributionMethod,
+    ) => Promise<ShipResult>;
+    unship: (
+      itemName: string,
+      category: AgentItemCategory,
+      projectName: string,
+      agent: AgentType,
+    ) => Promise<ShipResult>;
+    absorb: (
+      itemName: string,
+      category: AgentItemCategory,
+      projectName: string,
+      agent: AgentType,
+    ) => Promise<ShipResult>;
+    bulkShip: (
+      items: Array<{ name: string; category: AgentItemCategory }>,
+      targets: Array<{ projectName: string; agent: AgentType }>,
+      method?: DistributionMethod,
+    ) => Promise<ShipResult[]>;
     matrix: () => Promise<DistributionMatrix>;
     scan: () => Promise<ProjectAgentScanResult[]>;
     health: () => Promise<HealthCheckResult>;
@@ -2766,17 +3065,42 @@ export interface ApiClient {
   agentMemory: {
     list: (projectName: string) => Promise<Record<AgentType, string | null>>;
     get: (projectName: string, agent: AgentType) => Promise<string | null>;
-    update: (projectName: string, agent: AgentType, content: string) => Promise<{ updated: boolean }>;
+    update: (
+      projectName: string,
+      agent: AgentType,
+      content: string,
+    ) => Promise<{ updated: boolean }>;
     templates: () => Promise<MemoryTemplateInfo[]>;
-    apply: (templateName: string, projectName: string, agent: AgentType) => Promise<{ content: string }>;
+    apply: (
+      templateName: string,
+      projectName: string,
+      agent: AgentType,
+    ) => Promise<{ content: string }>;
   };
   agentImport: {
     scan: (repoUrl: string) => Promise<RepoScanResult>;
     scanLocal: (dirPath: string) => Promise<LocalScanResult>;
-    confirm: (tmpDir: string, selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>, skipCleanup?: boolean) => Promise<ImportResult[]>;
+    confirm: (
+      tmpDir: string,
+      selectedItems: Array<{
+        name: string;
+        category: AgentItemCategory;
+        relativePath: string;
+      }>,
+      skipCleanup?: boolean,
+    ) => Promise<ImportResult[]>;
   };
   terminal: {
-    create: (opts: { id: string; project?: string; command: string; cwd?: string; cols: number; rows: number; worktreePath?: string; name?: string | null }) => Promise<SessionInfo>;
+    create: (opts: {
+      id: string;
+      project?: string;
+      command: string;
+      cwd?: string;
+      cols: number;
+      rows: number;
+      worktreePath?: string;
+      name?: string | null;
+    }) => Promise<SessionInfo>;
     kill: (id: string) => Promise<void>;
     remove: (id: string) => Promise<void>;
     rename: (id: string, name: string | null) => Promise<SessionInfo>;
@@ -2792,8 +3116,12 @@ export interface ApiClient {
     resourceSnapshot: () => Promise<HostResourceSnapshotV1>;
     resourceAlerts: (limit?: number) => Promise<HostResourceAlertIncident[]>;
     idleSuspendStatus: () => Promise<IdleSuspendStatusV1>;
-    updateIdleSuspendTiming: (timing: IdleSuspendTimingPatchRequest) => Promise<IdleSuspendTimingPatchResponse>;
-    forceSuspend: (request: ForceSuspendRequest) => Promise<ForceSuspendAcceptedResponse>;
+    updateIdleSuspendTiming: (
+      timing: IdleSuspendTimingPatchRequest,
+    ) => Promise<IdleSuspendTimingPatchResponse>;
+    forceSuspend: (
+      request: ForceSuspendRequest,
+    ) => Promise<ForceSuspendAcceptedResponse>;
   };
   usage: {
     summary: (query?: UsageSummaryQuery) => Promise<UsageSummary>;
@@ -2804,22 +3132,61 @@ export interface ApiClient {
     setupStatus: () => Promise<UsageSetupStatus>;
     updateSettings: (patch: UsageSettingsPatch) => Promise<UsageSettings>;
     configure: (patch: UsageSettingsPatch) => Promise<UsageSetupStatus>;
-    delete: (request: { confirmation: string; from?: number; to?: number }) => Promise<{ deleted: true }>;
+    delete: (request: {
+      confirmation: string;
+      from?: number;
+      to?: number;
+    }) => Promise<{ deleted: true }>;
     deleteAll: () => Promise<{ deleted: true }>;
     deleteRange: (from: number, to: number) => Promise<{ deleted: true }>;
   };
   fs: {
     list: (target: ProjectTargetInput, path: string) => Promise<FsListResponse>;
-    languageFiles: (target: ProjectTargetInput) => Promise<LanguageFilesResponse>;
-    read: (target: ProjectTargetInput, path: string, opts?: { offset?: number; len?: number }) => Promise<FsReadResponse>;
-    writeFile: (target: ProjectTargetInput, path: string, content: string, expectedMtime: number) => Promise<FsWriteResponse>;
-    subscribeTree: (target: ProjectTargetInput, path: string) => Promise<number>;
+    languageFiles: (
+      target: ProjectTargetInput,
+    ) => Promise<LanguageFilesResponse>;
+    read: (
+      target: ProjectTargetInput,
+      path: string,
+      opts?: { offset?: number; len?: number },
+    ) => Promise<FsReadResponse>;
+    writeFile: (
+      target: ProjectTargetInput,
+      path: string,
+      content: string,
+      expectedMtime: number,
+    ) => Promise<FsWriteResponse>;
+    subscribeTree: (
+      target: ProjectTargetInput,
+      path: string,
+    ) => Promise<number>;
     unsubscribeTree: (sub_id: number) => Promise<boolean>;
     onEvent: (sub_id: number, cb: (event: FsEventDto) => void) => () => void;
-    uploadFile: (target: ProjectTargetInput, dir: string, file: File, onProgress?: (pct: number) => void) => Promise<FsUploadResult>;
-    putFile: (target: ProjectTargetInput, dir: string, file: File, uploadId: string, encKey: CryptoKey, onProgress?: (pct: number) => void) => Promise<FsPutResult>;
-    putSave: (target: ProjectTargetInput, path: string, blob: Blob, saveId: string, encKey: CryptoKey) => Promise<FsPutResult>;
-    op: (op: "delete" | "rename" | "mkdir" | "create_file", params: Record<string, unknown>) => Promise<FsOpResult>;
+    uploadFile: (
+      target: ProjectTargetInput,
+      dir: string,
+      file: File,
+      onProgress?: (pct: number) => void,
+    ) => Promise<FsUploadResult>;
+    putFile: (
+      target: ProjectTargetInput,
+      dir: string,
+      file: File,
+      uploadId: string,
+      encKey: CryptoKey,
+      onProgress?: (pct: number) => void,
+    ) => Promise<FsPutResult>;
+    putSave: (
+      target: ProjectTargetInput,
+      path: string,
+      blob: Blob,
+      saveId: string,
+      encKey: CryptoKey,
+    ) => Promise<FsPutResult>;
+    op: (
+      op: "delete" | "rename" | "mkdir" | "create_file",
+      params: Record<string, unknown>,
+    ) => Promise<FsOpResult>;
   };
   tunnels: {
     list: () => Promise<TunnelInfo[]>;
@@ -2827,33 +3194,77 @@ export interface ApiClient {
     stop: (id: string) => Promise<void>;
   };
   browserDebug: {
-    createArtifact: (terminalId: string, terminalIncarnation: number, selection: BrowserSelectionV1) => Promise<BrowserDebugArtifactResponse>;
+    createArtifact: (
+      terminalId: string,
+      terminalIncarnation: number,
+      selection: BrowserSelectionV1,
+    ) => Promise<BrowserDebugArtifactResponse>;
     deleteArtifact: (artifactId: string) => Promise<void>;
     handoff: (artifactId: string) => Promise<BrowserDebugHandoffResponse>;
-    uploadPng: (artifactId: string, png: Blob) => Promise<BrowserDebugArtifactResponse>;
+    uploadPng: (
+      artifactId: string,
+      png: Blob,
+    ) => Promise<BrowserDebugArtifactResponse>;
   };
   workflow: {
     overview: () => Promise<OverviewDto>;
     events: (query?: EventsQuery) => Promise<EventsDto>;
     createItem: (req: CreateItemRequest) => Promise<MutationDto<ItemDto>>;
-    patchItem: (id: string, req: PatchItemRequest) => Promise<MutationDto<ItemDto>>;
-    deleteItem: (id: string, req: DeleteItemRequest) => Promise<MutationDto<TombstoneDto>>;
-    createSession: (req: CreateSessionRequest) => Promise<MutationDto<SessionDto>>;
-    endSession: (id: string, req: EndSessionRequest) => Promise<MutationDto<SessionDto>>;
-    abandonSession: (id: string, req: AbandonSessionRequest) => Promise<MutationDto<SessionDto>>;
-    linkResource: (sessionId: string, req: LinkResourceRequest) => Promise<MutationDto<LinkDto>>;
-    unlinkResource: (sessionId: string, req: UnlinkResourceRequest) => Promise<MutationDto<TombstoneDto>>;
+    patchItem: (
+      id: string,
+      req: PatchItemRequest,
+    ) => Promise<MutationDto<ItemDto>>;
+    deleteItem: (
+      id: string,
+      req: DeleteItemRequest,
+    ) => Promise<MutationDto<TombstoneDto>>;
+    createSession: (
+      req: CreateSessionRequest,
+    ) => Promise<MutationDto<SessionDto>>;
+    endSession: (
+      id: string,
+      req: EndSessionRequest,
+    ) => Promise<MutationDto<SessionDto>>;
+    abandonSession: (
+      id: string,
+      req: AbandonSessionRequest,
+    ) => Promise<MutationDto<SessionDto>>;
+    linkResource: (
+      sessionId: string,
+      req: LinkResourceRequest,
+    ) => Promise<MutationDto<LinkDto>>;
+    unlinkResource: (
+      sessionId: string,
+      req: UnlinkResourceRequest,
+    ) => Promise<MutationDto<TombstoneDto>>;
     createNote: (req: CreateNoteRequest) => Promise<MutationDto<NoteDto>>;
-    deleteNote: (id: string, req: DeleteNoteRequest) => Promise<MutationDto<TombstoneDto>>;
+    deleteNote: (
+      id: string,
+      req: DeleteNoteRequest,
+    ) => Promise<MutationDto<TombstoneDto>>;
     purgeHistory: (req: PurgeHistoryRequest) => Promise<PurgeDto>;
   };
   plugins: {
     list: (target: ServerProjectTarget) => Promise<ListPluginsResponse>;
+    getEpoch: () => Promise<PluginEpoch>;
+    readUiAsset: (
+      request: PluginUiAssetRequest,
+      signal?: AbortSignal,
+    ) => Promise<PluginUiAsset>;
     openContext: (req: OpenContextRequest) => Promise<ContextOpenResult>;
     closeContext: (req: CloseContextRequest) => Promise<ContextCloseResult>;
     invoke: <T = unknown>(req: InvokeRequest) => Promise<InvokeResponse<T>>;
     cancel: (req: CancelRequest) => Promise<RequestCancelResult>;
+    onRevoked: (listener: (event: PluginRevokedEvent) => void) => () => void;
   };
+}
+
+interface PluginTransportSeam {
+  getPluginEpoch?: () => Promise<PluginEpoch>;
+  fetchPluginUi?: (
+    request: PluginUiAssetRequest,
+    signal?: AbortSignal,
+  ) => Promise<PluginUiAsset>;
 }
 
 interface FsTransportSeam {
@@ -2879,21 +3290,35 @@ const defaultAmbientTransport: Transport = {
   onTerminalExit: (id, cb) => getTransport().onTerminalExit(id, cb),
   onEvent: (channel, cb) => getTransport().onEvent(channel, cb),
   terminalWrite: (id, data) => getTransport().terminalWrite(id, data),
-  terminalResize: (id, cols, rows) => getTransport().terminalResize(id, cols, rows),
+  terminalResize: (id, cols, rows) =>
+    getTransport().terminalResize(id, cols, rows),
   uploadBrowserDebugPng: (id, png) =>
     getTransport().uploadBrowserDebugPng?.(id, png) ??
-    Promise.reject(new Error("Browser screenshot upload is unsupported by this transport")),
+    Promise.reject(
+      new Error("Browser screenshot upload is unsupported by this transport"),
+    ),
   onStatusChange: (cb) => getTransport().onStatusChange?.(cb) ?? (() => {}),
-  fsRead: (...args: unknown[]) => (getTransport() as unknown as FsTransportSeam).fsRead?.(...args),
-  fsWriteFile: (...args: unknown[]) => (getTransport() as unknown as FsTransportSeam).fsWriteFile?.(...args),
-  fsPutFile: (...args: unknown[]) => (getTransport() as unknown as FsTransportSeam).fsPutFile?.(...args),
-  fsPutSave: (...args: unknown[]) => (getTransport() as unknown as FsTransportSeam).fsPutSave?.(...args),
-  fsSubscribeTree: (...args: unknown[]) => (getTransport() as unknown as FsTransportSeam).fsSubscribeTree?.(...args),
-  fsUnsubscribeTree: (...args: unknown[]) => (getTransport() as unknown as FsTransportSeam).fsUnsubscribeTree?.(...args),
-  onFsEvent: (...args: unknown[]) => (getTransport() as unknown as FsTransportSeam).onFsEvent?.(...args),
-  fsUploadFile: (...args: unknown[]) => (getTransport() as unknown as FsTransportSeam).fsUploadFile?.(...args),
-  fsOp: (...args: unknown[]) => (getTransport() as unknown as FsTransportSeam).fsOp?.(...args),
+  fsRead: (...args: unknown[]) =>
+    (getTransport() as unknown as FsTransportSeam).fsRead?.(...args),
+  fsWriteFile: (...args: unknown[]) =>
+    (getTransport() as unknown as FsTransportSeam).fsWriteFile?.(...args),
+  fsPutFile: (...args: unknown[]) =>
+    (getTransport() as unknown as FsTransportSeam).fsPutFile?.(...args),
+  fsPutSave: (...args: unknown[]) =>
+    (getTransport() as unknown as FsTransportSeam).fsPutSave?.(...args),
+  fsSubscribeTree: (...args: unknown[]) =>
+    (getTransport() as unknown as FsTransportSeam).fsSubscribeTree?.(...args),
+  fsUnsubscribeTree: (...args: unknown[]) =>
+    (getTransport() as unknown as FsTransportSeam).fsUnsubscribeTree?.(...args),
+  onFsEvent: (...args: unknown[]) =>
+    (getTransport() as unknown as FsTransportSeam).onFsEvent?.(...args),
+  fsUploadFile: (...args: unknown[]) =>
+    (getTransport() as unknown as FsTransportSeam).fsUploadFile?.(...args),
+  fsOp: (...args: unknown[]) =>
+    (getTransport() as unknown as FsTransportSeam).fsOp?.(...args),
 };
 
-export const api = createApiClient({ profileId: "", generation: 0 }, defaultAmbientTransport);
-
+export const api = createApiClient(
+  { profileId: "", generation: 0 },
+  defaultAmbientTransport,
+);

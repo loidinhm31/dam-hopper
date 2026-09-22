@@ -30,7 +30,7 @@ Current standalone evcrate remains operational through G4. Final evcrate E05 rem
 | [D01](phase-01-package-registry.md) | Runner-owned safe package/trust staging; early real evcrate candidate intake | G0; overlaps E01/E02 | DONE (2026-09-21; 100%) |
 | [D02](phase-02-owner-runner.md) | Owner UID runner, framed UDS/pipes, supervision/cancel/restart/service | G0; overlaps D01/E01/E02 | DONE (2026-09-21; 100%) |
 | [D03](phase-03-authorized-api.md) | Actor/grant/target contexts over existing REST+WS owner transport | D01/D02 interfaces; E01/E02 → G1 | DONE (2026-09-22; 100%; review approved 9.2/10) |
-| [D04](phase-04-isolated-ui-host.md) | Inert bytes, host CSP, opaque iframe bridge, dynamic route/nav | G1; E03 → G2 | Pending |
+| [D04](phase-04-isolated-ui-host.md) | Inert bytes, host CSP, opaque iframe bridge, dynamic route/nav | G1; E03 → G2 | DONE (2026-09-22; implementation 100%; separate LAN G2 deferred to D06/G4) |
 | [D05](phase-05-management-and-lifecycle.md) | Admin install/update/rollback/disable/remove and crash recovery | G1; may overlap D04/E03; E04 → G3 | Pending |
 | [D06](phase-06-linux-lan-qualification.md) | Release-manager owner deployment and real evcrate LAN/workload proof | G2 + G3; E05 → G4 | Pending |
 
@@ -40,7 +40,7 @@ G1 and G2 do not wait for lifecycle polish: D01 accepts E02's early immutable pa
 
 - **G0:** jointly pin D00/E00 candidate versions and digests after actor/grant, exact path identity, schema fixtures, cancellation/isolation experiments, and measured budget review.
 - **G1 (status 2026-09-22):** D03's authorized API contribution is DONE and its real API → owner runner → worker slice is validated by scoped authorization, supervision, integration, and UI transport evidence. Joint G1 remains pending E01/E02 cross-repository sign-off for the installed evcrate worker, wrong-owner/grant denial, cancellation, crash, and source-immutability evidence; G1 is not releasable platform completion.
-- **G2:** separate LAN browser renders Overview, History/detail, Configuration, Evaluations inside the isolated frame; profile/project switch clears stale state; no picker or frame credentials/network.
+- **G2 (status 2026-09-22):** D04 host implementation and local browser qualification (overview/detail with 25 real records) complete; separate LAN browser execution over HTTPS/encrypted LAN is deferred to D06/G4 deployment qualification.
 - **G3:** independent host/plugin artifacts update, disable/remove, recover, and restore a matched pair. Current disabled/revoked security intent outranks rollback.
 - **G4:** D06/E05 satisfy all acceptance and workload/deployment evidence. Only then replace the standalone artifact.
 

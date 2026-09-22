@@ -28,8 +28,8 @@ use crate::state::AppState;
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
     fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend, media_session,
-    plugins as plugins_api, port_forward as port_forward_api, settings, ssh, system, terminal,
-    tunnel, usage, usage_sessions, workflow, workspace, ws,
+    plugin_assets, plugins as plugins_api, port_forward as port_forward_api, settings, ssh, system,
+    terminal, tunnel, usage, usage_sessions, workflow, workspace, ws,
 };
 
 /// Build the full Axum router without cross-origin browser access and without static web serving.
@@ -94,6 +94,16 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/workflow/history", delete(workflow::purge::purge))
         .route("/api/workflow/notes/{id}", delete(workflow::note::delete))
         .layer(RequestBodyLimitLayer::new(32 * 1024));
+
+    let plugin_asset_routes = Router::new()
+        .route(
+            "/api/plugins/{installationId}/ui",
+            get(plugin_assets::plugin_ui_asset_handler),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            plugin_assets::require_inert_asset_auth,
+        ));
     // Protected routes — auth middleware checks damhopper-auth cookie
     let protected = Router::new()
         // Workspace
@@ -437,8 +447,9 @@ pub fn build_router_with_web_dir_and_origins(
         )
         .route(
             "/api/plugins/invoke",
-            post(plugins_api::invoke_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024 * 1024)),
+            post(plugins_api::invoke_handler).layer(tower_http::limit::RequestBodyLimitLayer::new(
+                16 * 1024 * 1024,
+            )),
         )
         .route(
             "/api/plugins/cancel",
@@ -501,6 +512,7 @@ pub fn build_router_with_web_dir_and_origins(
     let router = Router::new()
         .merge(public)
         .merge(protected)
+        .merge(plugin_asset_routes)
         .merge(ide_routes)
         .merge(video_stream)
         .merge(image_stream);
@@ -512,7 +524,7 @@ pub fn build_router_with_web_dir_and_origins(
             .route("/api/", any(|| async { StatusCode::NOT_FOUND }))
             .route("/api/{*path}", any(|| async { StatusCode::NOT_FOUND }))
             .fallback_service(
-                ServeDir::new(&dir).not_found_service(ServeFile::new(dir.join("index.html"))),
+                ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html"))),
             ),
         None => router.fallback(any(|| async { StatusCode::NOT_FOUND })),
     };

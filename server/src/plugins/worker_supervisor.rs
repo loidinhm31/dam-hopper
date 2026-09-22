@@ -38,6 +38,7 @@ pub struct ContextEntry {
     pub allowed_operations: Vec<String>,
     pub allow_current_account_policy: bool,
     pub activation_generation: u64,
+    pub worker_generation: u64,
     pub binding_revision: u64,
     pub grant_revision: u64,
     pub in_flight: usize,
@@ -67,6 +68,7 @@ pub struct InstallationSupervisor {
     pub plugin_id: String,
     pub active_package_digest: String,
     pub active_version: String,
+    pub activation_generation: u64,
     pub package_dir: PathBuf,
     pub entrypoint: PathBuf,
     pub node_bin: PathBuf,
@@ -90,6 +92,7 @@ impl InstallationSupervisor {
             installation_id,
             plugin_id,
             active_package_digest,
+            activation_generation: generation,
             active_version,
             package_dir,
             entrypoint,
@@ -112,6 +115,9 @@ impl InstallationSupervisor {
         self.inner.lock().status.clone()
     }
 
+    pub fn activation_generation(&self) -> u64 {
+        self.activation_generation
+    }
     pub fn generation(&self) -> u64 {
         self.inner.lock().generation
     }
@@ -207,7 +213,12 @@ impl InstallationSupervisor {
         &self,
         params: ContextOpenParams,
     ) -> Result<ContextOpenResult, PluginError> {
-        let (worker, context_id, generation, expires_at_secs) = {
+        if params.activation_generation != self.activation_generation {
+            return Err(PluginError::context_revoked(
+                "Plugin activation changed before context open",
+            ));
+        }
+        let (worker, context_id, expires_at_secs) = {
             let mut inner = self.inner.lock();
             if !matches!(inner.status, SupervisorStatus::Ready) {
                 return Err(PluginError::runner_unavailable(format!(
@@ -236,7 +247,8 @@ impl InstallationSupervisor {
                 worktree_path: params.worktree_path.clone(),
                 allowed_operations: params.allowed_operations.clone(),
                 allow_current_account_policy: params.allow_current_account_policy,
-                activation_generation: generation,
+                activation_generation: self.activation_generation,
+                worker_generation: generation,
                 binding_revision: 1,
                 grant_revision: 1,
                 in_flight: 0,
@@ -245,7 +257,7 @@ impl InstallationSupervisor {
 
             inner.contexts.insert(context_id.clone(), entry);
             let worker = inner.worker.clone();
-            (worker, context_id, generation, expires_at_secs)
+            (worker, context_id, expires_at_secs)
         };
 
         if let Some(worker) = worker {
@@ -258,13 +270,18 @@ impl InstallationSupervisor {
                 "allowedOperations": params.allowed_operations,
                 "allowCurrentAccountPolicy": params.allow_current_account_policy,
                 "apiConnectionEpoch": params.api_connection_epoch,
-                "activationGeneration": generation,
+                "activationGeneration": self.activation_generation,
                 "bindingRevision": 1,
                 "grantRevision": 1,
             });
             let req_id = worker.generate_request_id();
             let worker_res = worker
-                .send_request(&req_id, "context.open", worker_params, Duration::from_secs(5))
+                .send_request(
+                    &req_id,
+                    "context.open",
+                    worker_params,
+                    Duration::from_secs(5),
+                )
                 .await;
             if let Err(e) = worker_res {
                 let mut inner = self.inner.lock();
@@ -277,7 +294,7 @@ impl InstallationSupervisor {
             context_id,
             binding_revision: 1,
             grant_revision: 1,
-            activation_generation: generation,
+            activation_generation: self.activation_generation,
             expires_at: expires_at_secs,
         })
     }
@@ -357,7 +374,7 @@ impl InstallationSupervisor {
 
             let generation = inner.generation;
             let ctx = inner.contexts.get_mut(&params.context_id).unwrap();
-            if ctx.activation_generation != generation {
+            if ctx.worker_generation != generation {
                 return Err(PluginError::context_revoked(
                     "Context belongs to prior worker generation and has been revoked",
                 ));
@@ -439,7 +456,13 @@ impl InstallationSupervisor {
             self.handle_worker_crash().await;
         }
 
-        invoke_res.map(|val| PluginInvokeResult { result: val })
+        invoke_res.and_then(|val| {
+            serde_json::from_value(val).map_err(|error| {
+                PluginError::invalid_input(format!(
+                    "Worker returned an invalid plugin.invoke result: {error}"
+                ))
+            })
+        })
     }
 
     pub async fn cancel_request(&self, params: RequestCancelParams) -> RequestCancelResult {

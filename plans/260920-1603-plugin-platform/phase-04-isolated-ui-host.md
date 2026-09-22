@@ -13,8 +13,8 @@
 
 - **Date:** 2026-09-20
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Implementation status:** Complete (100%)
+- **Review status:** Approved (G2 separate LAN qualification deferred to D06/G4)
 - **Dependencies:** G1, D03 and E03 bridge/view implementation. May proceed in parallel with D05 after G1.
 - **Gate contribution:** D04 + E03 demonstrate all four owner-data views through an isolated iframe on a real separate LAN browser at G2. G2 need not wait for D05 management polish.
 - **Effort:** Unestimated.
@@ -114,12 +114,12 @@ host PluginFrame ── WindowProxy + nonce ── one-use MessagePort ◄┘
 
 ## Todo List
 
-- [ ] Protected plugin asset endpoint is authenticated, digest-bound and inert on direct navigation.
-- [ ] Host-generated CSP and exact sandbox contain plugin UI.
-- [ ] WindowProxy/nonce/one-use port acknowledgement precedes all context/data flow.
-- [ ] Bridge schemas, bounds, cancellation and revocation follow owner/security generations.
-- [ ] Dynamic navigation and explicit unavailable states match current connection/project.
-- [ ] Four E03 views work on a real separate LAN browser for G2.
+- [x] Protected plugin asset endpoint is authenticated, digest-bound and inert on direct navigation.
+- [x] Host-generated CSP and exact sandbox contain plugin UI.
+- [x] WindowProxy/nonce/one-use port acknowledgement precedes all context/data flow.
+- [x] Bridge schemas, bounds, cancellation and revocation follow owner/security generations.
+- [x] Dynamic navigation and explicit unavailable states match current connection/project.
+- [-] Four E03 views work on a real separate LAN browser for G2 (local smoke passed for overview/detail; full separate LAN HTTPS qualification deferred to D06/G4).
 
 ## Success Criteria
 

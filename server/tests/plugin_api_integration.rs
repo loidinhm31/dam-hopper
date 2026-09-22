@@ -10,10 +10,10 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use rand::rngs::OsRng;
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::sync::watch;
 use tower::ServiceExt;
-use sha2::{Digest, Sha256};
 
 use dam_hopper_server::agent_store::AgentStoreService;
 use dam_hopper_server::api::build_router;
@@ -102,10 +102,12 @@ function handleMessage(msg) {
         jsonrpc: '2.0',
         id: msg.id,
         result: {
-          snapshotId: 'snap-42',
-          totalFiles: 5,
-          totalBytes: 1024,
-          status: 'ok'
+          result: {
+            snapshotId: 'snap-42',
+            totalFiles: 5,
+            totalBytes: 1024,
+            status: 'ok'
+          }
         }
       });
     } else if (msg.params.operation === 'crash.worker') {
@@ -114,7 +116,7 @@ function handleMessage(msg) {
       writeFrame({
         jsonrpc: '2.0',
         id: msg.id,
-        result: { echo: msg.params.operation }
+        result: { result: { echo: msg.params.operation } }
       });
     }
   } else if (msg.method === 'request.cancel') {
@@ -194,7 +196,10 @@ async fn create_test_harness(temp_dir: &TempDir, no_auth: bool) -> TestHarness {
 
     let node_bin = find_node_bin();
     let supervisor_mgr = Arc::new(SupervisorManager::new(registry.clone(), node_bin));
-    let sup = supervisor_mgr.get_or_create(&installation_id).await.unwrap();
+    let sup = supervisor_mgr
+        .get_or_create(&installation_id)
+        .await
+        .unwrap();
     sup.activate().await.unwrap();
 
     let server_config = RunnerServerConfig {
@@ -357,7 +362,9 @@ async fn test_plugin_api_full_g1_lifecycle_and_immutability() {
 
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let list_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let plugins = list_json["plugins"].as_array().unwrap();
     assert!(!plugins.is_empty());
@@ -385,8 +392,15 @@ async fn test_plugin_api_full_g1_lifecycle_and_immutability() {
 
     let resp = router.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(status, StatusCode::OK, "Body: {}", String::from_utf8_lossy(&body_bytes));
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Body: {}",
+        String::from_utf8_lossy(&body_bytes)
+    );
     let open_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let context_id = open_json["contextId"].as_str().unwrap().to_string();
     assert!(context_id.starts_with("ctx:"));
@@ -395,6 +409,7 @@ async fn test_plugin_api_full_g1_lifecycle_and_immutability() {
     let invoke_body = serde_json::json!({
         "epoch": harness.epoch,
         "contextId": context_id,
+        "requestId": "snapshot-summary-1",
         "operation": "snapshot.summary",
         "payload": { "project": "test-proj" },
         "deadlineMs": 5000
@@ -410,7 +425,9 @@ async fn test_plugin_api_full_g1_lifecycle_and_immutability() {
 
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let invoke_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(invoke_json["result"]["status"], "ok");
     assert_eq!(invoke_json["result"]["snapshotId"], "snap-42");
@@ -467,7 +484,9 @@ async fn test_plugin_api_full_g1_lifecycle_and_immutability() {
 
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let cancel_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert!(matches!(
         cancel_json["outcome"].as_str(),
@@ -507,8 +526,15 @@ async fn test_plugin_api_full_g1_lifecycle_and_immutability() {
     let meta_after = fs::metadata(&sample_file).unwrap();
     let content_after = fs::read(&sample_file).unwrap();
 
-    assert_eq!(content_before, content_after, "Source content must be identical");
-    assert_eq!(meta_before.len(), meta_after.len(), "Source file length must not change");
+    assert_eq!(
+        content_before, content_after,
+        "Source content must be identical"
+    );
+    assert_eq!(
+        meta_before.len(),
+        meta_after.len(),
+        "Source file length must not change"
+    );
     assert_eq!(
         meta_before.modified().unwrap(),
         meta_after.modified().unwrap(),
@@ -532,7 +558,9 @@ async fn test_plugin_api_denied_under_no_auth_mode() {
 
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let err_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(err_json["code"], "NoAuthForbidden");
 
@@ -542,7 +570,10 @@ async fn test_plugin_api_denied_under_no_auth_mode() {
 async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
     let candidate_path = PathBuf::from("/home/loidinh/WS/evcrate/artifacts/candidate/evcrate-advisor-plugin-0.1.0-candidate.tar.gz");
     if !candidate_path.exists() {
-        eprintln!("Candidate archive not found at {:?}; skipping real worker G1 test", candidate_path);
+        eprintln!(
+            "Candidate archive not found at {:?}; skipping real worker G1 test",
+            candidate_path
+        );
         return;
     }
 
@@ -566,14 +597,34 @@ async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
         .unwrap();
 
     let mut bindings = BTreeMap::new();
-    bindings.insert("evcrate".to_string(), "/home/loidinh/WS/evcrate".to_string());
+    bindings.insert(
+        "evcrate".to_string(),
+        "/home/loidinh/WS/evcrate".to_string(),
+    );
     let inst = registry
         .approve_stage("admin-user", &begin.stage_id, &digest, 1, bindings, vec![])
+        .unwrap();
+    let grant = dam_hopper_server::plugins::contract::GrantKey {
+        actor_subject: "admin-user".to_string(),
+        installation_id: inst.installation_id.clone(),
+        configured_project_target: "*".to_string(),
+        allowed_operations: vec![
+            "history.refresh".to_string(),
+            "history.summary".to_string(),
+            "policy.readCurrent".to_string(),
+        ],
+        allow_current_account_policy: false,
+    };
+    registry
+        .update_grants("admin-user", &inst.installation_id, 1, vec![grant.clone()])
         .unwrap();
 
     let node_bin = find_node_bin();
     let supervisor_mgr = Arc::new(SupervisorManager::new(registry.clone(), node_bin));
-    let sup = supervisor_mgr.get_or_create(&inst.installation_id).await.unwrap();
+    let sup = supervisor_mgr
+        .get_or_create(&inst.installation_id)
+        .await
+        .unwrap();
     sup.activate().await.unwrap();
 
     let server_config = RunnerServerConfig {
@@ -643,20 +694,7 @@ async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
     let epoch_registry = Arc::new(EpochRegistry::new());
     let epoch = epoch_registry.issue_epoch("admin-user", None);
     let auth_service = Arc::new(PluginAuthorizationService::new(epoch_registry));
-    auth_service.set_actor_grants(
-        "admin-user",
-        vec![dam_hopper_server::plugins::contract::GrantKey {
-            actor_subject: "admin-user".to_string(),
-            installation_id: inst.installation_id.clone(),
-            configured_project_target: "*".to_string(),
-            allowed_operations: vec![
-                "history.refresh".to_string(),
-                "history.summary".to_string(),
-                "policy.readCurrent".to_string(),
-            ],
-            allow_current_account_policy: false,
-        }],
-    );
+    auth_service.set_actor_grants("admin-user", vec![grant]);
     let context_table = Arc::new(PluginContextTable::new());
     let plugin_service = Arc::new(PluginApiService::new(
         runner_client,
@@ -688,6 +726,74 @@ async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
     let router = build_router(state);
     let admin_token = generate_auth_token("admin-user", "test-jwt-secret");
 
+    let asset_uri = format!(
+        "/api/plugins/{}/ui?project=evcrate&activeDigest={}&activationGeneration=1",
+        inst.installation_id, digest
+    );
+
+    let unauthenticated_asset = Request::builder()
+        .method(Method::GET)
+        .uri(&asset_uri)
+        .body(Body::empty())
+        .unwrap();
+    let unauthenticated_response = router.clone().oneshot(unauthenticated_asset).await.unwrap();
+    assert_eq!(unauthenticated_response.status(), StatusCode::UNAUTHORIZED);
+    let unauthenticated_body =
+        axum::body::to_bytes(unauthenticated_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+    assert!(unauthenticated_body.is_empty());
+
+    let stale_asset = Request::builder()
+        .method(Method::GET)
+        .uri(format!(
+            "/api/plugins/{}/ui?project=evcrate&activeDigest={}&activationGeneration=2",
+            inst.installation_id, digest
+        ))
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let stale_response = router.clone().oneshot(stale_asset).await.unwrap();
+    assert_eq!(stale_response.status(), StatusCode::GONE);
+    let stale_body = axum::body::to_bytes(stale_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(stale_body.is_empty());
+
+    let asset_request = Request::builder()
+        .method(Method::GET)
+        .uri(&asset_uri)
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let asset_response = router.clone().oneshot(asset_request).await.unwrap();
+    assert_eq!(asset_response.status(), StatusCode::OK);
+    assert_eq!(
+        asset_response.headers()[header::CONTENT_TYPE],
+        "application/octet-stream"
+    );
+    assert_eq!(
+        asset_response.headers()[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"plugin-ui.bin\""
+    );
+    assert_eq!(
+        asset_response.headers()[header::CACHE_CONTROL],
+        "private, no-store"
+    );
+    assert_eq!(
+        asset_response.headers()["x-content-type-options"],
+        "nosniff"
+    );
+    let expected_ui_digest = asset_response.headers()["x-plugin-ui-sha256"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let asset_body = axum::body::to_bytes(asset_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(hex::encode(Sha256::digest(&asset_body)), expected_ui_digest);
+    assert!(asset_body.starts_with(b"<!DOCTYPE html>"));
+
     // Open context on real evcrate target
     let open_body = serde_json::json!({
         "epoch": epoch,
@@ -710,8 +816,15 @@ async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
 
     let resp = router.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(status, StatusCode::OK, "Body: {}", String::from_utf8_lossy(&body_bytes));
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Body: {}",
+        String::from_utf8_lossy(&body_bytes)
+    );
     let open_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let context_id = open_json["contextId"].as_str().unwrap().to_string();
 
@@ -719,6 +832,7 @@ async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
     let refresh_body = serde_json::json!({
         "epoch": epoch,
         "contextId": context_id,
+        "requestId": "history-refresh-1",
         "operation": "history.refresh",
         "payload": {},
         "deadlineMs": 10000
@@ -734,8 +848,15 @@ async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
 
     let resp = router.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(status, StatusCode::OK, "Body: {}", String::from_utf8_lossy(&body_bytes));
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Body: {}",
+        String::from_utf8_lossy(&body_bytes)
+    );
     let refresh_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert!(refresh_json["result"].is_object());
 
@@ -759,8 +880,15 @@ async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
     // Source immutability verification on evcrate files
     let meta_after = fs::metadata(&sample_file).unwrap();
     let content_after = fs::read(&sample_file).unwrap();
-    assert_eq!(content_before, content_after, "evcrate source content must be strictly immutable");
-    assert_eq!(meta_before.len(), meta_after.len(), "evcrate file size must not change");
+    assert_eq!(
+        content_before, content_after,
+        "evcrate source content must be strictly immutable"
+    );
+    assert_eq!(
+        meta_before.len(),
+        meta_after.len(),
+        "evcrate file size must not change"
+    );
     assert_eq!(
         meta_before.modified().unwrap(),
         meta_after.modified().unwrap(),

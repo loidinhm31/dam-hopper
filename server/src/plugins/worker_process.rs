@@ -69,10 +69,12 @@ impl WorkerProcess {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        // Restrict environment: only preserve minimal essentials
+        // Restrict environment to runtime paths; never forward credentials or service settings.
         cmd.env_clear();
-        if let Ok(path) = std::env::var("PATH") {
-            cmd.env("PATH", path);
+        for variable in ["PATH", "HOME"] {
+            if let Ok(value) = std::env::var(variable) {
+                cmd.env(variable, value);
+            }
         }
         cmd.env("NODE_ENV", "production");
         cmd.env("TMPDIR", "/tmp");
