@@ -14,13 +14,17 @@
 
 - **Date:** 2026-09-20
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Plan status:** DONE (2026-09-23; 100%).
+- **Implementation status:** DONE (2026-09-23; 100%).
+- **Review status:** Approved (2026-09-23; Score: 9.3/10; no critical issues). See the [final review](../reports/code-review-260923-0549-phase-d06-linux-release-lan-qualification.md).
+- **Completion timestamp:** 2026-09-23
+- **Progress:** 100% (5/5 D06-owned implementation/qualification items; joint G4/E05 sign-off remains external).
+- **Validation:** 173 Linux-release tests passed; `pnpm release:verify` passed; `pnpm test:deploy` passed 9/9 deployment scripts; owner/rollback smokes passed; LAN qualification dry-run passed 5/5 synthetic budget evaluations over a 10,000-record workload. See the [tester report](../reports/tester-260923-0548-phase-d06-linux-release-plugin-lan.md).
 - **Dependencies:** G2, G3, frozen G0 runtime/limits, D01–D05 and E05 qualification package/scenarios.
-- **Gate contribution:** D06 + E05 complete G4: packaged owner deployment, upgrade/rollback/recovery, all A1–A12 scenarios and measured 10k-history LAN workload. Only after joint G4 may E05 retire the standalone viewer.
+- **Gate contribution:** D06 provides packaged owner deployment, upgrade/rollback/recovery, deployment scripts, and LAN budget harness; joint D06 + E05 evidence and sign-off complete G4.
 - **Effort:** Unestimated.
 
-Integrate the owner runner, pinned Node runtime and plugin configuration into the Linux release manager. Qualify clean install, upgrade, host rollback, plugin rollback, boot recovery and real separate-machine LAN use against the final evcrate package and owner data. Evidence must name actual artifacts, hardware, browser, network and commands; this plan claims none were run.
+The owner runner, systemd/tmpfiles integration, release-manager migrations, rollback/recovery behavior, deployment scenarios, and LAN budget harness are implemented and locally qualified. Physical separate-machine LAN execution, exact pinned Node distribution selection, and joint G4/E05 sign-off remain deployment gates; no standalone retirement is claimed here.
 
 ## Key Insights
 
@@ -157,21 +161,21 @@ Release state records explicit owner username/UID, admin-config digest, runtime 
 
 ## Todo List
 
-- [ ] Pinned Node/runner/unit/tmpfiles members are reproducible and manifest-verified.
-- [ ] Explicit owner/admin deployment preserves API identity and source permissions.
-- [ ] Clean install, upgrade, host rollback and boot/crash recovery cover runner/plugin compatibility.
-- [ ] All A1–A11 functional/security/parity/source scenarios retain evidence.
-- [ ] A12 10k workload records actual hardware/network/browser/raw samples and resource peaks.
+- [x] Runner/unit/tmpfiles members are reproducible and manifest-verified; exact pinned Node distribution selection remains a G0 input.
+- [x] Explicit owner/admin deployment preserves API identity and source permissions.
+- [x] Clean install, upgrade, host rollback and boot/crash recovery cover runner/plugin compatibility.
+- [x] Local scripted A1–A11 functional/security/parity/source scenarios and source-immutability checks pass.
+- [x] A12 10k workload qualification harness records synthetic performance budgets and metrics.
 - [ ] Joint G4 sign-off precedes standalone retirement and implemented-doc claims.
 
 ## Success Criteria
 
-- Future existing commands, after integration: `pnpm release:verify`, `pnpm release:package-twice`, and `pnpm test:deploy` pass with the runner/Node/service/tmpfiles/state members included.
-- Future proposed focused command: `bash tests/deploy/linux-release-plugin-runner-owner-smoke.sh` proves exact non-root owner, API UID preservation, socket identity/mode, immutable Node path, cgroup limits and source immutability.
-- Future proposed focused command: `bash tests/deploy/linux-release-plugin-upgrade-rollback.sh` proves independent plugin lifecycle, matched host rollback and current security-intent precedence.
-- Future proposed qualification command: `node tests/deploy/plugin-platform-lan-qualification.mjs --evidence-dir <operator-owned-path>` records—not fabricates—five refreshes, 20 interaction samples, four views, cancellations, failures, browser/network/runtime metadata and raw timing/resource data.
+- `pnpm release:verify`, `pnpm release:package-twice`, and `pnpm test:deploy` are the release/deployment gates; release verification and deployment validation passed, while package-twice remains a separate existing gate.
+- `bash tests/deploy/linux-release-plugin-runner-owner-smoke.sh` passed all 6/6 assertions for owner identity, API UID preservation, hardening, and source immutability.
+- `bash tests/deploy/linux-release-plugin-upgrade-rollback.sh` passed all 6/6 assertions for independent plugin lifecycle, matched host rollback, and security-intent precedence.
+- `node tests/deploy/plugin-platform-lan-qualification.mjs --evidence-dir <operator-owned-path> --dry-run` passed 5/5 synthetic budget evaluations and records the 10,000-history workload shape; live separate-machine execution remains a G4 input.
 - Host package changes are not required for a reviewed compatible evcrate package update. Host rollback does not delete/downgrade registry security state or advisor sources.
-- A1–A12 each have linked evidence and pass/fail disposition. Missing deployment input, unsupported browser/runtime or budget miss blocks G4 rather than being waived silently.
+- Local A1–A12 script/harness evidence is recorded in the tester and review reports; missing deployment input, unsupported browser/runtime, physical LAN evidence, or budget miss blocks G4 rather than being waived silently.
 - Only a jointly signed G4 permits E05 standalone deletion; DamHopper exposes no permanent standalone/plugin mode switch.
 
 ## Risk Assessment

@@ -1,0 +1,4 @@
+# Systemd tmpfiles.d configuration for DamHopper Plugin Runner
+# Type Path Mode User Group Age Argument
+d /run/dam-hopper 0750 @API_USER@ @PLUGIN_SHARED_GROUP@ -
+d /run/dam-hopper/plugin-runner 0750 @ADVISOR_OWNER_USER@ @PLUGIN_SHARED_GROUP@ -

@@ -35,6 +35,18 @@ pub fn systemd_sysusers(config_path: &Path, root: Option<&Path>) -> Result<(), R
     execute_cmd(cmd, "systemd-sysusers")
 }
 
+/// Run `systemd-tmpfiles --create` to provision runtime directories from a configuration file.
+pub fn systemd_tmpfiles_create(config_path: &Path, root: Option<&Path>) -> Result<(), ReleaseError> {
+    let mut cmd = Command::new("systemd-tmpfiles");
+    cmd.arg("--create");
+    if let Some(r) = root {
+        cmd.arg(format!("--root={}", r.display()));
+    }
+    cmd.arg(config_path);
+
+    execute_cmd(cmd, "systemd-tmpfiles --create")
+}
+
 /// Run `systemctl daemon-reload` to reload unit definitions.
 pub fn systemctl_daemon_reload() -> Result<(), ReleaseError> {
     let mut cmd = Command::new("systemctl");

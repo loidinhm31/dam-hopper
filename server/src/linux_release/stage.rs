@@ -52,7 +52,40 @@ pub fn determine_host_role(
     allow_origins: &[String],
     is_role_set: bool,
 ) -> Result<(TargetRole, HostConfig), ReleaseError> {
+    determine_host_role_with_plugins(
+        layout,
+        requested_role,
+        allow_origins,
+        is_role_set,
+        None,
+        &[],
+    )
+}
+
+/// Resolve requested role and plugin configuration without mutating host configuration.
+pub fn determine_host_role_with_plugins(
+    layout: &Layout,
+    requested_role: Option<TargetRole>,
+    allow_origins: &[String],
+    is_role_set: bool,
+    plugin_owner_user: Option<String>,
+    plugin_admin_subjects: &[String],
+) -> Result<(TargetRole, HostConfig), ReleaseError> {
     let existing_config = load_host_config(&layout.host_config_path())?;
+
+    let (owner, admins) = if plugin_owner_user.is_some() || !plugin_admin_subjects.is_empty() {
+        (plugin_owner_user, plugin_admin_subjects.to_vec())
+    } else {
+        (
+            existing_config
+                .as_ref()
+                .and_then(|c| c.plugin_owner_user.clone()),
+            existing_config
+                .as_ref()
+                .map(|c| c.plugin_admin_subjects.clone())
+                .unwrap_or_default(),
+        )
+    };
 
     if is_role_set {
         let role = requested_role.ok_or(ReleaseError::MissingRole)?;
@@ -68,7 +101,9 @@ pub fn determine_host_role(
             .and_then(|c| c.service_user.clone());
         return Ok((
             role,
-            HostConfig::new(role, origins)?.with_service_user(existing_service_user),
+            HostConfig::new(role, origins)?
+                .with_service_user(existing_service_user)
+                .with_plugin_config(owner, admins),
         ));
     }
 
@@ -91,12 +126,17 @@ pub fn determine_host_role(
             let existing_service_user = config.service_user.clone();
             Ok((
                 role,
-                HostConfig::new(role, origins)?.with_service_user(existing_service_user),
+                HostConfig::new(role, origins)?
+                    .with_service_user(existing_service_user)
+                    .with_plugin_config(owner, admins),
             ))
         }
         None => {
             let role = requested_role.ok_or(ReleaseError::MissingRole)?;
-            Ok((role, HostConfig::new(role, allow_origins.to_vec())?))
+            Ok((
+                role,
+                HostConfig::new(role, allow_origins.to_vec())?.with_plugin_config(owner, admins),
+            ))
         }
     }
 }

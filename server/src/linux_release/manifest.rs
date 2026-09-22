@@ -61,6 +61,8 @@ pub struct ComponentsMeta {
     pub api: ComponentVersion,
     pub web_host: ComponentVersion,
     pub web_assets: ComponentVersion,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<ComponentVersion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,11 +89,19 @@ pub struct WebServiceContract {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunnerServiceContract {
+    pub unit_name: String,
+    pub socket_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServicesMeta {
     pub api: ApiServiceContract,
     pub web: WebServiceContract,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<RunnerServiceContract>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RollbackMeta {

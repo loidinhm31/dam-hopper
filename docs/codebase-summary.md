@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-22 from `repomix-output.xml` (Repomix v1.18.0; 2,236
-files, 5,030,066 tokens, 21,027,017 characters; five security-flagged files
+**Generated:** 2026-09-22 from `repomix-output.xml` (Repomix v1.18.0; 2,244
+files, 5,055,703 tokens, 21,133,046 characters; five security-flagged files
 excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
@@ -28,7 +28,7 @@ security scanning are not represented in full.
 - `docs/` — operator, API, architecture, standards, and product-requirement
   documentation.
 
-## Trusted plugin platform (Phases D00–D05)
+## Trusted plugin platform (Phases D00–D06)
 
 The candidate SDK is `@dam-hopper/plugin-sdk` `0.1.0`; schemas, fixtures, and
 the packed artifact live under `packages/plugin-sdk/`. D00 Rust mirrors and
@@ -67,9 +67,18 @@ strict four-byte big-endian JSON-RPC framing live in `server/src/plugins/`.
   `packages/ui/src/api/{plugin-types,client,ws-transport}.ts`, and
   `packages/ui/src/components/pages/settings-page/PluginManagementSection.tsx`.
 - Focused D05 evidence is in `server/tests/plugin_admin_api.rs`,
-  `server/tests/plugin_lifecycle.rs`, and
-  `PluginManagementSection.test.tsx`; detailed boundaries and unresolved
-  startup/event questions are in [D05 architecture](./architecture/plugin-platform-d05.md).
+  `server/tests/plugin_lifecycle.rs`, and `PluginManagementSection.test.tsx`;
+  detailed boundaries and startup/event questions are in
+  [D05 architecture](./architecture/plugin-platform-d05.md).
+- D06 integrates Linux release assets: the owner runner unit, server-role
+  tmpfiles configuration, explicit owner/admin deployment inputs, and manager
+  state v2 retention of runner/host/plugin digests across rollback and recovery.
+  The source map spans `server/src/linux_release/`, `deploy/systemd/`,
+  `deploy/tmpfiles.d/`, and `deploy/release/`.
+- D06 qualification recorded 173/173 Linux-release tests, 9/9 deployment
+  journeys, owner/rollback smokes, and 5/5 synthetic LAN budgets over 10,000
+  history records. Physical separate-machine LAN and exact pinned Node
+  selection remain external deployment inputs.
 
 ## Unified-profile workbench frontend (Phases 00–02)
 
