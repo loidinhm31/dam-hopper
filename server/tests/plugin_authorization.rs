@@ -18,6 +18,7 @@ fn test_epoch_issuance_and_validation() {
     // Issue valid epoch
     let epoch = registry.issue_epoch(actor, None);
     assert_ne!(epoch, 0);
+    assert!(epoch <= ((1_u64 << 53) - 1));
 
     // Validate matching actor
     let validated = registry.validate_epoch(epoch, actor).unwrap();

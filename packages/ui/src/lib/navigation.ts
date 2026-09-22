@@ -32,8 +32,15 @@ const SSH_FORWARD_NAV: NavEntry = {
 
 export function getNavEntries({
   sshForwardHostAvailable,
+  pluginEntries = [],
 }: {
   sshForwardHostAvailable: boolean;
+  pluginEntries?: NavEntry[];
 }): NavEntry[] {
-  return sshForwardHostAvailable ? [...BASE_NAV, SSH_FORWARD_NAV] : BASE_NAV;
+  if (pluginEntries.length === 0) {
+    return sshForwardHostAvailable ? [...BASE_NAV, SSH_FORWARD_NAV] : BASE_NAV;
+  }
+  const settings = BASE_NAV.at(-1)!;
+  const entries = [...BASE_NAV.slice(0, -1), ...pluginEntries, settings];
+  return sshForwardHostAvailable ? [...entries, SSH_FORWARD_NAV] : entries;
 }

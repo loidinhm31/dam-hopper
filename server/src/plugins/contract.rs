@@ -109,6 +109,7 @@ pub struct PluginMetadataItem {
     pub publisher: String,
     pub capabilities: Vec<String>,
     pub has_ui: bool,
+    pub active_digest: String,
     pub active_generation: u64,
     pub enabled: bool,
 }
@@ -120,7 +121,7 @@ pub struct PluginListResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginReadUiParams {
     pub installation_id: String,
     pub expected_digest: String,
@@ -202,7 +203,7 @@ pub struct ContextCloseResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginInvokeParams {
     pub context_id: String,
     pub operation: String,
@@ -218,7 +219,7 @@ pub struct PluginInvokeResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestCancelParams {
     pub context_id: String,
     pub request_id: String,

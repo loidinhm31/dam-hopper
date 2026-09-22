@@ -10,6 +10,8 @@ use super::contract::GrantKey;
 use super::error::PluginError;
 use crate::api::auth::AuthenticatedActor;
 
+const MAX_JAVASCRIPT_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionEpoch {
     pub epoch_id: u64,
@@ -30,12 +32,12 @@ impl EpochRegistry {
         Self::default()
     }
 
-    /// Issue a cryptographically random, non-zero epoch for an authenticated actor.
+    /// Issue a cryptographically random, non-zero epoch that round-trips through JavaScript.
     pub fn issue_epoch(&self, actor_subject: &str, expires_at: Option<u64>) -> u64 {
         let mut rng = rand::thread_rng();
-        let epoch_id: u64 = loop {
-            let val = rng.gen::<u64>();
-            if val != 0 && !self.epochs.read().contains_key(&val) {
+        let epoch_id = loop {
+            let val = rng.gen_range(1..=MAX_JAVASCRIPT_SAFE_INTEGER);
+            if !self.epochs.read().contains_key(&val) {
                 break val;
             }
         };

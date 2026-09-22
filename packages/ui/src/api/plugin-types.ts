@@ -8,17 +8,32 @@ import type { ServerProjectTarget } from "./ownership.js";
 export type CancelOutcome = "accepted" | "alreadySettled" | "unknown";
 
 export interface PluginMetadataItem {
+  /** Server-authoritative installation ID used by routes and API calls. */
   id: string;
   version: string;
   publisher: string;
   capabilities: string[];
   hasUi: boolean;
+  activeDigest: string;
   activeGeneration: number;
   enabled: boolean;
 }
 
 export interface ListPluginsResponse {
   plugins: PluginMetadataItem[];
+}
+
+export interface PluginUiAssetRequest {
+  installationId: string;
+  activeDigest: string;
+  activationGeneration: number;
+  target: ServerProjectTarget;
+}
+
+export interface PluginUiAsset {
+  bytes: Uint8Array;
+  contentType: "application/octet-stream";
+  sha256: string;
 }
 
 export interface OpenContextRequest {
@@ -49,6 +64,7 @@ export interface ContextCloseResult {
 export interface InvokeRequest {
   epoch: number;
   contextId: string;
+  requestId: string;
   operation: string;
   payload: unknown;
   deadlineMs?: number;
@@ -68,12 +84,15 @@ export interface RequestCancelResult {
   outcome: CancelOutcome;
 }
 
-export interface PluginEpochEvent {
-  kind: "plugin:epoch";
-  reqId?: number;
+export interface PluginEpoch {
   epoch: number;
   actor: string;
   expiresAt?: number;
+}
+
+export interface PluginEpochEvent extends PluginEpoch {
+  kind: "plugin:epoch";
+  reqId?: number;
 }
 
 export interface PluginRevokedEvent {

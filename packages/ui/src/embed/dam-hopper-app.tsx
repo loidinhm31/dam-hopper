@@ -10,7 +10,10 @@ import {
 } from "react-router-dom";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
-import { connectProfile, syncActiveProfileConnection } from "@/api/connections.js";
+import {
+  connectProfile,
+  syncActiveProfileConnection,
+} from "@/api/connections.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import {
   getServerUrl,
@@ -103,6 +106,11 @@ const UsagePage = lazy(() =>
 const SshForwardingPage = lazy(() =>
   import("@/components/pages/SshForwardingPage.js").then((m) => ({
     default: m.SshForwardingPage,
+  })),
+);
+const PluginHostPage = lazy(() =>
+  import("@/components/PluginHostPage.js").then((module) => ({
+    default: module.PluginHostPage,
   })),
 );
 
@@ -208,7 +216,8 @@ function FreshResetBanner() {
       className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 flex items-center justify-between text-xs text-amber-300"
     >
       <span>
-        Unified multi-profile workbench upgrade: legacy browser-local resource state was reset. Server configuration and saved profiles are preserved.
+        Unified multi-profile workbench upgrade: legacy browser-local resource
+        state was reset. Server configuration and saved profiles are preserved.
       </span>
       <button
         onClick={() => {
@@ -343,89 +352,96 @@ export function DamHopperApp() {
             <PassphrasePrompt />
             <FreshResetBanner />
             <LegacyDeepLinkNotice />
-                  <Routes>
-                    <Route
-                      path="/"
-                      element={
-                        <ErrorBoundary>
-                          <Suspense fallback={LOADING_FALLBACK}>
-                            <DashboardPage />
-                          </Suspense>
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/workspace"
-                      element={
-                        <ErrorBoundary>
-                          <Suspense fallback={LOADING_FALLBACK}>
-                            <WorkspacePage />
-                          </Suspense>
-                        </ErrorBoundary>
-                      }
-                    />
-                    {/* Backward-compat redirects — preserve search params for deep-links */}
-                    <Route
-                      path="/terminals"
-                      element={<LegacyRedirect to="/workspace" />}
-                    />
-                    <Route
-                      path="/ide"
-                      element={<LegacyRedirect to="/workspace" />}
-                    />
-                    <Route
-                      path="/git"
-                      element={
-                        <ErrorBoundary>
-                          <Suspense fallback={LOADING_FALLBACK}>
-                            <GitPage />
-                          </Suspense>
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/settings"
-                      element={
-                        <ErrorBoundary>
-                          <Suspense fallback={LOADING_FALLBACK}>
-                            <SettingsPage />
-                          </Suspense>
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/agent-store"
-                      element={
-                        <ErrorBoundary>
-                          <Suspense fallback={LOADING_FALLBACK}>
-                            <AgentStorePage />
-                          </Suspense>
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/usage"
-                      element={
-                        <ErrorBoundary>
-                          <Suspense fallback={LOADING_FALLBACK}>
-                            <UsagePage />
-                          </Suspense>
-                        </ErrorBoundary>
-                      }
-                    />
-                    {sshForwardAvailable ? (
-                      <Route
-                        path="/ssh-forwarding"
-                        element={
-                          <ErrorBoundary>
-                            <Suspense fallback={LOADING_FALLBACK}>
-                              <SshForwardingPage />
-                            </Suspense>
-                          </ErrorBoundary>
-                        }
-                      />
-                    ) : null}
-                  </Routes>
+            <Routes>
+              <Route
+                path="/"
+                element={
+                  <ErrorBoundary>
+                    <Suspense fallback={LOADING_FALLBACK}>
+                      <DashboardPage />
+                    </Suspense>
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/workspace"
+                element={
+                  <ErrorBoundary>
+                    <Suspense fallback={LOADING_FALLBACK}>
+                      <WorkspacePage />
+                    </Suspense>
+                  </ErrorBoundary>
+                }
+              />
+              {/* Backward-compat redirects — preserve search params for deep-links */}
+              <Route
+                path="/terminals"
+                element={<LegacyRedirect to="/workspace" />}
+              />
+              <Route path="/ide" element={<LegacyRedirect to="/workspace" />} />
+              <Route
+                path="/git"
+                element={
+                  <ErrorBoundary>
+                    <Suspense fallback={LOADING_FALLBACK}>
+                      <GitPage />
+                    </Suspense>
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <ErrorBoundary>
+                    <Suspense fallback={LOADING_FALLBACK}>
+                      <SettingsPage />
+                    </Suspense>
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/agent-store"
+                element={
+                  <ErrorBoundary>
+                    <Suspense fallback={LOADING_FALLBACK}>
+                      <AgentStorePage />
+                    </Suspense>
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/usage"
+                element={
+                  <ErrorBoundary>
+                    <Suspense fallback={LOADING_FALLBACK}>
+                      <UsagePage />
+                    </Suspense>
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/plugins/:installationId"
+                element={
+                  <ErrorBoundary>
+                    <Suspense fallback={LOADING_FALLBACK}>
+                      <PluginHostPage />
+                    </Suspense>
+                  </ErrorBoundary>
+                }
+              />
+              {sshForwardAvailable ? (
+                <Route
+                  path="/ssh-forwarding"
+                  element={
+                    <ErrorBoundary>
+                      <Suspense fallback={LOADING_FALLBACK}>
+                        <SshForwardingPage />
+                      </Suspense>
+                    </ErrorBoundary>
+                  }
+                />
+              ) : null}
+            </Routes>
           </BrowserRouter>
         </AndroidChromeInputPolicyProvider>
       </EncryptProvider>

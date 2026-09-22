@@ -8,13 +8,30 @@ use super::authorization::PluginAuthorizationService;
 use super::contexts::{ContextRecord, PluginContextTable};
 use super::contract::budgets::MAX_PAYLOAD_BYTES;
 use super::contract::{
-    ContextCloseResult, ContextOpenParams, ContextOpenResult,
-    PluginInvokeParams, PluginMetadataItem, RequestCancelResult,
+    ContextCloseResult, ContextOpenParams, ContextOpenResult, PluginInvokeParams,
+    PluginMetadataItem, PluginReadUiParams, RequestCancelResult,
 };
 use super::error::PluginError;
 use super::runner_client::RunnerClient;
 use crate::api::auth::AuthenticatedActor;
 use crate::workspace_target::{ProjectTargetRef, WorkspaceTargetResolver};
+
+fn runner_invoke_request_id(epoch_id: u64, context_id: &str, request_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(epoch_id.to_be_bytes());
+    hasher.update([0]);
+    hasher.update(context_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(request_id.as_bytes());
+    format!("api-invoke-{}", hex::encode(hasher.finalize()))
+}
+
+pub struct VerifiedPluginUiAsset {
+    pub bytes: Vec<u8>,
+    pub sha256: String,
+}
 
 pub struct PluginApiService {
     runner_client: Arc<RunnerClient>,
@@ -58,7 +75,9 @@ impl PluginApiService {
     /// Check if runner generation changed (reconnect occurred), and invalidate caches and revoke contexts if so.
     pub fn check_runner_generation(&self) {
         let current_gen = self.runner_client.generation();
-        let old_gen = self.last_runner_generation.swap(current_gen, Ordering::SeqCst);
+        let old_gen = self
+            .last_runner_generation
+            .swap(current_gen, Ordering::SeqCst);
         if old_gen > 0 && current_gen != old_gen {
             tracing::warn!(
                 old_generation = old_gen,
@@ -75,6 +94,7 @@ impl PluginApiService {
         &self,
         actor: &AuthenticatedActor,
         target_ref: &ProjectTargetRef,
+        configured_project_root: &Path,
         no_auth: bool,
     ) -> Result<Vec<PluginMetadataItem>, PluginError> {
         if no_auth {
@@ -83,13 +103,17 @@ impl PluginApiService {
             ));
         }
 
+        self.workspace_target_resolver
+            .resolve(target_ref, configured_project_root)
+            .await
+            .map_err(|_| PluginError::invalid_input("Project target is unavailable"))?;
         self.check_runner_generation();
 
-        // Query runner client for plugins
-        let list_res = self.runner_client.list_plugins(false).await?;
-        let plugins = list_res.plugins;
+        // Include disabled durable records so authorized navigation can render
+        // an honest non-executable state instead of silently hiding them.
+        let plugins = self.runner_client.list_plugins(true).await?.plugins;
 
-        // Visibility filter: include only plugins for which the actor has some grant or default visibility
+        // Visibility remains explicit default-deny for this actor and target.
         let target_str = &target_ref.project;
         let visible = plugins
             .into_iter()
@@ -100,6 +124,90 @@ impl PluginApiService {
             .collect();
 
         Ok(visible)
+    }
+
+    /// Read the exact active UI document after current actor/target and
+    /// registry authorization. The caller receives bytes only after all
+    /// digest, generation, size, and content-hash checks succeed.
+    pub async fn read_ui_asset(
+        &self,
+        actor: &AuthenticatedActor,
+        installation_id: &str,
+        target_ref: &ProjectTargetRef,
+        configured_project_root: &Path,
+        expected_digest: &str,
+        activation_generation: u64,
+        no_auth: bool,
+    ) -> Result<VerifiedPluginUiAsset, PluginError> {
+        if no_auth {
+            return Err(PluginError::unauthorized(
+                "Plugin operations are strictly denied in --no-auth mode",
+            ));
+        }
+
+        self.check_runner_generation();
+        self.workspace_target_resolver
+            .resolve(target_ref, configured_project_root)
+            .await
+            .map_err(|_| PluginError::invalid_input("Project target is unavailable"))?;
+
+        if !self.auth_service.has_actor_visibility(
+            &actor.subject,
+            installation_id,
+            &target_ref.project,
+        ) {
+            return Err(PluginError::forbidden("Plugin UI is unavailable"));
+        }
+
+        let metadata = self
+            .runner_client
+            .list_plugins(true)
+            .await?
+            .plugins
+            .into_iter()
+            .find(|item| item.id == installation_id)
+            .ok_or_else(|| PluginError::forbidden("Plugin UI is unavailable"))?;
+        if !metadata.enabled || !metadata.has_ui {
+            return Err(PluginError::forbidden("Plugin UI is unavailable"));
+        }
+        if metadata.active_digest != expected_digest
+            || metadata.active_generation != activation_generation
+        {
+            return Err(PluginError::context_revoked("Plugin UI activation changed"));
+        }
+
+        let result = self
+            .runner_client
+            .read_ui(PluginReadUiParams {
+                installation_id: installation_id.to_string(),
+                expected_digest: expected_digest.to_string(),
+                activation_generation,
+                actor_subject: actor.subject.clone(),
+                project_target: target_ref.project.clone(),
+            })
+            .await?;
+
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(result.raw_bytes_base64)
+            .map_err(|_| PluginError::runner_unavailable("Plugin UI is unavailable"))?;
+        if result.size != bytes.len() || bytes.len() as u64 > super::limits::MAX_UI_DOCUMENT_BYTES {
+            return Err(PluginError::runner_unavailable("Plugin UI is unavailable"));
+        }
+        use sha2::{Digest, Sha256};
+        let sha256 = hex::encode(Sha256::digest(&bytes));
+        if sha256 != result.sha256 {
+            return Err(PluginError::runner_unavailable("Plugin UI is unavailable"));
+        }
+        if !self.auth_service.has_actor_visibility(
+            &actor.subject,
+            installation_id,
+            &target_ref.project,
+        ) {
+            return Err(PluginError::forbidden("Plugin UI is unavailable"));
+        }
+
+        Ok(VerifiedPluginUiAsset { bytes, sha256 })
     }
 
     /// Open an authorized connection-bound plugin context.
@@ -148,8 +256,15 @@ impl PluginApiService {
                 ))
             })?;
 
-        // 3. Open context on the runner
-        let activation_gen = self.runner_client.generation();
+        let activation_generation = self
+            .runner_client
+            .list_plugins(true)
+            .await?
+            .plugins
+            .into_iter()
+            .find(|plugin| plugin.id == installation_id && plugin.enabled)
+            .ok_or_else(|| PluginError::context_revoked("Plugin activation is unavailable"))?
+            .active_generation;
         let open_params = ContextOpenParams {
             actor_subject: actor.subject.clone(),
             installation_id: installation_id.to_string(),
@@ -158,7 +273,7 @@ impl PluginApiService {
             allowed_operations: allowed_operations.clone(),
             allow_current_account_policy,
             api_connection_epoch: epoch_id,
-            activation_generation: activation_gen,
+            activation_generation,
         };
 
         let res = self.runner_client.open_context(open_params).await?;
@@ -191,6 +306,7 @@ impl PluginApiService {
         actor: &AuthenticatedActor,
         epoch_id: u64,
         context_id: &str,
+        request_id: &str,
         operation: &str,
         payload: serde_json::Value,
         deadline_ms: Option<u64>,
@@ -203,11 +319,17 @@ impl PluginApiService {
         }
 
         self.check_runner_generation();
+        if request_id.is_empty()
+            || request_id.len() > 128
+            || !request_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+        {
+            return Err(PluginError::invalid_input("Invalid plugin request ID"));
+        }
 
         // Enforce generic request payload ceiling
-        let payload_size = serde_json::to_vec(&payload)
-            .map(|v| v.len())
-            .unwrap_or(0);
+        let payload_size = serde_json::to_vec(&payload).map(|v| v.len()).unwrap_or(0);
         if payload_size > MAX_PAYLOAD_BYTES {
             return Err(PluginError::invalid_input(format!(
                 "Payload size ({payload_size} bytes) exceeds maximum ceiling of {MAX_PAYLOAD_BYTES} bytes"
@@ -215,12 +337,9 @@ impl PluginApiService {
         }
 
         // 1. Begin invoke in local context table (checks concurrency limits, actor, epoch, operation)
-        let ctx = self.context_table.begin_invoke(
-            context_id,
-            &actor.subject,
-            epoch_id,
-            operation,
-        )?;
+        let ctx =
+            self.context_table
+                .begin_invoke(context_id, &actor.subject, epoch_id, operation)?;
 
         // Ensure in_flight counter is decremented when scope exits
         struct InvokeGuard<'a> {
@@ -256,7 +375,11 @@ impl PluginApiService {
             deadline_ms,
         };
 
-        let invoke_res = self.runner_client.invoke(invoke_params).await?;
+        let runner_request_id = runner_invoke_request_id(epoch_id, context_id, request_id);
+        let invoke_res = self
+            .runner_client
+            .invoke_with_request_id(&runner_request_id, invoke_params)
+            .await?;
         Ok(invoke_res.result)
     }
 
@@ -296,7 +419,10 @@ impl PluginApiService {
             )));
         }
 
-        self.runner_client.cancel_request(context_id, request_id).await
+        let runner_request_id = runner_invoke_request_id(epoch_id, context_id, request_id);
+        self.runner_client
+            .cancel_request(context_id, &runner_request_id)
+            .await
     }
 
     /// Close a context idempotently.
@@ -320,7 +446,10 @@ impl PluginApiService {
 
         if removed.is_some() {
             // Forward close to runner (best effort)
-            let _ = self.runner_client.close_context(context_id, Some("Closed by client request".to_string())).await;
+            let _ = self
+                .runner_client
+                .close_context(context_id, Some("Closed by client request".to_string()))
+                .await;
         }
 
         Ok(ContextCloseResult { closed: true })
@@ -331,16 +460,30 @@ impl PluginApiService {
         self.auth_service.epoch_registry().revoke_epoch(epoch_id);
         let revoked = self.context_table.revoke_by_epoch(epoch_id);
         for ctx in revoked {
-            let _ = self.runner_client.close_context(&ctx.context_id, Some("Epoch revoked on connection teardown".to_string())).await;
+            let _ = self
+                .runner_client
+                .close_context(
+                    &ctx.context_id,
+                    Some("Epoch revoked on connection teardown".to_string()),
+                )
+                .await;
         }
     }
 
     /// Revoke actor and all their owned contexts.
     pub async fn revoke_actor(&self, actor_subject: &str) {
-        self.auth_service.epoch_registry().revoke_by_actor(actor_subject);
+        self.auth_service
+            .epoch_registry()
+            .revoke_by_actor(actor_subject);
         let revoked = self.context_table.revoke_by_actor(actor_subject);
         for ctx in revoked {
-            let _ = self.runner_client.close_context(&ctx.context_id, Some(format!("Actor '{actor_subject}' logged out or disabled"))).await;
+            let _ = self
+                .runner_client
+                .close_context(
+                    &ctx.context_id,
+                    Some(format!("Actor '{actor_subject}' logged out or disabled")),
+                )
+                .await;
         }
     }
 }

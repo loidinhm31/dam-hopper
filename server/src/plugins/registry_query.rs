@@ -4,11 +4,39 @@ use std::fs;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 
-use super::contract::{GrantKey, PluginMetadataItem, PluginReadUiResult};
+use super::contract::{GrantKey, PluginMetadataItem, PluginReadUiParams, PluginReadUiResult};
 use super::error::PluginError;
 use super::limits::MAX_UI_DOCUMENT_BYTES;
 use super::registry::PluginRegistry;
 use super::registry_state::InstallationRecord;
+
+fn has_ui_visibility(
+    installation: &InstallationRecord,
+    actor_subject: &str,
+    project_target: &str,
+) -> bool {
+    let target_is_bound = installation.bindings.contains_key(project_target)
+        || installation
+            .bindings
+            .values()
+            .any(|bound_target| bound_target == project_target);
+    target_is_bound
+        && installation.grants.iter().any(|grant| {
+            grant.actor_subject == actor_subject
+                && grant.installation_id == installation.installation_id
+                && (grant.configured_project_target == project_target
+                    || grant.configured_project_target == "*")
+        })
+}
+
+fn matches_active_ui(
+    installation: &InstallationRecord,
+    expected_digest: &str,
+    activation_generation: u64,
+) -> bool {
+    installation.active_package_digest == expected_digest
+        && installation.activation_generation == activation_generation
+}
 
 impl PluginRegistry {
     pub fn list_plugins(&self) -> Result<(Vec<PluginMetadataItem>, u64), PluginError> {
@@ -26,6 +54,7 @@ impl PluginRegistry {
                     publisher: pkg.publisher.clone(),
                     capabilities: pkg.capabilities.clone(),
                     has_ui: pkg.entrypoints.ui.is_some(),
+                    active_digest: inst.active_package_digest.clone(),
                     active_generation: inst.activation_generation,
                     enabled: inst.enabled,
                 });
@@ -44,38 +73,42 @@ impl PluginRegistry {
 
     pub fn read_ui_bytes(
         &self,
-        installation_id: &str,
-        expected_digest: &str,
+        params: &PluginReadUiParams,
     ) -> Result<PluginReadUiResult, PluginError> {
+        // Keep authorization and byte selection under the same registry lock so
+        // a grant, binding, disable, or activation commit cannot race the read.
+        let _guard = self.state_lock.lock();
         let state = self.read_state()?;
-        let inst = state.installations.get(installation_id).ok_or_else(|| {
-            PluginError::invalid_input(format!("Installation '{installation_id}' not found"))
-        })?;
+        let inst = state
+            .installations
+            .get(&params.installation_id)
+            .ok_or_else(|| PluginError::invalid_input("Plugin UI is unavailable"))?;
 
         if !inst.enabled {
-            return Err(PluginError::forbidden(format!(
-                "Installation '{installation_id}' is disabled"
-            )));
+            return Err(PluginError::forbidden("Plugin UI is unavailable"));
         }
-
-        if inst.active_package_digest != expected_digest.to_lowercase() {
-            return Err(PluginError::invalid_input(format!(
-                "Active digest mismatch: expected {}, active is {}",
-                expected_digest, inst.active_package_digest
-            )));
+        if !matches_active_ui(inst, &params.expected_digest, params.activation_generation) {
+            return Err(PluginError::context_revoked("Plugin UI activation changed"));
+        }
+        if !has_ui_visibility(inst, &params.actor_subject, &params.project_target) {
+            return Err(PluginError::forbidden(
+                "Plugin UI is not authorized for this actor and target",
+            ));
         }
 
         let pkg_key = format!(
             "{}@{}#{}",
             inst.plugin_id, inst.active_version, inst.active_package_digest
         );
-        let pkg = state.packages.get(&pkg_key).ok_or_else(|| {
-            PluginError::runner_unavailable(format!("Package '{pkg_key}' missing from registry"))
-        })?;
-
-        let ui_entry = pkg.entrypoints.ui.as_ref().ok_or_else(|| {
-            PluginError::invalid_input(format!("Plugin '{}' has no UI entrypoint", inst.plugin_id))
-        })?;
+        let pkg = state
+            .packages
+            .get(&pkg_key)
+            .ok_or_else(|| PluginError::runner_unavailable("Plugin UI is unavailable"))?;
+        let ui_entry = pkg
+            .entrypoints
+            .ui
+            .as_ref()
+            .ok_or_else(|| PluginError::invalid_input("Plugin has no UI entrypoint"))?;
 
         let ui_path = self
             .layout
@@ -85,20 +118,12 @@ impl PluginRegistry {
                 &inst.active_package_digest,
             )
             .join(&ui_entry.entry);
-        if !ui_path.exists() {
-            return Err(PluginError::runner_unavailable(format!(
-                "UI file missing at '{}'",
-                ui_path.display()
-            )));
-        }
-
         let bytes = fs::read(&ui_path)
-            .map_err(|e| PluginError::runner_unavailable(format!("Failed to read UI file: {e}")))?;
-
+            .map_err(|_| PluginError::runner_unavailable("Plugin UI is unavailable"))?;
         if bytes.len() as u64 > MAX_UI_DOCUMENT_BYTES {
-            return Err(PluginError::invalid_input(format!(
-                "UI size exceeds {MAX_UI_DOCUMENT_BYTES} limit"
-            )));
+            return Err(PluginError::invalid_input(
+                "Plugin UI exceeds the document size limit",
+            ));
         }
 
         let sha256 = hex::encode(Sha256::digest(&bytes));
@@ -185,5 +210,50 @@ impl PluginRegistry {
         self.write_state(&state)?;
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn installation() -> InstallationRecord {
+        InstallationRecord {
+            installation_id: "install-1".to_string(),
+            plugin_id: "plugin.test".to_string(),
+            active_package_digest: "a".repeat(64),
+            active_version: "1.0.0".to_string(),
+            activation_generation: 7,
+            enabled: true,
+            bindings: BTreeMap::from([("project-a".to_string(), "approved-source".to_string())]),
+            grants: vec![GrantKey {
+                actor_subject: "actor-a".to_string(),
+                installation_id: "install-1".to_string(),
+                configured_project_target: "project-a".to_string(),
+                allowed_operations: vec!["advisor.scan".to_string()],
+                allow_current_account_policy: false,
+            }],
+            created_at: "2026-09-22T00:00:00Z".to_string(),
+            updated_at: "2026-09-22T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn ui_visibility_requires_matching_binding_and_grant() {
+        let mut inst = installation();
+        assert!(has_ui_visibility(&inst, "actor-a", "project-a"));
+        assert!(!has_ui_visibility(&inst, "actor-b", "project-a"));
+        assert!(!has_ui_visibility(&inst, "actor-a", "project-b"));
+
+        inst.bindings.clear();
+        assert!(!has_ui_visibility(&inst, "actor-a", "project-a"));
+    }
+
+    #[test]
+    fn active_ui_identity_rejects_stale_digest_or_generation() {
+        let inst = installation();
+        assert!(matches_active_ui(&inst, &"a".repeat(64), 7));
+        assert!(!matches_active_ui(&inst, &"b".repeat(64), 7));
+        assert!(!matches_active_ui(&inst, &"a".repeat(64), 6));
     }
 }
