@@ -152,16 +152,36 @@ pub async fn ws_handler(
         ));
     }
 
-    let auth_ok = websocket_auth_ok(state.no_auth, token, &state.jwt_secret);
+    let authenticated_actor = if state.no_auth {
+        Some(crate::api::auth::AuthenticatedActor {
+            subject: "dev-user".to_string(),
+            exp: None,
+        })
+    } else if let Some(t) = &token {
+        crate::api::auth::authenticate_token(t, &state.jwt_secret)
+    } else {
+        None
+    };
 
-    if !auth_ok {
+    let Some(actor) = authenticated_actor else {
         return axum::response::IntoResponse::into_response((
             StatusCode::UNAUTHORIZED,
             axum::Json(serde_json::json!({ "error": "Unauthorized" })),
         ));
-    }
+    };
 
-    upgrade.on_upgrade(move |socket| handle_socket(socket, state))
+    let epoch_id = if !state.no_auth {
+        let exp_secs = actor.exp.map(|e| e as u64);
+        state
+            .plugin_service
+            .auth_service()
+            .epoch_registry()
+            .issue_epoch(&actor.subject, exp_secs)
+    } else {
+        0
+    };
+
+    upgrade.on_upgrade(move |socket| handle_socket(socket, state, actor, epoch_id))
 }
 
 fn websocket_origin_allowed(
@@ -178,19 +198,24 @@ fn websocket_origin_allowed(
         no_auth || has_query_token
     }
 }
-
-fn websocket_auth_ok(no_auth: bool, token: Option<String>, jwt_secret: &str) -> bool {
+#[allow(dead_code)]
+pub(crate) fn websocket_auth_ok(no_auth: bool, token: Option<String>, jwt_secret: &str) -> bool {
     no_auth
         || token
-            .map(|value| crate::api::auth::validate_jwt(&value, jwt_secret))
-            .unwrap_or(false)
+            .as_deref()
+            .and_then(|t| crate::api::auth::authenticate_token(t, jwt_secret))
+            .is_some()
 }
-
 // ---------------------------------------------------------------------------
 // Socket handler — writer-task + reader-loop pattern
 // ---------------------------------------------------------------------------
 
-async fn handle_socket(socket: WebSocket, state: AppState) {
+async fn handle_socket(
+    socket: WebSocket,
+    state: AppState,
+    actor: crate::api::auth::AuthenticatedActor,
+    epoch_id: u64,
+) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Split channels: alerts get a priority queue ahead of PTY output; FS uses
@@ -1376,6 +1401,17 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     debug!(session_id, "auth:session_remove — key evicted");
                 }
             }
+            ClientMsg::PluginGetEpoch { req_id } => {
+                let msg = ServerMsg::PluginEpoch {
+                    req_id: Some(req_id),
+                    epoch: epoch_id,
+                    actor: actor.subject.clone(),
+                    expires_at: actor.exp.map(|e| e as u64),
+                };
+                if let Ok(json) = serde_json::to_string(&msg) {
+                    let _ = pty_tx.send(WireMsg::Text(json)).await;
+                }
+            }
 
             // -----------------------------------------------------------
             // FS — encrypted put (Phase 04 implementation)
@@ -1660,6 +1696,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     host_alert_pump.abort();
     idle_suspend_pump.abort();
     writer.abort();
+    if epoch_id != 0 {
+        state.plugin_service.revoke_epoch(epoch_id).await;
+    }
 }
 
 // ---------------------------------------------------------------------------

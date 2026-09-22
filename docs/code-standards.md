@@ -46,7 +46,7 @@ server/src/
 │   └── audit.rs      # Bounded mode-0600 helper JSONL audit
 ├── git/              # Git operations
 ├── agent_store/      # Item distribution
-├── plugins/          # D00 contracts, D01 registry, D02 runner/supervision
+├── plugins/          # D00 contracts, D01 registry, D02 runner, D03 API/auth
 └── commands/         # Command registry
 ```
 
@@ -119,10 +119,51 @@ Worker and supervisor rules:
 
 Errors use `PluginErrorCode` and stable constructors (`invalid_input`,
 `overloaded`, `deadline_exceeded`, `worker_failed`, `context_revoked`, and
-`runner_unavailable`). The current RunnerServer/RunnerClient bridge maps
-JSON-RPC failures to generic `-32603`/`RUNNER_UNAVAILABLE`; until D03 defines
-`error.data` mapping, do not promise end-to-end preservation of every plugin
-error code.
+`runner_unavailable`). The owner-runner JSON-RPC bridge still maps failures to
+generic `-32603`/`RUNNER_UNAVAILABLE`; the protected D03 REST handlers map
+known plugin codes to bounded HTTP status plus `{ error, code }`. Do not expose
+worker stderr, request bodies, credentials, source paths, or policy text.
+The complete endpoint and lifecycle contract is in
+[Phase D03 architecture](./architecture/plugin-platform-d03.md).
+
+### Authorized plugin API and context standards (Phase D03)
+
+- Keep `AuthenticatedActor` separate from bearer/cookie material. The auth
+  middleware installs subject and JWT expiry; plugin handlers never accept an
+  actor subject from the request body.
+- Issue a random non-zero WebSocket epoch only after token/origin checks. Bind
+  it to actor and expiry; require the same actor/epoch on open, invoke, cancel,
+  and close. Revoke it on socket teardown and HTTP logout.
+- Deny every production plugin operation under `--no-auth` at both route and
+  service boundaries. Do not create a no-auth fallback that loads packages or
+  worker data.
+- Keep plugin DTOs camelCase and target fields narrow: `{ project,
+  worktreePath? }`. Resolve targets with `WorkspaceTargetResolver`; never accept
+  `profileId`, browser generation, filesystem root, or grant claims as server
+  authority, and never silently fall back to the main worktree.
+- Treat `GrantKey` as explicit default-deny authority:
+  `(actorSubject, installationId, configuredProjectTarget,
+  allowedOperations, allowCurrentAccountPolicy)`. Support exact values and the
+  documented `*` wildcards only. Visibility/listing is not invoke permission.
+- A context is an opaque, ephemeral association, not an authorization lease.
+  Store actor/epoch/installation/target, revisions, expiry, and counters only.
+  Recheck the current grant and epoch before every invoke; do not authorize from
+  a cached open decision.
+- Reserve context and in-flight counters under the lock, perform runner I/O
+  after releasing it, and decrement with an RAII/drop guard on every exit path.
+  Enforce 16 contexts/worker, four invokes/context, 16 invokes/worker,
+  15-minute idle TTL, and 16 MiB generic payload ceiling. Fail fast with
+  `OVERLOADED`; do not claim a fair queue that is not implemented.
+- Map errors through one bounded `plugin_error_response`. Keep status/code
+  semantics stable and sanitize diagnostics. Context close is idempotent;
+  cancellation is scoped to actor/epoch/context/request and settles once.
+- `ApiClient` plugin methods use the owner-bound `WsTransport` channel mapping.
+  Capture connection generation, ignore late messages from replaced sockets,
+  and close contexts when profile/project/worktree ownership changes.
+- Evidence belongs in `server/tests/plugin_authorization.rs`,
+  `plugin_api_integration.rs`, `plugin_runner_supervision.rs`, and the UI
+  transport tests. Test cross-actor/target denial, stale epoch, grant update,
+  no-auth denial, target replacement, cancellation, crash, and immutability.
 
 ### Error Handling Pattern
 

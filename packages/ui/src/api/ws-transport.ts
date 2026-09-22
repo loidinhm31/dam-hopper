@@ -235,6 +235,10 @@ function channelToEndpoint(
   channel: string,
   data: unknown,
 ): { method: string; url: string; body?: unknown; contentType?: string } {
+  if (channel.startsWith("plugins:list")) {
+    const qs = channel.includes("?") ? channel.slice(channel.indexOf("?")) : "";
+    return { method: "GET", url: `/api/plugins${qs}` };
+  }
   switch (channel) {
     // Workspace
     case "workspace:status":
@@ -1321,6 +1325,15 @@ function channelToEndpoint(
     case "workflow:purgeHistory":
       return { method: "DELETE", url: "/api/workflow/history", body: data };
 
+    // Plugins
+    case "plugins:openContext":
+      return { method: "POST", url: "/api/plugins/contexts/open", body: data };
+    case "plugins:closeContext":
+      return { method: "POST", url: "/api/plugins/contexts/close", body: data };
+    case "plugins:invoke":
+      return { method: "POST", url: "/api/plugins/invoke", body: data };
+    case "plugins:cancel":
+      return { method: "POST", url: "/api/plugins/cancel", body: data };
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }

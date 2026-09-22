@@ -7,7 +7,7 @@ effort: unestimated
 branch: main
 tags: [feature, backend, frontend, api, auth, infra, security]
 created: 2026-09-20
-updated: 2026-09-21
+updated: 2026-09-22
 ---
 
 # DamHopper trusted plugin platform
@@ -29,7 +29,7 @@ Current standalone evcrate remains operational through G4. Final evcrate E05 rem
 | [D00](phase-00-contracts-and-feasibility.md) | Contract candidate, grant matrix, opaque-`srcdoc`/cancel/budget feasibility | E00 → G0 | Completed 2026-09-21 |
 | [D01](phase-01-package-registry.md) | Runner-owned safe package/trust staging; early real evcrate candidate intake | G0; overlaps E01/E02 | DONE (2026-09-21; 100%) |
 | [D02](phase-02-owner-runner.md) | Owner UID runner, framed UDS/pipes, supervision/cancel/restart/service | G0; overlaps D01/E01/E02 | DONE (2026-09-21; 100%) |
-| [D03](phase-03-authorized-api.md) | Actor/grant/target contexts over existing REST+WS owner transport | D01/D02 interfaces; E01/E02 → G1 | Pending |
+| [D03](phase-03-authorized-api.md) | Actor/grant/target contexts over existing REST+WS owner transport | D01/D02 interfaces; E01/E02 → G1 | DONE (2026-09-22; 100%; review approved 9.2/10) |
 | [D04](phase-04-isolated-ui-host.md) | Inert bytes, host CSP, opaque iframe bridge, dynamic route/nav | G1; E03 → G2 | Pending |
 | [D05](phase-05-management-and-lifecycle.md) | Admin install/update/rollback/disable/remove and crash recovery | G1; may overlap D04/E03; E04 → G3 | Pending |
 | [D06](phase-06-linux-lan-qualification.md) | Release-manager owner deployment and real evcrate LAN/workload proof | G2 + G3; E05 → G4 | Pending |
@@ -39,7 +39,7 @@ G1 and G2 do not wait for lifecycle polish: D01 accepts E02's early immutable pa
 ## Cross-repository gates
 
 - **G0:** jointly pin D00/E00 candidate versions and digests after actor/grant, exact path identity, schema fixtures, cancellation/isolation experiments, and measured budget review.
-- **G1:** real installed evcrate worker returns an authorized snapshot summary through API → owner runner → worker; deny wrong owner/grant, prove cancel and crash. Not releasable platform completion.
+- **G1 (status 2026-09-22):** D03's authorized API contribution is DONE and its real API → owner runner → worker slice is validated by scoped authorization, supervision, integration, and UI transport evidence. Joint G1 remains pending E01/E02 cross-repository sign-off for the installed evcrate worker, wrong-owner/grant denial, cancellation, crash, and source-immutability evidence; G1 is not releasable platform completion.
 - **G2:** separate LAN browser renders Overview, History/detail, Configuration, Evaluations inside the isolated frame; profile/project switch clears stale state; no picker or frame credentials/network.
 - **G3:** independent host/plugin artifacts update, disable/remove, recover, and restore a matched pair. Current disabled/revoked security intent outranks rollback.
 - **G4:** D06/E05 satisfy all acceptance and workload/deployment evidence. Only then replace the standalone artifact.
@@ -71,7 +71,7 @@ G1 and G2 do not wait for lifecycle polish: D01 accepts E02's early immutable pa
 
 ## Planning status
 
-D00 contracts, feasibility evidence, and immutable candidate delivery completed 2026-09-21. Phase D01 runner-owned package registry and trust staging is DONE (2026-09-21; 100%): bounded streamed intake, adversarial archive validation/extraction, digest-bound trust approval, durable registry/journal recovery, revision-tagged queries/CAS, and early E02 candidate staging are complete. Phase D02 owner-account runner and worker supervision is DONE (2026-09-21; 100%): strict framed JSON-RPC over authenticated Unix transport, exact handshake/peer validation, fixed Node worker launch, one-worker-per-installation supervision, multiplexed cancellation, deadline/process-group escalation, generation-fenced context routing, durable restart exhaustion, and the hardened systemd owner boundary are complete. Scoped protocol/supervision validation passed 13/13; full plugin subsystem validation passed 37/37 tests across five suites; test-targeted cargo check completed with 0 errors and 0 warnings. Cycle 2 review approved D02 at 9.0/10 with no critical issues. The parent plan remains IN PROGRESS at 3/7 phases (43%); D03 (Phase D03 — Authorized API and transport) is next. G0 joint E00 domain publication and cross-repository pin remain the next gate. Effort remains unestimated until G0 feasibility evidence plus named staffing/hardware. The active-plan helper could not persist because no session ID was available; use this directory explicitly.
+D00 contracts, feasibility evidence, and immutable candidate delivery completed 2026-09-21. Phase D01 runner-owned package registry and trust staging is DONE (2026-09-21; 100%): bounded streamed intake, adversarial archive validation/extraction, digest-bound trust approval, durable registry/journal recovery, revision-tagged queries/CAS, and early E02 candidate staging are complete. Phase D02 owner-account runner and worker supervision is DONE (2026-09-21; 100%): strict framed JSON-RPC over authenticated Unix transport, exact handshake/peer validation, fixed Node worker launch, one-worker-per-installation supervision, multiplexed cancellation, deadline/process-group escalation, generation-fenced context routing, durable restart exhaustion, and the hardened systemd owner boundary are complete. Phase D03 authorized plugin API and connection-bound contexts is DONE (2026-09-22; 100%; review approved 9.2/10): authenticated actor/epoch binding, explicit grant and target checks, context/request ceilings, reauthorization on invoke, selective revocation, sanitized errors, owner-bound UI transport, and the real G1 API-to-owner-worker slice are complete. Scoped D03 validation passed 7/7 authorization, 6/6 supervision, 3/3 API integration, 1,845/1,845 UI tests, and a clean UI build. D04–D06 remain pending; joint G1 remains open for cross-repository E01/E02 approval and final gate evidence.
 
 ## Unresolved questions
 

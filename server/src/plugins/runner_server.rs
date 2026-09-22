@@ -411,7 +411,7 @@ async fn dispatch_method(
             let sup = supervisor_manager
                 .get_or_create(&params.installation_id)
                 .await?;
-            let res = sup.open_context(params)?;
+            let res = sup.open_context(params).await?;
             Ok(serde_json::to_value(res).unwrap())
         }
         "context.close" => {
@@ -421,7 +421,7 @@ async fn dispatch_method(
             let sup = supervisor_manager
                 .get_by_context(&params.context_id)
                 .await?;
-            let res = sup.close_context(params)?;
+            let res = sup.close_context(params).await?;
             Ok(serde_json::to_value(res).unwrap())
         }
         "plugin.invoke" => {

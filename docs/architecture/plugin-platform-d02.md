@@ -3,8 +3,8 @@
 **Status:** Implemented 2026-09-21. D02 supplies the owner-account runner,
 Unix-socket API boundary, real Node worker process, per-installation
 supervision, and service hardening. It is trusted same-identity execution, not
-a malicious-code sandbox. D03 still owns the authenticated API façade and
-actor/target authorization.
+a malicious-code sandbox. The delivered D03 authorization façade is documented
+in [Phase D03 architecture](./plugin-platform-d03.md).
 
 - [D00 contracts](../plugin-platform-d00.md)
 - [D01 registry and trust staging](./plugin-platform-d01.md)
@@ -107,9 +107,9 @@ and worker notifications (`worker.health`, `worker.shutdown`). They remain
 separately authorized or worker-facing contracts; D02's `RunnerServer` rejects
 management calls as unavailable to public peers.
 
-The actor, target, grant, and API-epoch fields are carried in the D00 DTOs so
-the next authorization boundary can bind them. D02's registry/worker path does
-not yet independently authorize those values; D03 owns that fence.
+The actor, target, grant, and API-epoch fields are carried in the D00 DTOs.
+D02 transports those values without policy decisions; D03 now binds them at
+the authenticated API, grant, target, and connection-epoch fences.
 
 ## Framing and JSON-RPC 2.0
 
@@ -293,5 +293,6 @@ D05, or D06 integration boundaries.
 - Which owner UID/group and shared socket group will D06 render for each
   supported distribution?
 - Which immutable Node `>=22.19` artifact and absolute path will G0/D06 pin?
-- Should D03 standardize `PluginErrorCode` in JSON-RPC `error.data` before the
-  authorized API façade ships?
+- Should a future runner protocol revision preserve `PluginErrorCode` in
+  JSON-RPC `error.data`? D03 ships bounded REST status/code mapping but the
+  current owner-runner bridge remains generic.

@@ -11,9 +11,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Next:** Phase 03 — Windows CI publication, six-asset release gating, attestation wiring, and README/configuration guidance.
 
 
-### Trusted plugin platform (2026-09-21)
+### Trusted plugin platform (2026-09-22)
 
-- **Plan status: IN PROGRESS (3/7 phases; 43%; updated 2026-09-21).** D00, D01, and D02 are complete; D03–D06 remain pending. G0 joint pin and G1–G4 remain release gates.
+- **Plan status: IN PROGRESS (4/7 phases; 57%; updated 2026-09-22).** D00, D01, D02, and D03 are complete; D04–D06 remain pending. G0 joint pin and G1–G4 remain release gates.
 - **Phase D00 — Contracts, identity, and feasibility — DONE (2026-09-21; 100%).** Generic SDK/schema candidate, Rust parity, opaque UI/cancellation feasibility, and G0 artifact inputs recorded.
 - **Phase D01 — Runner-owned package registry and trust staging — DONE (2026-09-21; 100%).** Runner-owned staged intake, bounded archive inspection/extraction, independent digest review/approval, strict durable registry/journal, CAS revisions, crash recovery, and early E02 candidate staging complete.
 - **Phase D02 — Owner-account runner and worker supervision — DONE (2026-09-21; 100%).** Strict framed JSON-RPC over authenticated Unix transport, exact handshake/peer validation, fixed Node worker launch, one-worker-per-installation supervision, multiplexed cancellation, deadline/process-group escalation, generation-fenced context routing, durable restart exhaustion, and the hardened systemd owner boundary complete.
@@ -26,7 +26,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   - [x] Revision-tagged read façade and grant/binding CAS.
   - [x] Early E02 real package candidate staged for G1 without E04 dependency.
 - **Validation:** Targeted `plugin_package_archive`, `plugin_package_registry`, and `plugin_contract_fixtures` passed **24/24**; Cycle 2 review approved **9.0/10** with no critical issues. D01 is G1 input, not production/G3/G4 completion. See the [D01 plan](../plans/260920-1603-plugin-platform/phase-01-package-registry.md), [test report](../plans/reports/test-report-260921-1150-plugin-package-registry-tests.md), and [Cycle 2 review](../plans/reports/code-review-260921-1216-phase-d01-cycle2-verification.md).
-- **Next:** D03 (Phase D03 — Authorized API and transport) binds authenticated actor/connection epochs, target grants, and contexts to the D02 runner transport for the authorized G1 path.
+- **Phase D03 — Authorized plugin API and connection-bound contexts — DONE (2026-09-22; 100%; review approved 9.2/10).** Delivered authenticated actor and revocable epoch binding, explicit actor/grant/target authorization, connection-scoped opaque contexts, invoke-time revision checks, selective revocation, bounded/sanitized errors, owner-bound UI transport mappings, and the real API → owner runner → worker G1 slice.
+- **D03 validation:** `plugin_authorization` **7/7**, `plugin_runner_supervision` **6/6**, `plugin_api_integration` **3/3**, UI transport test run **1,845/1,845**, and UI build clean. All four critical review findings were resolved; remaining epoch/context cleanup and test-path portability items are non-blocking. See the [D03 plan](../plans/260920-1603-plugin-platform/phase-03-authorized-api.md) and [re-review](../plans/reports/code-review-260922-0649-phase-d03-authorized-api-re-review.md).
+- **G1 status (2026-09-22):** D03's authorized API-to-owner-worker contribution is complete and validated. Joint G1 remains pending E01/E02 cross-repository approval and final evidence for installed evcrate-worker authorization, wrong-owner/grant denial, cancellation, crash, and source immutability; D03 completion is not platform release completion.
+- **Next:** D04 (Phase D04 — Isolated UI host) consumes the authorized API for G2; D05 may proceed in parallel for lifecycle work.
 
 
 ### Windows dam-hopper-server build and verification (2026-09-20)

@@ -13,11 +13,12 @@
 
 - **Date:** 2026-09-20
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Implementation status:** DONE (2026-09-22; 100%; Server API, UI transport mappings, and integration tests complete)
+- **Review status:** Approved (2026-09-22; re-review score 9.2/10; all 4 critical issues resolved)
 - **Dependencies:** G0, D01, D02, E01 and E02's early real candidate.
-- **Gate contribution:** Completes the authenticated API-to-owner-worker path for G1, including denial, cancellation, crash and source-immutability evidence.
+- **Gate contribution/status:** D03's authorized API-to-owner-worker contribution to G1 is DONE. The joint G1 gate remains pending E01/E02 cross-repository approval and final installed-worker evidence.
 - **Effort:** Unestimated.
+- **Validation evidence:** `plugin_authorization` 7/7, `plugin_runner_supervision` 6/6, `plugin_api_integration` 3/3, UI transport test run 1,845/1,845, and `pnpm --filter @dam-hopper/ui build` clean; see the [D03 re-review](../reports/code-review-260922-0649-phase-d03-authorized-api-re-review.md).
 
 Expose a narrow REST/WebSocket façade over the runner. The API authenticates the current DamHopper actor, resolves an existing registered project target, and asks the runner to reauthorize current grants/bindings/activation on every invoke. Browser-local ownership identity never becomes server authority.
 
@@ -119,17 +120,17 @@ UI ConnectionRef(profileId, generation) ── bearer/cookie + live WS epoch ─
 
 ## Todo List
 
-- [ ] WebSocket retains actor/expiry and revocable random API epoch.
-- [ ] Production plugin endpoints deny no-auth and unregistered targets.
-- [ ] Grant/binding/activation/session revisions are rechecked on every invoke.
-- [ ] Generic context/request/response ceilings are enforced; domain snapshot/evaluation budgets remain E02-owned.
-- [ ] UI transport/cache ownership follows profile/project/generation exactly.
-- [ ] Real G1 allow/deny/cancel/crash slice is specified and executable.
+- [x] WebSocket retains actor/expiry and revocable random API epoch.
+- [x] Production plugin endpoints deny no-auth and unregistered targets.
+- [x] Grant/binding/activation/session revisions are rechecked on every invoke.
+- [x] Generic context/request/response ceilings are enforced; domain snapshot/evaluation budgets remain E02-owned.
+- [x] UI transport/cache ownership follows profile/project/generation exactly (ws-transport channel mappings added, generation scoping verified).
+- [x] Real G1 allow/deny/cancel/crash slice is specified and executable.
 
 ## Success Criteria
 
-- Future, proposed: `cargo test --manifest-path server/Cargo.toml --test plugin_authorization` proves cross-actor, cross-target, stale-epoch, expiry, no-auth, grant-revoke, disable and target-replacement denial.
-- Future, proposed: `cargo test --manifest-path server/Cargo.toml --test plugin_api_integration` runs a real API, Unix runner and E02 worker; summary succeeds and cancellation/crash settle once.
+- `cargo test --manifest-path server/Cargo.toml --test plugin_authorization` passed 7/7; `plugin_api_integration` passed 3/3 against the real API/Unix runner/worker G1 slice; `plugin_runner_supervision` passed 6/6.
+- `pnpm --filter @dam-hopper/ui test -- packages/ui/src/api/ws-transport.test.ts` passed 1,845/1,845 and `pnpm --filter @dam-hopper/ui build` compiled cleanly; the re-review approved D03 at 9.2/10 with no critical issues.
 - An invoke accepted before a grant/security revision change cannot start afterward; an in-flight call is cancelled/revoked under the frozen policy.
 - Browser `profileId` and filesystem roots are absent from server DTOs; server-side target resolution remains authoritative.
 - Connection loss, logout and profile/project/worktree switch revoke old contexts and late responses cannot populate the new owner's cache.

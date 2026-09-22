@@ -271,9 +271,9 @@ The principal operations are:
 A stale revision returns `FORBIDDEN`; it never merges caller data or silently
 retries against a newer security state. `PluginError` exposes structured
 `UNAUTHORIZED`, `FORBIDDEN`, `INVALID_INPUT`, `DEADLINE_EXCEEDED`,
-`RUNNER_UNAVAILABLE`, and related D00 codes. D02/D03 must add the public
-activation-generation, actor, target, grant, and API-epoch fences before exposing
-reads or invocation; the registry read methods alone are not that façade.
+The registry read methods alone are not the public façade. D02 supplies the
+owner runner; D03 now adds the public activation-generation, actor, target,
+grant, and API-epoch fences before exposing reads or invocation.
 
 ## Evidence and boundaries
 

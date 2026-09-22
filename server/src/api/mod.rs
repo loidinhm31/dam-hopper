@@ -18,6 +18,7 @@ mod http_byte_range;
 pub mod media_session;
 mod media_stream_headers;
 mod media_stream_response;
+pub mod plugins;
 pub mod port_forward;
 pub mod router;
 pub mod settings;

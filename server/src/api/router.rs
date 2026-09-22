@@ -28,8 +28,8 @@ use crate::state::AppState;
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
     fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend, media_session,
-    port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, usage,
-    usage_sessions, workflow, workspace, ws,
+    plugins as plugins_api, port_forward as port_forward_api, settings, ssh, system, terminal,
+    tunnel, usage, usage_sessions, workflow, workspace, ws,
 };
 
 /// Build the full Axum router without cross-origin browser access and without static web serving.
@@ -422,6 +422,28 @@ pub fn build_router_with_web_dir_and_origins(
             "/api/settings/import/workspace.toml",
             post(settings::import_workspace_settings)
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(1024 * 1024)),
+        )
+        // Plugins
+        .route("/api/plugins", get(plugins_api::list_plugins_handler))
+        .route(
+            "/api/plugins/contexts/open",
+            post(plugins_api::open_context_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route(
+            "/api/plugins/contexts/close",
+            post(plugins_api::close_context_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
+        )
+        .route(
+            "/api/plugins/invoke",
+            post(plugins_api::invoke_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024 * 1024)),
+        )
+        .route(
+            "/api/plugins/cancel",
+            post(plugins_api::cancel_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
         )
         .merge(workflow_routes)
         .route_layer(middleware::from_fn_with_state(

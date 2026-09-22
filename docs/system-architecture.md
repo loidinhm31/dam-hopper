@@ -626,16 +626,16 @@ claim that concurrent workspaces or profiles have shipped.
 - Implementation and release require the plan's multi-server isolation,
   migration/failure, live browser, and supported-native verification gates.
 
-## Trusted plugin platform — D00 contracts, D01 registry, and D02 runner (2026-09-21; G0/G1 pending)
+## Trusted plugin platform — D00 contracts through D03 authorized API (2026-09-22; joint G1 pending)
 
 [Phase D00](../plans/260920-1603-plugin-platform/phase-00-contracts-and-feasibility.md)
-freezes the candidate contracts and feasibility evidence for the trusted plugin
-platform. D01 adds the runner-owned registry and D02 adds the owner-account
-runner/worker boundary; the implementation plan is
+freezes the candidate contracts and feasibility evidence. D01 delivers the
+runner-owned registry, D02 the owner-account runner/worker boundary, and D03
+the authenticated REST/WebSocket façade with actor grants and connection-bound
+contexts. The implementation plan is
 [DamHopper plugin platform](../plans/260920-1603-plugin-platform/plan.md).
-The companion evcrate plan owns the cross-repository consumer. This is not a
-claim that the authorized API, dynamic route, embedded plugin UI, lifecycle
-rollback, or Linux qualification is production-complete.
+The companion evcrate plan owns the cross-repository consumer. D04–D06 still
+own isolated UI, lifecycle/rollback, and Linux qualification.
 
 ### G0 candidate artifact set
 
@@ -683,8 +683,8 @@ the boundary.
 2. G0 jointly pins the SDK digest, contract versions, fixtures, and budget
    interpretation with E00. The Node `>=22.19` distribution and target Linux
    assumptions remain unresolved inputs to that pin.
-3. D01 delivers the owner registry and D02 delivers the owner-worker runner;
-   D03–D06 implement the authorized API façade, browser integration,
+3. D01 delivers the owner registry, D02 the owner-worker runner, and D03 the
+   authorized API façade; D04–D06 implement browser integration,
    lifecycle/rollback, and Linux workload/deployment gates.
 
 The target deployment remains DamHopper's network/auth boundary plus a
@@ -697,11 +697,7 @@ through G4.
 
 ### D02 owner runner and worker supervision
 
-This is a planning design only. No runtime plugin loader, registry, runner,
-dynamic route, or embedded plugin UI exists yet. The source implementation plan
-is not present in this checkout; the companion evcrate plan owns its
-cross-repository contract.
-The D02 runtime path is:
+D02 is implemented. Its runtime path is:
 
 ```text
 API RunnerClient
@@ -776,6 +772,56 @@ trusted owner boundary but are not a malicious-plugin sandbox. The full
 interface, CLI table, systemd placeholders, evidence paths, and unresolved
 deployment inputs are in [Phase D02 runner architecture](./architecture/plugin-platform-d02.md).
 
+### D03 authorized API and connection-bound contexts
+
+D03 places the authenticated API boundary in front of D02:
+
+```text
+owner-bound UI ConnectionRef(profileId, generation)
+  └─ bearer/cookie + live WebSocket epoch
+      └─ auth::require_auth → AuthenticatedActor { subject, exp }
+          └─ PluginApiService
+              ├─ PluginAuthorizationService (epoch + GrantKey checks)
+              ├─ WorkspaceTargetResolver ({project, worktreePath?})
+              ├─ PluginContextTable (opaque owner/TTL/counters)
+              └─ RunnerClient → owner runner → installation worker
+```
+
+The protected routes are `GET /api/plugins`,
+`POST /api/plugins/contexts/open`, `POST /api/plugins/contexts/close`,
+`POST /api/plugins/invoke`, and `POST /api/plugins/cancel`. The only target
+fields accepted from the browser are `project` and optional
+`worktreePath`; `profileId`, browser generation, roots, and grant claims remain
+local or server-authoritative. `context.open` resolves a registered target and
+binds an opaque context to actor, epoch, installation, target, operation set,
+policy flag, binding/grant revisions, and activation generation.
+
+`GrantKey` is `(actorSubject, installationId, configuredProjectTarget,
+allowedOperations, allowCurrentAccountPolicy)`. Exact project and operation
+entries or `*` are supported; no grant is default deny. List visibility uses
+the grant tuple but never substitutes for invoke authorization. Every invoke
+revalidates actor/epoch, context ownership/expiry, operation, current grant,
+and runner generation before admitting opaque payload work.
+
+An authenticated WebSocket receives a cryptographically random epoch tied to
+the actor and JWT expiry. `plugin:get_epoch` returns a same-socket
+`plugin:epoch` message. Socket teardown revokes the epoch and its contexts;
+HTTP logout revokes the actor's epochs/contexts; runner reconnect invalidates
+local contexts before a new worker generation. `plugin:revoked` is a bounded
+wire variant, but D03 currently enforces causes by local removal and later
+request rejection rather than claiming a push event for every cause.
+
+Generic ceilings are 16 contexts/worker, four invokes/context, 16 invokes/
+worker, one long-running operation/worker, 15-minute idle TTL, 16 MiB payload,
+and 10/30-second ordinary/scan deadlines. Over-limit work fails fast with
+`OVERLOADED`; domain snapshot/evaluation budgets remain E02-owned. API errors
+are bounded `{ error, code }` responses mapped to unauthorized, forbidden,
+invalid-target, revoked, overload, deadline, cancellation, and unavailable
+HTTP classes. `packages/ui/src/api/plugin-types.ts`, `client.ts`, and
+`ws-transport.ts` provide owner-bound DTOs and channel-to-REST mappings.
+See the [D03 architecture page](./architecture/plugin-platform-d03.md) for
+endpoint fields, lifecycle examples, limits, source map, and evidence.
+
 ## High-Level Overview
 
 ```
@@ -808,6 +854,7 @@ deployment inputs are in [Phase D02 runner architecture](./architecture/plugin-p
 │  │  ├─ auth_token: Arc<String>                            │
 │  ├─ opaque_server_setup: Arc<ServerSetup<...>>            │
 │  ├─ opaque_registrations: OpaqueRegistrations (in-mem)   │
+│  │  ├─ plugin_service: PluginApiService                 │
 │  ├─ Router                                                 │
 │  │  ├─ /api/projects → ProjectList handler                │
 │  │  ├─ /api/pty/* → PTY spawn/send/kill                   │
@@ -823,6 +870,7 @@ deployment inputs are in [Phase D02 runner architecture](./architecture/plugin-p
 │  │  ├─ /api/system/idle-suspend/v1/* → Status/timing pair │
 │  │  ├─ /api/settings/export/workspace.toml → Raw TOML     │
 │  │  ├─ /api/settings/import/workspace.toml → Import/backup│
+│  │  ├─ /api/plugins/* → Authorized plugin API           │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
@@ -830,6 +878,7 @@ deployment inputs are in [Phase D02 runner architecture](./architecture/plugin-p
 │     │     (`sync_channel(256)`, non-blocking PTY handoff)   │
 │     ├─ TelemetryStore/Worker (opt-in, separate SQLite)     │
 │     ├─ BrowserDebugArtifactManager (ephemeral, TTL/sweep)  │
+│     ├─ PluginApiService (grants, epochs, contexts, runner) │
 │     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
 │     ├─ WorkflowService → WorkflowStore + startup reconcile │
