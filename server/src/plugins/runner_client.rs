@@ -19,7 +19,8 @@ use super::contract::{
     PluginReadUiResult, RequestCancelParams, RequestCancelResult, RunnerHelloResult,
     RUNNER_PROTOCOL_VERSION,
 };
-use super::error::PluginError;
+use super::admin::*;
+use super::error::{PluginError, PluginErrorCode};
 use super::framing::{
     build_json_rpc_request, read_frame_async, validate_json_rpc_message, write_frame_async,
 };
@@ -231,7 +232,34 @@ impl RunnerClient {
                                     .get("message")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("Unknown runner error");
-                                let _ = tx.send(Err(PluginError::runner_unavailable(msg)));
+                                let plugin_error = if let Some(code_str) = err_val
+                                    .get("data")
+                                    .and_then(|d| d.get("pluginErrorCode"))
+                                    .and_then(|c| c.as_str())
+                                {
+                                    let code = match code_str {
+                                        "Unauthorized" => PluginErrorCode::Unauthorized,
+                                        "Forbidden" => PluginErrorCode::Forbidden,
+                                        "InvalidInput" => PluginErrorCode::InvalidInput,
+                                        "SourceMissing" => PluginErrorCode::SourceMissing,
+                                        "SourceNotConfigured" => PluginErrorCode::SourceNotConfigured,
+                                        "SourcePermissionDenied" => PluginErrorCode::SourcePermissionDenied,
+                                        "Incompatible" => PluginErrorCode::Incompatible,
+                                        "Overloaded" => PluginErrorCode::Overloaded,
+                                        "DeadlineExceeded" => PluginErrorCode::DeadlineExceeded,
+                                        "Cancelled" => PluginErrorCode::Cancelled,
+                                        "ContextRevoked" => PluginErrorCode::ContextRevoked,
+                                        "SnapshotExpired" => PluginErrorCode::SnapshotExpired,
+                                        "WorkerFailed" => PluginErrorCode::WorkerFailed,
+                                        "RuntimeUnavailable" => PluginErrorCode::RuntimeUnavailable,
+                                        "DetailChangedOrMissing" => PluginErrorCode::DetailChangedOrMissing,
+                                        _ => PluginErrorCode::RunnerUnavailable,
+                                    };
+                                    PluginError::new(code, msg)
+                                } else {
+                                    PluginError::runner_unavailable(msg)
+                                };
+                                let _ = tx.send(Err(plugin_error));
                             } else {
                                 let res = parsed
                                     .get("result")
@@ -542,6 +570,164 @@ impl RunnerClient {
             .await?;
         serde_json::from_value(res).map_err(|e| {
             PluginError::invalid_input(format!("Failed to parse cancel_request result: {e}"))
+        })
+    }
+
+    pub async fn admin_stage_begin(
+        &self,
+        params: StageBeginParams,
+    ) -> Result<StageBeginResult, PluginError> {
+        let res = self
+            .execute_call("management.stage.begin", serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse stage begin result: {e}"))
+        })
+    }
+
+    pub async fn admin_stage_chunk(
+        &self,
+        params: StageChunkParams,
+    ) -> Result<StageChunkResult, PluginError> {
+        let res = self
+            .execute_call("management.stage.chunk", serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse stage chunk result: {e}"))
+        })
+    }
+
+    pub async fn admin_stage_finish(
+        &self,
+        params: StageFinishParams,
+    ) -> Result<StageReviewDto, PluginError> {
+        let res = self
+            .execute_call("management.stage.finish", serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse stage finish result: {e}"))
+        })
+    }
+
+    pub async fn admin_approve(
+        &self,
+        params: ApproveStageParams,
+    ) -> Result<AdminInstallationDto, PluginError> {
+        let res = self
+            .execute_call("management.approve", serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse approve result: {e}"))
+        })
+    }
+
+    pub async fn admin_rollback(
+        &self,
+        params: RollbackParams,
+    ) -> Result<AdminInstallationDto, PluginError> {
+        let res = self
+            .execute_call("management.rollback", serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse rollback result: {e}"))
+        })
+    }
+
+    pub async fn admin_disable(
+        &self,
+        params: DisableParams,
+    ) -> Result<AdminInstallationDto, PluginError> {
+        let res = self
+            .execute_call("management.disable", serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse disable result: {e}"))
+        })
+    }
+
+    pub async fn admin_enable(
+        &self,
+        params: EnableParams,
+    ) -> Result<AdminInstallationDto, PluginError> {
+        let res = self
+            .execute_call("management.enable", serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse enable result: {e}"))
+        })
+    }
+
+    pub async fn admin_remove(
+        &self,
+        params: RemoveParams,
+    ) -> Result<AdminRemoveResult, PluginError> {
+        let res = self
+            .execute_call("management.remove", serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse remove result: {e}"))
+        })
+    }
+
+    pub async fn admin_replace_grants(
+        &self,
+        params: ReplaceGrantsParams,
+    ) -> Result<AdminInstallationDto, PluginError> {
+        let res = self
+            .execute_call("management.grants.replace", serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse replace grants result: {e}"))
+        })
+    }
+
+    pub async fn admin_replace_bindings(
+        &self,
+        params: ReplaceBindingsParams,
+    ) -> Result<AdminInstallationDto, PluginError> {
+        let res = self
+            .execute_call("management.bindings.replace", serde_json::to_value(params).unwrap())
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse replace bindings result: {e}"))
+        })
+    }
+
+    pub async fn admin_list_installations(
+        &self,
+        actor: &str,
+    ) -> Result<AdminInstallationListResult, PluginError> {
+        let res = self
+            .execute_call(
+                "management.installations.list",
+                serde_json::to_value(AdminListParams {
+                    actor_subject: actor.to_string(),
+                })
+                .unwrap(),
+            )
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse admin list result: {e}"))
+        })
+    }
+
+    pub async fn admin_get_installation(
+        &self,
+        actor: &str,
+        installation_id: &str,
+    ) -> Result<AdminInstallationDto, PluginError> {
+        let res = self
+            .execute_call(
+                "management.installations.get",
+                serde_json::to_value(AdminGetParams {
+                    actor_subject: actor.to_string(),
+                    installation_id: installation_id.to_string(),
+                })
+                .unwrap(),
+            )
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse admin get result: {e}"))
         })
     }
 }

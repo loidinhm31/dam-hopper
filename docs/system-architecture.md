@@ -626,16 +626,17 @@ claim that concurrent workspaces or profiles have shipped.
 - Implementation and release require the plan's multi-server isolation,
   migration/failure, live browser, and supported-native verification gates.
 
-## Trusted plugin platform — D00 contracts through D03 authorized API (2026-09-22; joint G1 pending)
+## Trusted plugin platform — D00 contracts through D05 management/lifecycle (2026-09-22; joint G1 pending)
 
 [Phase D00](../plans/260920-1603-plugin-platform/phase-00-contracts-and-feasibility.md)
 freezes the candidate contracts and feasibility evidence. D01 delivers the
-runner-owned registry, D02 the owner-account runner/worker boundary, and D03
-the authenticated REST/WebSocket façade with actor grants and connection-bound
-contexts. The implementation plan is
+runner-owned registry, D02 the owner-account runner/worker boundary, D03 the
+authenticated REST/WebSocket façade with actor grants and connection-bound
+contexts, and D05 the bearer-only management API plus transactional lifecycle
+coordinator. The implementation plan is
 [DamHopper plugin platform](../plans/260920-1603-plugin-platform/plan.md).
-The companion evcrate plan owns the cross-repository consumer. D04–D06 still
-own isolated UI, lifecycle/rollback, and Linux qualification.
+The companion evcrate plan owns the cross-repository consumer. D04 isolated UI
+integration and D06 Linux qualification remain separate gates.
 
 ### G0 candidate artifact set
 
@@ -684,16 +685,17 @@ the boundary.
    interpretation with E00. The Node `>=22.19` distribution and target Linux
    assumptions remain unresolved inputs to that pin.
 3. D01 delivers the owner registry, D02 the owner-worker runner, and D03 the
-   authorized API façade; D04–D06 implement browser integration,
-   lifecycle/rollback, and Linux workload/deployment gates.
+   authorized API façade; D04 implements browser integration, D05 delivers the
+   management API and transactional lifecycle coordinator, and D06 covers Linux
+   workload/deployment gates.
 
 The target deployment remains DamHopper's network/auth boundary plus a
 root-provisioned owner-account systemd runner reached through a
 peer-credential-checked Unix socket. Trusted executable plugins are not a
 malicious-code sandbox, and a fixture worker or loader alone is never platform
 completion. Contract/security/isolation feasibility is G0; owner-worker read
-slice, LAN browser flow, lifecycle/rollback, and Linux qualification are G1
-through G4.
+slice, LAN browser flow, D05 management/lifecycle, and Linux qualification are
+G1 through G4.
 
 ### D02 owner runner and worker supervision
 
@@ -821,6 +823,82 @@ HTTP classes. `packages/ui/src/api/plugin-types.ts`, `client.ts`, and
 `ws-transport.ts` provide owner-bound DTOs and channel-to-REST mappings.
 See the [D03 architecture page](./architecture/plugin-platform-d03.md) for
 endpoint fields, lifecycle examples, limits, source map, and evidence.
+
+### D05 management API and transactional lifecycle
+
+D05 adds a separate administrator boundary in front of the D01/D02 runner:
+
+```text
+Settings / owner-bound ApiClient
+  └─ Authorization: Bearer <JWT>
+      └─ require_auth → AuthenticatedActor { subject, exp }
+          └─ require_bearer_auth
+              └─ /api/plugins/admin* handlers
+                  └─ RunnerClient → RunnerServer
+                      ├─ host-seeded AdminSubjectList
+                      ├─ PluginRegistry (registry-v1.json)
+                      ├─ SupervisorManager (drain/health)
+                      └─ LifecycleCoordinator + lifecycle journal
+```
+
+The management route group contains installation listing/details, streamed
+package staging, stage approval, rollback, enable, disable, remove, grant
+replacement, and binding replacement. All DTOs are camelCase. The stage route
+requires `Content-Length`, a 64-hex `X-Expected-SHA256`, and a bounded gzip or
+octet-stream body; it forwards chunks with backpressure rather than buffering
+the complete archive. `expectedSecurityRevision` is the mutation CAS fence.
+
+Management requests require bearer authentication even though ordinary API
+routes may accept the HttpOnly auth cookie. Cookie-only requests receive
+`BearerRequired`; `--no-auth` receives `NoAuthForbidden`. After middleware,
+the runner independently checks `AuthenticatedActor.subject` against its
+root-seeded allowlist. A missing allowlist is empty and deny-all; login,
+MongoDB membership, browser profile identity, and development mode do not
+grant plugin administration.
+
+The runner resolves administrator configuration in this order:
+`--admin-config`, `DAM_HOPPER_PLUGIN_ADMINS_FILE`,
+`/etc/dam-hopper/plugin-admins.json`, then empty list. It accepts an
+`adminSubjects` object or a string array, trims/deduplicates/sorts subjects,
+and stores a stable SHA-256 `adminConfigDigest` in the registry. Unix
+group/world-writable files are rejected. Explicit config errors fail startup;
+invalid host-default/environment files warn and deny all.
+
+`LifecycleCoordinator` serializes one installation with an async per-ID lock.
+For install/update it validates review and revision, journals `INITIATED`,
+extracts/publishes the immutable candidate, drains the prior worker, activates
+the candidate at the next generation, requires health, then rechecks security
+state and atomically publishes the package/installation pair. The old pair is
+preserved until candidate health succeeds. Journal phases are:
+
+```text
+INITIATED → DRAINING → STOPPED → ACTIVATING → HEALTHY
+           → PUBLISHED → COMMITTED
+                         ↘ FAILED / ABORTED
+```
+
+Rollback activates the matched previous backend/UI pair before publication,
+advances generation without rewinding, consumes the previous snapshot, and
+preserves current enabled/grant/binding intent. Disable drains and persists
+disabled intent; enable revalidates disk state and activates the next
+generation; remove drains first and deletes only unreferenced package roots.
+Grant/binding replacement advances security and registry revisions, causing
+affected D03 contexts to be invalidated. Successful actions emit redacted
+audit records and the API invalidates metadata/context caches.
+
+Records live at `journal/lifecycle-<transaction-id>.json`, use strict
+camelCase JSON, and are written atomically with mode `0600` and directory
+sync. `run_crash_recovery` maps pending pre-publish phases to `ABORTED`,
+interrupted activation to `FAILED`, and `PUBLISHED` to `COMMITTED`; it never
+invents approval or restores old security intent. The runner currently
+constructs the coordinator; explicit startup invocation of this coordinator
+recovery remains a qualification question.
+
+The Settings page's Plugin Platform section uses the owner-bound client to
+refresh installation state, show worker/revision details, stream package
+uploads with progress, display stage review, and confirm rollback/removal.
+Source map and phase evidence are maintained in the [D05 architecture page](./architecture/plugin-platform-d05.md).
+
 
 ## High-Level Overview
 

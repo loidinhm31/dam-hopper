@@ -134,11 +134,16 @@ impl PluginRegistry {
             .map(|i| i.installation_id.clone())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        let existing_gen = fresh_state
-            .installations
-            .get(&installation_id)
+        let existing = fresh_state.installations.get(&installation_id);
+        let existing_gen = existing
             .map(|i| i.activation_generation)
             .unwrap_or(0);
+        let previous_package = existing.map(|i| super::registry_state::RollbackPackageSnapshot {
+            package_digest: i.active_package_digest.clone(),
+            version: i.active_version.clone(),
+            bindings: i.bindings.clone(),
+            published_at: i.updated_at.clone(),
+        });
 
         let inst_record = InstallationRecord {
             installation_id: installation_id.clone(),
@@ -149,9 +154,8 @@ impl PluginRegistry {
             enabled: true,
             bindings: initial_bindings,
             grants: initial_grants,
-            created_at: fresh_state
-                .installations
-                .get(&installation_id)
+            previous_package,
+            created_at: existing
                 .map(|i| i.created_at.clone())
                 .unwrap_or_else(|| now_str.clone()),
             updated_at: now_str.clone(),

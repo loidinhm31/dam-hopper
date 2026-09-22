@@ -24,6 +24,9 @@ pub mod worker_supervisor;
 pub mod api_service;
 pub mod authorization;
 pub mod contexts;
+pub mod admin;
+pub mod lifecycle_journal;
+pub mod lifecycle;
 
 pub use contract::*;
 pub use error::*;
@@ -49,3 +52,6 @@ pub use worker_supervisor::*;
 pub use api_service::*;
 pub use authorization::*;
 pub use contexts::*;
+pub use admin::*;
+pub use lifecycle_journal::*;
+pub use lifecycle::*;

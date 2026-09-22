@@ -56,9 +56,12 @@ pub const ADMIN_RUNNER_METHODS: &[&str] = &[
     "management.approve",
     "management.rollback",
     "management.disable",
+    "management.enable",
     "management.remove",
     "management.grants.replace",
     "management.bindings.replace",
+    "management.installations.list",
+    "management.installations.get",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

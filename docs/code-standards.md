@@ -165,6 +165,46 @@ The complete endpoint and lifecycle contract is in
   transport tests. Test cross-actor/target denial, stale epoch, grant update,
   no-auth denial, target replacement, cancellation, crash, and immutability.
 
+### Plugin management and lifecycle standards (Phase D05)
+
+- Mount `/api/plugins/admin*` through `require_auth` and then
+  `require_bearer_auth`. Cookie credentials and `--no-auth` are explicit
+  denials; do not create a development administrator fallback.
+- Derive the actor only from `AuthenticatedActor.subject`. Never accept an
+  administrator subject from an HTTP body, query, or browser profile.
+- Keep administrator configuration host-seeded and default-deny. Accept only
+  the documented `adminSubjects` object or string-array JSON; trim,
+  deduplicate, sort, and persist the resulting `adminConfigDigest`. Reject
+  Unix group/world-writable files and keep explicit config-load failures
+  fail-closed.
+- Keep management request DTOs camelCase and `deny_unknown_fields`; serialized
+  result DTOs remain camelCase. Stage upload is a bounded streaming body with
+  declared length and expected SHA-256; never materialize a full package in an
+  unbounded request buffer.
+- Treat `expectedSecurityRevision` as a compare-and-swap fence. Read fresh
+  durable state under the registry lock, reject stale revisions, and never
+  merge caller state over a newer security decision.
+- Serialize operations for one installation with an async per-installation
+  lock. Never hold a synchronous registry lock across `.await`; reserve/read
+  under lock, perform extraction/worker I/O outside it, then reacquire and
+  revalidate before publication.
+- Journal lifecycle transitions with strict records and atomic mode-0600
+  writes. Activate and health-check candidate workers before publishing the
+  package/installation pair. On failure, stop the candidate and preserve the
+  prior durable pair.
+- Rollback must restore the matched backend/UI package pair without restoring
+  revoked grants, replaced bindings, disabled intent, old revisions, or a
+  previous activation generation. Remove only unreferenced package roots.
+- Lifecycle and authority mutations emit redacted audit records and
+  invalidate plugin metadata/context caches at the API boundary. Stage upload
+  is a reviewable input stream, not a published installation. Do not log bearer
+  values, package bytes, worker stderr, source paths, or policy text.
+- Keep UI management methods owner-bound through `ApiClient` and
+  `WsTransport`; mutation requests use the list's revision and destructive
+  actions require explicit confirmation. Focused evidence belongs in
+  `server/tests/plugin_admin_api.rs`, `server/tests/plugin_lifecycle.rs`, and
+  `PluginManagementSection.test.tsx`.
+
 ### Error Handling Pattern
 
 Each module defines `thiserror` enum:

@@ -28,8 +28,9 @@ use crate::state::AppState;
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
     fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend, media_session,
-    plugin_assets, plugins as plugins_api, port_forward as port_forward_api, settings, ssh, system,
-    terminal, tunnel, usage, usage_sessions, workflow, workspace, ws,
+    plugin_admin as plugin_admin_api, plugin_assets, plugins as plugins_api,
+    port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, usage,
+    usage_sessions, workflow, workspace, ws,
 };
 
 /// Build the full Axum router without cross-origin browser access and without static web serving.
@@ -508,10 +509,65 @@ pub fn build_router_with_web_dir_and_origins(
             state.clone(),
             mark_allowed_media_origin,
         ));
+    let plugin_admin_routes = Router::new()
+        .route(
+            "/api/plugins/admin",
+            get(plugin_admin_api::list_admin_installations_handler),
+        )
+        .route(
+            "/api/plugins/admin/installations/{id}",
+            get(plugin_admin_api::get_admin_installation_handler)
+                .delete(plugin_admin_api::remove_installation_handler),
+        )
+        .route(
+            "/api/plugins/admin/stages",
+            post(plugin_admin_api::stage_package_upload_handler)
+                .layer(DefaultBodyLimit::max(crate::plugins::MAX_PACKAGE_COMPRESSED_BYTES as usize + 64 * 1024)),
+        )
+        .route(
+            "/api/plugins/admin/stages/{stageId}/approve",
+            post(plugin_admin_api::approve_stage_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route(
+            "/api/plugins/admin/installations/{id}/rollback",
+            post(plugin_admin_api::rollback_installation_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
+        )
+        .route(
+            "/api/plugins/admin/installations/{id}/enable",
+            post(plugin_admin_api::enable_installation_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
+        )
+        .route(
+            "/api/plugins/admin/installations/{id}/disable",
+            post(plugin_admin_api::disable_installation_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
+        )
+        .route(
+            "/api/plugins/admin/installations/{id}/grants",
+            put(plugin_admin_api::replace_grants_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route(
+            "/api/plugins/admin/installations/{id}/bindings",
+            put(plugin_admin_api::replace_bindings_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_bearer_auth,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+
 
     let router = Router::new()
         .merge(public)
         .merge(protected)
+        .merge(plugin_admin_routes)
         .merge(plugin_asset_routes)
         .merge(ide_routes)
         .merge(video_stream)

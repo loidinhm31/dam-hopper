@@ -1,35 +1,34 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-22 from `repomix-output.xml` (Repomix v1.18.0; 2,208
-files, 4,938,183 tokens, 20,613,126 characters; five security-flagged files
+**Generated:** 2026-09-22 from `repomix-output.xml` (Repomix v1.18.0; 2,236
+files, 5,030,066 tokens, 21,027,017 characters; five security-flagged files
 excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
-security scanning are not represented in full. Release-source entries in the
-compaction include the Windows packager, profile-aware asset checker, package
-scripts, and Windows packaging/install harnesses.
+security scanning are not represented in full.
 
 ## Repository shape
 
 - `server/` — Rust/Axum backend, workspace/file APIs, PTY management, workflow
-  persistence, telemetry, idle suspend, Linux release management, and tests.
+  persistence, telemetry, idle suspend, Linux release management, plugins, and
+  tests.
 - `apps/web/` — browser Vite host.
 - `apps/native/` — Tauri host, native capability bridges, and platform smoke
   scripts.
 - `apps/browser-extension/` — optional browser-extension host.
 - `packages/ui/` — shared React components, stores, API/WS clients, terminal
-  surfaces, and browser tests.
-- `packages/plugin-sdk/` — candidate dependency-light plugin contracts, schemas, fixtures, and packed SDK artifact.
-- `packages/shared/` — dependency-light shared runtime utilities, including
-  logger and redaction helpers.
+  surfaces, Settings, and browser tests.
+- `packages/plugin-sdk/` — candidate dependency-light plugin contracts, schemas,
+  fixtures, and packed SDK artifact.
+- `packages/shared/` — dependency-light shared runtime utilities.
 - `deploy/` — release scripts, systemd templates, installer assets, and role
   staging support.
-- `plans/` — feature plans, research, phase records, and verification reports.
+- `plans/` — feature plans, phase records, research, and verification reports.
 - `docs/` — operator, API, architecture, standards, and product-requirement
   documentation.
 
-## Trusted plugin platform (Phases D00–D03)
+## Trusted plugin platform (Phases D00–D05)
 
 The candidate SDK is `@dam-hopper/plugin-sdk` `0.1.0`; schemas, fixtures, and
 the packed artifact live under `packages/plugin-sdk/`. D00 Rust mirrors and
@@ -40,31 +39,37 @@ strict four-byte big-endian JSON-RPC framing live in `server/src/plugins/`.
   fail closed.
 - D01 owns the immutable package registry, bounded gzip-tar staging/extraction,
   digest approval, strict state/journal records, and grant/binding CAS. See
-  [Phase D01 architecture](./architecture/plugin-platform-d01.md).
+  [D01 architecture](./architecture/plugin-platform-d01.md).
 - D02 adds `dam-hopper-plugin-runner`, `RunnerServer`, `RunnerClient`,
-  `WorkerProcess`, and `InstallationSupervisor` under `server/src/`. The
-  runner binds an owner-created AF_UNIX socket, checks `SO_PEERCRED`, performs
-  exact `runner.hello`, and multiplexes framed JSON-RPC requests.
+  `WorkerProcess`, and `InstallationSupervisor`; the runner binds an owner
+  AF_UNIX socket, checks `SO_PEERCRED`, performs exact `runner.hello`, and
+  multiplexes framed JSON-RPC requests.
 - Worker processes use immutable D01 package roots, private framed stdin/stdout,
-  sanitized bounded stderr, a cleared/allowlisted environment, and a Unix
-  process group. One supervisor generation owns one worker and revokes contexts
-  on crash/deadline.
-- D02 enforces 16 contexts/worker, four invokes/context, 16 invokes/worker,
-  one declared long-running invoke, 10/30-second deadlines, and a durable
-  three-failures-in-60-seconds installation budget. Current over-limit calls
-  fail fast with `OVERLOADED`; a 32-entry fair queue is not implemented.
-- D03 adds protected `/api/plugins` list/open/close/invoke/cancel routes,
-  actor/grant/target checks, random WebSocket connection epochs, 15-minute
-  opaque contexts, invoke-time authorization, selective revocation, and
-  owner-bound UI DTO/channel mappings. See
-  [Phase D03 architecture](./architecture/plugin-platform-d03.md).
-- D03 source map: `server/src/plugins/{authorization,contexts,api_service}.rs`,
-  `server/src/api/plugins.rs`, `auth.rs`, `ws.rs`, `ws_protocol.rs`,
-  `packages/ui/src/api/{plugin-types,client,ws-transport}.ts`.
-- Focused evidence is in `server/tests/plugin_authorization.rs`,
-  `plugin_api_integration.rs`, and `plugin_runner_supervision.rs`; D04–D06
-  still own isolated UI, lifecycle, and Linux qualification. This remains
-  trusted same-identity execution, not a malicious-code sandbox.
+  bounded stderr, a cleared/allowlisted environment, and a Unix process group.
+  One supervisor generation owns one worker and revokes contexts on crash/deadline.
+- D03 adds protected public `/api/plugins` routes, actor/grant/target checks,
+  random WebSocket connection epochs, opaque contexts, invoke-time
+  authorization, selective revocation, and owner-bound UI mappings. See
+  [D03 architecture](./architecture/plugin-platform-d03.md).
+- D05 adds `/api/plugins/admin*` listing, streaming stage/approval, rollback,
+  enable/disable/remove, grants, and bindings. `require_bearer_auth` rejects
+  cookie-only and `--no-auth` management requests.
+- D05 administrator subjects are host-seeded from `--admin-config`,
+  `DAM_HOPPER_PLUGIN_ADMINS_FILE`, or `/etc/dam-hopper/plugin-admins.json`;
+  missing/invalid host configuration is deny-all and its sorted subject digest
+  is persisted in `registry-v1.json`.
+- `LifecycleCoordinator` serializes each installation, journals strict
+  `lifecycle-<uuid>.json` records, health-checks candidate workers before
+  durable publication, preserves current security intent on rollback, fences
+  mutations by security revision, and exposes crash recovery.
+- D05 source map: `server/src/plugins/{admin,lifecycle_journal,lifecycle,
+  runner_client,runner_server}.rs`, `server/src/api/{auth,plugin_admin,router}.rs`,
+  `packages/ui/src/api/{plugin-types,client,ws-transport}.ts`, and
+  `packages/ui/src/components/pages/settings-page/PluginManagementSection.tsx`.
+- Focused D05 evidence is in `server/tests/plugin_admin_api.rs`,
+  `server/tests/plugin_lifecycle.rs`, and
+  `PluginManagementSection.test.tsx`; detailed boundaries and unresolved
+  startup/event questions are in [D05 architecture](./architecture/plugin-platform-d05.md).
 
 ## Unified-profile workbench frontend (Phases 00–02)
 

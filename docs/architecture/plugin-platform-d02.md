@@ -53,9 +53,11 @@ after `RunnerServer::run` returns. CLI options are:
 | `--expected-api-uid <UID>` | none | If set, only this API UID passes peer validation. |
 | `--allow-root-peer` | false | Explicitly permits UID 0; the default rejects root peers. |
 
-The binary seeds an empty administrator list. Administrative registry
-operations are not exposed by the D02 public server dispatcher; D01/D05 own the
-separately authorized management path.
+The binary loads root-seeded administrator subjects from `--admin-config`,
+`DAM_HOPPER_PLUGIN_ADMINS_FILE`, or `/etc/dam-hopper/plugin-admins.json`;
+missing configuration is empty and deny-all. D02's public dispatcher keeps
+management calls separate; the implemented management path is documented in
+[D05 management and lifecycle](./plugin-platform-d05.md).
 
 ## RunnerServer: authenticated local RPC
 
