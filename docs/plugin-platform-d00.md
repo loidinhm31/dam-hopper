@@ -277,9 +277,7 @@ G0 may pin D00 only after the following candidate set is jointly reviewed:
 5. E00 domain/identity consumers and compatibility behavior; and
 6. the Node runtime distribution and Linux qualification assumptions.
 
-D01–D06 remain required for a usable platform: owner-worker runner and registry,
-API façade, browser integration, lifecycle/rollback, and Linux workload/deploy
-qualification. A loader or fixture worker alone is not platform completion.
+D04 browser integration, D05 management/lifecycle, and D06 Linux workload/deployment qualification remain required for a usable platform. D05 now supplies the administrator API and transactional lifecycle boundary; a loader or fixture worker alone is not platform completion.
 
 ## Unresolved questions
 

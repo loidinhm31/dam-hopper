@@ -20,6 +20,7 @@ mod media_stream_headers;
 mod media_stream_response;
 pub mod plugin_assets;
 pub mod plugins;
+pub mod plugin_admin;
 pub mod port_forward;
 pub mod router;
 pub mod settings;

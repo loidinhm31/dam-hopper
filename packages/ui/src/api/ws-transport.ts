@@ -45,8 +45,8 @@ import type {
   PluginEpoch,
   PluginUiAsset,
   PluginUiAssetRequest,
+  StageReviewDto,
 } from "./plugin-types.js";
-
 type Callback = (...args: unknown[]) => void;
 
 function wsTargetFields(target: ProjectTargetInput): {
@@ -1337,6 +1337,80 @@ function channelToEndpoint(
       return { method: "POST", url: "/api/plugins/invoke", body: data };
     case "plugins:cancel":
       return { method: "POST", url: "/api/plugins/cancel", body: data };
+    case "plugins:adminList":
+      return { method: "GET", url: "/api/plugins/admin" };
+    case "plugins:adminGet": {
+      const { id } = (data ?? {}) as { id: string };
+      return {
+        method: "GET",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}`,
+      };
+    }
+    case "plugins:adminApprove": {
+      const { stageId, body } = (data ?? {}) as {
+        stageId: string;
+        body: unknown;
+      };
+      return {
+        method: "POST",
+        url: `/api/plugins/admin/stages/${encodeURIComponent(stageId)}/approve`,
+        body,
+      };
+    }
+    case "plugins:adminRollback": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "POST",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/rollback`,
+        body,
+      };
+    }
+    case "plugins:adminEnable": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "POST",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/enable`,
+        body,
+      };
+    }
+    case "plugins:adminDisable": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "POST",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/disable`,
+        body,
+      };
+    }
+    case "plugins:adminRemove": {
+      const { id, expectedSecurityRevision } = (data ?? {}) as {
+        id: string;
+        expectedSecurityRevision?: number;
+      };
+      const q =
+        expectedSecurityRevision !== undefined
+          ? `?expectedSecurityRevision=${expectedSecurityRevision}`
+          : "";
+      return {
+        method: "DELETE",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}${q}`,
+      };
+    }
+    case "plugins:adminReplaceGrants": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "PUT",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/grants`,
+        body,
+      };
+    }
+    case "plugins:adminReplaceBindings": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "PUT",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/bindings`,
+        body,
+      };
+    }
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }
@@ -2585,6 +2659,72 @@ export class WsTransport implements Transport {
       this.activeAbortControllers.delete(controller);
       clearTimeout(timeout);
     }
+  }
+
+  uploadPluginStage(
+    file: Blob | File,
+    expectedSha256: string,
+    onProgress?: (uploaded: number, total: number) => void,
+  ): Promise<StageReviewDto> {
+    return new Promise<StageReviewDto>((resolve, reject) => {
+    const url = `${this.baseUrl}/api/plugins/admin/stages`;
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    const headers = this.buildAuthHeaders();
+    for (const [key, val] of Object.entries(headers)) {
+      xhr.setRequestHeader(key, val);
+    }
+    xhr.setRequestHeader("Content-Type", "application/gzip");
+    xhr.setRequestHeader("X-Expected-SHA256", expectedSha256);
+
+    if (onProgress && xhr.upload) {
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) {
+          onProgress(ev.loaded, ev.total);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const review = JSON.parse(xhr.responseText) as StageReviewDto;
+          resolve(review);
+        } catch (e) {
+          reject(new Error(`Failed to parse stage review: ${e}`));
+        }
+      } else {
+        try {
+          const err = JSON.parse(xhr.responseText);
+          reject(
+            new ApiRequestError(
+              err.error ?? xhr.statusText,
+              xhr.status,
+              err.code,
+              err,
+            ),
+          );
+        } catch {
+          reject(
+            new ApiRequestError(
+              xhr.statusText || `HTTP ${xhr.status}`,
+              xhr.status,
+            ),
+          );
+        }
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error("Stage upload network error"));
+    };
+
+    xhr.onabort = () => {
+      reject(new Error("Stage upload aborted"));
+    };
+
+    xhr.send(file);
+    });
   }
 
   async uploadBrowserDebugPng(

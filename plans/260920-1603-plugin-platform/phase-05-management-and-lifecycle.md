@@ -14,8 +14,12 @@
 
 - **Date:** 2026-09-20
 - **Priority:** P1
-- **Implementation status:** Pending
-- **Review status:** Pending
+- **Plan status:** DONE (2026-09-22; 100%).
+- **Implementation status:** DONE (2026-09-22; 100%).
+- **Review status:** Approved (2026-09-22; Cycle 3; review score 9.8/10; no critical issues). See the [final review](../reports/code-review-260922-2050-phase-d05-cycle3-management-lifecycle.md).
+- **Completion timestamp:** 2026-09-22
+- **Progress:** 100% (6/6 D05-owned todo items; E04 joint G3 artifact gate deferred).
+- **Validation:** 23 Rust tests across four suites passed; 8 UI tests passed; TypeScript compilation reported 0 errors. See the [D05 test/review evidence](../reports/code-review-260922-2050-phase-d05-cycle3-management-lifecycle.md).
 - **Dependencies:** G1 and D01–D03 implementations; frozen D04 lifecycle/revocation interface. E04 supplies the reviewed final package for G3. D05 may implement in parallel with D04 after G1; integrated G3 requires completed D04/E03, while G2 does not wait for management polish.
 - **Gate contribution:** D05 + E04 prove stage/review/approve/install/update/rollback/disable/remove, crash recovery and final matched package activation at G3.
 - **Effort:** Unestimated.
@@ -125,18 +129,18 @@ bearer admin request ── API auth + root allowlist ── streamed admin RPC
 
 ## Todo List
 
-- [ ] Root-seeded empty-deny admin allowlist and bearer-only guard implemented.
-- [ ] Streaming stage/review/approval preserves independent digest trust flow.
-- [ ] Per-installation durable transaction publishes one matched generation atomically.
-- [ ] Rollback preserves current security intent under revoke/disable races.
-- [ ] Enable/disable/remove/recovery/retention never touch advisor sources.
-- [ ] Admin Settings surface presents review and lifecycle states safely.
-- [ ] E04 final artifact passes joint G3 lifecycle scenarios.
+- [x] Root-seeded empty-deny admin allowlist and bearer-only guard implemented.
+- [x] Streaming stage/review/approval preserves independent digest trust flow.
+- [x] Per-installation durable transaction publishes one matched generation atomically.
+- [x] Rollback preserves current security intent under revoke/disable races.
+- [x] Enable/disable/remove/recovery/retention never touch advisor sources.
+- [x] Admin Settings surface presents review and lifecycle states safely.
+- [-] E04 final artifact passes joint G3 lifecycle scenarios (external joint gate; deferred to G3 qualification).
 
 ## Success Criteria
 
-- Future, proposed: `cargo test --manifest-path server/Cargo.toml --test plugin_admin_api` proves empty-deny allowlist, bearer-only mutation, stale revision, upload bounds/disconnect and redacted audit.
-- Future, proposed: `cargo test --manifest-path server/Cargo.toml --test plugin_lifecycle` proves update atomicity, process drain, crash at every journal phase, matched-pair rollback and reference-safe cleanup.
+- `cd server && cargo test --test plugin_admin_api --test plugin_lifecycle --test plugin_api_integration --test plugin_runner_supervision` passed 23/23 tests across four suites with 0 failures.
+- `pnpm --filter @dam-hopper/ui test PluginManagementSection` passed 8/8; TypeScript compilation reported 0 errors. Cycle 3 review approved D05 at 9.8/10 with no critical issues.
 - A candidate health failure concurrent with grant revocation cannot restore the revoked grant; concurrent disable leaves the installation disabled with no worker/frame/nav execution.
 - At every observation point, API list, worker, asset bytes and navigation agree on one activation generation or explicit unavailable state.
 - Disable survives runner and host restart. Remove deletes only registry-owned unreferenced package/state and leaves source content/owner/mode/size/mtime unchanged.
@@ -166,3 +170,6 @@ bearer admin request ── API auth + root allowlist ── streamed admin RPC
 
 - Actual admin subjects, artifact handoff and independent expected-digest channel are deployment inputs.
 - Package retention count/disk budget and audit sink/retention must be chosen before G3; safety rules above do not depend on those values.
+- Runner startup must qualify invoking `run_crash_recovery` before accepting management RPC; the coordinator is constructed, but startup invocation remains a D06 recovery check.
+- The optional `plugin:lifecycle_revision` UI listener needs a server-emission decision or an explicit-refresh-only contract.
+- D06/operator deployment must define ownership and rotation for `/etc/dam-hopper/plugin-admins.json`.

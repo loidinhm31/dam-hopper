@@ -695,9 +695,10 @@ are allowed. E00 must consume these candidates, select an immutable Node
 
 ### PR-023: Trusted plugin owner runner and worker supervision (Phase D02)
 
-**Status:** Core implementation complete 2026-09-21; D04–D06 remain required
-for isolated UI integration, lifecycle/rollback, and Linux qualification. The
-detailed interface is [Phase D02 runner architecture](./architecture/plugin-platform-d02.md);
+**Status:** Core implementation complete 2026-09-21; D04 isolated UI
+integration and D06 Linux qualification remain required. D05 management and
+lifecycle is complete in [the D05 architecture](./architecture/plugin-platform-d05.md).
+The detailed runner interface is [Phase D02 runner architecture](./architecture/plugin-platform-d02.md);
 the delivered authorization boundary is [Phase D03 architecture](./architecture/plugin-platform-d03.md).
 
 **Functional requirements:**
@@ -808,12 +809,78 @@ authorization lease. Cookies, bearer tokens, epochs, profile IDs, and browser
 generation never cross into plugin workers or future iframe bridges. Worker
 stderr and source paths are sanitized at the API boundary. Trusted same-identity
 execution remains distinct from a malicious-code sandbox; D04 owns isolated UI
-capabilities, D05 owns management/lifecycle revocation, and D06 owns host
-deployment qualification.
+capabilities, D05 management/lifecycle is delivered by PR-025, and D06 owns
+host deployment qualification.
 
 **Unresolved questions:** Whether logout should push an immediate revocation
 notice; whether revoked actor epochs should be eagerly removed and periodically
 swept; and which canonical `EVCRATE_ROOT` lookup standalone packaging uses.
+
+### PR-025: Plugin management API and transactional lifecycle (Phase D05)
+
+**Status:** DONE — 2026-09-22 (100%; review approved 9.8/10). D05 completes
+the management side of the trusted plugin G1 slice. It does not claim a
+malicious-code sandbox, Linux deployment qualification, or the cross-repository
+installed-worker gate.
+
+**Functional requirements:**
+
+- Expose bearer-only administrator routes for installation listing/details,
+  streamed package staging/review, approval, rollback, enable, disable,
+  remove, grant replacement, and binding replacement.
+- Keep administrator membership host-seeded and default-deny. Load
+  `--admin-config`, `DAM_HOPPER_PLUGIN_ADMINS_FILE`, or
+  `/etc/dam-hopper/plugin-admins.json`; accept `adminSubjects` JSON object or
+  string array; persist a stable `adminConfigDigest`.
+- Reject cookie-only management requests with `BearerRequired` and all
+  `--no-auth` management requests with `NoAuthForbidden`. Recheck the bearer
+  subject in the runner, independently of HTTP middleware.
+- Stream gzip package bytes with expected SHA-256 and bounded declared length;
+  return an immutable, expiring review before approval. Use camelCase DTOs and
+  bounded `{ error, code }` failures.
+- Coordinate package and worker state through one per-installation
+  `LifecycleCoordinator`. Candidate activation and health must precede durable
+  package/installation publication; stale security revisions fail closed.
+- Journal install/update/rollback/enable/disable/remove transitions durably,
+  preserve prior package pairs for rollback, and never restore revoked grants,
+  replaced bindings, disabled intent, old security revisions, or old
+  activation generations.
+- Make Settings plugin controls owner-bound and revision-aware; destructive
+  actions require explicit confirmation and failed admin access is visible.
+
+**Acceptance criteria:**
+
+- [x] `/api/plugins/admin*` routes are registered behind normal JWT auth and
+      bearer-only middleware; no-auth and cookie-only denial codes are stable.
+- [x] Allowlist loader supports the documented precedence and JSON forms,
+      rejects Unix group/world-writable files, and denies all on missing host
+      configuration.
+- [x] Stage uploads enforce content type, declared length, digest format,
+      compressed package bound, incremental chunks, and backpressure.
+- [x] Approve/update/rollback activate and health-check candidates before
+      durable publication; failed activation leaves the prior registry pair
+      unchanged.
+- [x] Enable/disable persist intent; rollback preserves current security
+      intent; remove cleans only unreferenced package roots; grant/binding
+      replacement advances security and registry revisions.
+- [x] Durable lifecycle records use strict JSON, atomic mode-0600 writes,
+      explicit terminal phases, redacted audit records, and tested recovery
+      mappings for pending transactions.
+- [x] Focused backend/admin/lifecycle and Settings component evidence passes;
+      review approved 9.8/10.
+
+**Security and operational constraints:** The administrator file is an
+operator/deployment input, not a browser-managed setting. Keep it outside the
+plugin registry and staging roots. Trusted same-identity workers remain
+distinct from a malicious-code sandbox. D06 owns systemd account, file owner,
+rotation, and target-host qualification. See the [D05 architecture](./architecture/plugin-platform-d05.md)
+and [D05 API reference](./api-reference.md#trusted-plugin-management-api-phase-d05).
+
+**Unresolved questions:** The runner currently constructs the lifecycle
+coordinator but does not visibly invoke `run_crash_recovery` during startup;
+the server emission path for the UI's optional `plugin:lifecycle_revision`
+event also needs a qualification decision. Deployment ownership/rotation for
+the host allowlist remains a D06/operator input.
 
 ### PR-011: Workflow Tracking Domain & Relational Persistence (Phase 01)
 

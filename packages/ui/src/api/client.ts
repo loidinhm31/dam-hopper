@@ -59,38 +59,60 @@ export type {
   Owned,
 };
 import type {
+  AdminInstallationDto,
+  AdminInstallationListResult,
+  AdminRemoveResult,
+  ApproveStageRequest,
   CancelOutcome,
   CancelRequest,
   CloseContextRequest,
   ContextCloseResult,
   ContextOpenResult,
+  GrantKey,
   InvokeRequest,
   InvokeResponse,
+  LifecycleActionRequest,
   ListPluginsResponse,
   OpenContextRequest,
   PluginEpoch,
+  PluginLifecycleRevisionEvent,
   PluginMetadataItem,
   PluginRevokedEvent,
   PluginUiAsset,
   PluginUiAssetRequest,
+  ReplaceBindingsRequest,
+  ReplaceGrantsRequest,
   RequestCancelResult,
+  RollbackPackageSnapshotDto,
+  StageReviewDto,
 } from "./plugin-types.js";
 export type {
+  AdminInstallationDto,
+  AdminInstallationListResult,
+  AdminRemoveResult,
+  ApproveStageRequest,
   CancelOutcome,
   CancelRequest,
   CloseContextRequest,
   ContextCloseResult,
   ContextOpenResult,
+  GrantKey,
   InvokeRequest,
   InvokeResponse,
+  LifecycleActionRequest,
   ListPluginsResponse,
   OpenContextRequest,
   PluginEpoch,
+  PluginLifecycleRevisionEvent,
   PluginMetadataItem,
   PluginRevokedEvent,
   PluginUiAsset,
   PluginUiAssetRequest,
+  ReplaceBindingsRequest,
+  ReplaceGrantsRequest,
   RequestCancelResult,
+  RollbackPackageSnapshotDto,
+  StageReviewDto,
 };
 import type {
   AbandonSessionRequest,
@@ -2797,6 +2819,74 @@ export function createApiClient(
             reason: value.reason,
           });
         }),
+      adminList: () =>
+        transport.invoke<AdminInstallationListResult>("plugins:adminList"),
+      adminGet: (id: string) =>
+        transport.invoke<AdminInstallationDto>("plugins:adminGet", { id }),
+      adminStage: (
+        file: Blob | File,
+        expectedSha256: string,
+        onProgress?: (uploaded: number, total: number) => void,
+      ) => {
+        const method = (transport as Transport & PluginTransportSeam)
+          .uploadPluginStage;
+        if (!method) {
+          return Promise.reject(
+            new Error("Plugin stage upload is unavailable"),
+          );
+        }
+        return method.call(transport, file, expectedSha256, onProgress);
+      },
+      adminApprove: (stageId: string, req: ApproveStageRequest) =>
+        transport.invoke<AdminInstallationDto>("plugins:adminApprove", {
+          stageId,
+          body: req,
+        }),
+      adminRollback: (id: string, req: LifecycleActionRequest) =>
+        transport.invoke<AdminInstallationDto>("plugins:adminRollback", {
+          id,
+          body: req,
+        }),
+      adminEnable: (id: string, req: LifecycleActionRequest) =>
+        transport.invoke<AdminInstallationDto>("plugins:adminEnable", {
+          id,
+          body: req,
+        }),
+      adminDisable: (id: string, req: LifecycleActionRequest) =>
+        transport.invoke<AdminInstallationDto>("plugins:adminDisable", {
+          id,
+          body: req,
+        }),
+      adminRemove: (id: string, expectedSecurityRevision?: number) =>
+        transport.invoke<AdminRemoveResult>("plugins:adminRemove", {
+          id,
+          expectedSecurityRevision,
+        }),
+      adminReplaceGrants: (id: string, req: ReplaceGrantsRequest) =>
+        transport.invoke<AdminInstallationDto>("plugins:adminReplaceGrants", {
+          id,
+          body: req,
+        }),
+      adminReplaceBindings: (id: string, req: ReplaceBindingsRequest) =>
+        transport.invoke<AdminInstallationDto>("plugins:adminReplaceBindings", {
+          id,
+          body: req,
+        }),
+      onLifecycleRevision: (
+        listener: (event: PluginLifecycleRevisionEvent) => void,
+      ) =>
+        transport.onEvent("plugin:lifecycle_revision", (payload) => {
+          if (typeof payload !== "object" || payload === null) return;
+          const value = payload as Record<string, unknown>;
+          if (typeof value.installationId !== "string") return;
+          listener({
+            kind: "plugin:lifecycle_revision",
+            installationId: value.installationId,
+            activationGeneration: (value.activationGeneration as number) ?? 1,
+            securityRevision: (value.securityRevision as number) ?? 1,
+            enabled: Boolean(value.enabled),
+          });
+        }),
     },
   };
 }
@@ -3256,6 +3346,44 @@ export interface ApiClient {
     invoke: <T = unknown>(req: InvokeRequest) => Promise<InvokeResponse<T>>;
     cancel: (req: CancelRequest) => Promise<RequestCancelResult>;
     onRevoked: (listener: (event: PluginRevokedEvent) => void) => () => void;
+    adminList: () => Promise<AdminInstallationListResult>;
+    adminGet: (id: string) => Promise<AdminInstallationDto>;
+    adminStage: (
+      file: Blob | File,
+      expectedSha256: string,
+      onProgress?: (uploaded: number, total: number) => void,
+    ) => Promise<StageReviewDto>;
+    adminApprove: (
+      stageId: string,
+      req: ApproveStageRequest,
+    ) => Promise<AdminInstallationDto>;
+    adminRollback: (
+      id: string,
+      req: LifecycleActionRequest,
+    ) => Promise<AdminInstallationDto>;
+    adminEnable: (
+      id: string,
+      req: LifecycleActionRequest,
+    ) => Promise<AdminInstallationDto>;
+    adminDisable: (
+      id: string,
+      req: LifecycleActionRequest,
+    ) => Promise<AdminInstallationDto>;
+    adminRemove: (
+      id: string,
+      expectedSecurityRevision?: number,
+    ) => Promise<AdminRemoveResult>;
+    adminReplaceGrants: (
+      id: string,
+      req: ReplaceGrantsRequest,
+    ) => Promise<AdminInstallationDto>;
+    adminReplaceBindings: (
+      id: string,
+      req: ReplaceBindingsRequest,
+    ) => Promise<AdminInstallationDto>;
+    onLifecycleRevision: (
+      listener: (event: PluginLifecycleRevisionEvent) => void,
+    ) => () => void;
   };
 }
 
@@ -3265,6 +3393,11 @@ interface PluginTransportSeam {
     request: PluginUiAssetRequest,
     signal?: AbortSignal,
   ) => Promise<PluginUiAsset>;
+  uploadPluginStage?: (
+    file: Blob | File,
+    expectedSha256: string,
+    onProgress?: (uploaded: number, total: number) => void,
+  ) => Promise<StageReviewDto>;
 }
 
 interface FsTransportSeam {

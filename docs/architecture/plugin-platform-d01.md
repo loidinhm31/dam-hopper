@@ -9,6 +9,7 @@ malicious-code sandbox or a production lifecycle/update service.
 - [Plugin platform plan](../../plans/260920-1603-plugin-platform/plan.md)
 - [System architecture](../system-architecture.md)
 - [D02 owner-account runner and supervision](./plugin-platform-d02.md)
+- [D05 management and lifecycle](./plugin-platform-d05.md)
 
 ## Scope and ownership
 
@@ -17,12 +18,12 @@ the only durable package/grant/binding authority. An API peer may request
 management operations through the separately authorized runner namespace, but
 it does not write a second registry or accept a server filesystem path, URL,
 latest-version selector, or ambient `node_modules` path.
-
 D01 implements one immutable installation path for the first G1 vertical slice.
 D02 consumes immutable package references and supervises the worker; D03 adds
-actor/target authorization; D05 owns update, rollback, disable, and remove
-orchestration. Stage approval records an enabled installation but does not start
-worker code.
+actor/target authorization; D05 now owns update, rollback, disable, enable,
+remove, and management grant/binding orchestration. Stage approval records an
+enabled installation but does not start worker code; D05 approval performs the
+candidate activation/health gate before durable publication.
 
 The independently supplied SHA-256 proves the staged bytes match the review
 request. It is not a publisher signature and does not make same-UID executable

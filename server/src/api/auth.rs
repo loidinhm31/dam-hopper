@@ -70,6 +70,14 @@ impl AuthenticatedActor {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialMechanism {
+    Bearer,
+    Cookie,
+    NoAuthDev,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum CredentialVerificationError {
     AuthenticationUnavailable,
@@ -86,14 +94,22 @@ pub(crate) fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
         .and_then(|s| s.strip_prefix("Bearer "))
 }
 
-/// Extract token from `Authorization: Bearer <token>` header, falling back to cookie.
-fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String> {
+/// Extract token and credential mechanism from `Authorization: Bearer <token>` header, falling back to cookie.
+pub(crate) fn extract_token_and_mechanism<'a>(
+    request: &'a Request,
+    jar: &'a CookieJar,
+) -> Option<(String, CredentialMechanism)> {
     // Prefer Authorization Bearer header when supplied.
     if let Some(token) = extract_bearer_token(request.headers()) {
-        return Some(token.to_string());
+        return Some((token.to_string(), CredentialMechanism::Bearer));
     }
     // Fall back to httpOnly cookie (same-origin)
-    jar.get(AUTH_COOKIE).map(|c| c.value().to_string())
+    jar.get(AUTH_COOKIE)
+        .map(|c| (c.value().to_string(), CredentialMechanism::Cookie))
+}
+
+fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String> {
+    extract_token_and_mechanism(request, jar).map(|(token, _)| token)
 }
 
 pub fn validate_jwt(provided: &str, secret: &str) -> bool {
@@ -155,12 +171,17 @@ pub async fn require_auth(
             subject: "dev-user".into(),
             exp: None,
         });
+        request
+            .extensions_mut()
+            .insert(CredentialMechanism::NoAuthDev);
         return next.run(request).await;
     }
 
-    let Some(claims) =
-        extract_token(&request, &jar).and_then(|token| validated_claims(&token, &state.jwt_secret))
-    else {
+    let Some((token, mechanism)) = extract_token_and_mechanism(&request, &jar) else {
+        return unauthorized();
+    };
+
+    let Some(claims) = validated_claims(&token, &state.jwt_secret) else {
         return unauthorized();
     };
 
@@ -168,6 +189,39 @@ pub async fn require_auth(
         subject: claims.sub,
         exp: Some(claims.exp),
     });
+    request.extensions_mut().insert(mechanism);
+
+    next.run(request).await
+}
+
+/// Middleware that rejects non-bearer or dev-mode authentication for protected management operations.
+pub async fn require_bearer_auth(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if state.no_auth {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Plugin management operations are strictly denied in --no-auth mode",
+                "code": "NoAuthForbidden",
+            })),
+        )
+            .into_response();
+    }
+
+    let mechanism = request.extensions().get::<CredentialMechanism>().copied();
+    if mechanism != Some(CredentialMechanism::Bearer) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Bearer token required for plugin management operations; cookie credentials are not permitted",
+                "code": "BearerRequired",
+            })),
+        )
+            .into_response();
+    }
 
     next.run(request).await
 }

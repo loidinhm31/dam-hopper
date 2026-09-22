@@ -209,6 +209,39 @@ impl InstallationSupervisor {
         Ok(())
     }
 
+    pub async fn drain_and_stop(&self, timeout: Duration) -> Result<(), PluginError> {
+        let start = Instant::now();
+        {
+            let mut inner = self.inner.lock();
+            inner.status = SupervisorStatus::Draining;
+            inner.contexts.clear();
+        }
+
+        while start.elapsed() < timeout {
+            let in_flight = {
+                let inner = self.inner.lock();
+                inner.in_flight_ops
+            };
+            if in_flight == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let worker = {
+            let mut inner = self.inner.lock();
+            inner.in_flight_ops = 0;
+            inner.in_flight_long_running = 0;
+            inner.status = SupervisorStatus::Stopped;
+            inner.worker.take()
+        };
+
+        if let Some(w) = worker {
+            w.kill_process_group().await;
+        }
+        Ok(())
+    }
+
     pub async fn open_context(
         &self,
         params: ContextOpenParams,
@@ -456,12 +489,12 @@ impl InstallationSupervisor {
             self.handle_worker_crash().await;
         }
 
-        invoke_res.and_then(|val| {
-            serde_json::from_value(val).map_err(|error| {
-                PluginError::invalid_input(format!(
-                    "Worker returned an invalid plugin.invoke result: {error}"
-                ))
-            })
+        invoke_res.map(|val| {
+            if let Ok(res) = serde_json::from_value::<PluginInvokeResult>(val.clone()) {
+                res
+            } else {
+                PluginInvokeResult { result: val }
+            }
         })
     }
 
@@ -640,6 +673,37 @@ impl SupervisorManager {
         Ok(sup)
     }
 
+    pub async fn activate_candidate(
+        &self,
+        installation_id: &str,
+        plugin_id: &str,
+        version: &str,
+        digest: &str,
+        generation: u64,
+        entrypoint: &str,
+    ) -> Result<Arc<InstallationSupervisor>, PluginError> {
+        let package_dir = self.registry.layout.package_dir(plugin_id, version, digest);
+        let entrypoint_path = PathBuf::from(entrypoint);
+
+        let sup = Arc::new(InstallationSupervisor::new(
+            installation_id.to_string(),
+            plugin_id.to_string(),
+            digest.to_string(),
+            version.to_string(),
+            package_dir,
+            entrypoint_path,
+            self.node_bin.clone(),
+            generation,
+            self.registry.clone(),
+        ));
+
+        sup.activate().await?;
+
+        let mut map = self.supervisors.lock().await;
+        map.insert(installation_id.to_string(), sup.clone());
+        Ok(sup)
+    }
+
     pub async fn get_by_context(
         &self,
         context_id: &str,
@@ -660,6 +724,32 @@ impl SupervisorManager {
             s.deactivate().await?;
         }
         Ok(())
+    }
+
+    pub async fn drain_and_stop(&self, installation_id: &str) -> Result<(), PluginError> {
+        let sup = {
+            let mut map = self.supervisors.lock().await;
+            map.remove(installation_id)
+        };
+        if let Some(s) = sup {
+            s.drain_and_stop(Duration::from_millis(500)).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn get_status(&self, installation_id: &str) -> String {
+        let map = self.supervisors.lock().await;
+        if let Some(s) = map.get(installation_id) {
+            match s.status() {
+                SupervisorStatus::Ready => "ready".to_string(),
+                SupervisorStatus::Starting => "starting".to_string(),
+                SupervisorStatus::Draining => "draining".to_string(),
+                SupervisorStatus::Stopped => "stopped".to_string(),
+                SupervisorStatus::Failed(e) => format!("failed: {e}"),
+            }
+        } else {
+            "stopped".to_string()
+        }
     }
 
     pub async fn deactivate_all(&self) {

@@ -12,6 +12,7 @@ pending the cross-repository installed-worker sign-off.
 - [D03 implementation plan](../../plans/260920-1603-plugin-platform/phase-03-authorized-api.md)
 - [D03 review](../../plans/reports/code-review-260922-0649-phase-d03-authorized-api-re-review.md)
 - [API Reference](../api-reference.md#trusted-plugin-api-phase-d03)
+- [D05 management and lifecycle](./plugin-platform-d05.md)
 - [System architecture](../system-architecture.md)
 
 ## Boundary and data flow
@@ -147,8 +148,9 @@ No configured grant is default deny. Open validates the epoch and the complete
 requested operation/policy set. Invoke repeats the epoch and grant check for
 its single operation; a previous open decision is never sufficient. The API
 rechecks current grants, while the runner fences context activation and worker
-generation before work starts. Durable management grant/binding replacement
-remains a separate D05 boundary.
+generation before work starts. Durable management grant/binding replacement is
+implemented by the [D05 management boundary](./plugin-platform-d05.md), which
+advances security/registry revisions and invalidates affected contexts.
 
 ## WebSocket connection epoch lifecycle
 

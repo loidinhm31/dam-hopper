@@ -27,6 +27,9 @@ impl PluginRegistryLayout {
     pub fn journal_file(&self, transaction_id: &str) -> PathBuf {
         self.journal_dir().join(format!("{transaction_id}.json"))
     }
+    pub fn lifecycle_journal_file(&self, transaction_id: &str) -> PathBuf {
+        self.journal_dir().join(format!("lifecycle-{transaction_id}.json"))
+    }
 
     pub fn staging_dir(&self) -> PathBuf {
         self.root.join("staging")

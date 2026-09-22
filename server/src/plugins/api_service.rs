@@ -89,6 +89,16 @@ impl PluginApiService {
         }
     }
 
+    pub fn invalidate_caches_and_revoke_all(&self) {
+        *self.cached_plugins.write() = None;
+        self.context_table.revoke_all();
+    }
+
+    pub fn invalidate_installation(&self, installation_id: &str) {
+        *self.cached_plugins.write() = None;
+        self.context_table.revoke_by_installation(installation_id);
+    }
+
     /// List plugins visible to the authenticated actor for a target.
     pub async fn list_plugins(
         &self,

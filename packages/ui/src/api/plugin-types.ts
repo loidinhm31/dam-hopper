@@ -100,3 +100,99 @@ export interface PluginRevokedEvent {
   contextId: string;
   reason: string;
 }
+
+export interface GrantKey {
+  actorSubject: string;
+  installationId: string;
+  configuredProjectTarget: string;
+  allowedOperations: string[];
+  allowCurrentAccountPolicy: boolean;
+}
+
+export interface StageReviewDto {
+  stageId: string;
+  transactionId: string;
+  pluginId: string;
+  version: string;
+  publisher: string;
+  hostVersionRange: string;
+  contracts: {
+    runnerProtocol: string;
+    advisorDomain?: string;
+  };
+  capabilities: string[];
+  entrypoints: {
+    backend: { entry: string };
+    ui?: { entry: string; mode: string };
+  };
+  totalEntries: number;
+  uncompressedBytes: number;
+  archiveSha256: string;
+  securityRevision: number;
+  stageExpiresAt: string;
+}
+
+export interface RollbackPackageSnapshotDto {
+  packageDigest: string;
+  version: string;
+  bindings: Record<string, string>;
+  publishedAt: string;
+}
+
+export interface AdminInstallationDto {
+  installationId: string;
+  pluginId: string;
+  activePackageDigest: string;
+  activeVersion: string;
+  activationGeneration: number;
+  enabled: boolean;
+  bindings: Record<string, string>;
+  grants: GrantKey[];
+  hasUi: boolean;
+  workerStatus: string;
+  previousPackage?: RollbackPackageSnapshotDto;
+  canRollback: boolean;
+  securityRevision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminInstallationListResult {
+  installations: AdminInstallationDto[];
+  securityRevision: number;
+}
+
+export interface ApproveStageRequest {
+  expectedSha256: string;
+  expectedSecurityRevision: number;
+  initialBindings?: Record<string, string>;
+  initialGrants?: GrantKey[];
+}
+
+export interface LifecycleActionRequest {
+  expectedSecurityRevision: number;
+}
+
+export interface ReplaceGrantsRequest {
+  expectedSecurityRevision: number;
+  grants: GrantKey[];
+}
+
+export interface ReplaceBindingsRequest {
+  expectedSecurityRevision: number;
+  bindings: Record<string, string>;
+}
+
+export interface AdminRemoveResult {
+  installationId: string;
+  removed: boolean;
+  cleanedPackages: string[];
+}
+
+export interface PluginLifecycleRevisionEvent {
+  kind: "plugin:lifecycle_revision";
+  installationId: string;
+  activationGeneration: number;
+  securityRevision: number;
+  enabled: boolean;
+}

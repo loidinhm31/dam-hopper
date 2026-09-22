@@ -233,6 +233,7 @@ mod tests {
                 allowed_operations: vec!["advisor.scan".to_string()],
                 allow_current_account_policy: false,
             }],
+            previous_package: None,
             created_at: "2026-09-22T00:00:00Z".to_string(),
             updated_at: "2026-09-22T00:00:00Z".to_string(),
         }

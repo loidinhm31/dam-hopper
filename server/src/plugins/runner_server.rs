@@ -7,13 +7,15 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
 use tokio::time::timeout;
 
+use super::admin::*;
 use super::contract::budgets::HANDSHAKE_TIMEOUT_SECS;
 use super::contract::{
     ContextCloseParams, ContextOpenParams, PluginActivateParams, PluginActivateResult,
     PluginDeactivateParams, PluginDeactivateResult, PluginInvokeParams, PluginListParams,
     PluginListResult, PluginReadUiParams, RequestCancelParams, RunnerHelloParams,
-    RunnerHelloResult, PUBLIC_RUNNER_METHODS, RUNNER_PROTOCOL_VERSION,
+    RunnerHelloResult, ADMIN_RUNNER_METHODS, PUBLIC_RUNNER_METHODS, RUNNER_PROTOCOL_VERSION,
 };
+use super::lifecycle::LifecycleCoordinator;
 use super::error::PluginError;
 use super::framing::{
     build_json_rpc_error, build_json_rpc_response, read_frame_async, validate_json_rpc_message,
@@ -33,6 +35,7 @@ pub struct RunnerServer {
     pub config: RunnerServerConfig,
     pub registry: Arc<PluginRegistry>,
     pub supervisor_manager: Arc<SupervisorManager>,
+    pub lifecycle_coordinator: Arc<LifecycleCoordinator>,
 }
 
 impl RunnerServer {
@@ -41,11 +44,21 @@ impl RunnerServer {
         registry: Arc<PluginRegistry>,
         supervisor_manager: Arc<SupervisorManager>,
     ) -> Self {
+        let lifecycle_coordinator = Arc::new(LifecycleCoordinator::new(
+            registry.clone(),
+            supervisor_manager.clone(),
+        ));
         Self {
             config,
             registry,
             supervisor_manager,
+            lifecycle_coordinator,
         }
+    }
+
+    pub fn with_lifecycle_coordinator(mut self, lc: Arc<LifecycleCoordinator>) -> Self {
+        self.lifecycle_coordinator = lc;
+        self
     }
 
     pub async fn run(&self, mut shutdown_rx: watch::Receiver<bool>) -> Result<(), PluginError> {
@@ -83,8 +96,9 @@ impl RunnerServer {
                             }
                             let reg = self.registry.clone();
                             let sup_mgr = self.supervisor_manager.clone();
+                            let lc = self.lifecycle_coordinator.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(stream, reg, sup_mgr).await {
+                                if let Err(e) = handle_connection(stream, reg, sup_mgr, lc).await {
                                     tracing::debug!(error = %e, "Connection closed");
                                 }
                             });
@@ -201,6 +215,7 @@ async fn handle_connection(
     stream: UnixStream,
     registry: Arc<PluginRegistry>,
     supervisor_manager: Arc<SupervisorManager>,
+    lifecycle_coordinator: Arc<LifecycleCoordinator>,
 ) -> Result<(), PluginError> {
     let (mut reader, writer) = stream.into_split();
     let writer = Arc::new(tokio::sync::Mutex::new(writer));
@@ -312,10 +327,13 @@ async fn handle_connection(
 
         let reg = registry.clone();
         let sup_mgr = supervisor_manager.clone();
+        let lc = lifecycle_coordinator.clone();
         let w_clone = writer.clone();
 
         tokio::spawn(async move {
-            if !PUBLIC_RUNNER_METHODS.contains(&req_method.as_str()) {
+            if !PUBLIC_RUNNER_METHODS.contains(&req_method.as_str())
+                && !ADMIN_RUNNER_METHODS.contains(&req_method.as_str())
+            {
                 let err_json = build_json_rpc_error(
                     &req_id,
                     -32601,
@@ -328,13 +346,18 @@ async fn handle_connection(
             }
 
             let dispatch_result =
-                dispatch_method(&req_id, &req_method, params_val, &reg, &sup_mgr).await;
-
+                dispatch_method(&req_id, &req_method, params_val, &reg, &sup_mgr, &lc).await;
             let resp_payload = match dispatch_result {
                 Ok(res_val) => build_json_rpc_response(&req_id, res_val),
-                Err(err) => build_json_rpc_error(&req_id, -32603, &err.to_string(), None),
+                Err(err) => build_json_rpc_error(
+                    &req_id,
+                    -32603,
+                    &err.message,
+                    Some(serde_json::json!({
+                        "pluginErrorCode": format!("{:?}", err.code),
+                    })),
+                ),
             };
-
             let mut w = w_clone.lock().await;
             let _ = write_frame_async(&mut *w, &serde_json::to_vec(&resp_payload).unwrap()).await;
         });
@@ -349,6 +372,7 @@ async fn dispatch_method(
     params: serde_json::Value,
     registry: &Arc<PluginRegistry>,
     supervisor_manager: &Arc<SupervisorManager>,
+    lifecycle_coordinator: &Arc<LifecycleCoordinator>,
 ) -> Result<serde_json::Value, PluginError> {
     match method {
         "runner.hello" => {
@@ -439,6 +463,161 @@ async fn dispatch_method(
                 PluginError::invalid_input(format!("Invalid request.cancel params: {e}"))
             })?;
             let res = supervisor_manager.cancel_request(params).await;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.stage.begin" => {
+            let params: StageBeginParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.stage.begin params: {e}"))
+            })?;
+            let res = registry.stage_begin(
+                &params.actor_subject,
+                &params.expected_sha256,
+                params.total_bytes,
+            )?;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.stage.chunk" => {
+            let params: StageChunkParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.stage.chunk params: {e}"))
+            })?;
+            use base64::Engine;
+            let chunk_bytes = base64::engine::general_purpose::STANDARD
+                .decode(&params.chunk_base64)
+                .map_err(|e| {
+                    PluginError::invalid_input(format!("Invalid base64 in stage chunk: {e}"))
+                })?;
+            let bytes_written = registry.stage_chunk(
+                &params.actor_subject,
+                &params.stage_id,
+                params.sequence,
+                &chunk_bytes,
+            )?;
+            Ok(serde_json::to_value(StageChunkResult { bytes_written }).unwrap())
+        }
+        "management.stage.finish" => {
+            let params: StageFinishParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.stage.finish params: {e}"))
+            })?;
+            let res = registry.stage_finish(&params.actor_subject, &params.stage_id)?;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.approve" => {
+            let params: ApproveStageParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.approve params: {e}"))
+            })?;
+            let res = lifecycle_coordinator
+                .approve_and_install_stage(
+                    &params.actor_subject,
+                    &params.stage_id,
+                    &params.expected_sha256,
+                    params.expected_security_revision,
+                    params.initial_bindings,
+                    params.initial_grants,
+                )
+                .await?;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.rollback" => {
+            let params: RollbackParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.rollback params: {e}"))
+            })?;
+            let res = lifecycle_coordinator
+                .rollback(
+                    &params.actor_subject,
+                    &params.installation_id,
+                    params.expected_security_revision,
+                )
+                .await?;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.disable" => {
+            let params: DisableParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.disable params: {e}"))
+            })?;
+            let res = lifecycle_coordinator
+                .disable(
+                    &params.actor_subject,
+                    &params.installation_id,
+                    params.expected_security_revision,
+                )
+                .await?;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.enable" => {
+            let params: EnableParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.enable params: {e}"))
+            })?;
+            let res = lifecycle_coordinator
+                .enable(
+                    &params.actor_subject,
+                    &params.installation_id,
+                    params.expected_security_revision,
+                )
+                .await?;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.remove" => {
+            let params: RemoveParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.remove params: {e}"))
+            })?;
+            let res = lifecycle_coordinator
+                .remove(
+                    &params.actor_subject,
+                    &params.installation_id,
+                    params.expected_security_revision,
+                )
+                .await?;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.grants.replace" => {
+            let params: ReplaceGrantsParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.grants.replace params: {e}"))
+            })?;
+            let res = lifecycle_coordinator
+                .replace_grants(
+                    &params.actor_subject,
+                    &params.installation_id,
+                    params.expected_security_revision,
+                    params.grants,
+                )
+                .await?;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.bindings.replace" => {
+            let params: ReplaceBindingsParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.bindings.replace params: {e}"))
+            })?;
+            let res = lifecycle_coordinator
+                .replace_bindings(
+                    &params.actor_subject,
+                    &params.installation_id,
+                    params.expected_security_revision,
+                    params.bindings,
+                )
+                .await?;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.installations.list" => {
+            let params: AdminListParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.installations.list params: {e}"))
+            })?;
+            let res = lifecycle_coordinator
+                .list_installations(&params.actor_subject)
+                .await?;
+            let state = registry.read_state()?;
+            Ok(serde_json::to_value(AdminInstallationListResult {
+                installations: res,
+                security_revision: state.security_revision,
+            })
+            .unwrap())
+        }
+        "management.installations.get" => {
+            let params: AdminGetParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.installations.get params: {e}"))
+            })?;
+            let res = lifecycle_coordinator
+                .get_installation(&params.actor_subject, &params.installation_id)
+                .await?;
             Ok(serde_json::to_value(res).unwrap())
         }
         _ => Err(PluginError::invalid_input(format!(

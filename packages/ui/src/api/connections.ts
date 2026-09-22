@@ -591,6 +591,24 @@ export function getApi(owner: ConnectionRef): ApiClient {
   return entry.api;
 }
 
+/**
+ * Safely return the ApiClient for a given profile, or active profile if omitted.
+ * Returns null if disconnected or unavailable.
+ */
+export function getApiClientForProfile(
+  profileId?: ProfileId | null,
+): ApiClient | null {
+  const targetId = profileId || getActiveProfileId();
+  if (!targetId) return null;
+  const snap = getConnectionSnapshot(targetId);
+  if (!snap || snap.status !== "connected") return null;
+  try {
+    return getApi(snap.owner);
+  } catch {
+    return null;
+  }
+}
+
 /** Returns the in-memory random UUIDv4 mediaClientId bound to this ConnectionRef. */
 export function getMediaClientId(owner: ConnectionRef): string {
   const key = connectionKey(owner);

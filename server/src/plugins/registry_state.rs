@@ -51,6 +51,48 @@ impl RegisteredPackageRecord {
         Ok(())
     }
 }
+/// Snapshot of a previously active package pair for non-security rollback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RollbackPackageSnapshot {
+    pub package_digest: String,
+    pub version: String,
+    pub bindings: BTreeMap<String, String>,
+    pub published_at: String,
+}
+
+impl RollbackPackageSnapshot {
+    pub fn validate(&self) -> Result<(), PluginError> {
+        if !SHA256_REGEX.is_match(&self.package_digest) {
+            return Err(PluginError::invalid_input(format!(
+                "Invalid package digest in rollback snapshot: '{}'",
+                self.package_digest
+            )));
+        }
+        if semver::Version::parse(&self.version).is_err() {
+            return Err(PluginError::invalid_input(format!(
+                "Invalid version in rollback snapshot: '{}'",
+                self.version
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Current security-authoritative state for an installation.
+///
+/// Under Requirement 12 & 13:
+/// "Never restore revoked actor/source grants, replaced bindings, disabled intent,
+/// admin membership or old auth/security revisions. Persisted current security intent
+/// wins even when activation failure races a grant revoke or disable."
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityIntent {
+    pub enabled: bool,
+    pub grants: Vec<GrantKey>,
+    pub bindings: BTreeMap<String, String>,
+    pub security_revision: u64,
+}
 
 /// Strict installation record representing an active or configured plugin instance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,10 +106,11 @@ pub struct InstallationRecord {
     pub enabled: bool,
     pub bindings: BTreeMap<String, String>,
     pub grants: Vec<GrantKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_package: Option<RollbackPackageSnapshot>,
     pub created_at: String,
     pub updated_at: String,
 }
-
 impl InstallationRecord {
     pub fn validate(&self) -> Result<(), PluginError> {
         if self.installation_id.trim().is_empty() {
@@ -98,7 +141,19 @@ impl InstallationRecord {
                 "activation_generation must be at least 1",
             ));
         }
+        if let Some(prev) = &self.previous_package {
+            prev.validate()?;
+        }
         Ok(())
+    }
+
+    pub fn security_intent(&self, security_revision: u64) -> SecurityIntent {
+        SecurityIntent {
+            enabled: self.enabled,
+            grants: self.grants.clone(),
+            bindings: self.bindings.clone(),
+            security_revision,
+        }
     }
 }
 
