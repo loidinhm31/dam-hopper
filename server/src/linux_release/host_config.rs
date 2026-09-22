@@ -67,6 +67,12 @@ pub struct HostConfig {
     /// Dedicated system user for the API service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_user: Option<String>,
+    /// Dedicated system user for the owner plugin runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_owner_user: Option<String>,
+    /// Admin subjects permitted to manage plugins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_admin_subjects: Vec<String>,
 }
 
 impl HostConfig {
@@ -77,12 +83,25 @@ impl HostConfig {
             role,
             allowed_web_origins: validated_origins,
             service_user: None,
+            plugin_owner_user: None,
+            plugin_admin_subjects: Vec::new(),
         })
     }
 
     /// Set service user for this host config.
     pub fn with_service_user(mut self, service_user: Option<String>) -> Self {
         self.service_user = service_user;
+        self
+    }
+
+    /// Set plugin configuration for this host config.
+    pub fn with_plugin_config(
+        mut self,
+        plugin_owner_user: Option<String>,
+        plugin_admin_subjects: Vec<String>,
+    ) -> Self {
+        self.plugin_owner_user = plugin_owner_user;
+        self.plugin_admin_subjects = plugin_admin_subjects;
         self
     }
 }

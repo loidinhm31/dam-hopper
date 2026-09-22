@@ -6,7 +6,7 @@ use super::activate_preflight::{
 };
 use super::constants::{
     ALL_SERVICE_UNITS, API_SERVICE_UNIT, HELPER_SERVICE_UNIT, RECOVERY_SERVICE_UNIT,
-    WEB_SERVICE_UNIT,
+    RUNNER_SERVICE_UNIT, RUNNER_TMPFILES_CONF, WEB_SERVICE_UNIT,
 };
 use super::durable_fs::{atomic_symlink, copy_file_durable};
 use super::error::ReleaseError;
@@ -86,6 +86,14 @@ pub async fn execute_activation_locked_with_args(
                 web_unit_sha256: active.web_unit_sha256.clone(),
                 host_config_sha256: active.host_config_sha256.clone(),
                 helper_unit_sha256: active.helper_unit_sha256.clone(),
+                runner_unit_sha256: active.runner_unit_sha256.clone(),
+                runner_tmpfiles_sha256: active.runner_tmpfiles_sha256.clone(),
+                plugin_owner_user: active.plugin_owner_user.clone(),
+                plugin_owner_uid: active.plugin_owner_uid,
+                plugin_admin_config_sha256: active.plugin_admin_config_sha256.clone(),
+                plugin_runtime_node_version: active.plugin_runtime_node_version.clone(),
+                plugin_runtime_node_sha256: active.plugin_runtime_node_sha256.clone(),
+                plugin_platform_enabled: active.plugin_platform_enabled,
             };
             if active_candidate.tag == super::legacy_format2::LEGACY_FORMAT2_TAG {
                 let active_record = active.clone();
@@ -424,11 +432,18 @@ async fn execute_activation_pipeline(
             });
         }
         match entry.file_name().to_string_lossy().as_ref() {
-            API_SERVICE_UNIT | WEB_SERVICE_UNIT | RECOVERY_SERVICE_UNIT | HELPER_SERVICE_UNIT => {
+            API_SERVICE_UNIT
+            | WEB_SERVICE_UNIT
+            | RECOVERY_SERVICE_UNIT
+            | HELPER_SERVICE_UNIT
+            | RUNNER_SERVICE_UNIT => {
                 install_unit_file(&path, &layout.systemd_unit_dir)?;
             }
             "dam-hopper-web.conf" if candidate.role.includes_web() => {
                 copy_file_durable(&path, &layout.sysusers_conf_path(), Some(0o644))?;
+            }
+            RUNNER_TMPFILES_CONF if candidate.role.includes_server() => {
+                copy_file_durable(&path, &layout.runner_tmpfiles_conf_path(), Some(0o644))?;
             }
             name => {
                 return Err(ReleaseError::InvalidBundle {
@@ -442,6 +457,10 @@ async fn execute_activation_pipeline(
     if candidate.role.includes_web() {
         systemd_sysusers(&layout.sysusers_conf_path(), None)?;
         verify_web_sysuser_account(super::constants::WEB_SERVICE_IDENTITY)?;
+    }
+
+    if candidate.role.includes_server() && layout.runner_tmpfiles_conf_path().exists() {
+        let _ = super::systemd::systemd_tmpfiles_create(&layout.runner_tmpfiles_conf_path(), None);
     }
 
     match fs::symlink_metadata(&layout.host_config_json_path()) {
@@ -549,6 +568,14 @@ async fn execute_activation_pipeline(
                 "idle-suspend helper service startup failed (continuing API startup): {e}"
             );
         }
+        let runner_unit_installed = layout.systemd_unit_dir.join(RUNNER_SERVICE_UNIT).exists();
+        if runner_unit_installed {
+            if let Err(e) = systemctl_start(RUNNER_SERVICE_UNIT) {
+                tracing::warn!(
+                    "plugin runner service startup failed (continuing API startup): {e}"
+                );
+            }
+        }
         provision_and_start_api(
             layout,
             &layout.systemd_unit_dir.join(API_SERVICE_UNIT),
@@ -578,9 +605,16 @@ async fn execute_activation_pipeline(
         if let Err(e) = systemctl_enable(HELPER_SERVICE_UNIT) {
             tracing::warn!("idle-suspend helper service enable failed: {e}");
         }
+        let runner_unit_installed = layout.systemd_unit_dir.join(RUNNER_SERVICE_UNIT).exists();
+        if runner_unit_installed {
+            if let Err(e) = systemctl_enable(RUNNER_SERVICE_UNIT) {
+                tracing::warn!("plugin runner service enable failed: {e}");
+            }
+        }
         systemctl_enable(API_SERVICE_UNIT)?;
     } else {
         let _ = disable_if_enabled(HELPER_SERVICE_UNIT);
+        let _ = disable_if_enabled(RUNNER_SERVICE_UNIT);
         disable_if_enabled(API_SERVICE_UNIT)?;
     }
     systemctl_enable(RECOVERY_SERVICE_UNIT)?;
@@ -614,6 +648,14 @@ async fn execute_activation_pipeline(
             web_unit_sha256: None,
             host_config_sha256: None,
             helper_unit_sha256: None,
+            runner_unit_sha256: None,
+            runner_tmpfiles_sha256: None,
+            plugin_owner_user: None,
+            plugin_owner_uid: None,
+            plugin_admin_config_sha256: None,
+            plugin_runtime_node_version: None,
+            plugin_runtime_node_sha256: None,
+            plugin_platform_enabled: None,
         });
     } else {
         state.previous = state.active.take();
@@ -638,6 +680,14 @@ async fn execute_activation_pipeline(
         web_unit_sha256: candidate.web_unit_sha256.clone(),
         host_config_sha256: candidate.host_config_sha256.clone(),
         helper_unit_sha256: candidate.helper_unit_sha256.clone(),
+        runner_unit_sha256: candidate.runner_unit_sha256.clone(),
+        runner_tmpfiles_sha256: candidate.runner_tmpfiles_sha256.clone(),
+        plugin_owner_user: candidate.plugin_owner_user.clone(),
+        plugin_owner_uid: candidate.plugin_owner_uid,
+        plugin_admin_config_sha256: candidate.plugin_admin_config_sha256.clone(),
+        plugin_runtime_node_version: candidate.plugin_runtime_node_version.clone(),
+        plugin_runtime_node_sha256: candidate.plugin_runtime_node_sha256.clone(),
+        plugin_platform_enabled: candidate.plugin_platform_enabled,
     });
     state.pending = None;
     state.transaction = None;

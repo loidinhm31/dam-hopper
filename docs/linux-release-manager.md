@@ -1,6 +1,9 @@
-# Linux Release Manager (Manifest v2; manager state v1)
+# Linux Release Manager (Manifest v2; manager state v2)
 
-Status: The Manifest v2 hard cutover and manager-state v1 contract are current.
+Status: Manifest v2 and manager-state v2 are current. Phase D06 adds the
+owner-runner release assets, explicit plugin identities, tmpfiles provisioning,
+matched host/plugin rollback, recovery, and LAN qualification.
+
 The manager provides unprivileged acquisition, root-only staging, durable
 activation, exact health gating, rollback, crash recovery, and the one-time
 format-2 migration from the retired checkout runner.
@@ -39,6 +42,11 @@ Acquisition and installation have intentionally different privilege boundaries:
   authority. The manager rejects root and requires `Group=` to be the user's
   primary group; it does not infer identity from the manifest, host selection,
   `SUDO_USER`, or a username-as-group fallback.
+Plugin deployment is explicit: `--plugin-owner-user USER` selects the dedicated
+non-root runner account and repeatable `--plugin-admin-subject SUBJECT` records
+the subjects allowed to manage plugins. The owner must exist, have a valid
+non-root primary group and safe home, and differ from the API/web identities.
+On upgrades and role changes, omitted plugin arguments inherit `/etc/dam-hopper/host.toml`.
 
 The one-time format-2 migration is part of this manager. It accepts only the
 verified legacy layout described in [Linux systemd](./linux-systemd.md), stages
@@ -157,12 +165,12 @@ and stopped helper units before restarting the API.
 
 The published `dam-hopper-install.sh` is a non-root wrapper around this
 manager. It accepts `--version vX.Y.Z` or `--latest`, requires
-`--role server|web|both`, and optionally accepts repeated `--allow-web-origin`
-and `--verify-attestation` flags. It downloads the manifest/archive before
-using `sudo`, verifies the archive SHA-256, optionally verifies GitHub
-attestations for those two files, extracts only `bin/dam-hopper-manager`, and
-invokes `install`. It never starts or activates services; successful handoff
-leaves the manager state at `PENDING`.
+`--role server|web|both`, and forwards optional `--service-user`,
+`--plugin-owner-user`, repeatable `--plugin-admin-subject`, and
+`--allow-web-origin` values to `install`; `--verify-attestation` adds
+GitHub checks. It downloads and verifies the manifest/archive before using
+`sudo`, extracts only `bin/dam-hopper-manager`, and leaves state at `PENDING`
+without starting or activating services.
 
 ```bash
 bash dam-hopper-install.sh --version v0.2.0 --role server
@@ -187,9 +195,11 @@ cargo run --manifest-path server/Cargo.toml --bin dam-hopper -- ...
 ```text
 dam-hopper fetch (--version vX.Y.Z | --latest) --output DIR [--verify-attestation]
 sudo dam-hopper install --bundle DIR [--role server|web|both]
-    [--allow-web-origin ORIGIN ...] [--verify-attestation]
+    [--service-user USER] [--plugin-owner-user USER]
+    [--plugin-admin-subject SUBJECT ...] [--allow-web-origin ORIGIN ...]
 sudo dam-hopper role set ROLE --bundle DIR
-    [--allow-web-origin ORIGIN ...] [--verify-attestation]
+    [--service-user USER] [--plugin-owner-user USER]
+    [--plugin-admin-subject SUBJECT ...] [--allow-web-origin ORIGIN ...]
 sudo dam-hopper start
 dam-hopper status [--json]
 sudo dam-hopper rollback
@@ -261,17 +271,14 @@ manifest/archive SHA-256 comparison is mandatory.
 ### Install and role set
 
 ```bash
-# First install: role is required.
+# First install: role and explicit API/runner identities
 sudo dam-hopper install --bundle "$HOME/.cache/dam-hopper/v0.2.0" \
-  --role server
+  --role server \
+  --service-user dam-hopper \
+  --plugin-owner-user advisor-owner \
+  --plugin-admin-subject admin@example.test
 
-# A web role can have more than one exact browser origin.
-sudo dam-hopper install --bundle /var/tmp/dam-hopper-bundle \
-  --role web \
-  --allow-web-origin https://damhopper.example.com \
-  --allow-web-origin http://localhost:4802
-
-# Change the recorded role explicitly.
+# Change the recorded role and retain the configured plugin identities
 sudo dam-hopper role set both --bundle /var/tmp/dam-hopper-bundle
 ```
 
@@ -315,10 +322,11 @@ runtime-config file supplies the exact API origin; it is not packaged.
 ## Helper service lifecycle (Production CLI Phase 03)
 
 `dam-hopper-idle-suspend-helper.service` is a managed `server`-role unit
-alongside `dam-hopper-api.service`. The unit name is the
-`HELPER_SERVICE_UNIT` constant and is included in `ALL_SERVICE_UNITS`.
-Server-role staging renders the helper into the transaction's
-`pending-units-<tx-id>` directory; staging never starts or enables services.
+alongside `dam-hopper-plugin-runner.service` and `dam-hopper-api.service`.
+The helper name is the `HELPER_SERVICE_UNIT` constant; helper and runner are
+included in `ALL_SERVICE_UNITS` when rendered. Server-role staging renders both
+into the transaction's `pending-units-<tx-id>` directory; staging never starts
+or enables services.
 
 ### Start order and non-fatal fallback
 
@@ -327,105 +335,89 @@ committed release and for activation of a pending candidate:
 
 1. When activating a candidate, install the rendered units and run
    `systemctl daemon-reload`.
-2. If the selected role includes `server`, attempt
-   `systemctl start dam-hopper-idle-suspend-helper.service`.
-3. If the helper start fails, log a warning and continue; then start
-   `dam-hopper-api.service`.
+2. If the selected role includes `server`, attempt the helper start; warning
+   on failure and continue.
+3. If the runner unit was rendered, attempt it after the helper; warning on
+   failure and continue, then start `dam-hopper-api.service`.
 4. If the selected role includes `web`, start
    `dam-hopper-web.service`.
 5. Run the API/web health-stability gate. The helper has no HTTP probe target.
 
-The helper start failure is intentionally non-fatal. Hosts without the
-required suspend capability, or hosts where the helper cannot start, retain
-ordinary API operations; idle-suspend requests fail closed until the helper is
-available. Candidate activation still fails if API/web startup or health
-verification fails. After a successful health gate, helper enablement is also
-best-effort and warns without blocking API enablement or the commit.
+Helper and runner start failures are intentionally non-fatal. Hosts without
+required suspend or plugin capability retain ordinary API operations;
+idle-suspend requests or plugin operations fail closed until their companion
+is available. Candidate activation still fails if API/web startup or health
+verification fails. After a successful health gate, helper/runner enablement
+is best-effort and warns without blocking API enablement or the commit.
 
 ### Stop, rollback, and recovery behavior
 
 - Candidate activation first stops every unit in `ALL_SERVICE_UNITS`, including
-  the helper, and backs up the installed unit files before replacing them.
+  helper and the optional runner, and backs up installed units before replacing them.
 - `sudo dam-hopper stop` iterates the same managed-unit list. A stop error is
   printed as a warning for that unit; the command continues stopping other
   units. `--clean` additionally removes the active view/state selected by the
   CLI, but does not broaden cleanup to unrelated paths.
-- Automatic activation rollback stops the helper with the other managed units,
+- Automatic activation rollback stops helper/runner with the other managed units,
   restores transaction-owned unit/configuration backups, reloads systemd, and
-  starts the helper before the API for a restored server role. Helper startup
-  or enablement failure remains a warning; API/web restoration and health
-  verification determine whether recovery succeeds.
+  starts helper, runner, then API for a restored server role. Startup/enablement
+  failures remain warnings; API/web restoration and health verification decide recovery.
 - Manual rollback promotes the recorded `previous` release through the same
   activation transaction. The special imported format-2 path stops, disables,
-  and removes all current managed v1 units, including the helper, before
+  and removes all current managed v1 units, including helper/runner, before
   restoring the legacy unit.
-- Boot recovery disables the helper with the API/web units while a
-  `PENDING` candidate is retained. For an interrupted `QUIESCED`,
-  `SWITCHED`, or `PROBING` transaction it invokes the backup restoration path.
-  For a committed server role it repairs helper enablement; an inconsistent
+- Boot recovery disables helper/runner with the API/web units while a `PENDING`
+  candidate is retained. For an interrupted `QUIESCED`, `SWITCHED`, or `PROBING`
+  transaction it invokes the backup restoration path.
+- For a committed server role it repairs helper/runner enablement; an inconsistent
   state stops and disables every managed unit and returns `RECOVERY_REQUIRED`.
 
 ### Status inspection
 
-`collect_all_services_status()` reports four managed units: API and helper
-under `role: "server"`, web under `role: "web"`, and recovery under
-`role: "recovery"`. Each record contains the systemd active result plus
-best-effort `pid` and `uid` process evidence; missing process evidence does not
-make an inactive or stopped helper an error.
+`collect_all_services_status()` reports five managed units: API, helper, and
+the optional runner under `role: "server"`, web under `role: "web"`, and
+recovery under `role: "recovery"`. Each record contains the systemd active
+result plus best-effort `pid` and `uid` process evidence.
 
 ```bash
-dam-hopper status
 dam-hopper status --json
-systemctl status dam-hopper-idle-suspend-helper.service
-journalctl -u dam-hopper-idle-suspend-helper.service --no-tail
-test -S /run/dam-hopper/idle-suspend.sock
+systemctl status dam-hopper-plugin-runner.service
+journalctl -u dam-hopper-plugin-runner.service --no-tail
+test -S /run/dam-hopper/plugin-runner.sock
 ```
 
-Plaintext status groups the helper with server services. JSON status exposes the
-same records in its `services` array, so automation can distinguish an active
-API from an inactive helper. The socket check is separate evidence: status
-reports unit/process state, not socket protocol readiness. The helper's socket
-is `/run/dam-hopper/idle-suspend.sock`; it may be absent when helper startup
-failed or the selected role does not include `server`.
+Runner socket inspection is separate evidence: status reports unit/process
+state, while the health helper rejects missing, symlinked, non-socket, or
+world-writable endpoints.
 
+### Owner plugin runner and tmpfiles (Phase D06)
 
-### Configured-agent activity policy integration and configuration authority
+For a server or both role, staging renders `dam-hopper-plugin-runner.service`.
+The unit runs the owner account with its primary group/home, passes the
+immutable release root, `/run/dam-hopper/plugin-runner.sock`,
+`@DAM_HOPPER_STATE_DIR@/plugins`, `@NODE_BIN@`, expected API UID, and the
+hardening policy in [Linux systemd](./linux-systemd.md).
+`--plugin-owner-user` is validated before staging: no root/API/web identity,
+missing account, zero primary GID, symlink/restricted/world-writable home.
+Repeatable `--plugin-admin-subject` values persist in
+`/etc/dam-hopper/host.toml`; the D05 runner allowlist still loads from
+`--admin-config`, `DAM_HOPPER_PLUGIN_ADMINS_FILE`, or
+`/etc/dam-hopper/plugin-admins.json`, which must stay synchronized.
 
-The opt-in `agent-activity` idle suspend enhancement interacts cleanly with the release manager without altering unit staging or service lifecycle:
+Server staging writes the rendered `dam-hopper-plugin-runner.conf` beside
+pending units. Activation installs the unit at `/etc/systemd/system/` and the
+tmpfiles file at `/etc/dam-hopper/tmpfiles.d/`, then invokes
+`systemd-tmpfiles --create` for that file:
 
-1. **Canonical Production Configuration**:
-   In systemd deployments, `dam-hopper-api.service` reads its canonical
-   registry from `/var/lib/dam-hopper/dam-hopper.toml`. Operators configure
-   `[server.idle_suspend]` options (`automatic_policy`, `agent_executables`,
-   `quiet_period_seconds`, `wake_after_seconds`) directly in this file. If the
-   canonical file is absent on first start, the runtime gate performs a
-   validated, exact-byte, copy-once migration from
-   `/etc/dam-hopper/dam-hopper.toml`; the legacy file remains untouched.
+```text
+d /run/dam-hopper 0750 @API_USER@ @PLUGIN_SHARED_GROUP@ -
+d /run/dam-hopper/plugin-runner 0750 @ADVISOR_OWNER_USER@ @PLUGIN_SHARED_GROUP@ -
+```
 
-2. **Helper Lifecycle and Audit**:
-   The server timing/manual audit is
-   `/var/lib/dam-hopper/idle-suspend-audit.jsonl` with API-only mode `0600`.
-   The helper service (`dam-hopper-idle-suspend-helper.service`) and socket
-   (`/run/dam-hopper/idle-suspend.sock`) lifecycle remain unchanged. The
-   helper continues to execute privileged host suspend actions, while its
-   separate `/var/log/dam-hopper/idle-suspend-helper.jsonl` audit evolves in
-   place to schema v2 with typed milestones and bounded secure pruning. The
-   activity observer operates entirely within the unprivileged API server
-   process.
-
-3. **Per-Host Qualification Requirement**:
-   Do not assume fleet-wide compatibility from release deployment. Each target host must qualify procfs visibility and `NETLINK_SOCK_DIAG` socket diagnostics under the deployed API service user context before enabling the policy.
-
-4. **Restart vs. Release Rollback Ordering**:
-   - **Policy Change**: Setting `automatic_policy = "agent-activity"` or
-     `"empty-fleet"` in `/var/lib/dam-hopper/dam-hopper.toml` takes effect upon
-     running `sudo systemctl restart dam-hopper-api.service`. It does not
-     require a release-manager transaction or candidate redeployment.
-   - **Policy Rollback**: Reverting from `agent-activity` to `empty-fleet` is
-     an immediate canonical configuration edit and API service restart.
-     `sudo dam-hopper rollback` is reserved for binary release rollbacks,
-     while `./deploy/reset-linux-production.sh` is reserved for complete
-     helper disenrollment.
+Activation starts the helper, then the runner, then the API. Runner start and
+enable failures are warnings so API/web health remains the activation gate;
+web-only roles disable the runner. Runner unit/tmpfiles digests and owner
+metadata are retained in manager state for matched rollback and recovery.
 
 ## Verification and end-to-end coverage
 
@@ -634,14 +626,15 @@ under a temporary root and no host files are changed.
 | `/opt/dam-hopper/.staging/<tx-id>/`                            | Root-private staging workspace (`0700`)   |
 | `/opt/dam-hopper/releases/<tag>/<role>/`                       | Immutable unpacked role view              |
 | `/opt/dam-hopper/current`                                      | Convenience active-view symlink           |
-| `/etc/dam-hopper/host.toml`                                    | Recorded role and exact web origins       |
-| `/etc/dam-hopper/server.env`                                   | Machine-local API environment             |
-| `/etc/dam-hopper/web.env`                                      | Machine-local web environment             |
+| `/etc/dam-hopper/host.toml`                                    | Role, API user, plugin owner/admin inputs |
+| `/etc/dam-hopper/tmpfiles.d/dam-hopper-plugin-runner.conf`     | Rendered runner runtime directories       |
+| `/var/lib/dam-hopper-plugin-runner/`                           | Runner-owned durable registry/state       |
+| `/etc/dam-hopper/server.env` and `/etc/dam-hopper/web.env`      | Machine-local service environments        |
 | `/etc/dam-hopper/dam-hopper.toml`                              | Legacy API registry; read-only migration source |
 | `/var/lib/dam-hopper/`                                         | API-owned state root (`0700`, final API UID/GID) |
 | `/var/lib/dam-hopper/dam-hopper.toml`                          | Canonical API registry (`0600`, final API UID/GID) |
 | `/var/lib/dam-hopper/idle-suspend-audit.jsonl`                  | Server timing/manual audit (`0600`, final API UID/GID) |
-| `/var/lib/dam-hopper-manager/pending-units-<tx_id>/`           | Rendered candidate units/sysusers         |
+| `/var/lib/dam-hopper-manager/pending-units-<tx_id>/`           | Rendered candidate units/sysusers/tmpfiles |
 | `/var/lib/dam-hopper-manager/pending-host-config-<tx_id>.json` | Candidate public config                   |
 | `/var/lib/dam-hopper-manager/state.json`                       | Authoritative state envelope (mode 0600)  |
 | `/var/lib/dam-hopper-manager/backups/<tx-id>/`                 | Transaction-owned restore backups         |
@@ -676,13 +669,18 @@ root install / role set
   └─ fsync and atomically update the `pending` field in state.json
 ```
 
-### Role-aware unit staging (Phase 02)
+### Role-aware unit staging (Phase 02 and D06)
 
-After role projection is extracted, `stage_units.rs` builds the transaction-scoped unit set. Every role receives the recovery unit; a selected role that includes `server` also stages the API unit and `dam-hopper-idle-suspend-helper.service`. The helper is loaded from `systemd/dam-hopper-idle-suspend-helper.service.in` in the role view (or the checked-in template fallback used by local/test staging; a plain `.service` path is accepted as the bundle fallback).
+After role projection is extracted, `stage_units.rs` builds the transaction
+unit set. Every role receives recovery; a `server` role also stages API,
+helper, runner, and `dam-hopper-plugin-runner.conf` assets.
 
-`render_helper_unit` substitutes the allowlisted `@RELEASE_ROOT@` and `@API_GROUP@` values from `UnitRenderContext`, parses the rendered unit, and enforces `validate_helper_unit_policy`. Unknown or unresolved tokens and policy mismatches abort staging. The rendered helper is written under the transaction's `/var/lib/dam-hopper-manager/pending-units-<tx-id>/` directory using the `HELPER_SERVICE_UNIT` constant (`dam-hopper-idle-suspend-helper.service`).
+`render_helper_unit` and `render_runner_unit` substitute allowlisted release,
+identity, registry, Node, and socket tokens, parse the units, and enforce their
+policies. Both rendered files are hashed into pending state.
 
-Production staging requires `systemd-analyze` and runs `systemd-analyze verify` against all staged units before pending state is committed. Generic/local staging runs the same verification when the binary is available.
+Production staging requires `systemd-analyze verify` before pending state is
+committed; generic/local staging verifies when the binary is available.
 
 The archive inspector rejects normalized-path violations, duplicate entries,
 manifest-set mismatches, disallowed runtime/configuration names, links,
@@ -787,13 +785,14 @@ unless `pending` records the staged release.
 
 ## Verification evidence
 
-The historical Phase 02 record covered focused release suites for CLI
-grammar/privilege checks, profile and origin checks, acquisition boundaries,
-archive traversal and role projection, staging, deployment-lock contention, and
-pending-state persistence. Its legacy Fedora/profile cases are historical and
-are not release evidence for the current Linux-only Manifest v2 cutover.
+Run focused release checks from `server/` and the repository root:
 
-Run the focused suites from `server/` when changing this contract. Current
-publication approval additionally requires the bounded migration evidence,
-external attestation verification, authoritative manager inventory, and the
-stable-job hold to be cleared by the release owner.
+```bash
+cargo test -p dam-hopper-server --test linux_release_plugin_runner
+pnpm release:verify && pnpm test:deploy
+```
+
+D06 recorded 173/173 Linux-release tests, 9/9 deployment scripts, owner/rollback
+smokes, and 5/5 synthetic LAN budgets over 10,000 history records. Physical
+separate-machine HTTPS/LAN evidence and exact Node runtime selection remain
+G0/G4 deployment inputs.

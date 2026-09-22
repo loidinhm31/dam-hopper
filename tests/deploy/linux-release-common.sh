@@ -99,32 +99,38 @@ create_mock_release_bundle() {
     local out_dir="$2"
     local ver="${tag#v}"
 
-    mkdir -p "$out_dir/staging/bin" "$out_dir/staging/systemd" "$out_dir/staging/sysusers.d" "$out_dir/staging/web"
+    mkdir -p "$out_dir/staging/bin" "$out_dir/staging/systemd" "$out_dir/staging/sysusers.d" "$out_dir/staging/tmpfiles.d" "$out_dir/staging/web"
 
     local manager_bin="$out_dir/staging/bin/dam-hopper-manager"
     local server_bin="$out_dir/staging/bin/dam-hopper-server"
     local helper_bin="$out_dir/staging/bin/dam-hopper-idle-suspend-helper"
+    local runner_bin="$out_dir/staging/bin/dam-hopper-plugin-runner"
     local web_bin="$out_dir/staging/bin/dam-hopper-web"
 
     printf '#!/bin/sh\necho manager %s\n' "$ver" > "$manager_bin"
     printf '#!/bin/sh\necho server %s\n' "$ver" > "$server_bin"
     printf '#!/bin/sh\necho helper %s\n' "$ver" > "$helper_bin"
+    printf '#!/bin/sh\necho runner %s\n' "$ver" > "$runner_bin"
     printf '#!/bin/sh\necho web %s\n' "$ver" > "$web_bin"
-    chmod 755 "$manager_bin" "$server_bin" "$helper_bin" "$web_bin"
+    chmod 755 "$manager_bin" "$server_bin" "$helper_bin" "$runner_bin" "$web_bin"
 
     cp "$REPO_ROOT/deploy/systemd/dam-hopper-api.service.in" \
         "$out_dir/staging/systemd/dam-hopper-api.service"
     cp "$REPO_ROOT/deploy/systemd/dam-hopper-idle-suspend-helper.service.in" \
         "$out_dir/staging/systemd/dam-hopper-idle-suspend-helper.service"
+    cp "$REPO_ROOT/deploy/systemd/dam-hopper-plugin-runner.service.in" \
+        "$out_dir/staging/systemd/dam-hopper-plugin-runner.service"
     cp "$REPO_ROOT/deploy/systemd/dam-hopper-web.service.in" \
         "$out_dir/staging/systemd/dam-hopper-web.service"
     cp "$REPO_ROOT/deploy/systemd/dam-hopper-recovery.service.in" \
         "$out_dir/staging/systemd/dam-hopper-recovery.service"
     cp "$REPO_ROOT/deploy/sysusers.d/dam-hopper-web.conf" \
         "$out_dir/staging/sysusers.d/dam-hopper-web.conf"
+    cp "$REPO_ROOT/deploy/tmpfiles.d/dam-hopper-plugin-runner.conf.in" \
+        "$out_dir/staging/tmpfiles.d/dam-hopper-plugin-runner.conf"
     printf '<!doctype html><html><body>DamHopper %s</body></html>\n' "$ver" > "$out_dir/staging/web/index.html"
     printf 'MIT License\n' > "$out_dir/staging/LICENSE"
-    chmod 644 "$out_dir/staging/systemd/"* "$out_dir/staging/sysusers.d/"* "$out_dir/staging/web/"* "$out_dir/staging/LICENSE"
+    chmod 644 "$out_dir/staging/systemd/"* "$out_dir/staging/sysusers.d/"* "$out_dir/staging/tmpfiles.d/"* "$out_dir/staging/web/"* "$out_dir/staging/LICENSE"
 
     local archive_name="dam-hopper-${tag}-linux-x86_64-systemd.tar.gz"
     local archive_path="$out_dir/${archive_name}"
@@ -134,34 +140,38 @@ create_mock_release_bundle() {
         bin/dam-hopper-manager \
         bin/dam-hopper-server \
         bin/dam-hopper-idle-suspend-helper \
+        bin/dam-hopper-plugin-runner \
         bin/dam-hopper-web \
         systemd/dam-hopper-api.service \
         systemd/dam-hopper-idle-suspend-helper.service \
+        systemd/dam-hopper-plugin-runner.service \
         systemd/dam-hopper-recovery.service \
         systemd/dam-hopper-web.service \
         sysusers.d/dam-hopper-web.conf \
+        tmpfiles.d/dam-hopper-plugin-runner.conf \
         web \
         LICENSE
-
     local archive_sha
     archive_sha="$(sha256sum "$archive_path" | awk '{print $1}')"
     local archive_size
     archive_size="$(stat -c '%s' "$archive_path" 2>/dev/null || stat -f '%z' "$archive_path")"
 
     # Compute entry SHA256s
-    local mgr_sha srv_sha helper_sha web_sha api_unit_sha helper_unit_sha web_unit_sha recovery_unit_sha sysusers_sha html_sha lic_sha
+    local mgr_sha srv_sha helper_sha runner_sha web_sha api_unit_sha helper_unit_sha runner_unit_sha web_unit_sha recovery_unit_sha sysusers_sha tmpfiles_sha html_sha lic_sha
     mgr_sha="$(sha256sum "$manager_bin" | awk '{print $1}')"
     srv_sha="$(sha256sum "$server_bin" | awk '{print $1}')"
     helper_sha="$(sha256sum "$helper_bin" | awk '{print $1}')"
+    runner_sha="$(sha256sum "$runner_bin" | awk '{print $1}')"
     web_sha="$(sha256sum "$web_bin" | awk '{print $1}')"
     api_unit_sha="$(sha256sum "$out_dir/staging/systemd/dam-hopper-api.service" | awk '{print $1}')"
     helper_unit_sha="$(sha256sum "$out_dir/staging/systemd/dam-hopper-idle-suspend-helper.service" | awk '{print $1}')"
+    runner_unit_sha="$(sha256sum "$out_dir/staging/systemd/dam-hopper-plugin-runner.service" | awk '{print $1}')"
     web_unit_sha="$(sha256sum "$out_dir/staging/systemd/dam-hopper-web.service" | awk '{print $1}')"
     recovery_unit_sha="$(sha256sum "$out_dir/staging/systemd/dam-hopper-recovery.service" | awk '{print $1}')"
     sysusers_sha="$(sha256sum "$out_dir/staging/sysusers.d/dam-hopper-web.conf" | awk '{print $1}')"
+    tmpfiles_sha="$(sha256sum "$out_dir/staging/tmpfiles.d/dam-hopper-plugin-runner.conf" | awk '{print $1}')"
     html_sha="$(sha256sum "$out_dir/staging/web/index.html" | awk '{print $1}')"
     lic_sha="$(sha256sum "$out_dir/staging/LICENSE" | awk '{print $1}')"
-
     local manifest_path="$out_dir/release-manifest.json"
     cat > "$manifest_path" <<EOF
 {
@@ -189,18 +199,22 @@ create_mock_release_bundle() {
     "cli": { "version": "$ver" },
     "api": { "version": "$ver" },
     "webHost": { "version": "$ver" },
-    "webAssets": { "version": "$ver" }
+    "webAssets": { "version": "$ver" },
+    "runner": { "version": "$ver" }
   },
   "inventory": [
     { "path": "bin/dam-hopper-manager", "kind": "file", "roles": ["common"], "mode": 493, "size": $(stat -c '%s' "$manager_bin"), "sha256": "$mgr_sha" },
     { "path": "bin/dam-hopper-server", "kind": "file", "roles": ["server"], "mode": 493, "size": $(stat -c '%s' "$server_bin"), "sha256": "$srv_sha" },
     { "path": "bin/dam-hopper-idle-suspend-helper", "kind": "file", "roles": ["server"], "mode": 493, "size": $(stat -c '%s' "$helper_bin"), "sha256": "$helper_sha" },
+    { "path": "bin/dam-hopper-plugin-runner", "kind": "file", "roles": ["server"], "mode": 493, "size": $(stat -c '%s' "$runner_bin"), "sha256": "$runner_sha" },
     { "path": "bin/dam-hopper-web", "kind": "file", "roles": ["web"], "mode": 493, "size": $(stat -c '%s' "$web_bin"), "sha256": "$web_sha" },
     { "path": "systemd/dam-hopper-api.service", "kind": "file", "roles": ["server"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-api.service"), "sha256": "$api_unit_sha" },
     { "path": "systemd/dam-hopper-idle-suspend-helper.service", "kind": "file", "roles": ["server"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-idle-suspend-helper.service"), "sha256": "$helper_unit_sha" },
+    { "path": "systemd/dam-hopper-plugin-runner.service", "kind": "file", "roles": ["server"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-plugin-runner.service"), "sha256": "$runner_unit_sha" },
     { "path": "systemd/dam-hopper-recovery.service", "kind": "file", "roles": ["common"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-recovery.service"), "sha256": "$recovery_unit_sha" },
     { "path": "systemd/dam-hopper-web.service", "kind": "file", "roles": ["web"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-web.service"), "sha256": "$web_unit_sha" },
     { "path": "sysusers.d/dam-hopper-web.conf", "kind": "file", "roles": ["web"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/sysusers.d/dam-hopper-web.conf"), "sha256": "$sysusers_sha" },
+    { "path": "tmpfiles.d/dam-hopper-plugin-runner.conf", "kind": "file", "roles": ["server"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/tmpfiles.d/dam-hopper-plugin-runner.conf"), "sha256": "$tmpfiles_sha" },
     { "path": "web", "kind": "dir", "roles": ["web"], "mode": 493 },
     { "path": "web/index.html", "kind": "file", "roles": ["web"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/web/index.html"), "sha256": "$html_sha" },
     { "path": "LICENSE", "kind": "file", "roles": ["common"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/LICENSE"), "sha256": "$lic_sha" }
@@ -218,6 +232,10 @@ create_mock_release_bundle() {
       "bindHost": "0.0.0.0",
       "port": 4802,
       "healthPath": "/__dam-hopper/health"
+    },
+    "runner": {
+      "unitName": "dam-hopper-plugin-runner.service",
+      "socketPath": "/run/dam-hopper/plugin-runner.sock"
     }
   },
   "rollback": {

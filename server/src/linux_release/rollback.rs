@@ -64,6 +64,14 @@ fn release_to_candidate(r: &ReleaseRecord) -> PendingCandidateRecord {
         web_unit_sha256: r.web_unit_sha256.clone(),
         host_config_sha256: r.host_config_sha256.clone(),
         helper_unit_sha256: r.helper_unit_sha256.clone(),
+        runner_unit_sha256: r.runner_unit_sha256.clone(),
+        runner_tmpfiles_sha256: r.runner_tmpfiles_sha256.clone(),
+        plugin_owner_user: r.plugin_owner_user.clone(),
+        plugin_owner_uid: r.plugin_owner_uid,
+        plugin_admin_config_sha256: r.plugin_admin_config_sha256.clone(),
+        plugin_runtime_node_version: r.plugin_runtime_node_version.clone(),
+        plugin_runtime_node_sha256: r.plugin_runtime_node_sha256.clone(),
+        plugin_platform_enabled: r.plugin_platform_enabled,
     }
 }
 fn stage_previous_release_candidate(
@@ -163,6 +171,14 @@ fn stage_previous_release_candidate(
         web_unit_sha256,
         host_config_sha256: Some(host_config_sha256),
         helper_unit_sha256,
+        runner_unit_sha256: release.runner_unit_sha256.clone(),
+        runner_tmpfiles_sha256: release.runner_tmpfiles_sha256.clone(),
+        plugin_owner_user: release.plugin_owner_user.clone(),
+        plugin_owner_uid: release.plugin_owner_uid,
+        plugin_admin_config_sha256: release.plugin_admin_config_sha256.clone(),
+        plugin_runtime_node_version: release.plugin_runtime_node_version.clone(),
+        plugin_runtime_node_sha256: release.plugin_runtime_node_sha256.clone(),
+        plugin_platform_enabled: release.plugin_platform_enabled,
     })
 }
 

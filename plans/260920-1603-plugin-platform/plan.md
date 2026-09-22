@@ -1,13 +1,13 @@
 ---
 title: "DamHopper trusted plugin platform"
 description: "Add a generic owner-account plugin host, isolated UI, lifecycle management, and Linux/LAN qualification for the evcrate replacement."
-status: in-progress
+status: completed
 priority: P1
 effort: unestimated
 branch: main
 tags: [feature, backend, frontend, api, auth, infra, security]
 created: 2026-09-20
-updated: 2026-09-22
+updated: 2026-09-23
 ---
 
 # DamHopper trusted plugin platform
@@ -32,7 +32,7 @@ Current standalone evcrate remains operational through G4. Final evcrate E05 rem
 | [D03](phase-03-authorized-api.md) | Actor/grant/target contexts over existing REST+WS owner transport | D01/D02 interfaces; E01/E02 → G1 | DONE (2026-09-22; 100%; review approved 9.2/10) |
 | [D04](phase-04-isolated-ui-host.md) | Inert bytes, host CSP, opaque iframe bridge, dynamic route/nav | G1; E03 → G2 | DONE (2026-09-22; implementation 100%; separate LAN G2 deferred to D06/G4) |
 | [D05](phase-05-management-and-lifecycle.md) | Admin install/update/rollback/disable/remove and crash recovery | G1; may overlap D04/E03; E04 → G3 | DONE (2026-09-22; 100%; review approved 9.8/10) |
-| [D06](phase-06-linux-lan-qualification.md) | Release-manager owner deployment and real evcrate LAN/workload proof | G2 + G3; E05 → G4 | Pending |
+| [D06](phase-06-linux-lan-qualification.md) | Release-manager owner deployment and real evcrate LAN/workload proof | G2 + G3; E05 → G4 | DONE (2026-09-23; 100%; review approved 9.3/10) |
 
 G1 and G2 do not wait for lifecycle polish: D01 accepts E02's early immutable package candidate, then D01–D03 + E01–E02 prove a real snapshot summary; D04 + E03 prove all four views. E04 later supplies the production lifecycle artifact for G3. No fixture worker or loader-only milestone is platform completion.
 
@@ -40,9 +40,9 @@ G1 and G2 do not wait for lifecycle polish: D01 accepts E02's early immutable pa
 
 - **G0:** jointly pin D00/E00 candidate versions and digests after actor/grant, exact path identity, schema fixtures, cancellation/isolation experiments, and measured budget review.
 - **G1 (status 2026-09-22):** D03's authorized API contribution is DONE and its real API → owner runner → worker slice is validated by scoped authorization, supervision, integration, and UI transport evidence. Joint G1 remains pending E01/E02 cross-repository sign-off for the installed evcrate worker, wrong-owner/grant denial, cancellation, crash, and source-immutability evidence; G1 is not releasable platform completion.
-- **G2 (status 2026-09-22):** D04 host implementation and local browser qualification (overview/detail with 25 real records) complete; separate LAN browser execution over HTTPS/encrypted LAN is deferred to D06/G4 deployment qualification.
+- **G2 (status 2026-09-22):** D04 host implementation and local browser qualification (overview/detail with 25 real records) complete; physical LAN browser execution remains a joint G4 deployment gate after D06 qualification-harness completion.
 - **G3:** independent host/plugin artifacts update, disable/remove, recover, and restore a matched pair. Current disabled/revoked security intent outranks rollback.
-- **G4:** D06/E05 satisfy all acceptance and workload/deployment evidence. Only then replace the standalone artifact.
+- **G4 (status 2026-09-23):** D06 implementation, local deployment scripts, release verification, and LAN budget harness are complete; joint D06/E05 cross-repository sign-off with physical separate-machine evidence is still required before replacing the standalone artifact.
 
 ## G0 candidate delivery
 
@@ -71,7 +71,7 @@ G1 and G2 do not wait for lifecycle polish: D01 accepts E02's early immutable pa
 
 ## Planning status
 
-D00 contracts, feasibility evidence, and immutable candidate delivery completed 2026-09-21. Phase D01 runner-owned package registry and trust staging is DONE (2026-09-21; 100%): bounded streamed intake, adversarial archive validation/extraction, digest-bound trust approval, durable registry/journal recovery, revision-tagged queries/CAS, and early E02 candidate staging are complete. Phase D02 owner-account runner and worker supervision is DONE (2026-09-21; 100%): strict framed JSON-RPC over authenticated Unix transport, exact handshake/peer validation, fixed Node worker launch, one-worker-per-installation supervision, multiplexed cancellation, deadline/process-group escalation, generation-fenced context routing, durable restart exhaustion, and the hardened systemd owner boundary are complete. Phase D03 authorized plugin API and connection-bound contexts is DONE (2026-09-22; 100%; review approved 9.2/10): authenticated actor/epoch binding, explicit grant and target checks, context/request ceilings, reauthorization on invoke, selective revocation, sanitized errors, owner-bound UI transport, and the real G1 API-to-owner-worker slice are complete. Scoped D03 validation passed 7/7 authorization, 6/6 supervision, 3/3 API integration, 1,845/1,845 UI tests, and a clean UI build. Phase D04 isolated plugin UI host and dynamic navigation is DONE (2026-09-22; 100%; separate LAN G2 qualification deferred to D06/G4). Phase D05 management API and transactional plugin lifecycle is DONE (2026-09-22; 100%; review approved 9.8/10): root-seeded empty-deny administration, bearer-only streaming management, durable journaled lifecycle transactions, matched-generation publication, security-intent-safe rollback, failure recovery, retention, and Settings management are complete. D06 remains pending; joint G1, G2, G3 and G4 gates remain open for cross-repository and deployment qualification.
+D00 contracts, feasibility evidence, and immutable candidate delivery completed 2026-09-21. Phase D01 runner-owned package registry and trust staging is DONE (2026-09-21; 100%): bounded streamed intake, adversarial archive validation/extraction, digest-bound trust approval, durable registry/journal recovery, revision-tagged queries/CAS, and early E02 candidate staging are complete. Phase D02 owner-account runner and worker supervision is DONE (2026-09-21; 100%): strict framed JSON-RPC over authenticated Unix transport, exact handshake/peer validation, fixed Node worker launch, one-worker-per-installation supervision, multiplexed cancellation, deadline/process-group escalation, generation-fenced context routing, durable restart exhaustion, and the hardened systemd owner boundary are complete. Phase D03 authorized plugin API and connection-bound contexts is DONE (2026-09-22; 100%; review approved 9.2/10): authenticated actor/epoch binding, explicit grant and target checks, context/request ceilings, reauthorization on invoke, selective revocation, sanitized errors, owner-bound UI transport, and the real G1 API-to-owner-worker slice are complete. Scoped D03 validation passed 7/7 authorization, 6/6 supervision, 3/3 API integration, 1,845/1,845 UI tests, and a clean UI build. Phase D04 isolated plugin UI host and dynamic navigation is DONE (2026-09-22; 100%; separate LAN G2 qualification deferred to D06/G4). Phase D05 management API and transactional plugin lifecycle is DONE (2026-09-22; 100%; review approved 9.8/10): root-seeded empty-deny administration, bearer-only streaming management, durable journaled lifecycle transactions, matched-generation publication, security-intent-safe rollback, failure recovery, retention, and Settings management are complete. Phase D06 Linux release integration and LAN qualification is DONE (2026-09-23; 100%; review approved 9.3/10): owner runner and systemd units, tmpfiles runtime directory provisioning, account security validation, manifest/state schema v2 migrations, independent rollback preserving security intent, deployment qualification scripts, and LAN budget harness are complete. Scoped D06 validation passed 173 Linux-release tests, 9/9 deployment scripts, release verification, owner/rollback smokes, and 5/5 synthetic LAN budget evaluations over a 10,000-record workload; physical separate-machine LAN evidence and exact Node runtime pin remain deployment/G0/G4 inputs. Joint G1, G2, G3 and G4 gates remain open for cross-repository and deployment qualification with evcrate.
 
 ## Unresolved questions
 

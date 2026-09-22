@@ -6,8 +6,9 @@ use clap::Parser;
 use dam_hopper_server::linux_release::{
     acquire_release, current_euid, execute_activation_with_args, execute_manual_rollback,
     execute_recovery, load_host_config, load_or_init_manager_state, save_host_config,
-    stage_release_bundle, verify_api_service_account, verify_privileges, Cli, CollectorAdapters,
-    Commands, HostConfig, Layout, ReleaseError, RoleCommands, TargetRole, ALL_SERVICE_UNITS,
+    stage_release_bundle_with_options, verify_api_service_account,
+    verify_plugin_owner_account, verify_privileges, Cli, CollectorAdapters, Commands, HostConfig,
+    Layout, ReleaseError, RoleCommands, TargetRole, ALL_SERVICE_UNITS, DEFAULT_API_SERVICE_USER,
     run_diagnose,
 };
 #[cfg(target_os = "linux")]
@@ -50,6 +51,16 @@ async fn main() -> ExitCode {
                 eprintln!("host platform verification failed: {e}");
                 return ExitCode::from(1);
             }
+            let effective_api_user = args
+                .service_user
+                .as_deref()
+                .unwrap_or(DEFAULT_API_SERVICE_USER);
+            if let Some(owner) = &args.plugin_owner_user {
+                if let Err(e) = verify_plugin_owner_account(owner, Some(effective_api_user)) {
+                    eprintln!("invalid plugin owner user: {e}");
+                    return ExitCode::from(1);
+                }
+            }
             if let Some(user) = &args.service_user {
                 if let Err(e) = verify_api_service_account(user) {
                     eprintln!("invalid service user: {e}");
@@ -67,7 +78,7 @@ async fn main() -> ExitCode {
                 "Installing release bundle from '{}'...",
                 args.bundle.display()
             );
-            match stage_release_bundle(
+            match stage_release_bundle_with_options(
                 &layout,
                 &args.bundle,
                 args.role,
@@ -75,6 +86,8 @@ async fn main() -> ExitCode {
                 args.verify_attestation,
                 false,
                 args.reinstall,
+                args.plugin_owner_user,
+                &args.plugin_admin_subjects,
             ) {
                 Ok(pending) => {
                     println!("Successfully staged candidate release '{}'", pending.tag);
@@ -94,6 +107,16 @@ async fn main() -> ExitCode {
                 if let Err(e) = dam_hopper_server::linux_release::verify_host_platform() {
                     eprintln!("host platform verification failed: {e}");
                     return ExitCode::from(1);
+                }
+                let effective_api_user = args
+                    .service_user
+                    .as_deref()
+                    .unwrap_or(DEFAULT_API_SERVICE_USER);
+                if let Some(owner) = &args.plugin_owner_user {
+                    if let Err(e) = verify_plugin_owner_account(owner, Some(effective_api_user)) {
+                        eprintln!("invalid plugin owner user: {e}");
+                        return ExitCode::from(1);
+                    }
                 }
                 if let Some(user) = &args.service_user {
                     if let Err(e) = verify_api_service_account(user) {
@@ -115,7 +138,7 @@ async fn main() -> ExitCode {
                     args.role,
                     args.bundle.display()
                 );
-                match stage_release_bundle(
+                match stage_release_bundle_with_options(
                     &layout,
                     &args.bundle,
                     Some(args.role),
@@ -123,6 +146,8 @@ async fn main() -> ExitCode {
                     args.verify_attestation,
                     true,
                     args.reinstall,
+                    args.plugin_owner_user,
+                    &args.plugin_admin_subjects,
                 ) {
                     Ok(pending) => {
                         println!("Successfully staged candidate role view '{}'", pending.role);

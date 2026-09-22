@@ -21,11 +21,7 @@ Environment=RUST_LOG=info
 Environment=RUST_ENV=production
 
 # Startup command with pinned Node and socket path
-ExecStart=@RELEASE_ROOT@/bin/dam-hopper-plugin-runner \
-    --socket-path /run/dam-hopper/plugin-runner.sock \
-    --registry-dir @DAM_HOPPER_STATE_DIR@/plugins \
-    --node-bin @NODE_BIN@ \
-    --expected-api-uid @API_UID@
+ExecStart=@RELEASE_ROOT@/bin/dam-hopper-plugin-runner --socket-path /run/dam-hopper/plugin-runner.sock --registry-dir @DAM_HOPPER_STATE_DIR@/plugins --node-bin @NODE_BIN@ --expected-api-uid @API_UID@
 
 # Process group management and kill mode
 Restart=on-failure

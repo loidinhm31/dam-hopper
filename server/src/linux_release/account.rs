@@ -229,3 +229,113 @@ pub fn resolve_service_user(
         ))
     }
 }
+
+/// Verify that the plugin owner user satisfies security constraints:
+/// - Exists in libc database
+/// - Not root (UID 0)
+/// - Not matching the API service user
+/// - Not matching the web service identity
+/// - Has a valid non-root primary group
+/// - Has a safe, existing, non-root, non-world-writable home directory
+pub fn verify_plugin_owner_account(
+    owner_username: &str,
+    api_username: Option<&str>,
+) -> Result<UserInfo, ReleaseError> {
+    let trimmed = owner_username.trim();
+    if trimmed.is_empty() {
+        return Err(ReleaseError::Config(
+            "plugin owner user cannot be empty".into(),
+        ));
+    }
+
+    if trimmed == "root" {
+        return Err(ReleaseError::Config(
+            "plugin owner user 'root' cannot be root (UID 0)".into(),
+        ));
+    }
+
+    if trimmed == super::constants::WEB_SERVICE_IDENTITY {
+        return Err(ReleaseError::Config(format!(
+            "plugin owner user '{trimmed}' cannot be the web service user ('{}')",
+            super::constants::WEB_SERVICE_IDENTITY
+        )));
+    }
+
+    if let Some(api_user) = api_username {
+        if trimmed == api_user.trim() {
+            return Err(ReleaseError::Config(format!(
+                "plugin owner user '{trimmed}' cannot be the API service user ('{api_user}')"
+            )));
+        }
+    }
+
+    let user = get_user_by_name(trimmed)
+        .ok_or_else(|| ReleaseError::Config(format!("plugin owner user '{trimmed}' does not exist")))?;
+
+    if user.uid == 0 {
+        return Err(ReleaseError::Config(format!(
+            "plugin owner user '{trimmed}' cannot be root (UID 0)"
+        )));
+    }
+
+    if let Some(api_user) = api_username {
+        if let Some(api_info) = get_user_by_name(api_user.trim()) {
+            if user.uid == api_info.uid {
+                return Err(ReleaseError::Config(format!(
+                    "plugin owner user '{trimmed}' cannot share UID {} with API service user '{api_user}'",
+                    user.uid
+                )));
+            }
+        }
+    }
+
+    if user.gid == 0 || get_group_by_gid(user.gid).is_none() {
+        return Err(ReleaseError::Config(format!(
+            "plugin owner user '{trimmed}' has no valid non-root primary group"
+        )));
+    }
+
+    let home_path = std::path::Path::new(&user.home);
+    if !home_path.is_absolute() {
+        return Err(ReleaseError::Config(format!(
+            "plugin owner user '{trimmed}' home directory must be an absolute path, got '{}'",
+            user.home
+        )));
+    }
+
+    let disallowed_homes = ["/", "/root", "/tmp", "/var/tmp", "/dev/null", "/nonexistent"];
+    if disallowed_homes.contains(&user.home.as_str()) {
+        return Err(ReleaseError::Config(format!(
+            "plugin owner user '{trimmed}' has unsafe or restricted home directory '{}'",
+            user.home
+        )));
+    }
+
+    let meta = std::fs::symlink_metadata(home_path).map_err(|e| {
+        ReleaseError::Config(format!(
+            "plugin owner user '{trimmed}' home directory '{}' is inaccessible: {e}",
+            user.home
+        ))
+    })?;
+
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(ReleaseError::Config(format!(
+            "plugin owner user '{trimmed}' home directory '{}' must be a regular directory",
+            user.home
+        )));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode();
+        if mode & 0o002 != 0 {
+            return Err(ReleaseError::Config(format!(
+                "plugin owner user '{trimmed}' home directory '{}' must not be world-writable (mode {:o})",
+                user.home, mode
+            )));
+        }
+    }
+
+    Ok(user)
+}

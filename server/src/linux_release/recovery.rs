@@ -108,6 +108,14 @@ fn ensure_active_runtime_ready(
         web_unit_sha256: active.web_unit_sha256.clone(),
         host_config_sha256: active.host_config_sha256.clone(),
         helper_unit_sha256: active.helper_unit_sha256.clone(),
+        runner_unit_sha256: active.runner_unit_sha256.clone(),
+        runner_tmpfiles_sha256: active.runner_tmpfiles_sha256.clone(),
+        plugin_owner_user: active.plugin_owner_user.clone(),
+        plugin_owner_uid: active.plugin_owner_uid,
+        plugin_admin_config_sha256: active.plugin_admin_config_sha256.clone(),
+        plugin_runtime_node_version: active.plugin_runtime_node_version.clone(),
+        plugin_runtime_node_sha256: active.plugin_runtime_node_sha256.clone(),
+        plugin_platform_enabled: active.plugin_platform_enabled,
     };
     let validation = (|| {
         let allowed_sqlite_pids = match inspect_service_process(API_SERVICE_UNIT)? {
