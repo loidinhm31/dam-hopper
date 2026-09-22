@@ -81,6 +81,58 @@ Clear authentication session.
 
 Response: `{ "ok": true }`
 
+## Trusted Plugin API (Phase D03)
+
+The plugin façade is protected by the normal `/api/*` auth middleware. It
+requires a valid `AuthenticatedActor`; context open/close, invoke, and cancel
+also require a matching live WebSocket connection epoch. Listing uses actor
+visibility only. Every plugin route is denied with `403` (`NoAuthForbidden`)
+when `--no-auth` is active. The full ownership and security design is in
+[Trusted Plugin Platform D03](./architecture/plugin-platform-d03.md).
+
+### Endpoints
+
+| Method and path | Body/query | Result |
+| --- | --- | --- |
+| `GET /api/plugins` | Query: required `project`; optional `worktreePath` | `{ plugins: PluginMetadataItem[] }` visible to actor/target |
+| `POST /api/plugins/contexts/open` | `{ epoch, installationId, target, allowedOperations?, allowCurrentAccountPolicy? }` | `{ contextId, bindingRevision, grantRevision, activationGeneration, expiresAt }` |
+| `POST /api/plugins/contexts/close` | `{ epoch, contextId }` | `{ closed }`; idempotent |
+| `POST /api/plugins/invoke` | `{ epoch, contextId, operation, payload, deadlineMs? }` | `{ result }` |
+| `POST /api/plugins/cancel` | `{ epoch, contextId, requestId }` | `{ outcome }` |
+
+`target` is `{ project, worktreePath? }`; browser `profileId`, connection
+generation, filesystem roots, grant claims, and history hashes are not accepted
+server inputs. The server resolves registered project/worktree targets before
+opening a context. `payload` is bounded opaque JSON; the host does not parse
+plugin-domain evaluation data.
+
+### Authorization and lifecycle
+
+`context.open` checks the authenticated actor, epoch, installation, target, and
+explicit grant. A grant contains `actorSubject`, `installationId`,
+`configuredProjectTarget` (exact project or `*`), `allowedOperations` (explicit
+operations or `*`), and `allowCurrentAccountPolicy`. Missing grants are
+default-deny. `plugin.invoke` repeats the epoch, context ownership, current
+grant, operation, and concurrency checks; opening a context is not a durable
+authorization lease.
+
+The context is idle-expiring (15 minutes), capped at 16 contexts per worker and
+four in-flight operations per context. Worker-wide admission is 16 operations,
+one declared long-running operation, and 10-second ordinary/30-second scan
+deadlines. `request.cancel` is scoped to the same actor/epoch/context/request and
+returns `accepted`, `alreadySettled`, or `unknown`.
+
+The current `invoke` response contains only `{ result }`; it does not return a
+request ID. Callers that need to cancel an in-flight request must retain the
+runner request ID used by their integration path. Public request-ID allocation
+for the REST client remains an open D03 follow-up.
+
+Errors use `{ error, code }` with bounded messages. Current HTTP mapping is:
+`401` unauthorized/invalid epoch, `403` grant denial, `400` invalid input or
+target, `404` missing installation/source, `410` revoked/expired context,
+`429` overload, `504` deadline, `409` cancellation, and `503` worker/runner
+unavailable.
+
 ## Workflow Tracking Service and REST API (Phase 03)
 
 Workflow routes are protected by the normal `/api/*` authentication layer and

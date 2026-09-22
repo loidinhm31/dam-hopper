@@ -21,6 +21,9 @@ pub mod stage;
 pub mod trust;
 pub mod worker_process;
 pub mod worker_supervisor;
+pub mod api_service;
+pub mod authorization;
+pub mod contexts;
 
 pub use contract::*;
 pub use error::*;
@@ -43,3 +46,6 @@ pub use stage::*;
 pub use trust::*;
 pub use worker_process::*;
 pub use worker_supervisor::*;
+pub use api_service::*;
+pub use authorization::*;
+pub use contexts::*;

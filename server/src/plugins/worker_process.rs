@@ -234,7 +234,8 @@ impl WorkerProcess {
                 Ok(worker)
             }
             Ok(Err(e)) => {
-                tracing::error!(pid = worker.pid, error = %e, "Worker handshake rejected");
+                let stderr_dump = worker.stderr_diagnostics().join("\n");
+                tracing::error!(pid = worker.pid, stderr = %stderr_dump, error = %e, "Worker handshake rejected");
                 worker.kill_process_group().await;
                 Err(PluginError::runner_unavailable(format!(
                     "Worker handshake failed: {e}"

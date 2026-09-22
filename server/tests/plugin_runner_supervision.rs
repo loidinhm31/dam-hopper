@@ -56,6 +56,24 @@ function handleMessage(msg) {
         supportedCapabilities: ['advisor.scan']
       }
     });
+  } else if (msg.method === 'context.open') {
+    writeFrame({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: {
+        contextId: msg.params.contextId,
+        bindingRevision: 1,
+        grantRevision: 1,
+        activationGeneration: 1,
+        expiresAt: Math.floor(Date.now() / 1000) + 900
+      }
+    });
+  } else if (msg.method === 'context.close') {
+    writeFrame({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: { closed: true }
+    });
   } else if (msg.method === 'plugin.invoke') {
     if (msg.params.operation === 'snapshot.summary') {
       writeFrame({
@@ -170,6 +188,7 @@ async fn test_real_worker_lifecycle_and_snapshot_summary() {
             api_connection_epoch: 1,
             activation_generation: current_gen,
         })
+        .await
         .unwrap();
 
     assert_eq!(open_res.activation_generation, sup.generation());
@@ -215,6 +234,7 @@ async fn test_real_worker_lifecycle_and_snapshot_summary() {
             context_id: open_res.context_id.clone(),
             reason: None,
         })
+        .await
         .unwrap();
     assert!(close_res.closed);
 
@@ -246,6 +266,7 @@ async fn test_real_worker_cancellation() {
             api_connection_epoch: 1,
             activation_generation: current_gen,
         })
+        .await
         .unwrap();
 
     // Spawn slow invocation in background
@@ -323,6 +344,7 @@ async fn test_real_worker_crash_and_restart_exhaustion() {
             api_connection_epoch: 1,
             activation_generation: current_gen,
         })
+        .await
         .unwrap();
 
     // Trigger crash 1
@@ -352,6 +374,7 @@ async fn test_real_worker_crash_and_restart_exhaustion() {
             api_connection_epoch: 1,
             activation_generation: current_gen2,
         })
+        .await
         .unwrap();
 
     let _ = sup
@@ -380,6 +403,7 @@ async fn test_real_worker_crash_and_restart_exhaustion() {
             api_connection_epoch: 1,
             activation_generation: current_gen3,
         })
+        .await
         .unwrap();
 
     let _ = sup
@@ -605,6 +629,7 @@ async fn test_stale_context_revocation_across_worker_restarts() {
             api_connection_epoch: 1,
             activation_generation: sup.generation(),
         })
+        .await
         .unwrap();
 
     // Deactivate and reactivate (advancing generation)

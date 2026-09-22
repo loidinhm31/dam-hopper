@@ -12,6 +12,42 @@ All messages use JSON with `kind` tag (not legacy `type`). Phase 02 hard-cut fro
 
 **Direction:** Bidirectional (client↔server).
 
+## Plugin connection epoch (Phase D03)
+
+An authenticated `/ws` handshake retains the JWT subject and expiry and issues
+one cryptographically random, non-zero epoch for that socket. The client may
+request the value after connect:
+
+```json
+{ "kind": "plugin:get_epoch", "req_id": 1 }
+```
+
+The server replies on the same socket:
+
+```json
+{
+  "kind": "plugin:epoch",
+  "req_id": 1,
+  "epoch": 739128,
+  "actor": "alice",
+  "expiresAt": 1780000000
+}
+```
+
+The epoch is supplied in the protected plugin REST DTOs documented in the [API
+reference](./api-reference.md#trusted-plugin-api-phase-d03). It is bound to the
+authenticated actor and cannot be moved between sockets, profiles, or client
+connection generations. A `--no-auth` socket reports epoch `0`, but all
+production plugin operations remain denied in that mode.
+
+Socket teardown revokes the epoch and closes its contexts. HTTP logout revokes
+the actor's epochs and contexts; runner reconnect also invalidates local
+contexts so an old context cannot reach a new worker generation. The
+`plugin:revoked` server variant is reserved for bounded revocation notices; D03
+enforces teardown by rejecting subsequent requests and does not claim a push
+notice for every revocation cause. Clients must discard contexts on transport
+generation change or a revoked-context response.
+
 ## Project target context
 
 REST requests that operate on project files, Git state, editor/diff data, or

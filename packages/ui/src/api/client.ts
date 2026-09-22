@@ -59,6 +59,32 @@ export type {
   Owned,
 };
 import type {
+  CancelOutcome,
+  CancelRequest,
+  CloseContextRequest,
+  ContextCloseResult,
+  ContextOpenResult,
+  InvokeRequest,
+  InvokeResponse,
+  ListPluginsResponse,
+  OpenContextRequest,
+  PluginMetadataItem,
+  RequestCancelResult,
+} from "./plugin-types.js";
+export type {
+  CancelOutcome,
+  CancelRequest,
+  CloseContextRequest,
+  ContextCloseResult,
+  ContextOpenResult,
+  InvokeRequest,
+  InvokeResponse,
+  ListPluginsResponse,
+  OpenContextRequest,
+  PluginMetadataItem,
+  RequestCancelResult,
+};
+import type {
   AbandonSessionRequest,
   CreateItemRequest,
   CreateNoteRequest,
@@ -2628,6 +2654,21 @@ export function createApiClient(
     purgeHistory: (req: PurgeHistoryRequest) =>
       transport.invoke<PurgeDto>("workflow:purgeHistory", req),
   },
+    plugins: {
+      list: (target: ServerProjectTarget) => {
+        const query = new URLSearchParams({ project: target.project });
+        if (target.worktreePath) query.set("worktreePath", target.worktreePath);
+        return transport.invoke<ListPluginsResponse>(`plugins:list?${query.toString()}`);
+      },
+      openContext: (req: OpenContextRequest) =>
+        transport.invoke<ContextOpenResult>("plugins:openContext", req),
+      closeContext: (req: CloseContextRequest) =>
+        transport.invoke<ContextCloseResult>("plugins:closeContext", req),
+      invoke: <T = unknown>(req: InvokeRequest) =>
+        transport.invoke<InvokeResponse<T>>("plugins:invoke", req),
+      cancel: (req: CancelRequest) =>
+        transport.invoke<RequestCancelResult>("plugins:cancel", req),
+    },
   };
 }
 
@@ -2805,6 +2846,13 @@ export interface ApiClient {
     createNote: (req: CreateNoteRequest) => Promise<MutationDto<NoteDto>>;
     deleteNote: (id: string, req: DeleteNoteRequest) => Promise<MutationDto<TombstoneDto>>;
     purgeHistory: (req: PurgeHistoryRequest) => Promise<PurgeDto>;
+  };
+  plugins: {
+    list: (target: ServerProjectTarget) => Promise<ListPluginsResponse>;
+    openContext: (req: OpenContextRequest) => Promise<ContextOpenResult>;
+    closeContext: (req: CloseContextRequest) => Promise<ContextCloseResult>;
+    invoke: <T = unknown>(req: InvokeRequest) => Promise<InvokeResponse<T>>;
+    cancel: (req: CancelRequest) => Promise<RequestCancelResult>;
   };
 }
 

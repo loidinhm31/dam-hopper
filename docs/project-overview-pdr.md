@@ -695,9 +695,10 @@ are allowed. E00 must consume these candidates, select an immutable Node
 
 ### PR-023: Trusted plugin owner runner and worker supervision (Phase D02)
 
-**Status:** Core implementation complete 2026-09-21; D03–D06 remain required
-for authorized API integration, lifecycle/rollback, and Linux qualification.
-The detailed interface is [Phase D02 runner architecture](./architecture/plugin-platform-d02.md).
+**Status:** Core implementation complete 2026-09-21; D04–D06 remain required
+for isolated UI integration, lifecycle/rollback, and Linux qualification. The
+detailed interface is [Phase D02 runner architecture](./architecture/plugin-platform-d02.md);
+the delivered authorization boundary is [Phase D03 architecture](./architecture/plugin-platform-d03.md).
 
 **Functional requirements:**
 
@@ -747,8 +748,72 @@ owner/group, expected API UID, runtime directory, absolute pinned Node path,
 owns target-host qualification and cgroup/account policy.
 
 **Unresolved questions:** Owner UID/group, socket group, and immutable Node
-`>=22.19` artifact/path remain G0/D06 deployment inputs. D03 must decide the
-stable JSON-RPC `error.data` mapping for `PluginErrorCode`.
+`>=22.19` artifact/path remain G0/D06 deployment inputs. D03 ships bounded
+REST status/code mapping; a future runner protocol revision may still need to
+standardize `PluginErrorCode` in JSON-RPC `error.data`.
+
+### PR-024: Authorized plugin API and connection-bound contexts (Phase D03)
+
+**Status:** DONE — 2026-09-22 (100%; re-review approved 9.2/10). D03
+completes DamHopper's authenticated API-to-owner-worker authorization slice.
+Joint G1 remains pending E01/E02 cross-repository installed-worker approval;
+this phase is not lifecycle, isolated-UI, or Linux release completion.
+
+**Functional requirements:**
+
+- Mount protected `GET /api/plugins` visibility plus
+  `POST /api/plugins/contexts/open`, `contexts/close`, `invoke`, and `cancel`.
+  Use bounded camelCase DTOs and typed `{ error, code }` failures.
+- Retain `AuthenticatedActor.subject` and JWT expiry for HTTP and WebSocket
+  work. Issue a random epoch per authenticated `/ws` socket and require that
+  actor/epoch pair for every plugin context and request.
+- Deny plugin operations in `--no-auth` mode, including service-level calls
+  that bypass route middleware. Do not let browser profile identity, roots, or
+  client grant claims become server authority.
+- Authorize through an explicit grant tuple:
+  `actorSubject`, `installationId`, `configuredProjectTarget`,
+  `allowedOperations`, and `allowCurrentAccountPolicy`. Missing grants,
+  unmatched targets, and disallowed operations are default-deny; list
+  visibility never substitutes for invoke authorization.
+- Accept only `{ project, worktreePath? }` from the client and resolve it via
+  the registered `WorkspaceTargetResolver`. Missing/pruned/replaced targets
+  fail closed; there is no arbitrary path or implicit main-worktree fallback.
+- Bind each opaque context to actor, epoch, installation, target, operation
+  set, policy flag, grant/binding revisions, activation generation, and idle
+  expiry. Recheck current authority before every invoke.
+- Preserve bounded D02 behavior: 16 contexts/worker, four invokes/context,
+  16 invokes/worker, one declared long-running operation, 15-minute context
+  TTL, 16 MiB generic payloads, 10-second ordinary and 30-second scan
+  deadlines. Cancellation must settle at most once.
+- Bind UI methods to `ConnectionRef`/transport generation. Map plugin channels
+  to the REST routes and discard late messages/results after a socket or profile
+  generation changes.
+
+**Acceptance criteria:**
+
+- [x] Authenticated actor/epoch is retained and revoked on WebSocket teardown;
+      HTTP logout revokes actor epochs and owned contexts.
+- [x] Cross-actor, cross-target, stale-epoch, no-auth, grant, target-resolution,
+      cancellation, worker-crash, and source-immutability paths are covered by
+      focused server integration evidence.
+- [x] Runner reconnect and worker generation changes invalidate stale contexts;
+      close is idempotent and context/invoke ceilings fail closed.
+- [x] UI DTOs, `ApiClient` methods, and `WsTransport` endpoint mappings compile
+      and pass the focused transport suite.
+- [x] Scoped D03 evidence: authorization 7/7, supervision 6/6, API
+      integration 3/3, UI transport 1,845/1,845, and clean UI build.
+
+**Security and operational constraints:** A context is not a durable
+authorization lease. Cookies, bearer tokens, epochs, profile IDs, and browser
+generation never cross into plugin workers or future iframe bridges. Worker
+stderr and source paths are sanitized at the API boundary. Trusted same-identity
+execution remains distinct from a malicious-code sandbox; D04 owns isolated UI
+capabilities, D05 owns management/lifecycle revocation, and D06 owns host
+deployment qualification.
+
+**Unresolved questions:** Whether logout should push an immediate revocation
+notice; whether revoked actor epochs should be eagerly removed and periodically
+swept; and which canonical `EVCRATE_ROOT` lookup standalone packaging uses.
 
 ### PR-011: Workflow Tracking Domain & Relational Persistence (Phase 01)
 

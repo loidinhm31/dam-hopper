@@ -203,46 +203,75 @@ impl InstallationSupervisor {
         Ok(())
     }
 
-    pub fn open_context(
+    pub async fn open_context(
         &self,
         params: ContextOpenParams,
     ) -> Result<ContextOpenResult, PluginError> {
-        let mut inner = self.inner.lock();
-        if !matches!(inner.status, SupervisorStatus::Ready) {
-            return Err(PluginError::runner_unavailable(format!(
-                "Supervisor for installation '{}' is not ready (status: {:?})",
-                self.installation_id, inner.status
-            )));
-        }
+        let (worker, context_id, generation, expires_at_secs) = {
+            let mut inner = self.inner.lock();
+            if !matches!(inner.status, SupervisorStatus::Ready) {
+                return Err(PluginError::runner_unavailable(format!(
+                    "Supervisor for installation '{}' is not ready (status: {:?})",
+                    self.installation_id, inner.status
+                )));
+            }
 
-        Self::prune_expired_contexts_locked(&mut inner);
+            Self::prune_expired_contexts_locked(&mut inner);
 
-        if inner.contexts.len() >= MAX_CONTEXTS_PER_WORKER {
-            return Err(PluginError::overloaded(format!(
-                "Worker exceeded maximum active contexts limit of {MAX_CONTEXTS_PER_WORKER}"
-            )));
-        }
+            if inner.contexts.len() >= MAX_CONTEXTS_PER_WORKER {
+                return Err(PluginError::overloaded(format!(
+                    "Worker exceeded maximum active contexts limit of {MAX_CONTEXTS_PER_WORKER}"
+                )));
+            }
 
-        let context_id = format!("ctx:{}:{}", self.installation_id, uuid::Uuid::new_v4());
-        let expires_at_secs = (Utc::now().timestamp() as u64) + CONTEXT_IDLE_TTL_SECS;
-        let generation = inner.generation;
+            let context_id = format!("ctx:{}:{}", self.installation_id, uuid::Uuid::new_v4());
+            let expires_at_secs = (Utc::now().timestamp() as u64) + CONTEXT_IDLE_TTL_SECS;
+            let generation = inner.generation;
 
-        let entry = ContextEntry {
-            context_id: context_id.clone(),
-            installation_id: self.installation_id.clone(),
-            actor_subject: params.actor_subject,
-            configured_project_target: params.configured_project_target,
-            worktree_path: params.worktree_path,
-            allowed_operations: params.allowed_operations,
-            allow_current_account_policy: params.allow_current_account_policy,
-            activation_generation: generation,
-            binding_revision: 1,
-            grant_revision: 1,
-            in_flight: 0,
-            expires_at_secs,
+            let entry = ContextEntry {
+                context_id: context_id.clone(),
+                installation_id: self.installation_id.clone(),
+                actor_subject: params.actor_subject.clone(),
+                configured_project_target: params.configured_project_target.clone(),
+                worktree_path: params.worktree_path.clone(),
+                allowed_operations: params.allowed_operations.clone(),
+                allow_current_account_policy: params.allow_current_account_policy,
+                activation_generation: generation,
+                binding_revision: 1,
+                grant_revision: 1,
+                in_flight: 0,
+                expires_at_secs,
+            };
+
+            inner.contexts.insert(context_id.clone(), entry);
+            let worker = inner.worker.clone();
+            (worker, context_id, generation, expires_at_secs)
         };
 
-        inner.contexts.insert(context_id.clone(), entry);
+        if let Some(worker) = worker {
+            let worker_params = serde_json::json!({
+                "contextId": context_id,
+                "actorSubject": params.actor_subject,
+                "installationId": self.installation_id,
+                "configuredProjectTarget": params.configured_project_target,
+                "worktreePath": params.worktree_path,
+                "allowedOperations": params.allowed_operations,
+                "allowCurrentAccountPolicy": params.allow_current_account_policy,
+                "apiConnectionEpoch": params.api_connection_epoch,
+                "activationGeneration": generation,
+                "bindingRevision": 1,
+                "grantRevision": 1,
+            });
+            let req_id = worker.generate_request_id();
+            let worker_res = worker
+                .send_request(&req_id, "context.open", worker_params, Duration::from_secs(5))
+                .await;
+            if let Err(e) = worker_res {
+                let mut inner = self.inner.lock();
+                inner.contexts.remove(&context_id);
+                return Err(e);
+            }
+        }
 
         Ok(ContextOpenResult {
             context_id,
@@ -253,12 +282,27 @@ impl InstallationSupervisor {
         })
     }
 
-    pub fn close_context(
+    pub async fn close_context(
         &self,
         params: ContextCloseParams,
     ) -> Result<ContextCloseResult, PluginError> {
-        let mut inner = self.inner.lock();
-        let removed = inner.contexts.remove(&params.context_id).is_some();
+        let (removed, worker) = {
+            let mut inner = self.inner.lock();
+            let removed = inner.contexts.remove(&params.context_id).is_some();
+            let worker = inner.worker.clone();
+            (removed, worker)
+        };
+        if let Some(worker) = worker {
+            let req_id = worker.generate_request_id();
+            let _ = worker
+                .send_request(
+                    &req_id,
+                    "context.close",
+                    serde_json::json!({ "contextId": params.context_id, "reason": params.reason }),
+                    Duration::from_secs(5),
+                )
+                .await;
+        }
         Ok(ContextCloseResult { closed: removed })
     }
 

@@ -1,7 +1,7 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-21 from `repomix-output.xml` (Repomix v1.18.0; 2,174
-files, 4,834,061 tokens, 20,180,613 characters; five security-flagged files
+**Generated:** 2026-09-22 from `repomix-output.xml` (Repomix v1.18.0; 2,208
+files, 4,938,183 tokens, 20,613,126 characters; five security-flagged files
 excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
@@ -29,7 +29,7 @@ scripts, and Windows packaging/install harnesses.
 - `docs/` — operator, API, architecture, standards, and product-requirement
   documentation.
 
-## Trusted plugin platform (Phases D00–D02)
+## Trusted plugin platform (Phases D00–D03)
 
 The candidate SDK is `@dam-hopper/plugin-sdk` `0.1.0`; schemas, fixtures, and
 the packed artifact live under `packages/plugin-sdk/`. D00 Rust mirrors and
@@ -45,21 +45,26 @@ strict four-byte big-endian JSON-RPC framing live in `server/src/plugins/`.
   `WorkerProcess`, and `InstallationSupervisor` under `server/src/`. The
   runner binds an owner-created AF_UNIX socket, checks `SO_PEERCRED`, performs
   exact `runner.hello`, and multiplexes framed JSON-RPC requests.
-- Worker processes use immutable D01 package roots, private framed
-  stdin/stdout, sanitized bounded stderr, a cleared/allowlisted environment,
-  and a Unix process group. One supervisor generation owns one worker and
-  revokes contexts on crash/deadline.
+- Worker processes use immutable D01 package roots, private framed stdin/stdout,
+  sanitized bounded stderr, a cleared/allowlisted environment, and a Unix
+  process group. One supervisor generation owns one worker and revokes contexts
+  on crash/deadline.
 - D02 enforces 16 contexts/worker, four invokes/context, 16 invokes/worker,
   one declared long-running invoke, 10/30-second deadlines, and a durable
   three-failures-in-60-seconds installation budget. Current over-limit calls
   fail fast with `OVERLOADED`; a 32-entry fair queue is not implemented.
-- `deploy/systemd/dam-hopper-plugin-runner.service.in` renders the owner,
-  expected API UID, runtime directory, cgroup caps, and systemd hardening.
-  The full interface is in [Phase D02 architecture](./architecture/plugin-platform-d02.md).
-- Focused evidence is in `server/tests/plugin_runner_protocol.rs` and
-  `server/tests/plugin_runner_supervision.rs`; D03–D06 still own authorized
-  API, lifecycle, UI, and Linux qualification. This remains trusted
-  same-identity execution, not a malicious-code sandbox.
+- D03 adds protected `/api/plugins` list/open/close/invoke/cancel routes,
+  actor/grant/target checks, random WebSocket connection epochs, 15-minute
+  opaque contexts, invoke-time authorization, selective revocation, and
+  owner-bound UI DTO/channel mappings. See
+  [Phase D03 architecture](./architecture/plugin-platform-d03.md).
+- D03 source map: `server/src/plugins/{authorization,contexts,api_service}.rs`,
+  `server/src/api/plugins.rs`, `auth.rs`, `ws.rs`, `ws_protocol.rs`,
+  `packages/ui/src/api/{plugin-types,client,ws-transport}.ts`.
+- Focused evidence is in `server/tests/plugin_authorization.rs`,
+  `plugin_api_integration.rs`, and `plugin_runner_supervision.rs`; D04–D06
+  still own isolated UI, lifecycle, and Linux qualification. This remains
+  trusted same-identity execution, not a malicious-code sandbox.
 
 ## Unified-profile workbench frontend (Phases 00–02)
 

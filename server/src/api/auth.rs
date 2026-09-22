@@ -58,6 +58,16 @@ struct Claims {
 #[derive(Clone, Debug)]
 pub struct AuthenticatedActor {
     pub subject: String,
+    pub exp: Option<usize>,
+}
+
+impl AuthenticatedActor {
+    pub fn new(subject: impl Into<String>, exp: Option<usize>) -> Self {
+        Self {
+            subject: subject.into(),
+            exp,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -88,6 +98,13 @@ fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String>
 
 pub fn validate_jwt(provided: &str, secret: &str) -> bool {
     validated_claims(provided, secret).is_some()
+}
+
+pub fn authenticate_token(provided: &str, secret: &str) -> Option<AuthenticatedActor> {
+    validated_claims(provided, secret).map(|c| AuthenticatedActor {
+        subject: c.sub,
+        exp: Some(c.exp),
+    })
 }
 
 fn validated_claims(provided: &str, secret: &str) -> Option<Claims> {
@@ -136,6 +153,7 @@ pub async fn require_auth(
     if state.no_auth {
         request.extensions_mut().insert(AuthenticatedActor {
             subject: "dev-user".into(),
+            exp: None,
         });
         return next.run(request).await;
     }
@@ -148,6 +166,7 @@ pub async fn require_auth(
 
     request.extensions_mut().insert(AuthenticatedActor {
         subject: claims.sub,
+        exp: Some(claims.exp),
     });
 
     next.run(request).await
@@ -357,7 +376,12 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
 }
 
 /// POST /api/auth/logout — clears auth credentials.
-pub async fn logout(State(_state): State<AppState>, _jar: CookieJar, _request: Request) -> Response {
+pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Request) -> Response {
+    if let Some(token) = extract_token(&request, &jar) {
+        if let Some(actor) = authenticate_token(&token, &state.jwt_secret) {
+            state.plugin_service.revoke_actor(&actor.subject).await;
+        }
+    }
     let clear = auth_cookie_header("", true);
     (
         StatusCode::OK,
