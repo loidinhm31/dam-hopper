@@ -351,9 +351,10 @@ pub async fn register(State(state): State<AppState>, Json(body): Json<LoginBody>
 
 /// POST /api/auth/login — authenticates via mongodb or fallback to token, returns JWT
 pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody>) -> Response {
-    // Dev mode: return dev token immediately (no credentials check)
+    // Explicit dev mode (--no-auth): return token immediately without credentials check
     if state.no_auth {
-        let jwt_token = match generate_jwt("dev-user", &state.jwt_secret) {
+        let user = body.username.as_deref().unwrap_or("dev-user");
+        let jwt_token = match generate_jwt(user, &state.jwt_secret) {
             Ok(token) => token,
             Err(e) => {
                 tracing::error!("Dev mode JWT generation failed: {}", e);
@@ -462,13 +463,13 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
         .into_response();
     }
 
-    let ok = extract_token(&request, &jar)
-        .map(|t| validate_jwt(&t, &state.jwt_secret))
-        .unwrap_or(false);
+    let token_sub = extract_token(&request, &jar)
+        .and_then(|t| authenticate_token(&t, &state.jwt_secret));
 
-    if ok {
+    if let Some(actor) = token_sub {
         Json(serde_json::json!({
             "authenticated": true,
+            "user": actor.subject,
             "workbenchProtocol": 2
         }))
         .into_response()

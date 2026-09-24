@@ -341,6 +341,14 @@ async fn main() -> anyhow::Result<()> {
         let client = mongodb::Client::with_options(client_options)?;
         Some(client.database(&name))
     } else {
+        if std::env::var("RUST_ENV").unwrap_or_default() == "production"
+            || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
+        {
+            anyhow::bail!(
+                "FATAL: MongoDB configuration (MONGODB_URI and MONGODB_DATABASE) is required in production environment."
+            );
+        }
+        tracing::warn!("MongoDB not configured — running without database");
         None
     };
 
