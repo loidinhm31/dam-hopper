@@ -8,6 +8,7 @@ use super::contract::budgets::{
     CONTEXT_IDLE_TTL_SECS, MAX_CONTEXTS_PER_WORKER, MAX_OPERATIONS_PER_CONTEXT,
     MAX_OPERATIONS_PER_WORKER,
 };
+use super::contract::ContextScopeKind;
 use super::error::PluginError;
 
 #[derive(Debug, Clone)]
@@ -18,6 +19,7 @@ pub struct ContextRecord {
     pub installation_id: String,
     pub configured_project_target: String,
     pub resolved_root: PathBuf,
+    pub scope_kind: Option<ContextScopeKind>,
     pub allowed_operations: Vec<String>,
     pub allow_current_account_policy: bool,
     pub binding_revision: u64,

@@ -265,11 +265,13 @@ pub async fn approve_stage_handler(
             expected_security_revision: body.expected_security_revision,
             initial_bindings: body.initial_bindings,
             initial_grants: body.initial_grants,
+            owner_history_source: body.owner_history_source,
             actor_subject: actor.subject,
         })
         .await
     {
         Ok(inst) => {
+            state.plugin_service.auth_service().set_owner_history_source(&inst.installation_id, inst.owner_history_source.clone());
             state.plugin_service.invalidate_caches_and_revoke_all();
             (StatusCode::OK, Json(inst)).into_response()
         }
@@ -457,6 +459,36 @@ pub async fn replace_bindings_handler(
         .await
     {
         Ok(inst) => {
+            state.plugin_service.invalidate_installation(&id);
+            (StatusCode::OK, Json(inst)).into_response()
+        }
+        Err(e) => plugin_error_response(e),
+    }
+}
+/// PUT /api/plugins/admin/installations/:id/owner-history-source — replace owner-history source
+pub async fn replace_owner_history_source_handler(
+    State(state): State<AppState>,
+    Extension(actor): Extension<AuthenticatedActor>,
+    Path(id): Path<String>,
+    Json(body): Json<ReplaceOwnerHistorySourceRequest>,
+) -> Response {
+    if let Err(res) = check_no_auth(state.no_auth) {
+        return res;
+    }
+
+    match state
+        .plugin_service
+        .runner_client()
+        .admin_replace_owner_history_source(ReplaceOwnerHistorySourceParams {
+            installation_id: id.clone(),
+            expected_security_revision: body.expected_security_revision,
+            owner_history_source: body.owner_history_source,
+            actor_subject: actor.subject,
+        })
+        .await
+    {
+        Ok(inst) => {
+            state.plugin_service.auth_service().set_owner_history_source(&id, inst.owner_history_source.clone());
             state.plugin_service.invalidate_installation(&id);
             (StatusCode::OK, Json(inst)).into_response()
         }

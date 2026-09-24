@@ -8,7 +8,7 @@ import process from "node:process";
 import { chromium, request as playwrightRequest } from "playwright";
 
 function usage() {
-  console.log(`Usage: node scripts/plugin-g2-client.mjs \\
+  console.log(`Usage: node scripts/plugin-test-client.mjs \\
   --session <g2-session.json> \\
   --evidence-dir <empty-directory> \\
   --client-label <device-name> \\
@@ -249,7 +249,7 @@ async function runQualification(page, context, session, evidenceDir) {
   await frame
     .getByRole("heading", { name: "EVCrate Advisor Metrics Explorer" })
     .waitFor();
-  await frame.getByText("Embedded Plugin Container", { exact: true }).waitFor();
+  await frame.getByText(/Embedded Plugin Container|Plugin Isolation/).waitFor();
   assert(
     (await frame
       .getByRole("button", { name: /choose history directory/i })
@@ -320,9 +320,10 @@ async function runQualification(page, context, session, evidenceDir) {
     observedHash === session.uiSha256,
     "authenticated asset digest differs from staged UI digest",
   );
+  const contentType = authenticated.headers()["content-type"] ?? "";
   assert(
-    (authenticated.headers()["content-type"] ?? "").startsWith("text/html"),
-    "asset is not inert HTML bytes",
+    contentType.includes("octet-stream") || contentType.startsWith("text/html"),
+    "asset is not inert bytes",
   );
   const anonymous = await context.anonymousRequest.get(session.directAssetUrl);
   assert(

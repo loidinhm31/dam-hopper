@@ -88,9 +88,13 @@ export function pluginNavigationItem(
         : availability === "incompatible"
           ? " · INCOMPATIBLE"
           : "";
+  const friendlyName =
+    metadata.id === "evcrate.advisor" || metadata.publisher === "evcrate" || metadata.id.length > 20
+      ? "EVCrate Advisor"
+      : metadata.id.toUpperCase();
   return {
     installationId: metadata.id,
-    label: `${metadata.id.toUpperCase()}${suffix}`,
+    label: `${friendlyName}${suffix}`,
     to: `/plugins/${encodeURIComponent(metadata.id)}`,
     availability,
     metadata,

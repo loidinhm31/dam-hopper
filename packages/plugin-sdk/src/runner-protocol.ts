@@ -56,8 +56,13 @@ export interface PluginMetadataItem {
   hasUi: boolean;
   activeGeneration: number;
   enabled: boolean;
+  ownerHistorySource?: {
+    rootPath: string;
+    rootIdentity: string;
+    sourceRevision: number;
+    allAuthenticatedHistoryRead: boolean;
+  };
 }
-
 export interface PluginListResult {
   plugins: PluginMetadataItem[];
 }

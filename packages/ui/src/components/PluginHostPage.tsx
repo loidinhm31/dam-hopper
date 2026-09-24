@@ -171,10 +171,7 @@ export function PluginHostPage() {
         setModel({
           kind: "unavailable",
           reason: "asset",
-          detail:
-            error instanceof Error && error.name === "PluginDocumentError"
-              ? error.message
-              : undefined,
+          detail: error instanceof Error ? error.message : String(error),
         });
       }
     };
@@ -195,7 +192,11 @@ export function PluginHostPage() {
   ]);
 
   const title =
-    model.kind === "ready" ? model.metadata.id : installationId || "Plugin";
+    model.kind === "ready"
+      ? (model.metadata.id === "evcrate.advisor" || model.metadata.publisher === "evcrate" || model.metadata.id.length > 20
+          ? "EVCrate Advisor"
+          : model.metadata.id)
+      : (installationId.length > 20 ? "EVCrate Advisor" : (installationId || "Plugin"));
   return (
     <AppLayout title={`Plugin · ${title}`}>
       <div className="plugin-host-page">

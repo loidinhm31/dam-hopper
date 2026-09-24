@@ -13,7 +13,8 @@ use super::contract::budgets::{
 };
 use super::contract::{
     CancelOutcome, ContextCloseParams, ContextCloseResult, ContextOpenParams, ContextOpenResult,
-    PluginInvokeParams, PluginInvokeResult, RequestCancelParams, RequestCancelResult,
+    ContextScopeDescriptor, ContextScopeKind, PluginInvokeParams, PluginInvokeResult,
+    RequestCancelParams, RequestCancelResult,
 };
 use super::error::PluginError;
 use super::registry::PluginRegistry;
@@ -34,6 +35,7 @@ pub struct ContextEntry {
     pub installation_id: String,
     pub actor_subject: String,
     pub configured_project_target: String,
+    pub scope: Option<ContextScopeDescriptor>,
     pub worktree_path: Option<String>,
     pub allowed_operations: Vec<String>,
     pub allow_current_account_policy: bool,
@@ -251,6 +253,71 @@ impl InstallationSupervisor {
                 "Plugin activation changed before context open",
             ));
         }
+        if params.scope.as_ref().map(|s| s.kind) == Some(ContextScopeKind::HistoryRoot) {
+            let inst = self.registry.get_installation(&self.installation_id)?.ok_or_else(|| {
+                PluginError::context_revoked("Installation not found")
+            })?;
+            if !inst.enabled {
+                return Err(PluginError::context_revoked("Installation is disabled"));
+            }
+            let Some(owner_source) = &inst.owner_history_source else {
+                return Err(PluginError::forbidden(format!(
+                    "Installation '{}' has no owner-history source configured",
+                    self.installation_id
+                )));
+            };
+            if !owner_source.all_authenticated_history_read {
+                return Err(PluginError::forbidden(format!(
+                    "Installation '{}' does not permit authenticated history read",
+                    self.installation_id
+                )));
+            }
+            if let Some(req_scope) = &params.scope {
+                if let Some(req_id) = &req_scope.root_identity {
+                    if req_id != &owner_source.root_identity {
+                        return Err(PluginError::forbidden("Scope root identity mismatch"));
+                    }
+                }
+                if let Some(req_rev) = req_scope.source_revision {
+                    if req_rev != owner_source.source_revision {
+                        return Err(PluginError::forbidden("Scope source revision mismatch"));
+                    }
+                }
+            }
+
+            let root_path = std::path::Path::new(&owner_source.root_path);
+            let symlink_meta = std::fs::symlink_metadata(root_path).map_err(|e| {
+                PluginError::source_missing(format!("Owner history root path is unavailable: {e}"))
+            })?;
+            let canonical = root_path.canonicalize().map_err(|e| {
+                PluginError::source_missing(format!("Owner history root path is unavailable: {e}"))
+            })?;
+            if canonical != root_path {
+                return Err(PluginError::source_permission_denied(
+                    "Owner history root path must be a canonical path without symlink components",
+                ));
+            }
+            if symlink_meta.file_type().is_symlink() {
+                return Err(PluginError::source_permission_denied(
+                    "Owner history root path cannot be a symlink",
+                ));
+            }
+            if !symlink_meta.is_dir() {
+                return Err(PluginError::source_missing(
+                    "Owner history root path is not a directory",
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let current_uid = unsafe { libc::geteuid() };
+                if symlink_meta.uid() != current_uid && current_uid != 0 {
+                    return Err(PluginError::source_permission_denied(
+                        "Owner history root directory is not owned by the runner owner UID",
+                    ));
+                }
+            }
+        }
         let (worker, context_id, expires_at_secs) = {
             let mut inner = self.inner.lock();
             if !matches!(inner.status, SupervisorStatus::Ready) {
@@ -277,6 +344,7 @@ impl InstallationSupervisor {
                 installation_id: self.installation_id.clone(),
                 actor_subject: params.actor_subject.clone(),
                 configured_project_target: params.configured_project_target.clone(),
+                scope: params.scope.clone(),
                 worktree_path: params.worktree_path.clone(),
                 allowed_operations: params.allowed_operations.clone(),
                 allow_current_account_policy: params.allow_current_account_policy,
@@ -299,6 +367,7 @@ impl InstallationSupervisor {
                 "actorSubject": params.actor_subject,
                 "installationId": self.installation_id,
                 "configuredProjectTarget": params.configured_project_target,
+                "scope": params.scope,
                 "worktreePath": params.worktree_path,
                 "allowedOperations": params.allowed_operations,
                 "allowCurrentAccountPolicy": params.allow_current_account_policy,
@@ -363,6 +432,35 @@ impl InstallationSupervisor {
         request_id: &str,
         params: PluginInvokeParams,
     ) -> Result<PluginInvokeResult, PluginError> {
+        if let Some(scope) = {
+            let inner = self.inner.lock();
+            inner.contexts.get(&params.context_id).and_then(|c| c.scope.clone())
+        } {
+            if scope.kind == ContextScopeKind::HistoryRoot {
+                let inst = self.registry.get_installation(&self.installation_id)?.ok_or_else(|| {
+                    PluginError::context_revoked("Installation not found")
+                })?;
+                if !inst.enabled {
+                    return Err(PluginError::context_revoked("Installation is disabled"));
+                }
+                let Some(owner_source) = &inst.owner_history_source else {
+                    return Err(PluginError::context_revoked("Owner history root is revoked"));
+                };
+                if !owner_source.all_authenticated_history_read {
+                    return Err(PluginError::context_revoked("Authenticated history read is revoked"));
+                }
+                if let Some(req_id) = &scope.root_identity {
+                    if req_id != &owner_source.root_identity {
+                        return Err(PluginError::context_revoked("Owner history root identity changed"));
+                    }
+                }
+                if let Some(rev) = scope.source_revision {
+                    if rev != owner_source.source_revision {
+                        return Err(PluginError::context_revoked("Owner history source revision changed"));
+                    }
+                }
+            }
+        }
         let is_long_running =
             params.operation == "advisor.scan" || params.deadline_ms.map_or(false, |d| d > 10_000);
 

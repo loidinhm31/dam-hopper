@@ -8,8 +8,9 @@ use super::authorization::PluginAuthorizationService;
 use super::contexts::{ContextRecord, PluginContextTable};
 use super::contract::budgets::MAX_PAYLOAD_BYTES;
 use super::contract::{
-    ContextCloseResult, ContextOpenParams, ContextOpenResult, PluginInvokeParams,
-    PluginMetadataItem, PluginReadUiParams, RequestCancelResult,
+    ContextCloseResult, ContextOpenParams, ContextOpenResult, ContextScopeDescriptor,
+    ContextScopeKind, PluginInvokeParams, PluginMetadataItem, PluginReadUiParams,
+    RequestCancelResult,
 };
 use super::error::PluginError;
 use super::runner_client::RunnerClient;
@@ -96,6 +97,7 @@ impl PluginApiService {
 
     pub fn invalidate_installation(&self, installation_id: &str) {
         *self.cached_plugins.write() = None;
+        self.auth_service.set_owner_history_source(installation_id, None);
         self.context_table.revoke_by_installation(installation_id);
     }
 
@@ -122,6 +124,14 @@ impl PluginApiService {
         // Include disabled durable records so authorized navigation can render
         // an honest non-executable state instead of silently hiding them.
         let plugins = self.runner_client.list_plugins(true).await?.plugins;
+
+        // Hydrate in-memory authorization service with durable owner-history sources from runner
+        for p in &plugins {
+            if let Some(source) = &p.owner_history_source {
+                self.auth_service
+                    .set_owner_history_source(&p.id, Some(source.clone()));
+            }
+        }
 
         // Visibility remains explicit default-deny for this actor and target.
         let target_str = &target_ref.project;
@@ -228,6 +238,7 @@ impl PluginApiService {
         installation_id: &str,
         target_ref: &ProjectTargetRef,
         configured_project_root: &Path,
+        scope_kind: Option<ContextScopeKind>,
         allowed_operations: Vec<String>,
         allow_current_account_policy: bool,
         no_auth: bool,
@@ -240,46 +251,76 @@ impl PluginApiService {
 
         self.check_runner_generation();
 
-        let target_str = target_ref.project.clone();
-
-        // 1. Authorize actor and epoch against grants
-        self.auth_service.check_open_authorization(
-            actor,
-            epoch_id,
-            installation_id,
-            &target_str,
-            &allowed_operations,
-            allow_current_account_policy,
-            no_auth,
-        )?;
-
-        // 2. Resolve project target strictly using WorkspaceTargetResolver
-        let resolved_target = self
-            .workspace_target_resolver
-            .resolve(target_ref, configured_project_root)
-            .await
-            .map_err(|e| {
-                PluginError::invalid_input(format!(
-                    "Failed to resolve project target '{}/{}': {e}",
-                    target_ref.project,
-                    target_ref.worktree_path.as_deref().unwrap_or("")
-                ))
-            })?;
-
-        let activation_generation = self
+        // Hydrate durable plugin activation and owner-history source from runner before authorization
+        let active_plugin = self
             .runner_client
             .list_plugins(true)
             .await?
             .plugins
             .into_iter()
             .find(|plugin| plugin.id == installation_id && plugin.enabled)
-            .ok_or_else(|| PluginError::context_revoked("Plugin activation is unavailable"))?
-            .active_generation;
+            .ok_or_else(|| PluginError::context_revoked("Plugin activation is unavailable"))?;
+
+        if let Some(source) = &active_plugin.owner_history_source {
+            self.auth_service
+                .set_owner_history_source(installation_id, Some(source.clone()));
+        }
+
+        let target_str = target_ref.project.clone();
+
+        // 1. Authorize actor and epoch against grants or owner history
+        self.auth_service.check_open_authorization(
+            actor,
+            epoch_id,
+            installation_id,
+            &target_str,
+            scope_kind,
+            &allowed_operations,
+            allow_current_account_policy,
+            no_auth,
+        )?;
+
+        let (resolved_target_str, resolved_target_path) = if scope_kind == Some(ContextScopeKind::HistoryRoot) {
+            if let Ok(res) = self
+                .workspace_target_resolver
+                .resolve(target_ref, configured_project_root)
+                .await
+            {
+                (res.target_path().to_string_lossy().to_string(), res.target_path().to_path_buf())
+            } else {
+                (target_str.clone(), std::path::PathBuf::from(&target_str))
+            }
+        } else {
+            let res = self
+                .workspace_target_resolver
+                .resolve(target_ref, configured_project_root)
+                .await
+                .map_err(|e| {
+                    PluginError::invalid_input(format!(
+                        "Failed to resolve project target '{}/{}': {e}",
+                        target_ref.project,
+                        target_ref.worktree_path.as_deref().unwrap_or("")
+                    ))
+                })?;
+            (res.target_path().to_string_lossy().to_string(), res.target_path().to_path_buf())
+        };
+
+        let scope_descriptor = if scope_kind == Some(ContextScopeKind::HistoryRoot) {
+            let owner_source = self.auth_service.get_owner_history_source(installation_id);
+            Some(ContextScopeDescriptor {
+                kind: ContextScopeKind::HistoryRoot,
+                root_identity: owner_source.as_ref().map(|s| s.root_identity.clone()),
+                source_revision: owner_source.as_ref().map(|s| s.source_revision),
+            })
+        } else {
+            None
+        };
+        let activation_generation = active_plugin.active_generation;
         let open_params = ContextOpenParams {
             actor_subject: actor.subject.clone(),
             installation_id: installation_id.to_string(),
-            configured_project_target: resolved_target.target_path().to_string_lossy().to_string(),
-            scope: None,
+            configured_project_target: resolved_target_str,
+            scope: scope_descriptor,
             worktree_path: target_ref.worktree_path.clone(),
             allowed_operations: allowed_operations.clone(),
             allow_current_account_policy,
@@ -296,7 +337,8 @@ impl PluginApiService {
             api_connection_epoch: epoch_id,
             installation_id: installation_id.to_string(),
             configured_project_target: target_str,
-            resolved_root: resolved_target.target_path().to_path_buf(),
+            resolved_root: resolved_target_path,
+            scope_kind: res.scope_kind,
             allowed_operations,
             allow_current_account_policy,
             binding_revision: res.binding_revision,
@@ -373,6 +415,7 @@ impl PluginApiService {
             epoch_id,
             &ctx.installation_id,
             &ctx.configured_project_target,
+            ctx.scope_kind,
             operation,
             ctx.allow_current_account_policy,
             no_auth,

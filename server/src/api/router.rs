@@ -554,6 +554,11 @@ pub fn build_router_with_web_dir_and_origins(
             put(plugin_admin_api::replace_bindings_handler)
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
         )
+        .route(
+            "/api/plugins/admin/installations/{id}/owner-history-source",
+            put(plugin_admin_api::replace_owner_history_source_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer_auth,
