@@ -167,12 +167,31 @@ pub struct PluginDeactivateResult {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContextScopeKind {
+    Project,
+    HistoryRoot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextScopeDescriptor {
+    pub kind: ContextScopeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_revision: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextOpenParams {
     pub actor_subject: String,
     pub installation_id: String,
     pub configured_project_target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ContextScopeDescriptor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
     pub allowed_operations: Vec<String>,
@@ -185,12 +204,13 @@ pub struct ContextOpenParams {
 #[serde(rename_all = "camelCase")]
 pub struct ContextOpenResult {
     pub context_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_kind: Option<ContextScopeKind>,
     pub binding_revision: u64,
     pub grant_revision: u64,
     pub activation_generation: u64,
     pub expires_at: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextCloseParams {

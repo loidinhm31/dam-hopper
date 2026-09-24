@@ -17,6 +17,10 @@ import {
   WORKER_SDK_VERSION,
   UI_BRIDGE_VERSION,
   MAX_FRAME_PAYLOAD_BYTES,
+  ContextOpenParams,
+  ContextOpenResult,
+  ContextScopeDescriptor,
+  ContextScopeKind,
 } from './index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -237,5 +241,65 @@ describe('Resource Budgets and Version Constants', () => {
     expect(RESOURCE_BUDGETS.scanDeadlineMs).toBe(30000);
     expect(RESOURCE_BUDGETS.workerCgroupMemoryMaxBytes).toBe(1024 * 1024 * 1024);
     expect(RESOURCE_BUDGETS.workerCgroupTasksMax).toBe(64);
+  });
+});
+
+describe('Runner Protocol Scope and Context Contracts (Phase 01)', () => {
+  it('defines valid context scope kinds', () => {
+    const projectScope: ContextScopeKind = 'project';
+    const rootScope: ContextScopeKind = 'history-root';
+    expect(projectScope).toBe('project');
+    expect(rootScope).toBe('history-root');
+  });
+
+  it('allows ContextOpenParams with explicit scope descriptor', () => {
+    const params: ContextOpenParams = {
+      actorSubject: 'user-alice',
+      installationId: 'inst-1',
+      configuredProjectTarget: 'default',
+      scope: {
+        kind: 'history-root',
+        rootIdentity: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        sourceRevision: 1,
+      },
+      allowedOperations: ['history.refresh', 'history.summary'],
+      allowCurrentAccountPolicy: true,
+      apiConnectionEpoch: 100,
+      activationGeneration: 1,
+    };
+
+    expect(params.scope?.kind).toBe('history-root');
+    expect(params.scope?.rootIdentity).toHaveLength(64);
+    expect(params.scope?.sourceRevision).toBe(1);
+  });
+
+  it('allows ContextOpenResult with scopeKind provenance', () => {
+    const result: ContextOpenResult = {
+      contextId: 'ctx-1',
+      scopeKind: 'history-root',
+      bindingRevision: 2,
+      grantRevision: 1,
+      activationGeneration: 1,
+      expiresAt: Date.now() + 60000,
+    };
+
+    expect(result.scopeKind).toBe('history-root');
+    expect(result.bindingRevision).toBe(2);
+  });
+
+  it('validates positive context open root scope wire fixture', () => {
+    const raw = readFixture('positive/context-open-root-scope-valid.json');
+    const msg = validateJsonRpcMessage(raw);
+    expect(msg.method).toBe('context.open');
+    const params = msg.params as ContextOpenParams;
+    expect(params.scope?.kind).toBe('history-root');
+    expect(params.scope?.rootIdentity).toBe('78be05fd4e2291fb9eb0b5f9e1cf560bc8e14f7d78406d29a5d86f878ceb69f8');
+  });
+
+  it('rejects invalid scope kind in negative wire fixture', () => {
+    const raw = readFixture('negative/context-open-invalid-scope.json');
+    const parsed = JSON.parse(raw);
+    const scopeKind = parsed.params?.scope?.kind;
+    expect(['project', 'history-root'].includes(scopeKind)).toBe(false);
   });
 });
