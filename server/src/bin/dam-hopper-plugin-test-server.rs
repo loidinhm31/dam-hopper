@@ -19,7 +19,7 @@ use dam_hopper_server::diagnostics::DiagnosticStore;
 use dam_hopper_server::fs::FsSubsystem;
 use dam_hopper_server::plugins::contract::{GrantKey, PluginReadUiParams};
 use dam_hopper_server::plugins::{
-    AdminSubjectList, EpochRegistry, PluginApiService, PluginAuthorizationService,
+    AdminSubjectList, EpochRegistry, OwnerHistorySource, PluginApiService, PluginAuthorizationService,
     PluginContextTable, PluginRegistry, PluginRegistryLayout, RunnerClient, RunnerClientConfig,
     RunnerServer, RunnerServerConfig, SupervisorManager,
 };
@@ -241,6 +241,34 @@ async fn main() -> anyhow::Result<()> {
         bindings,
         Vec::new(),
     )?;
+    let history_root = std::env::var("HOME")
+        .ok()
+        .map(|home| PathBuf::from(home).join(".evcrate/advisor-history"))
+        .filter(|p| p.is_dir());
+
+    let owner_source = if let Some(hr) = history_root {
+        let canonical = hr.canonicalize()?;
+        let path_str = canonical.display().to_string();
+        let mut hasher = Sha256::new();
+        hasher.update(path_str.as_bytes());
+        let root_id = hex::encode(hasher.finalize());
+        let src = OwnerHistorySource {
+            root_path: path_str,
+            root_identity: root_id,
+            source_revision: 1,
+            all_authenticated_history_read: true,
+        };
+        let current_reg_rev = registry.read_state()?.registry_revision;
+        registry.update_owner_history_source(
+            "g2-admin",
+            &installation.installation_id,
+            current_reg_rev,
+            Some(src.clone()),
+        )?;
+        Some(src)
+    } else {
+        None
+    };
     let grant = GrantKey {
         actor_subject: args.actor.clone(),
         installation_id: installation.installation_id.clone(),
@@ -304,6 +332,9 @@ async fn main() -> anyhow::Result<()> {
     let epochs = Arc::new(EpochRegistry::new());
     let authorization = Arc::new(PluginAuthorizationService::new(epochs));
     authorization.set_actor_grants(&args.actor, vec![grant]);
+    if let Some(src) = &owner_source {
+        authorization.set_owner_history_source(&installation.installation_id, Some(src.clone()));
+    }
     let plugin_service = Arc::new(PluginApiService::new(
         runner_client,
         authorization,

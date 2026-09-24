@@ -267,6 +267,13 @@ impl PluginApiService {
         }
 
         let target_str = target_ref.project.clone();
+        let effective_scope_kind = scope_kind.or_else(|| {
+            if self.auth_service.has_owner_history_source(installation_id) {
+                Some(ContextScopeKind::HistoryRoot)
+            } else {
+                None
+            }
+        });
 
         // 1. Authorize actor and epoch against grants or owner history
         self.auth_service.check_open_authorization(
@@ -274,13 +281,13 @@ impl PluginApiService {
             epoch_id,
             installation_id,
             &target_str,
-            scope_kind,
+            effective_scope_kind,
             &allowed_operations,
             allow_current_account_policy,
             no_auth,
         )?;
 
-        let (resolved_target_str, resolved_target_path) = if scope_kind == Some(ContextScopeKind::HistoryRoot) {
+        let (resolved_target_str, resolved_target_path) = if effective_scope_kind == Some(ContextScopeKind::HistoryRoot) {
             if let Ok(res) = self
                 .workspace_target_resolver
                 .resolve(target_ref, configured_project_root)
@@ -305,7 +312,7 @@ impl PluginApiService {
             (res.target_path().to_string_lossy().to_string(), res.target_path().to_path_buf())
         };
 
-        let scope_descriptor = if scope_kind == Some(ContextScopeKind::HistoryRoot) {
+        let scope_descriptor = if effective_scope_kind == Some(ContextScopeKind::HistoryRoot) {
             let owner_source = self.auth_service.get_owner_history_source(installation_id);
             Some(ContextScopeDescriptor {
                 kind: ContextScopeKind::HistoryRoot,

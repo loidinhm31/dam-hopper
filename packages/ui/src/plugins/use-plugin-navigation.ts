@@ -37,7 +37,9 @@ export function parsePluginMetadata(value: unknown): PluginMetadataItem | null {
     return null;
   }
   const item = value as Record<string, unknown>;
-  const keys = Object.keys(item).sort();
+  const keys = Object.keys(item)
+    .filter((k) => k !== "ownerHistorySource")
+    .sort();
   const expected = [
     "activeDigest",
     "activeGeneration",
