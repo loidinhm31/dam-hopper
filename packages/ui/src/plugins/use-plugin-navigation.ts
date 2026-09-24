@@ -89,7 +89,7 @@ export function pluginNavigationItem(
           ? " · INCOMPATIBLE"
           : "";
   const friendlyName =
-    metadata.id === "evcrate.advisor" || metadata.publisher === "evcrate" || metadata.id.length > 20
+    metadata.id === "evcrate.advisor" || metadata.publisher === "evcrate"
       ? "EVCrate Advisor"
       : metadata.id.toUpperCase();
   return {
