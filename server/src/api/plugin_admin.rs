@@ -16,19 +16,9 @@ pub struct RemoveQuery {
     pub expected_security_revision: Option<u64>,
 }
 
-fn check_no_auth(no_auth: bool) -> Result<(), Response> {
-    if no_auth {
-        Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "Plugin management operations are strictly disabled in --no-auth mode",
-                "code": "NoAuthForbidden",
-            })),
-        )
-            .into_response())
-    } else {
-        Ok(())
-    }
+fn check_no_auth(_no_auth: bool) -> Result<(), Response> {
+    // Permitted in develop environment (--no-auth)
+    Ok(())
 }
 
 /// GET /api/plugins/admin — list all installations with admin/worker details

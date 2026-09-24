@@ -308,7 +308,7 @@ async fn test_bearer_only_mutation_rejects_cookie_and_no_auth() {
     let err_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(err_json["code"], "BearerRequired");
 
-    // 2. Request under --no-auth mode -> 403 Forbidden (NoAuthForbidden)
+    // 2. Request under --no-auth mode in develop environment is permitted -> 200 OK
     let temp_dir_no_auth = TempDir::new().unwrap();
     let harness_no_auth = create_admin_test_harness(&temp_dir_no_auth, true).await;
     let router_no_auth = build_router(harness_no_auth.state);
@@ -319,13 +319,56 @@ async fn test_bearer_only_mutation_rejects_cookie_and_no_auth() {
         .body(Body::empty())
         .unwrap();
 
-    let resp_no_auth = router_no_auth.oneshot(req_no_auth).await.unwrap();
-    assert_eq!(resp_no_auth.status(), StatusCode::FORBIDDEN);
+    let resp_no_auth = router_no_auth.clone().oneshot(req_no_auth).await.unwrap();
+    assert_eq!(resp_no_auth.status(), StatusCode::OK);
     let body_bytes = axum::body::to_bytes(resp_no_auth.into_body(), 1024 * 1024)
         .await
         .unwrap();
-    let err_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(err_json["code"], "NoAuthForbidden");
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert!(json.get("installations").is_some());
+
+    // 3. Staging a package under --no-auth mode without any Bearer token succeeds
+    let (tar_gz, sha) = sample_plugin_archive("dev-plugin", "0.1.0");
+    let stage_req_no_auth = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/admin/stages")
+        .header(header::CONTENT_TYPE, "application/gzip")
+        .header("X-Expected-SHA256", &sha)
+        .header(header::CONTENT_LENGTH, tar_gz.len())
+        .body(Body::from(tar_gz))
+        .unwrap();
+
+    let stage_resp_no_auth = router_no_auth.clone().oneshot(stage_req_no_auth).await.unwrap();
+    assert_eq!(stage_resp_no_auth.status(), StatusCode::CREATED);
+    let stage_bytes = axum::body::to_bytes(stage_resp_no_auth.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let stage_json: serde_json::Value = serde_json::from_slice(&stage_bytes).unwrap();
+    assert_eq!(stage_json["pluginId"], "dev-plugin");
+
+    // 4. Approve stage under --no-auth mode without any Bearer token succeeds
+    let stage_id = stage_json["stageId"].as_str().unwrap();
+    let approve_req_no_auth = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/plugins/admin/stages/{stage_id}/approve"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "expectedSha256": sha,
+                "expectedSecurityRevision": 1
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let approve_resp_no_auth = router_no_auth.oneshot(approve_req_no_auth).await.unwrap();
+    assert_eq!(approve_resp_no_auth.status(), StatusCode::OK);
+    let approve_bytes = axum::body::to_bytes(approve_resp_no_auth.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let inst_json: serde_json::Value = serde_json::from_slice(&approve_bytes).unwrap();
+    assert_eq!(inst_json["pluginId"], "dev-plugin");
+    assert_eq!(inst_json["enabled"], true);
 }
 
 #[tokio::test]

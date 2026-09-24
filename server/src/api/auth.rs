@@ -194,21 +194,15 @@ pub async fn require_auth(
     next.run(request).await
 }
 
-/// Middleware that rejects non-bearer or dev-mode authentication for protected management operations.
+/// Middleware that enforces bearer token authentication for protected management operations
+/// in authenticated environments, while permitting access in dev mode (--no-auth).
 pub async fn require_bearer_auth(
     State(state): State<AppState>,
     request: Request,
     next: Next,
 ) -> Response {
     if state.no_auth {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "Plugin management operations are strictly denied in --no-auth mode",
-                "code": "NoAuthForbidden",
-            })),
-        )
-            .into_response();
+        return next.run(request).await;
     }
 
     let mechanism = request.extensions().get::<CredentialMechanism>().copied();
