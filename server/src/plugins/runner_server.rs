@@ -513,6 +513,7 @@ async fn dispatch_method(
                     params.expected_security_revision,
                     params.initial_bindings,
                     params.initial_grants,
+                    params.owner_history_source,
                 )
                 .await?;
             Ok(serde_json::to_value(res).unwrap())
@@ -593,6 +594,20 @@ async fn dispatch_method(
                     &params.installation_id,
                     params.expected_security_revision,
                     params.bindings,
+                )
+                .await?;
+            Ok(serde_json::to_value(res).unwrap())
+        }
+        "management.ownerHistorySource.replace" => {
+            let params: ReplaceOwnerHistorySourceParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid management.ownerHistorySource.replace params: {e}"))
+            })?;
+            let res = lifecycle_coordinator
+                .replace_owner_history_source(
+                    &params.actor_subject,
+                    &params.installation_id,
+                    params.expected_security_revision,
+                    params.owner_history_source,
                 )
                 .await?;
             Ok(serde_json::to_value(res).unwrap())

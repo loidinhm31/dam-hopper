@@ -37,8 +37,8 @@ name = "dam-hopper-plugin-runner"
 path = "src/bin/dam-hopper-plugin-runner.rs"
 
 [[bin]]
-name = "dam-hopper-plugin-g2-harness"
-path = "src/bin/dam-hopper-plugin-g2-harness.rs"
+name = "dam-hopper-plugin-test-server"
+path = "src/bin/dam-hopper-plugin-test-server.rs"
 
 [features]
 # Bundle libgit2 + openssl statically — used for portable release binaries in CI

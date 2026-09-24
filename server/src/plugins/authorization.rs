@@ -6,8 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::RwLock;
 use rand::Rng;
 
-use super::contract::GrantKey;
+use super::contract::{ContextScopeKind, GrantKey};
 use super::error::PluginError;
+use super::registry_state::OwnerHistorySource;
 use crate::api::auth::AuthenticatedActor;
 
 const MAX_JAVASCRIPT_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
@@ -147,12 +148,20 @@ impl EpochRegistry {
     }
 }
 
+pub const ROOT_HISTORY_ALLOWED_OPERATIONS: &[&str] = &[
+    "history.refresh",
+    "history.summary",
+    "history.page",
+    "history.detail",
+];
+
 /// Authorization manager maintaining grants, security revisions, and checking actor authority.
 #[derive(Debug)]
 pub struct PluginAuthorizationService {
     epoch_registry: Arc<EpochRegistry>,
     security_revision: AtomicU64,
     grants: RwLock<HashMap<String, Vec<GrantKey>>>,
+    owner_history_sources: RwLock<HashMap<String, OwnerHistorySource>>,
 }
 
 impl PluginAuthorizationService {
@@ -161,6 +170,7 @@ impl PluginAuthorizationService {
             epoch_registry,
             security_revision: AtomicU64::new(1),
             grants: RwLock::new(HashMap::new()),
+            owner_history_sources: RwLock::new(HashMap::new()),
         }
     }
 
@@ -181,6 +191,29 @@ impl PluginAuthorizationService {
         self.grants.write().insert(actor_subject.to_string(), grants);
         self.bump_security_revision();
     }
+    /// Set or update the owner-history source for an installation.
+    pub fn set_owner_history_source(&self, installation_id: &str, source: Option<OwnerHistorySource>) {
+        let mut sources = self.owner_history_sources.write();
+        if let Some(src) = source {
+            sources.insert(installation_id.to_string(), src);
+        } else {
+            sources.remove(installation_id);
+        }
+        self.bump_security_revision();
+    }
+
+    /// Get owner-history source for an installation if present.
+    pub fn get_owner_history_source(&self, installation_id: &str) -> Option<OwnerHistorySource> {
+        self.owner_history_sources.read().get(installation_id).cloned()
+    }
+
+    /// Check if installation has an owner-history source configured with authenticated read allowed.
+    pub fn has_owner_history_source(&self, installation_id: &str) -> bool {
+        self.owner_history_sources
+            .read()
+            .get(installation_id)
+            .map_or(false, |s| s.all_authenticated_history_read)
+    }
     /// Check if an actor has visibility of an installation for a target.
     pub fn has_actor_visibility(
         &self,
@@ -188,6 +221,9 @@ impl PluginAuthorizationService {
         installation_id: &str,
         project_target: &str,
     ) -> bool {
+        if self.has_owner_history_source(installation_id) {
+            return true;
+        }
         let grants_guard = self.grants.read();
         grants_guard
             .get(actor_subject)
@@ -208,6 +244,7 @@ impl PluginAuthorizationService {
         epoch_id: u64,
         installation_id: &str,
         project_target: &str,
+        scope_kind: Option<ContextScopeKind>,
         requested_ops: &[String],
         allow_current_policy: bool,
         no_auth: bool,
@@ -222,14 +259,41 @@ impl PluginAuthorizationService {
         // Validate epoch and actor binding
         let epoch = self.epoch_registry.validate_epoch(epoch_id, &actor.subject)?;
 
-        // Validate grant
-        self.verify_grant(
-            &actor.subject,
-            installation_id,
-            project_target,
-            requested_ops,
-            allow_current_policy,
-        )?;
+        if scope_kind == Some(ContextScopeKind::HistoryRoot) {
+            let sources = self.owner_history_sources.read();
+            let source = sources.get(installation_id).ok_or_else(|| {
+                PluginError::forbidden(format!(
+                    "Installation '{installation_id}' does not have an owner-history root configured"
+                ))
+            })?;
+            if !source.all_authenticated_history_read {
+                return Err(PluginError::forbidden(format!(
+                    "Installation '{installation_id}' does not permit authenticated history read"
+                )));
+            }
+
+            let has_non_history_ops = requested_ops
+                .iter()
+                .any(|op| !ROOT_HISTORY_ALLOWED_OPERATIONS.contains(&op.as_str()));
+            if has_non_history_ops || allow_current_policy {
+                self.verify_grant(
+                    &actor.subject,
+                    installation_id,
+                    project_target,
+                    requested_ops,
+                    allow_current_policy,
+                )?;
+            }
+        } else {
+            // Project mode: standard grant verification
+            self.verify_grant(
+                &actor.subject,
+                installation_id,
+                project_target,
+                requested_ops,
+                allow_current_policy,
+            )?;
+        }
 
         Ok(epoch)
     }
@@ -241,6 +305,7 @@ impl PluginAuthorizationService {
         epoch_id: u64,
         installation_id: &str,
         project_target: &str,
+        scope_kind: Option<ContextScopeKind>,
         operation: &str,
         allow_current_policy: bool,
         no_auth: bool,
@@ -254,14 +319,37 @@ impl PluginAuthorizationService {
         // Validate epoch
         let epoch = self.epoch_registry.validate_epoch(epoch_id, &actor.subject)?;
 
-        // Verify grant
-        self.verify_grant(
-            &actor.subject,
-            installation_id,
-            project_target,
-            &[operation.to_string()],
-            allow_current_policy,
-        )?;
+        if scope_kind == Some(ContextScopeKind::HistoryRoot) {
+            let sources = self.owner_history_sources.read();
+            let source = sources.get(installation_id).ok_or_else(|| {
+                PluginError::context_revoked(format!(
+                    "Installation '{installation_id}' owner-history root is revoked or not configured"
+                ))
+            })?;
+            if !source.all_authenticated_history_read {
+                return Err(PluginError::context_revoked(format!(
+                    "Installation '{installation_id}' does not permit authenticated history read"
+                )));
+            }
+
+            if !ROOT_HISTORY_ALLOWED_OPERATIONS.contains(&operation) {
+                self.verify_grant(
+                    &actor.subject,
+                    installation_id,
+                    project_target,
+                    &[operation.to_string()],
+                    allow_current_policy,
+                )?;
+            }
+        } else {
+            self.verify_grant(
+                &actor.subject,
+                installation_id,
+                project_target,
+                &[operation.to_string()],
+                allow_current_policy,
+            )?;
+        }
 
         Ok(epoch)
     }

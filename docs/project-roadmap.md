@@ -2,6 +2,13 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### All-project advisor history integration (2026-09-24)
+
+- **Progress: 50% (3/6 phases complete; Phases 00–02 DONE).** Phase 02 host root authorization and context is complete; Phase 03 worker root history provider is next.
+- **Phase 02 — Host root authorization and context — DONE (2026-09-24).** Bound account-wide history to the durable trusted installation source, admitted authenticated accounts, hydrated owner-source state on context open, reauthorized at the runner, and cleared cached sources/contexts during lifecycle invalidation.
+- **Validation:** Targeted host authorization, lifecycle, runner, and API tests plus plugin SDK/UI and EVCrate suites passed. Follow-up checks covered restart hydration, ancestor-symlink rejection, and wrong-owner UID denial; one Windows-only test was skipped in the base suite.
+
+
 ### Windows release asset and bootstrap installer (2026-09-21)
 
 - **Plan status: IN PROGRESS (2/3 phases; 67%; updated 2026-09-21).** Phases 01 and 02 are complete; Phase 03 remains pending.

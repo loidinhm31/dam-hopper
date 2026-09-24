@@ -7,8 +7,9 @@ use dam_hopper_server::plugins::contexts::{ContextRecord, PluginContextTable};
 use dam_hopper_server::plugins::contract::budgets::{
     MAX_CONTEXTS_PER_WORKER, MAX_OPERATIONS_PER_CONTEXT,
 };
-use dam_hopper_server::plugins::contract::GrantKey;
+use dam_hopper_server::plugins::contract::{ContextScopeKind, GrantKey};
 use dam_hopper_server::plugins::error::PluginErrorCode;
+use dam_hopper_server::plugins::registry_state::OwnerHistorySource;
 
 #[test]
 fn test_epoch_issuance_and_validation() {
@@ -76,6 +77,7 @@ fn test_no_auth_mode_strictly_denied() {
             epoch,
             "test-plugin",
             "test-project",
+            None,
             &["history.summary".to_string()],
             false,
             true, // no_auth
@@ -91,6 +93,7 @@ fn test_no_auth_mode_strictly_denied() {
             epoch,
             "test-plugin",
             "test-project",
+            None,
             "history.summary",
             false,
             true, // no_auth
@@ -112,6 +115,7 @@ fn test_unconfigured_actor_default_deny() {
             epoch,
             "test-plugin",
             "test-project",
+            None,
             &["history.summary".to_string()],
             false,
             false,
@@ -145,6 +149,7 @@ fn test_grant_authorization_operations_and_policy() {
             epoch,
             "advisor-plugin",
             "project-alpha",
+            None,
             &["history.summary".to_string()],
             false,
             false,
@@ -158,6 +163,7 @@ fn test_grant_authorization_operations_and_policy() {
             epoch,
             "advisor-plugin",
             "project-alpha",
+            None,
             &["policy.readCurrent".to_string()],
             false,
             false,
@@ -172,6 +178,7 @@ fn test_grant_authorization_operations_and_policy() {
             epoch,
             "advisor-plugin",
             "project-beta",
+            None,
             &["history.summary".to_string()],
             false,
             false,
@@ -186,6 +193,7 @@ fn test_grant_authorization_operations_and_policy() {
             epoch,
             "advisor-plugin",
             "project-alpha",
+            None,
             &["history.summary".to_string()],
             true, // allow_current_policy
             false,
@@ -208,6 +216,7 @@ fn test_context_table_limits_and_concurrency() {
             installation_id: inst_id.to_string(),
             configured_project_target: "proj".to_string(),
             resolved_root: PathBuf::from("/tmp/proj"),
+            scope_kind: None,
             allowed_operations: vec!["history.summary".to_string()],
             allow_current_account_policy: false,
             binding_revision: 1,
@@ -227,6 +236,7 @@ fn test_context_table_limits_and_concurrency() {
         installation_id: inst_id.to_string(),
         configured_project_target: "proj".to_string(),
         resolved_root: PathBuf::from("/tmp/proj"),
+        scope_kind: None,
         allowed_operations: vec!["history.summary".to_string()],
         allow_current_account_policy: false,
         binding_revision: 1,
@@ -269,6 +279,7 @@ fn test_context_table_revocation_cascades() {
         installation_id: "plugin-1".to_string(),
         configured_project_target: "proj-1".to_string(),
         resolved_root: PathBuf::from("/tmp/proj-1"),
+        scope_kind: None,
         allowed_operations: vec!["history.summary".to_string()],
         allow_current_account_policy: false,
         binding_revision: 1,
@@ -285,6 +296,7 @@ fn test_context_table_revocation_cascades() {
         installation_id: "plugin-1".to_string(),
         configured_project_target: "proj-2".to_string(),
         resolved_root: PathBuf::from("/tmp/proj-2"),
+        scope_kind: None,
         allowed_operations: vec!["history.summary".to_string()],
         allow_current_account_policy: false,
         binding_revision: 1,
@@ -301,6 +313,7 @@ fn test_context_table_revocation_cascades() {
         installation_id: "plugin-2".to_string(),
         configured_project_target: "proj-1".to_string(),
         resolved_root: PathBuf::from("/tmp/proj-1"),
+        scope_kind: None,
         allowed_operations: vec!["history.summary".to_string()],
         allow_current_account_policy: false,
         binding_revision: 1,
@@ -332,4 +345,205 @@ fn test_context_table_revocation_cascades() {
     assert!(closed.is_some());
     let closed_again = table.close("ctx-alice-2", "alice", 1002).unwrap();
     assert!(closed_again.is_none());
+}
+#[test]
+fn test_root_history_authorization_admits_any_authenticated_account() {
+    let epoch_registry = Arc::new(EpochRegistry::new());
+    let auth_service = PluginAuthorizationService::new(epoch_registry.clone());
+    let actor_bob = AuthenticatedActor::new("user-bob", None);
+    let epoch = epoch_registry.issue_epoch("user-bob", None);
+
+    // bob has NO grants at all (default deny in project mode)
+    assert!(auth_service
+        .check_open_authorization(
+            &actor_bob,
+            epoch,
+            "evcrate.advisor",
+            "*",
+            Some(ContextScopeKind::Project),
+            &["history.summary".to_string()],
+            false,
+            false,
+        )
+        .is_err());
+
+    // Configure owner history root on installation
+    auth_service.set_owner_history_source(
+        "evcrate.advisor",
+        Some(OwnerHistorySource {
+            root_path: "/home/user/.evcrate/history".to_string(),
+            root_identity: "a".repeat(64),
+            source_revision: 1,
+            all_authenticated_history_read: true,
+        }),
+    );
+
+    // Now bob can open and invoke history-root scope WITHOUT any explicit grants!
+    assert!(auth_service
+        .check_open_authorization(
+            &actor_bob,
+            epoch,
+            "evcrate.advisor",
+            "*",
+            Some(ContextScopeKind::HistoryRoot),
+            &[
+                "history.refresh".to_string(),
+                "history.summary".to_string(),
+                "history.page".to_string(),
+                "history.detail".to_string(),
+            ],
+            false,
+            false,
+        )
+        .is_ok());
+
+    assert!(auth_service
+        .check_invoke_authorization(
+            &actor_bob,
+            epoch,
+            "evcrate.advisor",
+            "*",
+            Some(ContextScopeKind::HistoryRoot),
+            "history.summary",
+            false,
+            false,
+        )
+        .is_ok());
+
+    // Project target '*' alone without HistoryRoot scope is STILL DENIED without grant
+    assert!(auth_service
+        .check_open_authorization(
+            &actor_bob,
+            epoch,
+            "evcrate.advisor",
+            "*",
+            None,
+            &["history.summary".to_string()],
+            false,
+            false,
+        )
+        .is_err());
+}
+
+#[test]
+fn test_root_history_authorization_denies_non_history_operations_without_grant() {
+    let epoch_registry = Arc::new(EpochRegistry::new());
+    let auth_service = PluginAuthorizationService::new(epoch_registry.clone());
+    let actor = AuthenticatedActor::new("user-carol", None);
+    let epoch = epoch_registry.issue_epoch("user-carol", None);
+
+    auth_service.set_owner_history_source(
+        "evcrate.advisor",
+        Some(OwnerHistorySource {
+            root_path: "/home/user/.evcrate/history".to_string(),
+            root_identity: "a".repeat(64),
+            source_revision: 1,
+            all_authenticated_history_read: true,
+        }),
+    );
+
+    // policy.readCurrent or allow_current_policy is forbidden in root history without grant
+    let err = auth_service
+        .check_open_authorization(
+            &actor,
+            epoch,
+            "evcrate.advisor",
+            "*",
+            Some(ContextScopeKind::HistoryRoot),
+            &["policy.readCurrent".to_string()],
+            false,
+            false,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, PluginErrorCode::Forbidden);
+
+    let err2 = auth_service
+        .check_open_authorization(
+            &actor,
+            epoch,
+            "evcrate.advisor",
+            "*",
+            Some(ContextScopeKind::HistoryRoot),
+            &["history.summary".to_string()],
+            true, // allow_current_policy = true
+            false,
+        )
+        .unwrap_err();
+    assert_eq!(err2.code, PluginErrorCode::Forbidden);
+
+    let err3 = auth_service
+        .check_invoke_authorization(
+            &actor,
+            epoch,
+            "evcrate.advisor",
+            "*",
+            Some(ContextScopeKind::HistoryRoot),
+            "policy.readCurrent",
+            false,
+            false,
+        )
+        .unwrap_err();
+    assert_eq!(err3.code, PluginErrorCode::Forbidden);
+}
+
+#[test]
+fn test_root_history_authorization_denies_when_owner_source_unconfigured_or_revoked() {
+    let epoch_registry = Arc::new(EpochRegistry::new());
+    let auth_service = PluginAuthorizationService::new(epoch_registry.clone());
+    let actor = AuthenticatedActor::new("user-dave", None);
+    let epoch = epoch_registry.issue_epoch("user-dave", None);
+
+    // Unconfigured owner source
+    let err = auth_service
+        .check_open_authorization(
+            &actor,
+            epoch,
+            "evcrate.advisor",
+            "*",
+            Some(ContextScopeKind::HistoryRoot),
+            &["history.summary".to_string()],
+            false,
+            false,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, PluginErrorCode::Forbidden);
+
+    // Revoking/removing owner source revokes invoke
+    auth_service.set_owner_history_source(
+        "evcrate.advisor",
+        Some(OwnerHistorySource {
+            root_path: "/home/user/.evcrate/history".to_string(),
+            root_identity: "a".repeat(64),
+            source_revision: 1,
+            all_authenticated_history_read: true,
+        }),
+    );
+    assert!(auth_service
+        .check_invoke_authorization(
+            &actor,
+            epoch,
+            "evcrate.advisor",
+            "*",
+            Some(ContextScopeKind::HistoryRoot),
+            "history.summary",
+            false,
+            false,
+        )
+        .is_ok());
+
+    // Revoke source
+    auth_service.set_owner_history_source("evcrate.advisor", None);
+    let err = auth_service
+        .check_invoke_authorization(
+            &actor,
+            epoch,
+            "evcrate.advisor",
+            "*",
+            Some(ContextScopeKind::HistoryRoot),
+            "history.summary",
+            false,
+            false,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, PluginErrorCode::ContextRevoked);
 }

@@ -60,6 +60,7 @@ pub const ADMIN_RUNNER_METHODS: &[&str] = &[
     "management.remove",
     "management.grants.replace",
     "management.bindings.replace",
+    "management.ownerHistorySource.replace",
     "management.installations.list",
     "management.installations.get",
 ];
@@ -115,8 +116,9 @@ pub struct PluginMetadataItem {
     pub active_digest: String,
     pub active_generation: u64,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_history_source: Option<super::registry_state::OwnerHistorySource>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginListResult {

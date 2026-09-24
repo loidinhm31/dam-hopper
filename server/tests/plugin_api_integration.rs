@@ -24,6 +24,7 @@ use dam_hopper_server::config::{
 use dam_hopper_server::crypto::DamHopperOpaqueSuite;
 use dam_hopper_server::diagnostics::DiagnosticStore;
 use dam_hopper_server::fs::FsSubsystem;
+use dam_hopper_server::plugins::registry_state::OwnerHistorySource;
 use dam_hopper_server::plugins::{
     AdminSubjectList, EpochRegistry, PluginApiService, PluginAuthorizationService,
     PluginContextTable, PluginRegistry, PluginRegistryLayout, RunnerClient, RunnerClientConfig,
@@ -896,4 +897,203 @@ async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
     );
 
     let _ = shutdown_tx.send(true);
+}
+
+#[tokio::test]
+async fn test_root_history_api_admission_and_authorization() {
+    let temp_dir = TempDir::new().unwrap();
+    let harness = create_test_harness(&temp_dir, false).await;
+    let router = build_router(harness.state.clone());
+
+    // 1. Configure trusted owner-history root on the installation via admin API
+    let admin_token = generate_auth_token("admin-user", "test-jwt-secret");
+    let history_root = temp_dir.path().join("advisor_history_root");
+    fs::create_dir_all(&history_root).unwrap();
+    let root_identity = "78be05fd4e2291fb9eb0b5f9e1cf560bc8e14f7d78406d29a5d86f878ceb69f8".to_string();
+
+    let admin_req = Request::builder()
+        .method(Method::PUT)
+        .uri(format!("/api/plugins/admin/installations/{}/owner-history-source", harness.installation_id))
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "expectedSecurityRevision": 1,
+            "ownerHistorySource": {
+                "rootPath": history_root.to_string_lossy().to_string(),
+                "rootIdentity": root_identity,
+                "sourceRevision": 1,
+                "allAuthenticatedHistoryRead": true
+            }
+        })).unwrap()))
+        .unwrap();
+    let admin_resp = router.clone().oneshot(admin_req).await.unwrap();
+    assert_eq!(admin_resp.status(), StatusCode::OK);
+    // 2. Any authenticated account (e.g. newly registered user bob) has access by default
+    let bob_token = generate_auth_token("bob-new-user", "test-jwt-secret");
+    let bob_epoch = harness
+        .state
+        .plugin_service
+        .auth_service()
+        .epoch_registry()
+        .issue_epoch("bob-new-user", None);
+
+    // Negative case: Anonymous request denied
+    let anon_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/contexts/open")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "epoch": bob_epoch,
+            "installationId": harness.installation_id,
+            "target": { "project": "test-proj" },
+            "scopeKind": "history-root",
+            "allowedOperations": ["history.summary"]
+        })).unwrap()))
+        .unwrap();
+    let anon_resp = router.clone().oneshot(anon_req).await.unwrap();
+    assert_eq!(anon_resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Positive case: Authenticated user bob can open root history context
+    let open_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/contexts/open")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "epoch": bob_epoch,
+            "installationId": harness.installation_id,
+            "target": { "project": "test-proj" },
+            "scopeKind": "history-root",
+            "allowedOperations": ["history.refresh", "history.summary", "history.page", "history.detail"]
+        })).unwrap()))
+        .unwrap();
+    let open_resp = router.clone().oneshot(open_req).await.unwrap();
+    assert_eq!(open_resp.status(), StatusCode::OK);
+    let open_bytes = axum::body::to_bytes(open_resp.into_body(), usize::MAX).await.unwrap();
+    let open_json: serde_json::Value = serde_json::from_slice(&open_bytes).unwrap();
+    let context_id = open_json["contextId"].as_str().unwrap().to_string();
+    assert_eq!(open_json["scopeKind"], "history-root");
+
+    // Positive case: Authenticated user bob can invoke history.summary
+    let invoke_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/invoke")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "epoch": bob_epoch,
+            "contextId": context_id,
+            "requestId": "req-bob-1",
+            "operation": "history.summary",
+            "payload": {}
+        })).unwrap()))
+        .unwrap();
+    let invoke_resp = router.clone().oneshot(invoke_req).await.unwrap();
+    assert_eq!(invoke_resp.status(), StatusCode::OK);
+    let invoke_bytes = axum::body::to_bytes(invoke_resp.into_body(), usize::MAX).await.unwrap();
+    let invoke_json: serde_json::Value = serde_json::from_slice(&invoke_bytes).unwrap();
+    assert_eq!(invoke_json["result"]["status"], "ok");
+
+    // Negative case: Non-history operation (policy.readCurrent) denied without explicit grant
+    let policy_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/invoke")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "epoch": bob_epoch,
+            "contextId": context_id,
+            "requestId": "req-bob-2",
+            "operation": "policy.readCurrent",
+            "payload": {}
+        })).unwrap()))
+        .unwrap();
+    let policy_resp = router.clone().oneshot(policy_req).await.unwrap();
+    assert_eq!(policy_resp.status(), StatusCode::FORBIDDEN);
+    // Positive case: Server restart simulation (wiping in-memory auth_service sources)
+    harness
+        .state
+        .plugin_service
+        .auth_service()
+        .set_owner_history_source(&harness.installation_id, None);
+    assert!(!harness
+        .state
+        .plugin_service
+        .auth_service()
+        .has_owner_history_source(&harness.installation_id));
+
+    // Next open_context in root mode automatically hydrates durable source from runner!
+    let restart_open_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/contexts/open")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "epoch": bob_epoch,
+            "installationId": harness.installation_id,
+            "target": { "project": "test-proj" },
+            "scopeKind": "history-root",
+            "allowedOperations": ["history.refresh", "history.summary", "history.page", "history.detail"]
+        })).unwrap()))
+        .unwrap();
+    let restart_open_resp = router.clone().oneshot(restart_open_req).await.unwrap();
+    assert_eq!(restart_open_resp.status(), StatusCode::OK);
+    assert!(harness
+        .state
+        .plugin_service
+        .auth_service()
+        .has_owner_history_source(&harness.installation_id));
+
+    // Verify invalidate_installation clears owner_history_sources
+    harness
+        .state
+        .plugin_service
+        .invalidate_installation(&harness.installation_id);
+    assert!(!harness
+        .state
+        .plugin_service
+        .auth_service()
+        .has_owner_history_source(&harness.installation_id));
+
+    // Negative case: Project mode for bob without grant is denied (default deny preserved)
+    let proj_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/contexts/open")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "epoch": bob_epoch,
+            "installationId": harness.installation_id,
+            "target": { "project": "test-proj" },
+            "scopeKind": "project",
+            "allowedOperations": ["history.summary"]
+        })).unwrap()))
+        .unwrap();
+    let proj_resp = router.clone().oneshot(proj_req).await.unwrap();
+    assert_eq!(proj_resp.status(), StatusCode::FORBIDDEN);
+
+    // Negative case: Revoking owner history source revokes context invoke
+    harness
+        .state
+        .plugin_service
+        .auth_service()
+        .set_owner_history_source(&harness.installation_id, None);
+
+    let revoked_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/invoke")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "epoch": bob_epoch,
+            "contextId": context_id,
+            "requestId": "req-bob-3",
+            "operation": "history.summary",
+            "payload": {}
+        })).unwrap()))
+        .unwrap();
+    let revoked_resp = router.clone().oneshot(revoked_req).await.unwrap();
+    assert_eq!(revoked_resp.status(), StatusCode::GONE);
+
+    let _ = harness.shutdown_tx.send(true);
 }

@@ -51,6 +51,52 @@ impl RegisteredPackageRecord {
         Ok(())
     }
 }
+/// Typed owner-history source provisioned as part of trusted installation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OwnerHistorySource {
+    pub root_path: String,
+    pub root_identity: String,
+    #[serde(default = "default_source_revision")]
+    pub source_revision: u64,
+    #[serde(default = "default_true")]
+    pub all_authenticated_history_read: bool,
+}
+
+fn default_source_revision() -> u64 {
+    1
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl OwnerHistorySource {
+    pub fn validate(&self) -> Result<(), PluginError> {
+        if self.root_path.trim().is_empty()
+            || !self.root_path.starts_with('/')
+            || self.root_path.contains("..")
+            || self.root_path.contains('\0')
+        {
+            return Err(PluginError::invalid_input(
+                "owner_history_source.root_path must be a normalized non-empty absolute path without parent traversal",
+            ));
+        }
+        if !SHA256_REGEX.is_match(&self.root_identity) {
+            return Err(PluginError::invalid_input(format!(
+                "Invalid owner_history_source.root_identity: '{}' (must be 64-char lowercase hex)",
+                self.root_identity
+            )));
+        }
+        if self.source_revision == 0 {
+            return Err(PluginError::invalid_input(
+                "owner_history_source.source_revision must be at least 1",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Snapshot of a previously active package pair for non-security rollback.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -58,6 +104,8 @@ pub struct RollbackPackageSnapshot {
     pub package_digest: String,
     pub version: String,
     pub bindings: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_history_source: Option<OwnerHistorySource>,
     pub published_at: String,
 }
 
@@ -75,6 +123,9 @@ impl RollbackPackageSnapshot {
                 self.version
             )));
         }
+        if let Some(source) = &self.owner_history_source {
+            source.validate()?;
+        }
         Ok(())
     }
 }
@@ -91,6 +142,8 @@ pub struct SecurityIntent {
     pub enabled: bool,
     pub grants: Vec<GrantKey>,
     pub bindings: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_history_source: Option<OwnerHistorySource>,
     pub security_revision: u64,
 }
 
@@ -106,6 +159,8 @@ pub struct InstallationRecord {
     pub enabled: bool,
     pub bindings: BTreeMap<String, String>,
     pub grants: Vec<GrantKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_history_source: Option<OwnerHistorySource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_package: Option<RollbackPackageSnapshot>,
     pub created_at: String,
@@ -144,6 +199,9 @@ impl InstallationRecord {
         if let Some(prev) = &self.previous_package {
             prev.validate()?;
         }
+        if let Some(source) = &self.owner_history_source {
+            source.validate()?;
+        }
         Ok(())
     }
 
@@ -152,6 +210,7 @@ impl InstallationRecord {
             enabled: self.enabled,
             grants: self.grants.clone(),
             bindings: self.bindings.clone(),
+            owner_history_source: self.owner_history_source.clone(),
             security_revision,
         }
     }

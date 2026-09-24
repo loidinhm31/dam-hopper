@@ -142,6 +142,7 @@ impl PluginRegistry {
             package_digest: i.active_package_digest.clone(),
             version: i.active_version.clone(),
             bindings: i.bindings.clone(),
+            owner_history_source: i.owner_history_source.clone(),
             published_at: i.updated_at.clone(),
         });
 
@@ -154,6 +155,7 @@ impl PluginRegistry {
             enabled: true,
             bindings: initial_bindings,
             grants: initial_grants,
+            owner_history_source: existing.and_then(|i| i.owner_history_source.clone()),
             previous_package,
             created_at: existing
                 .map(|i| i.created_at.clone())

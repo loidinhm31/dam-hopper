@@ -45,6 +45,7 @@ pub fn validate_inventory_match(
 
     for (path, entry) in entries {
         if path != "manifest.json"
+            && path != "inventory.json"
             && !entry.is_dir
             && !manifest.inventory.iter().any(|i| &i.path == path)
         {

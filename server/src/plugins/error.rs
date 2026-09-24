@@ -89,6 +89,14 @@ impl PluginError {
         Self::new(PluginErrorCode::WorkerFailed, message)
     }
 
+    pub fn source_missing(message: impl Into<String>) -> Self {
+        Self::new(PluginErrorCode::SourceMissing, message)
+    }
+
+    pub fn source_permission_denied(message: impl Into<String>) -> Self {
+        Self::new(PluginErrorCode::SourcePermissionDenied, message)
+    }
+
     pub fn context_revoked(message: impl Into<String>) -> Self {
         Self::new(PluginErrorCode::ContextRevoked, message)
     }

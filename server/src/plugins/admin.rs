@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::contract::GrantKey;
 use super::error::PluginError;
+pub use super::registry_state::OwnerHistorySource;
 pub use super::trust::{AdminSubjectList, StageReviewDto};
 
 /// Configuration file format for host-seeded plugin administrators.
@@ -133,6 +134,8 @@ pub struct ApproveStageParams {
     pub initial_bindings: BTreeMap<String, String>,
     #[serde(default)]
     pub initial_grants: Vec<GrantKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_history_source: Option<OwnerHistorySource>,
     pub actor_subject: String,
 }
 
@@ -188,6 +191,16 @@ pub struct ReplaceBindingsParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplaceOwnerHistorySourceParams {
+    pub installation_id: String,
+    pub expected_security_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_history_source: Option<OwnerHistorySource>,
+    pub actor_subject: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminListParams {
     pub actor_subject: String,
 }
@@ -205,6 +218,8 @@ pub struct RollbackPackageSnapshotDto {
     pub package_digest: String,
     pub version: String,
     pub bindings: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_history_source: Option<OwnerHistorySource>,
     pub published_at: String,
 }
 
@@ -219,6 +234,8 @@ pub struct AdminInstallationDto {
     pub enabled: bool,
     pub bindings: BTreeMap<String, String>,
     pub grants: Vec<GrantKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_history_source: Option<OwnerHistorySource>,
     pub has_ui: bool,
     pub worker_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -257,6 +274,8 @@ pub struct ApproveStageRequest {
     pub initial_bindings: BTreeMap<String, String>,
     #[serde(default)]
     pub initial_grants: Vec<GrantKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_history_source: Option<OwnerHistorySource>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -277,6 +296,14 @@ pub struct ReplaceGrantsRequest {
 pub struct ReplaceBindingsRequest {
     pub expected_security_revision: u64,
     pub bindings: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplaceOwnerHistorySourceRequest {
+    pub expected_security_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_history_source: Option<OwnerHistorySource>,
 }
 
 // ---------------------------------------------------------------------------

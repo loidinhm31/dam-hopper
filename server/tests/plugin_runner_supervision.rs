@@ -5,7 +5,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
+use dam_hopper_server::plugins::contract::{ContextScopeDescriptor, ContextScopeKind};
+use dam_hopper_server::plugins::registry_state::OwnerHistorySource;
 use dam_hopper_server::plugins::{
     AdminSubjectList, CancelOutcome, ContextCloseParams, ContextOpenParams, PluginErrorCode,
     PluginInvokeParams, PluginRegistry, PluginRegistryLayout, RequestCancelParams, RunnerClient,
@@ -657,4 +661,205 @@ async fn test_stale_context_revocation_across_worker_restarts() {
         invoke_err.code == PluginErrorCode::ContextRevoked
             || invoke_err.code == PluginErrorCode::InvalidInput
     );
+}
+#[tokio::test]
+async fn test_runner_supervision_root_history_validation_and_rejections() {
+    let temp_dir = TempDir::new().unwrap();
+    let (registry, installation_id, _) = setup_test_installation(&temp_dir);
+
+    let node_bin = find_node_bin();
+    let sup_mgr = Arc::new(SupervisorManager::new(registry.clone(), node_bin));
+
+    let sup = sup_mgr.get_or_create(&installation_id).await.unwrap();
+    sup.activate().await.unwrap();
+
+    let history_dir = temp_dir.path().join("real_history");
+    std::fs::create_dir_all(&history_dir).unwrap();
+    let root_identity = "78be05fd4e2291fb9eb0b5f9e1cf560bc8e14f7d78406d29a5d86f878ceb69f8".to_string();
+
+    let owner_source = OwnerHistorySource {
+        root_path: history_dir.to_string_lossy().to_string(),
+        root_identity: root_identity.clone(),
+        source_revision: 1,
+        all_authenticated_history_read: true,
+    };
+    let reg_rev = registry.read_state().unwrap().registry_revision;
+    registry
+        .update_owner_history_source("admin-user", &installation_id, reg_rev, Some(owner_source.clone()))
+        .unwrap();
+    // 1. Success case: valid scope descriptor matches owner source
+    let open_res = sup
+        .open_context(ContextOpenParams {
+            actor_subject: "user-bob".to_string(),
+            installation_id: installation_id.clone(),
+            configured_project_target: "*".to_string(),
+            scope: Some(ContextScopeDescriptor {
+                kind: ContextScopeKind::HistoryRoot,
+                root_identity: Some(root_identity.clone()),
+                source_revision: Some(1),
+            }),
+            worktree_path: None,
+            allowed_operations: vec!["snapshot.summary".to_string()],
+            allow_current_account_policy: false,
+            api_connection_epoch: 1,
+            activation_generation: sup.activation_generation(),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(open_res.scope_kind, Some(ContextScopeKind::HistoryRoot));
+
+    // 2. Reject mismatched root identity
+    let err_id = sup
+        .open_context(ContextOpenParams {
+            actor_subject: "user-bob".to_string(),
+            installation_id: installation_id.clone(),
+            configured_project_target: "*".to_string(),
+            scope: Some(ContextScopeDescriptor {
+                kind: ContextScopeKind::HistoryRoot,
+                root_identity: Some("f".repeat(64)),
+                source_revision: Some(1),
+            }),
+            worktree_path: None,
+            allowed_operations: vec!["snapshot.summary".to_string()],
+            allow_current_account_policy: false,
+            api_connection_epoch: 1,
+            activation_generation: sup.activation_generation(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err_id.code, PluginErrorCode::Forbidden);
+
+    // 3. Reject mismatched source revision
+    let err_rev = sup
+        .open_context(ContextOpenParams {
+            actor_subject: "user-bob".to_string(),
+            installation_id: installation_id.clone(),
+            configured_project_target: "*".to_string(),
+            scope: Some(ContextScopeDescriptor {
+                kind: ContextScopeKind::HistoryRoot,
+                root_identity: Some(root_identity.clone()),
+                source_revision: Some(99),
+            }),
+            worktree_path: None,
+            allowed_operations: vec!["snapshot.summary".to_string()],
+            allow_current_account_policy: false,
+            api_connection_epoch: 1,
+            activation_generation: sup.activation_generation(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err_rev.code, PluginErrorCode::Forbidden);
+
+    // 4. Reject symlink as root path
+    #[cfg(unix)]
+    {
+        let symlink_path = temp_dir.path().join("symlink_history");
+        std::os::unix::fs::symlink(&history_dir, &symlink_path).unwrap();
+        let symlink_source = OwnerHistorySource {
+            root_path: symlink_path.to_string_lossy().to_string(),
+            root_identity: root_identity.clone(),
+            source_revision: 2,
+            all_authenticated_history_read: true,
+        };
+        let reg_rev2 = registry.read_state().unwrap().registry_revision;
+        registry
+            .update_owner_history_source("admin-user", &installation_id, reg_rev2, Some(symlink_source))
+            .unwrap();
+
+        let err_symlink = sup
+            .open_context(ContextOpenParams {
+                actor_subject: "user-bob".to_string(),
+                installation_id: installation_id.clone(),
+                configured_project_target: "*".to_string(),
+                scope: Some(ContextScopeDescriptor {
+                    kind: ContextScopeKind::HistoryRoot,
+                    root_identity: Some(root_identity.clone()),
+                    source_revision: Some(2),
+                }),
+                worktree_path: None,
+                allowed_operations: vec!["snapshot.summary".to_string()],
+                allow_current_account_policy: false,
+                api_connection_epoch: 1,
+                activation_generation: sup.activation_generation(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err_symlink.code, PluginErrorCode::SourcePermissionDenied);
+        // 4b. Reject ancestor symlink in root path
+        let parent_dir = temp_dir.path().join("real_parent");
+        let child_dir = parent_dir.join("child");
+        std::fs::create_dir_all(&child_dir).unwrap();
+        let symlink_parent = temp_dir.path().join("symlink_parent");
+        std::os::unix::fs::symlink(&parent_dir, &symlink_parent).unwrap();
+        let ancestor_symlink_path = symlink_parent.join("child");
+
+        let ancestor_symlink_source = OwnerHistorySource {
+            root_path: ancestor_symlink_path.to_string_lossy().to_string(),
+            root_identity: root_identity.clone(),
+            source_revision: 3,
+            all_authenticated_history_read: true,
+        };
+        let reg_rev_anc = registry.read_state().unwrap().registry_revision;
+        registry
+            .update_owner_history_source("admin-user", &installation_id, reg_rev_anc, Some(ancestor_symlink_source))
+            .unwrap();
+
+        let err_ancestor = sup
+            .open_context(ContextOpenParams {
+                actor_subject: "user-bob".to_string(),
+                installation_id: installation_id.clone(),
+                configured_project_target: "*".to_string(),
+                scope: Some(ContextScopeDescriptor {
+                    kind: ContextScopeKind::HistoryRoot,
+                    root_identity: Some(root_identity.clone()),
+                    source_revision: Some(3),
+                }),
+                worktree_path: None,
+                allowed_operations: vec!["snapshot.summary".to_string()],
+                allow_current_account_policy: false,
+                api_connection_epoch: 1,
+                activation_generation: sup.activation_generation(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err_ancestor.code, PluginErrorCode::SourcePermissionDenied);
+        // 5. Reject root directory not owned by the runner owner UID
+        let current_uid = unsafe { libc::geteuid() };
+        if current_uid != 0 && std::path::Path::new("/proc/1").exists() {
+            let proc_meta = std::fs::symlink_metadata("/proc/1").unwrap();
+            if proc_meta.uid() != current_uid {
+                let wrong_uid_source = OwnerHistorySource {
+                    root_path: "/proc/1".to_string(),
+                    root_identity: root_identity.clone(),
+                    source_revision: 3,
+                    all_authenticated_history_read: true,
+                };
+                let reg_rev3 = registry.read_state().unwrap().registry_revision;
+                registry
+                    .update_owner_history_source("admin-user", &installation_id, reg_rev3, Some(wrong_uid_source))
+                    .unwrap();
+
+                let err_uid = sup
+                    .open_context(ContextOpenParams {
+                        actor_subject: "user-bob".to_string(),
+                        installation_id: installation_id.clone(),
+                        configured_project_target: "*".to_string(),
+                        scope: Some(ContextScopeDescriptor {
+                            kind: ContextScopeKind::HistoryRoot,
+                            root_identity: Some(root_identity.clone()),
+                            source_revision: Some(3),
+                        }),
+                        worktree_path: None,
+                        allowed_operations: vec!["snapshot.summary".to_string()],
+                        allow_current_account_policy: false,
+                        api_connection_epoch: 1,
+                        activation_generation: sup.activation_generation(),
+                    })
+                    .await
+                    .unwrap_err();
+                assert_eq!(err_uid.code, PluginErrorCode::SourcePermissionDenied);
+            }
+        }
+    }
 }

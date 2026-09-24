@@ -5,11 +5,10 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::api::auth::AuthenticatedActor;
-use crate::plugins::contract::PluginMetadataItem;
+use crate::plugins::contract::{ContextScopeKind, PluginMetadataItem};
 use crate::plugins::error::{PluginError, PluginErrorCode};
 use crate::state::AppState;
 use crate::workspace_target::ProjectTargetRef;
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListPluginsQuery {
@@ -36,6 +35,8 @@ pub struct OpenContextRequest {
     pub epoch: u64,
     pub installation_id: String,
     pub target: TargetWireDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_kind: Option<ContextScopeKind>,
     #[serde(default)]
     pub allowed_operations: Vec<String>,
     #[serde(default)]
@@ -186,11 +187,15 @@ pub async fn open_context_handler(
     {
         Ok(path) => path,
         Err(e) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Project target not found: {e}") })),
-            )
-                .into_response();
+            if request.scope_kind == Some(ContextScopeKind::HistoryRoot) {
+                std::path::PathBuf::from("/")
+            } else {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": format!("Project target not found: {e}") })),
+                )
+                    .into_response();
+            }
         }
     };
 
@@ -207,6 +212,7 @@ pub async fn open_context_handler(
             &request.installation_id,
             &target_ref,
             &configured_root,
+            request.scope_kind,
             request.allowed_operations,
             request.allow_current_account_policy,
             state.no_auth,

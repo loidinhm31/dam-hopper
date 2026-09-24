@@ -19,7 +19,7 @@ use super::lifecycle_journal::{
 use super::package::inspect_and_validate_package;
 use super::package_extract::{extract_package_archive, publish_extracted_package};
 use super::registry::PluginRegistry;
-use super::registry_state::{InstallationRecord, RegisteredPackageRecord, RollbackPackageSnapshot};
+use super::registry_state::{InstallationRecord, OwnerHistorySource, RegisteredPackageRecord, RollbackPackageSnapshot};
 use super::trust::{validate_stage_approval, AdminSubjectList};
 use super::worker_supervisor::SupervisorManager;
 
@@ -71,6 +71,7 @@ impl LifecycleCoordinator {
             package_digest: p.package_digest.clone(),
             version: p.version.clone(),
             bindings: p.bindings.clone(),
+            owner_history_source: p.owner_history_source.clone(),
             published_at: p.published_at.clone(),
         });
         let can_rollback = inst.previous_package.is_some();
@@ -84,6 +85,7 @@ impl LifecycleCoordinator {
             enabled: inst.enabled,
             bindings: inst.bindings.clone(),
             grants: inst.grants.clone(),
+            owner_history_source: inst.owner_history_source.clone(),
             has_ui,
             worker_status,
             previous_package,
@@ -181,6 +183,7 @@ impl LifecycleCoordinator {
         expected_security_revision: u64,
         initial_bindings: BTreeMap<String, String>,
         initial_grants: Vec<GrantKey>,
+        owner_history_source: Option<OwnerHistorySource>,
     ) -> Result<AdminInstallationDto, PluginError> {
         if !self.admin_subjects().is_admin(actor) {
             return Err(PluginError::unauthorized(format!(
@@ -419,6 +422,7 @@ impl LifecycleCoordinator {
                     package_digest: i.active_package_digest.clone(),
                     version: i.active_version.clone(),
                     bindings: i.bindings.clone(),
+                    owner_history_source: i.owner_history_source.clone(),
                     published_at: i.updated_at.clone(),
                 });
 
@@ -432,7 +436,11 @@ impl LifecycleCoordinator {
                 } else {
                     initial_grants
                 };
-
+                let final_owner_history_source = if is_update && owner_history_source.is_none() {
+                    existing_item.and_then(|i| i.owner_history_source.clone())
+                } else {
+                    owner_history_source
+                };
                 let inst_record = InstallationRecord {
                     installation_id: installation_id.clone(),
                     plugin_id: review.plugin_id.clone(),
@@ -442,6 +450,7 @@ impl LifecycleCoordinator {
                     enabled: true,
                     bindings: final_bindings,
                     grants: final_grants,
+                    owner_history_source: final_owner_history_source,
                     previous_package,
                     created_at: existing_item
                         .map(|i| i.created_at.clone())
@@ -657,6 +666,9 @@ impl LifecycleCoordinator {
                     fresh_inst.enabled = effective_enabled;
                     if fresh_inst.bindings == inst.bindings {
                         fresh_inst.bindings = previous.bindings.clone();
+                    }
+                    if fresh_inst.owner_history_source == inst.owner_history_source {
+                        fresh_inst.owner_history_source = previous.owner_history_source.clone();
                     }
                     fresh_inst.previous_package = None;
                     fresh_inst.updated_at = now_str.clone();
@@ -1201,6 +1213,78 @@ impl LifecycleCoordinator {
         };
 
         let mut audit = AdminAuditRecord::new(actor, "replace_bindings", sec_rev, "success");
+        audit.installation_id = Some(installation_id.to_string());
+        record_admin_audit(&audit);
+
+        let worker_status = if !updated_inst.enabled {
+            "stopped".to_string()
+        } else {
+            self.supervisor_manager.get_status(installation_id).await
+        };
+
+        Ok(self.to_admin_dto(&updated_inst, sec_rev, worker_status, has_ui))
+    }
+
+    /// Replace owner-history source for an installation, advancing security revision.
+    pub async fn replace_owner_history_source(
+        &self,
+        actor: &str,
+        installation_id: &str,
+        expected_security_revision: u64,
+        owner_history_source: Option<OwnerHistorySource>,
+    ) -> Result<AdminInstallationDto, PluginError> {
+        if !self.admin_subjects().is_admin(actor) {
+            return Err(PluginError::unauthorized(format!(
+                "Actor '{actor}' is not authorized plugin administrator"
+            )));
+        }
+
+        if let Some(source) = &owner_history_source {
+            source.validate()?;
+        }
+
+        let inst_lock = self.get_installation_lock(installation_id).await;
+        let _guard = inst_lock.lock().await;
+
+        let (updated_inst, sec_rev, has_ui) = {
+            let _state_guard = self.registry.state_lock.lock();
+            let mut fresh_state = self.registry.read_state()?;
+            if fresh_state.security_revision != expected_security_revision {
+                return Err(PluginError::forbidden(format!(
+                    "Security revision advance: expected {expected_security_revision}, got {}",
+                    fresh_state.security_revision
+                )));
+            }
+
+            let (inst_clone, pkg_key) = {
+                let inst = fresh_state.installations.get_mut(installation_id).ok_or_else(|| {
+                    PluginError::invalid_input(format!("Installation '{installation_id}' not found"))
+                })?;
+
+                inst.owner_history_source = owner_history_source;
+                inst.updated_at = Utc::now().to_rfc3339();
+
+                let pkg_key = format!(
+                    "{}@{}#{}",
+                    inst.plugin_id, inst.active_version, inst.active_package_digest
+                );
+                (inst.clone(), pkg_key)
+            };
+
+            fresh_state.security_revision += 1;
+            fresh_state.registry_revision += 1;
+            self.registry.write_state(&fresh_state)?;
+
+            let has_ui = fresh_state
+                .packages
+                .get(&pkg_key)
+                .map(|p| p.entrypoints.ui.is_some())
+                .unwrap_or(false);
+
+            (inst_clone, fresh_state.security_revision, has_ui)
+        };
+
+        let mut audit = AdminAuditRecord::new(actor, "replace_owner_history_source", sec_rev, "success");
         audit.installation_id = Some(installation_id.to_string());
         record_admin_audit(&audit);
 

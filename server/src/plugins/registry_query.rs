@@ -15,6 +15,13 @@ fn has_ui_visibility(
     actor_subject: &str,
     project_target: &str,
 ) -> bool {
+    if installation
+        .owner_history_source
+        .as_ref()
+        .map_or(false, |s| s.all_authenticated_history_read)
+    {
+        return true;
+    }
     let target_is_bound = installation.bindings.contains_key(project_target)
         || installation
             .bindings
@@ -57,6 +64,7 @@ impl PluginRegistry {
                     active_digest: inst.active_package_digest.clone(),
                     active_generation: inst.activation_generation,
                     enabled: inst.enabled,
+                    owner_history_source: inst.owner_history_source.clone(),
                 });
             }
         }
@@ -211,6 +219,47 @@ impl PluginRegistry {
 
         Ok(result)
     }
+
+    pub fn update_owner_history_source(
+        &self,
+        actor: &str,
+        installation_id: &str,
+        expected_registry_rev: u64,
+        source: Option<super::registry_state::OwnerHistorySource>,
+    ) -> Result<InstallationRecord, PluginError> {
+        if !self.admin_subjects.is_admin(actor) {
+            return Err(PluginError::unauthorized("Actor is not authorized admin"));
+        }
+
+        if let Some(s) = &source {
+            s.validate()?;
+        }
+
+        let _guard = self.state_lock.lock();
+        let mut state = self.read_state()?;
+        if state.registry_revision != expected_registry_rev {
+            return Err(PluginError::forbidden(format!(
+                "Registry revision mismatch: expected {}, current is {}",
+                expected_registry_rev, state.registry_revision
+            )));
+        }
+
+        let inst = state
+            .installations
+            .get_mut(installation_id)
+            .ok_or_else(|| {
+                PluginError::invalid_input(format!("Installation '{installation_id}' not found"))
+            })?;
+
+        inst.owner_history_source = source;
+        inst.updated_at = Utc::now().to_rfc3339();
+        let result = inst.clone();
+
+        state.registry_revision += 1;
+        self.write_state(&state)?;
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +282,7 @@ mod tests {
                 allowed_operations: vec!["advisor.scan".to_string()],
                 allow_current_account_policy: false,
             }],
+            owner_history_source: None,
             previous_package: None,
             created_at: "2026-09-22T00:00:00Z".to_string(),
             updated_at: "2026-09-22T00:00:00Z".to_string(),
@@ -248,6 +298,24 @@ mod tests {
 
         inst.bindings.clear();
         assert!(!has_ui_visibility(&inst, "actor-a", "project-a"));
+    }
+    #[test]
+    fn ui_visibility_permits_authenticated_actor_when_owner_history_source_configured() {
+        let mut inst = installation();
+        inst.owner_history_source = Some(super::super::registry_state::OwnerHistorySource {
+            root_path: "/var/log/advisor".to_string(),
+            root_identity: "a".repeat(64),
+            source_revision: 1,
+            all_authenticated_history_read: true,
+        });
+        // Any actor has UI visibility regardless of explicit project grants/bindings
+        assert!(has_ui_visibility(&inst, "any-authenticated-user", "any-project"));
+        assert!(has_ui_visibility(&inst, "unrelated-user", "random-target"));
+
+        // If all_authenticated_history_read is false, falls back to explicit grants
+        inst.owner_history_source.as_mut().unwrap().all_authenticated_history_read = false;
+        assert!(has_ui_visibility(&inst, "actor-a", "project-a"));
+        assert!(!has_ui_visibility(&inst, "actor-b", "project-a"));
     }
 
     #[test]

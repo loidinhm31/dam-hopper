@@ -692,6 +692,20 @@ impl RunnerClient {
             PluginError::invalid_input(format!("Failed to parse replace bindings result: {e}"))
         })
     }
+    pub async fn admin_replace_owner_history_source(
+        &self,
+        params: ReplaceOwnerHistorySourceParams,
+    ) -> Result<AdminInstallationDto, PluginError> {
+        let res = self
+            .execute_call(
+                "management.ownerHistorySource.replace",
+                serde_json::to_value(params).unwrap(),
+            )
+            .await?;
+        serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse replace owner history source result: {e}"))
+        })
+    }
 
     pub async fn admin_list_installations(
         &self,
