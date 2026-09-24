@@ -6,6 +6,7 @@ import {
   buildVerifiedPluginDocument,
   MAX_PLUGIN_UI_BYTES,
 } from "./plugin-document.js";
+import { pluginNavigationItem } from "./use-plugin-navigation.js";
 
 const originalCrypto = globalThis.crypto;
 
@@ -98,5 +99,67 @@ describe("buildVerifiedPluginDocument", () => {
         activationGeneration: 4,
       }),
     ).rejects.toThrow(/5 MiB/);
+  });
+
+  it("computes correct SHA-256 using fallback implementation when crypto.subtle is unavailable", async () => {
+    const originalSubtle = globalThis.crypto?.subtle;
+    try {
+      Object.defineProperty(globalThis.crypto, "subtle", {
+        configurable: true,
+        value: undefined,
+      });
+      const input = fixture();
+      const result = await buildVerifiedPluginDocument({
+        bytes: input.bytes,
+        expectedDigest: input.digest,
+        frameSession: "session-fallback",
+        activationGeneration: 1,
+      });
+      expect(result.digest).toBe(input.digest);
+      expect(result.srcdoc).toContain('http-equiv="Content-Security-Policy"');
+    } finally {
+      Object.defineProperty(globalThis.crypto, "subtle", {
+        configurable: true,
+        value: originalSubtle,
+      });
+    }
+  });
+});
+
+describe("pluginNavigationItem labels", () => {
+  const baseMeta = {
+    activeDigest: "a".repeat(64),
+    activeGeneration: 1,
+    capabilities: ["history.summary"],
+    enabled: true,
+    hasUi: true,
+    version: "1.0.0",
+  };
+
+  it("labels evcrate.advisor or evcrate publisher as EVCrate Advisor", () => {
+    const item1 = pluginNavigationItem({
+      ...baseMeta,
+      id: "evcrate.advisor",
+      publisher: "any",
+    });
+    expect(item1.label).toBe("EVCrate Advisor");
+
+    const item2 = pluginNavigationItem({
+      ...baseMeta,
+      id: "custom.plugin",
+      publisher: "evcrate",
+    });
+    expect(item2.label).toBe("EVCrate Advisor");
+  });
+
+  it("does not label unrelated long plugin IDs as EVCrate Advisor", () => {
+    const longId = "abcdef01-2345-6789-abcd-ef0123456789";
+    const item = pluginNavigationItem({
+      ...baseMeta,
+      id: longId,
+      publisher: "community",
+    });
+    expect(item.label).toBe(longId.toUpperCase());
+    expect(item.label).not.toContain("EVCrate");
   });
 });

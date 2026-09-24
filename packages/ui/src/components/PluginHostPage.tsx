@@ -193,10 +193,10 @@ export function PluginHostPage() {
 
   const title =
     model.kind === "ready"
-      ? (model.metadata.id === "evcrate.advisor" || model.metadata.publisher === "evcrate" || model.metadata.id.length > 20
+      ? (model.metadata.id === "evcrate.advisor" || model.metadata.publisher === "evcrate"
           ? "EVCrate Advisor"
           : model.metadata.id)
-      : (installationId.length > 20 ? "EVCrate Advisor" : (installationId || "Plugin"));
+      : (installationId === "evcrate.advisor" ? "EVCrate Advisor" : (installationId || "Plugin"));
   return (
     <AppLayout title={`Plugin · ${title}`}>
       <div className="plugin-host-page">
