@@ -17,6 +17,12 @@ export interface PluginMetadataItem {
   activeDigest: string;
   activeGeneration: number;
   enabled: boolean;
+  ownerHistorySource?: {
+    rootPath: string;
+    rootIdentity: string;
+    sourceRevision: number;
+    allAuthenticatedHistoryRead: boolean;
+  };
 }
 
 export interface ListPluginsResponse {
