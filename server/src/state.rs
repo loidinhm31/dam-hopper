@@ -298,6 +298,14 @@ impl AppState {
             ));
 
             tracing::error!("⚠️  NO-AUTH mode enabled — authentication bypassed");
+        } else if db.is_none()
+            && (std::env::var("RUST_ENV").unwrap_or_default() == "production"
+                || std::env::var("ENVIRONMENT").unwrap_or_default() == "production")
+        {
+            anyhow::bail!(
+                "FATAL: MongoDB configuration (MONGODB_URI and MONGODB_DATABASE) is required in production environment.\n\
+                 Set MONGODB_URI and MONGODB_DATABASE or use development mode for local dev."
+            );
         }
 
         let browser_debug_artifacts = BrowserDebugArtifactManager::new()

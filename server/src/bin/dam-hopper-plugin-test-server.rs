@@ -57,8 +57,8 @@ enum TransportDeclaration {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "dam-hopper-plugin-g2-harness",
-    about = "Disposable authenticated D04/E03 G2 qualification server"
+    name = "dam-hopper-plugin-test-server",
+    about = "Integrated development and qualification test server for DamHopper plugins"
 )]
 struct Args {
     #[arg(long)]
@@ -394,6 +394,12 @@ async fn main() -> anyhow::Result<()> {
 
     let app = build_router_with_web_dir_and_origins(state, Vec::new(), Some(web_dir));
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
+    println!(
+        "PLUGIN_SERVER_READY session={} listen={} origin={}",
+        session_path.display(),
+        args.bind,
+        public_origin
+    );
     println!(
         "G2_READY session={} listen={} origin={}",
         session_path.display(),
