@@ -392,7 +392,11 @@ async fn main() -> anyhow::Result<()> {
     fs::write(&session_path, serde_json::to_vec_pretty(&descriptor)?)?;
     fs::set_permissions(&session_path, fs::Permissions::from_mode(0o600))?;
 
-    let app = build_router_with_web_dir_and_origins(state, Vec::new(), Some(web_dir));
+    let allowed_origins = axum::http::HeaderValue::from_str(&public_origin)
+        .ok()
+        .map(|v| vec![v])
+        .unwrap_or_default();
+    let app = build_router_with_web_dir_and_origins(state, allowed_origins, Some(web_dir));
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     println!(
         "PLUGIN_SERVER_READY session={} listen={} origin={}",
