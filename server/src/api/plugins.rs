@@ -350,6 +350,7 @@ mod tests {
                 active_digest: "a".repeat(64),
                 active_generation: 4,
                 enabled: true,
+                owner_history_source: None,
             }],
         };
 

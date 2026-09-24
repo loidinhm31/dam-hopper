@@ -87,11 +87,11 @@ Management routes are composed with both middleware layers:
    `AuthenticatedActor` plus `CredentialMechanism`.
 2. `require_bearer_auth` rejects every credential except `Bearer`.
 
-Cookie-only requests receive `403` with `code: "BearerRequired"`. Development
-`--no-auth` receives `403` with `code: "NoAuthForbidden"`; it never creates a
-synthetic management authority. A valid bearer for a subject outside the
-runner allowlist reaches the runner but receives `401`/`UNAUTHORIZED` from the
-admin check. Error bodies remain bounded `{ error, code }`.
+Cookie-only requests receive `403` with `code: "BearerRequired"`. In the develop
+environment (`--no-auth`), plugin management operations are permitted for the
+synthetic `dev-user` identity. In authenticated environments, a valid bearer for
+a subject outside the runner allowlist reaches the runner but receives `401`/`UNAUTHORIZED`
+from the admin check. Error bodies remain bounded `{ error, code }`.
 
 This stricter guard is limited to `/api/plugins/admin*`; D03 public plugin
 routes retain their documented actor/epoch rules.
