@@ -279,6 +279,7 @@ impl PluginApiService {
             actor_subject: actor.subject.clone(),
             installation_id: installation_id.to_string(),
             configured_project_target: resolved_target.target_path().to_string_lossy().to_string(),
+            scope: None,
             worktree_path: target_ref.worktree_path.clone(),
             allowed_operations: allowed_operations.clone(),
             allow_current_account_policy,

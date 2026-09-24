@@ -96,10 +96,19 @@ export interface PluginDeactivateResult {
   status: 'inactive';
 }
 
+export type ContextScopeKind = 'project' | 'history-root';
+
+export interface ContextScopeDescriptor {
+  kind: ContextScopeKind;
+  rootIdentity?: string;
+  sourceRevision?: number;
+}
+
 export interface ContextOpenParams {
   actorSubject: string;
   installationId: string;
   configuredProjectTarget: string;
+  scope?: ContextScopeDescriptor;
   worktreePath?: string;
   allowedOperations: string[];
   allowCurrentAccountPolicy: boolean;
@@ -109,6 +118,7 @@ export interface ContextOpenParams {
 
 export interface ContextOpenResult {
   contextId: string;
+  scopeKind?: ContextScopeKind;
   bindingRevision: number;
   grantRevision: number;
   activationGeneration: number;

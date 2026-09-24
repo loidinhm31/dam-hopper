@@ -1,0 +1,19 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req-003",
+  "method": "context.open",
+  "params": {
+    "actorSubject": "user-bob",
+    "installationId": "inst-123",
+    "configuredProjectTarget": "*",
+    "scope": {
+      "kind": "invalid-scope-kind"
+    },
+    "allowedOperations": [
+      "history.refresh"
+    ],
+    "allowCurrentAccountPolicy": false,
+    "apiConnectionEpoch": 1,
+    "activationGeneration": 1
+  }
+}

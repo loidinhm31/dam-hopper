@@ -323,8 +323,10 @@ impl InstallationSupervisor {
             }
         }
 
+        let scope_kind = params.scope.as_ref().map(|s| s.kind);
         Ok(ContextOpenResult {
             context_id,
+            scope_kind,
             binding_revision: 1,
             grant_revision: 1,
             activation_generation: self.activation_generation,
