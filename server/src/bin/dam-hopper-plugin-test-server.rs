@@ -397,6 +397,14 @@ async fn main() -> anyhow::Result<()> {
         .map(|v| vec![v])
         .unwrap_or_default();
     let app = build_router_with_web_dir_and_origins(state, allowed_origins, Some(web_dir));
+    let auth_state = Arc::new(AuthState {
+        token: descriptor.token.clone(),
+        actor: descriptor.actor.clone(),
+    });
+    let app = app.layer(axum::middleware::from_fn_with_state(
+        auth_state,
+        auto_auth_middleware,
+    ));
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     println!(
         "PLUGIN_SERVER_READY session={} listen={} origin={}",
@@ -419,4 +427,78 @@ async fn main() -> anyhow::Result<()> {
     result?;
     runner_result?;
     Ok(())
+}
+
+#[derive(Clone)]
+struct AuthState {
+    token: String,
+    actor: String,
+}
+
+async fn auto_auth_middleware(
+    axum::extract::State(auth): axum::extract::State<Arc<AuthState>>,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = request.uri().path().to_string();
+    let method = request.method().clone();
+
+    if path == "/api/auth/login" && method == axum::http::Method::POST {
+        let cookie_val = format!("damhopper-auth={}; HttpOnly; SameSite=Lax; Path=/", auth.token);
+        let body = serde_json::json!({
+            "ok": true,
+            "token": auth.token,
+            "user": auth.actor,
+            "dev_mode": true
+        });
+        let mut resp = axum::response::IntoResponse::into_response((
+            axum::http::StatusCode::OK,
+            axum::Json(body),
+        ));
+        if let Ok(header_val) = axum::http::HeaderValue::from_str(&cookie_val) {
+            resp.headers_mut().append(axum::http::header::SET_COOKIE, header_val);
+        }
+        return resp;
+    }
+
+    let has_auth = request.headers().contains_key(axum::http::header::AUTHORIZATION);
+    let has_cookie = request
+        .headers()
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .map(|c| c.contains("damhopper-auth="))
+        .unwrap_or(false);
+
+    if !has_auth && !has_cookie {
+        if let Ok(bearer_val) = axum::http::HeaderValue::from_str(&format!("Bearer {}", auth.token)) {
+            request.headers_mut().insert(axum::http::header::AUTHORIZATION, bearer_val);
+        }
+    }
+
+    if path == "/ws" && !has_cookie {
+        let uri = request.uri();
+        let new_uri = if let Some(query) = uri.query() {
+            if !query.contains("token=") {
+                format!("{}?{}&token={}", uri.path(), query, auth.token)
+            } else {
+                uri.to_string()
+            }
+        } else {
+            format!("{}?token={}", uri.path(), auth.token)
+        };
+        if let Ok(parsed) = new_uri.parse::<axum::http::Uri>() {
+            *request.uri_mut() = parsed;
+        }
+    }
+
+    let mut response = next.run(request).await;
+
+    if !has_cookie {
+        let cookie_val = format!("damhopper-auth={}; HttpOnly; SameSite=Lax; Path=/", auth.token);
+        if let Ok(header_val) = axum::http::HeaderValue::from_str(&cookie_val) {
+            response.headers_mut().append(axum::http::header::SET_COOKIE, header_val);
+        }
+    }
+
+    response
 }
