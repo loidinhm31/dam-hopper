@@ -265,6 +265,32 @@ async fn main() -> anyhow::Result<()> {
             current_reg_rev,
             Some(src.clone()),
         )?;
+
+        // Register project name in project-metadata.json so the UI displays target name instead of hash
+        let target_project_id = {
+            let mut hasher = Sha256::new();
+            hasher.update(project_path.display().to_string().as_bytes());
+            hex::encode(hasher.finalize())
+        };
+        let meta_file = canonical.join("project-metadata.json");
+        let mut meta_json: serde_json::Value = if meta_file.exists() {
+            fs::read_to_string(&meta_file)
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_else(|| serde_json::json!({ "version": 1, "projects": {} }))
+        } else {
+            serde_json::json!({ "version": 1, "projects": {} })
+        };
+        if let Some(projects_map) = meta_json.get_mut("projects").and_then(|p| p.as_object_mut()) {
+            projects_map.insert(
+                target_project_id,
+                serde_json::json!({
+                    "name": args.project_name,
+                    "updated_at": chrono::Utc::now().timestamp_millis()
+                }),
+            );
+            let _ = fs::write(&meta_file, serde_json::to_string_pretty(&meta_json).unwrap_or_default());
+        }
         Some(src)
     } else {
         None
