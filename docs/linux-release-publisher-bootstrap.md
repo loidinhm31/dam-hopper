@@ -144,11 +144,11 @@ requires `^v[0-9]+\.[0-9]+\.[0-9]+$`, and runs:
 node deploy/release/check-version-alignment.mjs vX.Y.Z
 ```
 
-`build-rust` invokes Cargo's `--bins` build (including the optional
-`dam-hopper-idle-suspend-helper`) with release optimizations, the `vendored`
-feature, and target `x86_64-unknown-linux-gnu`; the workflow version-checks and
-uploads the manager/server/web binaries, while archive assembly copies the
-helper when that output is present. `build-web` installs with
+`build-rust` invokes Cargo's `--bins` build with release optimizations, the
+`vendored` feature, and target `x86_64-unknown-linux-gnu`. The workflow checks
+`--version` output and uploads all five Linux release binaries, including
+`dam-hopper-plugin-runner`; downloaded binaries have executable mode restored
+before packaging. `build-web` installs with
 `pnpm install --frozen-lockfile` using pnpm 10 and Node 24, builds
 `@dam-hopper/web`, requires `apps/web/dist/index.html`, and rejects the
 host-specific `VITE_DAM_HOPPER_SERVER_URL` string in the output.
@@ -159,20 +159,27 @@ host-specific `VITE_DAM_HOPPER_SERVER_URL` string in the output.
 `--web-dist`, `--output-dir`, and `--source-date-epoch`. It stages:
 
 - `bin/dam-hopper-manager` (from `dam-hopper` or `dam-hopper-manager`),
-  `bin/dam-hopper-server`, and `bin/dam-hopper-web`;
-- `bin/dam-hopper-idle-suspend-helper` when the optional helper build output
-  is present;
-- API, web, and recovery systemd templates under `systemd/`;
-- the helper service and socket templates under `systemd/` when those optional
-  source assets are present;
+  `bin/dam-hopper-server`, `bin/dam-hopper-web`,
+  `bin/dam-hopper-idle-suspend-helper`, and
+  `bin/dam-hopper-plugin-runner`;
+- API, web, recovery, helper, and plugin-runner systemd files under `systemd/`;
+- `tmpfiles.d/dam-hopper-plugin-runner.conf`;
 - `sysusers.d/dam-hopper-web.conf`;
 - `LICENSE`; and
 - the built web tree under `web/`.
 
-Archive assembly accepts helper binary and unit assets as optional for older or
-non-helper builds. A server-role production archive must nevertheless include
-`bin/dam-hopper-idle-suspend-helper` for runtime enrollment; a checked-in
-template fallback used by local/test staging does not provide that executable.
+The stable release packager requires and copies the helper binary and service;
+local checked-in template fallbacks do not make release assets optional. The
+helper socket unit remains an optional archive asset.
+
+The plugin-runner binary, service, and tmpfiles input are mandatory in every
+Linux archive. The packager preflights them before staging and copies them
+unconditionally: the binary is mode `0755`, and the service/tmpfiles files are
+mode `0644`. `check-release-assets.mjs` requires all three inventory paths,
+their `server` role and regular-file kind, and an execute bit on the binary.
+The archive contains these `server`-role entries for every release; the
+`server` and `both` role projections include them, while `web` excludes them
+when the manager extracts a role view.
 
 Staged directories are `0755`, binaries `0755`, and other regular files `0644`.
 The script sets every mtime to the selected epoch, sorts the file list under
@@ -281,6 +288,55 @@ node deploy/release/check-release-assets.mjs \
 In the protected `publish-release` job, the checker runs with `--profile all` and verifies that all six local and remote release assets match in name, positive size, and SHA-256 digest before undrafting.
 
 The attestation job uses `actions/attest-build-provenance` for all six published release subjects: the Linux installer, runtime archive, manifest, and SPDX SBOM, plus the Windows installer and deterministic ZIP archive. Target-manager capability evidence and the forward/rollback migration records remain separate owner inputs until an external verifier and authoritative inventory source are integrated.
+
+## Release operator checklist and v0.5.1 advisory
+
+### v0.5.1 release checklist
+
+The published v0.5.0 Linux archive contains
+`systemd/dam-hopper-plugin-runner.service` but omits its
+`bin/dam-hopper-plugin-runner` `ExecStart` target. Staging `server` or `both`
+fails closed at `systemd-analyze verify`; the `web` role is unaffected. Source
+fixes cannot repair the already-published archive.
+
+Before publishing the required patch release:
+
+1. Set `server/Cargo.toml` and `apps/web/package.json` to `0.5.1`; confirm the
+   release tag and both package versions align.
+2. Run the local release checks and deterministic package gate with the actual
+   Linux build outputs:
+
+   ```bash
+   node deploy/release/check-version-alignment.mjs v0.5.1
+   pnpm release:verify
+   pnpm release:package-twice --version v0.5.1 \
+     --target-dir artifacts/bin \
+     --web-dist apps/web/dist \
+     --output-dir artifacts/final
+   node deploy/release/check-release-assets.mjs \
+     --profile linux --tag v0.5.1 --dir artifacts/final
+   ```
+
+3. Confirm the archive has `bin/dam-hopper-plugin-runner` mode `0755`,
+   `systemd/dam-hopper-plugin-runner.service` and
+   `tmpfiles.d/dam-hopper-plugin-runner.conf` mode `0644`, and all three
+   `server`-role inventory entries. Missing any path must block packaging or
+   the asset gate.
+4. Run the tagged release workflow's dry run, then publish the protected
+   `v0.5.1` release only after its package-twice, manifest, asset, and
+   attestation gates pass. The normal publisher owns the immutable release
+   asset set; do not reuse `v0.5.0` or replace its archive/digest.
+5. Publish an operator notice with the patch release:
+
+   > Linux v0.5.0 omitted `bin/dam-hopper-plugin-runner` although its systemd
+   > unit was present. Linux `server` and `both` staging fails unit verification.
+   > Use v0.5.1 or later for these roles; web-only installs are unaffected.
+
+Until v0.5.1 is published, operators must not use v0.5.0 for Linux `server` or
+`both` installations. After publication, stage the exact v0.5.1 bundle using
+the normal [Linux Release Manager](./linux-release-manager.md) install/upgrade
+flow; do not hand-edit the unit or substitute an unversioned runner binary.
+
 ## Bootstrap installer
 
 `deploy/release/dam-hopper-install.sh` downloads as the invoking user and uses

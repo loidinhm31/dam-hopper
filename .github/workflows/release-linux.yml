@@ -82,6 +82,7 @@ jobs:
           server/target/x86_64-unknown-linux-gnu/release/dam-hopper-server --version
           server/target/x86_64-unknown-linux-gnu/release/dam-hopper-web --version
           server/target/x86_64-unknown-linux-gnu/release/dam-hopper-idle-suspend-helper --version
+          server/target/x86_64-unknown-linux-gnu/release/dam-hopper-plugin-runner --version
 
       - name: Upload compiled Rust binaries
         uses: actions/upload-artifact@v4
@@ -92,6 +93,7 @@ jobs:
             server/target/x86_64-unknown-linux-gnu/release/dam-hopper-server
             server/target/x86_64-unknown-linux-gnu/release/dam-hopper-web
             server/target/x86_64-unknown-linux-gnu/release/dam-hopper-idle-suspend-helper
+            server/target/x86_64-unknown-linux-gnu/release/dam-hopper-plugin-runner
           if-no-files-found: error
           retention-days: 1
 
@@ -196,7 +198,7 @@ jobs:
 
       - name: Make binaries executable
         run: |
-          chmod +x artifacts/bin/dam-hopper artifacts/bin/dam-hopper-server artifacts/bin/dam-hopper-web artifacts/bin/dam-hopper-idle-suspend-helper
+          chmod +x artifacts/bin/dam-hopper artifacts/bin/dam-hopper-server artifacts/bin/dam-hopper-web artifacts/bin/dam-hopper-idle-suspend-helper artifacts/bin/dam-hopper-plugin-runner
 
       - name: Package archive twice and validate exact release subjects
         env:

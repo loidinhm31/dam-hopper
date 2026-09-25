@@ -12,6 +12,21 @@ release tooling refuses unsafe path ownership or symlink substitutions rather
 than repairing them. The helper remains root-owned and uses a restricted Unix
 socket with peer credentials.
 
+### Linux runner packaging invariant and v0.5.1 release
+
+Every published Linux archive requires `bin/dam-hopper-plugin-runner`,
+`systemd/dam-hopper-plugin-runner.service`, and
+`tmpfiles.d/dam-hopper-plugin-runner.conf`. The archive builder fails before
+staging if a required input is missing and copies the three assets
+unconditionally; the release inventory gate enforces their paths and server
+role, plus an execute bit for the binary. They remain server-role entries in
+every archive and are excluded from a web-only role projection.
+
+The published v0.5.0 Linux archive omitted the runner binary, so `server` and
+`both` staging fails unit verification. Release a corrected v0.5.1 tag and
+follow the [publisher checklist and operator advisory](./linux-release-publisher-bootstrap.md);
+the source fix does not alter existing v0.5.0 assets.
+
 ### Phase 01–02 Windows direct-server release and installer
 
 `deploy/release/build-windows-release-archive.mjs` emits a deterministic

@@ -10,8 +10,11 @@ use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
-#[command(name = "dam-hopper-plugin-runner")]
-#[command(about = "Owner-account plugin runner and worker supervisor for DamHopper")]
+#[command(
+    name = "dam-hopper-plugin-runner",
+    version,
+    about = "Owner-account plugin runner and worker supervisor for DamHopper"
+)]
 struct Args {
     /// Path to the AF_UNIX pathname socket
     #[arg(long, default_value = "/run/dam-hopper/plugin-runner.sock")]

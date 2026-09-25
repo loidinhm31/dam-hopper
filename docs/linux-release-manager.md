@@ -8,8 +8,8 @@ The manager provides unprivileged acquisition, root-only staging, durable
 activation, exact health gating, rollback, crash recovery, and the one-time
 format-2 migration from the retired checkout runner.
 
-This guide documents the executable from downloaded bundle through committed
-release. The manifest field contract remains in [Linux Release Manifest v2](./linux-release-manifest.md).
+This guide covers a downloaded bundle through committed release. Release
+assembly and the v0.5.0/v0.5.1 advisory are in [Publisher and Bootstrap](./linux-release-publisher-bootstrap.md); manifest fields are in [Linux Release Manifest v2](./linux-release-manifest.md).
 
 ## Prerequisites and trust boundary
 

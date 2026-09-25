@@ -1,8 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-22 from `repomix-output.xml` (Repomix v1.18.0; 2,244
-files, 5,055,703 tokens, 21,133,046 characters; five security-flagged files
-excluded).
+**Generated:** 2026-09-25 from the repository compaction `repomix-output.xml`.
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -75,6 +73,11 @@ strict four-byte big-endian JSON-RPC framing live in `server/src/plugins/`.
   state v2 retention of runner/host/plugin digests across rollback and recovery.
   The source map spans `server/src/linux_release/`, `deploy/systemd/`,
   `deploy/tmpfiles.d/`, and `deploy/release/`.
+- Linux archive assembly fails closed unless the runner binary, unit, and
+  tmpfiles input are present, then packages them unconditionally. The release
+  inventory gate requires their `server`-role paths. Published v0.5.0 omitted
+  the binary for `server`/`both`; the v0.5.1 checklist is in the
+  [publisher guide](./linux-release-publisher-bootstrap.md).
 - D06 qualification recorded 173/173 Linux-release tests, 9/9 deployment
   journeys, owner/rollback smokes, and 5/5 synthetic LAN budgets over 10,000
   history records. Physical separate-machine LAN and exact pinned Node

@@ -132,6 +132,12 @@ if [[ ! -f "${WEB_BIN}" ]]; then
     echo "Error: 'dam-hopper-web' binary not found in '${TARGET_DIR}'" >&2
     exit 1
 fi
+RUNNER_BIN="${TARGET_DIR}/dam-hopper-plugin-runner"
+if [[ ! -f "${RUNNER_BIN}" ]]; then
+    echo "Error: 'dam-hopper-plugin-runner' binary not found in '${TARGET_DIR}'" >&2
+    exit 1
+fi
+
 
 if [[ ! -d "${WEB_DIST}" || ! -f "${WEB_DIST}/index.html" ]]; then
     echo "Error: Web dist directory '${WEB_DIST}' does not exist or lacks index.html" >&2
@@ -144,9 +150,12 @@ RECOVERY_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-recovery.service.in"
 SYSUSERS_CONF="${REPO_ROOT}/deploy/sysusers.d/dam-hopper-web.conf"
 LICENSE_FILE="${REPO_ROOT}/LICENSE"
 HELPER_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-idle-suspend-helper.service.in"
+RUNNER_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-plugin-runner.service.in"
+RUNNER_TMPFILES_IN="${REPO_ROOT}/deploy/tmpfiles.d/dam-hopper-plugin-runner.conf.in"
 
 for req_file in "${API_SERVICE_IN}" "${WEB_SERVICE_IN}" "${RECOVERY_SERVICE_IN}" \
-    "${HELPER_SERVICE_IN}" "${SYSUSERS_CONF}" "${LICENSE_FILE}"; do
+    "${HELPER_SERVICE_IN}" "${RUNNER_SERVICE_IN}" "${RUNNER_TMPFILES_IN}" \
+    "${SYSUSERS_CONF}" "${LICENSE_FILE}"; do
     if [[ ! -f "${req_file}" ]]; then
         echo "Error: Required asset file '${req_file}' not found" >&2
         exit 1
@@ -164,6 +173,7 @@ trap 'rm -rf "${TMP_STAGE}"' EXIT
 mkdir -p "${TMP_STAGE}/bin"
 mkdir -p "${TMP_STAGE}/systemd"
 mkdir -p "${TMP_STAGE}/sysusers.d"
+mkdir -p "${TMP_STAGE}/tmpfiles.d"
 mkdir -p "${TMP_STAGE}/web"
 
 # Copy binaries
@@ -179,11 +189,8 @@ chmod 0755 "${TMP_STAGE}/bin/dam-hopper-web"
 cp -p "${HELPER_BIN}" "${TMP_STAGE}/bin/dam-hopper-idle-suspend-helper"
 chmod 0755 "${TMP_STAGE}/bin/dam-hopper-idle-suspend-helper"
 
-RUNNER_BIN="${TARGET_DIR}/dam-hopper-plugin-runner"
-if [[ -f "${RUNNER_BIN}" ]]; then
-    cp -p "${RUNNER_BIN}" "${TMP_STAGE}/bin/dam-hopper-plugin-runner"
-    chmod 0755 "${TMP_STAGE}/bin/dam-hopper-plugin-runner"
-fi
+cp -p "${RUNNER_BIN}" "${TMP_STAGE}/bin/dam-hopper-plugin-runner"
+chmod 0755 "${TMP_STAGE}/bin/dam-hopper-plugin-runner"
 # Copy systemd units and sysusers
 cp -p "${API_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-api.service"
 chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-api.service"
@@ -200,18 +207,11 @@ chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-idle-suspend-helper.service"
 cp -p "${SYSUSERS_CONF}" "${TMP_STAGE}/sysusers.d/dam-hopper-web.conf"
 chmod 0644 "${TMP_STAGE}/sysusers.d/dam-hopper-web.conf"
 
-RUNNER_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-plugin-runner.service.in"
-if [[ -f "${RUNNER_SERVICE_IN}" ]]; then
-    cp -p "${RUNNER_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-plugin-runner.service"
-    chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-plugin-runner.service"
-fi
+cp -p "${RUNNER_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-plugin-runner.service"
+chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-plugin-runner.service"
 
-RUNNER_TMPFILES_IN="${REPO_ROOT}/deploy/tmpfiles.d/dam-hopper-plugin-runner.conf.in"
-if [[ -f "${RUNNER_TMPFILES_IN}" ]]; then
-    mkdir -p "${TMP_STAGE}/tmpfiles.d"
-    cp -p "${RUNNER_TMPFILES_IN}" "${TMP_STAGE}/tmpfiles.d/dam-hopper-plugin-runner.conf"
-    chmod 0644 "${TMP_STAGE}/tmpfiles.d/dam-hopper-plugin-runner.conf"
-fi
+cp -p "${RUNNER_TMPFILES_IN}" "${TMP_STAGE}/tmpfiles.d/dam-hopper-plugin-runner.conf"
+chmod 0644 "${TMP_STAGE}/tmpfiles.d/dam-hopper-plugin-runner.conf"
 
 
 # Copy LICENSE
