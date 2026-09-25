@@ -14,6 +14,10 @@ Group=@ADVISOR_OWNER_GROUP@
 RuntimeDirectory=dam-hopper
 RuntimeDirectoryMode=0750
 
+# State directory for durable plugin registry and packages
+StateDirectory=dam-hopper-plugin-runner
+StateDirectoryMode=0700
+ReadWritePaths=@DAM_HOPPER_STATE_DIR@
 # Working directory and environment
 WorkingDirectory=@ADVISOR_OWNER_HOME@
 Environment=HOME=@ADVISOR_OWNER_HOME@
