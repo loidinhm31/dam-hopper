@@ -1,6 +1,6 @@
 # Linux Release Manifest v2
 
-Status: Manifest v2 and manager-state v1 are the current release contracts.
+Status: Manifest v2 and manager-state v2 are the current release contracts.
 This document defines the v2 metadata consumed by acquisition, staging, and
 durable activation. The v2 hard cutover removes API identity from the manifest:
 the finalized API unit is the sole runtime identity authority. Legacy format-2
@@ -78,7 +78,7 @@ The root object uses camelCase JSON names and has exactly these required fields:
 | `archive`       | Archive filename, positive byte size, and lowercase SHA-256 |
 | `components`    | Lockstep versions for CLI, API, web host, and web assets    |
 | `inventory`     | Every packaged directory and regular file                   |
-| `services`      | API and web systemd contracts                               |
+| `services`      | API, web, and optional plugin-runner systemd contracts   |
 | `rollback`      | Previous-release and state compatibility declaration        |
 
 All objects reject unknown fields. Required fields are not optional. Duplicate
@@ -165,6 +165,31 @@ The helper socket unit is a separate optional server-role archive asset. The
 release manager directly manages the helper service and must not enable both
 direct-binding service mode and socket activation for the same socket path.
 
+### Phase D06 owner-runner assets
+
+When the server bundle includes the trusted plugin platform, the release
+generator assigns these regular files to the `server` role:
+
+| Path                                             | Contract                                      |
+| ------------------------------------------------ | --------------------------------------------- |
+| `bin/dam-hopper-plugin-runner`                   | Executable owner-runner binary                |
+| `systemd/dam-hopper-plugin-runner.service`      | Rendered owner-runner unit template           |
+| `tmpfiles.d/dam-hopper-plugin-runner.conf`      | Runtime directory/socket provisioning input   |
+
+The Rust manifest types keep `components.runner` and `services.runner`
+optional for compatibility with local fixtures. When `services.runner` is
+present, its fixed contract is `unitName: "dam-hopper-plugin-runner.service"`
+and `socketPath: "/run/dam-hopper/plugin-runner.sock"`. The release manager
+installs the unit under `/etc/systemd/system/`, installs tmpfiles under
+`/etc/dam-hopper/tmpfiles.d/`, and invokes `systemd-tmpfiles --create`.
+
+The runner account and administrator subjects are deployment inputs, not
+manifest identity fields. `install` and `role set` accept
+`--plugin-owner-user USER` and repeatable `--plugin-admin-subject SUBJECT`;
+omitted values inherit `/etc/dam-hopper/host.toml`. The owner is validated as
+a dedicated non-root account with a safe home. Runtime admin allowlisting still
+uses the D05 `--admin-config` / `DAM_HOPPER_PLUGIN_ADMINS_FILE` precedence.
+
 The publisher must compute exact inventory set equality for each projection; a
 prefix check is not sufficient. Runtime/configuration material is forbidden,
 including `.env` and `.env.*`, `server.env`, `server-safety.env`,
@@ -174,8 +199,9 @@ matching as applicable).
 
 ## Service and rollback contracts
 
-Both service objects are required even when a role projection will not install
-the corresponding service.
+`api` and `web` objects are required even when a role projection omits the
+corresponding service. The optional `runner` object appears only when the
+server archive carries the trusted plugin runner.
 
 | Service | `unitName`               | `identity`                  | `bindHost` | `port` | `healthPath`           |
 | ------- | ------------------------ | --------------------------- | ---------- | -----: | ---------------------- |
@@ -258,7 +284,7 @@ replaces an existing same-tag/same-role destination before a repeated final
 rename. Phase 05 activates only the validated immutable view and records the
 result in the manager's authoritative state envelope.
 
-## Manager consumption (Manifest v2; manager state v1)
+## Manager consumption (Manifest v2; manager state v2)
 
 The Rust manager is the runtime consumer of Manifest v2:
 
@@ -269,11 +295,17 @@ The Rust manager is the runtime consumer of Manifest v2:
   extract only `common` plus the selected role (`both` includes all entries).
 - Staging persists the pending candidate in
   `/var/lib/dam-hopper-manager/state.json` only after the role view is renamed
-  into the release directory. This manager state remains schema v1 and is
-  independent from the release manifest schema.
+  into the release directory. Manager state is schema v2; installed legacy
+  records are migrated or dual-read only at the documented compatibility gate.
+- For a server role, staging renders the runner unit and tmpfiles input;
+  activation installs both, provisions `/run/dam-hopper`, and starts helper,
+  runner, then API. Runner start/enable failures are warning-only.
+- Explicit `--plugin-owner-user` and repeatable `--plugin-admin-subject` values
+  are persisted in host configuration; omitted values inherit existing host
+  configuration. They are not manifest identity fields.
 - `start` reparses the final API unit, provisions its fixed runtime paths, and
-  starts the API only after the pre-start provisioner succeeds. It commits only
-  after exact API/web health remains stable for 20 consecutive 500 ms probes.
+  commits only after exact API/web health remains stable for 20 consecutive
+  500 ms probes.
 - `rollback` and `recover` use recorded transaction backups and state; they do
   not reconstruct units or choose a release from `/opt/dam-hopper/current`.
   For managed active/previous release trees referenced by manager state, the
@@ -293,9 +325,10 @@ Format 1 and unknown layouts fail closed. The format-2 verifier is not a
 publisher input and must not be treated as a v2 archive or manifest.
 
 After a successful migration, the checkout-built runner, fixed legacy unit, and
-their package aliases are retired. An `imported-format-2` record may be kept as
-the previous rollback source, but it is not a release-manifest compatibility
-channel.
+their package aliases are retired. The owner-runner release asset described
+above is distinct and remains managed by Manifest v2. An `imported-format-2`
+record may be kept as the previous rollback source, but it is not a
+release-manifest compatibility channel.
 
 ## Verification
 
@@ -318,22 +351,15 @@ cargo test -p dam-hopper-server \
   idle_suspend::tests::test_helper_protocol_suspend_roundtrip
 ```
 
-The publisher contract includes the migration gate fixture. It requires a
-complete, fresh manager inventory with v2-manifest/v1-state capability,
-manager-first ordering, production environment, release-bound forward and
-rollback manifest/archive bytes, semantically older rollback version, and
-bounded timestamps. Missing, stale, mixed-version, unsigned, schema-v1,
-path-unsafe, detached, or reused rollback evidence fails closed before
-publication. The `verified` and `signed` markers are required evidence fields;
-external attestation verification and the authoritative target inventory remain
-release-owner prerequisites rather than claims made by this structural checker.
-The final bounded Phase 03 qualification (2026-09-13) recorded 84 passed, 0
-failed, and 0 ignored across the seven focused Rust integration suites listed
-above. `pnpm release:verify` passed, and `pnpm test:deploy` passed all six
-deployment journeys. This evidence qualifies the bounded checker and runtime
-path only; it does not establish stable publication, external trust-root
-verification, authoritative target-inventory integration, or workflow deep
-validation.
+The D06 qualification covers the manifest/archive contract, rendered runner
+unit and tmpfiles inputs, explicit owner/admin persistence, matched host/plugin
+rollback, and LAN deployment budgets. Focused Linux-release tests recorded
+173/173 passing; `pnpm release:verify` passed; `pnpm test:deploy` passed all
+9/9 deployment journeys, including owner and rollback smokes. The synthetic
+LAN qualification passed 5/5 bounded-budget scenarios over 10,000 history
+records. Physical separate-machine HTTPS/LAN evidence and exact pinned Node
+runtime selection remain G0/G4 deployment inputs, not claims of this manifest
+schema.
 
 The root release verification command checks version alignment, shell syntax,
 and Node syntax:

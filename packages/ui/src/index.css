@@ -462,3 +462,119 @@
     0 0 12px rgba(59, 130, 246, 0.15),
     inset 0 0 12px rgba(59, 130, 246, 0.03);
 }
+
+/* ── Isolated plugin host ── */
+.plugin-host-page {
+  min-height: 20rem;
+  height: max(
+    20rem,
+    calc(var(--app-viewport-height) - var(--top-nav-height) - 5rem)
+  );
+}
+
+.plugin-host-loading,
+.plugin-unavailable-state {
+  display: flex;
+  min-height: min(28rem, 60vh);
+  align-items: center;
+  justify-content: center;
+  gap: 0.875rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  padding: 1.5rem;
+  color: var(--color-text-muted);
+  text-align: left;
+}
+
+.plugin-unavailable-state {
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: clamp(1rem, 4vw, 2rem);
+}
+
+.plugin-unavailable-icon {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 2.75rem;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-warning);
+}
+
+.plugin-frame-shell {
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 20rem;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.plugin-frame-status {
+  display: flex;
+  min-height: 2.25rem;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  padding: 0.5rem 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+}
+
+.plugin-frame-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--color-warning);
+}
+
+.plugin-frame-status-dot-ready {
+  background: var(--color-success);
+}
+
+.plugin-frame-viewport {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.plugin-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 18rem;
+  border: 0;
+  background: var(--color-background);
+}
+
+.plugin-frame:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: -2px;
+}
+
+@media (max-width: 639px) {
+  .plugin-host-page {
+    height: max(
+      20rem,
+      calc(var(--app-viewport-height) - var(--top-nav-height) - 3.5rem)
+    );
+  }
+
+  .plugin-unavailable-state {
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-host-page .animate-spin {
+    animation: none;
+  }
+}

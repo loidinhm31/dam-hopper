@@ -21,7 +21,7 @@ use rand::rngs::OsRng;
 mod common;
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use tower::ServiceExt;
 
 // Global lock for tests that modify environment variables (prevents race conditions)
@@ -57,7 +57,7 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
     let fs = FsSubsystem::new(vec![]);
 
     // Acquire lock for env var access
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock();
 
     // Temporarily clear production flags for test
     let old_rust_env = std::env::var("RUST_ENV").ok();
@@ -120,9 +120,18 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
     let jwt_secret = "test-secret-key".to_string();
     let fs = FsSubsystem::new(vec![]);
 
+    // Acquire lock for env var access
+    let _guard = ENV_LOCK.lock();
+
+    // Temporarily clear production flags for test
+    let old_rust_env = std::env::var("RUST_ENV").ok();
+    let old_environment = std::env::var("ENVIRONMENT").ok();
+    std::env::remove_var("RUST_ENV");
+    std::env::remove_var("ENVIRONMENT");
+
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
-    AppState::new(
+    let state = AppState::new(
         workspace_root,
         config,
         global_config,
@@ -139,7 +148,17 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
         diagnostics,
         dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
-    .expect("Failed to create normal auth AppState in test")
+    .expect("Failed to create normal auth AppState in test");
+
+    // Restore environment flags
+    if let Some(val) = old_rust_env {
+        std::env::set_var("RUST_ENV", val);
+    }
+    if let Some(val) = old_environment {
+        std::env::set_var("ENVIRONMENT", val);
+    }
+
+    state
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +437,7 @@ async fn test_no_auth_with_mongodb_fails() {
 #[tokio::test]
 async fn test_no_auth_in_production_env_fails() {
     // Acquire lock to prevent other tests from interfering with env vars
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock();
 
     // Set production environment variable
     std::env::set_var("RUST_ENV", "production");
@@ -478,6 +497,74 @@ async fn test_no_auth_in_production_env_fails() {
         assert!(
             err_msg.contains("not allowed in production"),
             "Error message should mention production environment. Got: {}",
+            err_msg
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_production_missing_mongodb_fails() {
+    // Acquire lock to prevent other tests from interfering with env vars
+    let _guard = ENV_LOCK.lock();
+
+    // Set production environment variable
+    std::env::set_var("RUST_ENV", "production");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (event_sink, _rx) = BroadcastEventSink::new(TOKEN_CAPACITY);
+    let pty_manager = PtySessionManager::new(std::sync::Arc::new(event_sink.clone()));
+    let workspace_root = tmp.path().to_path_buf();
+
+    let config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "test-workspace".into(),
+            root: workspace_root.display().to_string(),
+        },
+        server: dam_hopper_server::config::ServerConfig::default(),
+        agent_store: None,
+        projects: vec![],
+        features: FeaturesConfig::default(),
+        config_path: workspace_root.join("dam-hopper.toml"),
+    };
+
+    let global_config = GlobalConfig::default();
+    let store_path = workspace_root.join(".dam-hopper/agent-store");
+    let agent_store = AgentStoreService::new(store_path);
+    let jwt_secret = "test-secret-key".to_string();
+    let fs = FsSubsystem::new(vec![]);
+
+    let tunnel_manager = common::make_tunnel_manager(&event_sink);
+    let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
+    let result = AppState::new(
+        workspace_root,
+        config,
+        global_config,
+        pty_manager,
+        agent_store,
+        event_sink,
+        jwt_secret,
+        fs,
+        None,  // missing MongoDB in production
+        false, // normal auth (no_auth = false)
+        tunnel_manager,
+        None,
+        ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+        diagnostics,
+        dam_hopper_server::telemetry::TelemetryRuntime::new(),
+    );
+
+    // Clean up environment variable
+    std::env::remove_var("RUST_ENV");
+
+    assert!(
+        result.is_err(),
+        "AppState::new() should fail with missing MongoDB in production"
+    );
+    if let Err(e) = result {
+        let err_msg = e.to_string();
+        assert!(
+            err_msg.contains("MongoDB configuration") && err_msg.contains("required in production"),
+            "Error message should mention MongoDB required in production. Got: {}",
             err_msg
         );
     }

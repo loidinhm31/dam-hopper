@@ -101,6 +101,14 @@ pub struct InstallArgs {
     #[arg(long = "service-user", alias = "user")]
     pub service_user: Option<String>,
 
+    /// Non-root user to run dam-hopper-plugin-runner (required to enable plugins).
+    #[arg(long = "plugin-owner-user")]
+    pub plugin_owner_user: Option<String>,
+
+    /// Admin subjects permitted to manage plugins (repeatable).
+    #[arg(long = "plugin-admin-subject")]
+    pub plugin_admin_subjects: Vec<String>,
+
     /// Stop and overwrite existing active or previous release destination for rebuilds.
     #[arg(long)]
     pub reinstall: bool,
@@ -135,6 +143,14 @@ pub struct RoleSetArgs {
     /// Dedicated system user to run dam-hopper-api (cannot be root).
     #[arg(long = "service-user", alias = "user")]
     pub service_user: Option<String>,
+
+    /// Non-root user to run dam-hopper-plugin-runner (required to enable plugins).
+    #[arg(long = "plugin-owner-user")]
+    pub plugin_owner_user: Option<String>,
+
+    /// Admin subjects permitted to manage plugins (repeatable).
+    #[arg(long = "plugin-admin-subject")]
+    pub plugin_admin_subjects: Vec<String>,
 
     /// Stop and overwrite existing active or previous release destination for rebuilds.
     #[arg(long)]

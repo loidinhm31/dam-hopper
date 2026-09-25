@@ -252,6 +252,51 @@ pub fn validate_web_unit_policy(
     Ok(())
 }
 
+/// Validate rendered Plugin Runner unit strictly matches security and containment invariants.
+pub fn validate_runner_unit_policy(
+    unit: &ParsedUnit,
+    ctx: &UnitRenderContext,
+) -> Result<(), ReleaseError> {
+    let name = "dam-hopper-plugin-runner.service";
+    assert_eq_prop(unit, name, "Service", "Type", "simple")?;
+    assert_eq_prop(unit, name, "Service", "User", &ctx.advisor_owner_user)?;
+    assert_eq_prop(unit, name, "Service", "Group", &ctx.advisor_owner_group)?;
+    assert_eq_prop(unit, name, "Service", "WorkingDirectory", &ctx.advisor_owner_home)?;
+    assert_eq_prop(unit, name, "Service", "RuntimeDirectory", "dam-hopper")?;
+    assert_eq_prop(unit, name, "Service", "RuntimeDirectoryMode", "0750")?;
+    assert_eq_prop(unit, name, "Service", "Restart", "on-failure")?;
+    assert_eq_prop(unit, name, "Service", "RestartSec", "3s")?;
+    assert_eq_prop(unit, name, "Service", "KillSignal", "SIGTERM")?;
+    assert_eq_prop(unit, name, "Service", "KillMode", "mixed")?;
+    assert_eq_prop(unit, name, "Service", "TimeoutStopSec", "15s")?;
+    assert_eq_prop(unit, name, "Service", "UMask", "0027")?;
+    assert_eq_prop(unit, name, "Service", "MemoryMax", "1G")?;
+    assert_eq_prop(unit, name, "Service", "TasksMax", "64")?;
+    assert_eq_prop(unit, name, "Service", "NoNewPrivileges", "true")?;
+    assert_eq_prop(unit, name, "Service", "ProtectSystem", "strict")?;
+    assert_eq_prop(unit, name, "Service", "ProtectHome", "read-only")?;
+    assert_eq_prop(unit, name, "Service", "PrivateTmp", "true")?;
+    assert_eq_prop(unit, name, "Service", "RestrictAddressFamilies", "AF_UNIX AF_INET AF_INET6")?;
+    assert_eq_prop(unit, name, "Service", "RestrictRealtime", "true")?;
+    assert_eq_prop(unit, name, "Service", "RestrictSUIDSGID", "true")?;
+    assert_eq_prop(unit, name, "Service", "SyslogIdentifier", "dam-hopper-plugin-runner")?;
+
+    let exec_val = unit.get_value("Service", "ExecStart").unwrap_or_default();
+    if !exec_val.contains("dam-hopper-plugin-runner")
+        || !exec_val.contains("--socket-path")
+        || !exec_val.contains("--registry-dir")
+        || !exec_val.contains("--node-bin")
+    {
+        return Err(ReleaseError::UnitPolicyViolation {
+            unit: name.into(),
+            reason: format!("invalid ExecStart for {name}: {exec_val}"),
+        });
+    }
+
+    assert_eq_prop(unit, name, "Install", "WantedBy", "multi-user.target")?;
+    Ok(())
+}
+
 fn assert_eq_prop(
     unit: &ParsedUnit,
     unit_name: &str,

@@ -237,6 +237,14 @@ fn test_state_envelope_lifecycle_and_generations() {
         web_unit_sha256: None,
         host_config_sha256: None,
         helper_unit_sha256: None,
+        runner_unit_sha256: None,
+        runner_tmpfiles_sha256: None,
+        plugin_owner_user: None,
+        plugin_owner_uid: None,
+        plugin_admin_config_sha256: None,
+        plugin_runtime_node_version: None,
+        plugin_runtime_node_sha256: None,
+        plugin_platform_enabled: None,
     });
 
     save_manager_state(&state_path, &mut state).expect("save active state");
@@ -333,6 +341,14 @@ fn test_recovery_classification() {
         web_unit_sha256: None,
         host_config_sha256: None,
         helper_unit_sha256: None,
+        runner_unit_sha256: None,
+        runner_tmpfiles_sha256: None,
+        plugin_owner_user: None,
+        plugin_owner_uid: None,
+        plugin_admin_config_sha256: None,
+        plugin_runtime_node_version: None,
+        plugin_runtime_node_sha256: None,
+        plugin_platform_enabled: None,
     });
     assert_eq!(classify_recovery(&state), RecoveryAction::ResumePending);
 
@@ -384,6 +400,14 @@ fn test_reference_safe_retention() {
         web_unit_sha256: None,
         host_config_sha256: None,
         helper_unit_sha256: None,
+        runner_unit_sha256: None,
+        runner_tmpfiles_sha256: None,
+        plugin_owner_user: None,
+        plugin_owner_uid: None,
+        plugin_admin_config_sha256: None,
+        plugin_runtime_node_version: None,
+        plugin_runtime_node_sha256: None,
+        plugin_platform_enabled: None,
     });
 
     state.previous = Some(ReleaseRecord {
@@ -402,6 +426,14 @@ fn test_reference_safe_retention() {
         web_unit_sha256: None,
         host_config_sha256: None,
         helper_unit_sha256: None,
+        runner_unit_sha256: None,
+        runner_tmpfiles_sha256: None,
+        plugin_owner_user: None,
+        plugin_owner_uid: None,
+        plugin_admin_config_sha256: None,
+        plugin_runtime_node_version: None,
+        plugin_runtime_node_sha256: None,
+        plugin_platform_enabled: None,
     });
 
     // Create directories for active, previous, and an unreferenced older version v0.8.0
@@ -522,6 +554,14 @@ async fn test_recovery_and_activation_boundaries() {
         web_unit_sha256: None,
         host_config_sha256: None,
         helper_unit_sha256: None,
+        runner_unit_sha256: None,
+        runner_tmpfiles_sha256: None,
+        plugin_owner_user: None,
+        plugin_owner_uid: None,
+        plugin_admin_config_sha256: None,
+        plugin_runtime_node_version: None,
+        plugin_runtime_node_sha256: None,
+        plugin_platform_enabled: None,
     });
     save_manager_state(&layout.manager_state_path(), &mut state).unwrap();
 
@@ -582,8 +622,7 @@ fn test_helper_service_lifecycle_invariants() {
 
     // 2. Status inspection includes all required services and roles
     let statuses = collect_all_services_status();
-    assert_eq!(statuses.len(), 4);
-
+    assert_eq!(statuses.len(), 5);
     let helper_status = statuses
         .iter()
         .find(|s| s.unit_name == HELPER_SERVICE_UNIT)

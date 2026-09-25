@@ -91,5 +91,13 @@ pub fn import_legacy_format2_release(
         web_unit_sha256: None,
         host_config_sha256: None,
         helper_unit_sha256: None,
+        runner_unit_sha256: None,
+        runner_tmpfiles_sha256: None,
+        plugin_owner_user: None,
+        plugin_owner_uid: None,
+        plugin_admin_config_sha256: None,
+        plugin_runtime_node_version: None,
+        plugin_runtime_node_sha256: None,
+        plugin_platform_enabled: None,
     })
 }

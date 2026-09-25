@@ -650,6 +650,22 @@ async fn package_router_serves_spa_without_masking_unknown_api_routes() {
         .unwrap();
     assert_eq!(index.as_ref(), b"<h1>DamHopper</h1>");
 
+    let deep_link = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/plugins/installation-id")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deep_link.status(), StatusCode::OK);
+    let deep_link = axum::body::to_bytes(deep_link.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(deep_link.as_ref(), b"<h1>DamHopper</h1>");
+
     for path in ["/api", "/api/", "/api/not-a-real-route"] {
         let api_miss = router
             .clone()

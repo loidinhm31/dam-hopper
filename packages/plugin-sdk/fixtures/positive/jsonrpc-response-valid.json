@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req-001",
+  "result": {
+    "contextId": "ctx-987",
+    "bindingRevision": 1,
+    "grantRevision": 1,
+    "activationGeneration": 1,
+    "expiresAt": 1789999999000
+  }
+}

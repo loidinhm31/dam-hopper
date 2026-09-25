@@ -143,7 +143,10 @@ fn validate_project_path(raw: &str, field: &str) -> Result<(), AppError> {
 /// Supporting paths like env files should stay project-relative.
 fn validate_relative_path(raw: &str, field: &str) -> Result<(), AppError> {
     let p = Path::new(raw);
-    if p.is_absolute()
+    let is_windows_rooted_or_drive =
+        raw.starts_with('\\') || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+    if is_windows_rooted_or_drive
+        || p.is_absolute()
         || p.has_root()
         || p.components()
             .any(|c| matches!(c, Component::Prefix(_) | Component::ParentDir))

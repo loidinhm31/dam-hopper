@@ -1,0 +1,12 @@
+{
+  "type": "request",
+  "bridgeVersion": "1.0.0",
+  "frameSession": "frame-session-123",
+  "activationGeneration": 1,
+  "requestId": "ui-req-001",
+  "operation": "history.summary",
+  "payload": {
+    "filter": "all"
+  },
+  "deadlineMs": 5000
+}

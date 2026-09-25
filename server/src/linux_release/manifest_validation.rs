@@ -137,6 +137,15 @@ fn validate_components(m: &ReleaseManifest) -> Result<(), ReleaseError> {
             });
         }
     }
+    if let Some(runner) = &m.components.runner {
+        if &runner.version != ver {
+            return Err(ReleaseError::ComponentVersionMismatch {
+                component: "runner",
+                expected: ver.clone(),
+                got: runner.version.clone(),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -248,6 +257,24 @@ fn validate_services(m: &ReleaseManifest, allow_installed_v1: bool) -> Result<()
             expected: WEB_SERVICE_HEALTH_PATH.to_string(),
             got: web.health_path.clone(),
         });
+    }
+    if let Some(runner) = &m.services.runner {
+        if runner.unit_name != RUNNER_SERVICE_UNIT {
+            return Err(ReleaseError::ServiceContractMismatch {
+                service: "runner",
+                field: "unitName",
+                expected: RUNNER_SERVICE_UNIT.to_string(),
+                got: runner.unit_name.clone(),
+            });
+        }
+        if runner.socket_path != DEFAULT_RUNNER_SOCKET_PATH {
+            return Err(ReleaseError::ServiceContractMismatch {
+                service: "runner",
+                field: "socketPath",
+                expected: DEFAULT_RUNNER_SOCKET_PATH.to_string(),
+                got: runner.socket_path.clone(),
+            });
+        }
     }
     Ok(())
 }

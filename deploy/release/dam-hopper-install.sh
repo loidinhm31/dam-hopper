@@ -21,6 +21,8 @@ VERIFY_ATTESTATION=0
 SERVICE_USER=""
 REINSTALL=0
 BUNDLE_PATH=""
+PLUGIN_OWNER_USER=""
+PLUGIN_ADMIN_SUBJECTS=()
 usage() {
     cat <<EOF
 Usage: $0 (--version <vX.Y.Z> | --latest | --bundle <dir>) --role <server|web|both> [options]
@@ -34,6 +36,8 @@ Options:
   --allow-web-origin <url> Allowed web origin for CORS (may be specified multiple times)
   --service-user <user>   Dedicated non-root user to run the API service
   --verify-attestation    Verify GitHub artifact attestations using the 'gh' CLI
+  --plugin-owner-user <user> Dedicated non-root user to run the plugin runner
+  --plugin-admin-subject <sub > Admin subject permitted to manage plugins (repeatable)
   -h, --help              Show this help message
 EOF
     exit 1
@@ -72,6 +76,14 @@ while [[ $# -gt 0 ]]; do
         --verify-attestation)
             VERIFY_ATTESTATION=1
             shift
+            ;;
+        --plugin-owner-user)
+            PLUGIN_OWNER_USER="$2"
+            shift 2
+            ;;
+        --plugin-admin-subject)
+            PLUGIN_ADMIN_SUBJECTS+=("$2")
+            shift 2
             ;;
         -h|--help)
             usage
@@ -311,6 +323,12 @@ done
 if [[ -n "${SERVICE_USER}" ]]; then
     INSTALL_CMD+=("--service-user" "${SERVICE_USER}")
 fi
+if [[ -n "${PLUGIN_OWNER_USER}" ]]; then
+    INSTALL_CMD+=("--plugin-owner-user" "${PLUGIN_OWNER_USER}")
+fi
+for admin in "${PLUGIN_ADMIN_SUBJECTS[@]}"; do
+    INSTALL_CMD+=("--plugin-admin-subject" "${admin}")
+done
 if [[ -d "/opt/dam-hopper/releases/${TAG}/${ROLE}" && ${REINSTALL} -eq 0 ]]; then
     echo "Release ${TAG} for role '${ROLE}' is already installed at /opt/dam-hopper/releases/${TAG}/${ROLE}."
     REINSTALL_CONFIRMED=""

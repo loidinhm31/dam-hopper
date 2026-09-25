@@ -41,7 +41,12 @@ import type {
   FsEventDto,
 } from "./fs-types.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
-
+import type {
+  PluginEpoch,
+  PluginUiAsset,
+  PluginUiAssetRequest,
+  StageReviewDto,
+} from "./plugin-types.js";
 type Callback = (...args: unknown[]) => void;
 
 function wsTargetFields(target: ProjectTargetInput): {
@@ -235,6 +240,10 @@ function channelToEndpoint(
   channel: string,
   data: unknown,
 ): { method: string; url: string; body?: unknown; contentType?: string } {
+  if (channel.startsWith("plugins:list")) {
+    const qs = channel.includes("?") ? channel.slice(channel.indexOf("?")) : "";
+    return { method: "GET", url: `/api/plugins${qs}` };
+  }
   switch (channel) {
     // Workspace
     case "workspace:status":
@@ -1245,9 +1254,7 @@ function channelToEndpoint(
       return {
         method: "GET",
         url:
-          qs.length > 0
-            ? `/api/workflow/events?${qs}`
-            : "/api/workflow/events",
+          qs.length > 0 ? `/api/workflow/events?${qs}` : "/api/workflow/events",
       };
     }
     case "workflow:createItem":
@@ -1321,6 +1328,89 @@ function channelToEndpoint(
     case "workflow:purgeHistory":
       return { method: "DELETE", url: "/api/workflow/history", body: data };
 
+    // Plugins
+    case "plugins:openContext":
+      return { method: "POST", url: "/api/plugins/contexts/open", body: data };
+    case "plugins:closeContext":
+      return { method: "POST", url: "/api/plugins/contexts/close", body: data };
+    case "plugins:invoke":
+      return { method: "POST", url: "/api/plugins/invoke", body: data };
+    case "plugins:cancel":
+      return { method: "POST", url: "/api/plugins/cancel", body: data };
+    case "plugins:adminList":
+      return { method: "GET", url: "/api/plugins/admin" };
+    case "plugins:adminGet": {
+      const { id } = (data ?? {}) as { id: string };
+      return {
+        method: "GET",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}`,
+      };
+    }
+    case "plugins:adminApprove": {
+      const { stageId, body } = (data ?? {}) as {
+        stageId: string;
+        body: unknown;
+      };
+      return {
+        method: "POST",
+        url: `/api/plugins/admin/stages/${encodeURIComponent(stageId)}/approve`,
+        body,
+      };
+    }
+    case "plugins:adminRollback": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "POST",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/rollback`,
+        body,
+      };
+    }
+    case "plugins:adminEnable": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "POST",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/enable`,
+        body,
+      };
+    }
+    case "plugins:adminDisable": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "POST",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/disable`,
+        body,
+      };
+    }
+    case "plugins:adminRemove": {
+      const { id, expectedSecurityRevision } = (data ?? {}) as {
+        id: string;
+        expectedSecurityRevision?: number;
+      };
+      const q =
+        expectedSecurityRevision !== undefined
+          ? `?expectedSecurityRevision=${expectedSecurityRevision}`
+          : "";
+      return {
+        method: "DELETE",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}${q}`,
+      };
+    }
+    case "plugins:adminReplaceGrants": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "PUT",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/grants`,
+        body,
+      };
+    }
+    case "plugins:adminReplaceBindings": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "PUT",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/bindings`,
+        body,
+      };
+    }
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }
@@ -1329,6 +1419,7 @@ function channelToEndpoint(
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
 const AUTH_TIMEOUT_MS = 30_000;
+const MAX_PLUGIN_UI_BYTES = 5 * 1024 * 1024;
 
 export class WsTransport implements Transport {
   private ws: WebSocket | null = null;
@@ -1413,6 +1504,15 @@ export class WsTransport implements Transport {
   >();
   /** sub_id → set of event callbacks */
   private fsEventListeners = new Map<number, Set<(ev: FsEventDto) => void>>();
+
+  private pendingPluginEpochs = new Map<
+    number,
+    {
+      resolve: (value: PluginEpoch) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   // ── FS read state ─────────────────────────────────────────────────────────
   private pendingFsReads = new Map<
@@ -1564,7 +1664,9 @@ export class WsTransport implements Transport {
       this.authToken =
         baseUrlOrOptions.authToken !== undefined
           ? baseUrlOrOptions.authToken
-          : (this.profileId ? getAuthToken(this.profileId) : getAuthToken());
+          : this.profileId
+            ? getAuthToken(this.profileId)
+            : getAuthToken();
       this.generation = baseUrlOrOptions.generation ?? 0;
       this.onDrop = baseUrlOrOptions.onDrop;
     } else {
@@ -1573,7 +1675,9 @@ export class WsTransport implements Transport {
       this.authToken =
         authToken !== undefined
           ? authToken
-          : (this.profileId ? getAuthToken(this.profileId) : getAuthToken());
+          : this.profileId
+            ? getAuthToken(this.profileId)
+            : getAuthToken();
       this.generation = generation;
       this.onDrop = onDrop;
     }
@@ -1607,6 +1711,11 @@ export class WsTransport implements Transport {
 
   private failAllPending(reason: string): void {
     const err = new Error(reason);
+    for (const pending of this.pendingPluginEpochs.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(err);
+    }
+    this.pendingPluginEpochs.clear();
     for (const p of this.pendingFsReqs.values()) {
       clearTimeout(p.timer);
       p.reject(err);
@@ -1747,7 +1856,12 @@ export class WsTransport implements Transport {
     const capturedGeneration = this.generation;
 
     ws.onopen = () => {
-      if (this.closed || this.ws !== capturedWs || this.generation !== capturedGeneration) return;
+      if (
+        this.closed ||
+        this.ws !== capturedWs ||
+        this.generation !== capturedGeneration
+      )
+        return;
       logger.debug("WsTransport", "connected", {
         baseUrl: this.baseUrl,
         generation: this.generation,
@@ -1756,7 +1870,12 @@ export class WsTransport implements Transport {
     };
 
     ws.onmessage = (event) => {
-      if (this.closed || this.ws !== capturedWs || this.generation !== capturedGeneration) return;
+      if (
+        this.closed ||
+        this.ws !== capturedWs ||
+        this.generation !== capturedGeneration
+      )
+        return;
       let msg: {
         kind: string;
         id?: string;
@@ -1791,6 +1910,9 @@ export class WsTransport implements Transport {
         conflict?: boolean;
         error?: string;
         session_id?: string;
+        epoch?: number;
+        actor?: string;
+        expires_at?: number;
       };
       try {
         msg = JSON.parse(event.data as string) as typeof msg;
@@ -2182,6 +2304,33 @@ export class WsTransport implements Transport {
             break;
           }
 
+          case "plugin:epoch": {
+            const requestId = msg.req_id;
+            const pending =
+              requestId === undefined
+                ? undefined
+                : this.pendingPluginEpochs.get(requestId);
+            if (
+              pending &&
+              Number.isSafeInteger(msg.epoch) &&
+              (msg.epoch as number) >= 0 &&
+              typeof msg.actor === "string" &&
+              msg.actor.length > 0
+            ) {
+              clearTimeout(pending.timer);
+              this.pendingPluginEpochs.delete(requestId!);
+              pending.resolve({
+                epoch: msg.epoch as number,
+                actor: msg.actor,
+                ...(Number.isSafeInteger(msg.expires_at) &&
+                (msg.expires_at as number) >= 0
+                  ? { expiresAt: msg.expires_at as number }
+                  : {}),
+              });
+            }
+            break;
+          }
+
           default: {
             const payload = msg.payload ?? msg;
             this.eventListeners.get(msg.kind)?.forEach((cb) => cb(payload));
@@ -2198,7 +2347,12 @@ export class WsTransport implements Transport {
     };
 
     ws.onclose = () => {
-      if (this.closed || this.ws !== capturedWs || this.generation !== capturedGeneration) return;
+      if (
+        this.closed ||
+        this.ws !== capturedWs ||
+        this.generation !== capturedGeneration
+      )
+        return;
       logger.debug("WsTransport", "disconnected", {
         baseUrl: this.baseUrl,
         generation: this.generation,
@@ -2213,7 +2367,12 @@ export class WsTransport implements Transport {
     };
 
     ws.onerror = () => {
-      if (this.closed || this.ws !== capturedWs || this.generation !== capturedGeneration) return;
+      if (
+        this.closed ||
+        this.ws !== capturedWs ||
+        this.generation !== capturedGeneration
+      )
+        return;
       recordClientDiagnostic("transport", "ws-transport", "ws.error", {
         messageKindCounts: this.messageKindCountsSnapshot(),
       });
@@ -2246,9 +2405,7 @@ export class WsTransport implements Transport {
     options?: TransportInvokeOptions | number,
   ): Promise<T> {
     const timeoutMs =
-      typeof options === "number"
-        ? options
-        : options?.timeoutMs ?? 30000;
+      typeof options === "number" ? options : (options?.timeoutMs ?? 30000);
     const externalSignal =
       typeof options === "object" && options !== null
         ? options.signal
@@ -2356,6 +2513,218 @@ export class WsTransport implements Transport {
       }
       this.activeAbortControllers.delete(controller);
     }
+  }
+
+  getPluginEpoch(): Promise<PluginEpoch> {
+    return new Promise((resolve, reject) => {
+      const requestId = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingPluginEpochs.delete(requestId);
+        reject(new Error("Plugin connection epoch request timed out"));
+      }, 10_000);
+      this.pendingPluginEpochs.set(requestId, { resolve, reject, timer });
+
+      if (this.ws?.readyState !== WebSocket.OPEN) {
+        clearTimeout(timer);
+        this.pendingPluginEpochs.delete(requestId);
+        reject(new Error("WebSocket not connected"));
+        return;
+      }
+      this.ws.send(
+        JSON.stringify({ kind: "plugin:get_epoch", req_id: requestId }),
+      );
+    });
+  }
+
+  async fetchPluginUi(
+    request: PluginUiAssetRequest,
+    signal?: AbortSignal,
+  ): Promise<PluginUiAsset> {
+    const query = new URLSearchParams({
+      project: request.target.project,
+      activeDigest: request.activeDigest,
+      activationGeneration: String(request.activationGeneration),
+    });
+    if (request.target.worktreePath) {
+      query.set("worktreePath", request.target.worktreePath);
+    }
+    const url =
+      `${this.baseUrl}/api/plugins/` +
+      `${encodeURIComponent(request.installationId)}/ui?${query.toString()}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error("Plugin UI asset request timed out")),
+      30_000,
+    );
+    this.activeAbortControllers.add(controller);
+    const abort = () =>
+      controller.abort(
+        signal?.reason instanceof Error
+          ? signal.reason
+          : new Error("Request aborted"),
+      );
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          ...this.buildAuthHeaders(),
+          Accept: "application/octet-stream",
+        },
+        credentials: "omit",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const error = (await response
+          .json()
+          .catch(() => ({ error: response.statusText }))) as {
+          error?: string;
+          code?: string;
+        };
+        throw new ApiRequestError(
+          error.error ?? `HTTP ${response.status}`,
+          response.status,
+          error.code,
+          error,
+        );
+      }
+
+      const contentType = response.headers.get("content-type");
+      const nosniff = response.headers.get("x-content-type-options");
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const cacheControl = response.headers.get("cache-control") ?? "";
+      const sha256 = response.headers.get("x-plugin-ui-sha256");
+      const cacheTokens = new Set(
+        cacheControl
+          .toLowerCase()
+          .split(",")
+          .map((token) => token.trim()),
+      );
+      if (
+        contentType?.toLowerCase() !== "application/octet-stream" ||
+        nosniff?.toLowerCase() !== "nosniff" ||
+        !/^attachment(?:;|$)/i.test(disposition) ||
+        !cacheTokens.has("private") ||
+        !cacheTokens.has("no-store") ||
+        !sha256 ||
+        !/^[a-f0-9]{64}$/.test(sha256)
+      ) {
+        throw new Error("Plugin UI asset response policy is invalid");
+      }
+      const declaredLength = response.headers.get("content-length");
+      if (
+        declaredLength !== null &&
+        (!/^(0|[1-9]\d*)$/.test(declaredLength) ||
+          Number(declaredLength) > MAX_PLUGIN_UI_BYTES)
+      ) {
+        throw new Error("Plugin UI asset exceeds the 5 MiB limit");
+      }
+      if (!response.body) {
+        throw new Error("Plugin UI asset response has no body");
+      }
+      const chunks: Uint8Array[] = [];
+      let byteLength = 0;
+      const reader = response.body.getReader();
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          byteLength += chunk.value.byteLength;
+          if (byteLength > MAX_PLUGIN_UI_BYTES) {
+            await reader.cancel();
+            throw new Error("Plugin UI asset exceeds the 5 MiB limit");
+          }
+          chunks.push(chunk.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      const bytes = new Uint8Array(byteLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+
+      return {
+        bytes,
+        contentType: "application/octet-stream",
+        sha256,
+      };
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      this.activeAbortControllers.delete(controller);
+      clearTimeout(timeout);
+    }
+  }
+
+  uploadPluginStage(
+    file: Blob | File,
+    expectedSha256: string,
+    onProgress?: (uploaded: number, total: number) => void,
+  ): Promise<StageReviewDto> {
+    return new Promise<StageReviewDto>((resolve, reject) => {
+    const url = `${this.baseUrl}/api/plugins/admin/stages`;
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    const headers = this.buildAuthHeaders();
+    for (const [key, val] of Object.entries(headers)) {
+      xhr.setRequestHeader(key, val);
+    }
+    xhr.setRequestHeader("Content-Type", "application/gzip");
+    xhr.setRequestHeader("X-Expected-SHA256", expectedSha256);
+
+    if (onProgress && xhr.upload) {
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) {
+          onProgress(ev.loaded, ev.total);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const review = JSON.parse(xhr.responseText) as StageReviewDto;
+          resolve(review);
+        } catch (e) {
+          reject(new Error(`Failed to parse stage review: ${e}`));
+        }
+      } else {
+        try {
+          const err = JSON.parse(xhr.responseText);
+          reject(
+            new ApiRequestError(
+              err.error ?? xhr.statusText,
+              xhr.status,
+              err.code,
+              err,
+            ),
+          );
+        } catch {
+          reject(
+            new ApiRequestError(
+              xhr.statusText || `HTTP ${xhr.status}`,
+              xhr.status,
+            ),
+          );
+        }
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error("Stage upload network error"));
+    };
+
+    xhr.onabort = () => {
+      reject(new Error("Stage upload aborted"));
+    };
+
+    xhr.send(file);
+    });
   }
 
   async uploadBrowserDebugPng(

@@ -1,0 +1,52 @@
+[Unit]
+Description=DamHopper Owner Plugin Runner and Worker Supervisor
+Documentation=https://github.com/loidinhm31/dam-hopper/tree/main/docs
+After=network.target
+PartOf=dam-hopper-api.service
+
+[Service]
+Type=simple
+# Owner UID execution: runner runs as the configured non-root advisor owner
+User=@ADVISOR_OWNER_USER@
+Group=@ADVISOR_OWNER_GROUP@
+
+# Restrictive runtime directory shared with API service
+RuntimeDirectory=dam-hopper
+RuntimeDirectoryMode=0750
+
+# Working directory and environment
+WorkingDirectory=@ADVISOR_OWNER_HOME@
+Environment=HOME=@ADVISOR_OWNER_HOME@
+Environment=RUST_LOG=info
+Environment=RUST_ENV=production
+
+# Startup command with pinned Node and socket path
+ExecStart=@RELEASE_ROOT@/bin/dam-hopper-plugin-runner --socket-path /run/dam-hopper/plugin-runner.sock --registry-dir @DAM_HOPPER_STATE_DIR@/plugins --node-bin @NODE_BIN@ --expected-api-uid @API_UID@
+
+# Process group management and kill mode
+Restart=on-failure
+RestartSec=3s
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=15s
+UMask=0027
+
+# Resource containment
+MemoryMax=1G
+TasksMax=64
+
+# Hardening / isolation defense-in-depth
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dam-hopper-plugin-runner
+
+[Install]
+WantedBy=multi-user.target
