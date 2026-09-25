@@ -12,9 +12,13 @@ pub mod version;
 #[path = "linux_release/origin.rs"]
 pub mod origin;
 
+#[path = "linux_release/durable_fs.rs"]
+pub mod durable_fs;
 pub use error::ReleaseError;
 pub use origin::{validate_web_origin, validate_web_origins};
-pub use version::{validate_commit_sha, validate_release_tag, validate_sha256_hex, validate_version};
+pub use version::{
+    validate_commit_sha, validate_release_tag, validate_sha256_hex, validate_version,
+};
 
 pub mod inventory {
     use serde::{Deserialize, Serialize};
@@ -87,8 +91,9 @@ pub mod host_config {
         ) -> Result<Self, ReleaseError> {
             let validated_origins = validate_web_origins(&allowed_web_origins)?;
             validate_version(&release_version)?;
-            let parsed_uuid = uuid::Uuid::parse_str(&profile_id)
-                .map_err(|e| ReleaseError::Config(format!("invalid profile_id '{profile_id}': {e}")))?;
+            let parsed_uuid = uuid::Uuid::parse_str(&profile_id).map_err(|e| {
+                ReleaseError::Config(format!("invalid profile_id '{profile_id}': {e}"))
+            })?;
             if parsed_uuid.get_version() != Some(uuid::Version::Random) {
                 return Err(ReleaseError::Config(format!(
                     "invalid profile_id '{profile_id}': must be UUID v4"

@@ -9,7 +9,9 @@
 
 use super::error::ReleaseError;
 use serde::Serialize;
-use std::fs::{self, File};
+use std::fs;
+#[cfg(unix)]
+use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -34,14 +36,17 @@ pub fn sync_dir(dir: &Path) -> Result<(), ReleaseError> {
             });
         }
     }
-    let f = File::open(dir).map_err(|e| ReleaseError::Io {
-        action: "open directory for sync",
-        details: e.to_string(),
-    })?;
-    f.sync_all().map_err(|e| ReleaseError::Io {
-        action: "fsync directory",
-        details: e.to_string(),
-    })?;
+    #[cfg(unix)]
+    {
+        let f = File::open(dir).map_err(|e| ReleaseError::Io {
+            action: "open directory for sync",
+            details: e.to_string(),
+        })?;
+        f.sync_all().map_err(|e| ReleaseError::Io {
+            action: "fsync directory",
+            details: e.to_string(),
+        })?;
+    }
     Ok(())
 }
 
@@ -58,6 +63,7 @@ fn ensure_directory(path: &Path, action: &'static str) -> Result<(), ReleaseErro
                 action,
                 details: e.to_string(),
             })?;
+            #[cfg(unix)]
             let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
             match fs::symlink_metadata(path) {
                 Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
@@ -85,6 +91,8 @@ pub fn atomic_write_file(
     content: &[u8],
     mode: Option<u32>,
 ) -> Result<(), ReleaseError> {
+    #[cfg(not(unix))]
+    let _ = mode;
     let parent = path.parent().ok_or_else(|| ReleaseError::Io {
         action: "resolve parent directory",
         details: format!("no parent for {}", path.display()),
@@ -171,6 +179,8 @@ pub fn copy_file_durable(src: &Path, dst: &Path, mode: Option<u32>) -> Result<()
 
 /// Atomically create or update a symbolic link to point to `target`.
 pub fn atomic_symlink(target: &Path, link_path: &Path) -> Result<(), ReleaseError> {
+    #[cfg(not(unix))]
+    let _ = target;
     let parent = link_path.parent().ok_or_else(|| ReleaseError::Io {
         action: "resolve parent for symlink",
         details: format!("no parent for {}", link_path.display()),

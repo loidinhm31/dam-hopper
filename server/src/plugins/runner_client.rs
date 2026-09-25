@@ -1,16 +1,27 @@
+#[cfg(unix)]
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(unix)]
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(unix)]
 use parking_lot::Mutex as SyncMutex;
+#[cfg(unix)]
 use tokio::net::unix::OwnedWriteHalf;
+#[cfg(unix)]
 use tokio::net::UnixStream;
-use tokio::sync::{oneshot, Mutex as TokioMutex};
+#[cfg(unix)]
+use tokio::sync::oneshot;
+use tokio::sync::Mutex as TokioMutex;
+#[cfg(unix)]
 use tokio::time::sleep;
 
+use super::admin::*;
+#[cfg(unix)]
 use super::contract::budgets::HANDSHAKE_TIMEOUT_SECS;
 use super::contract::{
     ContextCloseParams, ContextCloseResult, ContextOpenParams, ContextOpenResult,
@@ -19,8 +30,8 @@ use super::contract::{
     PluginReadUiResult, RequestCancelParams, RequestCancelResult, RunnerHelloResult,
     RUNNER_PROTOCOL_VERSION,
 };
-use super::admin::*;
-use super::error::{PluginError, PluginErrorCode};
+use super::error::PluginError;
+#[cfg(unix)]
 use super::framing::{
     build_json_rpc_request, read_frame_async, validate_json_rpc_message, write_frame_async,
 };
@@ -48,6 +59,7 @@ impl Default for RunnerClientConfig {
     }
 }
 
+#[cfg(unix)]
 struct ConnectedSession {
     writer: Arc<TokioMutex<OwnedWriteHalf>>,
     pending_responses:
@@ -56,8 +68,13 @@ struct ConnectedSession {
     pub generation: u64,
 }
 
+#[cfg(not(unix))]
+struct ConnectedSession;
+
 pub struct RunnerClient {
+    #[allow(dead_code)]
     config: RunnerClientConfig,
+    #[allow(dead_code)]
     session: TokioMutex<Option<ConnectedSession>>,
     next_req_id: AtomicU64,
     current_generation: AtomicU64,
@@ -86,6 +103,7 @@ impl RunnerClient {
         format!("api-req-{id}")
     }
 
+    #[cfg(unix)]
     fn validate_socket_file(&self) -> Result<(), PluginError> {
         let path = &self.config.socket_path;
         if !path.exists() {
@@ -134,6 +152,7 @@ impl RunnerClient {
         Ok(())
     }
 
+    #[cfg(unix)]
     async fn connect_and_handshake(&self) -> Result<ConnectedSession, PluginError> {
         self.validate_socket_file()?;
 
@@ -242,8 +261,12 @@ impl RunnerClient {
                                         "Forbidden" => PluginErrorCode::Forbidden,
                                         "InvalidInput" => PluginErrorCode::InvalidInput,
                                         "SourceMissing" => PluginErrorCode::SourceMissing,
-                                        "SourceNotConfigured" => PluginErrorCode::SourceNotConfigured,
-                                        "SourcePermissionDenied" => PluginErrorCode::SourcePermissionDenied,
+                                        "SourceNotConfigured" => {
+                                            PluginErrorCode::SourceNotConfigured
+                                        }
+                                        "SourcePermissionDenied" => {
+                                            PluginErrorCode::SourcePermissionDenied
+                                        }
                                         "Incompatible" => PluginErrorCode::Incompatible,
                                         "Overloaded" => PluginErrorCode::Overloaded,
                                         "DeadlineExceeded" => PluginErrorCode::DeadlineExceeded,
@@ -252,7 +275,9 @@ impl RunnerClient {
                                         "SnapshotExpired" => PluginErrorCode::SnapshotExpired,
                                         "WorkerFailed" => PluginErrorCode::WorkerFailed,
                                         "RuntimeUnavailable" => PluginErrorCode::RuntimeUnavailable,
-                                        "DetailChangedOrMissing" => PluginErrorCode::DetailChangedOrMissing,
+                                        "DetailChangedOrMissing" => {
+                                            PluginErrorCode::DetailChangedOrMissing
+                                        }
                                         _ => PluginErrorCode::RunnerUnavailable,
                                     };
                                     PluginError::new(code, msg)
@@ -292,70 +317,83 @@ impl RunnerClient {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, PluginError> {
-        let mut retries = 0;
-        loop {
-            let (writer, pending_responses) = {
-                let mut session_guard = self.session.lock().await;
+        #[cfg(not(unix))]
+        {
+            let _ = (method, params);
+            return Err(PluginError::runner_unavailable(
+                "Plugin runner is only supported on Unix platforms",
+            ));
+        }
 
-                if session_guard.is_none() {
-                    match self.connect_and_handshake().await {
-                        Ok(sess) => *session_guard = Some(sess),
-                        Err(e) => {
-                            if retries >= self.config.max_reconnect_retries {
-                                return Err(e);
+        #[cfg(unix)]
+        {
+            let mut retries = 0;
+            loop {
+                let (writer, pending_responses) = {
+                    let mut session_guard = self.session.lock().await;
+
+                    if session_guard.is_none() {
+                        match self.connect_and_handshake().await {
+                            Ok(sess) => *session_guard = Some(sess),
+                            Err(e) => {
+                                if retries >= self.config.max_reconnect_retries {
+                                    return Err(e);
+                                }
+                                retries += 1;
+                                let delay = self.config.reconnect_base_delay * (1 << (retries - 1));
+                                sleep(delay).await;
+                                continue;
                             }
-                            retries += 1;
-                            let delay = self.config.reconnect_base_delay * (1 << (retries - 1));
-                            sleep(delay).await;
-                            continue;
                         }
                     }
+
+                    let session = session_guard.as_ref().unwrap();
+                    (session.writer.clone(), session.pending_responses.clone())
+                };
+
+                let req_id = self.generate_request_id();
+                let req_json = build_json_rpc_request(&req_id, method, params.clone());
+                let req_bytes = serde_json::to_vec(&req_json).unwrap();
+
+                let (tx, rx) = oneshot::channel();
+                pending_responses.lock().insert(req_id.clone(), tx);
+
+                {
+                    let mut w = writer.lock().await;
+                    if let Err(e) = write_frame_async(&mut *w, &req_bytes).await {
+                        tracing::warn!("Failed to write to runner session: {e}, will reconnect");
+                        pending_responses.lock().remove(&req_id);
+                        *self.session.lock().await = None;
+                        if retries >= self.config.max_reconnect_retries {
+                            return Err(PluginError::runner_unavailable(format!(
+                                "Runner write failure: {e}"
+                            )));
+                        }
+                        retries += 1;
+                        let delay = self.config.reconnect_base_delay * (1 << (retries - 1));
+                        sleep(delay).await;
+                        continue;
+                    }
                 }
 
-                let session = session_guard.as_ref().unwrap();
-                (session.writer.clone(), session.pending_responses.clone())
-            };
-
-            let req_id = self.generate_request_id();
-            let req_json = build_json_rpc_request(&req_id, method, params.clone());
-            let req_bytes = serde_json::to_vec(&req_json).unwrap();
-
-            let (tx, rx) = oneshot::channel();
-            pending_responses.lock().insert(req_id.clone(), tx);
-
-            {
-                let mut w = writer.lock().await;
-                if let Err(e) = write_frame_async(&mut *w, &req_bytes).await {
-                    tracing::warn!("Failed to write to runner session: {e}, will reconnect");
-                    pending_responses.lock().remove(&req_id);
-                    *self.session.lock().await = None;
-                    if retries >= self.config.max_reconnect_retries {
-                        return Err(PluginError::runner_unavailable(format!(
-                            "Runner write failure: {e}"
-                        )));
+                match rx.await {
+                    Ok(Ok(val)) => return Ok(val),
+                    Ok(Err(err)) => return Err(err),
+                    Err(_) => {
+                        tracing::warn!(
+                            "Response channel dropped for request {req_id}, will reconnect"
+                        );
+                        *self.session.lock().await = None;
+                        if retries >= self.config.max_reconnect_retries {
+                            return Err(PluginError::runner_unavailable(
+                                "Runner dropped response channel prematurely",
+                            ));
+                        }
+                        retries += 1;
+                        let delay = self.config.reconnect_base_delay * (1 << (retries - 1));
+                        sleep(delay).await;
+                        continue;
                     }
-                    retries += 1;
-                    let delay = self.config.reconnect_base_delay * (1 << (retries - 1));
-                    sleep(delay).await;
-                    continue;
-                }
-            }
-
-            match rx.await {
-                Ok(Ok(val)) => return Ok(val),
-                Ok(Err(err)) => return Err(err),
-                Err(_) => {
-                    tracing::warn!("Response channel dropped for request {req_id}, will reconnect");
-                    *self.session.lock().await = None;
-                    if retries >= self.config.max_reconnect_retries {
-                        return Err(PluginError::runner_unavailable(
-                            "Runner dropped response channel prematurely",
-                        ));
-                    }
-                    retries += 1;
-                    let delay = self.config.reconnect_base_delay * (1 << (retries - 1));
-                    sleep(delay).await;
-                    continue;
                 }
             }
         }
@@ -475,60 +513,71 @@ impl RunnerClient {
         request_id: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, PluginError> {
-        let mut retries = 0;
-        let (writer, pending_responses) = loop {
-            let mut session_guard = self.session.lock().await;
-            if session_guard.is_none() {
-                match self.connect_and_handshake().await {
-                    Ok(session) => *session_guard = Some(session),
-                    Err(error) => {
-                        if retries >= self.config.max_reconnect_retries {
-                            return Err(error);
+        #[cfg(not(unix))]
+        {
+            let _ = (request_id, params);
+            return Err(PluginError::runner_unavailable(
+                "Plugin runner is only supported on Unix platforms",
+            ));
+        }
+
+        #[cfg(unix)]
+        {
+            let mut retries = 0;
+            let (writer, pending_responses) = loop {
+                let mut session_guard = self.session.lock().await;
+                if session_guard.is_none() {
+                    match self.connect_and_handshake().await {
+                        Ok(session) => *session_guard = Some(session),
+                        Err(error) => {
+                            if retries >= self.config.max_reconnect_retries {
+                                return Err(error);
+                            }
+                            retries += 1;
+                            let delay = self.config.reconnect_base_delay * (1 << (retries - 1));
+                            drop(session_guard);
+                            sleep(delay).await;
+                            continue;
                         }
-                        retries += 1;
-                        let delay = self.config.reconnect_base_delay * (1 << (retries - 1));
-                        drop(session_guard);
-                        sleep(delay).await;
-                        continue;
                     }
                 }
-            }
-            let session = session_guard.as_ref().unwrap();
-            break (session.writer.clone(), session.pending_responses.clone());
-        };
+                let session = session_guard.as_ref().unwrap();
+                break (session.writer.clone(), session.pending_responses.clone());
+            };
 
-        let request = build_json_rpc_request(request_id, "plugin.invoke", params);
-        let request_bytes = serde_json::to_vec(&request).unwrap();
-        let (tx, rx) = oneshot::channel();
-        {
-            let mut pending = pending_responses.lock();
-            if pending.contains_key(request_id) {
-                return Err(PluginError::invalid_input(
-                    "Plugin request ID is already in flight",
-                ));
+            let request = build_json_rpc_request(request_id, "plugin.invoke", params);
+            let request_bytes = serde_json::to_vec(&request).unwrap();
+            let (tx, rx) = oneshot::channel();
+            {
+                let mut pending = pending_responses.lock();
+                if pending.contains_key(request_id) {
+                    return Err(PluginError::invalid_input(
+                        "Plugin request ID is already in flight",
+                    ));
+                }
+                pending.insert(request_id.to_string(), tx);
             }
-            pending.insert(request_id.to_string(), tx);
-        }
 
-        {
-            let mut writer = writer.lock().await;
-            if let Err(error) = write_frame_async(&mut *writer, &request_bytes).await {
-                pending_responses.lock().remove(request_id);
-                *self.session.lock().await = None;
-                return Err(PluginError::runner_unavailable(format!(
-                    "Runner write failure: {error}"
-                )));
+            {
+                let mut writer = writer.lock().await;
+                if let Err(error) = write_frame_async(&mut *writer, &request_bytes).await {
+                    pending_responses.lock().remove(request_id);
+                    *self.session.lock().await = None;
+                    return Err(PluginError::runner_unavailable(format!(
+                        "Runner write failure: {error}"
+                    )));
+                }
             }
-        }
 
-        match rx.await {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => Err(error),
-            Err(_) => {
-                *self.session.lock().await = None;
-                Err(PluginError::runner_unavailable(
-                    "Runner dropped invoke response channel",
-                ))
+            match rx.await {
+                Ok(Ok(value)) => Ok(value),
+                Ok(Err(error)) => Err(error),
+                Err(_) => {
+                    *self.session.lock().await = None;
+                    Err(PluginError::runner_unavailable(
+                        "Runner dropped invoke response channel",
+                    ))
+                }
             }
         }
     }
@@ -578,7 +627,10 @@ impl RunnerClient {
         params: StageBeginParams,
     ) -> Result<StageBeginResult, PluginError> {
         let res = self
-            .execute_call("management.stage.begin", serde_json::to_value(params).unwrap())
+            .execute_call(
+                "management.stage.begin",
+                serde_json::to_value(params).unwrap(),
+            )
             .await?;
         serde_json::from_value(res).map_err(|e| {
             PluginError::invalid_input(format!("Failed to parse stage begin result: {e}"))
@@ -590,7 +642,10 @@ impl RunnerClient {
         params: StageChunkParams,
     ) -> Result<StageChunkResult, PluginError> {
         let res = self
-            .execute_call("management.stage.chunk", serde_json::to_value(params).unwrap())
+            .execute_call(
+                "management.stage.chunk",
+                serde_json::to_value(params).unwrap(),
+            )
             .await?;
         serde_json::from_value(res).map_err(|e| {
             PluginError::invalid_input(format!("Failed to parse stage chunk result: {e}"))
@@ -602,7 +657,10 @@ impl RunnerClient {
         params: StageFinishParams,
     ) -> Result<StageReviewDto, PluginError> {
         let res = self
-            .execute_call("management.stage.finish", serde_json::to_value(params).unwrap())
+            .execute_call(
+                "management.stage.finish",
+                serde_json::to_value(params).unwrap(),
+            )
             .await?;
         serde_json::from_value(res).map_err(|e| {
             PluginError::invalid_input(format!("Failed to parse stage finish result: {e}"))
@@ -616,9 +674,8 @@ impl RunnerClient {
         let res = self
             .execute_call("management.approve", serde_json::to_value(params).unwrap())
             .await?;
-        serde_json::from_value(res).map_err(|e| {
-            PluginError::invalid_input(format!("Failed to parse approve result: {e}"))
-        })
+        serde_json::from_value(res)
+            .map_err(|e| PluginError::invalid_input(format!("Failed to parse approve result: {e}")))
     }
 
     pub async fn admin_rollback(
@@ -640,9 +697,8 @@ impl RunnerClient {
         let res = self
             .execute_call("management.disable", serde_json::to_value(params).unwrap())
             .await?;
-        serde_json::from_value(res).map_err(|e| {
-            PluginError::invalid_input(format!("Failed to parse disable result: {e}"))
-        })
+        serde_json::from_value(res)
+            .map_err(|e| PluginError::invalid_input(format!("Failed to parse disable result: {e}")))
     }
 
     pub async fn admin_enable(
@@ -652,9 +708,8 @@ impl RunnerClient {
         let res = self
             .execute_call("management.enable", serde_json::to_value(params).unwrap())
             .await?;
-        serde_json::from_value(res).map_err(|e| {
-            PluginError::invalid_input(format!("Failed to parse enable result: {e}"))
-        })
+        serde_json::from_value(res)
+            .map_err(|e| PluginError::invalid_input(format!("Failed to parse enable result: {e}")))
     }
 
     pub async fn admin_remove(
@@ -664,9 +719,8 @@ impl RunnerClient {
         let res = self
             .execute_call("management.remove", serde_json::to_value(params).unwrap())
             .await?;
-        serde_json::from_value(res).map_err(|e| {
-            PluginError::invalid_input(format!("Failed to parse remove result: {e}"))
-        })
+        serde_json::from_value(res)
+            .map_err(|e| PluginError::invalid_input(format!("Failed to parse remove result: {e}")))
     }
 
     pub async fn admin_replace_grants(
@@ -674,7 +728,10 @@ impl RunnerClient {
         params: ReplaceGrantsParams,
     ) -> Result<AdminInstallationDto, PluginError> {
         let res = self
-            .execute_call("management.grants.replace", serde_json::to_value(params).unwrap())
+            .execute_call(
+                "management.grants.replace",
+                serde_json::to_value(params).unwrap(),
+            )
             .await?;
         serde_json::from_value(res).map_err(|e| {
             PluginError::invalid_input(format!("Failed to parse replace grants result: {e}"))
@@ -686,7 +743,10 @@ impl RunnerClient {
         params: ReplaceBindingsParams,
     ) -> Result<AdminInstallationDto, PluginError> {
         let res = self
-            .execute_call("management.bindings.replace", serde_json::to_value(params).unwrap())
+            .execute_call(
+                "management.bindings.replace",
+                serde_json::to_value(params).unwrap(),
+            )
             .await?;
         serde_json::from_value(res).map_err(|e| {
             PluginError::invalid_input(format!("Failed to parse replace bindings result: {e}"))
@@ -703,7 +763,9 @@ impl RunnerClient {
             )
             .await?;
         serde_json::from_value(res).map_err(|e| {
-            PluginError::invalid_input(format!("Failed to parse replace owner history source result: {e}"))
+            PluginError::invalid_input(format!(
+                "Failed to parse replace owner history source result: {e}"
+            ))
         })
     }
 
