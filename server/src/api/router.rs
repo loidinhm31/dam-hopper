@@ -2,9 +2,9 @@ use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use axum::http::{
     header::{
-        ACCEPT, ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH,
-        CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_RANGE,
-        LAST_MODIFIED, RANGE,
+        HeaderName, ACCEPT, ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION,
+        CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH,
+        IF_RANGE, LAST_MODIFIED, RANGE,
     },
     HeaderValue, Method, StatusCode, Uri,
 };
@@ -689,6 +689,10 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         Method::OPTIONS,
         Method::HEAD,
     ];
+    const X_EXPECTED_SHA256: HeaderName = HeaderName::from_static("x-expected-sha256");
+    const X_EXPECTED_SECURITY_REVISION: HeaderName =
+        HeaderName::from_static("x-expected-security-revision");
+
     let headers = [
         AUTHORIZATION,
         CONTENT_TYPE,
@@ -697,6 +701,8 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         IF_RANGE,
         IF_NONE_MATCH,
         IF_MODIFIED_SINCE,
+        X_EXPECTED_SHA256,
+        X_EXPECTED_SECURITY_REVISION,
     ];
     let exposed_headers = [
         ACCEPT_RANGES,
@@ -706,8 +712,9 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         ETAG,
         LAST_MODIFIED,
         CACHE_CONTROL,
+        X_EXPECTED_SHA256,
+        X_EXPECTED_SECURITY_REVISION,
     ];
-
     CorsLayer::new()
         .allow_origin(allowed_origins.to_vec())
         .allow_methods(methods)
@@ -827,5 +834,40 @@ mod tests {
             .headers()
             .get("access-control-allow-origin")
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn cors_allows_plugin_admin_custom_headers_in_preflight() {
+        let router = Router::new()
+            .route("/api/plugins/admin/stages", post(|| async { "ok" }))
+            .layer(build_cors(&[HeaderValue::from_static(
+                "https://trusted.example",
+            )]));
+        let preflight = router
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/api/plugins/admin/stages")
+                    .header("Origin", "https://trusted.example")
+                    .header("Access-Control-Request-Method", "POST")
+                    .header(
+                        "Access-Control-Request-Headers",
+                        "authorization, content-type, x-expected-sha256, x-expected-security-revision",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preflight.status(), StatusCode::OK);
+        assert_eq!(
+            preflight.headers()["access-control-allow-origin"],
+            "https://trusted.example"
+        );
+        let allow_headers = preflight.headers()["access-control-allow-headers"]
+            .to_str()
+            .unwrap();
+        assert!(allow_headers.contains("x-expected-sha256"));
+        assert!(allow_headers.contains("x-expected-security-revision"));
     }
 }
