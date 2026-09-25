@@ -168,6 +168,57 @@ pub fn ensure_plugin_shared_group() -> Result<(), ReleaseError> {
     }
     Ok(())
 }
+/// Ensure that the default plugin runner user and state directories exist on the host.
+pub fn ensure_default_plugin_runner_user_and_dir() -> Result<(), ReleaseError> {
+    ensure_plugin_shared_group()?;
+
+    let owner_user = "dam-hopper-plugin-runner";
+    let state_dir = std::path::Path::new(super::constants::DEFAULT_RUNNER_STATE_DIR);
+
+    if get_user_by_name(owner_user).is_none() {
+        let mut cmd = std::process::Command::new("useradd");
+        cmd.args([
+            "-r",
+            "-s",
+            "/sbin/nologin",
+            "-d",
+            super::constants::DEFAULT_RUNNER_STATE_DIR,
+            "-g",
+            super::constants::PLUGIN_SHARED_GROUP,
+            owner_user,
+        ]);
+        let _ = cmd.output();
+    }
+
+    if let Some(user_info) = get_user_by_name(owner_user) {
+        if !state_dir.exists() {
+            let _ = std::fs::create_dir_all(state_dir);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(state_dir, std::fs::Permissions::from_mode(0o700));
+            if let Ok(c_path) = std::ffi::CString::new(state_dir.to_string_lossy().as_bytes()) {
+                unsafe { libc::chown(c_path.as_ptr(), user_info.uid, user_info.gid) };
+            }
+        }
+        let plugins_dir = state_dir.join("plugins");
+        if !plugins_dir.exists() {
+            let _ = std::fs::create_dir_all(&plugins_dir);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&plugins_dir, std::fs::Permissions::from_mode(0o700));
+            if let Ok(c_path) = std::ffi::CString::new(plugins_dir.to_string_lossy().as_bytes()) {
+                unsafe { libc::chown(c_path.as_ptr(), user_info.uid, user_info.gid) };
+            }
+        }
+    }
+
+    Ok(())
+}
+
 
 
 /// Verify that the API service account exists, has a primary group, and is not root.

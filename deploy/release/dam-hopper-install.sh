@@ -363,14 +363,26 @@ echo "============================================================"
 
 if [[ $EUID -eq 0 ]]; then
     if [[ "${ROLE}" == "server" || "${ROLE}" == "both" ]]; then
+        PLUGIN_USER="${PLUGIN_OWNER_USER:-dam-hopper-plugin-runner}"
         getent group dam-hopper-plugins >/dev/null 2>&1 || groupadd -r dam-hopper-plugins 2>/dev/null || true
+        if ! id "${PLUGIN_USER}" >/dev/null 2>&1; then
+            useradd -r -s /sbin/nologin -d /var/lib/dam-hopper-plugin-runner -g dam-hopper-plugins "${PLUGIN_USER}" 2>/dev/null || true
+        fi
+        mkdir -p -m 0700 /var/lib/dam-hopper-plugin-runner/plugins
+        chown -R "${PLUGIN_USER}:dam-hopper-plugins" /var/lib/dam-hopper-plugin-runner 2>/dev/null || true
     fi
     "${INSTALL_CMD[@]}"
     mkdir -p -m 0755 /usr/local/bin
     install -m 0755 "${MANAGER_BIN}" /usr/local/bin/dam-hopper
 else
     if [[ "${ROLE}" == "server" || "${ROLE}" == "both" ]]; then
+        PLUGIN_USER="${PLUGIN_OWNER_USER:-dam-hopper-plugin-runner}"
         sudo getent group dam-hopper-plugins >/dev/null 2>&1 || sudo groupadd -r dam-hopper-plugins 2>/dev/null || true
+        if ! id "${PLUGIN_USER}" >/dev/null 2>&1; then
+            sudo useradd -r -s /sbin/nologin -d /var/lib/dam-hopper-plugin-runner -g dam-hopper-plugins "${PLUGIN_USER}" 2>/dev/null || true
+        fi
+        sudo mkdir -p -m 0700 /var/lib/dam-hopper-plugin-runner/plugins
+        sudo chown -R "${PLUGIN_USER}:dam-hopper-plugins" /var/lib/dam-hopper-plugin-runner 2>/dev/null || true
     fi
     sudo "${INSTALL_CMD[@]}"
     sudo mkdir -p -m 0755 /usr/local/bin
