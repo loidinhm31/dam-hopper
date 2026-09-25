@@ -35,7 +35,10 @@ pub(crate) fn runtime_task_key(
     generation: WireCounter,
     cancellation: &ConnectionCancellation,
 ) -> String {
-    format!("{scope_id}:{connection_id}:{rule_id}:{generation}:{:p}", cancellation)
+    format!(
+        "{scope_id}:{connection_id}:{rule_id}:{generation}:{:p}",
+        cancellation
+    )
 }
 
 pub(crate) struct ConnectionCancellation {
@@ -363,21 +366,33 @@ impl ConnectionRegistry {
     }
 
     fn get_entry(&self, scope_id: &str, connection_id: &str) -> Option<&ConnectionEntry> {
-        self.entries.get(&(scope_id.to_string(), connection_id.to_string()))
+        self.entries
+            .get(&(scope_id.to_string(), connection_id.to_string()))
     }
 
-    fn get_entry_mut(&mut self, scope_id: &str, connection_id: &str) -> Option<&mut ConnectionEntry> {
-        self.entries.get_mut(&(scope_id.to_string(), connection_id.to_string()))
+    fn get_entry_mut(
+        &mut self,
+        scope_id: &str,
+        connection_id: &str,
+    ) -> Option<&mut ConnectionEntry> {
+        self.entries
+            .get_mut(&(scope_id.to_string(), connection_id.to_string()))
     }
 
     #[cfg(test)]
     pub(crate) fn test_entry(&self, id: &str) -> Option<&ConnectionEntry> {
-        self.entries.iter().find(|((_, cid), _)| cid == id).map(|(_, e)| e)
+        self.entries
+            .iter()
+            .find(|((_, cid), _)| cid == id)
+            .map(|(_, e)| e)
     }
 
     #[cfg(test)]
     pub(crate) fn test_entry_mut(&mut self, id: &str) -> Option<&mut ConnectionEntry> {
-        self.entries.iter_mut().find(|((_, cid), _)| cid == id).map(|(_, e)| e)
+        self.entries
+            .iter_mut()
+            .find(|((_, cid), _)| cid == id)
+            .map(|(_, e)| e)
     }
 
     pub(crate) fn reserve_connection(
@@ -873,7 +888,8 @@ impl ConnectionRegistry {
                 return Err(RuntimeError::StaleConnectionGeneration(entry.generation));
             }
         }
-        self.entries.remove(&(scope_id.to_string(), connection_id.to_string()));
+        self.entries
+            .remove(&(scope_id.to_string(), connection_id.to_string()));
         Ok(())
     }
 
@@ -884,7 +900,8 @@ impl ConnectionRegistry {
         expected_generation: WireCounter,
     ) -> Result<(), RuntimeError> {
         self.ensure_disconnected(scope_id, connection_id, expected_generation)?;
-        self.entries.remove(&(scope_id.to_string(), connection_id.to_string()));
+        self.entries
+            .remove(&(scope_id.to_string(), connection_id.to_string()));
         Ok(())
     }
 
@@ -922,7 +939,8 @@ impl ConnectionRegistry {
         if !Arc::ptr_eq(&entry.cancellation, cancellation) {
             return Ok(());
         }
-        self.entries.remove(&(scope_id.to_string(), connection_id.to_string()));
+        self.entries
+            .remove(&(scope_id.to_string(), connection_id.to_string()));
         Ok(())
     }
 
@@ -1268,7 +1286,11 @@ impl ConnectionRegistry {
         Ok(())
     }
 
-    pub(crate) fn lifecycle(&self, scope_id: &str, connection_id: &str) -> Result<Arc<Mutex<()>>, RuntimeError> {
+    pub(crate) fn lifecycle(
+        &self,
+        scope_id: &str,
+        connection_id: &str,
+    ) -> Result<Arc<Mutex<()>>, RuntimeError> {
         self.get_entry(scope_id, connection_id)
             .map(|entry| Arc::clone(&entry.lifecycle))
             .ok_or(RuntimeError::ConnectionNotFound)
@@ -1379,13 +1401,23 @@ impl ConnectionRegistry {
         let mut keys = self
             .entries
             .iter()
-            .map(|((scope_id, id), entry)| (scope_id.clone(), id.clone(), entry.generation, Arc::clone(&entry.lifecycle)))
+            .map(|((scope_id, id), entry)| {
+                (
+                    scope_id.clone(),
+                    id.clone(),
+                    entry.generation,
+                    Arc::clone(&entry.lifecycle),
+                )
+            })
             .collect::<Vec<_>>();
         keys.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
         keys
     }
 
-    pub(crate) fn connection_keys_for_scope(&self, scope_id: &str) -> Vec<(String, WireCounter, Arc<Mutex<()>>)> {
+    pub(crate) fn connection_keys_for_scope(
+        &self,
+        scope_id: &str,
+    ) -> Vec<(String, WireCounter, Arc<Mutex<()>>)> {
         let mut keys = self
             .entries
             .iter()
@@ -1589,8 +1621,13 @@ impl ConnectionRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn state_for_scope(&self, scope_id: &str, connection_id: &str) -> Option<SshConnectionState> {
-        self.get_entry(scope_id, connection_id).map(|entry| entry.state)
+    pub(crate) fn state_for_scope(
+        &self,
+        scope_id: &str,
+        connection_id: &str,
+    ) -> Option<SshConnectionState> {
+        self.get_entry(scope_id, connection_id)
+            .map(|entry| entry.state)
     }
 }
 
@@ -1750,7 +1787,12 @@ mod tests {
             panic!("first connect must reserve");
         };
         registry
-            .fail_connection(SCOPE, id, old.generation, SshForwardErrorCode::SshConnectFailed)
+            .fail_connection(
+                SCOPE,
+                id,
+                old.generation,
+                SshForwardErrorCode::SshConnectFailed,
+            )
             .unwrap();
         registry.clear_if_disconnected();
         let ConnectionAdmission::Reserved(current) = registry
@@ -2326,8 +2368,12 @@ mod tests {
         let mut conn_b = connection(conn_id);
         conn_b.scope_id = SCOPE_2.into();
 
-        let _res_a = registry.reserve_connection(conn_a, WireCounter::ZERO).unwrap();
-        let _res_b = registry.reserve_connection(conn_b, WireCounter::ZERO).unwrap();
+        let _res_a = registry
+            .reserve_connection(conn_a, WireCounter::ZERO)
+            .unwrap();
+        let _res_b = registry
+            .reserve_connection(conn_b, WireCounter::ZERO)
+            .unwrap();
 
         assert_eq!(registry.connection_snapshots_for_scope(SCOPE).len(), 1);
         assert_eq!(registry.connection_snapshots_for_scope(SCOPE_2).len(), 1);
@@ -2341,10 +2387,14 @@ mod tests {
     fn active_rule_count_and_port_conflict_detection() {
         let mut registry = ConnectionRegistry::new();
         let conn = connection("c1");
-        let _ = registry.reserve_connection(conn, WireCounter::ZERO).unwrap();
+        let _ = registry
+            .reserve_connection(conn, WireCounter::ZERO)
+            .unwrap();
 
         let r1 = rule("r1", "c1", 8080);
-        let _ = registry.reserve_rule(r1, WireCounter::ZERO, WireCounter::ONE).unwrap();
+        let _ = registry
+            .reserve_rule(r1, WireCounter::ZERO, WireCounter::ONE)
+            .unwrap();
 
         assert_eq!(registry.active_rule_count(), 1);
         assert!(registry.port_conflict(8080, "other-rule"));

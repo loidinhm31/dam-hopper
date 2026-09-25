@@ -146,6 +146,29 @@ pub fn get_group_gid_by_name(groupname: &str) -> Option<u32> {
     }
     Some(unsafe { (*grp).gr_gid })
 }
+/// Ensure that the dedicated plugin shared group exists; provisions it via groupadd if absent.
+pub fn ensure_plugin_shared_group() -> Result<(), ReleaseError> {
+    if get_group_gid_by_name(super::constants::PLUGIN_SHARED_GROUP).is_some() {
+        return Ok(());
+    }
+    let mut cmd = std::process::Command::new("groupadd");
+    cmd.args(["-r", super::constants::PLUGIN_SHARED_GROUP]);
+    let output = cmd.output().map_err(|e| ReleaseError::Io {
+        action: "execute groupadd for plugin shared group",
+        details: e.to_string(),
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if get_group_gid_by_name(super::constants::PLUGIN_SHARED_GROUP).is_none() {
+            return Err(ReleaseError::Config(format!(
+                "failed to create required plugin shared group '{}': {stderr}",
+                super::constants::PLUGIN_SHARED_GROUP
+            )));
+        }
+    }
+    Ok(())
+}
+
 
 /// Verify that the API service account exists, has a primary group, and is not root.
 pub fn verify_api_service_account(username: &str) -> Result<UserInfo, ReleaseError> {

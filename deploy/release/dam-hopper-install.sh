@@ -362,10 +362,16 @@ echo "============================================================"
 
 
 if [[ $EUID -eq 0 ]]; then
+    if [[ "${ROLE}" == "server" || "${ROLE}" == "both" ]]; then
+        getent group dam-hopper-plugins >/dev/null 2>&1 || groupadd -r dam-hopper-plugins 2>/dev/null || true
+    fi
     "${INSTALL_CMD[@]}"
     mkdir -p -m 0755 /usr/local/bin
     install -m 0755 "${MANAGER_BIN}" /usr/local/bin/dam-hopper
 else
+    if [[ "${ROLE}" == "server" || "${ROLE}" == "both" ]]; then
+        sudo getent group dam-hopper-plugins >/dev/null 2>&1 || sudo groupadd -r dam-hopper-plugins 2>/dev/null || true
+    fi
     sudo "${INSTALL_CMD[@]}"
     sudo mkdir -p -m 0755 /usr/local/bin
     sudo install -m 0755 "${MANAGER_BIN}" /usr/local/bin/dam-hopper
