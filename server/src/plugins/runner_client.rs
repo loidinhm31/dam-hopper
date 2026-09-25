@@ -32,6 +32,8 @@ use super::contract::{
 };
 use super::error::PluginError;
 #[cfg(unix)]
+use super::error::PluginErrorCode;
+#[cfg(unix)]
 use super::framing::{
     build_json_rpc_request, read_frame_async, validate_json_rpc_message, write_frame_async,
 };
