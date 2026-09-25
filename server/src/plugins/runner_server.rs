@@ -1,26 +1,36 @@
+#[cfg(unix)]
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::Duration;
 
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
+#[cfg(unix)]
 use tokio::time::timeout;
 
+#[cfg(unix)]
 use super::admin::*;
+#[cfg(unix)]
 use super::contract::budgets::HANDSHAKE_TIMEOUT_SECS;
+#[cfg(unix)]
 use super::contract::{
     ContextCloseParams, ContextOpenParams, PluginActivateParams, PluginActivateResult,
     PluginDeactivateParams, PluginDeactivateResult, PluginInvokeParams, PluginListParams,
-    PluginListResult, PluginReadUiParams, RequestCancelParams, RunnerHelloParams,
-    RunnerHelloResult, ADMIN_RUNNER_METHODS, PUBLIC_RUNNER_METHODS, RUNNER_PROTOCOL_VERSION,
+    PluginListResult, PluginReadUiParams, RequestCancelParams, RunnerHelloResult,
+    RUNNER_PROTOCOL_VERSION,
 };
-use super::lifecycle::LifecycleCoordinator;
+#[cfg(unix)]
+use super::contract::{RunnerHelloParams, ADMIN_RUNNER_METHODS, PUBLIC_RUNNER_METHODS};
 use super::error::PluginError;
+#[cfg(unix)]
 use super::framing::{
     build_json_rpc_error, build_json_rpc_response, read_frame_async, validate_json_rpc_message,
     write_frame_async,
 };
+use super::lifecycle::LifecycleCoordinator;
 use super::registry::PluginRegistry;
 use super::worker_supervisor::SupervisorManager;
 
@@ -61,6 +71,7 @@ impl RunnerServer {
         self
     }
 
+    #[cfg(unix)]
     pub async fn run(&self, mut shutdown_rx: watch::Receiver<bool>) -> Result<(), PluginError> {
         self.validate_socket_directory()?;
         self.cleanup_existing_socket()?;
@@ -121,7 +132,14 @@ impl RunnerServer {
         self.supervisor_manager.deactivate_all().await;
         Ok(())
     }
+    #[cfg(not(unix))]
+    pub async fn run(&self, _shutdown_rx: watch::Receiver<bool>) -> Result<(), PluginError> {
+        Err(PluginError::runner_unavailable(
+            "RunnerServer is only supported on Unix platforms",
+        ))
+    }
 
+    #[cfg(unix)]
     fn validate_socket_directory(&self) -> Result<(), PluginError> {
         let parent = self.config.socket_path.parent().ok_or_else(|| {
             PluginError::invalid_input("Socket path must have a parent directory")
@@ -157,6 +175,7 @@ impl RunnerServer {
         Ok(())
     }
 
+    #[cfg(unix)]
     fn cleanup_existing_socket(&self) -> Result<(), PluginError> {
         if self.config.socket_path.exists() {
             #[cfg(unix)]
@@ -185,6 +204,7 @@ impl RunnerServer {
         Ok(())
     }
 
+    #[cfg(unix)]
     fn verify_peer_credentials(&self, stream: &UnixStream) -> Result<(), PluginError> {
         #[cfg(unix)]
         {
@@ -211,6 +231,7 @@ impl RunnerServer {
     }
 }
 
+#[cfg(unix)]
 async fn handle_connection(
     stream: UnixStream,
     registry: Arc<PluginRegistry>,
@@ -366,6 +387,7 @@ async fn handle_connection(
     Ok(())
 }
 
+#[cfg(unix)]
 async fn dispatch_method(
     req_id: &str,
     method: &str,
@@ -586,7 +608,9 @@ async fn dispatch_method(
         }
         "management.bindings.replace" => {
             let params: ReplaceBindingsParams = serde_json::from_value(params).map_err(|e| {
-                PluginError::invalid_input(format!("Invalid management.bindings.replace params: {e}"))
+                PluginError::invalid_input(format!(
+                    "Invalid management.bindings.replace params: {e}"
+                ))
             })?;
             let res = lifecycle_coordinator
                 .replace_bindings(
@@ -599,9 +623,12 @@ async fn dispatch_method(
             Ok(serde_json::to_value(res).unwrap())
         }
         "management.ownerHistorySource.replace" => {
-            let params: ReplaceOwnerHistorySourceParams = serde_json::from_value(params).map_err(|e| {
-                PluginError::invalid_input(format!("Invalid management.ownerHistorySource.replace params: {e}"))
-            })?;
+            let params: ReplaceOwnerHistorySourceParams =
+                serde_json::from_value(params).map_err(|e| {
+                    PluginError::invalid_input(format!(
+                        "Invalid management.ownerHistorySource.replace params: {e}"
+                    ))
+                })?;
             let res = lifecycle_coordinator
                 .replace_owner_history_source(
                     &params.actor_subject,
@@ -614,7 +641,9 @@ async fn dispatch_method(
         }
         "management.installations.list" => {
             let params: AdminListParams = serde_json::from_value(params).map_err(|e| {
-                PluginError::invalid_input(format!("Invalid management.installations.list params: {e}"))
+                PluginError::invalid_input(format!(
+                    "Invalid management.installations.list params: {e}"
+                ))
             })?;
             let res = lifecycle_coordinator
                 .list_installations(&params.actor_subject)
@@ -628,7 +657,9 @@ async fn dispatch_method(
         }
         "management.installations.get" => {
             let params: AdminGetParams = serde_json::from_value(params).map_err(|e| {
-                PluginError::invalid_input(format!("Invalid management.installations.get params: {e}"))
+                PluginError::invalid_input(format!(
+                    "Invalid management.installations.get params: {e}"
+                ))
             })?;
             let res = lifecycle_coordinator
                 .get_installation(&params.actor_subject, &params.installation_id)

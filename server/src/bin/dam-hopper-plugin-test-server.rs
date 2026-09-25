@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::net::SocketAddr;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,9 +20,9 @@ use dam_hopper_server::diagnostics::DiagnosticStore;
 use dam_hopper_server::fs::FsSubsystem;
 use dam_hopper_server::plugins::contract::{GrantKey, PluginReadUiParams};
 use dam_hopper_server::plugins::{
-    AdminSubjectList, EpochRegistry, OwnerHistorySource, PluginApiService, PluginAuthorizationService,
-    PluginContextTable, PluginRegistry, PluginRegistryLayout, RunnerClient, RunnerClientConfig,
-    RunnerServer, RunnerServerConfig, SupervisorManager,
+    AdminSubjectList, EpochRegistry, OwnerHistorySource, PluginApiService,
+    PluginAuthorizationService, PluginContextTable, PluginRegistry, PluginRegistryLayout,
+    RunnerClient, RunnerClientConfig, RunnerServer, RunnerServerConfig, SupervisorManager,
 };
 use dam_hopper_server::pty::{BroadcastEventSink, PtySessionManager};
 use dam_hopper_server::state::AppState;
@@ -124,6 +125,7 @@ fn require_empty_state_dir(path: &Path) -> anyhow::Result<()> {
     } else {
         fs::create_dir_all(path)?;
     }
+    #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
@@ -281,7 +283,10 @@ async fn main() -> anyhow::Result<()> {
         } else {
             serde_json::json!({ "version": 1, "projects": {} })
         };
-        if let Some(projects_map) = meta_json.get_mut("projects").and_then(|p| p.as_object_mut()) {
+        if let Some(projects_map) = meta_json
+            .get_mut("projects")
+            .and_then(|p| p.as_object_mut())
+        {
             projects_map.insert(
                 target_project_id,
                 serde_json::json!({
@@ -289,7 +294,10 @@ async fn main() -> anyhow::Result<()> {
                     "updated_at": chrono::Utc::now().timestamp_millis()
                 }),
             );
-            let _ = fs::write(&meta_file, serde_json::to_string_pretty(&meta_json).unwrap_or_default());
+            let _ = fs::write(
+                &meta_file,
+                serde_json::to_string_pretty(&meta_json).unwrap_or_default(),
+            );
         }
         Some(src)
     } else {
@@ -320,7 +328,10 @@ async fn main() -> anyhow::Result<()> {
     })?;
 
     let socket_path = state_dir.join("runner.sock");
+    #[cfg(unix)]
     let uid = unsafe { libc::geteuid() };
+    #[cfg(not(unix))]
+    let uid = 0;
     let allow_root = uid == 0;
     let supervisors = Arc::new(SupervisorManager::new(registry.clone(), node_bin));
     supervisors
@@ -447,6 +458,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let session_path = state_dir.join("g2-session.json");
     fs::write(&session_path, serde_json::to_vec_pretty(&descriptor)?)?;
+    #[cfg(unix)]
     fs::set_permissions(&session_path, fs::Permissions::from_mode(0o600))?;
 
     let allowed_origins = axum::http::HeaderValue::from_str(&public_origin)
@@ -501,7 +513,10 @@ async fn auto_auth_middleware(
     let method = request.method().clone();
 
     if path == "/api/auth/login" && method == axum::http::Method::POST {
-        let cookie_val = format!("damhopper-auth={}; HttpOnly; SameSite=Lax; Path=/", auth.token);
+        let cookie_val = format!(
+            "damhopper-auth={}; HttpOnly; SameSite=Lax; Path=/",
+            auth.token
+        );
         let body = serde_json::json!({
             "ok": true,
             "token": auth.token,
@@ -513,12 +528,15 @@ async fn auto_auth_middleware(
             axum::Json(body),
         ));
         if let Ok(header_val) = axum::http::HeaderValue::from_str(&cookie_val) {
-            resp.headers_mut().append(axum::http::header::SET_COOKIE, header_val);
+            resp.headers_mut()
+                .append(axum::http::header::SET_COOKIE, header_val);
         }
         return resp;
     }
 
-    let has_auth = request.headers().contains_key(axum::http::header::AUTHORIZATION);
+    let has_auth = request
+        .headers()
+        .contains_key(axum::http::header::AUTHORIZATION);
     let has_cookie = request
         .headers()
         .get(axum::http::header::COOKIE)
@@ -527,8 +545,11 @@ async fn auto_auth_middleware(
         .unwrap_or(false);
 
     if !has_auth && !has_cookie {
-        if let Ok(bearer_val) = axum::http::HeaderValue::from_str(&format!("Bearer {}", auth.token)) {
-            request.headers_mut().insert(axum::http::header::AUTHORIZATION, bearer_val);
+        if let Ok(bearer_val) = axum::http::HeaderValue::from_str(&format!("Bearer {}", auth.token))
+        {
+            request
+                .headers_mut()
+                .insert(axum::http::header::AUTHORIZATION, bearer_val);
         }
     }
 
@@ -551,9 +572,14 @@ async fn auto_auth_middleware(
     let mut response = next.run(request).await;
 
     if !has_cookie {
-        let cookie_val = format!("damhopper-auth={}; HttpOnly; SameSite=Lax; Path=/", auth.token);
+        let cookie_val = format!(
+            "damhopper-auth={}; HttpOnly; SameSite=Lax; Path=/",
+            auth.token
+        );
         if let Ok(header_val) = axum::http::HeaderValue::from_str(&cookie_val) {
-            response.headers_mut().append(axum::http::header::SET_COOKIE, header_val);
+            response
+                .headers_mut()
+                .append(axum::http::header::SET_COOKIE, header_val);
         }
     }
 
