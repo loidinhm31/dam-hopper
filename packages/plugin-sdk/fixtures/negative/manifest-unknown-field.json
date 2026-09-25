@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 1,
+  "id": "evcrate.advisor",
+  "version": "0.1.0",
+  "publisher": "evcrate",
+  "hostVersionRange": ">=0.4.0",
+  "contracts": {
+    "runnerProtocol": "^1.0.0",
+    "workerSdk": "^1.0.0",
+    "uiBridge": "^1.0.0",
+    "manifest": 1,
+    "dataApi": "^1.0.0"
+  },
+  "capabilities": ["history.refresh"],
+  "entrypoints": {
+    "backend": {
+      "runtime": "node",
+      "range": ">=22.19.0",
+      "entry": "backend/worker.cjs"
+    }
+  },
+  "inventory": [],
+  "unauthorizedField": "malicious"
+}

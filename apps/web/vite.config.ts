@@ -19,7 +19,7 @@ export default defineConfig(({ command, mode }) => {
   }
   const backend = configuredBackend || "http://127.0.0.1:4803";
   return {
-    base: "./",
+    base: "/",
     define: {
       __DAM_HOPPER_RELEASE_VERSION__: JSON.stringify(
         process.env.npm_package_version || "0.2.0",

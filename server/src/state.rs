@@ -127,6 +127,8 @@ pub struct AppState {
         Option<Arc<crate::idle_suspend::IdleSuspendEventWriter>>,
     /// Monotonic timestamp for idle suspend fallback warning onset.
     pub fallback_warning_onset_ms: u64,
+    /// Authorized plugin API service coordinating runner, contexts, and grants.
+    pub plugin_service: Arc<crate::plugins::PluginApiService>,
 }
 
 impl AppState {
@@ -296,6 +298,14 @@ impl AppState {
             ));
 
             tracing::error!("⚠️  NO-AUTH mode enabled — authentication bypassed");
+        } else if db.is_none()
+            && (std::env::var("RUST_ENV").unwrap_or_default() == "production"
+                || std::env::var("ENVIRONMENT").unwrap_or_default() == "production")
+        {
+            anyhow::bail!(
+                "FATAL: MongoDB configuration (MONGODB_URI and MONGODB_DATABASE) is required in production environment.\n\
+                 Set MONGODB_URI and MONGODB_DATABASE or use development mode for local dev."
+            );
         }
 
         let browser_debug_artifacts = BrowserDebugArtifactManager::new()
@@ -384,6 +394,20 @@ impl AppState {
             idle_suspend_coordinator: Arc::new(RwLock::new(None)),
             idle_suspend_event_writer,
             fallback_warning_onset_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(),
+            plugin_service: {
+                let runner_client = Arc::new(crate::plugins::RunnerClient::new(
+                    crate::plugins::RunnerClientConfig::default(),
+                ));
+                let epoch_registry = Arc::new(crate::plugins::EpochRegistry::new());
+                let auth_service = Arc::new(crate::plugins::PluginAuthorizationService::new(epoch_registry));
+                let context_table = Arc::new(crate::plugins::PluginContextTable::new());
+                Arc::new(crate::plugins::PluginApiService::new(
+                    runner_client,
+                    auth_service,
+                    context_table,
+                    WorkspaceTargetResolver::new(),
+                ))
+            },
         })
     }
     /// Attach the optional workflow repository using the existing session DB connection.
@@ -414,6 +438,10 @@ impl AppState {
                 self.diagnostics.clone(),
             ))
         });
+        self
+    }
+    pub fn with_plugin_service(mut self, service: Arc<crate::plugins::PluginApiService>) -> Self {
+        self.plugin_service = service;
         self
     }
     #[cfg(test)]

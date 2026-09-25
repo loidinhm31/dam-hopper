@@ -259,6 +259,7 @@ function validateInventory(inventory, label) {
         break;
       case "bin/dam-hopper-server":
       case "bin/dam-hopper-idle-suspend-helper":
+      case "bin/dam-hopper-plugin-runner":
         if (!isFile) failMigration(`${entryLabel} must be a file`);
         requires("server", true);
         break;
@@ -268,6 +269,8 @@ function validateInventory(inventory, label) {
         break;
       case "systemd/dam-hopper-api.service":
       case "systemd/dam-hopper-idle-suspend-helper.service":
+      case "systemd/dam-hopper-plugin-runner.service":
+      case "tmpfiles.d/dam-hopper-plugin-runner.conf":
         if (!isFile) failMigration(`${entryLabel} must be a file`);
         requires("server");
         break;
@@ -324,11 +327,12 @@ function validateManifestShape(manifest, label) {
     ],
     label,
   );
-  requireSchemaVersion(
-    manifest.schemaVersion,
-    RELEASE_MANIFEST_SCHEMA_VERSION,
-    `${label}.schemaVersion`,
-  );
+  if (
+    manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION &&
+    manifest.schemaVersion !== 3
+  ) {
+    failMigration(`${label}.schemaVersion expected schema version 2 or 3, got ${manifest.schemaVersion}`);
+  }
 
   assertExactKeys(manifest.release, ["tag", "version", "commitSha"], `${label}.release`);
   const tag = requireTag(manifest.release.tag, `${label}.release.tag`);
@@ -359,9 +363,13 @@ function validateManifestShape(manifest, label) {
   requireInteger(manifest.archive.size, `${label}.archive.size`, 1);
   requireSha256(manifest.archive.sha256, `${label}.archive.sha256`);
 
+  const expectedComponents = ["cli", "api", "webHost", "webAssets"];
+  if (manifest.components.runner) {
+    expectedComponents.push("runner");
+  }
   assertExactKeys(
     manifest.components,
-    ["cli", "api", "webHost", "webAssets"],
+    expectedComponents,
     `${label}.components`,
   );
   for (const [component, value] of Object.entries(manifest.components)) {
@@ -374,7 +382,11 @@ function validateManifestShape(manifest, label) {
 
   validateInventory(manifest.inventory, `${label}.inventory`);
 
-  assertExactKeys(manifest.services, ["api", "web"], `${label}.services`);
+  const expectedServices = ["api", "web"];
+  if (manifest.services.runner) {
+    expectedServices.push("runner");
+  }
+  assertExactKeys(manifest.services, expectedServices, `${label}.services`);
   assertExactKeys(
     manifest.services.api,
     ["unitName", "bindHost", "port", "healthPath"],
@@ -401,6 +413,19 @@ function validateManifestShape(manifest, label) {
     manifest.services.web.healthPath !== "/__dam-hopper/health"
   ) {
     failMigration(`${label}.services.web does not match the fixed web contract`);
+  }
+  if (manifest.services.runner) {
+    assertExactKeys(
+      manifest.services.runner,
+      ["unitName", "socketPath"],
+      `${label}.services.runner`,
+    );
+    if (
+      manifest.services.runner.unitName !== "dam-hopper-plugin-runner.service" ||
+      manifest.services.runner.socketPath !== "/run/dam-hopper/plugin-runner.sock"
+    ) {
+      failMigration(`${label}.services.runner does not match the fixed runner contract`);
+    }
   }
 
   assertExactKeys(

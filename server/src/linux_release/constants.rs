@@ -2,10 +2,13 @@
 
 /// Schema version for release manifests.
 pub const RELEASE_MANIFEST_SCHEMA_VERSION: u32 = 2;
+/// Legacy schema version for release manifests.
+pub const RELEASE_MANIFEST_SCHEMA_VERSION_LEGACY: u32 = 1;
 
 /// Schema version for persisted manager state.
-pub const MANAGER_STATE_SCHEMA_VERSION: u32 = 1;
-
+pub const MANAGER_STATE_SCHEMA_VERSION: u32 = 2;
+/// Legacy schema version for persisted manager state (strict n-1 migration).
+pub const MANAGER_STATE_SCHEMA_VERSION_LEGACY: u32 = 1;
 /// Target profile identifier.
 pub const PROFILE_ID: &str = "linux-x86_64-systemd";
 /// Legacy target profile identifier.
@@ -53,12 +56,24 @@ pub const RECOVERY_SERVICE_UNIT: &str = "dam-hopper-recovery.service";
 /// Systemd unit name for the idle-suspend helper service.
 pub const HELPER_SERVICE_UNIT: &str = "dam-hopper-idle-suspend-helper.service";
 
+/// Systemd unit name for the owner plugin runner service.
+pub const RUNNER_SERVICE_UNIT: &str = "dam-hopper-plugin-runner.service";
+/// Template and installed name for the plugin runner tmpfiles configuration.
+pub const RUNNER_TMPFILES_CONF: &str = "dam-hopper-plugin-runner.conf";
+/// Canonical runtime socket path for the plugin runner.
+pub const DEFAULT_RUNNER_SOCKET_PATH: &str = "/run/dam-hopper/plugin-runner.sock";
+/// Canonical state directory for the owner plugin runner.
+pub const DEFAULT_RUNNER_STATE_DIR: &str = "/var/lib/dam-hopper-plugin-runner";
+/// Dedicated shared group for API and plugin runner socket communication.
+pub const PLUGIN_SHARED_GROUP: &str = "dam-hopper-plugins";
+
 /// All managed release systemd service unit names.
 pub const ALL_SERVICE_UNITS: &[&str] = &[
     API_SERVICE_UNIT,
     WEB_SERVICE_UNIT,
     RECOVERY_SERVICE_UNIT,
     HELPER_SERVICE_UNIT,
+    RUNNER_SERVICE_UNIT,
 ];
 
 /// Standard rollback declaration compatibility flag.

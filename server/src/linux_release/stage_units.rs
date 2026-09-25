@@ -1,6 +1,6 @@
 //! Staging and isolated verification of candidate systemd units and public host config.
 
-use super::constants::HELPER_SERVICE_UNIT;
+use super::constants::{HELPER_SERVICE_UNIT, RUNNER_SERVICE_UNIT, RUNNER_TMPFILES_CONF};
 use super::durable_fs::atomic_write_file;
 use super::error::ReleaseError;
 use super::host_config::{load_host_public_config, save_host_public_config, HostPublicConfig};
@@ -9,7 +9,8 @@ use super::layout::Layout;
 use super::manifest::ReleaseManifest;
 use super::systemd::systemd_analyze_verify;
 use super::unit::{
-    render_api_unit, render_helper_unit, render_recovery_unit, render_web_unit, UnitRenderContext,
+    render_api_unit, render_helper_unit, render_recovery_unit, render_runner_unit, render_unit,
+    render_web_unit, UnitRenderContext,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -164,11 +165,28 @@ fn stage_candidate_units_inner(
                 "primary group for API service user '{service_user}' does not resolve"
             ))
         })?;
-        base_ctx.with_api_identity(
-            service_user,
+        let mut server_ctx = base_ctx.with_api_identity(
+            service_user.clone(),
             service_group,
             super::constants::API_SERVICE_HOME.to_string(),
-        )?
+        )?;
+        if let Some(owner) = host_config.as_ref().and_then(|c| c.plugin_owner_user.as_deref()) {
+            if let Ok(owner_info) =
+                super::account::verify_plugin_owner_account(owner, Some(&service_user))
+            {
+                let owner_group = super::account::get_group_by_gid(owner_info.gid)
+                    .unwrap_or_else(|| owner.to_string());
+                server_ctx = server_ctx.with_plugin_runner_identity(
+                    owner.to_string(),
+                    owner_group,
+                    owner_info.home,
+                    user_info.uid,
+                    None,
+                    None,
+                )?;
+            }
+        }
+        server_ctx
     } else {
         base_ctx
     };
@@ -206,6 +224,37 @@ fn stage_candidate_units_inner(
         let helper_unit_path = pending_units_dir.join(HELPER_SERVICE_UNIT);
         write_file_with_mode(&helper_unit_path, rendered_helper.as_bytes(), 0o644)?;
         staged_unit_paths.push(helper_unit_path);
+
+        let runner_template_res = load_release_template(
+            target_dir,
+            "systemd/dam-hopper-plugin-runner.service.in",
+            "systemd/dam-hopper-plugin-runner.service",
+            allow_checked_in_fallback,
+        );
+        if let Ok(runner_template) = runner_template_res {
+            let rendered_runner = render_runner_unit(&runner_template, &ctx)?;
+            let runner_unit_path = pending_units_dir.join(RUNNER_SERVICE_UNIT);
+            write_file_with_mode(&runner_unit_path, rendered_runner.as_bytes(), 0o644)?;
+            staged_unit_paths.push(runner_unit_path);
+        }
+
+        let tmpfiles_template_res = load_template(
+            target_dir,
+            "tmpfiles.d/dam-hopper-plugin-runner.conf.in",
+            allow_checked_in_fallback,
+        )
+        .or_else(|_| {
+            load_template(
+                target_dir,
+                "tmpfiles.d/dam-hopper-plugin-runner.conf",
+                allow_checked_in_fallback,
+            )
+        });
+        if let Ok(tmpfiles_template) = tmpfiles_template_res {
+            let rendered_tmpfiles = render_unit(&tmpfiles_template, &ctx)?;
+            let tmpfiles_dest = pending_units_dir.join(RUNNER_TMPFILES_CONF);
+            write_file_with_mode(&tmpfiles_dest, rendered_tmpfiles.as_bytes(), 0o644)?;
+        }
     }
 
     if role.includes_web() {
@@ -348,6 +397,12 @@ fn load_template(
             }
             p if p.contains("dam-hopper-idle-suspend-helper") => {
                 include_str!("../../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in")
+            }
+            p if p.contains("dam-hopper-plugin-runner.service") => {
+                include_str!("../../../deploy/systemd/dam-hopper-plugin-runner.service.in")
+            }
+            p if p.contains("dam-hopper-plugin-runner.conf") => {
+                include_str!("../../../deploy/tmpfiles.d/dam-hopper-plugin-runner.conf.in")
             }
             _ => "",
         };

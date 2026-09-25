@@ -1,7 +1,10 @@
+import { Puzzle } from "lucide-react";
+import { usePluginNavigation } from "@/plugins/use-plugin-navigation.js";
 import { getNavEntries } from "@/lib/navigation.js";
 import { useSshForwardHost } from "@/contexts/SshForwardHostContext.js";
 import { cn } from "@/lib/utils.js";
 import { TopNavRouteLink } from "@/components/molecules/TopNavRouteLink.js";
+import { useWorkspaceStore } from "@/stores/workspace.js";
 
 interface TopNavRouteMenuProps {
   collapsed: boolean;
@@ -17,13 +20,25 @@ export function TopNavRouteMenu({
   isCompactWorkspace,
 }: TopNavRouteMenuProps) {
   const { host, environment } = useSshForwardHost();
+  const project = useWorkspaceStore((state) => state.selectedProject);
+  const pluginNavigation = usePluginNavigation(project);
   const navEntries = getNavEntries({
     sshForwardHostAvailable:
       host !== null && environment.kind === "nativeDesktop",
+    pluginEntries: pluginNavigation.items.map((item) => ({
+      to: item.to,
+      icon: Puzzle,
+      label: item.label,
+    })),
   });
 
   return (
     <>
+      {pluginNavigation.error ? (
+        <span className="sr-only" role="status">
+          {pluginNavigation.error}
+        </span>
+      ) : null}
       <nav
         aria-label="Primary"
         className={cn(

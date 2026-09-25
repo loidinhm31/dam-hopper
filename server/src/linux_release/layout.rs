@@ -208,6 +208,30 @@ impl Layout {
         self.sysusers_dir().join("dam-hopper-web.conf")
     }
 
+    /// Directory for tmpfiles configuration:
+    /// `/etc/dam-hopper/tmpfiles.d`
+    pub fn tmpfiles_dir(&self) -> PathBuf {
+        self.etc_dir.join("tmpfiles.d")
+    }
+
+    /// Plugin runner tmpfiles configuration file:
+    /// `/etc/dam-hopper/tmpfiles.d/dam-hopper-plugin-runner.conf`
+    pub fn runner_tmpfiles_conf_path(&self) -> PathBuf {
+        self.tmpfiles_dir().join(super::constants::RUNNER_TMPFILES_CONF)
+    }
+
+    /// Dedicated durable state directory for the owner plugin runner:
+    /// `/var/lib/dam-hopper-plugin-runner`
+    pub fn runner_state_dir(&self) -> PathBuf {
+        self.trusted_root().join("var/lib/dam-hopper-plugin-runner")
+    }
+
+    /// Canonical socket path for plugin runner:
+    /// `/run/dam-hopper/plugin-runner.sock`
+    pub fn runner_socket_path(&self) -> PathBuf {
+        self.trusted_root().join("run/dam-hopper/plugin-runner.sock")
+    }
+
     /// Root bundle output directory:
     /// `/var/lib/dam-hopper-manager/diagnostics`
     pub fn diagnostics_dir(&self) -> PathBuf {

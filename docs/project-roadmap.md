@@ -2,6 +2,13 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### All-project advisor history integration (2026-09-24)
+
+- **Progress: 50% (3/6 phases complete; Phases 00–02 DONE).** Phase 02 host root authorization and context is complete; Phase 03 worker root history provider is next.
+- **Phase 02 — Host root authorization and context — DONE (2026-09-24).** Bound account-wide history to the durable trusted installation source, admitted authenticated accounts, hydrated owner-source state on context open, reauthorized at the runner, and cleared cached sources/contexts during lifecycle invalidation.
+- **Validation:** Targeted host authorization, lifecycle, runner, and API tests plus plugin SDK/UI and EVCrate suites passed. Follow-up checks covered restart hydration, ancestor-symlink rejection, and wrong-owner UID denial; one Windows-only test was skipped in the base suite.
+
+
 ### Windows release asset and bootstrap installer (2026-09-21)
 
 - **Plan status: IN PROGRESS (2/3 phases; 67%; updated 2026-09-21).** Phases 01 and 02 are complete; Phase 03 remains pending.
@@ -9,6 +16,33 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 02 — PowerShell bootstrap installer — DONE (2026-09-21; 100%).** Added the non-admin `dam-hopper-install.ps1` command contract (`-Version`/`-Latest`, `-InstallDir`, `-AddToPath`, `-VerifyAttestation`, and `-DryRun`), digest-first download, bounded ZIP validation, config preservation, User PATH handling, and a loopback fixture-backed PowerShell harness.
 - **Validation:** Focused Windows asset-gate coverage passed **23/23 assertions**; Phase 02 installer integration coverage passed **14/14 scenarios**; deterministic package-twice and Node release-script syntax verification passed. See the [Phase 01 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-01-asset-schema-and-packaging.md), [Phase 02 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-02-powershell-installer.md), and [parent plan](../plans/260920-2327-windows-release-asset-and-installer/plan.md).
 - **Next:** Phase 03 — Windows CI publication, six-asset release gating, attestation wiring, and README/configuration guidance.
+
+
+### Trusted plugin platform (2026-09-23)
+
+- **Plan status: COMPLETE (7/7 phases; 100%; updated 2026-09-23).** D00–D06 implementation is complete. Joint G0/G1–G4 cross-repository and deployment sign-offs remain release gates; standalone evcrate retirement remains E05/G4 scope.
+- **Phase D00 — Contracts, identity, and feasibility — DONE (2026-09-21; 100%).** Generic SDK/schema candidate, Rust parity, opaque UI/cancellation feasibility, and G0 artifact inputs recorded.
+- **Phase D01 — Runner-owned package registry and trust staging — DONE (2026-09-21; 100%).** Runner-owned staged intake, bounded archive inspection/extraction, independent digest review, strict durable registry/journal, CAS revisions, crash recovery, and early E02 candidate staging complete.
+- **Phase D02 — Owner-account runner and worker supervision — DONE (2026-09-21; 100%).** Strict framed JSON-RPC over authenticated Unix transport, exact handshake/peer validation, fixed Node worker launch, one-worker-per-installation supervision, multiplexed cancellation, deadline/process-group escalation, generation-fenced context routing, durable restart exhaustion, and the hardened systemd owner boundary complete.
+- **D02 validation:** Scoped protocol/supervision suites passed **13/13**; full plugin subsystem validation passed **37/37 tests across five suites**; test-targeted `cargo check` completed with **0 errors, 0 warnings**. Cycle 2 review approved **9.0/10** with no critical issues. See the [D02 plan](../plans/260920-1603-plugin-platform/phase-02-owner-runner.md) and [Cycle 2 review](../plans/reports/code-review-260921-1523-phase-d02-owner-runner.md).
+- **D01 checklist (6/6):**
+  - [x] Runner-owned layout and strict state/journal invariants.
+  - [x] Streaming intake and adversarial archive rejection.
+  - [x] Independent digest review/approval and admin revision binding.
+  - [x] Initial installation commit and crash recovery.
+  - [x] Revision-tagged read façade and grant/binding CAS.
+  - [x] Early E02 real package candidate staged for G1 without E04 dependency.
+- **Validation:** Targeted `plugin_package_archive`, `plugin_package_registry`, and `plugin_contract_fixtures` passed **24/24**; Cycle 2 review approved **9.0/10** with no critical issues. D01 is G1 input, not production/G3/G4 completion. See the [D01 plan](../plans/260920-1603-plugin-platform/phase-01-package-registry.md), [test report](../plans/reports/test-report-260921-1150-plugin-package-registry-tests.md), and [Cycle 2 review](../plans/reports/code-review-260921-1216-phase-d01-cycle2-verification.md).
+- **Phase D03 — Authorized plugin API and connection-bound contexts — DONE (2026-09-22; 100%; review approved 9.2/10).** Delivered authenticated actor and revocable epoch binding, explicit actor/grant/target authorization, connection-scoped opaque contexts, invoke-time revision checks, selective revocation, bounded/sanitized errors, owner-bound UI transport mappings, and the real API → owner runner → worker G1 slice.
+- **D03 validation:** `plugin_authorization` **7/7**, `plugin_runner_supervision` **6/6**, `plugin_api_integration` **3/3**, UI transport test run **1,845/1,845**, and UI build clean. All four critical review findings were resolved; remaining epoch/context cleanup and test-path portability items are non-blocking. See the [D03 plan](../plans/260920-1603-plugin-platform/phase-03-authorized-api.md) and [re-review](../plans/reports/code-review-260922-0649-phase-d03-authorized-api-re-review.md).
+- **Phase D04 — Isolated plugin UI host and dynamic navigation — DONE (2026-09-22; implementation 100%).** Protected inert asset delivery, host CSP, opaque sandboxed iframe bridge, generation-safe revocation, and dynamic installation navigation are complete; physical LAN browser execution remains a joint G4 deployment gate after D06 qualification-harness completion. See the [D04 plan](../plans/260920-1603-plugin-platform/phase-04-isolated-ui-host.md).
+- **Phase D05 — Management API and transactional plugin lifecycle — DONE (2026-09-22; 100%; review approved 9.8/10).** Delivered root-seeded empty-deny admin allowlist, bearer-only management endpoints, bounded streaming stage/review/approval, durable per-installation lifecycle journaling, activate-before-publish matched generations, security-intent-safe rollback, crash recovery, enable/disable/remove/retention, redacted failure audits, and Settings management. Final scoped validation passed **23 Rust tests** across four suites, **8 UI tests**, and TypeScript compilation with **0 errors**. See the [D05 plan](../plans/260920-1603-plugin-platform/phase-05-management-and-lifecycle.md), [test/review evidence](../plans/reports/code-review-260922-2050-phase-d05-cycle3-management-lifecycle.md), and [tester report](../plans/reports/tester-260922-2049-phase-d05-plugin-suite-verification.md).
+- **Phase D06 — Linux release integration and LAN qualification — DONE (2026-09-23; 100%; review approved 9.3/10).** Integrated owner-runner release assets, explicit owner/admin identity checks, tmpfiles/systemd runtime provisioning, manifest/state migrations, independent host/plugin rollback, recovery, deployment scenarios, and the LAN qualification harness.
+- **D06 validation:** Linux-release tests passed **173/173** across 18 suites; `pnpm release:verify` passed; `pnpm test:deploy` passed **9/9** deployment scripts; owner/rollback smokes passed; LAN dry-run passed **5/5** synthetic budget evaluations over a 10,000-history workload. Review recorded no critical issues. Physical separate-machine HTTPS/LAN evidence and exact Node runtime selection remain G0/G4 deployment inputs. See the [D06 plan](../plans/260920-1603-plugin-platform/phase-06-linux-lan-qualification.md), [tester report](../plans/reports/tester-260923-0548-phase-d06-linux-release-plugin-lan.md), and [review](../plans/reports/code-review-260923-0549-phase-d06-linux-release-lan-qualification.md).
+
+- **G1 status (2026-09-22):** D03's authorized API-to-owner-worker contribution is complete and validated. Joint G1 remains pending E01/E02 cross-repository approval and final evidence for installed evcrate-worker authorization, wrong-owner/grant denial, cancellation, crash, and source immutability; D03 completion is not platform release completion.
+- **G4 status (2026-09-23):** D06 implementation and local release/deployment/LAN-harness validation are complete. Physical separate-machine HTTPS/LAN execution, exact Node runtime pin, and E05 cross-repository sign-off remain required before standalone retirement.
+- **Next:** Joint G0/G1/G2/G3/G4 cross-repository and deployment sign-off, including physical LAN evidence and the E05 standalone-retirement decision.
 
 
 ### Windows dam-hopper-server build and verification (2026-09-20)

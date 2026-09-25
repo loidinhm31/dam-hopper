@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://dam-hopper.dev/schemas/runner-protocol-v1.json",
+  "title": "RunnerProtocolV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jsonrpc"],
+  "oneOf": [
+    {
+      "title": "JsonRpcRequest",
+      "required": ["jsonrpc", "id", "method"],
+      "properties": {
+        "jsonrpc": { "type": "string", "const": "2.0" },
+        "id": { "type": "string", "minLength": 1 },
+        "method": { "$ref": "#/definitions/allMethods" },
+        "params": { "type": "object" }
+      }
+    },
+    {
+      "title": "JsonRpcNotification",
+      "required": ["jsonrpc", "method"],
+      "not": { "required": ["id"] },
+      "properties": {
+        "jsonrpc": { "type": "string", "const": "2.0" },
+        "method": { "$ref": "#/definitions/allMethods" },
+        "params": { "type": "object" }
+      }
+    },
+    {
+      "title": "JsonRpcResponse",
+      "required": ["jsonrpc", "id"],
+      "not": { "required": ["method"] },
+      "properties": {
+        "jsonrpc": { "type": "string", "const": "2.0" },
+        "id": { "type": "string", "minLength": 1 },
+        "result": {},
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string" },
+            "data": { "type": "object" }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "allMethods": {
+      "type": "string",
+      "enum": [
+        "runner.hello",
+        "plugin.list",
+        "plugin.readUi",
+        "plugin.activate",
+        "plugin.deactivate",
+        "context.open",
+        "context.close",
+        "plugin.invoke",
+        "request.cancel",
+        "management.stage.begin",
+        "management.stage.chunk",
+        "management.stage.finish",
+        "management.approve",
+        "management.rollback",
+        "management.disable",
+        "management.remove",
+        "management.grants.replace",
+        "management.bindings.replace",
+        "worker.health",
+        "worker.shutdown"
+      ]
+    }
+  }
+}

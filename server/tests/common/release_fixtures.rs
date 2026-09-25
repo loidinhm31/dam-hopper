@@ -210,6 +210,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             web_assets: ComponentVersion {
                 version: "0.2.0".to_string(),
             },
+            runner: None,
         },
         inventory,
         services: ServicesMeta {
@@ -227,6 +228,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
                 port: WEB_SERVICE_PORT,
                 health_path: WEB_SERVICE_HEALTH_PATH.to_string(),
             },
+            runner: None,
         },
         rollback: RollbackMeta {
             previous_release_compatible: ROLLBACK_PREVIOUS_COMPATIBLE,

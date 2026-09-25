@@ -626,47 +626,279 @@ claim that concurrent workspaces or profiles have shipped.
 - Implementation and release require the plan's multi-server isolation,
   migration/failure, live browser, and supported-native verification gates.
 
-## Proposed trusted plugin platform (2026-09-20; not implemented)
+## Trusted plugin platform — D00 contracts through D05 management/lifecycle (2026-09-22; joint G1 pending)
 
-This is a planning design only. No runtime plugin loader, registry, runner,
-dynamic route, or embedded plugin UI exists yet. The source implementation plan
-is not present in this checkout; the companion evcrate plan owns its
-cross-repository contract.
+[Phase D00](../plans/260920-1603-plugin-platform/phase-00-contracts-and-feasibility.md)
+freezes the candidate contracts and feasibility evidence. D01 delivers the
+runner-owned registry, D02 the owner-account runner/worker boundary, D03 the
+authenticated REST/WebSocket façade with actor grants and connection-bound
+contexts, and D05 the bearer-only management API plus transactional lifecycle
+coordinator. The implementation plan is
+[DamHopper plugin platform](../plans/260920-1603-plugin-platform/plan.md).
+The companion evcrate plan owns the cross-repository consumer. D04 isolated UI
+integration and D06 Linux qualification remain separate gates.
 
-- DamHopper remains the network and authentication boundary. It derives the
-  actor from `AuthenticatedActor.subject`, resolves the configured project or
-  worktree with the existing server resolver, and applies explicit
-  actor/installation/target/operation grants. Plugin administration uses a
-  separate subject allowlist whose default is empty; login, registration, and
-  `--no-auth` never imply administrator authority.
-- A root-provisioned, owner-account systemd runner is the sole durable
-  installation/source/grant registry and sole worker supervisor. The API
-  reaches it through a peer-credential-checked Unix socket and exposes only an
-  authorized façade; every invoke rechecks the actor session and current grant
-  revision. The runner starts one private framed-pipe worker per enabled
-  installation. Plugins expose no listener. The initial deployment configures
-  one explicit advisor-data owner and preserves the dedicated `dam-hopper` API
-  identity.
-- Administrator-approved `.tar.gz` packages are validated into immutable
-  version directories. Lifecycle state atomically selects one matching
-  backend/UI digest generation, retains the prior compatible pair for rollback,
-  and never treats source history, policy, or evaluation data as package state.
-  Trusted executable plugins are not advertised as a malicious-code sandbox.
-- The browser receives approved navigation through its captured
-  profile/connection-generation/project owner. It fetches the approved
-  self-contained document from a non-navigable, `nosniff`
-  `application/octet-stream` endpoint; the host verifies bundle identity,
-  injects/enforces restrictive CSP, and mounts the bytes as opaque-origin
-  `srcdoc` in `sandbox="allow-scripts"`. A nonce- and generation-bound
-  `MessageChannel` must acknowledge its transferred port before any context or
-  data is released. The frame receives no host credentials, arbitrary
-  transport, filesystem API, or network path.
-- Contract/security/isolation feasibility freezes at G0. A real evcrate
-  owner-worker read slice is required at G1, the four-view separate-LAN-browser
-  flow at G2, package lifecycle and rollback at G3, and Linux workload plus
-  deployment qualification at G4. A loader or fixture worker alone is never
-  platform completion. The standalone evcrate viewer remains operational until
-  joint G4 acceptance, then is replaced rather than retained as a second mode.
+### G0 candidate artifact set
+
+| Artifact | Candidate location or rule |
+| --- | --- |
+| Generic SDK | `packages/plugin-sdk/dam-hopper-plugin-sdk-0.1.0.tgz`; SHA-256 pinned jointly at G0 |
+| Contract schemas | `manifest-v1`, `runner-protocol-v1`, `worker-sdk-v1`, and `ui-bridge-v1` under `packages/plugin-sdk/schemas/` |
+| Fixtures | Positive/negative JSON fixtures and the self-contained `opaque-ui` fixture under `packages/plugin-sdk/fixtures/` |
+| TypeScript evidence | Framing, manifest, runner, worker cancellation, error, and bridge sources/tests under `packages/plugin-sdk/src/` |
+| Rust evidence | Serde DTOs, errors, and the matching frame decoder under `server/src/plugins/`, exported by `server/src/lib.rs` |
+| Browser evidence | `packages/ui/browser-tests/plugin-isolation.browser.tsx` covering CSP, opaque origin, port acknowledgement, and revocation |
+
+The candidate wire format is a four-byte big-endian byte length followed by
+UTF-8 JSON-RPC 2.0. Payloads are capped at 16 MiB before body allocation,
+control frames at 64 KiB, and aggregate buffered frames at 64 MiB. String IDs,
+strict params, no JSON-RPC batches, and one terminal response per request are
+required. Public calls cover runner hello, metadata-only listing, approved UI
+read, activation/deactivation, contexts, invocation, and cancellation.
+Administrative staging, approval, rollback, disable/remove, grant replacement,
+and binding replacement are separately authorized; worker health/shutdown are
+notifications.
+
+The manifest pairs immutable package inventory and SHA-256 entries with
+contract versions, capabilities, a Node backend entrypoint, and an optional
+`opaque-srcdoc` UI entrypoint. The runner registry is the intended durable
+authority for installation/source/grant/binding state. Actor, installation,
+configured target, operation, grant revision, activation generation, frame
+session, and API epoch are rechecked at authorization fences. Administrator
+subjects are root-seeded out of band and default deny.
+
+The browser host fetches approved self-contained bytes through a non-navigable
+octet-stream boundary, injects restrictive CSP, and mounts them as
+`srcdoc` in `sandbox="allow-scripts"` without `allow-same-origin`. A nonce- and
+generation-bound `MessageChannel` must acknowledge its transferred port before
+context or data release. Revocation closes the port and invalidates the
+generation. The UI bridge and backend remain capability-limited; no credentials,
+arbitrary filesystem API, plugin listener, or arbitrary path reader crosses
+the boundary.
+
+### Candidate flow and later gates
+
+1. D00 packages and hashes the generic SDK, validates schemas/fixtures, mirrors
+   the DTO/framing contract in Rust, and records cancellation/isolation
+   feasibility plus candidate resource budgets.
+2. G0 jointly pins the SDK digest, contract versions, fixtures, and budget
+   interpretation with E00. The Node `>=22.19` distribution and target Linux
+   assumptions remain unresolved inputs to that pin.
+3. D01 delivers the owner registry, D02 the owner-worker runner, and D03 the
+   authorized API façade; D04 implements browser integration, D05 delivers the
+   management API and transactional lifecycle coordinator, and D06 covers Linux
+   workload/deployment gates.
+
+The target deployment remains DamHopper's network/auth boundary plus a
+root-provisioned owner-account systemd runner reached through a
+peer-credential-checked Unix socket. Trusted executable plugins are not a
+malicious-code sandbox, and a fixture worker or loader alone is never platform
+completion. Contract/security/isolation feasibility is G0; owner-worker read
+slice, LAN browser flow, D05 management/lifecycle, and Linux qualification are
+G1 through G4.
+
+### D02 owner runner and worker supervision
+
+D02 is implemented. Its runtime path is:
+
+```text
+API RunnerClient
+  └─ AF_UNIX pathname socket + 4-byte BE framed JSON-RPC
+      └─ RunnerServer (owner account, SO_PEERCRED gate)
+          └─ SupervisorManager (lazy entry per enabled installation)
+              └─ InstallationSupervisor (one generation at a time)
+                  └─ WorkerProcess (Node, private pipes, process group)
+```
+
+`dam-hopper-plugin-runner` accepts `--socket-path`, required `--registry-dir`,
+`--node-bin`, optional `--expected-api-uid`, and `--allow-root-peer`. The
+production systemd template supplies the absolute release paths and expected
+API UID. The binary initializes `PluginRegistry`, installs SIGINT/SIGTERM
+shutdown, and removes the socket after `deactivate_all`.
+
+`RunnerServer` creates the listener, rejects unsafe socket paths, sets mode
+`0660`, validates each accepted peer with `SO_PEERCRED`, rejects UID 0 by
+default, and requires an exact `runner.hello`/protocol `1.0.0` handshake within
+five seconds. Once handshaked, its reader stays live while each public request
+is dispatched in a Tokio task and responses use one locked writer. Public
+methods are `runner.hello`, `plugin.list`, `plugin.readUi`, activation and
+deactivation, context open/close, `plugin.invoke`, and `request.cancel`.
+Management methods remain a separate authorized boundary.
+
+Both runner and worker transports use a four-byte unsigned big-endian length
+followed by UTF-8 JSON-RPC 2.0. The Rust frame path rejects lengths above
+16 MiB before allocation, aggregate decoder buffers above 64 MiB, invalid
+UTF-8, truncated headers, malformed/trailing JSON, batches, numeric IDs,
+unknown fields, and result/error dual responses. The contract defines a
+64 KiB control budget; per-method enforcement remains a documented follow-up.
+
+`RunnerClient` validates the socket type, symlink/mode, optional owner UID, and
+connected peer UID before the same handshake. It splits the stream, routes
+responses from a background reader by `api-req-N` IDs into pending oneshot
+channels, and locks only the writer for one frame. Up to five reconnect
+attempts use exponential backoff from 50 ms; EOF fails all pending calls as
+`RUNNER_UNAVAILABLE`.
+
+`WorkerProcess` starts the configured Node executable against the immutable D01
+package entrypoint with package cwd, private stdin/stdout/stderr pipes,
+`env_clear()` plus `PATH` (when present), `NODE_ENV=production`, and
+`TMPDIR=/tmp`. Unix `process_group(0)` makes the PID the process-group ID.
+Stdout is protocol-only and any framing/JSON/EOF fault fails pending calls.
+Stderr is a UTF-8-safe bounded ring (1,024-byte lines, newest 50 lines).
+Worker hello must complete within five seconds. Teardown sends
+`worker.shutdown`, waits five seconds, then escalates SIGTERM/SIGKILL to the
+whole process group.
+
+The supervisor state machine is `Stopped → Starting → Ready → Draining →
+Stopped|Failed`. It enforces 16 contexts/worker, four invokes/context, 16
+invokes/worker, one declared long-running invoke/worker, 10-second ordinary
+deadlines, 30-second declared scan deadlines, and a 15-minute context idle TTL.
+Full-duplex transport keeps cancel/close control responsive while an invoke
+runs. Over-limit invokes currently fail fast with `OVERLOADED`; D02 does not
+ship the planned 32-entry fair FIFO queue, so callers must not depend on
+ordering or queue admission.
+
+Activation increments a generation before spawn and publishes `Ready` only
+after worker hello. Crashes, deadlines, EOF, and deactivation clear contexts
+and kill the old process group. Context IDs use
+`ctx:<installation-id>:<uuid>` and old-generation contexts return
+`CONTEXT_REVOKED`. Three failures inside 60 seconds persist installation
+disablement through the D01 registry and leave the supervisor `Failed` until an
+explicit lifecycle action re-enables it.
+
+The service template adds owner `User`/`Group`, `RuntimeDirectoryMode=0750`,
+`UMask=0027`, `KillMode=mixed`, `MemoryMax=1G`, `TasksMax=64`,
+`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=read-only`,
+`PrivateTmp`, and restricted address families. These controls isolate the
+trusted owner boundary but are not a malicious-plugin sandbox. The full
+interface, CLI table, systemd placeholders, evidence paths, and unresolved
+deployment inputs are in [Phase D02 runner architecture](./architecture/plugin-platform-d02.md).
+
+### D03 authorized API and connection-bound contexts
+
+D03 places the authenticated API boundary in front of D02:
+
+```text
+owner-bound UI ConnectionRef(profileId, generation)
+  └─ bearer/cookie + live WebSocket epoch
+      └─ auth::require_auth → AuthenticatedActor { subject, exp }
+          └─ PluginApiService
+              ├─ PluginAuthorizationService (epoch + GrantKey checks)
+              ├─ WorkspaceTargetResolver ({project, worktreePath?})
+              ├─ PluginContextTable (opaque owner/TTL/counters)
+              └─ RunnerClient → owner runner → installation worker
+```
+
+The protected routes are `GET /api/plugins`,
+`POST /api/plugins/contexts/open`, `POST /api/plugins/contexts/close`,
+`POST /api/plugins/invoke`, and `POST /api/plugins/cancel`. The only target
+fields accepted from the browser are `project` and optional
+`worktreePath`; `profileId`, browser generation, roots, and grant claims remain
+local or server-authoritative. `context.open` resolves a registered target and
+binds an opaque context to actor, epoch, installation, target, operation set,
+policy flag, binding/grant revisions, and activation generation.
+
+`GrantKey` is `(actorSubject, installationId, configuredProjectTarget,
+allowedOperations, allowCurrentAccountPolicy)`. Exact project and operation
+entries or `*` are supported; no grant is default deny. List visibility uses
+the grant tuple but never substitutes for invoke authorization. Every invoke
+revalidates actor/epoch, context ownership/expiry, operation, current grant,
+and runner generation before admitting opaque payload work.
+
+An authenticated WebSocket receives a cryptographically random epoch tied to
+the actor and JWT expiry. `plugin:get_epoch` returns a same-socket
+`plugin:epoch` message. Socket teardown revokes the epoch and its contexts;
+HTTP logout revokes the actor's epochs/contexts; runner reconnect invalidates
+local contexts before a new worker generation. `plugin:revoked` is a bounded
+wire variant, but D03 currently enforces causes by local removal and later
+request rejection rather than claiming a push event for every cause.
+
+Generic ceilings are 16 contexts/worker, four invokes/context, 16 invokes/
+worker, one long-running operation/worker, 15-minute idle TTL, 16 MiB payload,
+and 10/30-second ordinary/scan deadlines. Over-limit work fails fast with
+`OVERLOADED`; domain snapshot/evaluation budgets remain E02-owned. API errors
+are bounded `{ error, code }` responses mapped to unauthorized, forbidden,
+invalid-target, revoked, overload, deadline, cancellation, and unavailable
+HTTP classes. `packages/ui/src/api/plugin-types.ts`, `client.ts`, and
+`ws-transport.ts` provide owner-bound DTOs and channel-to-REST mappings.
+See the [D03 architecture page](./architecture/plugin-platform-d03.md) for
+endpoint fields, lifecycle examples, limits, source map, and evidence.
+
+### D05 management API and transactional lifecycle
+
+D05 adds a separate administrator boundary in front of the D01/D02 runner:
+
+```text
+Settings / owner-bound ApiClient
+  └─ Authorization: Bearer <JWT>
+      └─ require_auth → AuthenticatedActor { subject, exp }
+          └─ require_bearer_auth
+              └─ /api/plugins/admin* handlers
+                  └─ RunnerClient → RunnerServer
+                      ├─ host-seeded AdminSubjectList
+                      ├─ PluginRegistry (registry-v1.json)
+                      ├─ SupervisorManager (drain/health)
+                      └─ LifecycleCoordinator + lifecycle journal
+```
+
+The management route group contains installation listing/details, streamed
+package staging, stage approval, rollback, enable, disable, remove, grant
+replacement, and binding replacement. All DTOs are camelCase. The stage route
+requires `Content-Length`, a 64-hex `X-Expected-SHA256`, and a bounded gzip or
+octet-stream body; it forwards chunks with backpressure rather than buffering
+the complete archive. `expectedSecurityRevision` is the mutation CAS fence.
+
+Management requests require bearer authentication even though ordinary API
+routes may accept the HttpOnly auth cookie. Cookie-only requests receive
+`BearerRequired`; `--no-auth` receives `NoAuthForbidden`. After middleware,
+the runner independently checks `AuthenticatedActor.subject` against its
+root-seeded allowlist. A missing allowlist is empty and deny-all; login,
+MongoDB membership, browser profile identity, and development mode do not
+grant plugin administration.
+
+The runner resolves administrator configuration in this order:
+`--admin-config`, `DAM_HOPPER_PLUGIN_ADMINS_FILE`,
+`/etc/dam-hopper/plugin-admins.json`, then empty list. It accepts an
+`adminSubjects` object or a string array, trims/deduplicates/sorts subjects,
+and stores a stable SHA-256 `adminConfigDigest` in the registry. Unix
+group/world-writable files are rejected. Explicit config errors fail startup;
+invalid host-default/environment files warn and deny all.
+
+`LifecycleCoordinator` serializes one installation with an async per-ID lock.
+For install/update it validates review and revision, journals `INITIATED`,
+extracts/publishes the immutable candidate, drains the prior worker, activates
+the candidate at the next generation, requires health, then rechecks security
+state and atomically publishes the package/installation pair. The old pair is
+preserved until candidate health succeeds. Journal phases are:
+
+```text
+INITIATED → DRAINING → STOPPED → ACTIVATING → HEALTHY
+           → PUBLISHED → COMMITTED
+                         ↘ FAILED / ABORTED
+```
+
+Rollback activates the matched previous backend/UI pair before publication,
+advances generation without rewinding, consumes the previous snapshot, and
+preserves current enabled/grant/binding intent. Disable drains and persists
+disabled intent; enable revalidates disk state and activates the next
+generation; remove drains first and deletes only unreferenced package roots.
+Grant/binding replacement advances security and registry revisions, causing
+affected D03 contexts to be invalidated. Successful actions emit redacted
+audit records and the API invalidates metadata/context caches.
+
+Records live at `journal/lifecycle-<transaction-id>.json`, use strict
+camelCase JSON, and are written atomically with mode `0600` and directory
+sync. `run_crash_recovery` maps pending pre-publish phases to `ABORTED`,
+interrupted activation to `FAILED`, and `PUBLISHED` to `COMMITTED`; it never
+invents approval or restores old security intent. The runner currently
+constructs the coordinator; explicit startup invocation of this coordinator
+recovery remains a qualification question.
+
+The Settings page's Plugin Platform section uses the owner-bound client to
+refresh installation state, show worker/revision details, stream package
+uploads with progress, display stage review, and confirm rollback/removal.
+Source map and phase evidence are maintained in the [D05 architecture page](./architecture/plugin-platform-d05.md).
+
 
 ## High-Level Overview
 
@@ -700,6 +932,7 @@ cross-repository contract.
 │  │  ├─ auth_token: Arc<String>                            │
 │  ├─ opaque_server_setup: Arc<ServerSetup<...>>            │
 │  ├─ opaque_registrations: OpaqueRegistrations (in-mem)   │
+│  │  ├─ plugin_service: PluginApiService                 │
 │  ├─ Router                                                 │
 │  │  ├─ /api/projects → ProjectList handler                │
 │  │  ├─ /api/pty/* → PTY spawn/send/kill                   │
@@ -715,6 +948,7 @@ cross-repository contract.
 │  │  ├─ /api/system/idle-suspend/v1/* → Status/timing pair │
 │  │  ├─ /api/settings/export/workspace.toml → Raw TOML     │
 │  │  ├─ /api/settings/import/workspace.toml → Import/backup│
+│  │  ├─ /api/plugins/* → Authorized plugin API           │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
@@ -722,6 +956,7 @@ cross-repository contract.
 │     │     (`sync_channel(256)`, non-blocking PTY handoff)   │
 │     ├─ TelemetryStore/Worker (opt-in, separate SQLite)     │
 │     ├─ BrowserDebugArtifactManager (ephemeral, TTL/sweep)  │
+│     ├─ PluginApiService (grants, epochs, contexts, runner) │
 │     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
 │     ├─ WorkflowService → WorkflowStore + startup reconcile │

@@ -81,6 +81,106 @@ Clear authentication session.
 
 Response: `{ "ok": true }`
 
+## Trusted Plugin API (Phases D03 and D05)
+
+The public plugin façade is protected by the normal `/api/*` auth middleware.
+It requires a valid `AuthenticatedActor`; context open/close, invoke, and
+cancel also require a matching live WebSocket connection epoch. Listing uses
+actor visibility only. Every public plugin route is denied with `403`
+(`NoAuthForbidden`) when `--no-auth` is active. See the [D03 architecture](./architecture/plugin-platform-d03.md).
+
+### Public endpoints
+
+| Method and path | Body/query | Result |
+| --- | --- | --- |
+| `GET /api/plugins` | Query: required `project`; optional `worktreePath` | `{ plugins: PluginMetadataItem[] }` visible to actor/target |
+| `POST /api/plugins/contexts/open` | `{ epoch, installationId, target, allowedOperations?, allowCurrentAccountPolicy? }` | `{ contextId, bindingRevision, grantRevision, activationGeneration, expiresAt }` |
+| `POST /api/plugins/contexts/close` | `{ epoch, contextId }` | `{ closed }`; idempotent |
+| `POST /api/plugins/invoke` | `{ epoch, contextId, operation, payload, deadlineMs? }` | `{ result }` |
+| `POST /api/plugins/cancel` | `{ epoch, contextId, requestId }` | `{ outcome }` |
+
+`target` is `{ project, worktreePath? }`; browser `profileId`, connection
+generation, filesystem roots, grant claims, and history hashes are not accepted
+server inputs. The server resolves registered project/worktree targets before
+opening a context. `payload` is bounded opaque JSON; the host does not parse
+plugin-domain evaluation data.
+
+### Public authorization and lifecycle
+
+`context.open` checks the authenticated actor, epoch, installation, target, and
+explicit grant. A grant contains `actorSubject`, `installationId`,
+`configuredProjectTarget` (exact project or `*`), `allowedOperations` (explicit
+operations or `*`), and `allowCurrentAccountPolicy`. Missing grants are
+default-deny. `plugin.invoke` repeats the epoch, context ownership, current
+grant, operation, and concurrency checks; opening a context is not a durable
+authorization lease.
+
+The context is idle-expiring (15 minutes), capped at 16 contexts per worker and
+four in-flight operations per context. Worker-wide admission is 16 operations,
+one declared long-running operation, and 10-second ordinary/30-second scan
+deadlines. `request.cancel` is scoped to the same actor/epoch/context/request and
+returns `accepted`, `alreadySettled`, or `unknown`.
+
+The current `invoke` response contains only `{ result }`; it does not return a
+request ID. Callers that need to cancel an in-flight request must retain the
+runner request ID used by their integration path. Public request-ID allocation
+for the REST client remains an open D03 follow-up.
+
+Errors use `{ error, code }` with bounded messages. Current HTTP mapping is:
+`401` unauthorized/invalid epoch, `403` grant denial, `400` invalid input or
+target, `404` missing installation/source, `410` revoked/expired context,
+`429` overload, `504` deadline, `409` cancellation, and `503` worker/runner
+unavailable.
+
+## Trusted Plugin Management API (Phase D05)
+
+D05 adds the administrator-only management façade. Routes are mounted under
+`/api/plugins/admin*` and run through `require_auth` followed by
+`require_bearer_auth`. Cookie-only credentials return `403` with
+`code: "BearerRequired"`; `--no-auth` returns `403` with
+`code: "NoAuthForbidden"`. A valid bearer subject must also be in the
+runner's root-seeded administrator allowlist or the runner returns
+`UNAUTHORIZED`.
+
+### Management endpoints
+
+All fields use camelCase. Lifecycle and authority mutations carry
+`expectedSecurityRevision`, a compare-and-swap fence read from
+`GET /api/plugins/admin`; stale values are rejected rather than merged.
+
+| Method and path | Request | Success result |
+| --- | --- | --- |
+| `GET /api/plugins/admin` | none | `AdminInstallationListResult` (`installations`, `securityRevision`) |
+| `GET /api/plugins/admin/installations/{id}` | none | `AdminInstallationDto` |
+| `POST /api/plugins/admin/stages` | streaming `application/gzip`/`application/octet-stream`; `Content-Length`, `X-Expected-SHA256` | `201 StageReviewDto` |
+| `POST /api/plugins/admin/stages/{stageId}/approve` | `{ expectedSha256, expectedSecurityRevision, initialBindings?, initialGrants? }` | `AdminInstallationDto` |
+| `POST /api/plugins/admin/installations/{id}/rollback` | `{ expectedSecurityRevision }` | `AdminInstallationDto` |
+| `POST /api/plugins/admin/installations/{id}/enable` | `{ expectedSecurityRevision }` | `AdminInstallationDto` |
+| `POST /api/plugins/admin/installations/{id}/disable` | `{ expectedSecurityRevision }` | `AdminInstallationDto` |
+| `DELETE /api/plugins/admin/installations/{id}` | query `expectedSecurityRevision`, or `X-Expected-Security-Revision` header | `AdminRemoveResult` |
+| `PUT /api/plugins/admin/installations/{id}/grants` | `{ expectedSecurityRevision, grants }` | `AdminInstallationDto` |
+| `PUT /api/plugins/admin/installations/{id}/bindings` | `{ expectedSecurityRevision, bindings }` | `AdminInstallationDto` |
+
+Stage upload requires a non-zero declared length, a 64-character hexadecimal
+`X-Expected-SHA256`, and a body within the 32 MiB compressed package limit. The
+handler streams bounded chunks with backpressure to the owner runner. Finish
+verifies the digest and returns an expiring immutable `StageReviewDto`.
+Approval rechecks administrator membership, digest, review expiry, and security
+revision before the lifecycle coordinator starts.
+
+`AdminInstallationDto` includes installation/plugin/version, active digest,
+activation generation, enabled intent, bindings, grants, UI presence, worker
+status, optional previous-package snapshot, rollback availability, security
+revision, and timestamps. Remove returns the installation ID, `removed`, and
+unreferenced package digests cleaned from disk.
+
+The lifecycle coordinator journals install/update/rollback/enable/disable/remove
+transactions, activates and health-checks candidates before durable publication,
+preserves current security intent during rollback, and uses per-installation
+locks plus revision fences. Grant/binding replacement advances security and
+registry revisions and invalidates affected D03 contexts. See the [D05
+architecture](./architecture/plugin-platform-d05.md).
+
 ## Workflow Tracking Service and REST API (Phase 03)
 
 Workflow routes are protected by the normal `/api/*` authentication layer and

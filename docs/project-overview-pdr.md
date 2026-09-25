@@ -655,62 +655,232 @@ See the [Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/pha
 [test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md),
 and [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
 
-### PR-022: Windows Direct-Server Release, Bootstrap Installer, and CI Publication (Phases 01–03)
+### PR-022: Trusted plugin platform contracts (Phase D00)
 
-**Status:** COMPLETE (2026-09-21). Asset specification, deterministic
-packaging, non-admin PowerShell bootstrap, stable Release CI publication, and
-user-facing guidance are complete.
+**Status:** Candidate ready for the G0 joint pin as of 2026-09-20. D00 freezes
+cross-repository contracts and feasibility evidence; it does not claim a
+production loader, registry, runner service, or plugin route.
 
 **Functional requirements:**
 
-- Produce `dam-hopper-vX.Y.Z-windows-x86_64.zip` with the server executable,
-  example TOML, `LICENSE`, and `README.md` as root-level files.
-- Publish exactly two Windows assets: the ZIP and `dam-hopper-install.ps1`.
-- Support checker profiles `linux`, `windows`, and `all`; Windows requires two
-  assets and `all` requires the exact six-asset Linux+Windows union.
-- Keep Windows direct-server packaging separate from Linux systemd and Manifest
-  v2 assets.
-- The installer accepts exactly one of `-Version vX.Y.Z` and `-Latest`, plus
-  `-InstallDir`, `-AddToPath`, `-VerifyAttestation`, and `-DryRun`.
-- Resolve and verify release metadata, size, and SHA-256 before extraction;
-  extract only the four expected root files; preserve existing
-  `dam-hopper.toml`; update only User PATH when requested; and never start the
-  server or require elevation.
-- Extend `.github/workflows/release-linux.yml` with independent Windows build
-  and package jobs, explicit Linux/Windows profile gates, six-subject
-  attestation, and a final `--profile all` local/remote gate before undrafting.
+- Publish a versioned, dependency-light `@dam-hopper/plugin-sdk` with manifest,
+  runner, worker, framing, error, and opaque UI bridge contracts.
+- Use four-byte big-endian framed UTF-8 JSON-RPC 2.0, string IDs, no batches,
+  bounded payload/control frames, and strict unknown-field rejection.
+- Expose the approved public runner methods, separately authorized management
+  methods, worker health/shutdown notifications, and request cancellation.
+- Bind actor, installation, configured target, operation, grant revision,
+  activation generation, frame session, and API epoch at authorization fences.
+- Serve only approved self-contained UI bytes through an opaque
+  `sandbox="allow-scripts"` document and nonce/generation-bound acknowledged
+  `MessagePort`.
 
 **Acceptance criteria:**
 
-- [x] ZIP output is deterministic for identical inputs and epoch; changed epoch
-      changes the digest.
-- [x] ZIP inspection rejects missing/extra/nested/traversal members, CRC or
-      EOCD corruption, trailing bytes, and oversized entries.
-- [x] The asset gate parses PowerShell syntax without executing the installer.
-- [x] Installer integration coverage passes 14/14 fixture-backed scenarios,
-      including install, upgrade/config preservation, latest resolution,
-      dry-run, digest/size failures, archive safety, invalid arguments, PATH
-      idempotence, endpoint security, locked upgrade handling, and cleanup.
-- [x] `release:windows-archive`, `release:windows-check-assets`,
-      `release:windows-package-twice`, `release:windows-gate-test`,
-      `release:windows-installer-test`, and `release:verify-windows` expose
-      focused package, contract, reproducibility, installer, and syntax checks.
-- [x] CI builds `dam-hopper-server.exe`, packages immutable Linux and Windows
-      artifact bundles, and attests the exact six release subjects.
-- [x] Publication checks the exact six local/remote assets with `--profile all`
-      under the protected `linux-release` environment; dry runs cannot publish.
-- [x] Windows package evidence does not imply native/Tauri S13 or WebView2
-      runtime qualification.
+- Four versioned JSON Schemas, TypeScript validators, Rust DTOs/framer, and
+  positive/negative fixtures agree on field casing, versions, limits, and
+  rejection behavior.
+- Cancellation evidence covers cooperative settlement, idempotent late cancel,
+  and non-cooperative escalation without a second terminal settlement.
+- The browser fixture proves opaque origin, restrictive CSP, one-use port
+  acknowledgement, bidirectional messaging, and revocation.
+- Candidate package, schema/fixture set, and resource budgets are reviewable
+  inputs to G0; their final digests are pinned jointly rather than implied.
 
-**Implementation map:** `.github/workflows/release-linux.yml`,
-`deploy/release/build-windows-release-archive.mjs`,
-`deploy/release/check-release-assets.mjs`, `deploy/release/dam-hopper-install.ps1`,
-`tests/deploy/windows-release-package-twice.ps1`,
-`tests/deploy/windows-release-install.ps1`,
-`tests/deploy/windows-release-install-fixture.mjs`, and
-`tests/deploy/windows-release-asset-gate.test.mjs`. The operational command
-guide is [Windows Release Asset Packaging](./windows-release-packaging.md).
-[Phase 03 workflow plan](../plans/260920-2327-windows-release-asset-and-installer/phase-03-release-workflow-and-docs.md) and [code review](../plans/reports/code-review-260921-1904-phase03-release-ci-workflow-and-guidance-docs.md) record the implementation and focused verification.
+**Constraints and dependencies:** Trusted same-identity execution is not a
+malicious-code sandbox. Administrator subjects remain root-seeded and
+default-deny; no arbitrary paths, plugin listeners, or implicit admin authority
+are allowed. E00 must consume these candidates, select an immutable Node
+`>=22.19` distribution, and qualify the target Linux deployment before G0.
+
+### PR-023: Trusted plugin owner runner and worker supervision (Phase D02)
+
+**Status:** Core implementation complete 2026-09-21; D04 isolated UI
+integration and D06 Linux qualification remain required. D05 management and
+lifecycle is complete in [the D05 architecture](./architecture/plugin-platform-d05.md).
+The detailed runner interface is [Phase D02 runner architecture](./architecture/plugin-platform-d02.md);
+the delivered authorization boundary is [Phase D03 architecture](./architecture/plugin-platform-d03.md).
+
+**Functional requirements:**
+
+- Run `dam-hopper-plugin-runner` under the configured non-root owner account;
+  expose only an owner-created AF_UNIX pathname socket to the API.
+- Validate socket paths and modes plus `SO_PEERCRED` at both ends. Reject root,
+  unknown, or changed peers unless an explicit deployment option allows them.
+- Negotiate exact runner protocol `1.0.0` with a five-second `runner.hello`
+  handshake before dispatching public methods.
+- Use four-byte big-endian framed UTF-8 JSON-RPC 2.0 with strict object/ID/
+  method validation, no batches, and a 16 MiB payload ceiling.
+- Start lazily on activation at most one fixed-entrypoint Node worker per
+  enabled installation, using private pipes, a minimal environment,
+  process-group isolation, and bounded sanitized stderr.
+- Keep API/runner and runner/worker links full duplex so cancellation and
+  control calls remain responsive during long-running invocation.
+- Track bounded contexts, per-context and per-worker invokes, long-operation
+  admission, deadlines, activation generations, and cancellation outcomes.
+- Kill the complete worker process group on deadline, protocol, pipe, or
+  deactivation failure; settle owned calls and revoke old contexts once.
+- Persist installation failure after three crashes within 60 seconds; require
+  explicit lifecycle action before reactivation.
+
+**Acceptance criteria:**
+
+- [x] CLI, listener, peer checks, handshake, framing, typed client, real Node
+      process, and hardened systemd template exist in the checked-in paths.
+- [x] Public runner calls cover listing/UI reads, activation/deactivation,
+      context open/close, invoke, and cancel; management calls remain separate.
+- [x] Limits are 16 contexts/worker, four invokes/context, 16 invokes/worker,
+      one declared long-running invoke, 10-second ordinary and 30-second
+      declared scan deadlines, and 15-minute context idle expiry.
+- [x] Full-duplex integration routes UUID-bearing contexts and acknowledges
+      cancellation without waiting for a slow invoke to finish.
+- [x] Generation fences reject stale contexts after restart; registry failure
+      persistence disables the installation at the third crash in 60 seconds.
+- [ ] The planned 32-entry fair FIFO queue is not shipped in this revision.
+      Over-limit calls return `OVERLOADED`; callers must not rely on ordering.
+      The transport-level control lane is the current fairness/responsiveness
+      guarantee.
+
+**Security and operational constraints:** D02 is trusted same-identity
+execution, not a malicious-code sandbox. The production unit must render
+owner/group, expected API UID, runtime directory, absolute pinned Node path,
+`MemoryMax=1G`, `TasksMax=64`, `NoNewPrivileges`, `ProtectSystem=strict`,
+`ProtectHome=read-only`, `PrivateTmp`, and restricted address families. D06
+owns target-host qualification and cgroup/account policy.
+
+**Unresolved questions:** Owner UID/group, socket group, and immutable Node
+`>=22.19` artifact/path remain G0/D06 deployment inputs. D03 ships bounded
+REST status/code mapping; a future runner protocol revision may still need to
+standardize `PluginErrorCode` in JSON-RPC `error.data`.
+
+### PR-024: Authorized plugin API and connection-bound contexts (Phase D03)
+
+**Status:** DONE — 2026-09-22 (100%; re-review approved 9.2/10). D03
+completes DamHopper's authenticated API-to-owner-worker authorization slice.
+Joint G1 remains pending E01/E02 cross-repository installed-worker approval;
+this phase is not lifecycle, isolated-UI, or Linux release completion.
+
+**Functional requirements:**
+
+- Mount protected `GET /api/plugins` visibility plus
+  `POST /api/plugins/contexts/open`, `contexts/close`, `invoke`, and `cancel`.
+  Use bounded camelCase DTOs and typed `{ error, code }` failures.
+- Retain `AuthenticatedActor.subject` and JWT expiry for HTTP and WebSocket
+  work. Issue a random epoch per authenticated `/ws` socket and require that
+  actor/epoch pair for every plugin context and request.
+- Deny plugin operations in `--no-auth` mode, including service-level calls
+  that bypass route middleware. Do not let browser profile identity, roots, or
+  client grant claims become server authority.
+- Authorize through an explicit grant tuple:
+  `actorSubject`, `installationId`, `configuredProjectTarget`,
+  `allowedOperations`, and `allowCurrentAccountPolicy`. Missing grants,
+  unmatched targets, and disallowed operations are default-deny; list
+  visibility never substitutes for invoke authorization.
+- Accept only `{ project, worktreePath? }` from the client and resolve it via
+  the registered `WorkspaceTargetResolver`. Missing/pruned/replaced targets
+  fail closed; there is no arbitrary path or implicit main-worktree fallback.
+- Bind each opaque context to actor, epoch, installation, target, operation
+  set, policy flag, grant/binding revisions, activation generation, and idle
+  expiry. Recheck current authority before every invoke.
+- Preserve bounded D02 behavior: 16 contexts/worker, four invokes/context,
+  16 invokes/worker, one declared long-running operation, 15-minute context
+  TTL, 16 MiB generic payloads, 10-second ordinary and 30-second scan
+  deadlines. Cancellation must settle at most once.
+- Bind UI methods to `ConnectionRef`/transport generation. Map plugin channels
+  to the REST routes and discard late messages/results after a socket or profile
+  generation changes.
+
+**Acceptance criteria:**
+
+- [x] Authenticated actor/epoch is retained and revoked on WebSocket teardown;
+      HTTP logout revokes actor epochs and owned contexts.
+- [x] Cross-actor, cross-target, stale-epoch, no-auth, grant, target-resolution,
+      cancellation, worker-crash, and source-immutability paths are covered by
+      focused server integration evidence.
+- [x] Runner reconnect and worker generation changes invalidate stale contexts;
+      close is idempotent and context/invoke ceilings fail closed.
+- [x] UI DTOs, `ApiClient` methods, and `WsTransport` endpoint mappings compile
+      and pass the focused transport suite.
+- [x] Scoped D03 evidence: authorization 7/7, supervision 6/6, API
+      integration 3/3, UI transport 1,845/1,845, and clean UI build.
+
+**Security and operational constraints:** A context is not a durable
+authorization lease. Cookies, bearer tokens, epochs, profile IDs, and browser
+generation never cross into plugin workers or future iframe bridges. Worker
+stderr and source paths are sanitized at the API boundary. Trusted same-identity
+execution remains distinct from a malicious-code sandbox; D04 owns isolated UI
+capabilities, D05 management/lifecycle is delivered by PR-025, and D06 owns
+host deployment qualification.
+
+**Unresolved questions:** Whether logout should push an immediate revocation
+notice; whether revoked actor epochs should be eagerly removed and periodically
+swept; and which canonical `EVCRATE_ROOT` lookup standalone packaging uses.
+
+### PR-025: Plugin management API and transactional lifecycle (Phase D05)
+
+**Status:** DONE — 2026-09-22 (100%; review approved 9.8/10). D05 completes
+the management side of the trusted plugin G1 slice. It does not claim a
+malicious-code sandbox, Linux deployment qualification, or the cross-repository
+installed-worker gate.
+
+**Functional requirements:**
+
+- Expose bearer-only administrator routes for installation listing/details,
+  streamed package staging/review, approval, rollback, enable, disable,
+  remove, grant replacement, and binding replacement.
+- Keep administrator membership host-seeded and default-deny. Load
+  `--admin-config`, `DAM_HOPPER_PLUGIN_ADMINS_FILE`, or
+  `/etc/dam-hopper/plugin-admins.json`; accept `adminSubjects` JSON object or
+  string array; persist a stable `adminConfigDigest`.
+- Reject cookie-only management requests with `BearerRequired` and all
+  `--no-auth` management requests with `NoAuthForbidden`. Recheck the bearer
+  subject in the runner, independently of HTTP middleware.
+- Stream gzip package bytes with expected SHA-256 and bounded declared length;
+  return an immutable, expiring review before approval. Use camelCase DTOs and
+  bounded `{ error, code }` failures.
+- Coordinate package and worker state through one per-installation
+  `LifecycleCoordinator`. Candidate activation and health must precede durable
+  package/installation publication; stale security revisions fail closed.
+- Journal install/update/rollback/enable/disable/remove transitions durably,
+  preserve prior package pairs for rollback, and never restore revoked grants,
+  replaced bindings, disabled intent, old security revisions, or old
+  activation generations.
+- Make Settings plugin controls owner-bound and revision-aware; destructive
+  actions require explicit confirmation and failed admin access is visible.
+
+**Acceptance criteria:**
+
+- [x] `/api/plugins/admin*` routes are registered behind normal JWT auth and
+      bearer-only middleware; no-auth and cookie-only denial codes are stable.
+- [x] Allowlist loader supports the documented precedence and JSON forms,
+      rejects Unix group/world-writable files, and denies all on missing host
+      configuration.
+- [x] Stage uploads enforce content type, declared length, digest format,
+      compressed package bound, incremental chunks, and backpressure.
+- [x] Approve/update/rollback activate and health-check candidates before
+      durable publication; failed activation leaves the prior registry pair
+      unchanged.
+- [x] Enable/disable persist intent; rollback preserves current security
+      intent; remove cleans only unreferenced package roots; grant/binding
+      replacement advances security and registry revisions.
+- [x] Durable lifecycle records use strict JSON, atomic mode-0600 writes,
+      explicit terminal phases, redacted audit records, and tested recovery
+      mappings for pending transactions.
+- [x] Focused backend/admin/lifecycle and Settings component evidence passes;
+      review approved 9.8/10.
+
+**Security and operational constraints:** The administrator file is an
+operator/deployment input, not a browser-managed setting. Keep it outside the
+plugin registry and staging roots. Trusted same-identity workers remain
+distinct from a malicious-code sandbox. D06 owns systemd account, file owner,
+rotation, and target-host qualification. See the [D05 architecture](./architecture/plugin-platform-d05.md)
+and [D05 API reference](./api-reference.md#trusted-plugin-management-api-phase-d05).
+
+**Unresolved questions:** The runner currently constructs the lifecycle
+coordinator but does not visibly invoke `run_crash_recovery` during startup;
+the server emission path for the UI's optional `plugin:lifecycle_revision`
+event also needs a qualification decision. Deployment ownership/rotation for
+the host allowlist remains a D06/operator input.
 
 ### PR-011: Workflow Tracking Domain & Relational Persistence (Phase 01)
 

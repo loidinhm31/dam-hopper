@@ -7,6 +7,7 @@ After=network-online.target
 Type=exec
 User=@API_USER@
 Group=@API_GROUP@
+SupplementaryGroups=@PLUGIN_SHARED_GROUP@
 RuntimeDirectory=dam-hopper
 PIDFile=/run/dam-hopper/server.pid
 WorkingDirectory=@API_HOME@

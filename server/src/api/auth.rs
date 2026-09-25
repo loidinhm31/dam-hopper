@@ -58,6 +58,24 @@ struct Claims {
 #[derive(Clone, Debug)]
 pub struct AuthenticatedActor {
     pub subject: String,
+    pub exp: Option<usize>,
+}
+
+impl AuthenticatedActor {
+    pub fn new(subject: impl Into<String>, exp: Option<usize>) -> Self {
+        Self {
+            subject: subject.into(),
+            exp,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialMechanism {
+    Bearer,
+    Cookie,
+    NoAuthDev,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -76,18 +94,33 @@ pub(crate) fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
         .and_then(|s| s.strip_prefix("Bearer "))
 }
 
-/// Extract token from `Authorization: Bearer <token>` header, falling back to cookie.
-fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String> {
+/// Extract token and credential mechanism from `Authorization: Bearer <token>` header, falling back to cookie.
+pub(crate) fn extract_token_and_mechanism<'a>(
+    request: &'a Request,
+    jar: &'a CookieJar,
+) -> Option<(String, CredentialMechanism)> {
     // Prefer Authorization Bearer header when supplied.
     if let Some(token) = extract_bearer_token(request.headers()) {
-        return Some(token.to_string());
+        return Some((token.to_string(), CredentialMechanism::Bearer));
     }
     // Fall back to httpOnly cookie (same-origin)
-    jar.get(AUTH_COOKIE).map(|c| c.value().to_string())
+    jar.get(AUTH_COOKIE)
+        .map(|c| (c.value().to_string(), CredentialMechanism::Cookie))
+}
+
+fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String> {
+    extract_token_and_mechanism(request, jar).map(|(token, _)| token)
 }
 
 pub fn validate_jwt(provided: &str, secret: &str) -> bool {
     validated_claims(provided, secret).is_some()
+}
+
+pub fn authenticate_token(provided: &str, secret: &str) -> Option<AuthenticatedActor> {
+    validated_claims(provided, secret).map(|c| AuthenticatedActor {
+        subject: c.sub,
+        exp: Some(c.exp),
+    })
 }
 
 fn validated_claims(provided: &str, secret: &str) -> Option<Claims> {
@@ -136,19 +169,53 @@ pub async fn require_auth(
     if state.no_auth {
         request.extensions_mut().insert(AuthenticatedActor {
             subject: "dev-user".into(),
+            exp: None,
         });
+        request
+            .extensions_mut()
+            .insert(CredentialMechanism::NoAuthDev);
         return next.run(request).await;
     }
 
-    let Some(claims) =
-        extract_token(&request, &jar).and_then(|token| validated_claims(&token, &state.jwt_secret))
-    else {
+    let Some((token, mechanism)) = extract_token_and_mechanism(&request, &jar) else {
+        return unauthorized();
+    };
+
+    let Some(claims) = validated_claims(&token, &state.jwt_secret) else {
         return unauthorized();
     };
 
     request.extensions_mut().insert(AuthenticatedActor {
         subject: claims.sub,
+        exp: Some(claims.exp),
     });
+    request.extensions_mut().insert(mechanism);
+
+    next.run(request).await
+}
+
+/// Middleware that enforces bearer token authentication for protected management operations
+/// in authenticated environments, while permitting access in dev mode (--no-auth).
+pub async fn require_bearer_auth(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if state.no_auth {
+        return next.run(request).await;
+    }
+
+    let mechanism = request.extensions().get::<CredentialMechanism>().copied();
+    if mechanism != Some(CredentialMechanism::Bearer) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Bearer token required for plugin management operations; cookie credentials are not permitted",
+                "code": "BearerRequired",
+            })),
+        )
+            .into_response();
+    }
 
     next.run(request).await
 }
@@ -278,9 +345,10 @@ pub async fn register(State(state): State<AppState>, Json(body): Json<LoginBody>
 
 /// POST /api/auth/login — authenticates via mongodb or fallback to token, returns JWT
 pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody>) -> Response {
-    // Dev mode: return dev token immediately (no credentials check)
+    // Explicit dev mode (--no-auth): return token immediately without credentials check
     if state.no_auth {
-        let jwt_token = match generate_jwt("dev-user", &state.jwt_secret) {
+        let user = body.username.as_deref().unwrap_or("dev-user");
+        let jwt_token = match generate_jwt(user, &state.jwt_secret) {
             Ok(token) => token,
             Err(e) => {
                 tracing::error!("Dev mode JWT generation failed: {}", e);
@@ -357,7 +425,12 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
 }
 
 /// POST /api/auth/logout — clears auth credentials.
-pub async fn logout(State(_state): State<AppState>, _jar: CookieJar, _request: Request) -> Response {
+pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Request) -> Response {
+    if let Some(token) = extract_token(&request, &jar) {
+        if let Some(actor) = authenticate_token(&token, &state.jwt_secret) {
+            state.plugin_service.revoke_actor(&actor.subject).await;
+        }
+    }
     let clear = auth_cookie_header("", true);
     (
         StatusCode::OK,
@@ -384,13 +457,13 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
         .into_response();
     }
 
-    let ok = extract_token(&request, &jar)
-        .map(|t| validate_jwt(&t, &state.jwt_secret))
-        .unwrap_or(false);
+    let token_sub = extract_token(&request, &jar)
+        .and_then(|t| authenticate_token(&t, &state.jwt_secret));
 
-    if ok {
+    if let Some(actor) = token_sub {
         Json(serde_json::json!({
             "authenticated": true,
+            "user": actor.subject,
             "workbenchProtocol": 2
         }))
         .into_response()

@@ -3,8 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Dam Hopper</title>
+    <script>
+      try {
+        var params = new URLSearchParams(window.location.search);
+        var isDevOrTest = params.has('dev') ||
+          params.has('test') ||
+          (window.location.hostname === 'localhost' && window.location.port === '5173') ||
+          window.__DAM_HOPPER_TEST_HARNESS__ === true ||
+          sessionStorage.getItem('damhopper_test_harness') === 'true';
+        if (isDevOrTest && (!localStorage.getItem('damhopper_server_profiles') || localStorage.getItem('damhopper_server_profiles') === '[]')) {
+          var p = { id: 'default', name: 'Local Server', url: window.location.origin, authType: 'none', autoConnect: true, createdAt: Date.now() };
+          localStorage.setItem('damhopper_server_profiles', JSON.stringify([p]));
+          localStorage.setItem('damhopper_active_profile_id', 'default');
+          localStorage.setItem('dam-hopper:workspace-state', JSON.stringify({ state: { selectedProject: { profileId: 'default', project: 'evcrate' } }, version: 1 }));
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

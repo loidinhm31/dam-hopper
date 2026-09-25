@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://dam-hopper.dev/schemas/ui-bridge-v1.json",
+  "title": "UiBridgeV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "bridgeVersion", "frameSession", "activationGeneration"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "host.bootstrap",
+        "frame.ready",
+        "frame.portAck",
+        "request",
+        "cancel",
+        "response",
+        "context.revoked",
+        "availability.changed"
+      ]
+    },
+    "bridgeVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "frameSession": {
+      "type": "string",
+      "minLength": 1
+    },
+    "activationGeneration": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operation": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pluginId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {},
+    "result": {},
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "details": { "type": "object" },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "reason": {
+      "type": "string"
+    },
+    "available": {
+      "type": "boolean"
+    },
+    "deadlineMs": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

@@ -25,6 +25,7 @@ import {
   SettingsGlobalConfigPanel,
   SettingsWorkspaceConfigPanel,
 } from "@/components/pages/settings-page/SettingsConfigPanels.js";
+import { PluginManagementSection } from "@/components/pages/settings-page/PluginManagementSection.js";
 const SETTINGS_DIAGNOSTICS_SCOPE = {
   page: "settings",
   route: "/settings",
@@ -401,6 +402,13 @@ export function SettingsPage() {
                 : undefined
             }
           />
+        </SettingsSectionAccordion>
+
+        <SettingsSectionAccordion
+          title="Plugin Platform"
+          description="Manage installed plugins, stage packages with integrity verification, and supervise lifecycle."
+        >
+          <PluginManagementSection profileId={settingsProfileId} />
         </SettingsSectionAccordion>
       </div>
       <ConfirmDialog

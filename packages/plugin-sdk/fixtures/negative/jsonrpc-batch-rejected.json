@@ -1,0 +1,4 @@
+[
+  { "jsonrpc": "2.0", "id": "req-1", "method": "runner.hello" },
+  { "jsonrpc": "2.0", "id": "req-2", "method": "plugin.list" }
+]

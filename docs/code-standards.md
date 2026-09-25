@@ -46,8 +46,164 @@ server/src/
 │   └── audit.rs      # Bounded mode-0600 helper JSONL audit
 ├── git/              # Git operations
 ├── agent_store/      # Item distribution
+├── plugins/          # D00 contracts, D01 registry, D02 runner, D03 API/auth
 └── commands/         # Command registry
 ```
+
+### Trusted plugin contract candidate (Phase D00)
+
+The dependency-light TypeScript contract source lives in
+`packages/plugin-sdk/src/`; its four JSON Schemas and positive/negative
+fixtures live beside the package. Wire fields use camelCase, request IDs are
+strings, JSON-RPC batches and unknown manifest fields fail closed, and contract
+changes require corresponding fixtures rather than ad-hoc examples.
+
+The Rust mirror is `server/src/plugins/{contract,error,framing,manifest}.rs`,
+exported by `server/src/lib.rs`. DTOs use
+`serde(rename_all = "camelCase")`; manifest DTOs use
+`serde(deny_unknown_fields)`. Both implementations use a four-byte
+big-endian length prefix, reject payloads over 16 MiB before body allocation,
+bound aggregate buffering at 64 MiB, and reserve 64 KiB for control frames.
+`FrameDecoder` must never treat partial input as a complete JSON-RPC message.
+
+Worker cancellation is request/context keyed and follows
+`active -> cancelled -> settled`; unknown or repeated cancellation is reported
+without creating a second settlement. The SDK, Rust fixture test, and browser
+isolation test are the contract evidence locations.
+
+### Trusted plugin runner implementation (Phase D02)
+
+The D02 implementation lives in `server/src/plugins/runner_server.rs`,
+`runner_client.rs`, `worker_process.rs`, and `worker_supervisor.rs`; the
+`dam-hopper-plugin-runner` binary composes them. Keep D00/D01 wire names and
+camelCase DTOs unchanged. The full interface and deployment contract is in
+[Phase D02 runner architecture](./architecture/plugin-platform-d02.md).
+
+Transport rules:
+
+- Use `stream.into_split()` for both Unix RPC endpoints. A reader must continue
+  receiving frames while request work awaits; a writer lock may cover only one
+  complete `write_frame_async` call.
+- Route responses by non-empty string ID through a pending map. On EOF, protocol
+  error, or pipe failure, drain pending senders exactly once.
+- Require `runner.hello` first and negotiate exact `RUNNER_PROTOCOL_VERSION`;
+  do not silently downgrade or dispatch public methods before handshake.
+- Preserve the four-byte big-endian frame prefix, pre-allocation ceiling,
+  aggregate buffer bound, UTF-8 validation, no-batch rule, and strict JSON-RPC
+  field validation. The defined 64 KiB control budget is not yet enforced per
+  method; do not document it as an implemented check.
+
+Worker and supervisor rules:
+
+- Spawn only from the D01 immutable package directory and configured Node path.
+  Keep stdin/stdout/stderr piped, stdout protocol-only, and the minimal
+  environment (`env_clear`, inherited `PATH` when present, production mode,
+  and temporary directory).
+- Create a Unix process group and kill the group on graceful-stop timeout,
+  deadline escalation, worker failure, or supervisor deactivation. Drain all
+  pending calls with one terminal error.
+- Store only bounded, UTF-8-safe stderr diagnostics (1,024-byte lines and 50
+  retained lines). Never put stderr, request bodies, credentials, or source
+  paths in RPC responses.
+- Keep activation generation and context generation checks under the
+  supervisor lock. Clear contexts on crash/deactivation before publishing a
+  replacement worker; stale contexts return `CONTEXT_REVOKED`.
+- Enforce 16 contexts/worker, four invokes/context, 16 invokes/worker, one
+  declared long-running operation/worker, 10-second ordinary deadlines,
+  30-second scan deadlines, and the three-failures-in-60-seconds budget.
+  Current over-limit behavior is immediate `OVERLOADED`; no 32-entry fair
+  queue is implemented, so callers must not depend on FIFO ordering.
+- Never hold a synchronous registry/supervisor mutex across `.await`. Resolve
+  state and reserve counters under lock, perform pipe I/O without the lock,
+  then settle counters/status under lock.
+
+Errors use `PluginErrorCode` and stable constructors (`invalid_input`,
+`overloaded`, `deadline_exceeded`, `worker_failed`, `context_revoked`, and
+`runner_unavailable`). The owner-runner JSON-RPC bridge still maps failures to
+generic `-32603`/`RUNNER_UNAVAILABLE`; the protected D03 REST handlers map
+known plugin codes to bounded HTTP status plus `{ error, code }`. Do not expose
+worker stderr, request bodies, credentials, source paths, or policy text.
+The complete endpoint and lifecycle contract is in
+[Phase D03 architecture](./architecture/plugin-platform-d03.md).
+
+### Authorized plugin API and context standards (Phase D03)
+
+- Keep `AuthenticatedActor` separate from bearer/cookie material. The auth
+  middleware installs subject and JWT expiry; plugin handlers never accept an
+  actor subject from the request body.
+- Issue a random non-zero WebSocket epoch only after token/origin checks. Bind
+  it to actor and expiry; require the same actor/epoch on open, invoke, cancel,
+  and close. Revoke it on socket teardown and HTTP logout.
+- Deny every production plugin operation under `--no-auth` at both route and
+  service boundaries. Do not create a no-auth fallback that loads packages or
+  worker data.
+- Keep plugin DTOs camelCase and target fields narrow: `{ project,
+  worktreePath? }`. Resolve targets with `WorkspaceTargetResolver`; never accept
+  `profileId`, browser generation, filesystem root, or grant claims as server
+  authority, and never silently fall back to the main worktree.
+- Treat `GrantKey` as explicit default-deny authority:
+  `(actorSubject, installationId, configuredProjectTarget,
+  allowedOperations, allowCurrentAccountPolicy)`. Support exact values and the
+  documented `*` wildcards only. Visibility/listing is not invoke permission.
+- A context is an opaque, ephemeral association, not an authorization lease.
+  Store actor/epoch/installation/target, revisions, expiry, and counters only.
+  Recheck the current grant and epoch before every invoke; do not authorize from
+  a cached open decision.
+- Reserve context and in-flight counters under the lock, perform runner I/O
+  after releasing it, and decrement with an RAII/drop guard on every exit path.
+  Enforce 16 contexts/worker, four invokes/context, 16 invokes/worker,
+  15-minute idle TTL, and 16 MiB generic payload ceiling. Fail fast with
+  `OVERLOADED`; do not claim a fair queue that is not implemented.
+- Map errors through one bounded `plugin_error_response`. Keep status/code
+  semantics stable and sanitize diagnostics. Context close is idempotent;
+  cancellation is scoped to actor/epoch/context/request and settles once.
+- `ApiClient` plugin methods use the owner-bound `WsTransport` channel mapping.
+  Capture connection generation, ignore late messages from replaced sockets,
+  and close contexts when profile/project/worktree ownership changes.
+- Evidence belongs in `server/tests/plugin_authorization.rs`,
+  `plugin_api_integration.rs`, `plugin_runner_supervision.rs`, and the UI
+  transport tests. Test cross-actor/target denial, stale epoch, grant update,
+  no-auth denial, target replacement, cancellation, crash, and immutability.
+
+### Plugin management and lifecycle standards (Phase D05)
+
+- Mount `/api/plugins/admin*` through `require_auth` and then
+  `require_bearer_auth`. Cookie credentials and `--no-auth` are explicit
+  denials; do not create a development administrator fallback.
+- Derive the actor only from `AuthenticatedActor.subject`. Never accept an
+  administrator subject from an HTTP body, query, or browser profile.
+- Keep administrator configuration host-seeded and default-deny. Accept only
+  the documented `adminSubjects` object or string-array JSON; trim,
+  deduplicate, sort, and persist the resulting `adminConfigDigest`. Reject
+  Unix group/world-writable files and keep explicit config-load failures
+  fail-closed.
+- Keep management request DTOs camelCase and `deny_unknown_fields`; serialized
+  result DTOs remain camelCase. Stage upload is a bounded streaming body with
+  declared length and expected SHA-256; never materialize a full package in an
+  unbounded request buffer.
+- Treat `expectedSecurityRevision` as a compare-and-swap fence. Read fresh
+  durable state under the registry lock, reject stale revisions, and never
+  merge caller state over a newer security decision.
+- Serialize operations for one installation with an async per-installation
+  lock. Never hold a synchronous registry lock across `.await`; reserve/read
+  under lock, perform extraction/worker I/O outside it, then reacquire and
+  revalidate before publication.
+- Journal lifecycle transitions with strict records and atomic mode-0600
+  writes. Activate and health-check candidate workers before publishing the
+  package/installation pair. On failure, stop the candidate and preserve the
+  prior durable pair.
+- Rollback must restore the matched backend/UI package pair without restoring
+  revoked grants, replaced bindings, disabled intent, old revisions, or a
+  previous activation generation. Remove only unreferenced package roots.
+- Lifecycle and authority mutations emit redacted audit records and
+  invalidate plugin metadata/context caches at the API boundary. Stage upload
+  is a reviewable input stream, not a published installation. Do not log bearer
+  values, package bytes, worker stderr, source paths, or policy text.
+- Keep UI management methods owner-bound through `ApiClient` and
+  `WsTransport`; mutation requests use the list's revision and destructive
+  actions require explicit confirmation. Focused evidence belongs in
+  `server/tests/plugin_admin_api.rs`, `server/tests/plugin_lifecycle.rs`, and
+  `PluginManagementSection.test.tsx`.
 
 ### Error Handling Pattern
 

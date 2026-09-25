@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req-001",
+  "method": "context.open",
+  "params": {
+    "actorSubject": "user-alice",
+    "installationId": "inst-123",
+    "configuredProjectTarget": "dam-hopper",
+    "allowedOperations": ["history.refresh", "history.summary"],
+    "allowCurrentAccountPolicy": false,
+    "apiConnectionEpoch": 1,
+    "activationGeneration": 1
+  }
+}

@@ -1,30 +1,84 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-21 from `repomix-output.xml` (Repomix v0.2.26).
+**Generated:** 2026-09-22 from `repomix-output.xml` (Repomix v1.18.0; 2,244
+files, 5,055,703 tokens, 21,133,046 characters; five security-flagged files
+excluded).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
-security scanning are not represented in full. Release-source entries in the
-compaction include the Windows packager, profile-aware asset checker, package
-scripts, and Windows packaging/install harnesses.
+security scanning are not represented in full.
 
 ## Repository shape
 
 - `server/` — Rust/Axum backend, workspace/file APIs, PTY management, workflow
-  persistence, telemetry, idle suspend, Linux release management, and tests.
+  persistence, telemetry, idle suspend, Linux release management, plugins, and
+  tests.
 - `apps/web/` — browser Vite host.
 - `apps/native/` — Tauri host, native capability bridges, and platform smoke
   scripts.
 - `apps/browser-extension/` — optional browser-extension host.
 - `packages/ui/` — shared React components, stores, API/WS clients, terminal
-  surfaces, and browser tests.
-- `packages/shared/` — dependency-light shared runtime utilities, including
-  logger and redaction helpers.
+  surfaces, Settings, and browser tests.
+- `packages/plugin-sdk/` — candidate dependency-light plugin contracts, schemas,
+  fixtures, and packed SDK artifact.
+- `packages/shared/` — dependency-light shared runtime utilities.
 - `deploy/` — release scripts, systemd templates, installer assets, and role
   staging support.
-- `plans/` — feature plans, research, phase records, and verification reports.
+- `plans/` — feature plans, phase records, research, and verification reports.
 - `docs/` — operator, API, architecture, standards, and product-requirement
   documentation.
+
+## Trusted plugin platform (Phases D00–D06)
+
+The candidate SDK is `@dam-hopper/plugin-sdk` `0.1.0`; schemas, fixtures, and
+the packed artifact live under `packages/plugin-sdk/`. D00 Rust mirrors and
+strict four-byte big-endian JSON-RPC framing live in `server/src/plugins/`.
+
+- D00 caps payloads at 16 MiB, aggregate buffered frames at 64 MiB, and
+  defines a 64 KiB control budget; string IDs, strict params, and no batches
+  fail closed.
+- D01 owns the immutable package registry, bounded gzip-tar staging/extraction,
+  digest approval, strict state/journal records, and grant/binding CAS. See
+  [D01 architecture](./architecture/plugin-platform-d01.md).
+- D02 adds `dam-hopper-plugin-runner`, `RunnerServer`, `RunnerClient`,
+  `WorkerProcess`, and `InstallationSupervisor`; the runner binds an owner
+  AF_UNIX socket, checks `SO_PEERCRED`, performs exact `runner.hello`, and
+  multiplexes framed JSON-RPC requests.
+- Worker processes use immutable D01 package roots, private framed stdin/stdout,
+  bounded stderr, a cleared/allowlisted environment, and a Unix process group.
+  One supervisor generation owns one worker and revokes contexts on crash/deadline.
+- D03 adds protected public `/api/plugins` routes, actor/grant/target checks,
+  random WebSocket connection epochs, opaque contexts, invoke-time
+  authorization, selective revocation, and owner-bound UI mappings. See
+  [D03 architecture](./architecture/plugin-platform-d03.md).
+- D05 adds `/api/plugins/admin*` listing, streaming stage/approval, rollback,
+  enable/disable/remove, grants, and bindings. `require_bearer_auth` rejects
+  cookie-only and `--no-auth` management requests.
+- D05 administrator subjects are host-seeded from `--admin-config`,
+  `DAM_HOPPER_PLUGIN_ADMINS_FILE`, or `/etc/dam-hopper/plugin-admins.json`;
+  missing/invalid host configuration is deny-all and its sorted subject digest
+  is persisted in `registry-v1.json`.
+- `LifecycleCoordinator` serializes each installation, journals strict
+  `lifecycle-<uuid>.json` records, health-checks candidate workers before
+  durable publication, preserves current security intent on rollback, fences
+  mutations by security revision, and exposes crash recovery.
+- D05 source map: `server/src/plugins/{admin,lifecycle_journal,lifecycle,
+  runner_client,runner_server}.rs`, `server/src/api/{auth,plugin_admin,router}.rs`,
+  `packages/ui/src/api/{plugin-types,client,ws-transport}.ts`, and
+  `packages/ui/src/components/pages/settings-page/PluginManagementSection.tsx`.
+- Focused D05 evidence is in `server/tests/plugin_admin_api.rs`,
+  `server/tests/plugin_lifecycle.rs`, and `PluginManagementSection.test.tsx`;
+  detailed boundaries and startup/event questions are in
+  [D05 architecture](./architecture/plugin-platform-d05.md).
+- D06 integrates Linux release assets: the owner runner unit, server-role
+  tmpfiles configuration, explicit owner/admin deployment inputs, and manager
+  state v2 retention of runner/host/plugin digests across rollback and recovery.
+  The source map spans `server/src/linux_release/`, `deploy/systemd/`,
+  `deploy/tmpfiles.d/`, and `deploy/release/`.
+- D06 qualification recorded 173/173 Linux-release tests, 9/9 deployment
+  journeys, owner/rollback smokes, and 5/5 synthetic LAN budgets over 10,000
+  history records. Physical separate-machine LAN and exact pinned Node
+  selection remain external deployment inputs.
 
 ## Unified-profile workbench frontend (Phases 00–02)
 
@@ -57,89 +111,28 @@ configuration, PTYs, workflow/usage history, and remote data remain
 server-authoritative. The unified-profile backend-workspace proposal below is
 not part of this implementation.
 
-### Phase 01 multi-profile host-resource monitoring
+### Multi-profile host resources (Phases 01–04)
 
-`useMultiHostResources` builds a fleet read model from configured profiles and
-keyed connection snapshots. Its watch scope is `connected || autoConnect`:
-connected profiles are queried, while disconnected auto-connect profiles remain
-visible as non-fetching unavailable entries. Each watched profile gets an
-owner/generation-qualified `profileQueryKey` and bound API client through
-`useQueries`; partial failures stay isolated to one profile.
+`useMultiHostResources` builds an owner/generation-qualified fleet read model:
+connected profiles query, disconnected auto-connect profiles remain visible as
+unavailable, and one profile failure never contaminates another cache.
+`isCurrentConnection` fences late snapshots; `resolveHostResourceFleetSummary`
+keeps severity, unavailable, sampling, and stale precedence without averaging
+or summing host metrics.
 
-Snapshot responses are generation-fenced with `isCurrentConnection`, and late
-responses fail with `ConnectionOwnerError` instead of entering a replacement
-owner's cache. `resolveHostResourceFleetSummary` performs deterministic counts
-and severity/unavailable/sampling/stale precedence without summing or
+`HostResourceFleetDeck`/`HostResourceFleetCard` are pure presentation over
+`MultiHostResourceEntry[]`. They preserve configured order, expose explicit
+empty/offline states, keep incident/read state per profile, and offer inspection
+only for connected cards. `HostResourcePopover` enters Fleet mode only for
+multi-profile contexts; drilldown queries and destructive actions stay bound to
+the inspected owner and generation.
 
-deduplicating host metrics. Focused contracts live in
-`packages/ui/src/hooks/use-multi-host-resources.test.tsx` and
-`packages/ui/src/lib/host-resource-state.test.ts`.
-
-### Phase 02 multi-profile host-resource fleet deck and cards
-
-`HostResourceFleetDeck` and `HostResourceFleetCard` are pure React
-presentation boundaries over `MultiHostResourceEntry[]`. The deck preserves
-configured order, renders a labelled semantic list, reports watched count, and
-shows an explicit empty state without reading stores, APIs, or queries.
-
-Cards keep each profile distinct by ID, show connection/watch state, status,
-unread incidents, host identity, and sample age, and include finite deep-memory
-and battery facts only when available. Connected cards expose one 44px
-inspection button that returns only the profile ID; disconnected auto-connect
-entries remain non-interactive and qualify cached data as last known. Long
-profile/endpoint/host strings wrap as text, and no metric is averaged or
-summed across hosts.
-
-`formatSampleAge` rejects invalid or zero timestamps and rounds valid ages to
-seconds/minutes/hours/days without a per-card timer. Focused component
-contracts live in `HostResourceFleetCard.test.tsx` and
-`HostResourceFleetDeck.test.tsx`; formatter/state contracts remain in
-`host-resource-state.test.ts`.
-
-### Phase 03 multi-profile host-resource popover integration
-
-`HostResourcePopover` enters Fleet mode only when no explicit `owner` is
-provided and more than one profile is configured. It opens on the
-`HostResourceFleetDeck`, adds a `Fleet` toggle plus one status/profile pill per
-watched entry, and reuses one owner-bound glance/diagnosis/idle-suspend body for
-connected drilldowns. Fleet opening acknowledges no profile; inspection marks
-only the selected profile read.
-
-Phase 01 keeps 15-second snapshots isolated by profile/generation. The
-popover's compatibility metrics query is enabled only for an open, connected
-drilldown, so exactly the inspected owner receives 1-second polling; Fleet,
-closed, and disconnected views start none. Removing or disconnecting the
-inspected entry clears local diagnosis/action state and returns to Fleet rather
-than falling back to Settings or the active profile. Focus returns to the
-persistent pill or trigger across view changes and close.
-
-Focused component contracts live in
-`packages/ui/src/components/organisms/HostResourcePopover.test.tsx`; Phase 03
-tests preserved single-profile behavior and owner-bound drilldown semantics.
-Phase 04 completes the broader verification gate with 83 focused
-unit/component tests and 19 Chromium tests passing.
-
-### Phase 04 multi-profile host-resource verification
-
-The existing Chromium suite in
-`packages/ui/browser-tests/host-resource-monitoring.browser.tsx` now covers
-five multi-profile flows without a second harness: Fleet/profile navigation
-with pointer and keyboard activation, focus trapping and Escape restoration,
-15-second fleet versus selected-owner 1-second polling gates, disconnect
-cleanup, duplicate-incident unread isolation, 320x700 and 1280x800 layout/
-contrast/target-size checks, and security negatives.
-
-The security flow keeps markup-like profile/host values as literal text,
-exposes no inspection or suspend control for offline cards, and verifies the
-force-sleep hook receives only the inspected `ConnectionRef`. Fixtures use
-synthetic transports and mutations; no real host, RTC/systemd, credentials,
-network endpoint, or profile persistence is exercised.
-
-Focused verification passed **102/102** tests: six Vitest unit/component
-files (83/83) plus the extended Chromium file (19/19). No architecture drift
-was found; `docs/system-architecture.md` records the same owner-qualified
-dataflow and polling tiers with this evidence. Coverage percentages were not
-instrumented by the focused commands.
+Polling is 15 seconds for fleet snapshots and 1 second only for an open,
+connected drilldown. Disconnect/removal clears owner-local diagnosis state and
+returns to Fleet without falling back to Settings or another profile. Focused
+verification passed 102/102 tests (83 Vitest/component plus 19 Chromium);
+fixtures used synthetic transports and did not touch real credentials, hosts,
+RTC, systemd, network endpoints, or persistence.
 
 ## Unified-profile files, editor, search, and Git (Phase 03)
 

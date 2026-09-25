@@ -3,7 +3,9 @@
 //! Stored in `/var/lib/dam-hopper-manager/state.json` with permissions `0600`.
 //! Monotonic generation increments with every durable commit or boundary.
 
-use super::constants::{MANAGER_STATE_SCHEMA_VERSION, MAX_STATE_BYTES};
+use super::constants::{
+    MANAGER_STATE_SCHEMA_VERSION, MANAGER_STATE_SCHEMA_VERSION_LEGACY, MAX_STATE_BYTES,
+};
 use super::durable_fs::{atomic_write_json, copy_file_durable};
 use super::error::ReleaseError;
 use super::journal::DeploymentState;
@@ -57,10 +59,14 @@ impl ManagerState {
     }
 
     pub fn validate(&self) -> Result<(), ReleaseError> {
-        if self.schema_version != MANAGER_STATE_SCHEMA_VERSION {
+        if self.schema_version != MANAGER_STATE_SCHEMA_VERSION
+            && self.schema_version != MANAGER_STATE_SCHEMA_VERSION_LEGACY
+        {
             return Err(ReleaseError::Config(format!(
-                "unsupported state schema version {}, expected {}",
-                self.schema_version, MANAGER_STATE_SCHEMA_VERSION
+                "unsupported state schema version {}, expected {} or {}",
+                self.schema_version,
+                MANAGER_STATE_SCHEMA_VERSION_LEGACY,
+                MANAGER_STATE_SCHEMA_VERSION
             )));
         }
         if self.generation == 0 {
@@ -177,13 +183,16 @@ pub fn load_or_init_manager_state(path: &Path) -> Result<ManagerState, ReleaseEr
         )));
     }
 
-    let state: ManagerState = serde_json::from_slice(&content).map_err(|e| {
+    let mut state: ManagerState = serde_json::from_slice(&content).map_err(|e| {
         ReleaseError::Config(format!(
             "failed to parse authoritative state file {}: {e}",
             path.display()
         ))
     })?;
     state.validate()?;
+    if state.schema_version == MANAGER_STATE_SCHEMA_VERSION_LEGACY {
+        state.schema_version = MANAGER_STATE_SCHEMA_VERSION;
+    }
     Ok(state)
 }
 

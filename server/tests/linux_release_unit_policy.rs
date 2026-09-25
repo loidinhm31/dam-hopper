@@ -397,12 +397,15 @@ fn test_stage_candidate_units_roles() {
     std::fs::write(&cli_bin, "cli").unwrap();
     let helper_bin = target_dir.join("bin/dam-hopper-idle-suspend-helper");
     std::fs::write(&helper_bin, "helper").unwrap();
+    let runner_bin = target_dir.join("bin/dam-hopper-plugin-runner");
+    std::fs::write(&runner_bin, "runner").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&server_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&web_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&mgr_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&cli_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&helper_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&runner_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Create dummy manifest
     let manifest = ReleaseManifest {
         schema_version: RELEASE_MANIFEST_SCHEMA_VERSION,
@@ -438,6 +441,7 @@ fn test_stage_candidate_units_roles() {
             web_assets: ComponentVersion {
                 version: "0.2.0".to_string(),
             },
+            runner: None,
         },
         inventory: vec![],
         services: ServicesMeta {
@@ -455,6 +459,7 @@ fn test_stage_candidate_units_roles() {
                 port: WEB_SERVICE_PORT,
                 health_path: WEB_SERVICE_HEALTH_PATH.to_string(),
             },
+            runner: None,
         },
         rollback: RollbackMeta {
             previous_release_compatible: ROLLBACK_PREVIOUS_COMPATIBLE,
@@ -481,6 +486,9 @@ fn test_stage_candidate_units_roles() {
     assert!(pending_units.join("dam-hopper-recovery.service").exists());
     assert!(pending_units
         .join("dam-hopper-idle-suspend-helper.service")
+        .exists());
+    assert!(pending_units
+        .join("dam-hopper-plugin-runner.service")
         .exists());
     assert!(!pending_units.join("dam-hopper-web.service").exists());
 

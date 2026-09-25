@@ -285,3 +285,44 @@ fn query_unit_failure_log(unit_name: &str) -> Option<String> {
     }
     None
 }
+
+/// Probe plugin runner socket and protocol health.
+pub async fn probe_runner_health(
+    socket_path: &std::path::Path,
+    expected_owner_uid: Option<u32>,
+) -> HttpProbeOutcome {
+    if !socket_path.exists() {
+        return HttpProbeOutcome::Transient(format!(
+            "runner socket does not exist at '{}'",
+            socket_path.display()
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+        let meta = match std::fs::symlink_metadata(socket_path) {
+            Ok(m) => m,
+            Err(e) => return HttpProbeOutcome::Transient(format!("failed to stat socket: {e}")),
+        };
+        if meta.file_type().is_symlink() {
+            return HttpProbeOutcome::Fatal("runner socket must not be a symlink".into());
+        }
+        if !meta.file_type().is_socket() {
+            return HttpProbeOutcome::Fatal("runner socket path exists but is not a socket".into());
+        }
+        if meta.permissions().mode() & 0o002 != 0 {
+            return HttpProbeOutcome::Fatal("runner socket must not be world-writable".into());
+        }
+        if let Some(expected_uid) = expected_owner_uid {
+            if meta.uid() != expected_uid {
+                return HttpProbeOutcome::Fatal(format!(
+                    "runner socket owner UID {} mismatch (expected {expected_uid})",
+                    meta.uid()
+                ));
+            }
+        }
+    }
+
+    HttpProbeOutcome::Success
+}

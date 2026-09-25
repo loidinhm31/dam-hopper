@@ -939,6 +939,10 @@ path = "/tmp/test-workspace"
 | `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` | string  | Exact extension parent origins, embedded at build time                    |
 | `RUST_LOG`                                 | string  | Rust logging filter                                                       |
 | `MONGODB_URI` / `MONGODB_DATABASE`         | string  | Optional API authentication database                                      |
+| `DAM_HOPPER_PLUGIN_ADMINS_FILE`              | path    | Optional root-seeded plugin administrator JSON override                       |
+
+Plugin management administrators are not configured in `dam-hopper.toml`; the
+runner reads this host-owned file before opening its management RPC surface.
 
 `VITE_*` values require a web rebuild. `VITE_DAM_HOPPER_SERVER_URL` is not
 allowed for production builds; production API origin is runtime config.
@@ -970,6 +974,43 @@ Include in all API requests:
 curl -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
   http://localhost:4800/api/projects
 ```
+
+## Plugin Management Administrator Allowlist
+
+Plugin management uses a host-seeded administrator allowlist; it is separate
+from the project TOML and MongoDB roles. The runner checks the authenticated
+JWT subject against this list for every management RPC.
+
+The runner chooses the first available source:
+
+1. `dam-hopper-plugin-runner --admin-config <path>`
+2. `DAM_HOPPER_PLUGIN_ADMINS_FILE`
+3. `/etc/dam-hopper/plugin-admins.json`
+4. no file → empty list (deny all)
+
+The file accepts either shape:
+
+```json
+{"adminSubjects":["alice","ops@example.test"]}
+```
+
+or:
+
+```json
+["alice","ops@example.test"]
+```
+
+Subjects are trimmed, deduplicated, sorted, and hashed into the persisted
+`adminConfigDigest`. On Unix, group/world-writable files (`mode & 0o022`) are
+rejected. An invalid or unreadable environment/default file logs a warning and
+denies all administrators; an explicit `--admin-config` error prevents runner
+startup. Keep the file host-owned and outside plugin staging. Configuration
+details and management endpoint behavior are in the [D05 plugin architecture](./architecture/plugin-platform-d05.md).
+
+The management API requires `Authorization: Bearer ...` even when the general
+API also accepts an HttpOnly cookie. Cookie-only requests return
+`BearerRequired`; `--no-auth` returns `NoAuthForbidden`. Login and development
+mode never grant plugin administrator access.
 
 ## Running the Server
 

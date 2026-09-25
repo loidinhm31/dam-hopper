@@ -44,6 +44,7 @@ pub fn create_valid_manifest() -> ReleaseManifest {
             web_assets: ComponentVersion {
                 version: version.clone(),
             },
+            runner: None,
         },
         inventory: vec![
             InventoryEntry {
@@ -158,6 +159,7 @@ pub fn create_valid_manifest() -> ReleaseManifest {
                 port: WEB_SERVICE_PORT,
                 health_path: WEB_SERVICE_HEALTH_PATH.to_string(),
             },
+            runner: None,
         },
         rollback: RollbackMeta {
             previous_release_compatible: ROLLBACK_PREVIOUS_COMPATIBLE,

@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://dam-hopper.dev/schemas/worker-sdk-v1.json",
+  "title": "WorkerSdkV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "limits"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxPayloadBytes",
+        "maxControlBytes",
+        "maxContextsPerWorker",
+        "maxSnapshotsPerContext",
+        "maxAggregateSnapshotBytes",
+        "maxOperationsPerContext",
+        "maxActiveScansPerWorker",
+        "maxScanIoBytes",
+        "scanDeadlineMs"
+      ],
+      "properties": {
+        "maxPayloadBytes": { "type": "integer", "const": 16777216 },
+        "maxControlBytes": { "type": "integer", "const": 65536 },
+        "maxContextsPerWorker": { "type": "integer", "const": 16 },
+        "maxSnapshotsPerContext": { "type": "integer", "const": 2 },
+        "maxAggregateSnapshotBytes": { "type": "integer", "const": 134217728 },
+        "maxOperationsPerContext": { "type": "integer", "const": 4 },
+        "maxActiveScansPerWorker": { "type": "integer", "const": 1 },
+        "maxScanIoBytes": { "type": "integer", "const": 268435456 },
+        "scanDeadlineMs": { "type": "integer", "const": 30000 }
+      }
+    }
+  }
+}
