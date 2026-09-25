@@ -991,7 +991,11 @@ impl SshForwardManager {
         if let Some(active) = existing {
             let token = {
                 let intent = self.intent.lock().await;
-                intent.scope_tokens.get(scope_id).copied().unwrap_or(WireCounter::ONE)
+                intent
+                    .scope_tokens
+                    .get(scope_id)
+                    .copied()
+                    .unwrap_or(WireCounter::ONE)
             };
             let snapshot = self.snapshot_inner(context, token, scope_id).await?;
             return Ok(ScopeHandle {
@@ -1024,8 +1028,6 @@ impl SshForwardManager {
         let trust = store
             .load_trust()
             .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
-
-
 
         let generation = self.next_scope_generation(scope_id).await?;
         let token = WireCounter::ONE;
@@ -1070,7 +1072,8 @@ impl SshForwardManager {
             }
         };
 
-        self.emit_hint(None, SshForwardEventReason::ProfilesChanged).await;
+        self.emit_hint(None, SshForwardEventReason::ProfilesChanged)
+            .await;
 
         Ok(ScopeHandle {
             r#ref: ScopeContextInput {
@@ -1136,9 +1139,19 @@ impl SshForwardManager {
     async fn stop_scope_workers(&self, scope_id: &str) {
         let prefix = format!("{scope_id}:");
         let handles: Vec<AbortHandle> = {
-            let mut v2_handles = self.v2_abort_handles.lock().expect("v2 abort handle mutex poisoned");
-            let matching_keys: Vec<String> = v2_handles.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
-            matching_keys.into_iter().filter_map(|k| v2_handles.remove(&k)).collect()
+            let mut v2_handles = self
+                .v2_abort_handles
+                .lock()
+                .expect("v2 abort handle mutex poisoned");
+            let matching_keys: Vec<String> = v2_handles
+                .keys()
+                .filter(|k| k.starts_with(&prefix))
+                .cloned()
+                .collect();
+            matching_keys
+                .into_iter()
+                .filter_map(|k| v2_handles.remove(&k))
+                .collect()
         };
         for handle in handles {
             handle.abort();
@@ -1147,20 +1160,24 @@ impl SshForwardManager {
 
     async fn stop_scope_connections(&self, scope_id: &str) -> Result<(), SshForwardCommandError> {
         let _admission_gate = self.connection_admission_gate.lock().await;
-        let keys = self.connection_registry.lock().await.connection_keys_for_scope(scope_id);
+        let keys = self
+            .connection_registry
+            .lock()
+            .await
+            .connection_keys_for_scope(scope_id);
         let mut teardown_failed = false;
         for (connection_id, generation, lifecycle) in keys {
-            let _ = self
-                .connection_registry
-                .lock()
-                .await
-                .cancel_connection(scope_id, &connection_id, generation);
+            let _ = self.connection_registry.lock().await.cancel_connection(
+                scope_id,
+                &connection_id,
+                generation,
+            );
             let _lifecycle = lifecycle.lock().await;
-            let plan = self
-                .connection_registry
-                .lock()
-                .await
-                .begin_disconnect(scope_id, &connection_id, generation);
+            let plan = self.connection_registry.lock().await.begin_disconnect(
+                scope_id,
+                &connection_id,
+                generation,
+            );
             if let Ok(Some(plan)) = plan {
                 let next_generation = plan.generation;
                 let failed_session = self.close_disconnect_plan(plan).await;
@@ -1169,15 +1186,20 @@ impl SshForwardManager {
                         .connection_registry
                         .lock()
                         .await
-                        .retain_disconnect_session(scope_id, &connection_id, next_generation, session);
+                        .retain_disconnect_session(
+                            scope_id,
+                            &connection_id,
+                            next_generation,
+                            session,
+                        );
                     teardown_failed = true;
                     continue;
                 }
-                let _ = self
-                    .connection_registry
-                    .lock()
-                    .await
-                    .finish_disconnect(scope_id, &connection_id, next_generation);
+                let _ = self.connection_registry.lock().await.finish_disconnect(
+                    scope_id,
+                    &connection_id,
+                    next_generation,
+                );
             }
         }
         self.connection_registry
@@ -1271,13 +1293,22 @@ impl SshForwardManager {
         } else {
             let scopes: Vec<ActiveScope> = self.scopes.lock().await.values().cloned().collect();
             for scope in scopes {
-                let token = self.intent.lock().await.scope_tokens.get(&scope.id).copied().unwrap_or(WireCounter::ONE);
-                let _ = self.close_scope(&super::model::ScopeContextInput {
-                    context: context.clone(),
-                    activation_token: token,
-                    scope_id: scope.id,
-                    scope_generation: scope.generation,
-                }).await;
+                let token = self
+                    .intent
+                    .lock()
+                    .await
+                    .scope_tokens
+                    .get(&scope.id)
+                    .copied()
+                    .unwrap_or(WireCounter::ONE);
+                let _ = self
+                    .close_scope(&super::model::ScopeContextInput {
+                        context: context.clone(),
+                        activation_token: token,
+                        scope_id: scope.id,
+                        scope_generation: scope.generation,
+                    })
+                    .await;
             }
             Ok(SshForwardScopeActivation {
                 context: context.clone(),
@@ -1598,8 +1629,11 @@ impl SshForwardManager {
                 Ok(config) => config,
                 Err(_) => return Err(SshForwardErrorCode::CredentialCleanupPending.command_error()),
             };
-            self.update_connections_revision(&input.request.scope_id, rolled_back.connections_revision)
-                .await;
+            self.update_connections_revision(
+                &input.request.scope_id,
+                rolled_back.connections_revision,
+            )
+            .await;
             self.emit_collection_hint_checked(
                 &input.request.scope_id,
                 input.request.scope_generation,
@@ -1683,7 +1717,11 @@ impl SshForwardManager {
             self.connection_registry
                 .lock()
                 .await
-                .ensure_disconnected(&input.request.scope_id, &input.connection_profile_id, input.expected_generation)
+                .ensure_disconnected(
+                    &input.request.scope_id,
+                    &input.connection_profile_id,
+                    input.expected_generation,
+                )
                 .map_err(|error| error.code().command_error())?;
         }
         #[cfg(test)]
@@ -1710,8 +1748,11 @@ impl SshForwardManager {
                 Ok(config) => config,
                 Err(_) => return Err(SshForwardErrorCode::CredentialCleanupPending.command_error()),
             };
-            self.update_connections_revision(&input.request.scope_id, rolled_back.connections_revision)
-                .await;
+            self.update_connections_revision(
+                &input.request.scope_id,
+                rolled_back.connections_revision,
+            )
+            .await;
             self.emit_collection_hint_checked(
                 &input.request.scope_id,
                 input.request.scope_generation,
@@ -1726,7 +1767,11 @@ impl SshForwardManager {
                 .connection_registry
                 .lock()
                 .await
-                .remove_if_disconnected(&input.request.scope_id, &input.connection_profile_id, input.expected_generation);
+                .remove_if_disconnected(
+                    &input.request.scope_id,
+                    &input.connection_profile_id,
+                    input.expected_generation,
+                );
             if let Err(error) = removal {
                 let rollback = store.replace_connections(committed.connections_revision, current);
                 let rolled_back = match rollback {
@@ -1735,8 +1780,11 @@ impl SshForwardManager {
                         return Err(SshForwardErrorCode::CredentialCleanupPending.command_error())
                     }
                 };
-                self.update_connections_revision(&input.request.scope_id, rolled_back.connections_revision)
-                    .await;
+                self.update_connections_revision(
+                    &input.request.scope_id,
+                    rolled_back.connections_revision,
+                )
+                .await;
                 self.emit_collection_hint_checked(
                     &input.request.scope_id,
                     input.request.scope_generation,
@@ -1956,7 +2004,8 @@ impl SshForwardManager {
                     false,
                 )
             })?;
-        self.update_rules_revision(&input.request.scope_id, committed.rules_revision).await;
+        self.update_rules_revision(&input.request.scope_id, committed.rules_revision)
+            .await;
         let should_reconcile = self
             .connection_registry
             .lock()
@@ -2092,7 +2141,8 @@ impl SshForwardManager {
                     Ok(config) => config,
                     Err(_) => return Err(SshForwardErrorCode::StoreIo.command_error()),
                 };
-                self.update_rules_revision(&input.request.scope_id, rolled_back.rules_revision).await;
+                self.update_rules_revision(&input.request.scope_id, rolled_back.rules_revision)
+                    .await;
                 self.emit_collection_hint_checked(
                     &input.request.scope_id,
                     input.request.scope_generation,
@@ -2103,7 +2153,8 @@ impl SshForwardManager {
                 return Err(error.code().command_error());
             }
         }
-        self.update_rules_revision(&input.request.scope_id, committed.rules_revision).await;
+        self.update_rules_revision(&input.request.scope_id, committed.rules_revision)
+            .await;
         self.emit_collection_hint_checked(
             &input.request.scope_id,
             input.request.scope_generation,
@@ -2501,11 +2552,11 @@ impl SshForwardManager {
         );
         if self.is_shutting_down() {
             cancellation.cancel();
-            let _ = self
-                .connection_registry
-                .lock()
-                .await
-                .discard_connection(scope_id, connection_id, generation);
+            let _ = self.connection_registry.lock().await.discard_connection(
+                scope_id,
+                connection_id,
+                generation,
+            );
             reservation_cleanup.disarm();
             return Err(SshForwardErrorCode::ShutdownInProgress.command_error());
         }
@@ -2684,7 +2735,12 @@ impl SshForwardManager {
                     .connection_registry
                     .lock()
                     .await
-                    .retain_authenticating_session(scope_id, connection_id, generation, Arc::clone(&session))
+                    .retain_authenticating_session(
+                        scope_id,
+                        connection_id,
+                        generation,
+                        Arc::clone(&session),
+                    )
                     .is_ok()
             {
                 reservation_cleanup.disarm();
@@ -2692,11 +2748,11 @@ impl SshForwardManager {
                 return Err(SshForwardErrorCode::ShutdownTimeout.command_error());
             }
             if shutdown {
-                let _ = self
-                    .connection_registry
-                    .lock()
-                    .await
-                    .discard_connection(scope_id, connection_id, generation);
+                let _ = self.connection_registry.lock().await.discard_connection(
+                    scope_id,
+                    connection_id,
+                    generation,
+                );
             } else {
                 let _ = self.connection_registry.lock().await.fail_connection(
                     scope_id,
@@ -2750,18 +2806,23 @@ impl SshForwardManager {
                     .connection_registry
                     .lock()
                     .await
-                    .retain_authenticating_session(scope_id, connection_id, generation, Arc::clone(&session))
+                    .retain_authenticating_session(
+                        scope_id,
+                        connection_id,
+                        generation,
+                        Arc::clone(&session),
+                    )
                     .is_ok()
             {
                 reservation_cleanup.disarm();
                 drop(_lifecycle);
                 return Err(SshForwardErrorCode::ShutdownTimeout.command_error());
             }
-            let _ = self
-                .connection_registry
-                .lock()
-                .await
-                .discard_connection(scope_id, connection_id, generation);
+            let _ = self.connection_registry.lock().await.discard_connection(
+                scope_id,
+                connection_id,
+                generation,
+            );
             reservation_cleanup.disarm();
             drop(_lifecycle);
             return Err(error);
@@ -3127,7 +3188,11 @@ impl SshForwardManager {
         }
 
         if let Some(generation) = self
-            .cleanup_timed_out_connection(&input.scope_id, &input.connection_profile_id, input.expected_generation)
+            .cleanup_timed_out_connection(
+                &input.scope_id,
+                &input.connection_profile_id,
+                input.expected_generation,
+            )
             .await
         {
             self.emit_connection_hint_checked(
@@ -3189,7 +3254,12 @@ impl SshForwardManager {
         let failed_session = self.close_disconnect_plan_until(plan, deadline).await;
         let mut registry = self.connection_registry.lock().await;
         if let Some(session) = failed_session {
-            let _ = registry.retain_disconnect_session(scope_id, connection_id, next_generation, session);
+            let _ = registry.retain_disconnect_session(
+                scope_id,
+                connection_id,
+                next_generation,
+                session,
+            );
         } else {
             let _ = registry.finish_disconnect(scope_id, connection_id, next_generation);
             registry.clear_if_disconnected();
@@ -3335,7 +3405,11 @@ impl SshForwardManager {
                     .connection_registry
                     .lock()
                     .await
-                    .rule_generation(scope_id, &rule_for_retry.connection_profile_id, &rule_for_retry.id)
+                    .rule_generation(
+                        scope_id,
+                        &rule_for_retry.connection_profile_id,
+                        &rule_for_retry.id,
+                    )
                     .map_err(runtime_command_error)?
                     .unwrap_or(WireCounter::ZERO);
                 return Box::pin(self.enable_rule_impl(
@@ -4682,7 +4756,12 @@ impl SshForwardManager {
                 .has_reconnectable_rules(scope_id, connection_id, connection_generation, owner)
                 .unwrap_or(false)
             {
-                let _ = registry.abandon_reconnect(scope_id, connection_id, connection_generation, owner);
+                let _ = registry.abandon_reconnect(
+                    scope_id,
+                    connection_id,
+                    connection_generation,
+                    owner,
+                );
                 Some(false)
             } else {
                 let changed = registry
@@ -4820,9 +4899,7 @@ impl SshForwardManager {
             return fail(SshForwardErrorCode::SshConnectFailed).await;
         }
         let active = match self.scopes.lock().await.get(scope_id).cloned() {
-            Some(active) if active.generation == scope_generation => {
-                active
-            }
+            Some(active) if active.generation == scope_generation => active,
             _ => return fail(SshForwardErrorCode::ScopeNotActive).await,
         };
         let trust = match active.store.load_trust() {
@@ -4917,7 +4994,13 @@ impl SshForwardManager {
                         .connection_registry
                         .lock()
                         .await
-                        .finish_reconnect(scope_id, connection_id, generation, Arc::clone(&session), lease)
+                        .finish_reconnect(
+                            scope_id,
+                            connection_id,
+                            generation,
+                            Arc::clone(&session),
+                            lease,
+                        )
                         .is_ok();
                     if committed {
                         self.emit_connection_hint_checked(
@@ -5201,17 +5284,17 @@ impl SshForwardManager {
         let keys = self.connection_registry.lock().await.connection_keys();
         let mut teardown_failed = false;
         for (scope_id, connection_id, generation, lifecycle) in keys {
-            let _ = self
-                .connection_registry
-                .lock()
-                .await
-                .cancel_connection(&scope_id, &connection_id, generation);
+            let _ = self.connection_registry.lock().await.cancel_connection(
+                &scope_id,
+                &connection_id,
+                generation,
+            );
             let _lifecycle = lifecycle.lock().await;
-            let plan = self
-                .connection_registry
-                .lock()
-                .await
-                .begin_disconnect(&scope_id, &connection_id, generation);
+            let plan = self.connection_registry.lock().await.begin_disconnect(
+                &scope_id,
+                &connection_id,
+                generation,
+            );
             let plan = match plan {
                 Ok(Some(plan)) => plan,
                 Ok(None) => continue,
@@ -5231,11 +5314,11 @@ impl SshForwardManager {
                 teardown_failed = true;
                 continue;
             }
-            let _ = self
-                .connection_registry
-                .lock()
-                .await
-                .finish_disconnect(&scope_id, &connection_id, next_generation);
+            let _ = self.connection_registry.lock().await.finish_disconnect(
+                &scope_id,
+                &connection_id,
+                next_generation,
+            );
         }
         self.connection_registry
             .lock()
@@ -5380,7 +5463,10 @@ impl SshForwardManager {
         Ok(())
     }
 
-    async fn next_scope_generation(&self, scope_id: &str) -> Result<WireCounter, SshForwardCommandError> {
+    async fn next_scope_generation(
+        &self,
+        scope_id: &str,
+    ) -> Result<WireCounter, SshForwardCommandError> {
         let mut intent = self.intent.lock().await;
         let next_gen = intent
             .scope_generations
@@ -5389,7 +5475,9 @@ impl SshForwardManager {
             .unwrap_or(WireCounter::ZERO)
             .increment()
             .map_err(|_| SshForwardErrorCode::CounterExhausted.command_error())?;
-        intent.scope_generations.insert(scope_id.to_string(), next_gen);
+        intent
+            .scope_generations
+            .insert(scope_id.to_string(), next_gen);
         Ok(next_gen)
     }
 
@@ -5656,20 +5744,21 @@ impl SshForwardManager {
         let Some(app) = self.app.lock().await.clone() else {
             return;
         };
-        let (active, token) = if let Some((scope_id, scope_generation, token)) = scope_guard.as_ref() {
-            let scopes = self.scopes.lock().await;
-            let active = match scopes.get(scope_id).cloned() {
-                Some(active) if active.generation == *scope_generation => active,
-                _ => return,
+        let (active, token) =
+            if let Some((scope_id, scope_generation, token)) = scope_guard.as_ref() {
+                let scopes = self.scopes.lock().await;
+                let active = match scopes.get(scope_id).cloned() {
+                    Some(active) if active.generation == *scope_generation => active,
+                    _ => return,
+                };
+                let intent = self.intent.lock().await;
+                if intent.scope_tokens.get(scope_id) != Some(token) {
+                    return;
+                }
+                (Some(active), *token)
+            } else {
+                (None, WireCounter::ZERO)
             };
-            let intent = self.intent.lock().await;
-            if intent.scope_tokens.get(scope_id) != Some(token) {
-                return;
-            }
-            (Some(active), *token)
-        } else {
-            (None, WireCounter::ZERO)
-        };
         let now = Instant::now();
         let key = if let Some(rule_id) = rule_id.as_deref() {
             format!("rule:{rule_id}")
@@ -8568,7 +8657,12 @@ mod tests {
     async fn concurrent_open_scope_calls_return_identical_generation() {
         let config = temp_config_dir("concurrent-open-scope");
         let manager = Arc::new(SshForwardManager::new(&config).unwrap());
-        let open_res = manager.open_client(KnownScopesInput { known_scopes: vec![] }).await.unwrap();
+        let open_res = manager
+            .open_client(KnownScopesInput {
+                known_scopes: vec![],
+            })
+            .await
+            .unwrap();
         let scope_id = "test-scope-concurrent";
 
         let m1 = Arc::clone(&manager);

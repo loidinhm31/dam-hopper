@@ -110,8 +110,8 @@ pub use legacy_format2::{
 pub use lock::DeploymentLock;
 pub use manifest::{
     validate_manifest_and_archive, ApiServiceContract, ArchiveMeta, ComponentVersion,
-    ComponentsMeta, ProfileMeta, ReleaseManifest, ReleaseMeta, RollbackMeta, ServicesMeta,
-    WebServiceContract,
+    ComponentsMeta, ProfileMeta, ReleaseManifest, ReleaseMeta, RollbackMeta, RunnerServiceContract,
+    ServicesMeta, WebServiceContract,
 };
 pub use origin::{validate_web_origin, validate_web_origins};
 pub use ownership::{

@@ -197,6 +197,7 @@ fn test_publisher_end_to_end_scripts_and_manager_validation() {
         "dam-hopper",
         "dam-hopper-server",
         "dam-hopper-idle-suspend-helper",
+        "dam-hopper-plugin-runner",
         "dam-hopper-web",
     ] {
         let p = bin_dir.join(b);
@@ -412,7 +413,7 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
     let mut rollback_manifest = serde_json::to_value(&manifest).expect("serialize rollback base");
     rollback_manifest["release"]["tag"] = serde_json::json!("v0.1.0");
     rollback_manifest["release"]["version"] = serde_json::json!("0.1.0");
-    for component in ["cli", "api", "webHost", "webAssets"] {
+    for component in ["cli", "api", "webHost", "webAssets", "runner"] {
         rollback_manifest["components"][component]["version"] = serde_json::json!("0.1.0");
     }
     rollback_manifest["archive"]["name"] =
