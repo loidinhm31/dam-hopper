@@ -218,6 +218,26 @@ pub fn ensure_default_plugin_runner_user_and_dir() -> Result<(), ReleaseError> {
 
     Ok(())
 }
+/// Synchronize plugin administrator subjects to /etc/dam-hopper/plugin-admins.json.
+pub fn sync_plugin_admins_file(admin_subjects: &[String]) -> Result<(), ReleaseError> {
+    if admin_subjects.is_empty() {
+        return Ok(());
+    }
+    let admins_file = std::path::Path::new("/etc/dam-hopper/plugin-admins.json");
+    if let Some(parent) = admins_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json_content = serde_json::json!({
+        "adminSubjects": admin_subjects
+    });
+    let content = serde_json::to_string_pretty(&json_content).map_err(|e| ReleaseError::Io {
+        action: "serialize plugin admins config",
+        details: e.to_string(),
+    })?;
+    super::durable_fs::atomic_write_file(admins_file, content.as_bytes(), Some(0o644))?;
+    Ok(())
+}
+
 
 
 
