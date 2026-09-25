@@ -57,13 +57,16 @@ const REQUIRED_INVENTORY_PATHS = Object.freeze([
   "bin/dam-hopper-manager",
   "bin/dam-hopper-server",
   "bin/dam-hopper-idle-suspend-helper",
+  "bin/dam-hopper-plugin-runner",
   "bin/dam-hopper-web",
   "web",
   "systemd/dam-hopper-api.service",
   "systemd/dam-hopper-idle-suspend-helper.service",
+  "systemd/dam-hopper-plugin-runner.service",
   "systemd/dam-hopper-web.service",
   "systemd/dam-hopper-recovery.service",
   "sysusers.d/dam-hopper-web.conf",
+  "tmpfiles.d/dam-hopper-plugin-runner.conf",
 ]);
 
 const DISALLOWED_INVENTORY_NAMES = new Set([

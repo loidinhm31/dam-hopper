@@ -78,7 +78,7 @@ The root object uses camelCase JSON names and has exactly these required fields:
 | `archive`       | Archive filename, positive byte size, and lowercase SHA-256 |
 | `components`    | Lockstep versions for CLI, API, web host, and web assets    |
 | `inventory`     | Every packaged directory and regular file                   |
-| `services`      | API, web, and optional plugin-runner systemd contracts   |
+| `services`      | API, web, and plugin-runner systemd contracts              |
 | `rollback`      | Previous-release and state compatibility declaration        |
 
 All objects reject unknown fields. Required fields are not optional. Duplicate
@@ -152,6 +152,9 @@ execute bit.
 | ------------------------------------------------ | --------- | ------------- | ----------------------------------------- |
 | `bin/dam-hopper-manager`                         | file      | `common`      | executable                                |
 | `bin/dam-hopper-server`                          | file      | `server`      | executable                                |
+| `bin/dam-hopper-plugin-runner`                   | file      | `server`      | executable; mode `0755`                  |
+| `systemd/dam-hopper-plugin-runner.service`      | file      | `server`      | unit template; mode `0644`                |
+| `tmpfiles.d/dam-hopper-plugin-runner.conf`      | file      | `server`      | tmpfiles input; mode `0644`                |
 | `bin/dam-hopper-web`                             | file      | `web`         | executable                                |
 | `systemd/dam-hopper-recovery.service`            | file      | `common`      | boot recovery unit template when packaged |
 | `systemd/dam-hopper-api.service`                 | file      | `server`      | unit template                             |
@@ -165,22 +168,26 @@ The helper socket unit is a separate optional server-role archive asset. The
 release manager directly manages the helper service and must not enable both
 direct-binding service mode and socket activation for the same socket path.
 
-### Phase D06 owner-runner assets
+### Plugin runner release invariant
 
-When the server bundle includes the trusted plugin platform, the release
-generator assigns these regular files to the `server` role:
+Every published Linux release archive MUST include the three runner paths in
+the required-path table above, regardless of the deployment role selected
+later. They have the `server` inventory role, so `server` and `both` projections
+include them while the `web` projection excludes them at installation.
 
-| Path                                             | Contract                                      |
-| ------------------------------------------------ | --------------------------------------------- |
-| `bin/dam-hopper-plugin-runner`                   | Executable owner-runner binary                |
-| `systemd/dam-hopper-plugin-runner.service`      | Rendered owner-runner unit template           |
-| `tmpfiles.d/dam-hopper-plugin-runner.conf`      | Runtime directory/socket provisioning input   |
+`build-release-archive.sh` preflights the runner executable and both templates
+before staging, then copies all three unconditionally. The binary is archived
+as mode `0755`; the unit and tmpfiles input as `0644`. The release asset gate
+requires all three inventory paths, their `server` role and regular-file kind,
+and an execute bit on the binary.
 
-The Rust manifest types keep `components.runner` and `services.runner`
-optional for compatibility with local fixtures. When `services.runner` is
-present, its fixed contract is `unitName: "dam-hopper-plugin-runner.service"`
-and `socketPath: "/run/dam-hopper/plugin-runner.sock"`. The release manager
-installs the unit under `/etc/systemd/system/`, installs tmpfiles under
+The release generator emits `components.runner` and `services.runner` for
+published archives. Rust manifest fields remain optional for local/test
+fixtures; that compatibility does not make the three archive assets optional.
+When present, `services.runner` has the fixed contract
+`unitName: "dam-hopper-plugin-runner.service"` and
+`socketPath: "/run/dam-hopper/plugin-runner.sock"`. The manager installs the
+unit under `/etc/systemd/system/`, installs tmpfiles under
 `/etc/dam-hopper/tmpfiles.d/`, and invokes `systemd-tmpfiles --create`.
 
 The runner account and administrator subjects are deployment inputs, not
@@ -200,8 +207,9 @@ matching as applicable).
 ## Service and rollback contracts
 
 `api` and `web` objects are required even when a role projection omits the
-corresponding service. The optional `runner` object appears only when the
-server archive carries the trusted plugin runner.
+corresponding service. The release generator emits `services.runner` for every
+published Linux archive; runtime manifest fields remain optional for local
+fixtures only.
 
 | Service | `unitName`               | `identity`                  | `bindHost` | `port` | `healthPath`           |
 | ------- | ------------------------ | --------------------------- | ---------- | -----: | ---------------------- |

@@ -63,7 +63,7 @@ jobs:
         run: |
           bash -n deploy/release/build-release-archive.sh deploy/release/dam-hopper-install.sh tests/deploy/*.sh
           node -c deploy/release/generate-release-manifest.mjs deploy/release/check-release-assets.mjs deploy/release/check-version-alignment.mjs tests/deploy/linux-release-evidence-check.mjs
-          node deploy/release/check-version-alignment.mjs --bin server/target/release/dam-hopper --bin server/target/release/dam-hopper-server --bin server/target/release/dam-hopper-web --bin server/target/release/dam-hopper-idle-suspend-helper
+          node deploy/release/check-version-alignment.mjs --bin server/target/release/dam-hopper --bin server/target/release/dam-hopper-server --bin server/target/release/dam-hopper-web --bin server/target/release/dam-hopper-idle-suspend-helper --bin server/target/release/dam-hopper-plugin-runner
           pnpm test:deploy
       - uses: actions/upload-artifact@v4
         with:
@@ -73,6 +73,7 @@ jobs:
             server/target/release/dam-hopper-server
             server/target/release/dam-hopper-web
             server/target/release/dam-hopper-idle-suspend-helper
+            server/target/release/dam-hopper-plugin-runner
           if-no-files-found: error
           retention-days: 7
 

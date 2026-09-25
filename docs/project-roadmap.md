@@ -2,6 +2,11 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Linux release plugin runner packaging fix (2026-09-25)
+
+- **Implementation COMPLETE (4/4 phases; 100%; P1).** Validation passed 19/19 overall, including deterministic package smoke and 5/5 fail-closed cases; review 10/10, no critical issues. Hosted CI was not run.
+- **Release PENDING:** package metadata remains `0.5.0`; publish `v0.5.1` and the v0.5.0 advisory. Linux `server`/`both` remains broken; `web`-only unaffected. See [release checklist](./linux-release-publisher-bootstrap.md#v051-release-checklist), [plan](../plans/260925-1617-fix-missing-plugin-runner-release/plan.md), [tester](../plans/reports/tester-260925-1617-missing-plugin-runner.md), [review](../plans/reports/code-reviewer-260925-1617-missing-plugin-runner.md), and [docs report](../plans/reports/docs-manager-260925-1617-missing-plugin-runner.md).
+
 ### All-project advisor history integration (2026-09-24)
 
 - **Progress: 50% (3/6 phases complete; Phases 00–02 DONE).** Phase 02 host root authorization and context is complete; Phase 03 worker root history provider is next.

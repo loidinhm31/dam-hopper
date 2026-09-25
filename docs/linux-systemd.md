@@ -1,7 +1,6 @@
 # Linux systemd Deployment and Operator Guide
 
-Authoritative deployment, role management, activation, rollback, recovery, and
-format-2 migration guide for Linux x86_64 systemd hosts.
+Authoritative Linux x86_64 guide to roles, activation, rollback, recovery, and format-2 migration; release assets and the v0.5.0/v0.5.1 advisory are in the [Publisher guide](./linux-release-publisher-bootstrap.md).
 
 ## 1. Supported Platform and System Requirements
 

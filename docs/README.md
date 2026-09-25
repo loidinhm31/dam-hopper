@@ -53,7 +53,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Deployment
 
 - **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
-- **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Cross-platform Release CI DAG, profile-specific gates, six-subject attestation, and Linux bootstrap ownership
+- **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Cross-platform Release CI, required Linux runner packaging invariant, v0.5.1 operator checklist, and Linux bootstrap ownership
 - **[Linux Release Manifest v2](./linux-release-manifest.md)** — Linux-only manifest contract and Windows asset boundary
 - **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
 - **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, Phase 06 diagnostics, helper service lifecycle, activation, rollback, and recovery
