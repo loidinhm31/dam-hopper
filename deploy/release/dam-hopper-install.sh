@@ -312,6 +312,14 @@ if [[ "${MANAGER_MODE}" != "755" ]]; then
     exit 1
 fi
 
+if [[ ${#PLUGIN_ADMIN_SUBJECTS[@]} -eq 0 && ("${ROLE}" == "server" || "${ROLE}" == "both") ]]; then
+    PLUGIN_ADMIN_SUBJECTS+=("${REPO_OWNER}")
+    ACTOR="${SUDO_USER:-$USER}"
+    if [[ -n "${ACTOR}" && "${ACTOR}" != "root" && "${ACTOR}" != "${REPO_OWNER}" ]]; then
+        PLUGIN_ADMIN_SUBJECTS+=("${ACTOR}")
+    fi
+fi
+
 # Execute manager install via sudo
 INSTALL_CMD=("${MANAGER_BIN}" "install" "--bundle" "${BUNDLE_DIR}" "--role" "${ROLE}")
 if [[ ${VERIFY_ATTESTATION} -eq 1 ]]; then
@@ -370,6 +378,21 @@ if [[ $EUID -eq 0 ]]; then
         fi
         mkdir -p -m 0700 /var/lib/dam-hopper-plugin-runner/plugins
         chown -R "${PLUGIN_USER}:dam-hopper-plugins" /var/lib/dam-hopper-plugin-runner 2>/dev/null || true
+
+        ADMIN_JSON="{\"adminSubjects\":["
+        FIRST_ADMIN=1
+        for a in "${PLUGIN_ADMIN_SUBJECTS[@]}"; do
+            if [[ ${FIRST_ADMIN} -eq 1 ]]; then
+                ADMIN_JSON+="\"${a}\""
+                FIRST_ADMIN=0
+            else
+                ADMIN_JSON+=",\"${a}\""
+            fi
+        done
+        ADMIN_JSON+="]}"
+        mkdir -p /etc/dam-hopper
+        echo "${ADMIN_JSON}" > /etc/dam-hopper/plugin-admins.json
+        chmod 0644 /etc/dam-hopper/plugin-admins.json
     fi
     "${INSTALL_CMD[@]}"
     mkdir -p -m 0755 /usr/local/bin
@@ -383,6 +406,21 @@ else
         fi
         sudo mkdir -p -m 0700 /var/lib/dam-hopper-plugin-runner/plugins
         sudo chown -R "${PLUGIN_USER}:dam-hopper-plugins" /var/lib/dam-hopper-plugin-runner 2>/dev/null || true
+
+        ADMIN_JSON="{\"adminSubjects\":["
+        FIRST_ADMIN=1
+        for a in "${PLUGIN_ADMIN_SUBJECTS[@]}"; do
+            if [[ ${FIRST_ADMIN} -eq 1 ]]; then
+                ADMIN_JSON+="\"${a}\""
+                FIRST_ADMIN=0
+            else
+                ADMIN_JSON+=",\"${a}\""
+            fi
+        done
+        ADMIN_JSON+="]}"
+        sudo mkdir -p /etc/dam-hopper
+        echo "${ADMIN_JSON}" | sudo tee /etc/dam-hopper/plugin-admins.json > /dev/null
+        sudo chmod 0644 /etc/dam-hopper/plugin-admins.json
     fi
     sudo "${INSTALL_CMD[@]}"
     sudo mkdir -p -m 0755 /usr/local/bin

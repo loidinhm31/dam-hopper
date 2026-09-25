@@ -231,6 +231,9 @@ pub fn stage_release_bundle_with_options(
             previous_host_config.as_ref(),
         ));
     }
+    if role.includes_server() && !host_config.plugin_admin_subjects.is_empty() {
+        let _ = super::account::sync_plugin_admins_file(&host_config.plugin_admin_subjects);
+    }
 
     let digests = (|| {
         let manifest_sha256 = hex::encode(Sha256::digest(&manifest_bytes));

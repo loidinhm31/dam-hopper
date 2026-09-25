@@ -144,6 +144,9 @@ pub async fn execute_activation_locked_with_args(
                 let targets = build_candidate_health_targets(layout, &active_candidate)?;
                 if active_candidate.role.includes_server() {
                     let _ = super::account::ensure_default_plugin_runner_user_and_dir();
+                    if let Some(host_cfg) = super::host_config::load_host_config(&layout.host_config_path()).ok().flatten() {
+                        let _ = super::account::sync_plugin_admins_file(&host_cfg.plugin_admin_subjects);
+                    }
                     if let Err(e) = systemctl_start(HELPER_SERVICE_UNIT) {
                         tracing::warn!(
                             "idle-suspend helper service startup failed (continuing API startup): {e}"
@@ -462,6 +465,9 @@ async fn execute_activation_pipeline(
 
     if candidate.role.includes_server() {
         let _ = super::account::ensure_default_plugin_runner_user_and_dir();
+        if let Some(host_cfg) = super::host_config::load_host_config(&layout.host_config_path()).ok().flatten() {
+            let _ = super::account::sync_plugin_admins_file(&host_cfg.plugin_admin_subjects);
+        }
         if layout.runner_tmpfiles_conf_path().exists() {
             let _ = super::systemd::systemd_tmpfiles_create(&layout.runner_tmpfiles_conf_path(), None);
         }
