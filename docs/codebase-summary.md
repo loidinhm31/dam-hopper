@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-25 from the repository compaction `repomix-output.xml`.
+**Generated:** 2026-09-26 from the repository compaction `repomix-output.xml`.
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -390,7 +390,14 @@ and [multi-server guide](./user-guide-multi-server-profiles.md).
 
 ## Backend boundaries
 
-`server/src/main.rs` starts the HTTP/WebSocket service and assembles `AppState`.
+`server/src/main.rs` starts the HTTP/WebSocket service and assembles `AppState`,
+which owns an `auth::AuthService` backed by the optional MongoDB store and
+injectable clock. `server/src/auth/` defines user/session/challenge state,
+MongoDB CAS and TTL-index operations, a V2 session-policy evaluator,
+AES-256-GCM MFA-secret protection, and TOTP/replay checks. Phase 01 does not yet
+wire this evaluator into the existing `api/auth.rs` JWT middleware or expose MFA
+HTTP endpoints; see [Phase 01 auth state, cryptography, and policy](./phase-01-auth-state-cryptography-and-policy.md).
+
 The router exposes authenticated project, filesystem, PTY, Git, workflow,
 browser-debug, host-resource, and idle-suspend surfaces. Shared state owns
 configuration, project sandboxes, PTY sessions, event sinks, media tickets,

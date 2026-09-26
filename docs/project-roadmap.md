@@ -7,6 +7,14 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Implementation COMPLETE (4/4 phases; 100%; P1).** Validation passed 19/19 overall, including deterministic package smoke and 5/5 fail-closed cases; review 10/10, no critical issues. Hosted CI was not run.
 - **Release PENDING:** package metadata remains `0.5.0`; publish `v0.5.1` and the v0.5.0 advisory. Linux `server`/`both` remains broken; `web`-only unaffected. See [release checklist](./linux-release-publisher-bootstrap.md#v051-release-checklist), [plan](../plans/260925-1617-fix-missing-plugin-runner-release/plan.md), [tester](../plans/reports/tester-260925-1617-missing-plugin-runner.md), [review](../plans/reports/code-reviewer-260925-1617-missing-plugin-runner.md), and [docs report](../plans/reports/docs-manager-260925-1617-missing-plugin-runner.md).
 
+### Mandatory MFA and token lifecycle (2026-09-26)
+
+- **Plan status: IN PROGRESS (1/5 phases; 20%; updated 2026-09-26).** Phase 01 is complete; Phases 02–05 remain pending.
+- **Phase 01 — Auth state, cryptography, and policy — DONE (2026-09-26; 100%).** Established auth/session state, key-backed TOTP secret encryption, replay/concurrency controls, and deterministic session policy.
+- **Validation:** The code-review report records targeted auth tests **5/5** and the server suite **1,515 passed, 0 failed, 5 ignored**; review score **9.0/10**, no critical issues. The key-file loader metadata/read TOCTOU warning and other review follow-ups remain qualification work; no release or production rollout is claimed. See the [plan](../plans/260926-2157-token-rotation-mfa/plan.md), [Phase 01 plan](../plans/260926-2157-token-rotation-mfa/phase-01-auth-state-and-policy.md), and [review report](../plans/reports/code-review-260926-2258-phase01-auth-state-and-policy.md).
+- **Next:** Phase 02 — Enrollment, MFA, and session APIs; keep production rollout gated on Phases 02–05 and qualification.
+
+
 ### All-project advisor history integration (2026-09-24)
 
 - **Progress: 50% (3/6 phases complete; Phases 00–02 DONE).** Phase 02 host root authorization and context is complete; Phase 03 worker root history provider is next.

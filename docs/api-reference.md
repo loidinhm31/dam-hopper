@@ -14,7 +14,7 @@ The server also accepts an HttpOnly SameSite=Strict authentication cookie. `GET
 /api/health` and authentication endpoints have public/flow-specific exceptions;
 consult each route group below rather than assuming every request is protected.
 
-Token stored at `~/.config/dam-hopper/server-token`.
+Token stored at `~/.config/dam-hopper/server-token`. Phase 01 introduces the auth-state foundation without MFA HTTP endpoints or `require_auth` integration; see [Phase 01 auth state, cryptography, and policy](./phase-01-auth-state-cryptography-and-policy.md).
 
 ### Dev Mode (--no-auth)
 
@@ -35,11 +35,7 @@ Body (normal mode):
 { "username": "user", "password": "pass" }
 ```
 
-Body (--no-auth mode):
-
-```json
-{}
-```
+Body (--no-auth mode): `{}`
 
 Response:
 
@@ -47,7 +43,7 @@ Response:
 {
   "ok": true,
   "token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-  "dev_mode": false
+  "role": "user"
 }
 ```
 
@@ -60,7 +56,7 @@ Response (authenticated):
 {
   "authenticated": true,
   "user": "username",
-  "dev_mode": false,
+  "role": "user",
   "workbenchProtocol": 2
 }
 ```
@@ -70,14 +66,15 @@ Response (--no-auth mode):
 ```json
 {
   "authenticated": true,
-  "user": "dev-user",
   "dev_mode": true,
+  "user": "dev-user",
+  "role": "user",
   "workbenchProtocol": 2
 }
 ```
 
 **POST /api/auth/logout**
-Clear authentication session.
+Clear the auth cookie; when a valid token is supplied, revoke that actor's plugin epochs and contexts.
 
 Response: `{ "ok": true }`
 
