@@ -696,7 +696,8 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
     const X_EXPECTED_SHA256: HeaderName = HeaderName::from_static("x-expected-sha256");
     const X_EXPECTED_SECURITY_REVISION: HeaderName =
         HeaderName::from_static("x-expected-security-revision");
-
+    const X_PLUGIN_UI_SHA256: HeaderName = HeaderName::from_static("x-plugin-ui-sha256");
+    const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
     let headers = [
         AUTHORIZATION,
         CONTENT_TYPE,
@@ -718,6 +719,8 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         CACHE_CONTROL,
         X_EXPECTED_SHA256,
         X_EXPECTED_SECURITY_REVISION,
+        X_PLUGIN_UI_SHA256,
+        X_CONTENT_TYPE_OPTIONS,
     ];
     CorsLayer::new()
         .allow_origin(allowed_origins.to_vec())
@@ -873,5 +876,27 @@ mod tests {
             .unwrap();
         assert!(allow_headers.contains("x-expected-sha256"));
         assert!(allow_headers.contains("x-expected-security-revision"));
+    }
+
+    #[tokio::test]
+    async fn cors_exposes_plugin_ui_headers() {
+        let router = Router::new()
+            .route("/test", get(|| async { "ok" }))
+            .layer(build_cors(&[HeaderValue::from_static("https://trusted.example")]));
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/test")
+                    .header("Origin", "https://trusted.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let expose = resp.headers()["access-control-expose-headers"].to_str().unwrap();
+        assert!(expose.contains("x-plugin-ui-sha256"));
+        assert!(expose.contains("x-content-type-options"));
     }
 }
