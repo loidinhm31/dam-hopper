@@ -311,9 +311,14 @@ impl InstallationSupervisor {
             {
                 use std::os::unix::fs::MetadataExt;
                 let current_uid = unsafe { libc::geteuid() };
-                if symlink_meta.uid() != current_uid && current_uid != 0 {
+                if symlink_meta.uid() == 0 {
                     return Err(PluginError::source_permission_denied(
-                        "Owner history root directory is not owned by the runner owner UID",
+                        "Owner history root directory cannot be owned by root (UID 0)",
+                    ));
+                }
+                if current_uid == 0 && symlink_meta.uid() != 0 {
+                    return Err(PluginError::source_permission_denied(
+                        "Owner history root directory cannot be accessed by root",
                     ));
                 }
             }
