@@ -27,6 +27,7 @@ shared group, and private state directory automatically. Optional inputs:
 ### Account Validation Rules
 
 The release manager enforces strict security validation on the chosen owner account:
+
 1. **Existence**: The user must exist in the system user database (`/etc/passwd`).
 2. **Non-Root**: UID 0 (`root`) is strictly rejected.
 3. **Distinct Identity**: The owner account must not be the API service user (`dam-hopper`) and must not be the web identity (`dam-hopper-web`).
@@ -60,9 +61,41 @@ The release manager enforces strict security validation on the chosen owner acco
    Existing state owned by another account is rejected rather than recursively
    reassigned. Account changes require a deliberate state migration.
 
+## Workspace Directory Access & Developer Permissions
+
+By default, the plugin runner executes as the isolated system user `dam-hopper-plugin-runner`. When plugins (such as `evcrate.advisor`) need to read target project files or history under a developer's home directory (`/home/<user>`), the Linux kernel's standard discretionary access control applies:
+
+### Scenario A: Single-User Developer Workstation (Recommended)
+
+If the server is your personal development machine, run the runner under your own account:
+
+```bash
+./dam-hopper-install.sh --latest --role both --plugin-owner-user $(id -un)
+```
+
+Because the runner shares your UID, it can access all your workspaces and `~/.evcrate` files naturally without opening permissions.
+
+### Scenario B: Multi-User / Sandboxed Deployment
+
+If using the default dedicated runner account (`dam-hopper-plugin-runner`), developer home directories with mode `0700` (`rwx------`) block access at the filesystem layer. Grant traversal and read permissions explicitly using POSIX ACLs:
+
+```bash
+# 1. Allow the runner service to traverse your home directory
+setfacl -m u:dam-hopper-plugin-runner:x /home/<your-user>
+
+# 2. Grant recursive read & execute on your workspace repositories
+setfacl -R -m u:dam-hopper-plugin-runner:rX /home/<your-user>/WS
+setfacl -R -d -m u:dam-hopper-plugin-runner:rX /home/<your-user>/WS
+
+# 3. Grant recursive read & execute on tool history (if using evcrate)
+setfacl -R -m u:dam-hopper-plugin-runner:rX /home/<your-user>/.evcrate
+setfacl -R -d -m u:dam-hopper-plugin-runner:rX /home/<your-user>/.evcrate
+```
+
 ## Systemd Service Hardening
 
 `dam-hopper-plugin-runner.service` employs defense-in-depth isolation:
+
 - `User=@ADVISOR_OWNER_USER@`, `Group=@ADVISOR_OWNER_GROUP@`
 - `WorkingDirectory=@ADVISOR_OWNER_HOME@`, `Environment=HOME=@ADVISOR_OWNER_HOME@`
 - `NoNewPrivileges=true`
@@ -97,6 +130,7 @@ functions remain available.
 ## Lifecycle Transactions
 
 ### Clean Install
+
 ```bash
 sudo ./deploy/release/dam-hopper-install.sh \
   --bundle /path/to/release-bundle \
@@ -108,12 +142,15 @@ sudo dam-hopper start
 ```
 
 ### Upgrade & Matched Rollback
+
 - Host release upgrades replace binaries, unit files, and templates atomically via `/opt/dam-hopper/releases/<tag>/<role>`.
 - Plugin packages, durable registry state, and journals remain persistent in `/var/lib/dam-hopper-plugin-runner` across host upgrades and rollbacks.
 - Host rollback restores a matched set of manager, API, runner, and units. If the previous host cannot read current plugin state, plugins fail-closed safely without mutating security state.
 
 ### Crash Recovery
+
 `dam-hopper-manager recover --boot` executes at system boot before application services:
+
 1. Validates manager state and transaction phase.
 2. Reconciles systemd unit definitions and symlinks.
 3. Removes stale socket files safely.
@@ -136,9 +173,9 @@ sudo dam-hopper start
    Authenticated end-to-end plugin requests remain a deployment verification
    requirement; `/api/health` alone does not certify plugin readiness.
 4. **LAN Qualification Harness Synthetic Timing Mode**: `plugin-platform-lan-qualification.mjs` executes deterministic simulated measurements under `--dry-run`.
-   - *Affected Paths:* `tests/deploy/plugin-platform-lan-qualification.mjs`
-   - *Severity:* Low
-   - *Disposition:* Deferred Non-Goal. Full multi-machine physical LAN testing requires hardware deployment, which is deferred to deployment operational qualification at Gate G4.
+   - _Affected Paths:_ `tests/deploy/plugin-platform-lan-qualification.mjs`
+   - _Severity:_ Low
+   - _Disposition:_ Deferred Non-Goal. Full multi-machine physical LAN testing requires hardware deployment, which is deferred to deployment operational qualification at Gate G4.
 5. **Worker runtime**: Linux archives include `bin/node` and its license text in
    `NOTICES`. Packaging requires a Linux x64 Node distribution (>=22.19); the
    manifest hashes the executable. Rendered units use its absolute immutable
