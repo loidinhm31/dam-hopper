@@ -938,7 +938,7 @@ path = "/tmp/test-workspace"
 | `VITE_DAM_HOPPER_LOG_LEVEL`                | string  | Web bootstrap log level, embedded at build time                           |
 | `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` | string  | Exact extension parent origins, embedded at build time                    |
 | `RUST_LOG`                                 | string  | Rust logging filter                                                       |
-| `MONGODB_URI` / `MONGODB_DATABASE`         | string  | Optional API authentication database                                      |
+| `MONGODB_URI` / `MONGODB_DATABASE` / `DAM_HOPPER_MFA_KEY_FILE` | string/path | Optional API auth database; dedicated MFA key required for production authenticated startup. See [Phase 01 auth guide](./phase-01-auth-state-cryptography-and-policy.md). |
 | `DAM_HOPPER_PLUGIN_ADMINS_FILE`              | path    | Optional root-seeded plugin administrator JSON override                       |
 
 Plugin management administrators are not configured in `dam-hopper.toml`; the

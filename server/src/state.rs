@@ -129,6 +129,8 @@ pub struct AppState {
     pub fallback_warning_onset_ms: u64,
     /// Authorized plugin API service coordinating runner, contexts, and grants.
     pub plugin_service: Arc<crate::plugins::PluginApiService>,
+    /// Authentication and session policy service.
+    pub auth_service: Arc<crate::auth::AuthService>,
 }
 
 impl AppState {
@@ -354,6 +356,23 @@ impl AppState {
                     None
                 }
             });
+        let auth_store = db.as_ref().map(|database| crate::auth::AuthStore::new(database.clone()));
+        let mfa_key = if let Ok(key_path) = std::env::var("DAM_HOPPER_MFA_KEY_FILE") {
+            let key = crate::auth::MfaEncryptionKey::from_file(&key_path)
+                .map_err(|e| anyhow::anyhow!("Failed to load MFA key from {key_path}: {e}"))?;
+            Some(key)
+        } else if !no_auth && db.is_some() && (
+            std::env::var("RUST_ENV").unwrap_or_default() == "production"
+            || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
+        ) {
+            anyhow::bail!(
+                "FATAL: DAM_HOPPER_MFA_KEY_FILE is required in production authenticated mode."
+            );
+        } else {
+            None
+        };
+        let auth_service = Arc::new(crate::auth::AuthService::with_system_clock(auth_store, mfa_key));
+
         Ok(Self {
             workspace_dir,
             config: Arc::new(RwLock::new(config)),
@@ -408,7 +427,13 @@ impl AppState {
                     WorkspaceTargetResolver::new(),
                 ))
             },
+            auth_service,
         })
+    }
+    /// Override the auth service handle (used for testing or custom clock injection).
+    pub fn with_auth_service(mut self, auth_service: Arc<crate::auth::AuthService>) -> Self {
+        self.auth_service = auth_service;
+        self
     }
     /// Attach the optional workflow repository using the existing session DB connection.
     pub fn with_workflow_store(mut self, store: Option<WorkflowStore>) -> Self {

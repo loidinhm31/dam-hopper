@@ -230,13 +230,7 @@ pub struct LoginBody {
     pub password: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum UserRole {
-    #[default]
-    User,
-    Admin,
-}
+pub use crate::auth::model::UserRole;
 
 #[derive(Serialize)]
 struct LoginResponse {
@@ -256,6 +250,8 @@ pub struct User {
     pub is_enabled: bool,
     #[serde(default)]
     pub role: UserRole,
+    #[serde(default)]
+    pub auth_version: i64,
 }
 
 /// Verify an enabled MongoDB user without minting or refreshing a session.
@@ -398,6 +394,7 @@ pub async fn register(State(state): State<AppState>, Json(body): Json<LoginBody>
         password_hash,
         is_enabled: false,
         role: UserRole::User,
+        auth_version: 0,
     };
     let _ = collection.insert_one(new_user).await;
 

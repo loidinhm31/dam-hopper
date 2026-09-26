@@ -12,6 +12,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 ## Feature Guides
 
+- **[Phase 01 Auth State, Cryptography, and Policy](./phase-01-auth-state-cryptography-and-policy.md)** — MongoDB-backed auth state, MFA cryptography, session policy, and current API-integration boundary
 - **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage profile-scoped server connections and storage
 - **[Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)** — Profile-qualified IDE resources, federated search/replace, previews, and target-aware Git
 - **[Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)** — Owner-qualified terminal identity, persistence, workflow reveal, notifications, and diagnostics
